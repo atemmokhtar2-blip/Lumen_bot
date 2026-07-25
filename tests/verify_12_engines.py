@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive verification of all 12 engines in the pipeline.
+Comprehensive verification of all 13 engines in the pipeline.
 
 Checks:
 1. Every engine is registered in the registry.
@@ -40,7 +40,7 @@ print("=" * 80)
 # 1. Count
 # ---------------------------------------------------------------------------
 
-EXPECTED = 12
+EXPECTED = 13
 actual = len(queue)
 status = "PASS" if actual == EXPECTED else "FAIL"
 print(f"\n1. Engine count: {actual} (expected {EXPECTED}) [{status}]")
@@ -183,7 +183,7 @@ if exec_issues:
     for eid, issue in exec_issues:
         print(f"     {eid}: {issue}")
 else:
-    print(f"   [PASS] All 12 engines have valid execute() methods")
+    print(f"   [PASS] All 13 engines have valid execute() methods")
 
 # ---------------------------------------------------------------------------
 # 7. Engine class types
@@ -213,6 +213,7 @@ spec_map = {
     "project_context": "Spec 010",
     "intelligence_graph": "Spec 011",
     "requirement_intelligence": "Spec 012",
+    "semantic_understanding": "Spec 013",
 }
 
 for item in sorted(queue, key=lambda m: m.priority):
@@ -271,7 +272,7 @@ all_pass = (
     and not exec_issues
 )
 if all_pass:
-    print(f"SUMMARY: ALL 12 ENGINES VERIFIED — COMPLETE & INTEGRATED")
+    print(f"SUMMARY: ALL 13 ENGINES VERIFIED — COMPLETE & INTEGRATED")
 else:
     print(f"SUMMARY: ISSUES FOUND — see above")
 print(f"{'='*80}")

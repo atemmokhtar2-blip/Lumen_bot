@@ -18,6 +18,7 @@ from .dependency_resolver import DependencyResolutionEngine
 from .project_context import ProjectContextEngine
 from .intelligence_graph import IntelligenceGraphEngine
 from .requirement_intelligence import RequirementIntelligenceEngine
+from .semantic_understanding import SemanticUnderstandingEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -32,4 +33,5 @@ __all__ = [
     "ProjectContextEngine",
     "IntelligenceGraphEngine",
     "RequirementIntelligenceEngine",
+    "SemanticUnderstandingEngine",
 ]

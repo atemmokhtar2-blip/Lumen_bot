@@ -35,6 +35,7 @@ from ..engines.generators import (
     ProjectContextEngine,
     IntelligenceGraphEngine,
     RequirementIntelligenceEngine,
+    SemanticUnderstandingEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -173,6 +174,23 @@ def bootstrap(
     requirement_intelligence_engine = RequirementIntelligenceEngine()
     registry.register_engine(requirement_intelligence_engine)
 
+    # -- semantic understanding engine (Specification 013) ---------------
+    # The semantic understanding engine understands the TRUE meaning
+    # of the user's request.  It does not rely on keywords alone —
+    # it relies on understanding the intent, the context, and the
+    # meaning.  It reads the five data sources (user request,
+    # requirement intelligence report, project context, knowledge
+    # base, and built-in language rules), performs full sentence
+    # analysis (dialect normalization, spell correction, abbreviation
+    # expansion, synonym resolution), extracts the true intent, maps
+    # all variations to a unified intent, detects ambiguities and
+    # requests clarification, understands the relationships between
+    # the parts of the request, calculates the confidence score, and
+    # produces a Semantic Understanding Report.  It does not write
+    # code, create files, choose libraries, or make build decisions.
+    semantic_understanding_engine = SemanticUnderstandingEngine()
+    registry.register_engine(semantic_understanding_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -209,6 +227,9 @@ def bootstrap(
     manager.register(requirement_intelligence_engine,
                      engine_id="requirement_intelligence",
                      priority=98, dependencies=["intelligence_graph"])
+    manager.register(semantic_understanding_engine,
+                     engine_id="semantic_understanding",
+                     priority=99, dependencies=["requirement_intelligence"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
