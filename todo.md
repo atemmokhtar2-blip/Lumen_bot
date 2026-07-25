@@ -100,6 +100,15 @@
 ### Completion
 - [x] STOP and wait for Specification 014
 
+## Documentation Update — Full Project Documentation
+- [x] Fix test_manager.py (12 engines → 14 engines)
+- [x] Rewrite README.md to reflect all 14 engines (Specs 001–014, minus removed Spec 009 PDFX)
+- [x] Rewrite telegram_bot_engine/ARCHITECTURE.md with full 14-engine pipeline
+- [x] Rewrite docs/ALL_ENGINES_COMPLETE_DOCUMENTATION.md — remove PDFX, add Specs 012, 013, 014
+- [x] Clean up stale todo files (todo_spec005.md, todo_spec009.md, etc.)
+- [x] Run all tests to verify everything passes
+- [ ] Commit and push documentation updates to GitHub
+
 ## Phase 14: Requirement Normalization Engine (Specification 014) ✅ COMPLETE
 ### Data Model
 - [x] requirement_normalization/report_data.py — All constants, dataclasses (CanonicalName, TerminologyMapping, RequirementLink, DuplicateRecord, ConflictRecord, NormalizationFinding, CacheInfo, NormalizationProvenance, NormalizedRequirement, NormalizationReport)
