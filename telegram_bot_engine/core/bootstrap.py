@@ -38,6 +38,7 @@ from ..engines.generators import (
     SemanticUnderstandingEngine,
     RequirementNormalizationEngine,
     ArchitectureDecisionEngine,
+    TechnologySelectionEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -231,6 +232,17 @@ def bootstrap(
     architecture_decision_engine = ArchitectureDecisionEngine()
     registry.register_engine(architecture_decision_engine)
 
+    # -- technology selection engine (Specification 016) -----------------
+    # The technology selection engine selects all ten technology
+    # categories for the project based on the architecture decision,
+    # requirements, intelligence graph, knowledge base, and quality
+    # rules.  It performs compatibility, performance, and security
+    # analyses, validates selections through the quality gate, and
+    # produces a Technology Selection Report.  It does not write code,
+    # create files, or build the project.
+    technology_selection_engine = TechnologySelectionEngine()
+    registry.register_engine(technology_selection_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -276,6 +288,10 @@ def bootstrap(
     manager.register(architecture_decision_engine,
                      engine_id="architecture_decision",
                      priority=101, dependencies=["requirement_normalization"])
+    manager.register(technology_selection_engine,
+                     engine_id="technology_selection",
+                     priority=102,
+                     dependencies=["architecture_decision"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
