@@ -107,7 +107,7 @@
 - [x] Rewrite docs/ALL_ENGINES_COMPLETE_DOCUMENTATION.md — remove PDFX, add Specs 012, 013, 014
 - [x] Clean up stale todo files (todo_spec005.md, todo_spec009.md, etc.)
 - [x] Run all tests to verify everything passes
-- [ ] Commit and push documentation updates to GitHub
+- [x] Commit and push documentation updates to GitHub
 
 ## Phase 14: Requirement Normalization Engine (Specification 014) ✅ COMPLETE
 ### Data Model
