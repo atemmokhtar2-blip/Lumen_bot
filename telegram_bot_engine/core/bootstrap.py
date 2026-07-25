@@ -37,6 +37,7 @@ from ..engines.generators import (
     RequirementIntelligenceEngine,
     SemanticUnderstandingEngine,
     RequirementNormalizationEngine,
+    ArchitectureDecisionEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -210,6 +211,26 @@ def bootstrap(
     requirement_normalization_engine = RequirementNormalizationEngine()
     registry.register_engine(requirement_normalization_engine)
 
+    # -- architecture decision engine (Specification 015) ----------------
+    # The architecture decision engine makes ALL architectural
+    # decisions for the project.  It reads five data sources
+    # (normalized requirement model, intelligence graph, requirement
+    # intelligence report, semantic understanding report, and
+    # knowledge base), analyses the project across five dimensions
+    # (size, scalability, performance, security, maintainability),
+    # and makes all eight architectural decisions (layers, modules,
+    # services, dependency structure, project layout, communication
+    # pattern, error handling strategy, configuration strategy).
+    # Every decision has a reason, an analysis, an impact, and at
+    # least one rejected alternative.  It validates all decisions,
+    # enforces quality rules (no architecture that fails quality or
+    # scalability requirements is allowed), caches the decision
+    # report for re-decision, and produces an Architecture Decision
+    # Report — the official reference for all other engines.  It
+    # does not write code, create files, or build the project.
+    architecture_decision_engine = ArchitectureDecisionEngine()
+    registry.register_engine(architecture_decision_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -252,6 +273,9 @@ def bootstrap(
     manager.register(requirement_normalization_engine,
                      engine_id="requirement_normalization",
                      priority=100, dependencies=["semantic_understanding"])
+    manager.register(architecture_decision_engine,
+                     engine_id="architecture_decision",
+                     priority=101, dependencies=["requirement_normalization"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

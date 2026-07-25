@@ -20,6 +20,7 @@ from .intelligence_graph import IntelligenceGraphEngine
 from .requirement_intelligence import RequirementIntelligenceEngine
 from .semantic_understanding import SemanticUnderstandingEngine
 from .requirement_normalization import RequirementNormalizationEngine
+from .architecture_decision import ArchitectureDecisionEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -36,4 +37,5 @@ __all__ = [
     "RequirementIntelligenceEngine",
     "SemanticUnderstandingEngine",
     "RequirementNormalizationEngine",
+    "ArchitectureDecisionEngine",
 ]

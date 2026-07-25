@@ -3,7 +3,7 @@
 > **This project is under active development — iterating through numbered Specifications.**
 >
 > Each specification adds one complete, tested engine to the generation pipeline.
-> Implemented so far: **001 through 014** (14 engines). Specification **015** is next.
+> Implemented so far: **001 through 015** (15 engines). Specification **016** is next.
 
 ---
 
@@ -38,9 +38,9 @@ engine's outputs directly.
 | 012 | Requirement Intelligence Engine | 98 | Understands the user's request with precision, classifies requirements into 9 categories, detects missing info and conflicts | 103/103 ✅ |
 | 013 | Semantic Understanding Engine | 99 | Understands the TRUE meaning of the request — dialect normalization, spell correction, abbreviation expansion, synonym resolution, intent extraction | 76/76 ✅ |
 | 014 | Requirement Normalization Engine | 100 | Transforms all requirements into a unified, canonical model — name normalization, terminology unification, deduplication, consistency validation, requirement linking | 103/103 ✅ |
-| **015** | **Next — not started** | ⏳ | | — |
+| 015 | Architecture Decision Engine | 101 | Makes ALL architectural decisions for the project — selects layers, modules, services, dependency structure, project layout, communication pattern, error handling strategy, and configuration strategy; analyses size, scalability, performance, security, and maintainability; validates every decision with reason, analysis, impact, and rejected alternatives; enforces quality and scalability rules | 93/93 ✅ |
 
-**Total: 14 engines in the pipeline (Specs 001–014).**
+**Total: 15 engines in the pipeline (Specs 001–015).**
 
 > **Note:** Spec 009 in the original plan referred to a PDFX Visual Page
 > Reconstruction Engine. That engine was removed because it was added by
@@ -72,6 +72,7 @@ User Request (natural language)
 │ 12. Requirement Intelligence (p=98) → ReqIntelReport    │
 │ 13. Semantic Understanding (p=99) → SemanticReport     │
 │ 14. Requirement Normalization (p=100) → NormalizationReport│
+│ 15. Architecture Decision (p=101) → ArchitectureDecision   │
 └─────────────────────────────────────────────────────────┘
         │
         ▼
@@ -116,7 +117,7 @@ telegram_bot_engine/
 │   ├── base/
 │   │   ├── base_engine.py         # Shared boilerplate (logger, ok/failed)
 │   │   └── base_generator.py      # Shared boilerplate for generators
-│   └── generators/                # ALL 14 generation engines
+│   └── generators/                # ALL 15 generation engines
 │       ├── analyzer/              # Spec 002 — 10-stage request analyzer
 │       ├── intent_parser_engine.py     # Spec 005
 │       ├── blueprint_composer_engine.py# Spec 005
@@ -130,7 +131,8 @@ telegram_bot_engine/
 │       ├── intelligence_graph/    # Spec 011
 │       ├── requirement_intelligence/  # Spec 012
 │       ├── semantic_understanding/    # Spec 013
-│       └── requirement_normalization/ # Spec 014
+│       ├── requirement_normalization/ # Spec 014
+│       └── architecture_decision/    # Spec 015 — architecture decisions
 ├── logging/                       # EngineLogger facade
 ├── manager/                       # CoreEngineManager (lifecycle, deps, queue)
 │   ├── engine_entry.py
@@ -188,6 +190,18 @@ telegram_bot_engine/
     requirements into a unified, canonical model — name normalization,
     terminology unification, deduplication (Jaccard similarity), consistency
     validation, and requirement linking.
+16. **The Architecture Decision Engine** (Spec 015) makes ALL architectural
+    decisions for the project based on prior analysis. It reads the Normalized
+    Requirement Model, Project Intelligence Graph, Requirement Intelligence
+    Report, Semantic Understanding Report, and Knowledge Base. It analyses the
+    project size, scalability, performance, security, and maintainability, then
+    selects the best architecture: layers, modules, services, dependency
+    structure, project layout, communication pattern, error handling strategy,
+    and configuration strategy. Every decision is validated with a reason, an
+    analysis, an impact, and rejected alternatives. No architecture that fails
+    quality or scalability requirements is allowed. The engine does not write
+    code, create files, or build the project — it only decides the
+    architecture.
 
 Each engine reads only what it needs from the `GenerationContext` and produces
 its own artefact. No engine modifies another engine's output — if
@@ -281,7 +295,7 @@ This project is built through numbered specifications. Each specification:
 - **No** additional components are added outside the specification scope.
 - **No** architectural changes are made without a clear specification.
 
-**The next specification is 015.** Start from there. Do not modify what was
+**The next specification is 016.** Start from there. Do not modify what was
 previously implemented unless fixing urgent bugs only.
 
 ---
