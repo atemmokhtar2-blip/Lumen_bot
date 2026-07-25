@@ -36,6 +36,7 @@ from ..engines.generators import (
     IntelligenceGraphEngine,
     RequirementIntelligenceEngine,
     SemanticUnderstandingEngine,
+    RequirementNormalizationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -191,6 +192,24 @@ def bootstrap(
     semantic_understanding_engine = SemanticUnderstandingEngine()
     registry.register_engine(semantic_understanding_engine)
 
+    # -- requirement normalization engine (Specification 014) -------------
+    # The requirement normalization engine transforms ALL user
+    # requirements into a unified, canonical model that every
+    # downstream engine can understand.  It reads five data sources
+    # (user request, requirement intelligence report, semantic
+    # understanding report, project context, and knowledge base),
+    # unifies all names into canonical snake_case keys, unifies all
+    # terminology into a single vocabulary, removes duplicates using
+    # Jaccard similarity, validates consistency (detecting conflicts,
+    # terminology variations, and lost requirements), links each
+    # requirement to its feature, component, priority, dependencies,
+    # and expected output, caches the normalized model for
+    # re-normalization, enforces quality rules, and produces a
+    # Normalization Report.  It does not write code, create files,
+    # choose libraries, or make build decisions.
+    requirement_normalization_engine = RequirementNormalizationEngine()
+    registry.register_engine(requirement_normalization_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -230,6 +249,9 @@ def bootstrap(
     manager.register(semantic_understanding_engine,
                      engine_id="semantic_understanding",
                      priority=99, dependencies=["requirement_intelligence"])
+    manager.register(requirement_normalization_engine,
+                     engine_id="requirement_normalization",
+                     priority=100, dependencies=["semantic_understanding"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

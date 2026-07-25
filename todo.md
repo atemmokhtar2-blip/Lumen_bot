@@ -127,3 +127,42 @@
 - [x] Run tests and verify all pass — 127/127 passed
 ### Completion
 - [x] STOP and wait for Specification 012
+
+## Phase 12: Requirement Intelligence Engine (Specification 012) ✅ COMPLETE
+### Completion
+- [x] STOP and wait for Specification 013
+
+## Phase 13: Semantic Understanding Engine (Specification 013) ✅ COMPLETE
+### Completion
+- [x] STOP and wait for Specification 014
+
+## Phase 14: Requirement Normalization Engine (Specification 014) ✅ COMPLETE
+### Data Model
+- [x] requirement_normalization/report_data.py — All constants, dataclasses (CanonicalName, TerminologyMapping, RequirementLink, DuplicateRecord, ConflictRecord, NormalizationFinding, CacheInfo, NormalizationProvenance, NormalizedRequirement, NormalizationReport)
+### Readers
+- [x] requirement_normalization/request_reader.py — RequestReader, RequestData
+- [x] requirement_normalization/requirement_intelligence_reader.py — RequirementIntelligenceReader, RequirementIntelligenceData, RawRequirement
+- [x] requirement_normalization/semantic_understanding_reader.py — SemanticUnderstandingReader, SemanticUnderstandingData
+- [x] requirement_normalization/context_reader.py — ContextReader, ContextData
+- [x] requirement_normalization/knowledge_reader.py — KnowledgeReader, KnowledgeData
+### Helpers
+- [x] requirement_normalization/name_normalizer.py — NameNormalizer
+- [x] requirement_normalization/terminology_normalizer.py — TerminologyNormalizer
+- [x] requirement_normalization/deduplication_remover.py — DeduplicationRemover (Jaccard similarity, threshold 0.85)
+- [x] requirement_normalization/consistency_validator.py — ConsistencyValidator
+- [x] requirement_normalization/requirement_linker.py — RequirementLinker
+- [x] requirement_normalization/cache_manager.py — CacheManager (SHA-256 cache key)
+- [x] requirement_normalization/quality_gate.py — QualityGate
+### Engine
+- [x] requirement_normalization/report_assembler.py — ReportAssembler
+- [x] requirement_normalization/requirement_normalization_engine.py — RequirementNormalizationEngine (14-step execute)
+- [x] requirement_normalization/__init__.py — exports
+### Integration
+- [x] Wire RequirementNormalizationEngine into generators __init__.py
+- [x] Wire RequirementNormalizationEngine into bootstrap (priority 100, deps [semantic_understanding])
+### Testing
+- [x] Create comprehensive test suite (tests/test_requirement_normalization.py) — 103 tests
+- [x] Fix all 17 failing tests (wrong method signatures in tests)
+- [x] Run tests and verify all pass — 103/103 passed
+### Completion
+- [x] STOP and wait for Specification 015

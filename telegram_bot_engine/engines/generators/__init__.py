@@ -19,6 +19,7 @@ from .project_context import ProjectContextEngine
 from .intelligence_graph import IntelligenceGraphEngine
 from .requirement_intelligence import RequirementIntelligenceEngine
 from .semantic_understanding import SemanticUnderstandingEngine
+from .requirement_normalization import RequirementNormalizationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -34,4 +35,5 @@ __all__ = [
     "IntelligenceGraphEngine",
     "RequirementIntelligenceEngine",
     "SemanticUnderstandingEngine",
+    "RequirementNormalizationEngine",
 ]
