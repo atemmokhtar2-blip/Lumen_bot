@@ -139,3 +139,90 @@
 - [x] Run tests and verify all pass — 103/103 passed
 ### Completion
 - [x] STOP and wait for Specification 015
+
+## Phase 15: Architecture Decision Engine (Specification 015) ✅ COMPLETE
+### Data Model
+- [x] architecture_decision/report_data.py — All constants, dataclasses (AnalysisResult, RejectedAlternative, ArchitectureDecision, ArchitectureFinding, CacheInfo, ArchitectureProvenance, ModuleSpec, ServiceSpec, ArchitectureDecisionReport)
+### Readers
+- [x] architecture_decision/requirement_normalization_reader.py
+- [x] architecture_decision/intelligence_graph_reader.py
+- [x] architecture_decision/requirement_intelligence_reader.py
+- [x] architecture_decision/semantic_understanding_reader.py
+- [x] architecture_decision/knowledge_reader.py
+### Analyzers
+- [x] architecture_decision/size_analyzer.py
+- [x] architecture_decision/scalability_analyzer.py
+- [x] architecture_decision/performance_analyzer.py
+- [x] architecture_decision/security_analyzer.py
+- [x] architecture_decision/maintainability_analyzer.py
+### Core Decision
+- [x] architecture_decision/architecture_selector.py — ArchitectureSelector
+- [x] architecture_decision/decision_validator.py — DecisionValidator
+- [x] architecture_decision/quality_gate.py — QualityGate
+- [x] architecture_decision/cache_manager.py — CacheManager
+- [x] architecture_decision/report_assembler.py — ReportAssembler
+### Engine
+- [x] architecture_decision/architecture_decision_engine.py — ArchitectureDecisionEngine
+- [x] architecture_decision/__init__.py — exports
+### Integration
+- [x] Wire ArchitectureDecisionEngine into generators __init__.py
+- [x] Wire ArchitectureDecisionEngine into bootstrap (priority 101, deps [requirement_normalization])
+### Testing
+- [x] Create comprehensive test suite (tests/test_architecture_decision.py)
+- [x] Run tests and verify all pass
+### Completion
+- [x] STOP and wait for Specification 016
+
+## Phase 16: Technology Selection Engine (Specification 016) ✅ COMPLETE
+### Data Model
+- [x] technology_selection/report_data.py — All constants, dataclasses (AnalysisResult, TechnologySelection, TechnologyFinding, CacheInfo, TechnologyProvenance, TechnologySelectionReport)
+### Readers
+- [x] technology_selection/data_readers.py — 5 readers (ArchitectureDecision, RequirementNormalization, IntelligenceGraph, Knowledge, QualityRules)
+### Analyzers
+- [x] technology_selection/compatibility_analyzer.py — CompatibilityAnalyzer
+- [x] technology_selection/performance_analyzer.py — PerformanceAnalyzer
+- [x] technology_selection/security_analyzer.py — SecurityAnalyzer
+### Core Selection
+- [x] technology_selection/technology_selector.py — TechnologySelector (10 categories)
+- [x] technology_selection/quality_gate.py — QualityGate
+- [x] technology_selection/cache_manager.py — CacheManager
+- [x] technology_selection/report_builder.py — ReportBuilder
+### Engine
+- [x] technology_selection/technology_selection_engine.py — TechnologySelectionEngine
+- [x] technology_selection/__init__.py — exports
+### Integration
+- [x] Wire TechnologySelectionEngine into generators __init__.py
+- [x] Wire TechnologySelectionEngine into bootstrap (priority 102, deps [architecture_decision])
+### Testing
+- [x] Create comprehensive test suite (tests/test_technology_selection.py)
+- [x] Run tests and verify all pass
+### Completion
+- [x] STOP and wait for Specification 017
+
+## Phase 17: Project Capability Analyzer Engine (Specification 017) ✅ COMPLETE
+### Data Model
+- [x] capability_analyzer/report_data.py — All constants, dataclasses (AnalysisResult, ComplexityAnalysis, ResourceEstimation, ScalabilityTier, ScalabilityAnalysis, Bottleneck, ArchitectureStressAnalysis, DependencyIssue, DependencyAnalysis, CapabilityFinding, CacheInfo, CapabilityProvenance, ProjectCapabilityReport)
+### Readers
+- [x] capability_analyzer/data_readers.py — 5 readers (ArchitectureDecision, TechnologySelection, RequirementNormalization, IntelligenceGraph, Knowledge)
+### Analyzers
+- [x] capability_analyzer/complexity_analyzer.py — ComplexityAnalyzer
+- [x] capability_analyzer/resource_estimator.py — ResourceEstimator
+- [x] capability_analyzer/scalability_analyzer.py — ScalabilityAnalyzer
+- [x] capability_analyzer/stress_analyzer.py — StressAnalyzer
+- [x] capability_analyzer/dependency_analyzer.py — DependencyAnalyzer
+### Core Analysis & Validation
+- [x] capability_analyzer/quality_gate.py — QualityGate (blocks generation if architecture can't meet performance/scalability/quality)
+- [x] capability_analyzer/cache_manager.py — CacheManager (SHA-256 cache key, 5 data sources)
+- [x] capability_analyzer/report_builder.py — ReportBuilder (strengths, risks, recommendations, verdict)
+### Engine
+- [x] capability_analyzer/capability_analyzer_engine.py — ProjectCapabilityAnalyzerEngine
+- [x] capability_analyzer/__init__.py — exports
+### Integration
+- [x] Wire ProjectCapabilityAnalyzerEngine into generators __init__.py
+- [x] Wire ProjectCapabilityAnalyzerEngine into bootstrap (priority 103, deps [technology_selection])
+- [x] Append Spec 015, 016, 017 sections to repo todo.md
+### Testing
+- [x] Create comprehensive test suite (tests/test_capability_analyzer.py)
+- [x] Run tests and verify all pass
+### Completion
+- [x] STOP and wait for Specification 018

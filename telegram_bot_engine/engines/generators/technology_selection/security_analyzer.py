@@ -460,12 +460,13 @@ class SecurityAnalyzer:
                         category="security",
                     ))
 
+        has_issues = any(
+            f.code == 'security_concern'
+            for f in self._findings
+        )
         details.append(
             "Security concern check: "
-            f"{'issues found' if any(
-                f.code == 'security_concern'
-                for f in self._findings
-            ) else 'passed'}"
+            + ("issues found" if has_issues else "passed")
         )
         return details
 

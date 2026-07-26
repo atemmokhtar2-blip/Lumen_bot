@@ -39,6 +39,7 @@ from ..engines.generators import (
     RequirementNormalizationEngine,
     ArchitectureDecisionEngine,
     TechnologySelectionEngine,
+    ProjectCapabilityAnalyzerEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -243,6 +244,21 @@ def bootstrap(
     technology_selection_engine = TechnologySelectionEngine()
     registry.register_engine(technology_selection_engine)
 
+    # -- project capability analyzer engine (Specification 017) -----------
+    # The project capability analyzer engine analyzes the project's
+    # full capability before building starts.  It reads five data
+    # sources (architecture decision report, technology selection
+    # report, normalized requirement model, intelligence graph, and
+    # knowledge base), performs five analyses (complexity, resource
+    # estimation, scalability, architecture stress, dependencies),
+    # validates the architecture through the quality gate (blocks
+    # generation if the architecture can't meet performance,
+    # scalability, or quality requirements), and produces a Project
+    # Capability Report.  It does not write code, create files, or
+    # build the project.
+    capability_analyzer_engine = ProjectCapabilityAnalyzerEngine()
+    registry.register_engine(capability_analyzer_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -292,6 +308,10 @@ def bootstrap(
                      engine_id="technology_selection",
                      priority=102,
                      dependencies=["architecture_decision"])
+    manager.register(capability_analyzer_engine,
+                     engine_id="capability_analyzer",
+                     priority=103,
+                     dependencies=["technology_selection"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

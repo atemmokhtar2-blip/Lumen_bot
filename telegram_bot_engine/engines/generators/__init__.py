@@ -22,6 +22,7 @@ from .semantic_understanding import SemanticUnderstandingEngine
 from .requirement_normalization import RequirementNormalizationEngine
 from .architecture_decision import ArchitectureDecisionEngine
 from .technology_selection import TechnologySelectionEngine
+from .capability_analyzer import ProjectCapabilityAnalyzerEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -40,4 +41,5 @@ __all__ = [
     "RequirementNormalizationEngine",
     "ArchitectureDecisionEngine",
     "TechnologySelectionEngine",
+    "ProjectCapabilityAnalyzerEngine",
 ]

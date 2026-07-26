@@ -356,12 +356,13 @@ class CompatibilityAnalyzer:
                         category="compatibility",
                     ))
 
+        passed = not any(
+            f.code == 'framework_language_mismatch'
+            for f in self._findings
+        )
         details.append(
-            f"Framework-language compatibility: "
-            f"{'passed' if not any(
-                f.code == 'framework_language_mismatch'
-                for f in self._findings
-            ) else 'issues found'}"
+            "Framework-language compatibility: "
+            + ("passed" if passed else "issues found")
         )
         return details
 
@@ -517,12 +518,13 @@ class CompatibilityAnalyzer:
                                 category="compatibility",
                             ))
 
+        passed2 = not any(
+            f.code == 'known_incompatibility'
+            for f in self._findings
+        )
         details.append(
-            f"Known incompatibility check: "
-            f"{'passed' if not any(
-                f.code == 'known_incompatibility'
-                for f in self._findings
-            ) else 'issues found'}"
+            "Known incompatibility check: "
+            + ("passed" if passed2 else "issues found")
         )
         return details
 
