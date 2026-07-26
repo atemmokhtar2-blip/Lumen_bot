@@ -226,3 +226,33 @@
 - [x] Run tests and verify all pass
 ### Completion
 - [x] STOP and wait for Specification 018
+
+## Phase 18: Risk Detection Engine (Specification 018) ✅ COMPLETE
+### Data Model
+- [x] risk_detection/report_data.py — All constants, dataclasses (RiskItem, RiskRecommendation, RiskDimensionResult, RiskFinding, CacheInfo, RiskProvenance, RiskAnalysisReport), severity constants (Critical/High/Medium/Low), dimension constants (7 dimensions), priority constants, quality rule constants, verdict constants
+### Readers
+- [x] risk_detection/data_readers.py — 5 readers (ProjectCapability, ArchitectureDecision, TechnologySelection, RequirementNormalization, Knowledge)
+### Analyzers (7 risk dimensions)
+- [x] risk_detection/architecture_risk_analyzer.py — ArchitectureRiskAnalyzer (poor partitioning, circular deps, excessive coupling, weak extensibility)
+- [x] risk_detection/performance_risk_analyzer.py — PerformanceRiskAnalyzer (bottlenecks, high memory, slow operations, unnecessary repetition)
+- [x] risk_detection/scalability_risk_analyzer.py — ScalabilityRiskAnalyzer (growth capacity, weak points)
+- [x] risk_detection/security_risk_analyzer.py — SecurityRiskAnalyzer (input validation, authorization, data exposure, insecure comm, secrets mgmt)
+- [x] risk_detection/dependency_risk_analyzer.py — DependencyRiskAnalyzer (version conflicts, deprecated, vulnerabilities, excessive, single point of failure)
+- [x] risk_detection/maintenance_risk_analyzer.py — MaintenanceRiskAnalyzer (high complexity, no tests, no docs, tight coupling, no monitoring)
+- [x] risk_detection/resource_risk_analyzer.py — ResourceRiskAnalyzer (CPU-bound, memory-bound, disk-bound, network-bound, cost overrun)
+### Core Validation & Assembly
+- [x] risk_detection/quality_gate.py — QualityGate (blocks generation if Critical risks exist)
+- [x] risk_detection/cache_manager.py — CacheManager (SHA-256 cache key, 5 data sources)
+- [x] risk_detection/report_builder.py — ReportBuilder (risk list, severity scores, recommendations, readiness, verdict)
+### Engine
+- [x] risk_detection/risk_detection_engine.py — RiskDetectionEngine
+- [x] risk_detection/__init__.py — exports (108 symbols)
+### Integration
+- [x] Wire RiskDetectionEngine into generators __init__.py
+- [x] Wire RiskDetectionEngine into bootstrap (priority 104, deps [capability_analyzer])
+- [x] Update verify_12_engines.py (13 → 18 engines, spec_map, summary line)
+### Testing
+- [x] Create comprehensive test suite (tests/test_risk_detection.py) — 113 tests
+- [x] Run tests and verify all pass — 113 passed, 0 failed
+### Completion
+- [x] STOP and wait for Specification 019

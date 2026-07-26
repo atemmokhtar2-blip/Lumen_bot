@@ -40,6 +40,7 @@ from ..engines.generators import (
     ArchitectureDecisionEngine,
     TechnologySelectionEngine,
     ProjectCapabilityAnalyzerEngine,
+    RiskDetectionEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -259,6 +260,21 @@ def bootstrap(
     capability_analyzer_engine = ProjectCapabilityAnalyzerEngine()
     registry.register_engine(capability_analyzer_engine)
 
+    # -- risk detection engine (Specification 018) ----------------------
+    # The risk detection engine detects all potential risks before
+    # project generation begins.  It reads five data sources
+    # (project capability report, architecture decision report,
+    # technology selection report, normalized requirement model, and
+    # knowledge base), performs seven risk analyses (architecture,
+    # performance, scalability, security, dependency, maintenance,
+    # resource), classifies each risk by severity (Critical, High,
+    # Medium, Low), produces recommendations, and determines the
+    # project's readiness for the generation phase.  It blocks
+    # generation if a Critical risk exists.  It does not write code,
+    # create files, or start the build process.
+    risk_detection_engine = RiskDetectionEngine()
+    registry.register_engine(risk_detection_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -312,6 +328,10 @@ def bootstrap(
                      engine_id="capability_analyzer",
                      priority=103,
                      dependencies=["technology_selection"])
+    manager.register(risk_detection_engine,
+                     engine_id="risk_detection",
+                     priority=104,
+                     dependencies=["capability_analyzer"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

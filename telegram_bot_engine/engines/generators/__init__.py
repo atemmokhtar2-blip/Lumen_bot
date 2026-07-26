@@ -23,6 +23,7 @@ from .requirement_normalization import RequirementNormalizationEngine
 from .architecture_decision import ArchitectureDecisionEngine
 from .technology_selection import TechnologySelectionEngine
 from .capability_analyzer import ProjectCapabilityAnalyzerEngine
+from .risk_detection import RiskDetectionEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -42,4 +43,5 @@ __all__ = [
     "ArchitectureDecisionEngine",
     "TechnologySelectionEngine",
     "ProjectCapabilityAnalyzerEngine",
+    "RiskDetectionEngine",
 ]
