@@ -1,0 +1,83 @@
+"""BlueprintBuilder — Specification 036"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from .report_data import (
+    PerformanceReport, PerfUnit, Bottleneck, PerformanceAction,
+    LoadSimulation, CachePlan, CacheInfo, PerformanceProvenance,
+    SEVERITY_CRITICAL, STATUS_OPEN,
+    CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW,
+    CONFIDENCE_HIGH_THRESHOLD, CONFIDENCE_MEDIUM_THRESHOLD, VERDICT_NOT_READY,
+)
+
+_log = logging.getLogger("engine.performance_optimization.blueprint_builder")
+
+
+class BlueprintBuilder:
+    def build(
+        self,
+        units: List[PerfUnit],
+        bottlenecks: List[Bottleneck],
+        actions: List[PerformanceAction],
+        simulations: List[LoadSimulation],
+        cache_plans: List[CachePlan],
+        sources_used: List[str],
+        sources_missing: List[str],
+        self_review_passed: bool = False,
+        cache_info: Optional[CacheInfo] = None,
+        confidence: float = 0.0,
+    ) -> PerformanceReport:
+        conf_level = (
+            CONFIDENCE_HIGH if confidence >= CONFIDENCE_HIGH_THRESHOLD
+            else CONFIDENCE_MEDIUM if confidence >= CONFIDENCE_MEDIUM_THRESHOLD
+            else CONFIDENCE_LOW
+        )
+        critical = [b for b in bottlenecks if b.severity == SEVERITY_CRITICAL]
+        open_crit = [b for b in critical if b.status == STATUS_OPEN]
+        avg = (
+            round(sum(u.quality_after for u in units) / len(units), 1)
+            if units else 0.0
+        )
+        report = PerformanceReport(
+            report_id=str(uuid.uuid4()),
+            units=units,
+            bottlenecks=bottlenecks,
+            actions=actions,
+            findings=[],
+            simulations=simulations,
+            cache_plans=cache_plans,
+            unit_count=len(units),
+            bottleneck_count=len(bottlenecks),
+            critical_bottleneck_count=len(critical),
+            open_critical_count=len(open_crit),
+            action_count=len(actions),
+            average_quality_after=avg,
+            self_review_passed=self_review_passed,
+            readiness_status=VERDICT_NOT_READY,
+            verdict=VERDICT_NOT_READY,
+            cache_info=cache_info or CacheInfo(),
+            provenance=PerformanceProvenance(
+                engine_name="performance_optimization",
+                engine_version="1.0.0",
+                sources_used=list(sources_used),
+                sources_missing=list(sources_missing),
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                confidence=confidence,
+                confidence_level=conf_level,
+                self_review_passed=self_review_passed,
+            ),
+            is_empty=len(units) == 0 and len(bottlenecks) == 0,
+        )
+        _log.info(
+            "BlueprintBuilder produced %s (%d units, %d bottlenecks, open_crit=%d)",
+            report.report_id[:8], len(units), len(bottlenecks), len(open_crit),
+        )
+        return report
+
+
+__all__ = ["BlueprintBuilder"]

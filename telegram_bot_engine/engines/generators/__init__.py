@@ -41,6 +41,7 @@ from .function_generation import FunctionGenerationEngine
 from .business_logic_generation import BusinessLogicGenerationEngine
 from .code_optimization import CodeOptimizationEngine
 from .security_review import SecurityReviewEngine
+from .performance_optimization import PerformanceOptimizationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -78,4 +79,5 @@ __all__ = [
     "BusinessLogicGenerationEngine",
     "CodeOptimizationEngine",
     "SecurityReviewEngine",
+    "PerformanceOptimizationEngine",
 ]
