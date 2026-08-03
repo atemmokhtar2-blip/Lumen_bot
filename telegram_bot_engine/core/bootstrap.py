@@ -62,6 +62,7 @@ from ..engines.generators import (
     ArchitectureComplianceEngine,
     CodeRefactoringEngine,
     StaticAnalysisEngine,
+    RuntimeSimulationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -418,6 +419,11 @@ def bootstrap(
     static_analysis_engine = StaticAnalysisEngine()
     registry.register_engine(static_analysis_engine)
 
+    # -- intelligent runtime simulation engine (Specification 040) --------
+    # ULTRA CRITICAL: simulate runtime/Telegram/stress; block on crash/leak.
+    runtime_simulation_engine = RuntimeSimulationEngine()
+    registry.register_engine(runtime_simulation_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -559,6 +565,10 @@ def bootstrap(
                      engine_id="static_analysis",
                      priority=125,
                      dependencies=["code_refactoring"])
+    manager.register(runtime_simulation_engine,
+                     engine_id="runtime_simulation",
+                     priority=126,
+                     dependencies=["static_analysis"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

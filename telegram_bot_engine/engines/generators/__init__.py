@@ -45,6 +45,7 @@ from .performance_optimization import PerformanceOptimizationEngine
 from .architecture_compliance import ArchitectureComplianceEngine
 from .code_refactoring import CodeRefactoringEngine
 from .static_analysis import StaticAnalysisEngine
+from .runtime_simulation import RuntimeSimulationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -86,4 +87,5 @@ __all__ = [
     "ArchitectureComplianceEngine",
     "CodeRefactoringEngine",
     "StaticAnalysisEngine",
+    "RuntimeSimulationEngine",
 ]
