@@ -53,6 +53,7 @@ from ..engines.generators import (
     GenerationOrchestratorEngine,
     CodeGenerationPlanningEngine,
     ProjectBuilderEngine,
+    ClassGenerationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -364,6 +365,11 @@ def bootstrap(
     project_builder_engine = ProjectBuilderEngine()
     registry.register_engine(project_builder_engine)
 
+    # -- intelligent class generation engine (Specification 031) ----------
+    # Emits class skeletons only (no business logic, no method bodies).
+    class_generation_engine = ClassGenerationEngine()
+    registry.register_engine(class_generation_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -469,6 +475,10 @@ def bootstrap(
                      engine_id="project_builder",
                      priority=116,
                      dependencies=["code_generation_planning"])
+    manager.register(class_generation_engine,
+                     engine_id="class_generation",
+                     priority=117,
+                     dependencies=["project_builder"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
