@@ -48,6 +48,7 @@ from .static_analysis import StaticAnalysisEngine
 from .runtime_simulation import RuntimeSimulationEngine
 from .self_healing import SelfHealingEngine
 from .integration_verification import IntegrationVerificationEngine
+from .unit_test_generation import UnitTestGenerationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -92,4 +93,5 @@ __all__ = [
     "RuntimeSimulationEngine",
     "SelfHealingEngine",
     "IntegrationVerificationEngine",
+    "UnitTestGenerationEngine",
 ]

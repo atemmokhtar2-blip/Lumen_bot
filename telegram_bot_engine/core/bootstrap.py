@@ -65,6 +65,7 @@ from ..engines.generators import (
     RuntimeSimulationEngine,
     SelfHealingEngine,
     IntegrationVerificationEngine,
+    UnitTestGenerationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -436,6 +437,11 @@ def bootstrap(
     integration_verification_engine = IntegrationVerificationEngine()
     registry.register_engine(integration_verification_engine)
 
+    # -- intelligent unit test generation engine (Specification 043) ------
+    # ULTRA CRITICAL: generate unit tests for all units; block if any fail.
+    unit_test_generation_engine = UnitTestGenerationEngine()
+    registry.register_engine(unit_test_generation_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -589,6 +595,10 @@ def bootstrap(
                      engine_id="integration_verification",
                      priority=128,
                      dependencies=["self_healing"])
+    manager.register(unit_test_generation_engine,
+                     engine_id="unit_test_generation",
+                     priority=129,
+                     dependencies=["integration_verification"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
