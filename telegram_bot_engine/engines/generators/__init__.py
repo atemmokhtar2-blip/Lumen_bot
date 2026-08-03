@@ -24,6 +24,8 @@ from .architecture_decision import ArchitectureDecisionEngine
 from .technology_selection import TechnologySelectionEngine
 from .capability_analyzer import ProjectCapabilityAnalyzerEngine
 from .risk_detection import RiskDetectionEngine
+from .execution_planning import ExecutionPlanningEngine
+from .project_structure_planning import ProjectStructurePlanningEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -44,4 +46,6 @@ __all__ = [
     "TechnologySelectionEngine",
     "ProjectCapabilityAnalyzerEngine",
     "RiskDetectionEngine",
+    "ExecutionPlanningEngine",
+    "ProjectStructurePlanningEngine",
 ]

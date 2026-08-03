@@ -41,6 +41,8 @@ from ..engines.generators import (
     TechnologySelectionEngine,
     ProjectCapabilityAnalyzerEngine,
     RiskDetectionEngine,
+    ExecutionPlanningEngine,
+    ProjectStructurePlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -275,6 +277,22 @@ def bootstrap(
     risk_detection_engine = RiskDetectionEngine()
     registry.register_engine(risk_detection_engine)
 
+    # -- execution planning engine (Specification 019) --------------------
+    # The execution planning engine converts all previous analysis and
+    # planning artefacts into a precise, ordered Execution Plan that the
+    # remaining engines can follow step by step.  It partitions work into
+    # phases, orders tasks, resolves dependencies, detects parallel-safe
+    # work, detects conflicts, and validates the plan through a quality
+    # gate.  It does not write code, create files, or start the build.
+    execution_planning_engine = ExecutionPlanningEngine()
+    registry.register_engine(execution_planning_engine)
+
+    # -- project structure planning engine (Specification 020) ------------
+    # Designs the complete project folder and file structure before any
+    # file is created. Produces the Project Structure Blueprint.
+    project_structure_planning_engine = ProjectStructurePlanningEngine()
+    registry.register_engine(project_structure_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -332,6 +350,14 @@ def bootstrap(
                      engine_id="risk_detection",
                      priority=104,
                      dependencies=["capability_analyzer"])
+    manager.register(execution_planning_engine,
+                     engine_id="execution_planning",
+                     priority=105,
+                     dependencies=["risk_detection"])
+    manager.register(project_structure_planning_engine,
+                     engine_id="project_structure_planning",
+                     priority=106,
+                     dependencies=["execution_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
