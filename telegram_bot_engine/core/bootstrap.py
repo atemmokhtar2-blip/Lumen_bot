@@ -46,6 +46,7 @@ from ..engines.generators import (
     ModuleArchitecturePlanningEngine,
     ComponentArchitecturePlanningEngine,
     InterfaceContractPlanningEngine,
+    DataFlowPlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -314,6 +315,12 @@ def bootstrap(
     interface_contract_planning_engine = InterfaceContractPlanningEngine()
     registry.register_engine(interface_contract_planning_engine)
 
+    # -- data flow planning engine (Specification 024) --------------------
+    # Designs all data movement paths, transformations, validation and
+    # security rules before generation begins.
+    data_flow_planning_engine = DataFlowPlanningEngine()
+    registry.register_engine(data_flow_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -391,6 +398,10 @@ def bootstrap(
                      engine_id="interface_contract_planning",
                      priority=109,
                      dependencies=["component_architecture_planning"])
+    manager.register(data_flow_planning_engine,
+                     engine_id="data_flow_planning",
+                     priority=110,
+                     dependencies=["interface_contract_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
