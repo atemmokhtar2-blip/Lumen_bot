@@ -50,6 +50,7 @@ from ..engines.generators import (
     ResourceDependencyPlanningEngine,
     GenerationStrategyEngine,
     GenerationReadinessEngine,
+    GenerationOrchestratorEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -342,6 +343,13 @@ def bootstrap(
     generation_readiness_engine = GenerationReadinessEngine()
     registry.register_engine(generation_readiness_engine)
 
+    # -- project generation orchestrator engine (Specification 028) -------
+    # Creates the generation session, distributes tasks to downstream
+    # generators, defines checkpoints and tracks progress. Does not write
+    # code itself — it orchestrates the generation process.
+    generation_orchestrator_engine = GenerationOrchestratorEngine()
+    registry.register_engine(generation_orchestrator_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -435,6 +443,10 @@ def bootstrap(
                      engine_id="generation_readiness",
                      priority=113,
                      dependencies=["generation_strategy"])
+    manager.register(generation_orchestrator_engine,
+                     engine_id="generation_orchestrator",
+                     priority=114,
+                     dependencies=["generation_readiness"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
