@@ -43,6 +43,7 @@ from ..engines.generators import (
     RiskDetectionEngine,
     ExecutionPlanningEngine,
     ProjectStructurePlanningEngine,
+    ModuleArchitecturePlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -293,6 +294,12 @@ def bootstrap(
     project_structure_planning_engine = ProjectStructurePlanningEngine()
     registry.register_engine(project_structure_planning_engine)
 
+    # -- module architecture planning engine (Specification 021) ----------
+    # Designs all logical modules, assigns responsibilities, defines
+    # interfaces and prevents overlapping before any file is created.
+    module_architecture_planning_engine = ModuleArchitecturePlanningEngine()
+    registry.register_engine(module_architecture_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -358,6 +365,10 @@ def bootstrap(
                      engine_id="project_structure_planning",
                      priority=106,
                      dependencies=["execution_planning"])
+    manager.register(module_architecture_planning_engine,
+                     engine_id="module_architecture_planning",
+                     priority=107,
+                     dependencies=["project_structure_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
