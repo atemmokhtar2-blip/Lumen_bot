@@ -52,6 +52,7 @@ from ..engines.generators import (
     GenerationReadinessEngine,
     GenerationOrchestratorEngine,
     CodeGenerationPlanningEngine,
+    ProjectBuilderEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -357,6 +358,12 @@ def bootstrap(
     code_generation_planning_engine = CodeGenerationPlanningEngine()
     registry.register_engine(code_generation_planning_engine)
 
+    # -- intelligent project builder engine (Specification 030) -----------
+    # Scaffolds the project: folders, empty files, manifest and registry
+    # according to the intelligent plan. Does not write business logic.
+    project_builder_engine = ProjectBuilderEngine()
+    registry.register_engine(project_builder_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -458,6 +465,10 @@ def bootstrap(
                      engine_id="code_generation_planning",
                      priority=115,
                      dependencies=["generation_orchestrator"])
+    manager.register(project_builder_engine,
+                     engine_id="project_builder",
+                     priority=116,
+                     dependencies=["code_generation_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
