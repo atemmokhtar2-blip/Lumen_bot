@@ -34,6 +34,7 @@ from .resource_dependency_planning import ResourceDependencyPlanningEngine
 from .generation_strategy import GenerationStrategyEngine
 from .generation_readiness import GenerationReadinessEngine
 from .generation_orchestrator import GenerationOrchestratorEngine
+from .code_generation_planning import CodeGenerationPlanningEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -64,4 +65,5 @@ __all__ = [
     "GenerationStrategyEngine",
     "GenerationReadinessEngine",
     "GenerationOrchestratorEngine",
+    "CodeGenerationPlanningEngine",
 ]

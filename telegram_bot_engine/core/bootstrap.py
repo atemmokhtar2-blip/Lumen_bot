@@ -51,6 +51,7 @@ from ..engines.generators import (
     GenerationStrategyEngine,
     GenerationReadinessEngine,
     GenerationOrchestratorEngine,
+    CodeGenerationPlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -350,6 +351,12 @@ def bootstrap(
     generation_orchestrator_engine = GenerationOrchestratorEngine()
     registry.register_engine(generation_orchestrator_engine)
 
+    # -- intelligent code generation planning engine (Specification 029 v2)
+    # Last planning step before code is written. Builds adaptive queue,
+    # SOLID/Clean rules, style, dry simulation, rollback and intelligence score.
+    code_generation_planning_engine = CodeGenerationPlanningEngine()
+    registry.register_engine(code_generation_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -447,6 +454,10 @@ def bootstrap(
                      engine_id="generation_orchestrator",
                      priority=114,
                      dependencies=["generation_readiness"])
+    manager.register(code_generation_planning_engine,
+                     engine_id="code_generation_planning",
+                     priority=115,
+                     dependencies=["generation_orchestrator"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
