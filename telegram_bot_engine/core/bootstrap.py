@@ -59,6 +59,7 @@ from ..engines.generators import (
     CodeOptimizationEngine,
     SecurityReviewEngine,
     PerformanceOptimizationEngine,
+    ArchitectureComplianceEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -400,6 +401,11 @@ def bootstrap(
     performance_optimization_engine = PerformanceOptimizationEngine()
     registry.register_engine(performance_optimization_engine)
 
+    # -- intelligent architecture compliance engine (Specification 037) ---
+    # ULTRA CRITICAL: implementation must match architecture; violations block.
+    architecture_compliance_engine = ArchitectureComplianceEngine()
+    registry.register_engine(architecture_compliance_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -529,6 +535,10 @@ def bootstrap(
                      engine_id="performance_optimization",
                      priority=122,
                      dependencies=["security_review"])
+    manager.register(architecture_compliance_engine,
+                     engine_id="architecture_compliance",
+                     priority=123,
+                     dependencies=["performance_optimization"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
