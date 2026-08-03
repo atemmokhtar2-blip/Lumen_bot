@@ -20,6 +20,7 @@ from .report_data import (
     FILE_TYPE_DOC,
     FILE_TYPE_SCRIPT,
     FILE_TYPE_INIT,
+    FOLDER_ROOT,
     FOLDER_CORE,
     FOLDER_HANDLERS,
     FOLDER_SERVICES,
