@@ -24,6 +24,7 @@ from .report_data import (
     KIND_FACTORY,
     KIND_STRATEGY,
     KIND_PROVIDER,
+    KIND_OTHER,
     COMM_INTERFACE,
 )
 from .data_readers import ModuleArchitectureData, ArchitectureDecisionData
@@ -212,6 +213,7 @@ class ComponentDiscoverer:
                 component_id=f"{mid}.provider",
                 name=f"{mname} Provider",
                 kind=KIND_PROVIDER,
+    KIND_OTHER,
                 module_id=mid,
                 purpose="Provide configured client instances",
                 responsibility="Create and configure external clients",
