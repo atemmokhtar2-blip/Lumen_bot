@@ -57,6 +57,7 @@ from ..engines.generators import (
     FunctionGenerationEngine,
     BusinessLogicGenerationEngine,
     CodeOptimizationEngine,
+    SecurityReviewEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -388,6 +389,11 @@ def bootstrap(
     code_optimization_engine = CodeOptimizationEngine()
     registry.register_engine(code_optimization_engine)
 
+    # -- intelligent security review engine (Specification 035) -----------
+    # ULTRA CRITICAL: detects/fixes vulns; blocks critical issues.
+    security_review_engine = SecurityReviewEngine()
+    registry.register_engine(security_review_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -509,6 +515,10 @@ def bootstrap(
                      engine_id="code_optimization",
                      priority=120,
                      dependencies=["business_logic_generation"])
+    manager.register(security_review_engine,
+                     engine_id="security_review",
+                     priority=121,
+                     dependencies=["code_optimization"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
