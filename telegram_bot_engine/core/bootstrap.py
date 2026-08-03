@@ -48,6 +48,7 @@ from ..engines.generators import (
     InterfaceContractPlanningEngine,
     DataFlowPlanningEngine,
     ResourceDependencyPlanningEngine,
+    GenerationStrategyEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -328,6 +329,12 @@ def bootstrap(
     resource_dependency_planning_engine = ResourceDependencyPlanningEngine()
     registry.register_engine(resource_dependency_planning_engine)
 
+    # -- generation strategy engine (Specification 026) -------------------
+    # Builds the complete ordered strategy for generating the project
+    # (stages, items, rules, rollback, optimisations) before any file is written.
+    generation_strategy_engine = GenerationStrategyEngine()
+    registry.register_engine(generation_strategy_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -413,6 +420,10 @@ def bootstrap(
                      engine_id="resource_dependency_planning",
                      priority=111,
                      dependencies=["data_flow_planning"])
+    manager.register(generation_strategy_engine,
+                     engine_id="generation_strategy",
+                     priority=112,
+                     dependencies=["resource_dependency_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

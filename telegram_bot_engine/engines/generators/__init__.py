@@ -31,6 +31,7 @@ from .component_architecture_planning import ComponentArchitecturePlanningEngine
 from .interface_contract_planning import InterfaceContractPlanningEngine
 from .data_flow_planning import DataFlowPlanningEngine
 from .resource_dependency_planning import ResourceDependencyPlanningEngine
+from .generation_strategy import GenerationStrategyEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -58,4 +59,5 @@ __all__ = [
     "InterfaceContractPlanningEngine",
     "DataFlowPlanningEngine",
     "ResourceDependencyPlanningEngine",
+    "GenerationStrategyEngine",
 ]
