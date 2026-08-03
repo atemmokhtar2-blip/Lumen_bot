@@ -37,6 +37,7 @@ from .generation_orchestrator import GenerationOrchestratorEngine
 from .code_generation_planning import CodeGenerationPlanningEngine
 from .project_builder import ProjectBuilderEngine
 from .class_generation import ClassGenerationEngine
+from .function_generation import FunctionGenerationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -70,4 +71,5 @@ __all__ = [
     "CodeGenerationPlanningEngine",
     "ProjectBuilderEngine",
     "ClassGenerationEngine",
+    "FunctionGenerationEngine",
 ]
