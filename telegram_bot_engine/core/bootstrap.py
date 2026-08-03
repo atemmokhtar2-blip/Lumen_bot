@@ -47,6 +47,7 @@ from ..engines.generators import (
     ComponentArchitecturePlanningEngine,
     InterfaceContractPlanningEngine,
     DataFlowPlanningEngine,
+    ResourceDependencyPlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -321,6 +322,12 @@ def bootstrap(
     data_flow_planning_engine = DataFlowPlanningEngine()
     registry.register_engine(data_flow_planning_engine)
 
+    # -- resource & dependency planning engine (Specification 025) --------
+    # Plans all libraries, frameworks, resources, versions, compatibility
+    # and risks before any file is generated.
+    resource_dependency_planning_engine = ResourceDependencyPlanningEngine()
+    registry.register_engine(resource_dependency_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -402,6 +409,10 @@ def bootstrap(
                      engine_id="data_flow_planning",
                      priority=110,
                      dependencies=["interface_contract_planning"])
+    manager.register(resource_dependency_planning_engine,
+                     engine_id="resource_dependency_planning",
+                     priority=111,
+                     dependencies=["data_flow_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

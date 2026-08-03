@@ -30,6 +30,7 @@ from .module_architecture_planning import ModuleArchitecturePlanningEngine
 from .component_architecture_planning import ComponentArchitecturePlanningEngine
 from .interface_contract_planning import InterfaceContractPlanningEngine
 from .data_flow_planning import DataFlowPlanningEngine
+from .resource_dependency_planning import ResourceDependencyPlanningEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -56,4 +57,5 @@ __all__ = [
     "ComponentArchitecturePlanningEngine",
     "InterfaceContractPlanningEngine",
     "DataFlowPlanningEngine",
+    "ResourceDependencyPlanningEngine",
 ]
