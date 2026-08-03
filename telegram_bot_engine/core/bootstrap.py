@@ -60,6 +60,7 @@ from ..engines.generators import (
     SecurityReviewEngine,
     PerformanceOptimizationEngine,
     ArchitectureComplianceEngine,
+    CodeRefactoringEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -406,6 +407,11 @@ def bootstrap(
     architecture_compliance_engine = ArchitectureComplianceEngine()
     registry.register_engine(architecture_compliance_engine)
 
+    # -- intelligent code refactoring engine (Specification 038) ----------
+    # ULTRA CRITICAL: safe refactorings only; behaviour & architecture preserved.
+    code_refactoring_engine = CodeRefactoringEngine()
+    registry.register_engine(code_refactoring_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -539,6 +545,10 @@ def bootstrap(
                      engine_id="architecture_compliance",
                      priority=123,
                      dependencies=["performance_optimization"])
+    manager.register(code_refactoring_engine,
+                     engine_id="code_refactoring",
+                     priority=124,
+                     dependencies=["architecture_compliance"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

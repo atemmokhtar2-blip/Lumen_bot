@@ -43,6 +43,7 @@ from .code_optimization import CodeOptimizationEngine
 from .security_review import SecurityReviewEngine
 from .performance_optimization import PerformanceOptimizationEngine
 from .architecture_compliance import ArchitectureComplianceEngine
+from .code_refactoring import CodeRefactoringEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -82,4 +83,5 @@ __all__ = [
     "SecurityReviewEngine",
     "PerformanceOptimizationEngine",
     "ArchitectureComplianceEngine",
+    "CodeRefactoringEngine",
 ]
