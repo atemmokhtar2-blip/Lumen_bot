@@ -61,6 +61,7 @@ from ..engines.generators import (
     PerformanceOptimizationEngine,
     ArchitectureComplianceEngine,
     CodeRefactoringEngine,
+    StaticAnalysisEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -412,6 +413,11 @@ def bootstrap(
     code_refactoring_engine = CodeRefactoringEngine()
     registry.register_engine(code_refactoring_engine)
 
+    # -- intelligent static analysis engine (Specification 039) -----------
+    # ULTRA CRITICAL: static analysis without execution; critical issues block.
+    static_analysis_engine = StaticAnalysisEngine()
+    registry.register_engine(static_analysis_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -549,6 +555,10 @@ def bootstrap(
                      engine_id="code_refactoring",
                      priority=124,
                      dependencies=["architecture_compliance"])
+    manager.register(static_analysis_engine,
+                     engine_id="static_analysis",
+                     priority=125,
+                     dependencies=["code_refactoring"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
