@@ -64,6 +64,7 @@ from ..engines.generators import (
     StaticAnalysisEngine,
     RuntimeSimulationEngine,
     SelfHealingEngine,
+    IntegrationVerificationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -430,6 +431,11 @@ def bootstrap(
     self_healing_engine = SelfHealingEngine()
     registry.register_engine(self_healing_engine)
 
+    # -- intelligent integration verification engine (Specification 042) --
+    # ULTRA CRITICAL: verify whole-system integration; block on failure.
+    integration_verification_engine = IntegrationVerificationEngine()
+    registry.register_engine(integration_verification_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -579,6 +585,10 @@ def bootstrap(
                      engine_id="self_healing",
                      priority=127,
                      dependencies=["runtime_simulation"])
+    manager.register(integration_verification_engine,
+                     engine_id="integration_verification",
+                     priority=128,
+                     dependencies=["self_healing"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

@@ -47,6 +47,7 @@ from .code_refactoring import CodeRefactoringEngine
 from .static_analysis import StaticAnalysisEngine
 from .runtime_simulation import RuntimeSimulationEngine
 from .self_healing import SelfHealingEngine
+from .integration_verification import IntegrationVerificationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -90,4 +91,5 @@ __all__ = [
     "StaticAnalysisEngine",
     "RuntimeSimulationEngine",
     "SelfHealingEngine",
+    "IntegrationVerificationEngine",
 ]
