@@ -55,6 +55,7 @@ from ..engines.generators import (
     ProjectBuilderEngine,
     ClassGenerationEngine,
     FunctionGenerationEngine,
+    BusinessLogicGenerationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -376,6 +377,11 @@ def bootstrap(
     function_generation_engine = FunctionGenerationEngine()
     registry.register_engine(function_generation_engine)
 
+    # -- intelligent business logic generation engine (Specification 033) -
+    # ULTRA CRITICAL: production-grade bodies with Clean Code / SOLID / security.
+    business_logic_generation_engine = BusinessLogicGenerationEngine()
+    registry.register_engine(business_logic_generation_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -489,6 +495,10 @@ def bootstrap(
                      engine_id="function_generation",
                      priority=118,
                      dependencies=["class_generation"])
+    manager.register(business_logic_generation_engine,
+                     engine_id="business_logic_generation",
+                     priority=119,
+                     dependencies=["function_generation"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

@@ -38,6 +38,7 @@ from .code_generation_planning import CodeGenerationPlanningEngine
 from .project_builder import ProjectBuilderEngine
 from .class_generation import ClassGenerationEngine
 from .function_generation import FunctionGenerationEngine
+from .business_logic_generation import BusinessLogicGenerationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -72,4 +73,5 @@ __all__ = [
     "ProjectBuilderEngine",
     "ClassGenerationEngine",
     "FunctionGenerationEngine",
+    "BusinessLogicGenerationEngine",
 ]
