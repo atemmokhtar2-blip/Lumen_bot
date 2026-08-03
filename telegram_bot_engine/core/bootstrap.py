@@ -44,6 +44,7 @@ from ..engines.generators import (
     ExecutionPlanningEngine,
     ProjectStructurePlanningEngine,
     ModuleArchitecturePlanningEngine,
+    ComponentArchitecturePlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -300,6 +301,12 @@ def bootstrap(
     module_architecture_planning_engine = ModuleArchitecturePlanningEngine()
     registry.register_engine(module_architecture_planning_engine)
 
+    # -- component architecture planning engine (Specification 022) -------
+    # Splits every module into independent components with clear
+    # responsibilities, interfaces and dependencies.
+    component_architecture_planning_engine = ComponentArchitecturePlanningEngine()
+    registry.register_engine(component_architecture_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -369,6 +376,10 @@ def bootstrap(
                      engine_id="module_architecture_planning",
                      priority=107,
                      dependencies=["project_structure_planning"])
+    manager.register(component_architecture_planning_engine,
+                     engine_id="component_architecture_planning",
+                     priority=108,
+                     dependencies=["module_architecture_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

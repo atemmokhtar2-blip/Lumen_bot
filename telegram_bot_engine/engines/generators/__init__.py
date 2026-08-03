@@ -27,6 +27,7 @@ from .risk_detection import RiskDetectionEngine
 from .execution_planning import ExecutionPlanningEngine
 from .project_structure_planning import ProjectStructurePlanningEngine
 from .module_architecture_planning import ModuleArchitecturePlanningEngine
+from .component_architecture_planning import ComponentArchitecturePlanningEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -50,4 +51,5 @@ __all__ = [
     "ExecutionPlanningEngine",
     "ProjectStructurePlanningEngine",
     "ModuleArchitecturePlanningEngine",
+    "ComponentArchitecturePlanningEngine",
 ]
