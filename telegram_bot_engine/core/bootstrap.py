@@ -63,6 +63,7 @@ from ..engines.generators import (
     CodeRefactoringEngine,
     StaticAnalysisEngine,
     RuntimeSimulationEngine,
+    SelfHealingEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -424,6 +425,11 @@ def bootstrap(
     runtime_simulation_engine = RuntimeSimulationEngine()
     registry.register_engine(runtime_simulation_engine)
 
+    # -- intelligent self-healing engine (Specification 041) --------------
+    # ULTRA CRITICAL: auto-repair upstream issues; re-validate; never break arch.
+    self_healing_engine = SelfHealingEngine()
+    registry.register_engine(self_healing_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -569,6 +575,10 @@ def bootstrap(
                      engine_id="runtime_simulation",
                      priority=126,
                      dependencies=["static_analysis"])
+    manager.register(self_healing_engine,
+                     engine_id="self_healing",
+                     priority=127,
+                     dependencies=["runtime_simulation"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
