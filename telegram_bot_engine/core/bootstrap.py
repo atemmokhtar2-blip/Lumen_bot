@@ -45,6 +45,7 @@ from ..engines.generators import (
     ProjectStructurePlanningEngine,
     ModuleArchitecturePlanningEngine,
     ComponentArchitecturePlanningEngine,
+    InterfaceContractPlanningEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -307,6 +308,12 @@ def bootstrap(
     component_architecture_planning_engine = ComponentArchitecturePlanningEngine()
     registry.register_engine(component_architecture_planning_engine)
 
+    # -- interface & contract planning engine (Specification 023) ---------
+    # Designs all interfaces and contracts that regulate communication
+    # between modules and components, preventing strong coupling.
+    interface_contract_planning_engine = InterfaceContractPlanningEngine()
+    registry.register_engine(interface_contract_planning_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -380,6 +387,10 @@ def bootstrap(
                      engine_id="component_architecture_planning",
                      priority=108,
                      dependencies=["module_architecture_planning"])
+    manager.register(interface_contract_planning_engine,
+                     engine_id="interface_contract_planning",
+                     priority=109,
+                     dependencies=["component_architecture_planning"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
