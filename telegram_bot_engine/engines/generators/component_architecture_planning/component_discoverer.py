@@ -213,7 +213,6 @@ class ComponentDiscoverer:
                 component_id=f"{mid}.provider",
                 name=f"{mname} Provider",
                 kind=KIND_PROVIDER,
-    KIND_OTHER,
                 module_id=mid,
                 purpose="Provide configured client instances",
                 responsibility="Create and configure external clients",
