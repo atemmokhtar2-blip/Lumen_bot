@@ -49,6 +49,7 @@ from ..engines.generators import (
     DataFlowPlanningEngine,
     ResourceDependencyPlanningEngine,
     GenerationStrategyEngine,
+    GenerationReadinessEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -335,6 +336,12 @@ def bootstrap(
     generation_strategy_engine = GenerationStrategyEngine()
     registry.register_engine(generation_strategy_engine)
 
+    # -- generation readiness validation engine (Specification 027) -------
+    # Final gate before generation. Requires 100% readiness across all
+    # upstream blueprints; rejects if any critical gap remains.
+    generation_readiness_engine = GenerationReadinessEngine()
+    registry.register_engine(generation_readiness_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -424,6 +431,10 @@ def bootstrap(
                      engine_id="generation_strategy",
                      priority=112,
                      dependencies=["resource_dependency_planning"])
+    manager.register(generation_readiness_engine,
+                     engine_id="generation_readiness",
+                     priority=113,
+                     dependencies=["generation_strategy"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
