@@ -83,6 +83,7 @@ from ..engines.generators import (
     CentralLoggingEngine,
     ConfigurationManagementEngine,
     SecurityPermissionEngine,
+    ServiceManagementEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -544,6 +545,11 @@ def bootstrap(
     security_permission_engine = SecurityPermissionEngine()
     registry.register_engine(security_permission_engine)
 
+    # -- service management engine (Specification 061) ---------------------
+    # MAXIMUM CRITICAL: service registry, lifecycle, health, recovery.
+    service_management_engine = ServiceManagementEngine()
+    registry.register_engine(service_management_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -769,6 +775,10 @@ def bootstrap(
                      engine_id="security_permission",
                      priority=146,
                      dependencies=["configuration_management"])
+    manager.register(service_management_engine,
+                     engine_id="service_management",
+                     priority=147,
+                     dependencies=["security_permission"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
