@@ -277,11 +277,31 @@ class LocalProcessDriver(DeploymentProvider):
         except Exception as e:
             pre_notes = [f"preflight_error:{type(e).__name__}"]
 
+        # Package Reality pre-host check (warn only; never blocks install)
+        pkg_notes: list = []
+        try:
+            from telegram_bot_engine.formal_engine.services.package_reality import (
+                assess_repo_packages,
+                recommend_upgrades,
+            )
+            preport = assess_repo_packages(project_path)
+            pkg_notes.append(
+                f"package_health={preport.health_score:.2f} "
+                f"outdated={preport.outdated_count} major_lag={preport.major_lag_count} "
+                f"yanked={preport.yanked_count}"
+            )
+            for rec in recommend_upgrades(preport)[:8]:
+                pkg_notes.append(
+                    f"upgrade:{rec.name}:{rec.kind}:{'auto' if rec.auto_applicable else 'manual'}"
+                )
+        except Exception as e:
+            pkg_notes.append(f"package_reality_skip:{type(e).__name__}")
+
         py, mode, isolation, note = _ensure_runtime(project_path)
         req = _find_requirements(project_path)
         ok, log, warns = _pip_install(py, req, project_path, mode, isolation)
         install_log.write_text(
-            f"mode={mode}\nnote={note}\npreflight={pre_notes}\nwarns={warns}\n\n{log}",
+            f"mode={mode}\nnote={note}\npreflight={pre_notes}\npackage_reality={pkg_notes}\nwarns={warns}\n\n{log}",
             encoding="utf-8",
         )
         if not ok:

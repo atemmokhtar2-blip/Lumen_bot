@@ -357,3 +357,149 @@ def assess_repo_packages(
     extra_packages: list[str] | None = None,
 ) -> PackageHealthReport:
     return PackageRealityEngine().assess_repo(root, extra_packages=extra_packages)
+
+
+@dataclass
+class UpgradeRecommendation:
+    name: str
+    from_spec: str
+    to_spec: str
+    kind: str  # safe_minor | major_manual | yanked_fix
+    reason_ar: str
+    auto_applicable: bool = False
+
+
+def recommend_upgrades(report: PackageHealthReport) -> list[UpgradeRecommendation]:
+    """Build upgrade recommendations from a health report."""
+    recs: list[UpgradeRecommendation] = []
+    for p in report.packages:
+        if not p.latest:
+            continue
+        if p.status == "yanked":
+            recs.append(
+                UpgradeRecommendation(
+                    name=p.name,
+                    from_spec=p.declared or "",
+                    to_spec=f"{p.name}>={p.latest}",
+                    kind="yanked_fix",
+                    reason_ar=f"الإصدار مسحوب — ثبّت latest {p.latest}",
+                    auto_applicable=True,
+                )
+            )
+        elif p.status == "outdated":
+            recs.append(
+                UpgradeRecommendation(
+                    name=p.name,
+                    from_spec=p.declared or "",
+                    to_spec=f"{p.name}>={p.latest}",
+                    kind="safe_minor",
+                    reason_ar=p.message_ar or f"ترقية آمنة إلى {p.latest}",
+                    auto_applicable=True,
+                )
+            )
+        elif p.status == "major_lag":
+            recs.append(
+                UpgradeRecommendation(
+                    name=p.name,
+                    from_spec=p.declared or "",
+                    to_spec=f"{p.name}>={p.latest}",
+                    kind="major_manual",
+                    reason_ar=p.message_ar
+                    or f"ترقية major إلى {p.latest} — راجع التغييرات أولاً",
+                    auto_applicable=False,
+                )
+            )
+    return recs
+
+
+def apply_safe_upgrades(
+    root: str | Path, *, include_major: bool = False
+) -> tuple[list[str], str]:
+    """
+    Rewrite requirements for auto-applicable upgrades only.
+    Returns (changed_package_names, message_ar).
+    """
+    root = Path(root)
+    engine = PackageRealityEngine()
+    report = engine.assess_repo(root)
+    recs = recommend_upgrades(report)
+    applicable = [
+        r
+        for r in recs
+        if r.auto_applicable or (include_major and r.kind == "major_manual")
+    ]
+    if not applicable:
+        manual = [r for r in recs if not r.auto_applicable]
+        msg = "لا ترقيات آمنة للتطبيق تلقائياً."
+        if manual:
+            msg += " يحتاج مراجعة يدوية: " + ", ".join(
+                f"`{r.name}` ({r.kind})" for r in manual[:8]
+            )
+        return [], msg
+
+    req_path = None
+    for fname in ("requirements.txt", "requirements-bot.txt", "reqs.txt"):
+        p = root / fname
+        if p.is_file():
+            req_path = p
+            break
+    if req_path is None:
+        req_path = root / "requirements.txt"
+        req_path.write_text("", encoding="utf-8")
+
+    text = req_path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+    changed: list[str] = []
+    by_norm = {_norm_name(r.name): r for r in applicable}
+
+    new_lines: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        parsed = _parse_req_line(line)
+        if not parsed:
+            new_lines.append(line)
+            continue
+        name, _ver = parsed
+        key = _norm_name(name)
+        if key in by_norm:
+            rec = by_norm[key]
+            new_lines.append(rec.to_spec)
+            changed.append(rec.name)
+            seen.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, rec in by_norm.items():
+        if key not in seen:
+            new_lines.append(rec.to_spec)
+            changed.append(rec.name)
+
+    if not changed:
+        return [], "لم يتغير أي سطر في requirements."
+
+    body = "\n".join(new_lines).rstrip() + "\n"
+    if "# package-reality-safe-upgrade" not in body:
+        body += "\n# package-reality-safe-upgrade applied\n"
+    req_path.write_text(body, encoding="utf-8")
+    return changed, (
+        "تُطبّقت ترقيات آمنة على `"
+        + req_path.name
+        + "`: "
+        + ", ".join("`" + c + "`" for c in changed)
+    )
+
+
+def format_recommendations(recs: list[UpgradeRecommendation]) -> str:
+    if not recs:
+        return "لا توصيات ترقية حالياً."
+    lines = ["🔧 *توصيات الترقية (Package Reality)*"]
+    for r in recs:
+        flag = "⚡" if r.auto_applicable else "🖐"
+        lines.append(
+            f"• {flag} `{r.name}`: `{r.from_spec or '—'}` → `{r.to_spec}` "
+            f"({r.kind}) — {r.reason_ar}"
+        )
+    lines.append(
+        "نفّذ الآمن: «طبّق الترقيات الآمنة» | major يدوياً بعد المراجعة."
+    )
+    return "\n".join(lines)

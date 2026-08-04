@@ -111,6 +111,19 @@ def detect_repo_intent(text: str) -> tuple[str, dict[str, Any]]:
         return "package_health", params
 
     if any(k in t for k in (
+        "طبق الترقيات", "طبّق الترقيات", "طبق الترقيات الآمنة",
+        "طبّق الترقيات الآمنة", "apply safe upgrade", "apply upgrades",
+        "رقّي الحزم", "رقي الحزم", "apply safe upgrades",
+    )):
+        return "upgrade_apply", params
+
+    if any(k in t for k in (
+        "توصيات الترقية", "ترقية آمنة", "ترقيات مقترحة", "upgrade recommend",
+        "recommend upgrade", "ماذا أرقّي", "ماذ ارقى",
+    )):
+        return "upgrade_recommend", params
+
+    if any(k in t for k in (
         "سد فجوات", "سد الفجوات", "أضف التبعيات", "اضف التبعيات",
         "apply deps", "fix deps", "dependency gaps", "فجوات التبعيات",
     )):
@@ -537,18 +550,64 @@ class RepoDevService:
 
 
         if action == "package_health":
-            from ..package_reality import assess_repo_packages
+            from ..package_reality import (
+                assess_repo_packages,
+                recommend_upgrades,
+                format_recommendations,
+            )
             report = assess_repo_packages(root)
+            recs = recommend_upgrades(report)
+            msg = report.to_user_text()
+            if recs:
+                msg += "\n\n" + format_recommendations(recs)
             return RepoDevResult(
                 ok=True,
                 action="package_health",
-                message=report.to_user_text(),
+                message=msg,
                 contract=contract,
                 data={
                     "health_score": report.health_score,
                     "outdated": report.outdated_count,
                     "major_lag": report.major_lag_count,
+                    "recs": len(recs),
                 },
+            )
+
+        if action == "upgrade_recommend":
+            from ..package_reality import (
+                assess_repo_packages,
+                recommend_upgrades,
+                format_recommendations,
+            )
+            report = assess_repo_packages(root)
+            recs = recommend_upgrades(report)
+            return RepoDevResult(
+                ok=True,
+                action="upgrade_recommend",
+                message=format_recommendations(recs),
+                contract=contract,
+                data={"count": len(recs)},
+            )
+
+        if action == "upgrade_apply":
+            from ..package_reality import apply_safe_upgrades, assess_repo_packages
+            changed, msg = apply_safe_upgrades(root, include_major=False)
+            new_c = contract
+            if changed:
+                new_c = understand_repo(root, remote_url=contract.remote_url or "")
+            # append fresh health snapshot
+            try:
+                snap = assess_repo_packages(root).to_user_text()
+                msg = msg + "\n\n" + snap
+            except Exception:
+                pass
+            return RepoDevResult(
+                ok=True,
+                action="upgrade_apply",
+                message=msg,
+                changed_files=["requirements.txt"] if changed else [],
+                contract=new_c,
+                data={"changed": changed},
             )
 
         if action == "apply_dev":
