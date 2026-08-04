@@ -41,7 +41,7 @@ class LiveRunReport:
 
     def to_user_text(self) -> str:
         icon = "✅" if self.ok else "❌"
-        lines = [f"{icon} *تشغيل حي — {self.phase}*", f"• {self.message}"]
+        lines = [f"{icon} *تشغيل حي — {self.phase}*", f"• {self.message}", "• build: `live-fix-v3`"]
         if self.bot_username:
             lines.append(f"• البوت: @{self.bot_username}")
         if self.entry_point:

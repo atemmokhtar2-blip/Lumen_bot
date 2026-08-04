@@ -139,11 +139,24 @@ def smart_clone(
     name = Path(urlparse(url).path).stem or "repo"
     target = dest / name
     if target.exists():
+        # Try to refresh existing clone (best effort)
+        try:
+            subprocess.run(
+                ["git", "-C", str(target), "fetch", "--depth", "1", "origin"],
+                capture_output=True, text=True, timeout=60, check=False,
+                env={**dict(**__import__("os").environ), "GIT_TERMINAL_PROMPT": "0"},
+            )
+            subprocess.run(
+                ["git", "-C", str(target), "reset", "--hard", "origin/HEAD"],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        except Exception:
+            pass
         return CloneResult(
             ok=True,
             path=str(target),
             url=url,
-            message=f"المجلد موجود مسبقاً — إعادة استخدام: {target}",
+            message=f"المجلد موجود — تم تحديثه إن أمكن: {target}",
         )
 
     cmd = [
