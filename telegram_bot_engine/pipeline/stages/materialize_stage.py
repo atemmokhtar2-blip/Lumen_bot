@@ -19,9 +19,13 @@ from ...core.result import StageResult
 from ..base_stage import BaseStage
 from .feature_codegen import (
     build_feature_module,
+    build_main_from_blueprint,
     build_ptb_main,
     collect_features,
+    extract_commands_from_context,
+    extract_handlers_from_context,
     resolve_start_reply,
+    start_reply_from_context,
 )
 
 
@@ -152,13 +156,10 @@ def _content_for_file(
         )
 
     if base in ("main.py", "bot.py", "app.py", "__main__.py"):
-        # Feature-aware entry point (uses analysis/blueprint features)
-        if framework in ("python-telegram-bot", "ptb") or framework not in (
-            "aiogram",
-            "pyrogram",
-            "telethon",
-        ):
-            return build_ptb_main(start_reply, features)
+        # Prefer blueprint-driven assembly when commands were provided by caller
+        # (execute() passes them via features list + start_reply already resolved).
+        if features:
+            return build_ptb_main(start_reply, features) if framework != "aiogram" else _main_module(framework, start_reply)
         return _main_module(framework, start_reply)
 
     if base == "__init__.py":
@@ -390,11 +391,19 @@ class MaterializeStage(BaseStage):
         blueprint = context.get("project_blueprint") or context.blueprint
         framework = _detect_framework(context.request, blueprint)
         project_name = _project_name(context.request, blueprint)
-        features = collect_features(context)
-        start_reply = resolve_start_reply(
-            context.request, features, fallback=_extract_start_reply(context.request)
-        )
+        # Drive code from blueprint/analysis — NOT from domain templates
+        commands = extract_commands_from_context(context)
+        handlers = extract_handlers_from_context(context)
+        features = [c["name"] for c in commands]
+        start_reply = start_reply_from_context(context, commands)
         class_sources = _class_source_index(context)
+        # Pre-build main from full blueprint specs (richer than name-only features)
+        main_source = build_main_from_blueprint(
+            framework=framework,
+            commands=commands,
+            handlers=handlers,
+            start_reply=start_reply,
+        )
 
         errors: List[str] = []
         warnings: List[str] = []
@@ -412,15 +421,19 @@ class MaterializeStage(BaseStage):
 
         # 2) Files
         for path in file_paths:
-            content = _content_for_file(
-                path,
-                request=context.request,
-                framework=framework,
-                project_name=project_name,
-                start_reply=start_reply,
-                class_sources=class_sources,
-                features=features,
-            )
+            base = path.replace("\\", "/").split("/")[-1].lower()
+            if base in ("main.py", "bot.py", "app.py", "__main__.py"):
+                content = main_source
+            else:
+                content = _content_for_file(
+                    path,
+                    request=context.request,
+                    framework=framework,
+                    project_name=project_name,
+                    start_reply=start_reply,
+                    class_sources=class_sources,
+                    features=features,
+                )
             result = self._files.build(
                 context,
                 {"path": path, "content": content, "overwrite": True},

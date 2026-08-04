@@ -1,259 +1,254 @@
 """
-Feature-aware code generation for materialize stage.
+Blueprint-driven code assembly for materialize.
 
-Turns analysis/blueprint features into real python-telegram-bot handlers
-instead of a generic Hello World main.py.
+NO domain templates (no hard-coded ban/mute/company bots).
+
+Code is derived only from:
+- Blueprint.commands / Blueprint.handlers (composer output)
+- analysis_report features (names + descriptions)
+- class_generation reports when they provide source_code
+
+If understanding produced commands X,Y,Z — we emit handlers for X,Y,Z
+from those specs, not from a fixed catalogue of bot types.
 """
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Set
+import re
+from typing import Any, Dict, List, Optional, Sequence
 
 
-def collect_features(context: Any) -> List[str]:
-    names: List[str] = []
-    if context is None:
-        return names
+def _safe_ident(name: str) -> str:
+    s = re.sub(r"[^0-9a-zA-Z_]+", "_", (name or "").strip().lower())
+    if not s:
+        s = "handler"
+    if s[0].isdigit():
+        s = "cmd_" + s
+    return s
 
-    report = context.get("analysis_report") if hasattr(context, "get") else None
-    if report is not None:
-        for f in getattr(report, "features", []) or []:
-            n = getattr(f, "name", None) or str(f)
-            if n:
-                names.append(str(n).lower())
 
-    bp = context.get("project_blueprint") if hasattr(context, "get") else None
+def extract_commands_from_context(context: Any) -> List[Dict[str, Any]]:
+    commands: List[Dict[str, Any]] = []
+    seen = set()
+
+    bp = None
+    if context is not None:
+        # Prefer pipeline Blueprint (CommandSpec list from composer)
+        bp = getattr(context, "blueprint", None)
+        if bp is None and hasattr(context, "get"):
+            bp = context.get("project_blueprint")
+
     if bp is not None:
-        for f in getattr(bp, "features", []) or []:
-            n = getattr(f, "name", None) or str(f)
-            if n:
-                names.append(str(n).lower())
+        for cmd in getattr(bp, "commands", []) or []:
+            name = str(getattr(cmd, "name", "") or "").lstrip("/").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            commands.append({
+                "name": name,
+                "description": str(getattr(cmd, "description", "") or ""),
+                "admin_only": bool(getattr(cmd, "admin_only", False)),
+                "group_only": bool(getattr(cmd, "group_only", False)),
+                "response_type": str(getattr(cmd, "response_type", "text") or "text"),
+            })
 
-    req = (getattr(context, "request", "") or "").lower()
-    keyword_map = {
-        "ban": ["ban", "/ban", "حظر", "طرد"],
-        "mute": ["mute", "/mute", "كتم"],
-        "warn": ["warn", "/warn", "تحذير"],
-        "stats": ["stats", "/stats", "إحصائ", "احصائ"],
-        "welcome": ["welcome", "ترحيب", "أعضاء جدد", "اعضاء جدد", "new member"],
-        "user_management": ["user_management", "مستخدمين", "أعضاء", "اعضاء"],
-        "admin_panel": ["admin", "مشرف", "إدارة مجموعات", "ادارة مجموعات", "group admin"],
-        "message_handler": ["بيرد", "يرد", "reply", "echo"],
-    }
-    for feat, kws in keyword_map.items():
-        if any(k in req for k in kws):
-            names.append(feat)
+    report = context.get("analysis_report") if context and hasattr(context, "get") else None
+    if report is not None and not commands:
+        for f in getattr(report, "features", []) or []:
+            name = str(getattr(f, "name", "") or "").strip().lower()
+            if not name or name in seen:
+                continue
+            if name in {
+                "message_handler", "config_loader", "logger", "bot_application",
+                "database", "middleware",
+            }:
+                continue
+            seen.add(name)
+            desc = str(
+                getattr(f, "description", None)
+                or getattr(f, "display_name", None)
+                or name
+            )
+            commands.append({
+                "name": name.replace(" ", "_")[:32],
+                "description": desc,
+                "admin_only": False,
+                "group_only": False,
+                "response_type": "text",
+            })
 
-    out: List[str] = []
-    seen: Set[str] = set()
-    for n in names:
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out
+    if "start" not in seen:
+        commands.insert(0, {
+            "name": "start",
+            "description": "Start the bot.",
+            "admin_only": False,
+            "group_only": False,
+            "response_type": "text",
+        })
+        seen.add("start")
+    if "help" not in seen:
+        commands.append({
+            "name": "help",
+            "description": "Show available commands.",
+            "admin_only": False,
+            "group_only": False,
+            "response_type": "text",
+        })
+
+    return commands
 
 
-def resolve_start_reply(request: str, features: List[str], fallback: str = "Hello World") -> str:
-    text = request or ""
-    # Explicit quoted reply after /start
-    import re
-    m = re.search(r"""/start[^\"'\n]{0,80}[\"']([^\"']+)[\"']""", text, re.I | re.S)
+def extract_handlers_from_context(context: Any) -> List[Dict[str, Any]]:
+    handlers: List[Dict[str, Any]] = []
+    bp = None
+    if context is not None:
+        bp = getattr(context, "blueprint", None)
+        if bp is None and hasattr(context, "get"):
+            bp = context.get("project_blueprint")
+    if bp is None:
+        return handlers
+    for h in getattr(bp, "handlers", []) or []:
+        handlers.append({
+            "name": str(getattr(h, "name", "") or "handler"),
+            "handler_type": str(getattr(h, "handler_type", "message") or "message"),
+            "triggers": list(getattr(h, "triggers", []) or []),
+            "description": str(getattr(h, "description", "") or ""),
+        })
+    return handlers
+
+
+def start_reply_from_context(context: Any, commands: Sequence[Dict[str, Any]]) -> str:
+    request = (getattr(context, "request", "") or "") if context else ""
+    m = re.search(r"""/start[^\"'\n]{0,80}[\"']([^\"']+)[\"']""", request, re.I | re.S)
     if m:
-        return m.group(1).strip() or fallback
+        return m.group(1).strip()
     m = re.search(
-        r"""(?:يرسل|send|replies?|reply)\s*[:：]?\s*[\"']?([^\n\"']+)[\"']?""",
-        text,
+        r"""(?:يرسل|send|replies?|reply)\s*[:：]?\s*[\"']([^\"']+)[\"']""",
+        request,
         re.I,
     )
     if m:
-        c = m.group(1).strip().strip("-•* ")
-        if c and len(c) < 120 and "/start" not in c.lower():
-            # avoid capturing feature lists
-            if not any(x in c for x in ("/ban", "/mute", "أمر", "مميزات")):
-                return c
-    if re.search(r"hello\s*world", text, re.I):
-        return "Hello World"
-    if "هاي" in text and not features:
-        return "هاي"
+        return m.group(1).strip()
 
-    admin_feats = {"ban", "mute", "warn", "stats", "welcome", "admin_panel", "user_management"}
-    if admin_feats.intersection(features):
-        return (
-            "مرحباً أيها المشرف 👋\n"
-            "أوامر الإدارة:\n"
-            "/ban — حظر عضو\n"
-            "/mute — كتم عضو\n"
-            "/warn — تحذير\n"
-            "/stats — إحصائيات\n"
-            "/help — المساعدة"
-        )
-    return fallback
+    lines = ["تم تشغيل البوت."]
+    if request.strip():
+        first = request.strip().splitlines()[0].strip()
+        if len(first) > 120:
+            first = first[:117] + "..."
+        lines.append(f"الطلب: {first}")
+    if commands:
+        lines.append("الأوامر:")
+        for c in commands:
+            if c["name"] == "start":
+                continue
+            desc = c.get("description") or ""
+            if desc:
+                lines.append(f"/{c['name']} — {desc}")
+            else:
+                lines.append(f"/{c['name']}")
+    return "\n".join(lines)
 
 
-def build_ptb_main(start_reply: str, features: List[str]) -> str:
-    feats = set(features)
+def build_main_from_blueprint(
+    *,
+    framework: str,
+    commands: Sequence[Dict[str, Any]],
+    handlers: Sequence[Dict[str, Any]],
+    start_reply: str,
+) -> str:
+    if framework == "aiogram":
+        return _build_aiogram(commands, handlers, start_reply)
+    return _build_ptb(commands, handlers, start_reply)
+
+
+def _build_ptb(
+    commands: Sequence[Dict[str, Any]],
+    handlers: Sequence[Dict[str, Any]],
+    start_reply: str,
+) -> str:
     reply = repr(start_reply)
+    fn_blocks: List[str] = []
+    registers: List[str] = []
 
-    has_ban = "ban" in feats or any("ban" in f for f in feats)
-    has_mute = "mute" in feats or any("mute" in f for f in feats)
-    has_warn = "warn" in feats or any("warn" in f for f in feats)
-    has_stats = (
-        "stats" in feats
-        or "analytics" in feats
-        or any("stat" in f or "analytics" in f for f in feats)
-    )
-    has_welcome = "welcome" in feats or any("welcome" in f for f in feats)
+    for cmd in commands:
+        name = cmd["name"]
+        ident = _safe_ident(name)
+        desc = cmd.get("description") or f"Command /{name}"
+        admin = bool(cmd.get("admin_only"))
+        group = bool(cmd.get("group_only"))
 
-    help_lines = ["الأوامر:", "/start", "/help"]
-    extra_blocks: List[str] = []
-    register: List[str] = [
-        '    app.add_handler(CommandHandler("start", start))',
-        '    app.add_handler(CommandHandler("help", help_cmd))',
-    ]
+        if name == "start":
+            body = (
+                f"async def {ident}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
+                f"    if update.message:\n"
+                f"        await update.message.reply_text({reply})\n"
+            )
+        elif name == "help":
+            help_lines = ["Available commands:"]
+            for c in commands:
+                help_lines.append(f"/{c['name']} — {c.get('description') or c['name']}")
+            body = (
+                f"async def {ident}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
+                f"    if update.message:\n"
+                f"        await update.message.reply_text({chr(10).join(help_lines)!r})\n"
+            )
+        else:
+            guards = ""
+            if group:
+                guards += (
+                    '    if update.effective_chat and update.effective_chat.type not in '
+                    '("group", "supergroup"):\n'
+                    '        await update.message.reply_text("This command is for groups only.")\n'
+                    '        return\n'
+                )
+            if admin:
+                guards += (
+                    '    if update.effective_chat and update.effective_user:\n'
+                    '        member = await context.bot.get_chat_member('
+                    'update.effective_chat.id, update.effective_user.id)\n'
+                    '        if member.status not in ("administrator", "creator"):\n'
+                    '            await update.message.reply_text("Admins only.")\n'
+                    '            return\n'
+                )
+            body = (
+                f"async def {ident}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
+                f"    if not update.message:\n"
+                f"        return\n"
+                f"{guards}"
+                f"    args = context.args or []\n"
+                f"    text = {desc!r}\n"
+                f"    if args:\n"
+                f"        text = text + \"\\nArgs: \" + \" \".join(args)\n"
+                f"    await update.message.reply_text(text)\n"
+            )
+        fn_blocks.append(body)
+        registers.append(f'    app.add_handler(CommandHandler("{name}", {ident}))')
 
-    if has_ban:
-        help_lines.append("/ban — حظر عضو (رد على رسالة)")
-        register.append('    app.add_handler(CommandHandler("ban", ban))')
-        extra_blocks.append(
-            '''
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_chat:
-        return
-    chat = update.effective_chat
-    user = update.effective_user
-    if chat.type not in ("group", "supergroup"):
-        await update.message.reply_text("هذا الأمر للمجموعات فقط.")
-        return
-    member = await context.bot.get_chat_member(chat.id, user.id)
-    if member.status not in ("administrator", "creator"):
-        await update.message.reply_text("هذا الأمر للمشرفين فقط.")
-        return
-    target = None
-    if update.message.reply_to_message and update.message.reply_to_message.from_user:
-        target = update.message.reply_to_message.from_user.id
-    elif context.args:
-        try:
-            target = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("استخدم: /ban بالرد على رسالة أو /ban <user_id>")
-            return
-    if not target:
-        await update.message.reply_text("حدد العضو أولاً.")
-        return
-    await context.bot.ban_chat_member(chat.id, target)
-    await update.message.reply_text(f"تم حظر العضو {target}.")
-'''
-        )
+    for h in handlers:
+        hname = _safe_ident(h.get("name") or "on_message")
+        triggers = h.get("triggers") or []
+        if "new_chat_members" in triggers:
+            fn_blocks.append(
+                f"async def {hname}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
+                f"    if not update.message or not update.message.new_chat_members:\n"
+                f"        return\n"
+                f"    for member in update.message.new_chat_members:\n"
+                f"        if member.is_bot:\n"
+                f"            continue\n"
+                f"        await update.message.reply_text(\n"
+                f"            f\"Welcome {{member.full_name}}!\"\n"
+                f"        )\n"
+            )
+            registers.append(
+                f"    app.add_handler(MessageHandler("
+                f"filters.StatusUpdate.NEW_CHAT_MEMBERS, {hname}))"
+            )
 
-    if has_mute:
-        help_lines.append("/mute [دقائق] — كتم عضو")
-        register.append('    app.add_handler(CommandHandler("mute", mute))')
-        extra_blocks.append(
-            '''
-async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from datetime import datetime, timedelta, timezone
-    from telegram import ChatPermissions
-    if not update.message or not update.effective_chat:
-        return
-    chat = update.effective_chat
-    user = update.effective_user
-    member = await context.bot.get_chat_member(chat.id, user.id)
-    if member.status not in ("administrator", "creator"):
-        await update.message.reply_text("للمشرفين فقط.")
-        return
-    if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
-        await update.message.reply_text("رد على رسالة العضو ثم: /mute [دقائق]")
-        return
-    target = update.message.reply_to_message.from_user.id
-    minutes = 60
-    if context.args:
-        try:
-            minutes = int(context.args[0])
-        except ValueError:
-            pass
-    until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    await context.bot.restrict_chat_member(
-        chat.id,
-        target,
-        permissions=ChatPermissions(can_send_messages=False),
-        until_date=until,
-    )
-    await update.message.reply_text(f"تم كتم {target} لمدة {minutes} دقيقة.")
-'''
-        )
+    return f'''"""Telegram bot entry point — assembled from blueprint commands/handlers.
 
-    if has_warn:
-        help_lines.append("/warn — تحذير عضو")
-        register.append('    app.add_handler(CommandHandler("warn", warn))')
-        extra_blocks.append(
-            '''
-_WARNINGS = {}
-
-async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_chat:
-        return
-    chat = update.effective_chat
-    user = update.effective_user
-    member = await context.bot.get_chat_member(chat.id, user.id)
-    if member.status not in ("administrator", "creator"):
-        await update.message.reply_text("للمشرفين فقط.")
-        return
-    if not update.message.reply_to_message or not update.message.reply_to_message.from_user:
-        await update.message.reply_text("رد على رسالة العضو لاستخدام /warn")
-        return
-    target = update.message.reply_to_message.from_user
-    key = (chat.id, target.id)
-    _WARNINGS[key] = _WARNINGS.get(key, 0) + 1
-    count = _WARNINGS[key]
-    await update.message.reply_text(f"تحذير لـ {target.full_name}. العدد: {count}")
-    if count >= 3:
-        await context.bot.ban_chat_member(chat.id, target.id)
-        await update.message.reply_text("3 تحذيرات — تم الحظر.")
-'''
-        )
-
-    if has_stats:
-        help_lines.append("/stats — إحصائيات المجموعة")
-        register.append('    app.add_handler(CommandHandler("stats", stats))')
-        extra_blocks.append(
-            '''
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_chat:
-        return
-    chat = update.effective_chat
-    try:
-        count = await context.bot.get_chat_member_count(chat.id)
-    except Exception:
-        count = "?"
-    await update.message.reply_text(
-        f"إحصائيات المجموعة:\\n• الاسم: {chat.title or chat.id}\\n• الأعضاء: {count}"
-    )
-'''
-        )
-
-    if has_welcome:
-        register.append(
-            "    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome))"
-        )
-        extra_blocks.append(
-            '''
-async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.new_chat_members:
-        return
-    for member in update.message.new_chat_members:
-        if member.is_bot:
-            continue
-        await update.message.reply_text(
-            f"أهلاً {member.full_name} في المجموعة! التزم بالقوانين."
-        )
-'''
-        )
-
-    help_text = repr("\n".join(help_lines))
-    extras = "\n".join(extra_blocks)
-    regs = "\n".join(register)
-
-    return f'''"""Telegram bot entry point (python-telegram-bot) — feature-aware generation."""
+Generated from understanding/planning output (CommandSpec / HandlerSpec).
+Domain business logic should be filled by business-logic engines, not templates.
+"""
 from __future__ import annotations
 
 import logging
@@ -278,21 +273,12 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Set it in the environment or .env file.")
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message:
-        await update.message.reply_text({reply})
-
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message:
-        await update.message.reply_text({help_text})
-
-{extras}
+{chr(10).join(fn_blocks)}
 
 def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
-{regs}
-    logger.info("Starting bot (polling) features={list(feats)!r}")
+{chr(10).join(registers)}
+    logger.info("Starting bot (polling) with %s command handler(s)", {len(commands)})
     app.run_polling()
 
 
@@ -301,64 +287,118 @@ if __name__ == "__main__":
 '''
 
 
-def build_feature_module(stem: str) -> Optional[str]:
-    """Optional richer module body for package feature files."""
-    s = stem.lower().replace("-", "_")
-    if "ban" in s:
-        return '''"""Ban moderation helpers."""
+def _build_aiogram(
+    commands: Sequence[Dict[str, Any]],
+    handlers: Sequence[Dict[str, Any]],
+    start_reply: str,
+) -> str:
+    reply = repr(start_reply)
+    blocks: List[str] = []
+    for cmd in commands:
+        name = cmd["name"]
+        ident = _safe_ident(name)
+        desc = cmd.get("description") or f"/{name}"
+        if name == "start":
+            blocks.append(
+                f"@dp.message(CommandStart())\n"
+                f"async def {ident}(message: Message) -> None:\n"
+                f"    await message.answer({reply})\n"
+            )
+        else:
+            blocks.append(
+                f'@dp.message(Command("{name}"))\n'
+                f"async def {ident}(message: Message) -> None:\n"
+                f"    await message.answer({desc!r})\n"
+            )
+    return f'''"""Telegram bot entry point (aiogram) — from blueprint commands."""
 from __future__ import annotations
 
-from telegram import Update
-from telegram.ext import ContextTypes
+import asyncio
+import logging
+import os
+
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message
+from dotenv import load_dotenv
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is missing. Set it in the environment or .env file.")
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
 
-async def ban_user(bot, chat_id: int, user_id: int) -> None:
-    await bot.ban_chat_member(chat_id, user_id)
+{chr(10).join(blocks)}
+
+async def main() -> None:
+    logger.info("Starting bot (aiogram polling)...")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 '''
-    if "mute" in s:
-        return '''"""Mute helpers."""
-from __future__ import annotations
-
-from datetime import datetime, timedelta, timezone
-
-from telegram import ChatPermissions
 
 
-async def mute_user(bot, chat_id: int, user_id: int, minutes: int = 60) -> None:
-    until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    await bot.restrict_chat_member(
-        chat_id,
-        user_id,
-        permissions=ChatPermissions(can_send_messages=False),
-        until_date=until,
+def collect_class_sources(context: Any) -> Dict[str, str]:
+    index: Dict[str, str] = {}
+    if context is None:
+        return index
+    report = context.get("class_generation_report") if hasattr(context, "get") else None
+    if report is None:
+        return index
+    classes = getattr(report, "classes", None) or getattr(report, "skeletons", None) or []
+    for cls in classes:
+        src = getattr(cls, "source_code", None) or ""
+        if not src:
+            continue
+        path = getattr(cls, "path", None) or getattr(cls, "file_path", None) or ""
+        name = getattr(cls, "name", None) or ""
+        if path:
+            index[str(path).replace("\\", "/").lstrip("/")] = str(src)
+        if name:
+            index[f"{name}.py"] = str(src)
+            snake = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower() + ".py"
+            index[snake] = str(src)
+    return index
+
+
+def collect_features(context: Any) -> List[str]:
+    return [c["name"] for c in extract_commands_from_context(context)]
+
+
+def resolve_start_reply(request: str, features: List[str], fallback: str = "Hello World") -> str:
+    class _Ctx:
+        pass
+    c = _Ctx()
+    c.request = request
+    c.get = lambda k, d=None: None
+    commands = [{"name": f, "description": f} for f in features] or [
+        {"name": "start", "description": "start"}
+    ]
+    return start_reply_from_context(c, commands) or fallback
+
+
+def build_ptb_main(start_reply: str, features: List[str]) -> str:
+    commands = [
+        {"name": f, "description": f, "admin_only": False, "group_only": False}
+        for f in features
+    ]
+    if not any(c["name"] == "start" for c in commands):
+        commands.insert(0, {"name": "start", "description": "start"})
+    return build_main_from_blueprint(
+        framework="python-telegram-bot",
+        commands=commands,
+        handlers=[],
+        start_reply=start_reply,
     )
-'''
-    if "warn" in s:
-        return '''"""Warn counter helpers."""
-from __future__ import annotations
-
-_WARNINGS = {}
 
 
-def add_warning(chat_id: int, user_id: int) -> int:
-    key = (chat_id, user_id)
-    _WARNINGS[key] = _WARNINGS.get(key, 0) + 1
-    return _WARNINGS[key]
-'''
-    if "welcome" in s:
-        return '''"""Welcome message helper."""
-from __future__ import annotations
-
-
-def welcome_text(name: str) -> str:
-    return f"أهلاً {name} في المجموعة! التزم بالقوانين."
-'''
-    if "stat" in s or "analytics" in s:
-        return '''"""Stats helper."""
-from __future__ import annotations
-
-
-def format_stats(title: str, count) -> str:
-    return f"إحصائيات:\\n• {title}\\n• أعضاء: {count}"
-'''
+def build_feature_module(stem: str) -> Optional[str]:
     return None
