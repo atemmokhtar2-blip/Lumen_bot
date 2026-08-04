@@ -41,4 +41,12 @@ tmp/
 .agent_hooks/
 .summarized_conversations/
 .psiphon_data/
-*.txt
+
+# Secrets & env
+.env
+.env.local
+.env.*.local
+
+# Generated projects on the server
+/tmp/
+generated/
