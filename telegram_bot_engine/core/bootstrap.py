@@ -72,6 +72,7 @@ from ..engines.generators import (
     GitOperationsEngine,
     FileSystemEngine,
     WorkspaceManagementEngine,
+    DependencyManagementEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -478,6 +479,11 @@ def bootstrap(
     workspace_management_engine = WorkspaceManagementEngine()
     registry.register_engine(workspace_management_engine)
 
+    # -- intelligent dependency management engine (Specification 050) -----
+    # ULTRA CRITICAL: discover/validate/lock deps; block unsafe/incompatible.
+    dependency_management_engine = DependencyManagementEngine()
+    registry.register_engine(dependency_management_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -659,6 +665,10 @@ def bootstrap(
                      engine_id="workspace_management",
                      priority=135,
                      dependencies=["file_system"])
+    manager.register(dependency_management_engine,
+                     engine_id="dependency_management",
+                     priority=136,
+                     dependencies=["workspace_management"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
