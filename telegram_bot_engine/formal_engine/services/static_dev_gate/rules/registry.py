@@ -8,6 +8,7 @@ from .import_rule import LocalImportRule
 from .security_rule import HardcodedTokenRule
 from .telegram_rule import TelegramEntryRule
 from .quality_rule import EmptyExceptRule, BareExceptRule
+from .dataflow_rule import UseBeforeDefRule, UnusedLocalRule, DangerousSinkRule
 
 # Order = execution order (core first)
 _RULE_CLASSES = [
@@ -19,6 +20,9 @@ _RULE_CLASSES = [
     TelegramEntryRule,
     EmptyExceptRule,
     BareExceptRule,
+    UseBeforeDefRule,
+    UnusedLocalRule,
+    DangerousSinkRule,
 ]
 
 
