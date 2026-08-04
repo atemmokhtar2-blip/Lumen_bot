@@ -75,6 +75,7 @@ from ..engines.generators import (
     DependencyManagementEngine,
     EnvironmentConfigEngine,
     EngineEcosystemEngine,
+    EngineOrchestratorEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -496,6 +497,11 @@ def bootstrap(
     engine_ecosystem_engine = EngineEcosystemEngine()
     registry.register_engine(engine_ecosystem_engine)
 
+    # -- intelligent engine orchestrator (Specification 053) ---------------
+    # MAXIMUM CRITICAL: all engine execution flows through orchestrator only.
+    engine_orchestrator_engine = EngineOrchestratorEngine()
+    registry.register_engine(engine_orchestrator_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -689,6 +695,10 @@ def bootstrap(
                      engine_id="engine_ecosystem",
                      priority=138,
                      dependencies=["environment_config"])
+    manager.register(engine_orchestrator_engine,
+                     engine_id="engine_orchestrator",
+                     priority=139,
+                     dependencies=["engine_ecosystem"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
