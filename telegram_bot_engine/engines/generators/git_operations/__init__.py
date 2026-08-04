@@ -9,6 +9,8 @@ from .report_data import (
 )
 
 __all__ = [
+    "smart_clone", "looks_like_clone_request", "extract_repo_url", "CloneResult",
+    
     "GitOperationsEngine",
     "GitOperationsReport",
     "GitOperation",
@@ -29,3 +31,5 @@ __all__ = [
     "VERDICT_NOT_READY",
     "VERDICT_DENIED",
 ]
+
+from .smart_clone import smart_clone, looks_like_clone_request, extract_repo_url, CloneResult
