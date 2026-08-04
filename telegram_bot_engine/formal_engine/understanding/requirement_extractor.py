@@ -91,17 +91,16 @@ def _section_block(text: str, *titles: str) -> str:
 def _extract_commands_from_text(text: str) -> list[dict]:
     found = []
     seen = set()
-    block = _section_block(text, "الأوامر", "commands", "أوامر")
-    search_in = block if block.strip() else text
-    for m in re.finditer(
-        r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\s*[-–—:：]?\s*(?P<desc>[^\n]{0,100})",
-        search_in,
-    ):
+    # Always scan full text for /command tokens (works for inline lists)
+    for m in re.finditer(r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b", text):
         cmd = m.group("cmd").lower()
         if cmd in seen:
             continue
         seen.add(cmd)
-        desc = (m.group("desc") or "").strip() or cmd
+        # optional description after dash on same segment
+        rest = text[m.end(): m.end() + 80]
+        dm = re.match(r"\s*[-–—:：]\s*([^/\n]{1,80})", rest)
+        desc = dm.group(1).strip() if dm else cmd
         admin = cmd in ("admin", "panel", "stats", "ban", "mute", "broadcast") or "أدمن" in desc
         found.append({"command": cmd, "description": desc[:100], "admin_only": admin})
     return found
@@ -112,7 +111,7 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
     seen = set()
     block = _section_block(text, "الأزرار", "buttons", "أزرار", "القائمة")
     emoji_line = re.compile(
-        r"^[\s\-•*]*(?P<label>(?:[🛒🧺📦📞⚙️📋🏠⭐🔥🚀📄💬🛍✅❌🎮🏆📝📊]+)\s*[^\n]{1,40})\s*$"
+        r"^[\s\-•*]*(?P<label>(?:[🛒🧺📦📞⚙️📋🏠⭐🔥🚀📄💬🛍✅❌🎮🏆📝📊📅🗓🕐]+)\s*[^\n]{1,40})\s*$"
     )
     for src in (block, text):
         if not (src or "").strip():
