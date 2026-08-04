@@ -305,6 +305,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         if project_path:
             summary_lines.append(f"• المسار: `{_escape_md(project_path)}`")
+        meta = getattr(result, "metadata", None) or {}
+        if meta.get("button_count") is not None:
+            summary_lines.append(f"• الأزرار في /start: {meta.get(\"button_count\")}")
+        if meta.get("buttons"):
+            summary_lines.append(f"• نصوص الأزرار: {\", \".join(meta.get(\"buttons\") or [])}")
+        if meta.get("commands"):
+            summary_lines.append(f"• الأوامر: {\"/\" + \" /\".join(meta.get(\"commands\") or [])}")
         if errors:
             summary_lines.append("• أخطاء:")
             for e in errors[:5]:

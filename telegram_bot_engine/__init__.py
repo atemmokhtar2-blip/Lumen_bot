@@ -48,6 +48,7 @@ def generate_bot(request: str, work_dir=None):
     from .core.result import GenerationResult, StageResult
     from .formal_engine.understanding.requirement_extractor import extract_formal_spec
     from .formal_engine.generation.project_generator import generate_project
+    from .formal_engine.generation.post_verify import verify_generated_project
 
     t0 = time.perf_counter()
     request = (request or "").strip()
@@ -110,6 +111,7 @@ def generate_bot(request: str, work_dir=None):
     try:
         path = generate_project(spec, project_dir)
         files = sorted(str(p.relative_to(path)) for p in path.rglob("*") if p.is_file())
+        verify = verify_generated_project(path)
         stages.append(
             StageResult.ok(
                 "formal_generation",
@@ -118,9 +120,12 @@ def generate_bot(request: str, work_dir=None):
                     "files_created": files,
                     "bot_name": spec.bot_name,
                     "bot_type": spec.bot_type.value,
+                    "verify": verify,
                 },
             )
         )
+        if not verify.get("ok"):
+            errors.extend(verify.get("errors") or [])
     except Exception as exc:
         errors.append(f"Formal generation failed: {exc}")
         stages.append(StageResult.failed("formal_generation", errors=[str(exc)]))
@@ -134,17 +139,22 @@ def generate_bot(request: str, work_dir=None):
         )
 
     elapsed = time.perf_counter() - t0
+    ok = (not errors) and bool(verify.get("ok", True))
     return GenerationResult(
-        success=True,
+        success=ok,
         project_path=str(path),
         stages=stages,
         validation_reports=[],
-        errors=[],
+        errors=errors,
         metadata={
             "engine": "formal",
             "bot_name": spec.bot_name,
             "bot_type": spec.bot_type.value,
             "files_created": files,
             "elapsed_ms": round(elapsed * 1000, 1),
+            "button_count": (verify.get("info") or {}).get("button_count", 0),
+            "verify_ok": verify.get("ok"),
+            "buttons": [b.text for b in (spec.ui.main_buttons or [])],
+            "commands": [c.command for c in (spec.ui.commands or [])],
         },
     )

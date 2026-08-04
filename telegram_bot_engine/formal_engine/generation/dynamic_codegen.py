@@ -25,6 +25,18 @@ def _py_str(s: str) -> str:
     return repr(s)
 
 
+def _cb_data(text: str, fallback: str) -> str:
+    """Telegram callback_data max 64 bytes; prefer ascii-safe ids."""
+    import hashlib
+    raw = (fallback or text or "btn").strip()
+    # keep short ascii if possible
+    ascii_id = re.sub(r"[^a-zA-Z0-9_]", "_", raw)[:40].strip("_")
+    if ascii_id and ascii_id.isascii() and len(ascii_id.encode()) <= 64:
+        return ascii_id or "btn"
+    h = hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+    return f"b_{h}"
+
+
 def render_requirements(spec: FormalBotSpec) -> str:
     deps = [
         "python-telegram-bot>=21.0,<22",
@@ -150,21 +162,24 @@ def render_models(spec: FormalBotSpec) -> str:
 
 def render_start_handler(spec: FormalBotSpec) -> str:
     rows = []
-    for b in (spec.ui.main_buttons or [])[:10]:
+    for i, b in enumerate(spec.ui.main_buttons or []):
+        # Keep label as user intended; callback_data must be stable & safe
+        cb = _cb_data(b.text, b.callback_data or f"btn_{i}")
         rows.append(
-            f'        [InlineKeyboardButton({_py_str(b.text)}, callback_data={_py_str(b.callback_data)})]'
+            f"        [InlineKeyboardButton({_py_str(b.text)}, callback_data={_py_str(cb)})]"
         )
     if not rows:
-        rows = ['        [InlineKeyboardButton("Start", callback_data="main_menu")]']
+        rows = [
+            '        [InlineKeyboardButton("القائمة", callback_data="main_menu")]',
+        ]
     buttons_code = ",\n".join(rows)
-    welcome = spec.ui.welcome_message or f"Welcome to {spec.bot_name}"
+    welcome = (spec.ui.welcome_message or f"مرحبا بك في {spec.bot_name}").replace("*", "")
     cmd_help = "\n".join(
         f"/{c.command} — {c.description}" for c in (spec.ui.commands or [])
     ) or "/start"
-    return f'''"""Entry handlers — buttons & commands come from FormalBotSpec.ui only."""
+    return f'''"""Entry handlers — buttons from FormalBotSpec.ui (always attached)."""
 from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 
@@ -179,9 +194,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message = update.effective_message
     if message is None:
         return
+    # No parse_mode: avoids Telegram Markdown parse errors that drop the whole message (and buttons)
     await message.reply_text(
         {_py_str(welcome)},
-        parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_keyboard(),
     )
 
@@ -191,11 +206,11 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if message is None:
         return
     await message.reply_text(
-        {_py_str("*Commands:*\\n" + cmd_help)},
-        parse_mode=ParseMode.MARKDOWN,
+        {_py_str("الأوامر:\n" + cmd_help)},
         reply_markup=main_keyboard(),
     )
 '''
+
 
 
 def render_command_handler(command: str, description: str, admin_only: bool, spec: FormalBotSpec) -> str:
@@ -234,16 +249,17 @@ async def {fn}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def render_callbacks(spec: FormalBotSpec) -> str:
-    """Route every understood button callback_data — no fixed domain routes."""
+    """Route every understood button — same callback ids as start keyboard."""
     cases = []
-    for b in spec.ui.main_buttons or []:
+    for i, b in enumerate(spec.ui.main_buttons or []):
+        cb = _cb_data(b.text, b.callback_data or f"btn_{i}")
         cases.append(
-            f"    if data == {_py_str(b.callback_data)}:\n"
-            f"        await query.edit_message_text({_py_str('Selected: ' + b.text)})\n"
+            f"    if data == {_py_str(cb)}:\n"
+            f"        await query.edit_message_text({_py_str(b.text)})\n"
             f"        return\n"
         )
     body = "\n".join(cases) if cases else "    pass\n"
-    return f'''"""Callback router — built from FormalBotSpec.ui.main_buttons only."""
+    return f'''"""Callback router — from FormalBotSpec.ui.main_buttons."""
 from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -258,6 +274,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 {body}
     await query.edit_message_text(f"Action: {{data}}")
 '''
+
 
 
 def render_messages(spec: FormalBotSpec) -> str:
