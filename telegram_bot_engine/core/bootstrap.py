@@ -76,6 +76,7 @@ from ..engines.generators import (
     EnvironmentConfigEngine,
     EngineEcosystemEngine,
     EngineOrchestratorEngine,
+    ExecutionContextEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -502,6 +503,11 @@ def bootstrap(
     engine_orchestrator_engine = EngineOrchestratorEngine()
     registry.register_engine(engine_orchestrator_engine)
 
+    # -- intelligent execution context engine (Specification 054) ----------
+    # CRITICAL: unified shared context; one active per project; versioned.
+    execution_context_engine = ExecutionContextEngine()
+    registry.register_engine(execution_context_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -699,6 +705,10 @@ def bootstrap(
                      engine_id="engine_orchestrator",
                      priority=139,
                      dependencies=["engine_ecosystem"])
+    manager.register(execution_context_engine,
+                     engine_id="execution_context",
+                     priority=140,
+                     dependencies=["engine_orchestrator"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

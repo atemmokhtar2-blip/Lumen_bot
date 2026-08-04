@@ -59,6 +59,7 @@ from .dependency_management import DependencyManagementEngine
 from .environment_config import EnvironmentConfigEngine
 from .engine_ecosystem import EngineEcosystemEngine
 from .engine_orchestrator import EngineOrchestratorEngine
+from .execution_context import ExecutionContextEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -114,4 +115,5 @@ __all__ = [
     "EnvironmentConfigEngine",
     "EngineEcosystemEngine",
     "EngineOrchestratorEngine",
+    "ExecutionContextEngine",
 ]
