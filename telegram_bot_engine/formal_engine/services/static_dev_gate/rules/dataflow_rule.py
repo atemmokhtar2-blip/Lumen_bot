@@ -168,7 +168,6 @@ class AsyncNoAwaitRule:
                 continue
             for fn in flow.functions:
                 if fn.is_async and not fn.has_await:
-                    # allow simple reply-only handlers that still should await — flag as warning
                     out.append(
                         StaticFinding(
                             severity="warning",
@@ -178,6 +177,125 @@ class AsyncNoAwaitRule:
                             lineno=fn.lineno,
                             message_ar=f"دالة async `{fn.qualname}` بدون أي await",
                             evidence=fn.qualname,
+                        )
+                    )
+        return out
+
+
+class UnreachableCodeRule:
+    """Detect statements that control flow can never reach."""
+
+    meta = RuleMeta(
+        "unreachable_code",
+        "كود غير قابل للوصول بعد return/raise أو مسار منتهٍ",
+        tags=("dataflow", "control-flow", "gate"),
+    )
+
+    def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
+        out: list[StaticFinding] = []
+        for m in ctx.module_list():
+            flow = _flow_for(m)
+            if not flow:
+                continue
+            for fn in flow.functions:
+                seen: set[int] = set()
+                for ln in fn.unreachable_lines:
+                    if not ln or ln in seen:
+                        continue
+                    seen.add(ln)
+                    out.append(
+                        StaticFinding(
+                            severity="warning",
+                            code="unreachable_code",
+                            rule_id=self.meta.id,
+                            file=m.path,
+                            lineno=ln,
+                            message_ar=(
+                                f"كود غير قابل للوصول في `{fn.qualname}` "
+                                f"(بعد return/raise أو فرع منتهٍ)"
+                            ),
+                            evidence=fn.qualname,
+                        )
+                    )
+        return out
+
+
+class MaybeNoneRule:
+    """Flag uses of names that may be None at the use site."""
+
+    meta = RuleMeta(
+        "maybe_none",
+        "متغير قد يكون None عند الاستخدام",
+        tags=("dataflow", "nullability", "gate"),
+    )
+
+    def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
+        out: list[StaticFinding] = []
+        for m in ctx.module_list():
+            flow = _flow_for(m)
+            if not flow:
+                continue
+            for fn in flow.functions:
+                seen: set[tuple[str, int]] = set()
+                for use in getattr(fn, "maybe_none_uses", []) or []:
+                    key = (use.name, use.lineno)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    severity = (
+                        "error"
+                        if str(getattr(use.nullability, "value", use.nullability))
+                        == "definite_none"
+                        else "warning"
+                    )
+                    out.append(
+                        StaticFinding(
+                            severity=severity,
+                            code="maybe_none",
+                            rule_id=self.meta.id,
+                            file=m.path,
+                            lineno=use.lineno,
+                            message_ar=(
+                                f"`{use.name}` قد يكون None عند الاستخدام "
+                                f"في `{fn.qualname}` ({use.nullability})"
+                            ),
+                            evidence=f"{use.name}:{use.nullability}",
+                        )
+                    )
+        return out
+
+
+class ResourceLeakRule:
+    """Detect resources opened without close and not under `with`."""
+
+    meta = RuleMeta(
+        "resource_leak",
+        "مورد مفتوح بدون إغلاق (ملف/اتصال/جلسة)",
+        tags=("dataflow", "resources", "gate"),
+    )
+
+    def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
+        out: list[StaticFinding] = []
+        for m in ctx.module_list():
+            flow = _flow_for(m)
+            if not flow:
+                continue
+            for fn in flow.functions:
+                for name, kind, ln in getattr(fn, "resource_leaks", []) or []:
+                    label = f"`{name}` " if name else ""
+                    out.append(
+                        StaticFinding(
+                            severity="warning",
+                            code="resource_leak",
+                            rule_id=self.meta.id,
+                            file=m.path,
+                            lineno=ln,
+                            message_ar=(
+                                f"تسريب مورد ({kind}): {label}"
+                                f"فُتح بدون close ولم يُستخدم داخل `with` "
+                                f"في `{fn.qualname}`"
+                            ),
+                            evidence=f"{kind}:{name or 'anonymous'}",
                         )
                     )
         return out

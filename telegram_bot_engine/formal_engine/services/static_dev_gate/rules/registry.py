@@ -11,6 +11,7 @@ from .quality_rule import EmptyExceptRule, BareExceptRule
 from .dataflow_rule import (
     UseBeforeDefRule, UnusedLocalRule, DangerousSinkRule,
     TaintToSinkRule, AsyncNoAwaitRule,
+    UnreachableCodeRule, MaybeNoneRule, ResourceLeakRule,
 )
 
 # Order = execution order (core first)
@@ -28,6 +29,9 @@ _RULE_CLASSES = [
     DangerousSinkRule,
     TaintToSinkRule,
     AsyncNoAwaitRule,
+    UnreachableCodeRule,
+    MaybeNoneRule,
+    ResourceLeakRule,
 ]
 
 
