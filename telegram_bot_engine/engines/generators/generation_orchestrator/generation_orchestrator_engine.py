@@ -1,12 +1,10 @@
-"""Generation Orchestrator — Formal Generation (lazy)."""
+"""REMOVED — replaced by Formal Generation Engine."""
 from __future__ import annotations
 from ...base.base_engine import BaseEngine
 
 class GenerationOrchestratorEngine(BaseEngine):
     def __init__(self) -> None:
-        super().__init__(name="generation_orchestrator", version="2.0.0", description="Formal generation orchestrator", tags=["formal"])
+        super().__init__(name="generation_orchestrator", version="2.0.0", description="Replaced by formal_generation", tags=["formal", "removed"])
     def execute(self, context):
-        if context.artefacts.get("generated_project_path"):
-            return self.ok(outputs={"reused": context.artefacts["generated_project_path"]}, metadata={"engine": "generation_orchestrator"})
         from ..formal_generation.formal_generation_engine import FormalGenerationEngine
         return FormalGenerationEngine().execute(context)

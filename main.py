@@ -216,7 +216,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/start — هذه الرسالة\n"
         "/status — حالة النظام\n"
         "/help — مساعدة\n\n"
-        "⚠️ ملاحظة: المحركات ما زالت قيد التطوير، قد تكون النتيجة جزئية."
+        "✅ المحرك الرسمي (Formal Engine) يعمل — فهم حتمي + توليد كود نظيف."
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -245,7 +245,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"✅ النظام يعمل\n"
             f"• المحركات المسجّلة: {engine_count}\n"
             f"• مجلد الإخراج: `{OUTPUT_DIR}`\n"
-            f"• ملاحظة: لا تزال هناك محركات قيد الإضافة."
+            f"• المحرك النشط: Formal Engine (فهم + توليد)."
         )
     except Exception as e:
         msg = f"⚠️ خطأ أثناء فحص الحالة:\n`{e}`"
@@ -277,9 +277,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     status_msg = await message.reply_text(
-        "⏳ جاري تحليل الطلب وتشغيل المحركات...\n"
-        "قد يستغرق الأمر دقيقة أو أكثر (خاصة في الطلب الأول لأن المحركات تُحمَّل).\n"
-        "ملاحظة: لا تزال هناك محركات قيد الإضافة."
+        "⏳ جاري الفهم الرسمي وتوليد المشروع (Formal Engine)..."
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
@@ -314,7 +312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 summary_lines.append(f"  - {_escape_md(e)}")
 
         summary_lines.append(
-            "\n_ملاحظة: لا تزال هناك محركات قيد التطوير، قد تكون بعض الأجزاء غير مكتملة._"
+            "\n_المحرك: Formal Engine — بدون نماذج لغوية._"
         )
 
         await _safe_edit_text(status_msg, "\n".join(summary_lines), use_markdown=True)
@@ -361,7 +359,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _safe_edit_text(
             status_msg,
             f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`\n\n"
-            "قد يكون السبب محركات غير مكتملة بعد. حاول لاحقاً.",
+            "راجع السجلات أو أعد المحاولة. المحرك الرسمي نشط.",
             use_markdown=True,
         )
     finally:
