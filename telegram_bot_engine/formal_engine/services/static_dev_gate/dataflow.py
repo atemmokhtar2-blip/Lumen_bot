@@ -833,20 +833,25 @@ class _FlowVisitor(ast.NodeVisitor):
             self.unreachable_lines.append(node.lineno)
             return
         self.visit(node.test)
-        # narrow nullability on `if x is not None`
-        narrowed: dict[str, Nullability] = {}
+        # narrow nullability on `if x is None` / `if x is not None`
+        narrowed_then: dict[str, Nullability] = {}
+        narrowed_else: dict[str, Nullability] = {}
         if isinstance(node.test, ast.Compare) and len(node.test.ops) == 1:
             left, op, comps = node.test.left, node.test.ops[0], node.test.comparators
             if len(comps) == 1 and _is_none_constant(comps[0]) and isinstance(left, ast.Name):
                 if isinstance(op, ast.IsNot):
-                    narrowed[left.id] = Nullability.NOT_NONE
+                    # if x is not None:  then→NOT_NONE  else→DEFINITE_NONE
+                    narrowed_then[left.id] = Nullability.NOT_NONE
+                    narrowed_else[left.id] = Nullability.DEFINITE_NONE
                 elif isinstance(op, ast.Is):
-                    narrowed[left.id] = Nullability.DEFINITE_NONE
+                    # if x is None:  then→DEFINITE_NONE  else→NOT_NONE
+                    narrowed_then[left.id] = Nullability.DEFINITE_NONE
+                    narrowed_else[left.id] = Nullability.NOT_NONE
 
         before = set(self.defined)
         before_null = dict(self._null)
         # then
-        for k, v in narrowed.items():
+        for k, v in narrowed_then.items():
             self._null[k] = v
         was_returned = self._returned
         for stmt in node.body:
@@ -857,6 +862,8 @@ class _FlowVisitor(ast.NodeVisitor):
         # else
         self.defined = set(before)
         self._null = dict(before_null)
+        for k, v in narrowed_else.items():
+            self._null[k] = v
         self._returned = was_returned
         for stmt in node.orelse:
             self.visit(stmt)
@@ -872,6 +879,15 @@ class _FlowVisitor(ast.NodeVisitor):
             self._null[name] = a.join(b)
         # if both branches return, subsequent code is dead
         self._returned = then_returned and else_returned
+        # Early-return guard refinement:
+        #   if x is None: return   → after if, x is NOT_NONE on continuing path
+        #   if x is not None: return → after if, x may still be None
+        if then_returned and not else_returned:
+            for name, v in narrowed_else.items():
+                self._null[name] = v
+        elif else_returned and not then_returned:
+            for name, v in narrowed_then.items():
+                self._null[name] = v
 
     def visit_While(self, node: ast.While) -> None:
         if self._returned:
@@ -1023,6 +1039,34 @@ class _FlowVisitor(ast.NodeVisitor):
                 continue
             bound = alias.asname or alias.name
             self._def(bound, node.lineno, Nullability.NOT_NONE)
+
+    def _visit_comprehension(self, gens: list[ast.comprehension], visit_elt) -> None:
+        """
+        Comprehension targets (for x in ...) are definitions before the elt
+        and filters use them — must not flag use_before_def on `x`.
+        """
+        for gen in gens:
+            self.visit(gen.iter)
+            for n in _assign_targets(gen.target):
+                self._def(n, getattr(gen.target, "lineno", 0) or 0, Nullability.UNKNOWN)
+            for if_test in gen.ifs:
+                self.visit(if_test)
+        visit_elt()
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node.generators, lambda: self.visit(node.elt))
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node.generators, lambda: self.visit(node.elt))
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node.generators, lambda: self.visit(node.elt))
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        def _elts() -> None:
+            self.visit(node.key)
+            self.visit(node.value)
+        self._visit_comprehension(node.generators, _elts)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return  # nested: isolated
