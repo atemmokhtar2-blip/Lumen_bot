@@ -51,7 +51,7 @@ _LIST_APPEND_LOOP = re.compile(
     re.MULTILINE,
 )
 _BLOCKING_IN_ASYNC = re.compile(
-    r"""async\s+def\s+\w+[^]*?(?:time\.sleep|requests\.(?:get|post)|open\s*\()""",
+    r"""async\s+def\s+\w+[\s\S]*?(?:time\.sleep|requests\.(?:get|post)|open\s*\()""",
     re.DOTALL,
 )
 
