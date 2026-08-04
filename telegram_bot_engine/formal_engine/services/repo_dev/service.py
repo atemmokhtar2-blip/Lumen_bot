@@ -117,11 +117,30 @@ def detect_repo_intent(text: str) -> tuple[str, dict[str, Any]]:
         return "edit_targets", params
 
     if any(k in t for k in (
+        "نفذ المواصفة", "نفّذ المواصفة", "طبق المواصفة", "طبّق المواصفة",
+        "apply spec", "implement spec", "نفذ التطوير", "نفّذ التطوير",
+    )):
+        return "apply_dev", params
+
+    # Long development specs (>180 chars) with structure signals → full engine
+    if len(raw) >= 180 and any(
+        k in t for k in (
+            "أمر", "امر", "command", "ميزة", "feature", "زر", "button",
+            "أضف", "اضف", "طور", "طوّر", "يجب", "المواصفات", "spec",
+            "admin", "أدمن", "دفع", "payment", "ai", "ذكي",
+        )
+    ):
+        return "apply_dev", params
+
+    if any(k in t for k in (
         "خطة تطوير", "خطة التطوير", "dev plan", "develop plan",
         "طور المستودع", "طوّر المستودع", "تطوير المستودع",
         "عايز اطور", "عايز أطور", "أريد تطوير", "develop repo",
         "ملخص تطوير", "تطوير نشط", "dev brief", "وضع التطوير",
     )):
+        # short "طور المستودع" → plan; long already caught above
+        if len(raw) >= 180:
+            return "apply_dev", params
         return "dev_plan", params
 
     if any(k in t for k in ("عدل", "عدّل", "modify", "change", "طور", "طوّر", "fix", "أصلح", "صلح")):
@@ -510,6 +529,18 @@ class RepoDevService:
                 contract=new_contract,
             )
 
+
+        if action == "apply_dev":
+            from ..active_dev import apply_development_request
+            report = apply_development_request(root, text, contract_dict=contract.model_dump(mode="json"))
+            return RepoDevResult(
+                ok=report.ok,
+                action="apply_dev",
+                message=report.to_user_text(),
+                changed_files=list(report.changed_files),
+                contract=report.contract or contract,
+                data=report.data,
+            )
 
         if action == "dev_plan":
             from ..repo_dev_intelligence import build_dev_plan
