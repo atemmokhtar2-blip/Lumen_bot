@@ -9,7 +9,7 @@ from .report_data import (
 )
 
 __all__ = [
-    "smart_clone", "looks_like_clone_request", "extract_repo_url", "CloneResult",
+    "smart_clone", "looks_like_clone_request", "extract_repo_url", "extract_token", "looks_like_git_token", "CloneResult",
     
     "GitOperationsEngine",
     "GitOperationsReport",
@@ -32,4 +32,4 @@ __all__ = [
     "VERDICT_DENIED",
 ]
 
-from .smart_clone import smart_clone, looks_like_clone_request, extract_repo_url, CloneResult
+from .smart_clone import smart_clone, looks_like_clone_request, extract_repo_url, extract_token, looks_like_git_token, CloneResult

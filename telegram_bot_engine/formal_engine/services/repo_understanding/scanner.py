@@ -35,7 +35,7 @@ _SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".tox",
     ".mypy_cache", ".pytest_cache", "dist", "build", ".eggs", ".idea",
     ".vscode", "htmlcov", ".ruff_cache", "docs", "examples", "example",
-    "tests", "test", ".github",
+    "tests", "test", ".github", "site-packages", "dist-info",
 }
 
 _ENTRY_NAMES = {
@@ -563,7 +563,7 @@ class RepoUnderstandingService:
                 str(p),
             ),
         )
-        for p in ranked[:150]:
+        for p in ranked[:80]:
             an = _analyze_file(p, root)
             if an:
                 analyses.append(an)

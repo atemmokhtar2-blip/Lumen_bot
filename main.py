@@ -307,6 +307,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_live_run_token(message, context, request, pending_run)
         return
 
+    # Private repo: user sends GitHub PAT after auth failure
+    pending_clone = (context.user_data or {}).get("pending_clone_auth")
+    if pending_clone:
+        from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
+            extract_token,
+            smart_clone,
+        )
+        git_tok = extract_token(request)
+        if git_tok:
+            status = await message.reply_text("🔑 جاري إعادة سحب المستودع بالتوكن...")
+            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+            dest = Path(OUTPUT_DIR) / "clones"
+            dest.mkdir(parents=True, exist_ok=True)
+            url = pending_clone.get("url") or ""
+
+            def _reclone():
+                return smart_clone(
+                    text=url,
+                    dest_dir=dest,
+                    token=git_tok,
+                    url_override=url,
+                    depth=1,
+                )
+
+            try:
+                result = await asyncio.to_thread(_reclone)
+            except Exception as e:
+                logger.exception("private reclone failed")
+                await status.edit_text(f"❌ فشل السحب بالتوكن: {type(e).__name__}: {str(e)[:200]}")
+                return
+            finally:
+                git_tok = ""  # noqa: F841
+
+            if not result.ok:
+                err_msg = f"❌ {result.message}"
+                if result.stderr:
+                    err_msg += f"\n`{result.stderr[:250]}`"
+                await status.edit_text(err_msg)
+                if not result.needs_auth:
+                    context.user_data.pop("pending_clone_auth", None)
+                return
+
+            context.user_data.pop("pending_clone_auth", None)
+            lines = [
+                "✅ تم سحب المستودع الخاص بنجاح",
+                f"• الرابط: `{result.url or ''}`",
+                f"• المسار: `{result.path or ''}`",
+            ]
+            try:
+                await status.edit_text("\n".join(lines + ["", "🔍 جاري فهم المستودع..."]))
+                from telegram_bot_engine.formal_engine.services.repo_understanding import understand_repo
+
+                def _do_u():
+                    return understand_repo(result.path, remote_url=result.url or "")
+
+                repo_contract = await asyncio.to_thread(_do_u)
+                context.user_data["active_repo"] = {
+                    "path": result.path,
+                    "url": result.url,
+                    "contract": repo_contract.model_dump(mode="json"),
+                }
+                lines.append("")
+                lines.append(repo_contract.to_user_summary())
+                if repo_contract.is_telegram_bot or repo_contract.architecture_style in (
+                    "telegram_bot", "generation_engine",
+                ):
+                    entry = repo_contract.entry_points[0].path if repo_contract.entry_points else ""
+                    context.user_data["pending_run"] = {
+                        "project_path": result.path,
+                        "entry_point": entry,
+                        "run_seconds": 8,
+                    }
+                    lines.append("")
+                    lines.append("🚀 *للتشغيل الحقيقي:* أرسل توكن البوت من @BotFather")
+                await status.edit_text("\n".join(lines))
+            except Exception as e:
+                logger.exception("understand after private clone failed")
+                await status.edit_text("\n".join(lines + [f"⚠️ الفهم فشل: {type(e).__name__}"]))
+            return
+
     pending = (context.user_data or {}).get("pending_deploy")
     if pending and _looks_like_bot_token(request):
         await _handle_live_deploy_token(message, context, request, pending)
@@ -408,10 +488,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception:
                     logger.exception("Failed to zip cloned repo")
         else:
-            err = (result.message or "فشل غير معروف")
-            if result.stderr:
-                err += f"\n`{result.stderr[:300]}`"
-            await status.edit_text(f"❌ {err}")
+            if getattr(result, "needs_auth", False):
+                context.user_data["pending_clone_auth"] = {
+                    "url": result.url or "",
+                }
+                await status.edit_text(
+                    "🔒 المستودع خاص أو يحتاج صلاحية.\n\n"
+                    "أرسل الآن *توكن GitHub* (PAT) بصلاحية `repo`:\n"
+                    "• Classic: ghp_...\n"
+                    "• Fine-grained: github_pat_...\n\n"
+                    "بعدها هُعاد السحب تلقائياً."
+                )
+            else:
+                err = (result.message or "فشل غير معروف")
+                if result.stderr:
+                    err += f"\n`{result.stderr[:300]}`"
+                await status.edit_text(f"❌ {err}")
         return
 
     # --- Active repo development (must run before generate_bot) ---
