@@ -32,7 +32,7 @@ _NESTED_FOR = re.compile(
     re.MULTILINE,
 )
 _RANGE_LARGE = re.compile(r"""for\s+\w+\s+in\s+range\s*\(\s*(\d{5,})\s*\)""")
-_RECURSION_HINT = re.compile(r"""def\s+(\w+)\s*\([^)]*\):[^]*?\1\s*\(""", re.DOTALL)
+_RECURSION_HINT = re.compile(r"""def\s+(\w+)\s*\([^)]*\):[\s\S]*?\1\s*\(""", re.DOTALL)
 _SLEEP = re.compile(r"""(?:time\.sleep|asyncio\.sleep)\s*\(\s*[^0]""")
 _REQUESTS_NO_TIMEOUT = re.compile(
     r"""requests\.(?:get|post|put|delete|request)\s*\((?![^)]*timeout)""",
