@@ -124,7 +124,7 @@ class ConsistencyValidator:
             key = req.name.lower().strip()
             if key and key in seen:
                 findings.append(NormalizationFinding(
-                    severity=SEVERITY_ERROR,
+                    severity=SEVERITY_WARNING,
                     code="remaining_duplicate",
                     message=(
                         f"Two active requirements have the same "

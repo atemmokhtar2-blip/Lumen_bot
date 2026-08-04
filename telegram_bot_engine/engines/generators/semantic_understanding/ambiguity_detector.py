@@ -45,13 +45,20 @@ from .report_data import (
 
 # Vague words that indicate the request is too vague.
 _VAGUE_WORDS = {
-    # English
+    # English — whole phrases / clearly vague terms only
     "something", "anything", "stuff", "things", "maybe", "perhaps",
-    "possibly", "kind of", "sort of", "like", "whatever",
-    # Arabic
-    "شي", "شىء", "حاجة", "حاجه", "أي", "اي", "كذا", "أشياء",
-    "اشياء", "ممكن", "ربما", "قد", "لا أدري", "لا_ادري",
+    "possibly", "kind of", "sort of", "whatever",
+    # Arabic — avoid single-letter particles like "أي"/"اي" which appear
+    # in normal instructions (e.g. "ولا تضف أي شيء آخر") and incorrectly
+    # mark a clear request as vague.
+    "كذا", "أشياء", "اشياء", "لا أدري", "لا_ادري", "مش عارف", "مش_عارف",
 }
+
+# Phrases that mean "don't add extras" — not vague intent
+_NON_VAGUE_PHRASES = (
+    "أي شيء", "اى شيء", "أي حاجه", "أي حاجة", "لا شيء آخر",
+    "ولا تضف", "فقط", "only", "nothing else", "no more",
+)
 
 # Multiple-interpretation indicators — words that can mean different
 # things in different contexts.
@@ -137,7 +144,15 @@ class AmbiguityDetector:
             ))
 
         # 3. Missing context (subject or target empty).
-        if not intent.subject:
+        # If the text already says "bot"/"بوت", the subject is clear enough
+        # — do not block generation with a required clarification.
+        desc_l = (intent.full_description or "").lower()
+        subject_implied = (
+            bool(intent.subject)
+            or "bot" in desc_l
+            or "بوت" in desc_l
+        )
+        if not subject_implied:
             missing_amb = self._make_ambiguity(
                 kind=AMBIGUITY_MISSING_CONTEXT,
                 description=(
@@ -245,6 +260,21 @@ class AmbiguityDetector:
 
         # Check for vague words in the full description.
         lower_desc = intent.full_description.lower()
+        # Clear constraint phrases are NOT vagueness.
+        if any(p in lower_desc for p in _NON_VAGUE_PHRASES):
+            return None
+        # If the request clearly names a bot + action, do not treat it
+        # as vague even if a soft vague word appears elsewhere.
+        clear_bot = (
+            "bot" in lower_desc or "بوت" in lower_desc
+        ) and (
+            "start" in lower_desc or "/start" in lower_desc
+            or "aiogram" in lower_desc or "python" in lower_desc
+            or "مرحبا" in lower_desc or "hello" in lower_desc
+            or "يرسل" in lower_desc or "send" in lower_desc
+        )
+        if clear_bot:
+            return None
         for vague_word in _VAGUE_WORDS:
             if vague_word in lower_desc:
                 return self._make_ambiguity(

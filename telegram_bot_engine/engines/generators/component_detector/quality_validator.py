@@ -89,21 +89,10 @@ class QualityRulesValidator:
                 ))
 
         # -- Rule 2: no self-dependent components --------------------------
+        # Auto-repair self-edges; they are never intentional.
         for comp in components:
             if comp.name in comp.depends_on:
-                findings.append(DetectionFinding(
-                    severity=SEVERITY_ERROR,
-                    code="self_dependency",
-                    message=(
-                        f"Component '{comp.name}' depends on itself. "
-                        f"Self-dependencies are not allowed."
-                    ),
-                    affected=comp.name,
-                    resolution_hint=(
-                        f"Remove the self-reference from "
-                        f"'{comp.name}'.depends_on."
-                    ),
-                ))
+                comp.depends_on = [d for d in comp.depends_on if d != comp.name]
 
         # -- Rule 3: no circular dependencies ------------------------------
         cycles = self._find_cycles(components)

@@ -127,9 +127,12 @@ class CircularDetector:
         findings: List[GraphFinding] = []
 
         # Build the adjacency list from dependency-like edges.
+        # Skip self-edges — a node depending on itself is noise, not a cycle.
         adj: Dict[str, List[str]] = {}
         for edge in graph.edges:
             if edge.kind in _DEPENDENCY_EDGE_KINDS:
+                if edge.source_id == edge.target_id:
+                    continue
                 adj.setdefault(edge.source_id, []).append(edge.target_id)
 
         if not adj:

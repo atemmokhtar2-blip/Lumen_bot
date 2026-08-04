@@ -279,12 +279,13 @@ class DependencyEntry:
 
     def add_dependency(self, name: str) -> None:
         """Record that this dependency depends on another (by name)."""
-        if name and name not in self.depends_on:
+        # Never allow a dependency to depend on itself (self-cycle).
+        if name and name != self.name and name not in self.depends_on:
             self.depends_on.append(name)
 
     def add_dependent(self, name: str) -> None:
         """Record that another dependency depends on this one."""
-        if name and name not in self.depended_by:
+        if name and name != self.name and name not in self.depended_by:
             self.depended_by.append(name)
 
     def add_source_component(self, component: str) -> None:

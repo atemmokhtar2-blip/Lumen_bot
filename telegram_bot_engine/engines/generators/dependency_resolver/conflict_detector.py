@@ -225,9 +225,13 @@ class ConflictDetector:
         """
         findings: List[ResolutionFinding] = []
 
+        # Strip accidental self-edges before cycle detection.
         graph: Dict[str, List[str]] = {
-            d.name: list(d.depends_on) for d in dependencies
+            d.name: [x for x in d.depends_on if x != d.name]
+            for d in dependencies
         }
+        for d in dependencies:
+            d.depends_on = [x for x in d.depends_on if x != d.name]
 
         visited: Set[str] = set()
         rec_stack: List[str] = []

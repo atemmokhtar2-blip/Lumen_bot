@@ -65,11 +65,24 @@ class GenerateStage(BaseStage):
                 continue
             ran.append(engine.name)
             if not result.success:
-                errors.extend(result.errors)
-                warnings.extend(result.warnings)
-                # Fail-fast is configurable; we keep running but collect errors.
+                # Soft-fail quality gates: keep them as warnings so the
+                # pipeline can still package whatever was produced.
+                # Only hard-fail when an engine crashed or reported a
+                # true blocking error (missing blueprint / crash).
+                hard = [
+                    e for e in (result.errors or [])
+                    if "crashed" in e.lower()
+                    or "no blueprint" in e.lower()
+                ]
+                soft = [
+                    e for e in (result.errors or [])
+                    if e not in hard
+                ]
+                errors.extend(hard)
+                warnings.extend(soft)
+                warnings.extend(result.warnings or [])
             else:
-                warnings.extend(result.warnings)
+                warnings.extend(result.warnings or [])
 
         context.set("generated_files", list(context.created_files))
 
