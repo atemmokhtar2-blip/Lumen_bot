@@ -61,6 +61,17 @@ _HEADING_PATTERNS = [
     re.compile(r"^(?:#{1,3}\s*)?(الهدف\s*النهائي|final\s*goal)\s*:?\s*$", re.I),
     re.compile(r"^(?:#{1,3}\s*)?(وصف|description)\s*:?\s*$", re.I),
 
+    re.compile(r"^(?:#{1,3}\s*)?(اسم\s*البوت|bot\s*name)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(لغة\s*البرمجة|programming\s*language|framework)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(أنواع\s*المستخدمين|user\s*types|roles|الأدوار)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(صلاحيات|permissions|rbac)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(إشعارات|notifications)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(معمارية|architecture|clean\s*architecture)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(handlers|services|repositories|middlewares)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(logging|error\s*handling|الأخطاء)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(docker|docker-compose|railway|deployment|النشر)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(/start|start\s*flow|تدفق)\s*:?\s*$", re.I),
+
 ]
 
 
@@ -76,7 +87,8 @@ def _is_heading(line: str) -> bool:
     low = s.lower()
     if len(s) < 50 and not s.endswith((".", "،")):
         keys = ["فكرة", "هدف", "طريقة", "أنواع", "تصميم", "لغات", "جودة", "واجهة", "أداء",
-                "idea", "goal", "design", "language", "performance"]
+                "أدوار", "صلاحيات", "إشعار", "معمارية", "نشر", "docker",
+                "idea", "goal", "design", "language", "performance", "roles", "admin"]
         if any(k in low for k in keys):
             return True
     return False

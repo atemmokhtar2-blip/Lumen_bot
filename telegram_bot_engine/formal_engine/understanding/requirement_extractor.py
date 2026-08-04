@@ -15,6 +15,8 @@ from ..ontology.knowledge_base import (
     extract_feature_tags,
 )
 from ..schemas.formal_spec import (
+    RoleSpec,
+    ArchitectureSpec,
     BotType,
     ButtonSpec,
     CommandSpec,
@@ -146,6 +148,184 @@ def _map_type(archetype: str) -> BotType:
     }.get(archetype, BotType.CUSTOM)
 
 
+
+
+# ---------------------------------------------------------------------------
+# Long-spec deep extraction (generic — any domain, no canned bot templates)
+# ---------------------------------------------------------------------------
+
+_ROLE_HEADERS = re.compile(
+    r"^(?:#{1,3}\s*)?(Admin|Manager|Driver|Customer|الأدمن|المدير|السائق|العميل|"
+    r"مشرف|مدير|مستخدم)\s*:?\s*$",
+    re.I | re.M,
+)
+
+_PERM_LINE = re.compile(
+    r"^[\s\-•*]+(.{2,80})$",
+)
+
+_LAYER_WORDS = [
+    "handlers", "services", "repositories", "middlewares", "filters",
+    "models", "configurations", "utilities", "domain", "usecases",
+    "handlers", "services", "repositories",
+]
+
+
+def _extract_bot_name_explicit(text: str, fallback: str) -> str:
+    m = re.search(
+        r"(?:اسم\s*البوت|bot\s*name)\s*:?\s*\n?\s*([A-Za-z][A-Za-z0-9_\-]{1,40})",
+        text,
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()[:64]
+    m2 = re.search(r"\b([A-Z][A-Za-z0-9]{2,30})\b", text)
+    # only if near "اسم" or "bot"
+    if m2 and re.search(r"(اسم\s*البوت|bot\s*name|Delivery)", text, re.I):
+        # prefer explicit line after اسم البوت
+        pass
+    m3 = re.search(r"اسم\s*البوت\s*:?\s*([^\n]{2,40})", text, re.I)
+    if m3:
+        name = re.sub(r"[^\w\-]", "", m3.group(1).strip())
+        if len(name) >= 2:
+            return name[:64]
+    return fallback
+
+
+def _extract_framework(text: str) -> str:
+    t = text.lower()
+    if "aiogram" in t:
+        return "aiogram"
+    if "pyrogram" in t:
+        return "pyrogram"
+    if "telebot" in t or "pytelegram" in t:
+        return "pytelegrambotapi"
+    if "python-telegram-bot" in t or "ptb" in t:
+        return "python-telegram-bot"
+    return "python-telegram-bot"
+
+
+def _extract_architecture(text: str) -> "ArchitectureSpec":
+    t = text.lower()
+    style = ""
+    if "clean architecture" in t or "cleanarchitecture" in t or "معمارية نظيفة" in t:
+        style = "clean_architecture"
+    elif "layered" in t or "طبقات" in t:
+        style = "layered"
+    elif "modular" in t or "modular" in t or "قابلًا للتوسع" in t or "قابل للتوسع" in t:
+        style = "modular"
+    layers = []
+    for w in _LAYER_WORDS:
+        if re.search(rf"\b{w}\b", text, re.I):
+            if w not in layers:
+                layers.append(w)
+    di = bool(re.search(r"dependency\s*injection|حقن\s*الاعتماد", text, re.I))
+    deploy = []
+    for d in ("railway", "docker", "docker-compose", "kubernetes", "heroku"):
+        if d in t:
+            deploy.append(d)
+    return ArchitectureSpec(
+        style=style or ("clean_architecture" if layers else ""),
+        layers=layers,
+        dependency_injection=di,
+        framework=_extract_framework(text),
+        deploy_targets=deploy,
+    )
+
+
+def _extract_roles(text: str) -> list:
+    """Extract roles + permission bullets from long multi-section specs."""
+    roles: list[RoleSpec] = []
+    lines = text.splitlines()
+    role_pat = re.compile(
+        r"^(Admin|Manager|Driver|Customer|الأدمن|المدير|السائق|العميل|مشرف|مدير|سائق|عميل)\s*:?\s*$",
+        re.I,
+    )
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = role_pat.match(line)
+        if not m:
+            i += 1
+            continue
+        rname = m.group(1).strip()
+        perms: list[str] = []
+        j = i + 1
+        while j < len(lines):
+            ln = lines[j].strip()
+            if role_pat.match(ln):
+                break
+            if ln.startswith("=") and len(ln) >= 5:
+                break
+            if re.search(
+                r"إشعارات|صلاحيات|Logging|Error Handling|Dockerfile|Environment|Production",
+                ln,
+                re.I,
+            ):
+                break
+            if ln in ("يمكنه:", "يمكنه", "permissions:", "can:"):
+                j += 1
+                continue
+            # bullet or plain short capability line
+            if ln.startswith(("-", "•", "*", "–")) or (
+                2 < len(ln) < 80
+                and not ln.endswith(":")
+                and not ln.lower().startswith("http")
+            ):
+                perm = ln.lstrip("-•*– \t").strip()
+                if perm and perm not in perms and not role_pat.match(perm):
+                    perms.append(perm[:100])
+            j += 1
+            if j - i > 50:
+                break
+        roles.append(RoleSpec(name=rname, permissions=perms[:25]))
+        i = j
+
+    # dedupe by normalized name (keep richest permissions)
+    best: dict[str, RoleSpec] = {}
+    for r in roles:
+        key = r.name.lower()
+        if key not in best or len(r.permissions) > len(best[key].permissions):
+            best[key] = r
+    return list(best.values())
+
+
+def _extract_flow_steps(text: str) -> list[str]:
+    steps = []
+    # /start section
+    m = re.search(
+        r"(?:عند\s*الضغط\s*على\s*/start|/start\s*:?)(.{0,800})",
+        text,
+        re.I | re.S,
+    )
+    block = m.group(1) if m else ""
+    if not block:
+        return steps
+    for ln in block.splitlines():
+        s = ln.strip()
+        if re.match(r"^[\-•*\d]", s) or s.startswith("إذا") or s.startswith("يقوم") or s.startswith("ثم"):
+            s = re.sub(r"^[\-•*\d\.\)\s]+", "", s).strip()
+            if 3 < len(s) < 120:
+                steps.append(s)
+        if len(steps) >= 12:
+            break
+    return steps
+
+
+def _extract_quality_flags(text: str) -> dict:
+    t = text.lower()
+    return {
+        "requires_notifications": bool(re.search(r"إشعار|notification", text, re.I)),
+        "requires_logging": bool(re.search(r"logging|سجل|لوج", text, re.I)),
+        "requires_rbac": bool(
+            re.search(r"صلاحيات|rbac|permissions|لا يسمح لأي مستخدم", text, re.I)
+        ),
+        "requires_docker": bool(re.search(r"dockerfile|docker-compose|\bdocker\b", text, re.I)),
+        "error_handling": bool(re.search(r"error\s*handling|معالجة\s*أخطاء|بدون توقف", text, re.I)),
+        "env_only": bool(re.search(r"environment\s*variables|\.env|لا يتم وضع أي مفاتيح", text, re.I)),
+    }
+
+
 def extract_formal_spec(text: str) -> FormalBotSpec:
     # Long-text safe: normalize once
     full = (text or "").strip()
@@ -154,8 +334,21 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
 
     structure = analyze_structure(full)
     bot_name = _clean_name(structure.title, full)
+    bot_name = _extract_bot_name_explicit(full, bot_name)
+
+    arch = _extract_architecture(full)
+    roles = _extract_roles(full)
+    flow_steps = _extract_flow_steps(full)
+    qflags = _extract_quality_flags(full)
 
     archetype = detect_archetype(full)
+    # Long-spec: multi-role ops platforms should not collapse to game/utility
+    _low = full.lower()
+    if any(k in full for k in ("توصيل", "سائق", "Delivery")) or (
+        "driver" in _low and "customer" in _low
+    ):
+        if archetype in ("game", "utility"):
+            archetype = "custom"
     knowledge = enrich_from_archetype(archetype)
     feature_tags_raw = extract_feature_tags(full)
     feature_tag_ids = [f["id"] for f in feature_tags_raw]
@@ -366,5 +559,12 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
             *(["requires:file_handling"] if requires_files else []),
         ],
         architecture_rules_applied=applied,
+        roles=roles,
+        architecture=arch,
+        requires_notifications=qflags["requires_notifications"],
+        requires_logging=qflags["requires_logging"],
+        requires_rbac=qflags["requires_rbac"],
+        requires_docker=qflags["requires_docker"],
+        flow_steps=flow_steps,
         source_sections={s.title: s.content[:500] for s in structure.sections},
     )
