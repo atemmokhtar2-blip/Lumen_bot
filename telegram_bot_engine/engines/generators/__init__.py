@@ -65,6 +65,7 @@ from .resource_management import ResourceManagementEngine
 from .system_monitoring import SystemMonitoringEngine
 from .central_logging import CentralLoggingEngine
 from .configuration_management import ConfigurationManagementEngine
+from .security_permission import SecurityPermissionEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -126,4 +127,5 @@ __all__ = [
     "SystemMonitoringEngine",
     "CentralLoggingEngine",
     "ConfigurationManagementEngine",
+    "SecurityPermissionEngine",
 ]
