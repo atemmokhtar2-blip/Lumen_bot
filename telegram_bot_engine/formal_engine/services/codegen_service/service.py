@@ -198,34 +198,43 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 def _callbacks(c: ProgramContract) -> str:
-    cases = []
+    first_state = c.conversation_states[0].name if c.conversation_states else None
+    cases: list[str] = []
     for b in c.buttons:
-        cases.append(
-            f"    if data == {_py(b.callback_id)}:\n"
-            f"        await query.edit_message_text({_py(b.label)})\n"
-            f"        return\n"
-        )
+        if first_state:
+            cases.append(
+                "    if data == %s:\n"
+                "        context.user_data[\"state\"] = %s\n"
+                "        await query.edit_message_text(%s)\n"
+                "        return\n"
+                % (_py(b.callback_id), _py(first_state), _py(b.label + " — send details as text"))
+            )
+        else:
+            cases.append(
+                "    if data == %s:\n"
+                "        await query.edit_message_text(%s)\n"
+                "        return\n"
+                % (_py(b.callback_id), _py(b.label))
+            )
     body = "\n".join(cases) if cases else "    pass\n"
-    return f'''"""Callbacks from ProgramContract.buttons."""
-from __future__ import annotations
-from telegram import Update
-from telegram.ext import ContextTypes
-
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None:
-        return
-    await query.answer()
-    data = query.data or ""
-{body}
-    await query.edit_message_text(f"Action: {{data}}")
-'''
-
+    return (
+        '"""Callbacks from ProgramContract.buttons."""\n'
+        "from __future__ import annotations\n"
+        "from telegram import Update\n"
+        "from telegram.ext import ContextTypes\n\n\n"
+        "async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
+        "    query = update.callback_query\n"
+        "    if query is None:\n"
+        "        return\n"
+        "    await query.answer()\n"
+        "    data = query.data or \"\"\n"
+        + body
+        + "    await query.edit_message_text(f\"Action: {data}\")\n"
+    )
 
 
 
-def _cmd_handler(name: str, description: str, admin_only: bool) -> str:
+def _cmd_handler(name: str, description: str, admin_only: bool, entity_names: list[str] | None = None) -> str:
     fn = f"{_ident(name)}_handler"
     guard = ""
     imp = ""
@@ -240,6 +249,9 @@ def _cmd_handler(name: str, description: str, admin_only: bool) -> str:
         await message.reply_text("Admin only.")
         return
 '''
+    entities_line = ""
+    if entity_names:
+        entities_line = "\nRelated entities: " + ", ".join(entity_names[:8])
     return f'''"""Command /{name} from ProgramContract."""
 from __future__ import annotations
 from telegram import Update
@@ -251,8 +263,9 @@ async def {fn}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 {guard}
-    await message.reply_text({_py(f"/{name}: {description}")})
+    await message.reply_text({_py(f"/{name}: {description}{entities_line}")})
 '''
+
 
 
 def _service(name: str) -> str:
@@ -370,8 +383,7 @@ def _states_module(c: ProgramContract) -> str:
 
 
 def _messages(c: ProgramContract) -> str:
-    has_states = bool(c.conversation_states)
-    if not has_states:
+    if not c.conversation_states:
         return '''"""Text fallback."""
 from __future__ import annotations
 from telegram import Update
@@ -384,11 +396,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     await message.reply_text("Use /start or menu buttons.")
 '''
-    return '''"""Text handler — drives conversation_states from ProgramContract."""
+    # Build next map
+    next_map = {st.name: st.next_state for st in c.conversation_states}
+    prompts = {st.name: st.prompt for st in c.conversation_states}
+    return (
+        '''"""Text handler — conversation_states from ProgramContract."""
 from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.states import STATE_PROMPTS, UserState
+
+NEXT_STATE = ''' + repr(next_map) + '''
+PROMPTS = ''' + repr(prompts) + '''
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -398,23 +417,26 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = message.text.strip()
     ud = context.user_data
     state = ud.get("state", UserState.IDLE.value)
-    if state != UserState.IDLE.value:
+    if state and state != UserState.IDLE.value:
         ud.setdefault("collected", {})
         ud["collected"][state] = text
-        # advance if next known
-        prompt = STATE_PROMPTS.get(state)
-        ud["state"] = UserState.IDLE.value
-        await message.reply_text(f"Saved for {state}." + (f" ({prompt})" if prompt else ""))
+        nxt = NEXT_STATE.get(state)
+        if nxt:
+            ud["state"] = nxt
+            await message.reply_text(PROMPTS.get(nxt) or f"Next: {nxt}")
+        else:
+            ud["state"] = UserState.IDLE.value
+            await message.reply_text("Done. Saved: " + ", ".join(ud["collected"].keys()))
         return
     await message.reply_text("Use /start or menu buttons.")
 '''
+    )
 
 
 class CodegenService:
-    """Microservice: ProgramContract → files."""
+    """Microservice: ProgramContract → files. Blind to user text."""
 
     def run(self, contract: ProgramContract, output_dir: str | Path) -> tuple[Path, dict]:
-        # Blind: never accepts user text
         root = Path(output_dir).resolve()
         root.mkdir(parents=True, exist_ok=True)
         app = root / "app"
@@ -425,7 +447,10 @@ class CodegenService:
         _write(root / ".env.example", _env(contract))
         _write(root / "README.md", _readme(contract))
         _write(root / "program_contract.json", contract.model_dump_json(indent=2))
-        _write(root / "pyproject.toml", f'[project]\nname = "{_ident(contract.bot_name)}"\nversion = "{contract.version}"\nrequires-python = ">=3.11"\n')
+        _write(
+            root / "pyproject.toml",
+            f'[project]\nname = "{_ident(contract.bot_name)}"\nversion = "{contract.version}"\nrequires-python = ">=3.11"\n',
+        )
         _write(app / "__init__.py", '"""app"""\n')
         _write(handlers / "__init__.py", '"""handlers"""\n')
         _write(services / "__init__.py", '"""services"""\n')
@@ -438,11 +463,15 @@ class CodegenService:
         if contract.conversation_states:
             _write(app / "states.py", _states_module(contract))
 
+        entity_names = [e.name for e in contract.entities]
         for cmd in contract.commands:
             if cmd.name in ("start", "help"):
                 continue
             ident = _ident(cmd.name)
-            _write(handlers / f"cmd_{ident}.py", _cmd_handler(cmd.name, cmd.description, cmd.admin_only))
+            _write(
+                handlers / f"cmd_{ident}.py",
+                _cmd_handler(cmd.name, cmd.description, cmd.admin_only, entity_names),
+            )
 
         for svc in contract.services:
             _write(services / f"{_ident(svc.name)}.py", _service(svc.name))

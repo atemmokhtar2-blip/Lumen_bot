@@ -31,6 +31,7 @@ from ...schemas.program_contract import (
     validate_contract,
 )
 from ...understanding.requirement_extractor import extract_formal_spec
+from ...understanding.flow_extractor import extract_flows
 from ...schemas.formal_spec import FormalBotSpec
 
 
@@ -78,7 +79,7 @@ def _field_type(hint: str) -> FieldType:
     return table.get(h, FieldType.STR)
 
 
-def formal_spec_to_contract(spec: FormalBotSpec) -> ProgramContract:
+def formal_spec_to_contract(spec: FormalBotSpec, raw_text: str = "") -> ProgramContract:
     commands = [
         CommandUnit(
             name=c.command,
@@ -130,29 +131,32 @@ def formal_spec_to_contract(spec: FormalBotSpec) -> ProgramContract:
         ServiceUnit(name=s, responsibility=s) for s in (spec.services or [])
     ]
 
-    # Optional simple flow from feature tags
+    # Flows primarily from user text steps; tags only fill if text has none
     flows: list[FlowUnit] = []
-    if "shopping_cart" in (spec.feature_tags or []) or "order_management" in (spec.feature_tags or []):
+    for flow_name, step_dicts in extract_flows(raw_text or spec.description or ""):
+        # Also try full source if description short
         flows.append(
             FlowUnit(
-                name="checkout",
+                name=flow_name,
                 steps=[
-                    FlowStep(id="browse", action="list_products", next_id="cart"),
-                    FlowStep(id="cart", action="view_cart", next_id="checkout"),
-                    FlowStep(id="checkout", action="create_order", next_id=None),
+                    FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"))
+                    for s in step_dicts
                 ],
             )
         )
-    if "booking" in (spec.feature_tags or []):
-        flows.append(
-            FlowUnit(
-                name="booking",
-                steps=[
-                    FlowStep(id="pick", action="pick_slot", next_id="confirm"),
-                    FlowStep(id="confirm", action="confirm_booking", next_id=None),
-                ],
+    if not flows:
+        # Re-scan using formal spec source sections if present
+        joined = "\n".join((spec.source_sections or {}).values()) if getattr(spec, "source_sections", None) else ""
+        for flow_name, step_dicts in extract_flows(joined or (spec.description or "")):
+            flows.append(
+                FlowUnit(
+                    name=flow_name,
+                    steps=[
+                        FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"))
+                        for s in step_dicts
+                    ],
+                )
             )
-        )
 
     # Permissions derived from commands (not templates — from contract inputs)
     user_cmds = [c.name for c in commands if not c.admin_only]
@@ -231,7 +235,7 @@ class UnderstandingService:
 
     def run(self, user_text: str) -> tuple[ProgramContract, ContractValidation]:
         spec = extract_formal_spec(user_text or "")
-        contract = formal_spec_to_contract(spec)
+        contract = formal_spec_to_contract(spec, raw_text=user_text or "")
         validation = validate_contract(contract)
         return contract, validation
 
