@@ -60,4 +60,26 @@ class FormalUnderstandingEngine(BaseEngine):
             "bot_type": spec.bot_type.value,
             "name": spec.bot_name,
         }
+        # Compatibility: also expose classic intent for ParseStage
+        intent = {
+            "raw": request,
+            "bot_type": spec.bot_type.value,
+            "bot_name": spec.bot_name,
+            "features": [getattr(f, "name", str(f)) for f in spec.features][:40],
+            "commands": [
+                {"name": getattr(c, "command", "start"), "description": getattr(c, "description", "")}
+                for c in (spec.ui.commands if spec.ui else [])
+            ] or [{"name": "start", "description": "تشغيل البوت"}, {"name": "help", "description": "المساعدة"}],
+            "language": "python",
+            "language_version": "3.11",
+            "framework": "python-telegram-bot",
+            "source": "formal_understanding",
+        }
+        outputs["intent"] = intent
+        context.artefacts["intent"] = intent
+        try:
+            context.set("intent", intent)
+        except Exception:
+            pass
+
         return self.ok(outputs=outputs, metadata={"engine": "formal_understanding"})
