@@ -74,6 +74,7 @@ from ..engines.generators import (
     WorkspaceManagementEngine,
     DependencyManagementEngine,
     EnvironmentConfigEngine,
+    EngineEcosystemEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -490,6 +491,11 @@ def bootstrap(
     environment_config_engine = EnvironmentConfigEngine()
     registry.register_engine(environment_config_engine)
 
+    # -- intelligent engine ecosystem & registry (Specification 052) ------
+    # MAXIMUM CRITICAL: central registry; no engine runs unregistered.
+    engine_ecosystem_engine = EngineEcosystemEngine()
+    registry.register_engine(engine_ecosystem_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -679,6 +685,10 @@ def bootstrap(
                      engine_id="environment_config",
                      priority=137,
                      dependencies=["dependency_management"])
+    manager.register(engine_ecosystem_engine,
+                     engine_id="engine_ecosystem",
+                     priority=138,
+                     dependencies=["environment_config"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

@@ -57,6 +57,7 @@ from .file_system import FileSystemEngine
 from .workspace_management import WorkspaceManagementEngine
 from .dependency_management import DependencyManagementEngine
 from .environment_config import EnvironmentConfigEngine
+from .engine_ecosystem import EngineEcosystemEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -110,4 +111,5 @@ __all__ = [
     "WorkspaceManagementEngine",
     "DependencyManagementEngine",
     "EnvironmentConfigEngine",
+    "EngineEcosystemEngine",
 ]
