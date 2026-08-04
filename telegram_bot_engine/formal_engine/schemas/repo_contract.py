@@ -71,8 +71,64 @@ class EnvVarInfo(StrictModel):
     source_file: str = ""
 
 
+
+class DependencyGap(StrictModel):
+    module: str
+    suggested_package: str = ""
+    evidence: str = ""
+
+
+class RepoRisk(StrictModel):
+    code: str
+    severity: str = "medium"  # low | medium | high | critical
+    message_ar: str = ""
+
+
+class RepoCapability(StrictModel):
+    name: str
+    kind: str = "feature"  # feature | command | integration
+    evidence: str = ""
+
+
+class RepoIntelligence(StrictModel):
+    """Layer on top of structural RepoContract — deterministic readiness intelligence."""
+    host_readiness: float = 0.0  # 0..1
+    host_ready: bool = False
+    dependency_gaps: list[DependencyGap] = Field(default_factory=list)
+    env_gaps: list[str] = Field(default_factory=list)
+    capabilities: list[RepoCapability] = Field(default_factory=list)
+    risks: list[RepoRisk] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    change_surface: list[str] = Field(default_factory=list)  # files safe to extend
+    notes: list[str] = Field(default_factory=list)
+
+    def to_user_lines(self) -> list[str]:
+        lines = [
+            f"• جاهزية الاستضافة: {self.host_readiness:.0%} ({'جاهز' if self.host_ready else 'غير جاهز'})",
+        ]
+        if self.dependency_gaps:
+            gaps = ", ".join(
+                f"`{g.module}`→`{g.suggested_package or '?'}`"
+                for g in self.dependency_gaps[:8]
+            )
+            lines.append(f"• فجوات تبعيات: {gaps}")
+        if self.env_gaps:
+            lines.append("• متغيرات ناقصة: " + ", ".join(f"`{x}`" for x in self.env_gaps[:8]))
+        if self.capabilities:
+            caps = ", ".join(c.name for c in self.capabilities[:10])
+            lines.append(f"• قدرات: {caps}")
+        if self.risks:
+            rs = " | ".join(f"{r.severity}:{r.message_ar}" for r in self.risks[:5])
+            lines.append(f"• مخاطر: {rs}")
+        if self.next_actions:
+            lines.append("• خطوات تالية: " + "؛ ".join(self.next_actions[:5]))
+        if self.change_surface:
+            lines.append("• سطح التعديل: " + ", ".join(f"`{x}`" for x in self.change_surface[:6]))
+        return lines
+
+
 class RepoContract(StrictModel):
-    schema_version: str = "2.0"
+    schema_version: str = "2.1"
     root_path: str
     repo_name: str = ""
     remote_url: str = ""
@@ -109,6 +165,7 @@ class RepoContract(StrictModel):
     notes: list[str] = Field(default_factory=list)
     quality_signals: dict[str, Any] = Field(default_factory=dict)
     raw_stats: dict[str, Any] = Field(default_factory=dict)
+    intelligence: RepoIntelligence | None = None
 
     def to_user_summary(self) -> str:
         lines = [

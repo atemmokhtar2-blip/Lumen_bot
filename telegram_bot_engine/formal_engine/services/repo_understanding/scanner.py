@@ -798,4 +798,9 @@ class RepoUnderstandingService:
 
 
 def understand_repo(root_path: str | Path, remote_url: str = "") -> RepoContract:
-    return RepoUnderstandingService().run(root_path, remote_url=remote_url)
+    contract = RepoUnderstandingService().run(root_path, remote_url=remote_url)
+    try:
+        from ..repo_intelligence import enrich_repo_contract
+        return enrich_repo_contract(contract)
+    except Exception:
+        return contract

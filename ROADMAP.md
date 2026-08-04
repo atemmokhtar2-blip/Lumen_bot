@@ -69,6 +69,7 @@
 | 1.3 | بناء `RepoContract` (مشابه لـ ProgramContract لكن لمشروع موجود) | تم |
 | 1.4 | ربط الشات: تطوير على المستودع النشط (شرح/أوامر/ملفات/بحث/إضافة/حذف أمر + رفض صادق) | تم |
 | 1.5 | تخزين سياق المستودع لكل مستخدم (آخر clone + RepoContract) | تم |
+| 1.6 | طبقة ذكاء المستودع (RepoIntelligence): فجوات تبعيات + جاهزية استضافة + قدرات + مخاطر + خطوات تالية | تم |
 
 ### المرحلة 2 — فهم عميق للنص (Understanding Evolution)
 > الهدف: المحرك الأساسي يفهم الطلب حرفياً بدقة أعلى بدون LLM.
@@ -150,6 +151,7 @@
 - تم: تمييز سحب المستودع عن التوليد
 - تم: هذه الخطة كملف التوثيق الوحيد
 - تم: فهم المستودع بعد السحب (RepoContract + scanner + سياق)
+- تم: RepoIntelligence v1 فوق RepoContract — host_readiness، dependency_gaps، capabilities، risks، next_actions، change_surface
 - تم: ترقية الفهم إلى RepoContract v2 (AST عميق + معمارية + جودة)
 - تم: scanner v3 — دعم aiogram/telebot/PTB + تمييز مكتبة vs بوت + README
 - تم: أوامر تطوير على المستودع النشط (1.4) — شرح/أوامر/إضافة أمر PTB+aiogram+telebot
