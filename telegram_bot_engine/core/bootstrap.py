@@ -70,6 +70,7 @@ from ..engines.generators import (
     ProductionReadinessEngine,
     RepositoryManagementEngine,
     GitOperationsEngine,
+    FileSystemEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -466,6 +467,11 @@ def bootstrap(
     git_operations_engine = GitOperationsEngine()
     registry.register_engine(git_operations_engine)
 
+    # -- intelligent file system engine (Specification 048) ---------------
+    # CRITICAL: abstract FS layer; backup+integrity; workspace isolation.
+    file_system_engine = FileSystemEngine()
+    registry.register_engine(file_system_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -639,6 +645,10 @@ def bootstrap(
                      engine_id="git_operations",
                      priority=133,
                      dependencies=["repository_management"])
+    manager.register(file_system_engine,
+                     engine_id="file_system",
+                     priority=134,
+                     dependencies=["git_operations"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
