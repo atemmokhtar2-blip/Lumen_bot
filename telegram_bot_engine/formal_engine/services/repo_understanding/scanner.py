@@ -654,11 +654,18 @@ class RepoUnderstandingService:
             n in {c.name for c in classes} | {f.name for f in functions}
             for n in ("CodegenService", "UnderstandingService", "generate_bot", "PlanningService")
         )
-        is_tg_app = (tg_score >= 3 or bool(commands) or bool(handlers_u)) and not is_library
-        # library that is a telegram framework
-        is_tg_lib = is_library and any(
-            x in frameworks for x in ("aiogram", "python-telegram-bot", "pyTelegramBotAPI", "pyrogram")
+        has_tg_fw = any(
+            x in frameworks
+            for x in ("aiogram", "python-telegram-bot", "pyTelegramBotAPI", "pyrogram")
         )
+        # App bot if signals OR telegram framework in deps/entry (even if AST score low)
+        is_tg_app = (not is_library) and (
+            tg_score >= 2
+            or bool(commands)
+            or bool(handlers_u)
+            or (has_tg_fw and (bool(entries) or bool(py_files)))
+        )
+        is_tg_lib = is_library and has_tg_fw
 
         if is_gen:
             style = "generation_engine"

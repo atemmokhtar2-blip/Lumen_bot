@@ -303,9 +303,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Spec 065 — if user is sending a bot token after successful generation
     pending_run = (context.user_data or {}).get("pending_run")
-    if pending_run and _looks_like_bot_token(request):
-        await _handle_live_run_token(message, context, request, pending_run)
-        return
+    if _looks_like_bot_token(request):
+        if not pending_run:
+            active = (context.user_data or {}).get("active_repo") or {}
+            if active.get("path") and Path(active["path"]).exists():
+                entry = ""
+                try:
+                    cdict = active.get("contract") or {}
+                    eps = cdict.get("entry_points") or []
+                    if eps:
+                        entry = (eps[0] or {}).get("path") or ""
+                except Exception:
+                    entry = ""
+                if not entry:
+                    for cand in ("bot.py", "main.py", "app.py"):
+                        if (Path(active["path"]) / cand).exists():
+                            entry = cand
+                            break
+                pending_run = {
+                    "project_path": active["path"],
+                    "entry_point": entry,
+                    "run_seconds": 8,
+                }
+                context.user_data["pending_run"] = pending_run
+        if pending_run:
+            await _handle_live_run_token(message, context, request, pending_run)
+            return
 
     # Private repo: user sends GitHub PAT after auth failure
     pending_clone = (context.user_data or {}).get("pending_clone_auth")
@@ -370,9 +393,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 }
                 lines.append("")
                 lines.append(repo_contract.to_user_summary())
-                if repo_contract.is_telegram_bot or repo_contract.architecture_style in (
-                    "telegram_bot", "generation_engine",
-                ):
+                _tg_fws = ("python-telegram-bot", "aiogram", "pyTelegramBotAPI", "pyrogram")
+                _is_runnable = (
+                    repo_contract.is_telegram_bot
+                    or repo_contract.architecture_style in ("telegram_bot", "generation_engine")
+                    or any(f in _tg_fws for f in (repo_contract.frameworks or []))
+                    or any(
+                        str(d).lower().replace("_", "-").startswith(
+                            ("python-telegram-bot", "aiogram", "pytelegrambotapi", "telebot", "pyrogram")
+                        )
+                        for d in (repo_contract.dependencies or [])
+                    )
+                )
+                if _is_runnable:
                     entry = repo_contract.entry_points[0].path if repo_contract.entry_points else ""
                     context.user_data["pending_run"] = {
                         "project_path": result.path,
@@ -452,10 +485,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "• اشرح هيكل المشروع\n"
                         "• قائمة الملفات / ابحث عن X"
                     )
-                    if repo_contract.is_telegram_bot or repo_contract.architecture_style in (
-                        "telegram_bot",
-                        "generation_engine",
-                    ):
+                    _tg_fws = ("python-telegram-bot", "aiogram", "pyTelegramBotAPI", "pyrogram")
+                    _is_runnable = (
+                        repo_contract.is_telegram_bot
+                        or repo_contract.architecture_style in ("telegram_bot", "generation_engine")
+                        or any(f in _tg_fws for f in (repo_contract.frameworks or []))
+                        or any(
+                            str(d).lower().replace("_", "-").startswith(
+                                ("python-telegram-bot", "aiogram", "pytelegrambotapi", "telebot", "pyrogram")
+                            )
+                            for d in (repo_contract.dependencies or [])
+                        )
+                    )
+                    if _is_runnable:
                         entry = ""
                         if repo_contract.entry_points:
                             entry = repo_contract.entry_points[0].path
