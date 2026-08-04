@@ -71,6 +71,8 @@ from .message_queue import MessageQueueEngine
 from .task_scheduler import TaskSchedulerEngine
 from .workflow_execution import WorkflowExecutionEngine
 from .live_deployment import LiveDeploymentEngine
+from .formal_understanding import FormalUnderstandingEngine
+from .formal_generation import FormalGenerationEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -138,4 +140,6 @@ __all__ = [
     "TaskSchedulerEngine",
     "WorkflowExecutionEngine",
     "LiveDeploymentEngine",
+    "FormalUnderstandingEngine",
+    "FormalGenerationEngine",
 ]
