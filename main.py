@@ -63,6 +63,41 @@ def _looks_like_bot_token(text: str) -> bool:
     return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", (text or "").strip()))
 
 
+
+async def _handle_live_run_token(message, context, token: str, pending: dict) -> None:
+    """Real install + run via LiveRunnerService (no fake success)."""
+    status = await message.reply_text(
+        "🔐 جاري التحقق من التوكن ثم تثبيت التبعيات وتشغيل البوت..."
+    )
+    project_path = pending.get("project_path")
+    entry = pending.get("entry_point") or ""
+
+    def _run():
+        from telegram_bot_engine.formal_engine.services.live_runner import run_bot_project
+        return run_bot_project(
+            project_path=project_path,
+            bot_token=token,
+            entry_hint=entry or None,
+            run_seconds=float(pending.get("run_seconds") or 8),
+        )
+
+    try:
+        report = await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.exception("Live run failed")
+        await status.edit_text(f"❌ فشل التشغيل الحي: {type(e).__name__}: {str(e)[:200]}")
+        context.user_data.pop("pending_run", None)
+        return
+    finally:
+        token = ""  # noqa: F841
+
+    context.user_data.pop("pending_run", None)
+    text_out = report.to_user_text()
+    if len(text_out) > 3500:
+        text_out = text_out[:3500] + "\n…"
+    await status.edit_text(text_out)
+
+
 async def _handle_live_deploy_token(message, context, token: str, pending: dict) -> None:
     """Spec 065: validate token, deploy, health-check, functional tests."""
     status = await message.reply_text(
@@ -267,6 +302,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Spec 065 — if user is sending a bot token after successful generation
+    pending_run = (context.user_data or {}).get("pending_run")
+    if pending_run and _looks_like_bot_token(request):
+        await _handle_live_run_token(message, context, request, pending_run)
+        return
+
     pending = (context.user_data or {}).get("pending_deploy")
     if pending and _looks_like_bot_token(request):
         await _handle_live_deploy_token(message, context, request, pending)
@@ -330,8 +370,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "يمكنك الآن طلب تطوير على هذا المستودع، مثال:\n"
                         "• أضف أمر /stats\n"
                         "• اشرح هيكل المشروع\n"
-                        "• طوّر نظام تذاكر"
+                        "• قائمة الملفات / ابحث عن X"
                     )
+                    if repo_contract.is_telegram_bot or repo_contract.architecture_style in (
+                        "telegram_bot",
+                        "generation_engine",
+                    ):
+                        entry = ""
+                        if repo_contract.entry_points:
+                            entry = repo_contract.entry_points[0].path
+                        context.user_data["pending_run"] = {
+                            "project_path": result.path,
+                            "entry_point": entry,
+                            "run_seconds": 8,
+                        }
+                        lines.append("")
+                        lines.append(
+                            "🚀 *للتشغيل الحقيقي:* أرسل الآن توكن البوت من @BotFather\n"
+                            "(تحقق + تثبيت تبعيات + تشغيل — بدون نجاح وهمي)"
+                        )
                 except Exception as e:
                     logger.exception("Repo understanding failed")
                     lines.append(f"⚠️ السحب نجح لكن الفهم فشل: {type(e).__name__}")
