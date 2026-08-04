@@ -235,42 +235,54 @@ def _callbacks(c: ProgramContract) -> str:
 
 
 def _cmd_handler(name: str, description: str, admin_only: bool, entity_names: list[str] | None = None) -> str:
-    from .moderation_templates import MOD_COMMANDS, moderation_handler_source
-
-    if name in MOD_COMMANDS:
-        return moderation_handler_source(name, description)
-
+    """Universal command handler — NO domain templates. Contract-driven only."""
     fn = f"{_ident(name)}_handler"
-    guard = ""
-    imp = ""
+    desc = description or name
+    ents = list(entity_names or [])[:8]
+    lines: list[str] = [
+        f'"""Command /{name} from ProgramContract (universal handler)."""',
+        "from __future__ import annotations",
+        "",
+        "from telegram import Update",
+        "from telegram.ext import ContextTypes",
+    ]
     if admin_only or name == "admin":
-        imp = "from app.config import get_settings\n"
-        guard = (
-            "\n    settings = get_settings()\n"
-            "    user = update.effective_user\n"
-            "    if user is None:\n"
-            "        return\n"
-            "    if settings.admin_ids and user.id not in settings.admin_ids:\n"
-            "        await message.reply_text(\"هذا الأمر للإدارة فقط.\")\n"
-            "        return\n"
-        )
-    entities_line = ""
-    if entity_names:
-        entities_line = "\nRelated entities: " + ", ".join(entity_names[:8])
-    header = (
-        f'"""Command /{name} from ProgramContract."""\n'
-        "from __future__ import annotations\n"
-        "from telegram import Update\n"
-        "from telegram.ext import ContextTypes\n"
-        f"{imp}\n"
-        f"async def {fn}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
-        "    message = update.effective_message\n"
-        "    if message is None:\n"
-        "        return\n"
-        f"{guard}"
-        f"    await message.reply_text({_py('/' + name + ': ' + description + entities_line)})\n"
+        lines.append("from app.config import get_settings")
+    lines.extend(["", "", f"async def {fn}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:"])
+    lines.extend(
+        [
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+        ]
     )
-    return header
+    if admin_only or name == "admin":
+        lines.extend(
+            [
+                "    settings = get_settings()",
+                "    user = update.effective_user",
+                "    if user is None:",
+                "        return",
+                "    if settings.admin_ids and user.id not in settings.admin_ids:",
+                '        await message.reply_text("هذا الأمر للإدارة فقط.")',
+                "        return",
+            ]
+        )
+    lines.extend(
+        [
+            "    args = list(context.args or [])",
+            f"    description = {_py(desc)}",
+            f"    entities = {_py(ents)}",
+            f'    parts = ["/{name}: " + description]',
+            "    if args:",
+            '        parts.append("args: " + ", ".join(args))',
+            "    if entities:",
+            '        parts.append("entities: " + ", ".join(entities))',
+            '    await message.reply_text("\\n".join(parts))',
+            "",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 
