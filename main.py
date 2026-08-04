@@ -779,18 +779,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:
                 await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
 
-            # Spec 065: after successful project, offer live deploy via token
-            if success:
+            # Structural review report + token request only if gate passed
+            ready = bool(success) and bool(meta.get("ready_for_token", success))
+            gate = meta.get("static_gate") or {}
+            if gate:
+                g_lines = [
+                    "🔬 مراجعة StaticDevGate",
+                    "• النتيجة: " + ("نجاح" if gate.get("ok") else "فشل"),
+                    f"• أخطاء: {gate.get('errors', 0)} | تحذيرات: {gate.get('warnings', 0)}",
+                ]
+                for f in (gate.get("findings") or [])[:8]:
+                    if f.get("severity") == "error":
+                        g_lines.append(f"  🔴 {f.get('code')}: {str(f.get('msg', ''))[:80]}")
+                await message.reply_text("\n".join(g_lines))
+
+            if ready:
                 context.user_data["pending_deploy"] = {
                     "project_path": str(project_path),
                     "owner_user_id": user.id if user else None,
                 }
+                context.user_data["pending_live_run"] = {
+                    "project_path": str(project_path),
+                    "owner_user_id": user.id if user else None,
+                }
                 await message.reply_text(
-                    "✅ تم إنشاء المشروع بنجاح.\n\n"
-                    "إذا أردت تجربة البوت مباشرة، أرسل:\n"
-                    "Telegram Bot Token\n\n"
-                    "(من @BotFather — لن يتم حفظ التوكن في الكود أو اللوجات)"
+                    "✅ المشروع عدّى الفهم + التوليد + المراجعة الاستاتيكية + py_compile.\n\n"
+                    "🔑 أرسل توكن البوت الآن لتجربة حية (من @BotFather).\n"
+                    "التوكن لا يُحفظ في الكود أو اللوجات.\n\n"
+                    "لبوت إدارة المجموعات: أضفه مشرفاً في المجموعة بعد التشغيل."
                 )
+            else:
+                await message.reply_text(
+                    "⚠️ المشروع اتولّد لكن المراجعة الاستاتيكية/الترجمة لم تمر بالكامل.\n"
+                    "راجع الأخطاء قبل إرسال التوكن."
+                )
+
         elif not success:
             await message.reply_text(
                 "لم يُنشأ مشروع. جرّب وصفاً أبسط أو أوضح."
