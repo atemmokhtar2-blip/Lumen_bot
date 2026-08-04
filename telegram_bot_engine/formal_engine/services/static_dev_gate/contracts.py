@@ -150,11 +150,46 @@ def infer_expr_type(node: ast.AST, env: dict[str, TypeTag]) -> TypeTag:
     if isinstance(node, ast.BoolOp):
         return TypeTag.BOOL
     if isinstance(node, ast.Call):
+        # attribute methods with known return behaviour
+        if isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            # dict.get(key, default) → type of default when present, else UNKNOWN
+            if attr == "get":
+                if len(node.args) >= 2:
+                    return infer_expr_type(node.args[1], env)
+                for kw in node.keywords:
+                    if kw.arg == "default" and kw.value is not None:
+                        return infer_expr_type(kw.value, env)
+                return TypeTag.UNKNOWN
+            if attr in ("strip", "lower", "upper", "replace", "format", "join",
+                        "lstrip", "rstrip", "title", "swapcase"):
+                return TypeTag.STR
+            if attr in ("keys", "values", "items"):
+                return TypeTag.UNKNOWN
+            if attr in ("append", "extend", "add", "clear", "update", "remove"):
+                return TypeTag.NONE
+            if attr in ("read", "readline", "read_text", "decode", "decode_contents"):
+                return TypeTag.STR
+            if attr in ("split", "rsplit", "splitlines"):
+                return TypeTag.LIST
+            if attr in ("encode",):
+                return TypeTag.BYTES
+            if attr in ("find", "rfind", "index", "count", "rindex"):
+                return TypeTag.INT
+            return TypeTag.UNKNOWN
         if isinstance(node.func, ast.Name):
             ctor = {
                 "int": TypeTag.INT, "float": TypeTag.FLOAT, "str": TypeTag.STR,
                 "bool": TypeTag.BOOL, "list": TypeTag.LIST, "dict": TypeTag.DICT,
                 "set": TypeTag.SET, "tuple": TypeTag.TUPLE, "bytes": TypeTag.BYTES,
+                "len": TypeTag.INT, "sum": TypeTag.INT, "abs": TypeTag.INT,
+                "ord": TypeTag.INT, "hash": TypeTag.INT,
+                "round": TypeTag.FLOAT,
+                "sorted": TypeTag.LIST, "list": TypeTag.LIST,
+                "reversed": TypeTag.UNKNOWN,
+                "isinstance": TypeTag.BOOL, "hasattr": TypeTag.BOOL,
+                "callable": TypeTag.BOOL,
+                "open": TypeTag.UNKNOWN,
             }
             return ctor.get(node.func.id, TypeTag.UNKNOWN)
         return TypeTag.UNKNOWN
@@ -168,6 +203,10 @@ def infer_expr_type(node: ast.AST, env: dict[str, TypeTag]) -> TypeTag:
         base = infer_expr_type(node.value, env)
         if base == TypeTag.STR:
             return TypeTag.STR
+        if base == TypeTag.LIST:
+            return TypeTag.UNKNOWN
+        if base == TypeTag.DICT:
+            return TypeTag.UNKNOWN
         return TypeTag.UNKNOWN
     return TypeTag.UNKNOWN
 
@@ -294,28 +333,38 @@ def analyze_function_contracts(
     fc.preconditions = _leading_asserts(body)
     fc.postconditions = _trailing_asserts_before_returns(list(node.body))
 
-    # --- missing annotations on public API ---
-    if public:
-        missing_params = [p for p in fc.params if p.name not in ("self", "cls") and not p.annotated]
-        if missing_params:
-            names = ", ".join(f"`{p.name}`" for p in missing_params[:5])
-            fc.findings.append(ContractFinding(
-                kind="missing_annotation",
-                severity="info",
-                lineno=node.lineno,
-                message=f"عقد ناقص: معاملات بدون نوع في `{qual}`: {names}",
-                qualname=qual,
-                evidence="params",
-            ))
-        if not fc.return_annotated and node.name not in ("__init__", "__aenter__", "__aexit__"):
-            fc.findings.append(ContractFinding(
-                kind="missing_annotation",
-                severity="info",
-                lineno=node.lineno,
-                message=f"عقد ناقص: لا يوجد نوع إرجاع في `{qual}`",
-                qualname=qual,
-                evidence="return",
-            ))
+    # --- missing annotations: only incomplete contracts (partial typing) ---
+    # Avoid noise on fully-untyped public APIs. Flag when the function already
+    # committed to types but left gaps (inconsistent contract).
+    skip_names = {"__init__", "__aenter__", "__aexit__", "__enter__", "__exit__",
+                  "__repr__", "__str__", "__call__"}
+    if public and node.name not in skip_names:
+        real_params = [p for p in fc.params if p.name not in ("self", "cls")]
+        annotated_params = [p for p in real_params if p.annotated]
+        missing_params = [p for p in real_params if not p.annotated]
+        has_any_type = bool(annotated_params) or fc.return_annotated
+        if has_any_type:
+            if missing_params:
+                names = ", ".join(f"`{p.name}`" for p in missing_params[:5])
+                fc.findings.append(ContractFinding(
+                    kind="missing_annotation",
+                    severity="warning",
+                    lineno=node.lineno,
+                    message=(
+                        f"عقد غير مكتمل: معاملات بدون نوع في `{qual}`: {names}"
+                    ),
+                    qualname=qual,
+                    evidence="params",
+                ))
+            if not fc.return_annotated:
+                fc.findings.append(ContractFinding(
+                    kind="missing_annotation",
+                    severity="warning",
+                    lineno=node.lineno,
+                    message=f"عقد غير مكتمل: لا يوجد نوع إرجاع في `{qual}`",
+                    qualname=qual,
+                    evidence="return",
+                ))
 
     # --- walk body for type mismatches & bad binops ---
     for stmt in ast.walk(node):

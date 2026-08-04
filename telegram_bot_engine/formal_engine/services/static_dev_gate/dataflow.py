@@ -43,9 +43,22 @@ _DANGEROUS_CALLS = {
     "subprocess.call",
     "subprocess.run",
     "subprocess.Popen",
+    "subprocess.check_output",
+    "subprocess.check_call",
     "pickle.loads",
     "pickle.load",
+    # SQL injection surfaces
+    "execute",
+    "executemany",
+    "executescript",
+    "cursor.execute",
+    "Cursor.execute",
+    "connection.execute",
+    "Connection.execute",
 }
+
+# Attribute names that are SQL sinks when called on any object
+_SQL_SINK_ATTRS = {"execute", "executemany", "executescript"}
 
 # Resource factories: call label → resource kind
 _RESOURCE_OPENERS = {
@@ -808,9 +821,16 @@ class _FlowVisitor(ast.NodeVisitor):
             if isinstance(node.func.value, ast.Name):
                 self._note_resource_close(node.func.value.id, node.lineno)
 
-        if label in _DANGEROUS_CALLS or any(
-            label.endswith("." + d.split(".")[-1]) for d in _DANGEROUS_CALLS
-        ):
+        is_sql = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _SQL_SINK_ATTRS
+        )
+        is_dangerous = (
+            label in _DANGEROUS_CALLS
+            or any(label.endswith("." + d.split(".")[-1]) for d in _DANGEROUS_CALLS)
+            or is_sql
+        )
+        if is_dangerous:
             detail = "call"
             risky = False
             for a in node.args:
@@ -823,17 +843,43 @@ class _FlowVisitor(ast.NodeVisitor):
                 elif isinstance(a, ast.JoinedStr):
                     risky = True
                     detail = "f-string"
-            if risky or label in ("eval", "exec"):
-                self.dangerous_sinks.append((label, node.lineno, detail))
+                elif isinstance(a, ast.Call):
+                    risky = True
+                    detail = "call-arg"
+            # eval/exec/SQL always noted; other sinks only with dynamic args
+            if risky or label in ("eval", "exec") or is_sql:
+                sink_label = label or (
+                    f"*.{node.func.attr}" if is_sql and isinstance(node.func, ast.Attribute)
+                    else "call"
+                )
+                self.dangerous_sinks.append((sink_label, node.lineno, detail))
             for a in node.args:
                 if isinstance(a, ast.Name) and a.id in self.tainted:
                     self.tainted_to_sink.append((a.id, label or "call", node.lineno))
+                # nested attrs: update.message.text / query.data
                 if isinstance(a, ast.Attribute):
-                    base = a.value.id if isinstance(a.value, ast.Name) else ""
-                    if base in self.tainted or (base, a.attr) in _TAINT_SOURCE_ATTRS:
-                        self.tainted_to_sink.append(
-                            (f"{base}.{a.attr}", label or "call", node.lineno)
-                        )
+                    chain: list[str] = []
+                    cur: ast.AST = a
+                    while isinstance(cur, ast.Attribute):
+                        chain.append(cur.attr)
+                        cur = cur.value
+                    if isinstance(cur, ast.Name):
+                        chain.append(cur.id)
+                        chain.reverse()
+                        root = chain[0]
+                        pair = (chain[-2], chain[-1]) if len(chain) >= 2 else ("", "")
+                        if (
+                            root in self.tainted
+                            or root in _TAINT_SOURCE_NAMES
+                            or pair in _TAINT_SOURCE_ATTRS
+                            or any(
+                                (chain[i], chain[i + 1]) in _TAINT_SOURCE_ATTRS
+                                for i in range(len(chain) - 1)
+                            )
+                        ):
+                            self.tainted_to_sink.append(
+                                (".".join(chain), label or "call", node.lineno)
+                            )
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if self._returned:
@@ -878,6 +924,25 @@ class _FlowVisitor(ast.NodeVisitor):
             self.unreachable_lines.append(node.lineno)
             return
         self._returned = True
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Local / nested imports define names — not use-before-def."""
+        if self._returned:
+            self.unreachable_lines.append(node.lineno)
+            return
+        for alias in node.names:
+            bound = alias.asname or alias.name.split(".")[0]
+            self._def(bound, node.lineno, Nullability.NOT_NONE)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if self._returned:
+            self.unreachable_lines.append(node.lineno)
+            return
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            bound = alias.asname or alias.name
+            self._def(bound, node.lineno, Nullability.NOT_NONE)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         return  # nested: isolated
