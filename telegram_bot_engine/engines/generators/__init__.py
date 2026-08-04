@@ -62,6 +62,7 @@ from .engine_orchestrator import EngineOrchestratorEngine
 from .execution_context import ExecutionContextEngine
 from .synchronization import SynchronizationEngine
 from .resource_management import ResourceManagementEngine
+from .system_monitoring import SystemMonitoringEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -120,4 +121,5 @@ __all__ = [
     "ExecutionContextEngine",
     "SynchronizationEngine",
     "ResourceManagementEngine",
+    "SystemMonitoringEngine",
 ]

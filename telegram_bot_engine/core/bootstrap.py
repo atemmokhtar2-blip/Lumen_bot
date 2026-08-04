@@ -79,6 +79,7 @@ from ..engines.generators import (
     ExecutionContextEngine,
     SynchronizationEngine,
     ResourceManagementEngine,
+    SystemMonitoringEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -520,6 +521,11 @@ def bootstrap(
     resource_management_engine = ResourceManagementEngine()
     registry.register_engine(resource_management_engine)
 
+    # -- intelligent system monitoring engine (Specification 057) ----------
+    # CRITICAL: real-time health/performance/anomaly/alert/trend monitoring.
+    system_monitoring_engine = SystemMonitoringEngine()
+    registry.register_engine(system_monitoring_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -729,6 +735,10 @@ def bootstrap(
                      engine_id="resource_management",
                      priority=142,
                      dependencies=["synchronization"])
+    manager.register(system_monitoring_engine,
+                     engine_id="system_monitoring",
+                     priority=143,
+                     dependencies=["resource_management"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
