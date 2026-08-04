@@ -60,19 +60,23 @@ def _is_allowed(user_id: int | None) -> bool:
 
 
 def _detect_host_intent(text: str) -> str:
-    """Return host action: start|stop|status|diagnose|none."""
-    t = (text or "").strip().lower()
-    if not t:
+    """Return host action via ChatRouter (natural Arabic/English). Chat routes only."""
+    try:
+        from telegram_bot_engine.formal_engine.services.chat_router import route_message
+        r = route_message(text or "")
+        if not r.ok:
+            return "none"
+        return {
+            "host_start": "start",
+            "host_stop": "stop",
+            "host_status": "status",
+            "host_diagnose": "diagnose",
+        }.get(r.capability_id, "none")
+    except Exception:
+        t = (text or "").strip().lower()
+        if any(k in t for k in ("استضف", "استضافة", "host")):
+            return "start"
         return "none"
-    if any(k in t for k in ("استضف", "استضافة", "host", "deploy host", "شغّل استضافة", "شغل استضافة")):
-        return "start"
-    if any(k in t for k in ("أوقف الاستضافة", "اوقف الاستضافة", "وقف الاستضافة", "stop host", "stop hosting")):
-        return "stop"
-    if any(k in t for k in ("حالة الاستضافة", "status host", "hosting status", "المثيلات")):
-        return "status"
-    if any(k in t for k in ("تشخيص الاستضافة", "diagnose host", "أخطاء الاستضافة", "اخطاء الاستضافة")):
-        return "diagnose"
-    return "none"
 
 
 def _looks_like_bot_token(text: str) -> bool:
@@ -476,7 +480,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         looks_like_clone_request = None  # type: ignore
 
-    if looks_like_clone_request and looks_like_clone_request(request):
+    # ChatRouter: natural "اسحب المستودع..." → clone path only
+    try:
+        from telegram_bot_engine.formal_engine.services.chat_router import route_message as _route_msg
+        _cr = _route_msg(request)
+        _clone_via_router = (
+            _cr.ok
+            and _cr.capability_id == "clone_repo"
+            and (bool(_cr.params.get("url")) or "github.com" in request.lower() or "gitlab.com" in request.lower())
+        )
+    except Exception:
+        _clone_via_router = False
+
+    if (looks_like_clone_request and looks_like_clone_request(request)) or _clone_via_router:
         status = await message.reply_text("📥 جاري سحب المستودع...")
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
         dest = Path(OUTPUT_DIR) / "clones"
