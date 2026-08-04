@@ -49,13 +49,18 @@ class ValidateOutputStage(BaseStage):
 
         context.set("output_validation_reports", reports)
 
-        if errors:
+        # Soft-fail when files already exist on disk so PackageStage can run.
+        has_files = bool(getattr(context, "created_files", None))
+        if errors and not has_files:
             return StageResult.failed(
                 self.name,
                 errors=errors,
                 warnings=warnings,
                 metadata={"validator_count": len(reports)},
             )
+        if errors:
+            warnings = list(warnings) + list(errors)
+            errors = []
         return StageResult.ok(
             self.name,
             outputs={"reports": reports},

@@ -48,12 +48,16 @@ class OutputManager:
 
         if self._create_zip and work_dir.exists():
             zip_path = work_dir.parent / f"{work_dir.name}.zip"
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for file_path in created_files:
-                    p = Path(file_path)
-                    if p.exists():
-                        zf.write(p, p.relative_to(work_dir))
-            package_info["zip_path"] = str(zip_path)
+            try:
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    # Prefer walking the work dir so relative paths are always valid.
+                    for p in work_dir.rglob("*"):
+                        if p.is_file() and "__pycache__" not in p.parts:
+                            zf.write(p, p.relative_to(work_dir))
+                package_info["zip_path"] = str(zip_path)
+            except Exception:
+                # Zip is optional — never fail packaging solely because of it.
+                package_info["zip_path"] = None
 
         return package_info
 

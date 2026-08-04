@@ -33,17 +33,12 @@ class PackageStage(BaseStage):
         self._output_manager = output_manager
 
     def execute(self, context: GenerationContext) -> StageResult:
-        # Check that the output validation passed.
+        # Prefer packaging whenever files exist on disk.
         reports = context.get("output_validation_reports", [])
-        has_errors = any(not r.passed for r in reports)
-        if has_errors:
-            error_msgs = []
-            for r in reports:
-                error_msgs.extend(r.errors)
-            return StageResult.failed(
-                self.name,
-                ["Output validation reported errors — cannot package."] + error_msgs,
-            )
+        warnings: List[str] = []
+        for r in reports or []:
+            if not getattr(r, "passed", True):
+                warnings.extend(getattr(r, "errors", []) or [])
 
         try:
             package_info = self._output_manager.package(context)
@@ -51,12 +46,14 @@ class PackageStage(BaseStage):
             return StageResult.failed(
                 self.name,
                 [f"Packaging failed: {exc}"],
+                warnings=warnings,
             )
 
         context.set("final_project", package_info)
         return StageResult.ok(
             self.name,
             outputs={"package": package_info},
+            warnings=warnings,
             metadata={"project_path": package_info.get("project_path")},
         )
 

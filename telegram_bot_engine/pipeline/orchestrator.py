@@ -23,6 +23,7 @@ from ..output import OutputManager
 from .stages import (
     ComposeBlueprintStage,
     GenerateStage,
+    MaterializeStage,
     PackageStage,
     ParseStage,
     ValidateBlueprintStage,
@@ -53,6 +54,7 @@ class PipelineOrchestrator:
             ComposeBlueprintStage(self._registry),
             ValidateBlueprintStage(self._registry),
             GenerateStage(self._registry),
+            MaterializeStage(),
             ValidateOutputStage(self._registry),
             PackageStage(self._output_manager),
         ]
