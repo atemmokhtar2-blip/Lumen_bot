@@ -129,10 +129,14 @@ def infer_expr_type(node: ast.AST, env: dict[str, TypeTag]) -> TypeTag:
         left = infer_expr_type(node.left, env)
         right = infer_expr_type(node.right, env)
         if isinstance(node.op, (ast.Add,)):
-            if left == TypeTag.STR or right == TypeTag.STR:
-                if left == TypeTag.STR and right == TypeTag.STR:
-                    return TypeTag.STR
-                return TypeTag.UNKNOWN  # possible error
+            if left == TypeTag.STR and right == TypeTag.STR:
+                return TypeTag.STR
+            # incompatible str + non-str → poison with non-str side so
+            # `-> str` still mismatches when the other side is int
+            if left == TypeTag.STR and right not in (TypeTag.STR, TypeTag.ANY, TypeTag.UNKNOWN):
+                return right
+            if right == TypeTag.STR and left not in (TypeTag.STR, TypeTag.ANY, TypeTag.UNKNOWN):
+                return left
             if left in _NUMERIC and right in _NUMERIC:
                 if TypeTag.FLOAT in (left, right):
                     return TypeTag.FLOAT

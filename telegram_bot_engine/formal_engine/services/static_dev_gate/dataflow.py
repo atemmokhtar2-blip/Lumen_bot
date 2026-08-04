@@ -30,8 +30,66 @@ _TAINT_SOURCE_ATTRS = {
     ("message", "caption"),
     ("query", "data"),
     ("update", "text"),
+    # common PTB patterns
+    ("context", "args"),
+    ("update", "message"),
+    ("message", "from_user"),
 }
-_TAINT_SOURCE_NAMES = {"user_input", "text", "raw", "payload", "data"}
+_TAINT_SOURCE_NAMES = {
+    "user_input", "text", "raw", "payload", "data", "cmd", "query_text", "blob",
+}
+# attribute names that are user-controlled when loaded from any object
+_TAINT_ATTR_NAMES = {
+    "text", "caption", "data", "args", "query", "username", "full_name",
+}
+
+
+def _attr_chain(node: ast.AST) -> list[str]:
+    """update.message.text → ['update', 'message', 'text']."""
+    chain: list[str] = []
+    cur: ast.AST = node
+    while isinstance(cur, ast.Attribute):
+        chain.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        chain.append(cur.id)
+        chain.reverse()
+        return chain
+    return []
+
+
+def _chain_is_taint_source(chain: list[str]) -> bool:
+    if not chain:
+        return False
+    if chain[0] in _TAINT_SOURCE_NAMES:
+        return True
+    if chain[0] in ("update", "message", "query", "context", "callback_query"):
+        # any attr under telegram user-facing objects is treated as taint source
+        return True
+    for i in range(len(chain) - 1):
+        if (chain[i], chain[i + 1]) in _TAINT_SOURCE_ATTRS:
+            return True
+    if chain[-1] in _TAINT_ATTR_NAMES:
+        return True
+    return False
+
+
+def _expr_carries_taint(node: ast.AST, tainted: set[str]) -> bool:
+    """Whether an expression transitively carries user-controlled data."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name) and (n.id in tainted or n.id in _TAINT_SOURCE_NAMES):
+            return True
+        if isinstance(n, ast.Attribute):
+            chain = _attr_chain(n)
+            if _chain_is_taint_source(chain):
+                return True
+            if chain and chain[0] in tainted:
+                return True
+        if isinstance(n, ast.JoinedStr):
+            for v in n.values:
+                if isinstance(v, ast.FormattedValue) and _expr_carries_taint(v.value, tainted):
+                    return True
+    return False
 
 _DANGEROUS_CALLS = {
     "eval",
@@ -543,14 +601,31 @@ class _FlowVisitor(ast.NodeVisitor):
             return out
         if isinstance(value, ast.Call):
             label = _call_label(value.func)
+            # dict.get / .get without default → MAYBE_NONE
+            if isinstance(value.func, ast.Attribute) and value.func.attr == "get":
+                has_default = len(value.args) >= 2 or any(
+                    kw.arg == "default" for kw in value.keywords
+                )
+                if has_default:
+                    # type of default may be none-ish; conservative maybe
+                    if len(value.args) >= 2:
+                        return self._infer_null(value.args[1]).join(Nullability.MAYBE_NONE)
+                    return Nullability.MAYBE_NONE
+                return Nullability.MAYBE_NONE
             # common factories that never return None
             if label in ("dict", "list", "set", "tuple", "str", "int", "float", "bool"):
                 return Nullability.NOT_NONE
             if label in _RESOURCE_OPENERS or label == "open":
                 return Nullability.NOT_NONE
+            # open(...).read() still NOT_NONE for the string, but resource handled elsewhere
             return Nullability.UNKNOWN
         if isinstance(value, (ast.List, ast.Dict, ast.Set, ast.Tuple, ast.JoinedStr)):
             return Nullability.NOT_NONE
+        if isinstance(value, ast.Subscript):
+            base = self._infer_null(value.value)
+            if base in (Nullability.MAYBE_NONE, Nullability.DEFINITE_NONE):
+                return base
+            return Nullability.UNKNOWN
         return Nullability.UNKNOWN
 
     def _note_resource_open(
@@ -611,19 +686,12 @@ class _FlowVisitor(ast.NodeVisitor):
             return
         self.visit(node.value)
         null = self._infer_null(node.value)
-        tainted_value = False
-        for n in ast.walk(node.value):
-            if isinstance(n, ast.Name) and (n.id in self.tainted or n.id in _TAINT_SOURCE_NAMES):
-                tainted_value = True
-            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
-                if (n.value.id, n.attr) in _TAINT_SOURCE_ATTRS or n.value.id in self.tainted:
-                    tainted_value = True
-        # resource open via assignment: f = open(...)
+        tainted_value = _expr_carries_taint(node.value, self.tainted)
+        # resource open via assignment: f = open(...) OR data = open(...).read()
         bound: list[str] = []
         for t in node.targets:
             bound.extend(_assign_targets(t))
-        if isinstance(node.value, ast.Call):
-            self._note_resource_open(_call_label(node.value.func), node.lineno, bound, False)
+        self._detect_resource_in_expr(node.value, node.lineno, bound)
         for t in node.targets:
             for n in _assign_targets(t):
                 self._def(n, node.lineno, null)
@@ -631,6 +699,29 @@ class _FlowVisitor(ast.NodeVisitor):
                     self.tainted.add(n)
             # targets are Store — already handled; do not re-visit
             # (re-visit would overwrite nullability with UNKNOWN)
+
+    def _detect_resource_in_expr(
+        self, value: ast.AST, lineno: int, bound: list[str]
+    ) -> None:
+        """Flag open()/connect() even when chained: open(x).read()."""
+        if isinstance(value, ast.Call):
+            # method chain first: open(path).read() → resource is the inner open (unbound)
+            if isinstance(value.func, ast.Attribute):
+                self._detect_resource_in_expr(value.func.value, lineno, [])
+            label = _call_label(value.func)
+            is_opener = (
+                label in _RESOURCE_OPENERS
+                or label == "open"
+                or label.endswith(".open")
+                or (isinstance(value.func, ast.Name) and value.func.id == "open")
+            )
+            if is_opener:
+                self._note_resource_open(label or "open", lineno, bound, False)
+            for a in value.args:
+                if isinstance(a, (ast.Call, ast.Attribute)):
+                    self._detect_resource_in_expr(a, lineno, [])
+        elif isinstance(value, ast.Attribute):
+            self._detect_resource_in_expr(value.value, lineno, bound)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if self._returned:
@@ -640,11 +731,11 @@ class _FlowVisitor(ast.NodeVisitor):
         if node.value is not None:
             self.visit(node.value)
             null = self._infer_null(node.value)
-            if isinstance(node.value, ast.Call):
-                bound = _assign_targets(node.target)
-                self._note_resource_open(
-                    _call_label(node.value.func), node.lineno, bound, False
-                )
+            bound = _assign_targets(node.target)
+            self._detect_resource_in_expr(node.value, node.lineno, bound)
+            if _expr_carries_taint(node.value, self.tainted):
+                for n in bound:
+                    self.tainted.add(n)
         for n in _assign_targets(node.target):
             self._def(n, node.lineno, null)
 
@@ -843,52 +934,41 @@ class _FlowVisitor(ast.NodeVisitor):
                 elif isinstance(a, ast.JoinedStr):
                     risky = True
                     detail = "f-string"
+                elif isinstance(a, ast.BinOp) and isinstance(a.op, (ast.Mod, ast.Add)):
+                    risky = True
+                    detail = "format"
                 elif isinstance(a, ast.Call):
                     risky = True
                     detail = "call-arg"
-            # eval/exec/SQL always noted; other sinks only with dynamic args
             if risky or label in ("eval", "exec") or is_sql:
                 sink_label = label or (
                     f"*.{node.func.attr}" if is_sql and isinstance(node.func, ast.Attribute)
                     else "call"
                 )
                 self.dangerous_sinks.append((sink_label, node.lineno, detail))
+            # taint → sink (names, attrs, f-strings, % format)
             for a in node.args:
-                if isinstance(a, ast.Name) and a.id in self.tainted:
-                    self.tainted_to_sink.append((a.id, label or "call", node.lineno))
-                # nested attrs: update.message.text / query.data
-                if isinstance(a, ast.Attribute):
-                    chain: list[str] = []
-                    cur: ast.AST = a
-                    while isinstance(cur, ast.Attribute):
-                        chain.append(cur.attr)
-                        cur = cur.value
-                    if isinstance(cur, ast.Name):
-                        chain.append(cur.id)
-                        chain.reverse()
-                        root = chain[0]
-                        pair = (chain[-2], chain[-1]) if len(chain) >= 2 else ("", "")
-                        if (
-                            root in self.tainted
-                            or root in _TAINT_SOURCE_NAMES
-                            or pair in _TAINT_SOURCE_ATTRS
-                            or any(
-                                (chain[i], chain[i + 1]) in _TAINT_SOURCE_ATTRS
-                                for i in range(len(chain) - 1)
-                            )
-                        ):
-                            self.tainted_to_sink.append(
-                                (".".join(chain), label or "call", node.lineno)
-                            )
+                if _expr_carries_taint(a, self.tainted):
+                    src = "tainted"
+                    if isinstance(a, ast.Name):
+                        src = a.id
+                    elif isinstance(a, ast.Attribute):
+                        ch = _attr_chain(a)
+                        src = ".".join(ch) if ch else _call_label(a)
+                    elif isinstance(a, ast.JoinedStr):
+                        src = "f-string"
+                    elif isinstance(a, ast.BinOp):
+                        src = "format"
+                    self.tainted_to_sink.append((src, label or "call", node.lineno))
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if self._returned:
             return
         self.visit(node.value)
-        if isinstance(node.value, ast.Name):
-            pair = (node.value.id, node.attr)
-            if pair in _TAINT_SOURCE_ATTRS:
-                self.tainted.add(node.value.id)
+        chain = _attr_chain(node)
+        if _chain_is_taint_source(chain) and chain:
+            # mark root name as tainted carrier
+            self.tainted.add(chain[0])
 
     def visit_Await(self, node: ast.Await) -> None:
         if self._returned:
@@ -1023,7 +1103,10 @@ def analyze_function_flow(
     # Phase 2–6: visitor
     v = _FlowVisitor(qual, params)
     for p in params:
-        if p in ("message", "update", "query", "text", "user_input"):
+        if p in (
+            "message", "update", "query", "text", "user_input", "context",
+            "callback_query", "args",
+        ):
             v.tainted.add(p)
     for stmt in node.body:
         v.visit(stmt)
