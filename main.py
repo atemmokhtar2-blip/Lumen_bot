@@ -304,6 +304,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"• الرابط: `{result.url or ''}`",
                 f"• المسار: `{result.path or ''}`",
             ]
+            # Auto-understand repository
+            repo_contract = None
+            if result.path and Path(result.path).exists():
+                try:
+                    await status.edit_text("\n".join(lines + ["", "🔍 جاري فهم المستودع..."]))
+                    from telegram_bot_engine.formal_engine.services.repo_understanding import (
+                        understand_repo,
+                    )
+
+                    def _do_understand():
+                        return understand_repo(result.path, remote_url=result.url or "")
+
+                    repo_contract = await asyncio.to_thread(_do_understand)
+                    # Keep context for future development turns
+                    context.user_data["active_repo"] = {
+                        "path": result.path,
+                        "url": result.url,
+                        "contract": repo_contract.model_dump(mode="json"),
+                    }
+                    lines.append("")
+                    lines.append(repo_contract.to_user_summary())
+                    lines.append("")
+                    lines.append(
+                        "يمكنك الآن طلب تطوير على هذا المستودع، مثال:\n"
+                        "• أضف أمر /stats\n"
+                        "• اشرح هيكل المشروع\n"
+                        "• طوّر نظام تذاكر"
+                    )
+                except Exception as e:
+                    logger.exception("Repo understanding failed")
+                    lines.append(f"⚠️ السحب نجح لكن الفهم فشل: {type(e).__name__}")
+
             await status.edit_text("\n".join(lines))
             # zip and send if small enough
             if result.path and Path(result.path).exists():
