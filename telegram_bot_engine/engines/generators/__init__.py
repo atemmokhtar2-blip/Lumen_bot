@@ -64,6 +64,7 @@ from .synchronization import SynchronizationEngine
 from .resource_management import ResourceManagementEngine
 from .system_monitoring import SystemMonitoringEngine
 from .central_logging import CentralLoggingEngine
+from .configuration_management import ConfigurationManagementEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -124,4 +125,5 @@ __all__ = [
     "ResourceManagementEngine",
     "SystemMonitoringEngine",
     "CentralLoggingEngine",
+    "ConfigurationManagementEngine",
 ]
