@@ -823,7 +823,10 @@ def bootstrap(
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
     orchestrator = PipelineOrchestrator(
-        registry=registry, output_manager=output_manager, config=config,
+        registry=registry,
+        output_manager=output_manager,
+        config=config,
+        manager=manager,
     )
 
     return registry, orchestrator, manager

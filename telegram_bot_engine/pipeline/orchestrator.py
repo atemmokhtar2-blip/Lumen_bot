@@ -38,10 +38,12 @@ class PipelineOrchestrator:
 
     def __init__(self, registry: EngineRegistry,
                  output_manager: OutputManager,
-                 config=None) -> None:
+                 config=None,
+                 manager=None) -> None:
         self._registry = registry
         self._output_manager = output_manager
         self._config = config
+        self._manager = manager
         self._fail_fast = True
         if config is not None:
             self._fail_fast = bool(config.get("pipeline", "fail_fast", True))
@@ -53,7 +55,7 @@ class PipelineOrchestrator:
             ParseStage(self._registry),
             ComposeBlueprintStage(self._registry),
             ValidateBlueprintStage(self._registry),
-            GenerateStage(self._registry),
+            GenerateStage(self._registry, manager=self._manager),
             MaterializeStage(),
             ValidateOutputStage(self._registry),
             PackageStage(self._output_manager),

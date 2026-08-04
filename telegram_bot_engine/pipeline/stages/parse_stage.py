@@ -37,6 +37,21 @@ class ParseStage(BaseStage):
         self._registry = registry
 
     def execute(self, context: GenerationContext) -> StageResult:
+        # 1) Analyzer first (priority 10) — deep request analysis
+        analyzer = self._registry.get_engine("analyzer")
+        if analyzer is not None:
+            try:
+                ares = analyzer.execute(context)
+                if ares.success:
+                    # analysis_report is set by the analyzer itself
+                    pass
+                else:
+                    # Soft: continue to intent even if analyzer quality gate fails
+                    pass
+            except Exception:
+                pass
+
+        # 2) Intent parser (priority 20)
         parser = self._registry.get_engine("intent_parser")
         if parser is not None:
             result = parser.execute(context)
@@ -52,7 +67,7 @@ class ParseStage(BaseStage):
             return StageResult.ok(
                 self.name,
                 outputs={"intent": intent},
-                metadata={"engine": parser.name},
+                metadata={"engine": parser.name, "analyzer": analyzer is not None},
             )
 
         # Fallback heuristic — enough to keep the pipeline moving.
