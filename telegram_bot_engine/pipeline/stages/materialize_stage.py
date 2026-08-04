@@ -17,6 +17,12 @@ from ...builders.file_builder import FileBuilder
 from ...core.context import GenerationContext
 from ...core.result import StageResult
 from ..base_stage import BaseStage
+from .feature_codegen import (
+    build_feature_module,
+    build_ptb_main,
+    collect_features,
+    resolve_start_reply,
+)
 
 
 def _detect_framework(request: str, blueprint: Any) -> str:
@@ -92,10 +98,12 @@ def _content_for_file(
     project_name: str,
     start_reply: str,
     class_sources: Dict[str, str],
+    features: Optional[List[str]] = None,
 ) -> str:
     """Produce file content for a planned path."""
     norm = path.replace("\\", "/").lstrip("./")
     base = norm.split("/")[-1].lower()
+    features = features or []
 
     # Prefer generated class skeletons when path matches.
     if norm in class_sources and class_sources[norm].strip():
@@ -144,14 +152,23 @@ def _content_for_file(
         )
 
     if base in ("main.py", "bot.py", "app.py", "__main__.py"):
+        # Feature-aware entry point (uses analysis/blueprint features)
+        if framework in ("python-telegram-bot", "ptb") or framework not in (
+            "aiogram",
+            "pyrogram",
+            "telethon",
+        ):
+            return build_ptb_main(start_reply, features)
         return _main_module(framework, start_reply)
 
     if base == "__init__.py":
         return '"""Package init."""\n'
 
     if base.endswith(".py"):
-        # Generic Python module stub from path stem
         stem = base[:-3]
+        rich = build_feature_module(stem)
+        if rich:
+            return rich
         class_name = "".join(p.capitalize() for p in re.split(r"[_\-]+", stem) if p)
         return (
             f'"""{stem} module."""\n'
@@ -373,7 +390,10 @@ class MaterializeStage(BaseStage):
         blueprint = context.get("project_blueprint") or context.blueprint
         framework = _detect_framework(context.request, blueprint)
         project_name = _project_name(context.request, blueprint)
-        start_reply = _extract_start_reply(context.request)
+        features = collect_features(context)
+        start_reply = resolve_start_reply(
+            context.request, features, fallback=_extract_start_reply(context.request)
+        )
         class_sources = _class_source_index(context)
 
         errors: List[str] = []
@@ -399,6 +419,7 @@ class MaterializeStage(BaseStage):
                 project_name=project_name,
                 start_reply=start_reply,
                 class_sources=class_sources,
+                features=features,
             )
             result = self._files.build(
                 context,
@@ -419,6 +440,7 @@ class MaterializeStage(BaseStage):
                 "folders": created_dirs,
                 "files": created_files,
                 "start_reply": start_reply,
+                "features": features,
             },
         )
 
