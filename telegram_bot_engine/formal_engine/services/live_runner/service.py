@@ -519,6 +519,196 @@ def _extract_errors(log: str) -> list[str]:
     return out[:8]
 
 
+# ---------------------------------------------------------------------------
+# Auto-Heal: missing dependency → add to requirements → reinstall → rerun
+# ---------------------------------------------------------------------------
+
+# Common import-name → PyPI package mappings (deterministic, no LLM)
+_MODULE_TO_PACKAGE: dict[str, str] = {
+    "telegram": "python-telegram-bot",
+    "telegram.ext": "python-telegram-bot",
+    "aiogram": "aiogram",
+    "telebot": "pyTelegramBotAPI",
+    "pyrogram": "pyrogram",
+    "dotenv": "python-dotenv",
+    "pydantic": "pydantic",
+    "pydantic_settings": "pydantic-settings",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "flask": "flask",
+    "django": "django",
+    "requests": "requests",
+    "aiohttp": "aiohttp",
+    "httpx": "httpx",
+    "bs4": "beautifulsoup4",
+    "PIL": "Pillow",
+    "cv2": "opencv-python",
+    "sklearn": "scikit-learn",
+    "yaml": "PyYAML",
+    "dateutil": "python-dateutil",
+    "jwt": "PyJWT",
+    "Crypto": "pycryptodome",
+    "Cryptodome": "pycryptodome",
+    "redis": "redis",
+    "celery": "celery",
+    "sqlalchemy": "SQLAlchemy",
+    "pymongo": "pymongo",
+    "psycopg2": "psycopg2-binary",
+    "MySQLdb": "mysqlclient",
+    "openpyxl": "openpyxl",
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "matplotlib": "matplotlib",
+    "seaborn": "seaborn",
+    "rich": "rich",
+    "typer": "typer",
+    "click": "click",
+    "tqdm": "tqdm",
+    "loguru": "loguru",
+    "orjson": "orjson",
+    "ujson": "ujson",
+    "lxml": "lxml",
+    "paramiko": "paramiko",
+    "boto3": "boto3",
+    "stripe": "stripe",
+    "openai": "openai",
+    "anthropic": "anthropic",
+}
+
+# stdlib modules we must never try to pip-install
+_STDLIB_SKIP = {
+    "os", "sys", "re", "json", "time", "datetime", "pathlib", "typing",
+    "collections", "functools", "itertools", "subprocess", "threading",
+    "asyncio", "logging", "http", "urllib", "email", "html", "xml",
+    "sqlite3", "hashlib", "hmac", "base64", "uuid", "copy", "math",
+    "random", "string", "io", "tempfile", "shutil", "glob", "fnmatch",
+    "argparse", "configparser", "csv", "dataclasses", "enum", "abc",
+    "contextlib", "traceback", "warnings", "weakref", "gc", "inspect",
+    "importlib", "pkgutil", "platform", "socket", "ssl", "select",
+    "multiprocessing", "concurrent", "queue", "signal", "struct",
+    "zlib", "gzip", "bz2", "lzma", "zipfile", "tarfile", "pickle",
+    "shelve", "dbm", "secrets", "statistics", "decimal", "fractions",
+    "numbers", "operator", "pprint", "textwrap", "unicodedata",
+    "codecs", "locale", "gettext", "calendar", "zoneinfo",
+}
+
+
+def _extract_missing_modules(log: str) -> list[str]:
+    """Extract module names from ModuleNotFoundError / ImportError lines."""
+    if not log:
+        return []
+    found: list[str] = []
+    patterns = [
+        r"ModuleNotFoundError:\s*No module named ['\"]([^'\"]+)['\"]",
+        r"ImportError:\s*No module named ['\"]([^'\"]+)['\"]",
+        r"ImportError:\s*cannot import name ['\"][^'\"]+['\"] from ['\"]([^'\"]+)['\"]",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, log):
+            mod = m.group(1).strip()
+            # take top-level package only (a.b.c → a)
+            top = mod.split(".")[0]
+            if top and top not in found:
+                found.append(top)
+    return found
+
+
+def _module_to_package(module: str) -> str | None:
+    """Map import name to a PyPI package. Returns None for stdlib / unknown risky."""
+    if not module or module in _STDLIB_SKIP:
+        return None
+    if module in _MODULE_TO_PACKAGE:
+        return _MODULE_TO_PACKAGE[module]
+    # Heuristic: if it looks like a normal package name, use it as-is
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,60}", module):
+        return module
+    return None
+
+
+def _packages_already_in_requirements(root: Path) -> set[str]:
+    """Return normalized package names already listed in any requirements file."""
+    present: set[str] = set()
+    for name in ("requirements.txt", "requirements-bot.txt", "reqs.txt",
+                 ".tbe_requirements_clean.txt", ".tbe_requirements_ready.txt"):
+        p = root / name
+        if not p.exists():
+            continue
+        try:
+            for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # strip extras / markers / version
+                pkg = re.split(r"[<>=!~;\[]", line)[0].strip().lower()
+                if pkg:
+                    present.add(pkg)
+                    present.add(pkg.replace("-", "_"))
+                    present.add(pkg.replace("_", "-"))
+        except Exception:
+            continue
+    return present
+
+
+def _ensure_packages_in_requirements(root: Path, packages: list[str]) -> list[str]:
+    """
+    Append missing packages to requirements.txt.
+    Creates the file if it does not exist.
+    Returns the list of packages actually added.
+    """
+    if not packages:
+        return []
+    req = _find_requirements(root)
+    if req is None:
+        req = root / "requirements.txt"
+        req.write_text("", encoding="utf-8")
+
+    present = _packages_already_in_requirements(root)
+    added: list[str] = []
+    lines_to_append: list[str] = []
+
+    for pkg in packages:
+        norm = pkg.strip().lower()
+        if not norm:
+            continue
+        if norm in present or norm.replace("-", "_") in present or norm.replace("_", "-") in present:
+            continue
+        lines_to_append.append(pkg)
+        added.append(pkg)
+        present.add(norm)
+        present.add(norm.replace("-", "_"))
+        present.add(norm.replace("_", "-"))
+
+    if lines_to_append:
+        existing = req.read_text(encoding="utf-8", errors="ignore")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        # marker so humans know these were auto-added
+        block = "\n".join(lines_to_append) + "\n"
+        if "# auto-healed by LiveRunner" not in existing:
+            existing += "\n# auto-healed by LiveRunner\n"
+        existing += block
+        req.write_text(existing, encoding="utf-8")
+
+    return added
+
+
+def _error_location_summary(log: str) -> str:
+    """Best-effort file:line from the last traceback frame."""
+    if not log:
+        return ""
+    # File "path", line N, in ...
+    frames = re.findall(
+        r'File "([^"]+)", line (\d+)',
+        log,
+    )
+    if not frames:
+        return ""
+    path, line = frames[-1]
+    # shorten path
+    name = Path(path).name
+    return f"{name}:{line}"
+
+
 class LiveRunnerService:
     def run(
         self,
@@ -527,7 +717,16 @@ class LiveRunnerService:
         entry_hint: str | None = None,
         run_seconds: float = 8.0,
         install: bool = True,
+        max_heal_rounds: int = 2,
     ) -> LiveRunReport:
+        """
+        Real install + run with Auto-Heal for missing dependencies.
+
+        On ModuleNotFoundError / ImportError:
+          1) map module → package
+          2) append to requirements.txt if missing
+          3) reinstall + rerun  (up to max_heal_rounds)
+        """
         t0 = time.perf_counter()
         root = Path(project_path).resolve()
         if not root.exists():
@@ -565,9 +764,117 @@ class LiveRunnerService:
                 details={"repair_notes": repair_notes},
             )
 
+        heal_notes: list[str] = []
+        all_install_log = ""
+        last_report: LiveRunReport | None = None
+
+        for heal_round in range(max_heal_rounds + 1):
+            report = self._attempt_install_and_run(
+                root=root,
+                entry=entry,
+                bot_token=bot_token,
+                username=username,
+                bot_id=bot_id,
+                run_seconds=run_seconds,
+                install=install,
+                repair_notes=repair_notes,
+                t0=t0,
+                heal_notes=heal_notes,
+            )
+            last_report = report
+            all_install_log = (all_install_log + "\n" + (report.install_log or "")).strip()
+
+            if report.ok:
+                if heal_notes:
+                    report.details = dict(report.details or {})
+                    report.details["auto_healed_packages"] = list(heal_notes)
+                    report.warnings = list(report.warnings or []) + [
+                        f"auto_healed: {', '.join(heal_notes)}"
+                    ]
+                    report.message = (
+                        report.message
+                        + f" | تم إصلاح تبعيات ناقصة تلقائياً: {', '.join(heal_notes)}"
+                    )
+                report.install_log = all_install_log[-4000:]
+                return report
+
+            # Only heal on missing-module errors
+            if report.phase not in ("run", "install"):
+                return report
+
+            missing_mods = _extract_missing_modules(
+                (report.run_log or "") + "\n" + (report.install_log or "") + "\n" + "\n".join(report.errors or [])
+            )
+            if not missing_mods:
+                # no healable missing module
+                report.install_log = all_install_log[-4000:]
+                loc = _error_location_summary(report.run_log or "")
+                if loc and report.message:
+                    report.message = f"{report.message} | الموقع: `{loc}`"
+                return report
+
+            if heal_round >= max_heal_rounds:
+                report.install_log = all_install_log[-4000:]
+                report.warnings = list(report.warnings or []) + [
+                    f"heal_exhausted after {max_heal_rounds} rounds; still missing: {missing_mods}"
+                ]
+                loc = _error_location_summary(report.run_log or "")
+                if loc:
+                    report.message = f"{report.message} | الموقع: `{loc}`"
+                return report
+
+            # Map modules → packages and append to requirements
+            packages: list[str] = []
+            for mod in missing_mods:
+                pkg = _module_to_package(mod)
+                if pkg:
+                    packages.append(pkg)
+                else:
+                    heal_notes.append(f"skipped:{mod}")
+
+            if not packages:
+                report.install_log = all_install_log[-4000:]
+                report.warnings = list(report.warnings or []) + [
+                    f"unmapped_modules: {missing_mods}"
+                ]
+                return report
+
+            added = _ensure_packages_in_requirements(root, packages)
+            if not added:
+                # already listed but still missing at runtime → force reinstall next loop
+                heal_notes.append(f"reinstall_try:{','.join(packages)}")
+            else:
+                for a in added:
+                    heal_notes.append(a)
+
+            # continue loop → reinstall + rerun
+
+        # fallback (should not reach)
+        if last_report is None:
+            return LiveRunReport(ok=False, phase="run", message="heal loop failed unexpectedly")
+        last_report.install_log = all_install_log[-4000:]
+        return last_report
+
+    def _attempt_install_and_run(
+        self,
+        *,
+        root: Path,
+        entry: Path,
+        bot_token: str,
+        username: str,
+        bot_id: int | None,
+        run_seconds: float,
+        install: bool,
+        repair_notes: list[str],
+        t0: float,
+        heal_notes: list[str],
+    ) -> LiveRunReport:
         install_log = ""
         mode = "unknown"
         isolation = root
+        py = sys.executable
+        note = ""
+
         try:
             py, mode, isolation, note = _ensure_runtime(root)
             if install:
@@ -594,7 +901,7 @@ class LiveRunnerService:
                                 entry_point=str(entry.relative_to(root)),
                                 venv_path=str(isolation),
                                 duration_ms=(time.perf_counter() - t0) * 1000,
-                                details={"install_mode": mode, "note": note},
+                                details={"install_mode": mode, "note": note, "heal_notes": heal_notes},
                             )
                     else:
                         errs = _extract_pip_errors(install_log)
@@ -607,7 +914,7 @@ class LiveRunnerService:
                             entry_point=str(entry.relative_to(root)),
                             venv_path=str(isolation),
                             duration_ms=(time.perf_counter() - t0) * 1000,
-                            details={"install_mode": mode, "note": note},
+                            details={"install_mode": mode, "note": note, "heal_notes": heal_notes},
                         )
         except subprocess.TimeoutExpired:
             return LiveRunReport(
@@ -622,13 +929,13 @@ class LiveRunnerService:
                 duration_ms=(time.perf_counter() - t0) * 1000,
             )
 
+        from .source_fix import discover_token_env_names
+
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        # Discover token env names from source and inject token into all of them
         token_envs = discover_token_env_names(root)
         for key in token_envs:
             env[key] = bot_token
-        # hard defaults
         for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
             env[key] = bot_token
         if mode.startswith("target"):
@@ -668,7 +975,7 @@ class LiveRunnerService:
                         pid=pid, entry_point=str(entry.relative_to(root)),
                         venv_path=str(isolation),
                         duration_ms=(time.perf_counter() - t0) * 1000,
-                        details={"install_mode": mode, "probe_seconds": run_seconds},
+                        details={"install_mode": mode, "probe_seconds": run_seconds, "heal_notes": heal_notes},
                     )
                 return LiveRunReport(
                     ok=False, phase="run", message="أخطاء أثناء التشغيل",
@@ -677,7 +984,7 @@ class LiveRunnerService:
                     errors=errors, pid=pid, entry_point=str(entry.relative_to(root)),
                     venv_path=str(isolation),
                     duration_ms=(time.perf_counter() - t0) * 1000,
-                    details={"install_mode": mode},
+                    details={"install_mode": mode, "heal_notes": heal_notes},
                 )
 
             errors = _extract_errors(run_log)
@@ -690,7 +997,7 @@ class LiveRunnerService:
                     pid=pid, entry_point=str(entry.relative_to(root)),
                     venv_path=str(isolation),
                     duration_ms=(time.perf_counter() - t0) * 1000,
-                    details={"install_mode": mode},
+                    details={"install_mode": mode, "heal_notes": heal_notes},
                 )
             if not errors:
                 errors = [f"process exited with code {proc.returncode}"]
@@ -702,7 +1009,7 @@ class LiveRunnerService:
                 errors=errors, pid=pid, entry_point=str(entry.relative_to(root)),
                 venv_path=str(isolation),
                 duration_ms=(time.perf_counter() - t0) * 1000,
-                details={"install_mode": mode},
+                details={"install_mode": mode, "heal_notes": heal_notes},
             )
         except Exception as e:
             return LiveRunReport(
@@ -711,7 +1018,10 @@ class LiveRunnerService:
                 install_log=install_log[-2000:], run_log=run_log[-2000:],
                 errors=[str(e)], entry_point=str(entry.relative_to(root)),
                 duration_ms=(time.perf_counter() - t0) * 1000,
+                details={"heal_notes": heal_notes},
             )
+
+
 
 
 def run_bot_project(
