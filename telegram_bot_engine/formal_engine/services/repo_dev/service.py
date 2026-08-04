@@ -105,6 +105,12 @@ def detect_repo_intent(text: str) -> tuple[str, dict[str, Any]]:
 
     # Phase-2 development intelligence
     if any(k in t for k in (
+        "تحليل استاتيكي", "تحقق استاتيكي", "static analysis", "static gate",
+        "بوابة التحقق", "افحص الكود", "تحقق من الكود",
+    )):
+        return "static_gate", params
+
+    if any(k in t for k in (
         "صحة الحزم", "حالة الحزم", "package health", "package reality",
         "هل المكتبات", "إصدارات", "اصدارات", "outdated", "pypi",
     )):
@@ -548,6 +554,17 @@ class RepoDevService:
                 contract=new_contract,
             )
 
+
+        if action == "static_gate":
+            from ..static_dev_gate import analyze_project
+            report = analyze_project(root)
+            return RepoDevResult(
+                ok=report.ok,
+                action="static_gate",
+                message=report.to_user_text(),
+                contract=contract,
+                data={"errors": report.errors, "warnings": report.warnings},
+            )
 
         if action == "package_health":
             from ..package_reality import (

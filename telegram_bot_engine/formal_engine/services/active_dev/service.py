@@ -443,6 +443,19 @@ class ActiveDevEngine:
                 if name not in ("start", "help") or name not in existing:
                     wanted.append((name, name))
 
+        # Symbolic plan filter (static gate)
+        try:
+            from ..static_dev_gate import plan_command_adds
+            accepted, plan_findings = plan_command_adds(existing, [c for c, _ in wanted])
+            for pf in plan_findings:
+                if pf.severity == "info":
+                    skipped.append(pf.message_ar)
+                elif pf.severity == "error":
+                    needs_manual.append(pf.message_ar)
+            wanted = [(c, d) for c, d in wanted if c in accepted]
+        except Exception as e:
+            needs_manual.append(f"plan_gate_skip:{type(e).__name__}")
+
         if not entry:
             needs_manual.append("لا توجد نقطة دخول — لا يمكن تسجيل الأوامر تلقائياً")
         elif not contract.is_telegram_bot and fw == "ptb" and not contract.frameworks:
@@ -529,10 +542,37 @@ class ActiveDevEngine:
         if getattr(spec, "requires_admin_panel", False):
             needs_manual.append("لوحة أدمن كاملة تحتاج توليد شاشات/صلاحيات أعمق")
 
-        # 6) Rescan
+        # 6) Static gate — hard verifier (compiler-grade)
+        gate_report = None
+        try:
+            from ..static_dev_gate import verify_after_edit
+            expected = [c for c, _ in new_cmds_applied]
+            gate_report = verify_after_edit(root, changed, expected_commands=expected)
+            if not gate_report.ok:
+                for f in gate_report.findings:
+                    if f.severity == "error":
+                        needs_manual.append(f"[static:{f.code}] {f.message_ar}")
+                applied.append(AppliedChange(
+                    kind="static_gate",
+                    target="project",
+                    detail=f"فشل البوابة: {gate_report.errors} أخطاء",
+                    ok=False,
+                ))
+            else:
+                applied.append(AppliedChange(
+                    kind="static_gate",
+                    target="project",
+                    detail=f"نجحت — {gate_report.files_checked} ملف، warnings={gate_report.warnings}",
+                    ok=True,
+                ))
+        except Exception as e:
+            needs_manual.append(f"static_gate_skip:{type(e).__name__}")
+
+        # 7) Rescan
         new_contract = understand_repo(root, remote_url=(contract.remote_url or ""))
 
-        ok = bool(applied) and not any(not a.ok for a in applied)
+        gate_failed = bool(gate_report is not None and not gate_report.ok)
+        ok = bool(applied) and not any(not a.ok for a in applied) and not gate_failed
         if not applied and not skipped:
             ok = False
             msg = "لم يُستخرج من المواصفة ما يمكن تنفيذه تلقائياً على هذا المستودع."
@@ -556,6 +596,8 @@ class ActiveDevEngine:
                 "commands_applied": [c for c, _ in new_cmds_applied],
                 "framework": fw,
                 "packages_added": added_pkgs,
+                "static_gate_ok": None if gate_report is None else gate_report.ok,
+                "static_errors": 0 if gate_report is None else gate_report.errors,
             },
         )
 

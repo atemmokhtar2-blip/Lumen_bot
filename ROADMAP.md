@@ -176,4 +176,5 @@
 4. لا نكسر محركات Git.
 5. أي فهم جديد يجب أن يصب في عقد بيانات قابل للتحقق، لا في نص حر فقط.
 
+- تم: StaticDevGate — بوابة تحقق استاتيكي (syntax/handlers/duplicates) مربوطة بـ ActiveDev
 - تم: Package Reality Engine v1
