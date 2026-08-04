@@ -1,6 +1,6 @@
 """
-FormalBotSpec – General purpose formal specification for ANY Telegram bot.
-Extreme precision, zero domain lock-in.
+FormalBotSpec — rich formal model produced by deep understanding.
+Generation must assemble code FROM this model, not from fixed templates.
 """
 
 from __future__ import annotations
@@ -13,10 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(
-        frozen=True,
-        extra="forbid",
-        validate_assignment=True,
-        str_strip_whitespace=True,
+        frozen=True, extra="forbid", validate_assignment=True, str_strip_whitespace=True
     )
 
 
@@ -47,8 +44,9 @@ class DatabaseChoice(str, Enum):
 
 
 class Feature(StrictModel):
-    """A single concrete feature the bot must implement."""
     name: str
+    feature_id: str = ""
+    category: str = ""
     description: str = ""
     priority: int = 50
 
@@ -62,6 +60,19 @@ class CommandSpec(StrictModel):
 class ButtonSpec(StrictModel):
     text: str
     callback_data: str
+
+
+class HandlerSpec(StrictModel):
+    name: str
+    handler_type: str  # command | callback | message | conversation
+    triggers: list[str] = Field(default_factory=list)
+    admin_only: bool = False
+    description: str = ""
+
+
+class DataModelSpec(StrictModel):
+    name: str
+    fields: list[str] = Field(default_factory=list)
 
 
 class UIFlow(StrictModel):
@@ -81,31 +92,25 @@ class QualityRequirements(StrictModel):
 
 
 class FormalBotSpec(StrictModel):
-    """
-    Complete formal specification of a Telegram bot.
-    Domain-agnostic. Works for any bot type.
-    """
-
-    # Identity
     bot_name: str = Field(..., min_length=2, max_length=64)
     bot_type: BotType = BotType.CUSTOM
     version: str = "1.0"
-    description: str = Field(default="", min_length=0)
+    description: str = ""
     final_goal: str | None = None
 
-    # Core capabilities (free-form canonical names from ontology)
     capabilities: list[str] = Field(default_factory=list)
-
-    # Concrete features extracted from the text
     features: list[Feature] = Field(default_factory=list)
+    feature_tags: list[str] = Field(default_factory=list)
 
-    # UI
+    # Deep structure understood from the request + knowledge base
+    handlers: list[HandlerSpec] = Field(default_factory=list)
+    data_models: list[DataModelSpec] = Field(default_factory=list)
+    services: list[str] = Field(default_factory=list)
+    integrations: list[str] = Field(default_factory=list)
+
     ui: UIFlow = Field(default_factory=UIFlow)
-
-    # Languages
     languages: list[LanguageSupport] = Field(default_factory=lambda: [LanguageSupport.ARABIC])
 
-    # Technical decisions
     database: DatabaseChoice = DatabaseChoice.SQLITE
     requires_async_queue: bool = False
     requires_state_management: bool = True
@@ -114,18 +119,11 @@ class FormalBotSpec(StrictModel):
     requires_file_handling: bool = False
     external_services: list[str] = Field(default_factory=list)
 
-    # Quality
     quality: QualityRequirements = Field(default_factory=QualityRequirements)
-
-    # Solver constraints
     hard_constraints: list[str] = Field(default_factory=list)
     soft_preferences: list[str] = Field(default_factory=list)
-
-    # Provenance
+    architecture_rules_applied: list[str] = Field(default_factory=list)
     source_sections: dict[str, str] = Field(default_factory=dict)
 
-    def has_capability(self, name: str) -> bool:
-        return name.lower() in {c.lower() for c in self.capabilities}
-
-    def has_feature(self, name: str) -> bool:
-        return name.lower() in {f.name.lower() for f in self.features}
+    def has_feature_tag(self, tag: str) -> bool:
+        return tag in self.feature_tags

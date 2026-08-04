@@ -589,3 +589,48 @@ requires-python = ">=3.11"
 line-length = 100
 target-version = "py311"
 '''
+
+
+def render_models_from_spec(spec: FormalBotSpec) -> str:
+    """Build models.py from understood DataModelSpec list."""
+    if not spec.data_models:
+        return render_models(spec)
+    lines = [
+        '"""Domain models — from FormalBotSpec.data_models."""',
+        "from __future__ import annotations",
+        "from enum import Enum",
+        "from typing import Any, Optional",
+        "from pydantic import BaseModel, ConfigDict, Field",
+        "",
+        "class StrictModel(BaseModel):",
+        "    model_config = ConfigDict(frozen=True, extra=\"forbid\")",
+        "",
+    ]
+    for m in spec.data_models:
+        fields = m.fields or ["id"]
+        lines.append(f"class {m.name}(StrictModel):")
+        for f in fields:
+            if f in ("id", "user_id", "telegram_id", "price", "qty", "stock", "total"):
+                lines.append(f"    {f}: int | str = 0")
+            elif f in ("items", "messages"):
+                lines.append(f"    {f}: list[Any] = Field(default_factory=list)")
+            else:
+                lines.append(f"    {f}: str = \"\"")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def render_generic_service(name: str, spec: FormalBotSpec) -> str:
+    cls = "".join(p.capitalize() for p in name.split("_")) + "Service"
+    return f'''"""Service: {name} — scaffold from understanding."""
+from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
+
+class {cls}:
+    """Business logic for `{name}`. Replace in-memory logic with DB/API as needed."""
+
+    def run(self, *args, **kwargs):
+        logger.info("{name}.run called")
+        return {{"status": "ok", "service": "{name}"}}
+'''
