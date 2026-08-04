@@ -70,9 +70,16 @@ class HandlerSpec(StrictModel):
     description: str = ""
 
 
+class FieldSpec(StrictModel):
+    name: str
+    type_hint: str = "str"
+
+
 class DataModelSpec(StrictModel):
     name: str
     fields: list[str] = Field(default_factory=list)
+    typed_fields: list[FieldSpec] = Field(default_factory=list)
+
 
 
 class UIFlow(StrictModel):

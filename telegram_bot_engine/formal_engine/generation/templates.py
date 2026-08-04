@@ -592,32 +592,45 @@ target-version = "py311"
 
 
 def render_models_from_spec(spec: FormalBotSpec) -> str:
-    """Build models.py from understood DataModelSpec list."""
-    if not spec.data_models:
-        return render_models(spec)
+    """Build models.py from understood DataModelSpec (typed fields)."""
     lines = [
-        '"""Domain models — from FormalBotSpec.data_models."""',
+        '"""Domain models — assembled from FormalBotSpec.data_models."""',
         "from __future__ import annotations",
-        "from enum import Enum",
         "from typing import Any, Optional",
         "from pydantic import BaseModel, ConfigDict, Field",
         "",
         "class StrictModel(BaseModel):",
-        "    model_config = ConfigDict(frozen=True, extra=\"forbid\")",
+        '    model_config = ConfigDict(frozen=True, extra="forbid")',
         "",
     ]
-    for m in spec.data_models:
-        fields = m.fields or ["id"]
+    models = list(spec.data_models) if spec.data_models else []
+    if not models:
+        return render_models(spec)
+    for m in models:
         lines.append(f"class {m.name}(StrictModel):")
-        for f in fields:
-            if f in ("id", "user_id", "telegram_id", "price", "qty", "stock", "total"):
-                lines.append(f"    {f}: int | str = 0")
-            elif f in ("items", "messages"):
-                lines.append(f"    {f}: list[Any] = Field(default_factory=list)")
-            else:
-                lines.append(f"    {f}: str = \"\"")
+        typed = list(getattr(m, "typed_fields", None) or [])
+        if typed:
+            for f in typed:
+                th = f.type_hint or "str"
+                # safe defaults
+                if th in ("int",):
+                    lines.append(f"    {f.name}: int = 0")
+                elif th in ("bool",):
+                    lines.append(f"    {f.name}: bool = False")
+                elif "list" in th:
+                    lines.append(f"    {f.name}: list[Any] = Field(default_factory=list)")
+                elif "dict" in th:
+                    lines.append(f"    {f.name}: dict[str, Any] = Field(default_factory=dict)")
+                elif "None" in th:
+                    lines.append(f"    {f.name}: {th} = None")
+                else:
+                    lines.append(f'    {f.name}: str = ""')
+        else:
+            for name in (m.fields or ["id"]):
+                lines.append(f'    {name}: str = ""')
         lines.append("")
     return "\n".join(lines) + "\n"
+
 
 
 def render_generic_service(name: str, spec: FormalBotSpec) -> str:
