@@ -78,6 +78,7 @@ from ..engines.generators import (
     EngineOrchestratorEngine,
     ExecutionContextEngine,
     SynchronizationEngine,
+    ResourceManagementEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -514,6 +515,11 @@ def bootstrap(
     synchronization_engine = SynchronizationEngine()
     registry.register_engine(synchronization_engine)
 
+    # -- intelligent resource management engine (Specification 056) --------
+    # CRITICAL: CPU/RAM/storage/threads; limits; leak detection; cleanup.
+    resource_management_engine = ResourceManagementEngine()
+    registry.register_engine(resource_management_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -719,6 +725,10 @@ def bootstrap(
                      engine_id="synchronization",
                      priority=141,
                      dependencies=["execution_context"])
+    manager.register(resource_management_engine,
+                     engine_id="resource_management",
+                     priority=142,
+                     dependencies=["synchronization"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
