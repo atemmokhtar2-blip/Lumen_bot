@@ -1,12 +1,8 @@
 """
-Local Process Driver — runs the generated bot for real on this host.
+Local Process Driver — install deps robustly and run the bot process for real.
 
-1. Create a virtualenv inside the project (optional but preferred)
-2. pip install -r requirements.txt
-3. Start main.py / bot.py as a background process with BOT_TOKEN in env
-4. Track PID for stop / restart / logs
-
-Never logs the BOT_TOKEN value.
+Uses LiveRunner install stack (preemptive conflict fix, venv/target fallback).
+Separate install log vs run log so crash reasons are not buried under pip output.
 """
 
 from __future__ import annotations
@@ -30,39 +26,22 @@ from .report_data import (
 )
 
 _log = logging.getLogger("engine.live_deployment.local_process")
-
-# Global registry of running bots (deployment_id → process info)
 _RUNNING: Dict[str, dict] = {}
 
 
 def _find_entry_point(project_path: Path) -> Optional[Path]:
-    candidates = [
-        project_path / "main.py",
-        project_path / "bot.py",
-        project_path / "app.py",
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c
-    # Nested common layouts
-    for c in project_path.glob("*/main.py"):
-        return c
-    for c in project_path.glob("*/core/main.py"):
-        return c
-    return None
-
-
-def _find_requirements(project_path: Path) -> Optional[Path]:
-    for name in ("requirements.txt", "requirements-dev.txt"):
+    for name in ("main.py", "bot.py", "app.py", "run.py"):
         p = project_path / name
         if p.is_file():
             return p
+    for c in project_path.glob("*/main.py"):
+        return c
+    for c in project_path.glob("*/bot.py"):
+        return c
     return None
 
 
 class LocalProcessDriver(DeploymentProvider):
-    """Deploy by installing deps and running the bot process locally."""
-
     name = "local_process"
 
     def deploy(
@@ -89,7 +68,12 @@ class LocalProcessDriver(DeploymentProvider):
             )
 
         env_vars = dict(env_vars or {})
-        bot_token = env_vars.get("BOT_TOKEN", "")
+        bot_token = (
+            env_vars.get("BOT_TOKEN")
+            or env_vars.get("TELEGRAM_BOT_TOKEN")
+            or env_vars.get("TOKEN")
+            or ""
+        )
         if not bot_token:
             return DeploymentStatus(
                 provider=self.name,
@@ -98,33 +82,45 @@ class LocalProcessDriver(DeploymentProvider):
             )
 
         dep_id = f"local-{uuid.uuid4().hex[:10]}"
-        log_path = path / f".deploy_{dep_id}.log"
+        install_log = path / f".deploy_{dep_id}.install.log"
+        run_log = path / f".deploy_{dep_id}.run.log"
 
-        # Stop any previous process for same project path
         self._stop_by_project(str(path))
 
         try:
-            python_bin = self._ensure_venv_and_deps(path, log_path)
+            python_bin, mode, isolation = self._ensure_runtime_and_deps(path, install_log)
         except Exception as e:
+            tail = self._read_log(install_log, limit=15)
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
-                message=f"Dependency install failed: {type(e).__name__}: {e}",
+                message=(
+                    f"Dependency install failed: {type(e).__name__}: {e}. "
+                    f"Log: {' | '.join(tail[-5:]) if tail else 'empty'}"
+                ),
             )
 
-        # Build env for child (includes BOT_TOKEN — never logged)
         child_env = os.environ.copy()
+        # Cover common token env names used by bot templates
         child_env["BOT_TOKEN"] = bot_token
+        child_env["TELEGRAM_BOT_TOKEN"] = bot_token
+        child_env["TOKEN"] = bot_token
+        child_env["TG_TOKEN"] = bot_token
+        child_env["API_TOKEN"] = bot_token
         child_env["PYTHONUNBUFFERED"] = "1"
-        # Avoid the child bot conflicting if it tries to bind same port
         child_env.pop("PORT", None)
+        if mode.startswith("target"):
+            pp = child_env.get("PYTHONPATH", "")
+            child_env["PYTHONPATH"] = str(isolation) + (os.pathsep + pp if pp else "")
 
         try:
-            log_f = open(log_path, "a", encoding="utf-8")
+            log_f = open(run_log, "w", encoding="utf-8")
+            log_f.write(f"--- starting {entry.name} with {python_bin} (mode={mode}) ---\n")
+            log_f.flush()
             proc = subprocess.Popen(
                 [python_bin, str(entry)],
-                cwd=str(entry.parent if entry.parent != path else path),
+                cwd=str(path),
                 env=child_env,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
@@ -138,18 +134,20 @@ class LocalProcessDriver(DeploymentProvider):
                 message=f"Failed to start process: {type(e).__name__}: {e}",
             )
 
-        # Brief wait to catch instant crashes
-        time.sleep(2.0)
+        time.sleep(2.5)
         rc = proc.poll()
         if rc is not None:
-            tail = self._read_log(log_path, limit=30)
+            tail = self._read_log(run_log, limit=40)
+            # Prefer traceback / Error lines
+            useful = [ln for ln in tail if any(k in ln for k in ("Error", "Traceback", "Exception", "error", "Missing"))]
+            show = useful[-8:] if useful else tail[-8:]
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
                 message=(
                     f"Bot process exited immediately (code={rc}). "
-                    f"Last log: {' | '.join(tail[-5:]) if tail else 'empty'}"
+                    f"Run log: {' | '.join(show) if show else 'empty'}"
                 ),
             )
 
@@ -157,27 +155,19 @@ class LocalProcessDriver(DeploymentProvider):
             "proc": proc,
             "project_path": str(path),
             "entry": str(entry),
-            "log_path": str(log_path),
+            "log_path": str(run_log),
+            "install_log": str(install_log),
             "python": python_bin,
             "started_at": time.time(),
             "log_file": log_f,
         }
-
-        _log.info(
-            "Bot process started",
-            extra={
-                "deployment_id": dep_id,
-                "pid": proc.pid,
-                "entry": str(entry.name),
-            },
-        )
 
         return DeploymentStatus(
             provider=self.name,
             deployment_id=dep_id,
             service_id=service_name,
             status=DEPLOY_RUNNING,
-            message=f"Bot process running (pid={proc.pid}, entry={entry.name}).",
+            message=f"Bot process running (pid={proc.pid}, entry={entry.name}, mode={mode}).",
             dry_run=False,
         )
 
@@ -224,25 +214,12 @@ class LocalProcessDriver(DeploymentProvider):
         )
 
     def restart(self, deployment_id: str) -> DeploymentStatus:
-        info = _RUNNING.get(deployment_id)
-        if not info:
-            return DeploymentStatus(
-                provider=self.name,
-                deployment_id=deployment_id,
-                status=DEPLOY_FAILED,
-                message="Cannot restart: deployment not found.",
-            )
-        project = info["project_path"]
-        # Token must be re-supplied via deploy(); restart without token is limited
         self.stop(deployment_id)
         return DeploymentStatus(
             provider=self.name,
             deployment_id=deployment_id,
             status=DEPLOY_STOPPED,
-            message=(
-                "Stopped previous process. Call deploy() again with BOT_TOKEN "
-                "to restart."
-            ),
+            message="Stopped. Call deploy() again with BOT_TOKEN to restart.",
         )
 
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:
@@ -251,85 +228,28 @@ class LocalProcessDriver(DeploymentProvider):
             return [f"No logs for {deployment_id}"]
         return self._read_log(Path(info["log_path"]), limit=limit)
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
+    def _ensure_runtime_and_deps(self, project_path: Path, install_log: Path) -> tuple[str, str, Path]:
+        """Reuse LiveRunner robust installer."""
+        from telegram_bot_engine.formal_engine.services.live_runner.service import (
+            _ensure_runtime,
+            _find_requirements,
+            _pip_install,
+        )
 
-    def _ensure_venv_and_deps(self, project_path: Path, log_path: Path) -> str:
-        """Create .venv if needed, pip install requirements, return python path."""
-        venv_dir = project_path / ".venv"
-        if sys.platform == "win32":
-            python_bin = str(venv_dir / "Scripts" / "python.exe")
-            pip_bin = str(venv_dir / "Scripts" / "pip.exe")
-        else:
-            python_bin = str(venv_dir / "bin" / "python")
-            pip_bin = str(venv_dir / "bin" / "pip")
-
-        if not Path(python_bin).exists():
-            _log.info("Creating virtualenv", extra={"path": str(venv_dir)})
-            subprocess.run(
-                [sys.executable, "-m", "venv", str(venv_dir)],
-                check=True,
-                cwd=str(project_path),
-                capture_output=True,
-                timeout=120,
-            )
-
+        py, mode, isolation, note = _ensure_runtime(project_path)
         req = _find_requirements(project_path)
-        if req is not None:
-            _log.info("Installing requirements", extra={"file": req.name})
-            with open(log_path, "a", encoding="utf-8") as lf:
-                lf.write(f"\n--- pip install -r {req.name} ---\n")
-                proc = subprocess.run(
-                    [python_bin, "-m", "pip", "install", "--upgrade", "pip"],
-                    cwd=str(project_path),
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                )
-                lf.write(proc.stdout or "")
-                lf.write(proc.stderr or "")
-                proc = subprocess.run(
-                    [
-                        python_bin,
-                        "-m",
-                        "pip",
-                        "install",
-                        "-r",
-                        str(req),
-                    ],
-                    cwd=str(project_path),
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                )
-                lf.write(proc.stdout or "")
-                lf.write(proc.stderr or "")
-                if proc.returncode != 0:
-                    raise RuntimeError(
-                        f"pip install failed (code={proc.returncode}). "
-                        f"See deploy log."
-                    )
-        else:
-            # Minimal installs for common frameworks if no requirements file
-            _log.info("No requirements.txt — installing common telegram deps")
-            subprocess.run(
-                [
-                    python_bin,
-                    "-m",
-                    "pip",
-                    "install",
-                    "aiogram>=3.4",
-                    "python-telegram-bot>=21",
-                    "python-dotenv>=1.0",
-                ],
-                cwd=str(project_path),
-                capture_output=True,
-                timeout=300,
-                check=False,
+        ok, log, warns = _pip_install(py, req, project_path, mode, isolation)
+        install_log.write_text(
+            f"mode={mode}\nnote={note}\nwarns={warns}\n\n{log}",
+            encoding="utf-8",
+        )
+        if not ok:
+            raise RuntimeError(
+                "pip install failed after auto-fix attempts. "
+                + (log[-500:].replace("\n", " ") if log else "")
             )
-
-        return python_bin
+        # If venv mode still has no usable pip path issues — py is already selected
+        return py, mode, isolation
 
     def _stop_by_project(self, project_path: str) -> None:
         to_stop = [
