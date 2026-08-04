@@ -13,6 +13,10 @@ from .dataflow_rule import (
     TaintToSinkRule, AsyncNoAwaitRule,
     UnreachableCodeRule, MaybeNoneRule, ResourceLeakRule,
 )
+from .symbolic_rule import (
+    SymbolicDivZeroRule, SymbolicAssertRule,
+    SymbolicNoneAccessRule, SymbolicAlwaysRaiseRule,
+)
 
 # Order = execution order (core first)
 _RULE_CLASSES = [
@@ -32,6 +36,10 @@ _RULE_CLASSES = [
     UnreachableCodeRule,
     MaybeNoneRule,
     ResourceLeakRule,
+    SymbolicDivZeroRule,
+    SymbolicAssertRule,
+    SymbolicNoneAccessRule,
+    SymbolicAlwaysRaiseRule,
 ]
 
 
