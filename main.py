@@ -58,6 +58,23 @@ def _is_allowed(user_id: int | None) -> bool:
     return user_id is not None and user_id in ALLOWED_USER_IDS
 
 
+
+def _detect_host_intent(text: str) -> str:
+    """Return host action: start|stop|status|diagnose|none."""
+    t = (text or "").strip().lower()
+    if not t:
+        return "none"
+    if any(k in t for k in ("استضف", "استضافة", "host", "deploy host", "شغّل استضافة", "شغل استضافة")):
+        return "start"
+    if any(k in t for k in ("أوقف الاستضافة", "اوقف الاستضافة", "وقف الاستضافة", "stop host", "stop hosting")):
+        return "stop"
+    if any(k in t for k in ("حالة الاستضافة", "status host", "hosting status", "المثيلات")):
+        return "status"
+    if any(k in t for k in ("تشخيص الاستضافة", "diagnose host", "أخطاء الاستضافة", "اخطاء الاستضافة")):
+        return "diagnose"
+    return "none"
+
+
 def _looks_like_bot_token(text: str) -> bool:
     import re
     return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", (text or "").strip()))
@@ -302,6 +319,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Spec 065 — if user is sending a bot token after successful generation
+    pending_host = (context.user_data or {}).get("pending_host")
+    if pending_host and _looks_like_bot_token(request):
+        context.user_data.pop("pending_host", None)
+        status = await message.reply_text("🚀 جاري بدء الاستضافة (عملية طويلة الأمد)...")
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+
+        def _do_host():
+            from telegram_bot_engine.formal_engine.services.hosting import get_hosting_service
+            svc = get_hosting_service(OUTPUT_DIR)
+            return svc.start(
+                user_id=message.from_user.id if message.from_user else 0,
+                project_path=pending_host.get("project_path") or "",
+                bot_token=request,
+            )
+
+        try:
+            result = await asyncio.to_thread(_do_host)
+        except Exception as e:
+            logger.exception("hosting start failed")
+            await status.edit_text(f"❌ فشل الاستضافة: {type(e).__name__}: {str(e)[:200]}")
+            return
+        await status.edit_text(result.to_user_text())
+        return
+
     pending_run = (context.user_data or {}).get("pending_run")
     if _looks_like_bot_token(request):
         if not pending_run:
@@ -547,6 +588,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     err += f"\n`{result.stderr[:300]}`"
                 await status.edit_text(f"❌ {err}")
         return
+
+    # --- Hosting (owner-only foundation; no billing yet) ---
+    host_action = _detect_host_intent(request)
+    if host_action != "none":
+        from telegram_bot_engine.formal_engine.services.hosting import get_hosting_service
+        svc = get_hosting_service(OUTPUT_DIR)
+        uid = message.from_user.id if message.from_user else 0
+        active = (context.user_data or {}).get("active_repo") or {}
+
+        if host_action == "start":
+            project_path = active.get("path") or ""
+            if not project_path or not Path(project_path).exists():
+                await message.reply_text(
+                    "ما فيش مشروع نشط للاستضافة.\n"
+                    "اسحب مستودع أو ولّد بوت أولاً، بعدين اكتب: استضف"
+                )
+                return
+            context.user_data["pending_host"] = {
+                "project_path": project_path,
+                "user_id": uid,
+            }
+            await message.reply_text(
+                "🚀 *استضافة المشروع النشط*\n"
+                f"• المسار: `{project_path}`\n\n"
+                "أرسل الآن توكن البوت من @BotFather لبدء التشغيل الطويل الأمد.\n"
+                "(الأساس جاهز — بدون طبقة دفع حالياً)"
+            )
+            return
+
+        if host_action == "status":
+            result = svc.status(user_id=uid)
+            await message.reply_text(result.to_user_text())
+            return
+
+        if host_action == "stop":
+            items = svc.list_for_user(uid)
+            running = [i for i in items if i.status == "running"]
+            if not running:
+                await message.reply_text("ما فيش مثيل استضافة شغال لإيقافه.")
+                return
+            # stop the most recent running
+            target = sorted(running, key=lambda x: x.started_at, reverse=True)[0]
+            result = await asyncio.to_thread(
+                lambda: svc.stop(instance_id=target.instance_id, user_id=uid)
+            )
+            await message.reply_text(result.to_user_text())
+            return
+
+        if host_action == "diagnose":
+            items = svc.list_for_user(uid)
+            if not items:
+                await message.reply_text("ما فيش مثيلات لتشخيصها.")
+                return
+            target = sorted(items, key=lambda x: x.started_at, reverse=True)[0]
+            result = await asyncio.to_thread(
+                lambda: svc.diagnose(user_id=uid, instance_id=target.instance_id)
+            )
+            await message.reply_text(result.to_user_text())
+            return
 
     # --- Active repo development (must run before generate_bot) ---
     active = (context.user_data or {}).get("active_repo")

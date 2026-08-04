@@ -1079,32 +1079,15 @@ class LiveRunnerService:
                 report.install_log = all_install_log[-4000:]
                 return report
 
-            # Only heal on missing-module errors
+            # ── Error Intelligence is the single decision authority ──
             if report.phase not in ("run", "install"):
                 return report
 
-            missing_mods = _extract_missing_modules(
-                (report.run_log or "") + "\n" + (report.install_log or "") + "\n" + "\n".join(report.errors or [])
-            )
-            if not missing_mods:
-                # no healable missing module
-                report.install_log = all_install_log[-4000:]
-                loc = _error_location_summary(report.run_log or "")
-                if loc and report.message:
-                    report.message = f"{report.message} | الموقع: `{loc}`"
-                return report
+            try:
+                from ..error_intelligence import analyze_logs
+            except Exception:
+                analyze_logs = None  # type: ignore
 
-            if heal_round >= max_heal_rounds:
-                report.install_log = all_install_log[-4000:]
-                report.warnings = list(report.warnings or []) + [
-                    f"heal_exhausted after {max_heal_rounds} rounds; still missing: {missing_mods}"
-                ]
-                loc = _error_location_summary(report.run_log or "")
-                if loc:
-                    report.message = f"{report.message} | الموقع: `{loc}`"
-                return report
-
-            # Strengthen: also AST-read the failing source file for real imports
             combined_log = (
                 (report.run_log or "")
                 + "\n"
@@ -1112,26 +1095,96 @@ class LiveRunnerService:
                 + "\n"
                 + "\n".join(report.errors or [])
             )
-            source_mods = _resolve_missing_via_source(root, combined_log)
-            for sm in source_mods:
-                if sm not in missing_mods:
-                    missing_mods.append(sm)
 
-            # Map modules → packages
+            contract = None
+            if analyze_logs is not None:
+                contract = analyze_logs(
+                    run_log=report.run_log or "",
+                    install_log=report.install_log or "",
+                    phase=report.phase or "",
+                    extra_errors=list(report.errors or []),
+                )
+                # Enrich heal packages via AST on failing file
+                source_mods = _resolve_missing_via_source(root, combined_log)
+                for sm in source_mods:
+                    pkg = _module_to_package(sm)
+                    if pkg and pkg not in contract.heal_packages:
+                        contract.heal_packages.append(pkg)
+                        contract.healable = True
+
+            # Attach diagnosis for hosting / user visibility
+            report.details = dict(report.details or {})
+            if contract is not None and contract.primary:
+                report.details["error_contract"] = {
+                    "category": contract.primary.category,
+                    "action": contract.primary.suggested_action,
+                    "location": contract.primary.location,
+                    "package": contract.primary.suggested_package,
+                    "healable": contract.healable,
+                    "heal_packages": list(contract.heal_packages),
+                    "summary_ar": contract.primary.summary_ar,
+                    "confidence": contract.primary.confidence,
+                }
+
             packages: list[str] = []
-            for mod in missing_mods:
-                pkg = _module_to_package(mod)
-                if pkg:
-                    if pkg not in packages:
+            if contract is not None:
+                action = (
+                    (contract.primary.suggested_action if contract.primary else "none")
+                    or "none"
+                )
+                if contract.healable and contract.heal_packages and action in (
+                    "install_package",
+                    "fix_requirements",
+                    "none",
+                ):
+                    packages = list(contract.heal_packages)
+                elif (
+                    action == "install_package"
+                    and contract.primary
+                    and contract.primary.suggested_package
+                ):
+                    packages = [contract.primary.suggested_package]
+                elif action not in ("install_package", "fix_requirements", "none", ""):
+                    # Error Intelligence: do not pip-heal (token/syntax/network/...)
+                    report.install_log = all_install_log[-4000:]
+                    loc = contract.primary.location if contract.primary else ""
+                    if loc and report.message:
+                        report.message = f"{report.message} | الموقع: `{loc}`"
+                    report.warnings = list(report.warnings or []) + [
+                        f"error_intel_action:{action}",
+                        f"category:{(contract.primary.category if contract.primary else 'unknown')}",
+                    ]
+                    return report
+
+            if not packages:
+                missing_mods = _extract_missing_modules(combined_log)
+                source_mods = _resolve_missing_via_source(root, combined_log)
+                for sm in source_mods:
+                    if sm not in missing_mods:
+                        missing_mods.append(sm)
+                for mod in missing_mods:
+                    pkg = _module_to_package(mod)
+                    if pkg and pkg not in packages:
                         packages.append(pkg)
-                else:
-                    heal_notes.append(f"skipped:{mod}")
+                    elif not pkg:
+                        heal_notes.append(f"skipped:{mod}")
 
             if not packages:
                 report.install_log = all_install_log[-4000:]
+                loc = _error_location_summary(report.run_log or "")
+                if loc and report.message:
+                    report.message = f"{report.message} | الموقع: `{loc}`"
+                report.warnings = list(report.warnings or []) + ["not_healable_by_error_intel"]
+                return report
+
+            if heal_round >= max_heal_rounds:
+                report.install_log = all_install_log[-4000:]
                 report.warnings = list(report.warnings or []) + [
-                    f"unmapped_modules: {missing_mods}"
+                    f"heal_exhausted after {max_heal_rounds} rounds; packages: {packages}"
                 ]
+                loc = _error_location_summary(report.run_log or "")
+                if loc:
+                    report.message = f"{report.message} | الموقع: `{loc}`"
                 return report
 
             added = _ensure_packages_in_requirements(root, packages)
@@ -1141,13 +1194,14 @@ class LiveRunnerService:
             else:
                 heal_notes.append(f"reinstall_try:{','.join(packages)}")
 
-            # Direct pip install of the specific packages (stronger than -r alone)
             try:
                 py_h, mode_h, isolation_h, _note_h = _ensure_runtime(root)
                 ok_direct, direct_log = _pip_install_packages_direct(
                     py_h, packages, root, mode_h, isolation_h
                 )
-                all_install_log = (all_install_log + "\n--- direct heal pip ---\n" + direct_log).strip()
+                all_install_log = (
+                    all_install_log + "\n--- error_intel direct pip ---\n" + direct_log
+                ).strip()
                 if ok_direct:
                     heal_notes.append(f"direct_pip:{','.join(packages)}")
                 else:

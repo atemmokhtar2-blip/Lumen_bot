@@ -102,6 +102,8 @@
 | 4.4 | ربط LiveDeployment الحالي ببوابة الجودة السابقة | قادم |
 | 4.5 | Auto-Heal: ModuleNotFoundError → إضافة الحزمة لـ requirements + إعادة تثبيت وتشغيل (حتى 2 جولات) | تم |
 | 4.6 | محرك أخطاء (Error Intelligence): تحليل لوج → ErrorContract + تصنيف + إجراء مقترح | تم |
+| 4.7 | ربط Error Intelligence كمصدر قرار وحيد لـ Auto-Heal | تم |
+| 4.8 | أساس الاستضافة (HostingService): start/stop/status/diagnose بدون دفع | تم |
 
 ### المرحلة 5 — تطوير تكراري على مشروع قائم
 > الهدف: المستخدم يقول «عدّل / أضف / صلّح» والنظام يعدّل الكود بفهم.
