@@ -116,6 +116,19 @@ class FlowUnit(StrictModel):
     steps: list[FlowStep] = Field(default_factory=list)
 
 
+class PermissionUnit(StrictModel):
+    role: str  # user | admin | owner
+    allows: list[str] = Field(default_factory=list)  # command names or callback ids
+
+
+class ConversationStateUnit(StrictModel):
+    name: str
+    prompt: str = ""
+    next_state: str | None = None
+    collects_field: str | None = None
+
+
+
 class TechFlags(StrictModel):
     database: str = "sqlite"  # sqlite | postgres | none
     payments: bool = False
@@ -153,6 +166,8 @@ class ProgramContract(StrictModel):
     entities: list[EntityUnit] = Field(default_factory=list)
     services: list[ServiceUnit] = Field(default_factory=list)
     flows: list[FlowUnit] = Field(default_factory=list)
+    permissions: list[PermissionUnit] = Field(default_factory=list)
+    conversation_states: list[ConversationStateUnit] = Field(default_factory=list)
 
     integrations: list[str] = Field(default_factory=lambda: ["telegram"])
     feature_tags: list[str] = Field(default_factory=list)
@@ -204,4 +219,12 @@ def validate_contract(contract: ProgramContract) -> ContractValidation:
         warnings.append("payments enabled but no Order entity")
     if contract.tech.admin_panel and "admin" not in names:
         warnings.append("admin_panel without /admin command")
+    if contract.flows and not contract.conversation_states:
+        warnings.append("flows present without conversation_states")
+    entity_names = {e.name for e in contract.entities}
+    for e in contract.entities:
+        if not e.fields:
+            warnings.append(f"entity {e.name} has no fields")
+    if contract.tech.payments and "Payment" not in entity_names:
+        warnings.append("payments without Payment entity")
     return ContractValidation(ok=len(errors) == 0, errors=errors, warnings=warnings)

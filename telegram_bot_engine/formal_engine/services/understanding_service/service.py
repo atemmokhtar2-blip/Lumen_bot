@@ -15,6 +15,7 @@ from ...schemas.program_contract import (
     ButtonUnit,
     CommandUnit,
     ContractValidation,
+    ConversationStateUnit,
     EntityUnit,
     FieldType,
     FieldUnit,
@@ -22,6 +23,7 @@ from ...schemas.program_contract import (
     FlowUnit,
     HandlerKind,
     HandlerUnit,
+    PermissionUnit,
     ProgramContract,
     QualityFlags,
     ServiceUnit,
@@ -152,9 +154,48 @@ def formal_spec_to_contract(spec: FormalBotSpec) -> ProgramContract:
             )
         )
 
+    # Permissions derived from commands (not templates — from contract inputs)
+    user_cmds = [c.name for c in commands if not c.admin_only]
+    admin_cmds = [c.name for c in commands if c.admin_only]
+    permissions = [
+        PermissionUnit(role="user", allows=user_cmds + [b.callback_id for b in buttons]),
+        PermissionUnit(role="admin", allows=list({*user_cmds, *admin_cmds, *[b.callback_id for b in buttons]})),
+    ]
+
+    # Conversation states from flows
+    conversation_states: list[ConversationStateUnit] = []
+    for fl in flows:
+        for step in fl.steps:
+            conversation_states.append(
+                ConversationStateUnit(
+                    name=f"{fl.name}__{step.id}",
+                    prompt=step.action.replace("_", " "),
+                    next_state=(f"{fl.name}__{step.next_id}" if step.next_id else None),
+                    collects_field=step.id if step.action.startswith(("collect", "ask", "pick")) else None,
+                )
+            )
+
+    # Booking kind boost entities if missing
+    kind = _map_kind(spec.bot_type.value, list(spec.feature_tags or []))
+    entity_names = {e.name for e in entities}
+    if kind == BotKind.BOOKING and "Appointment" not in entity_names:
+        entities.append(
+            EntityUnit(
+                name="Appointment",
+                fields=[
+                    FieldUnit(name="id", field_type=FieldType.STR),
+                    FieldUnit(name="user_id", field_type=FieldType.INT),
+                    FieldUnit(name="slot", field_type=FieldType.STR),
+                    FieldUnit(name="status", field_type=FieldType.STR),
+                ],
+            )
+        )
+        if not any(s.name == "booking" for s in services):
+            services.append(ServiceUnit(name="booking", responsibility="appointments"))
+
     return ProgramContract(
         bot_name=spec.bot_name,
-        bot_kind=_map_kind(spec.bot_type.value, list(spec.feature_tags or [])),
+        bot_kind=kind,
         summary=(spec.description or "")[:500],
         commands=commands,
         buttons=buttons,
@@ -162,6 +203,8 @@ def formal_spec_to_contract(spec: FormalBotSpec) -> ProgramContract:
         entities=entities,
         services=services,
         flows=flows,
+        permissions=permissions,
+        conversation_states=conversation_states,
         integrations=list(spec.integrations or ["telegram"]),
         feature_tags=list(spec.feature_tags or []),
         tech=TechFlags(

@@ -223,19 +223,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 '''
 
 
-def _messages() -> str:
-    return '''"""Text fallback."""
-from __future__ import annotations
-from telegram import Update
-from telegram.ext import ContextTypes
-
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None or not message.text:
-        return
-    await message.reply_text("Use /start or menu buttons.")
-'''
 
 
 def _cmd_handler(name: str, description: str, admin_only: bool) -> str:
@@ -301,37 +288,40 @@ def _main(c: ProgramContract) -> str:
         "    app.add_handler(CallbackQueryHandler(callback_handler))",
         "    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))",
     ]
+    bot_cmds_lines = []
+    for x in c.commands:
+        bot_cmds_lines.append(
+            f"        BotCommand({_py(x.name)}, {_py((x.description or x.name)[:50])}),"
+        )
+    bot_cmds_block = "\n".join(bot_cmds_lines) if bot_cmds_lines else '        BotCommand("start", "start"),'
     log = _ident(c.bot_name) or "bot"
-    return f'''"""
-{c.bot_name} — assembled from ProgramContract (codegen blind to user text).
-"""
-from __future__ import annotations
-import logging
-import sys
-from telegram import Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
-from app.config import get_settings
-{chr(10).join(imports)}
+    return (
+        f'"""\n{c.bot_name} — assembled from ProgramContract (codegen blind to user text).\n"""\n'
+        "from __future__ import annotations\n"
+        "import logging\n"
+        "import sys\n"
+        "from telegram import BotCommand, Update\n"
+        "from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters\n"
+        "from app.config import get_settings\n"
+        + "\n".join(imports) + "\n\n"
+        "logging.basicConfig(format=\"%(asctime)s | %(levelname)-8s | %(name)s | %(message)s\", level=logging.INFO, stream=sys.stdout)\n"
+        f"logger = logging.getLogger({_py(log)})\n\n\n"
+        "async def _post_init(app: Application) -> None:\n"
+        "    await app.bot.set_my_commands([\n"
+        + bot_cmds_block + "\n"
+        "    ])\n\n\n"
+        "def build_application() -> Application:\n"
+        "    settings = get_settings()\n"
+        "    app = Application.builder().token(settings.telegram_bot_token).post_init(_post_init).build()\n"
+        + "\n".join(regs) + "\n"
+        "    return app\n\n\n"
+        "def main() -> None:\n"
+        f"    logger.info(\"Starting %s\", {_py(c.bot_name)})\n"
+        "    build_application().run_polling(allowed_updates=Update.ALL_TYPES)\n\n\n"
+        "if __name__ == \"__main__\":\n"
+        "    main()\n"
+    )
 
-logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s", level=logging.INFO, stream=sys.stdout)
-logger = logging.getLogger({_py(log)})
-
-
-def build_application() -> Application:
-    settings = get_settings()
-    app = Application.builder().token(settings.telegram_bot_token).build()
-{chr(10).join(regs)}
-    return app
-
-
-def main() -> None:
-    logger.info("Starting %s", {_py(c.bot_name)})
-    build_application().run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == "__main__":
-    main()
-'''
 
 
 def _readme(c: ProgramContract) -> str:
@@ -352,6 +342,74 @@ python -m app.main
 """
 
 
+
+def _states_module(c: ProgramContract) -> str:
+    lines = [
+        '"""Conversation states from ProgramContract.conversation_states."""',
+        "from __future__ import annotations",
+        "from enum import Enum",
+        "",
+        "class UserState(str, Enum):",
+        '    IDLE = "idle"',
+    ]
+    for st in c.conversation_states or []:
+        key = st.name.upper().replace("-", "_")
+        # safe enum name
+        import re
+        key = re.sub(r"[^A-Z0-9_]", "_", key)[:40]
+        if not key or key[0].isdigit():
+            key = "S_" + key
+        lines.append(f'    {key} = "{st.name}"')
+    lines.append("")
+    lines.append("STATE_PROMPTS: dict[str, str] = {")
+    for st in c.conversation_states or []:
+        lines.append(f'    "{st.name}": {repr(st.prompt)},')
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _messages(c: ProgramContract) -> str:
+    has_states = bool(c.conversation_states)
+    if not has_states:
+        return '''"""Text fallback."""
+from __future__ import annotations
+from telegram import Update
+from telegram.ext import ContextTypes
+
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None or not message.text:
+        return
+    await message.reply_text("Use /start or menu buttons.")
+'''
+    return '''"""Text handler — drives conversation_states from ProgramContract."""
+from __future__ import annotations
+from telegram import Update
+from telegram.ext import ContextTypes
+from app.states import STATE_PROMPTS, UserState
+
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None or not message.text:
+        return
+    text = message.text.strip()
+    ud = context.user_data
+    state = ud.get("state", UserState.IDLE.value)
+    if state != UserState.IDLE.value:
+        ud.setdefault("collected", {})
+        ud["collected"][state] = text
+        # advance if next known
+        prompt = STATE_PROMPTS.get(state)
+        ud["state"] = UserState.IDLE.value
+        await message.reply_text(f"Saved for {state}." + (f" ({prompt})" if prompt else ""))
+        return
+    await message.reply_text("Use /start or menu buttons.")
+'''
+
+
 class CodegenService:
     """Microservice: ProgramContract → files."""
 
@@ -366,6 +424,7 @@ class CodegenService:
         _write(root / "requirements.txt", _requirements(contract))
         _write(root / ".env.example", _env(contract))
         _write(root / "README.md", _readme(contract))
+        _write(root / "program_contract.json", contract.model_dump_json(indent=2))
         _write(root / "pyproject.toml", f'[project]\nname = "{_ident(contract.bot_name)}"\nversion = "{contract.version}"\nrequires-python = ">=3.11"\n')
         _write(app / "__init__.py", '"""app"""\n')
         _write(handlers / "__init__.py", '"""handlers"""\n')
@@ -375,7 +434,9 @@ class CodegenService:
         _write(app / "main.py", _main(contract))
         _write(handlers / "start.py", _start(contract))
         _write(handlers / "callbacks.py", _callbacks(contract))
-        _write(handlers / "messages.py", _messages())
+        _write(handlers / "messages.py", _messages(contract))
+        if contract.conversation_states:
+            _write(app / "states.py", _states_module(contract))
 
         for cmd in contract.commands:
             if cmd.name in ("start", "help"):
