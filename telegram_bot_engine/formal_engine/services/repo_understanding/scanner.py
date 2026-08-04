@@ -1,14 +1,20 @@
 """
-Deep Repo Scanner v2 — AST + filesystem + architecture inference.
+Deep Repo Scanner v3 — production-grade deterministic understanding.
 
-Deterministic. No LLM. Uses Python stdlib `ast` as the primary tool.
+Goals:
+  - Correctly detect Telegram bots across PTB / aiogram / telebot / pyrogram
+  - Distinguish application bot vs library/framework package
+  - Extract real registered commands (not noise)
+  - Read README purpose
+  - Architecture layers + quality signals
+Uses: stdlib ast + filesystem only (no LLM).
 """
 
 from __future__ import annotations
 
 import ast
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -28,25 +34,28 @@ from ...schemas.repo_contract import (
 _SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".tox",
     ".mypy_cache", ".pytest_cache", "dist", "build", ".eggs", ".idea",
-    ".vscode", "htmlcov", ".ruff_cache",
+    ".vscode", "htmlcov", ".ruff_cache", "docs", "examples", "example",
+    "tests", "test", ".github",
 }
 
 _ENTRY_NAMES = {
     "main.py": 100,
-    "bot.py": 90,
+    "bot.py": 95,
     "app.py": 85,
     "run.py": 80,
     "server.py": 75,
     "app/main.py": 95,
     "src/main.py": 90,
-    "src/bot.py": 88,
+    "src/bot.py": 92,
+    "__main__.py": 70,
 }
 
-_FRAMEWORK_MAP = {
+_FW = {
     "python-telegram-bot": "python-telegram-bot",
     "telegram": "python-telegram-bot",
     "aiogram": "aiogram",
     "telebot": "pyTelegramBotAPI",
+    "pytelegrambotapi": "pyTelegramBotAPI",
     "pyrogram": "pyrogram",
     "fastapi": "fastapi",
     "flask": "flask",
@@ -54,39 +63,41 @@ _FRAMEWORK_MAP = {
     "pydantic": "pydantic",
     "sqlalchemy": "sqlalchemy",
     "redis": "redis",
-    "celery": "celery",
-    "httpx": "httpx",
     "aiohttp": "aiohttp",
+    "httpx": "httpx",
 }
 
 _LAYER_ROLES = {
-    "formal_engine": "formal understanding + codegen core",
+    "formal_engine": "formal understanding + codegen",
     "engines": "generation engines",
-    "generators": "concrete generator engines",
+    "generators": "concrete generators",
     "pipeline": "pipeline orchestration",
-    "core": "contracts and bootstrap",
+    "core": "contracts / bootstrap",
     "handlers": "telegram handlers",
     "services": "domain services",
-    "tests": "test suite",
-    "docs": "documentation",
-    "configuration": "config system",
-    "registry": "engine registry",
-    "manager": "lifecycle manager",
-    "builders": "file/module builders",
-    "validators": "validators",
+    "configuration": "config",
     "ontology": "knowledge / rules",
     "understanding": "requirement understanding",
     "generation": "code generation",
     "schemas": "typed contracts",
+    "app": "application package",
 }
 
 
-def _iter_files(root: Path) -> Iterable[Path]:
+def _iter_files(root: Path, include_tests: bool = False) -> Iterable[Path]:
     for p in root.rglob("*"):
         if not p.is_file():
             continue
-        if any(part in _SKIP_DIRS for part in p.parts):
+        parts = set(p.parts)
+        if parts & _SKIP_DIRS:
+            # still allow requirements/readme at root-ish
+            if p.name.lower() in ("requirements.txt", "pyproject.toml", "readme.md", "readme.rst"):
+                if ".git" not in p.parts:
+                    yield p
             continue
+        if not include_tests and ("tests" in p.parts or "test" in p.parts):
+            if p.suffix == ".py":
+                continue
         yield p
 
 
@@ -97,16 +108,14 @@ def _kind(path: Path) -> str:
         return "python"
     if name in ("requirements.txt", "pyproject.toml", "setup.cfg", "setup.py", "Pipfile"):
         return "config"
-    if "test" in name or "tests" in path.parts:
-        return "test"
-    if suf in (".md", ".rst"):
+    if name.startswith("readme"):
         return "docs"
     if suf in (".yml", ".yaml", ".toml", ".json", ".env", ".ini"):
         return "config"
     return "other"
 
 
-def _read(path: Path, limit: int = 400_000) -> str:
+def _read(path: Path, limit: int = 350_000) -> str:
     try:
         return path.read_bytes()[:limit].decode("utf-8", errors="ignore")
     except Exception:
@@ -123,35 +132,7 @@ def _parse_ast(path: Path) -> ast.AST | None:
         return None
 
 
-def _parse_requirements(root: Path) -> list[str]:
-    deps: list[str] = []
-    req = root / "requirements.txt"
-    if req.exists():
-        for line in _read(req).splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("-"):
-                continue
-            pkg = re.split(r"[<>=!;\\[\s]", line, maxsplit=1)[0].strip()
-            if pkg:
-                deps.append(pkg)
-    pyproject = root / "pyproject.toml"
-    if pyproject.exists():
-        for m in re.finditer(
-            r'^\s*["\']([A-Za-z0-9_.\-]+)["\']\s*[>=<~!]',
-            _read(pyproject),
-            re.M,
-        ):
-            deps.append(m.group(1))
-    seen, out = set(), []
-    for d in deps:
-        k = d.lower()
-        if k not in seen:
-            seen.add(k)
-            out.append(d)
-    return out[:50]
-
-
-def _base_name(node: ast.expr) -> str:
+def _base(node: ast.expr) -> str:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -159,19 +140,112 @@ def _base_name(node: ast.expr) -> str:
     return ""
 
 
-def _decorator_names(decs: list[ast.expr]) -> list[str]:
-    names = []
-    for d in decs:
-        if isinstance(d, ast.Name):
-            names.append(d.id)
-        elif isinstance(d, ast.Attribute):
-            names.append(d.attr)
-        elif isinstance(d, ast.Call):
-            names.append(_base_name(d.func))
-    return names
+def _call_name(node: ast.Call) -> str:
+    return _base(node.func)
 
 
-class _ModuleAnalyzer(ast.NodeVisitor):
+def _const_str(node: ast.expr | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _decorator_chain(dec: ast.expr) -> str:
+    """Return dotted-ish name for decorator, e.g. router.message / bot.message_handler."""
+    if isinstance(dec, ast.Call):
+        return _decorator_chain(dec.func)
+    if isinstance(dec, ast.Attribute):
+        left = _decorator_chain(dec.value) if isinstance(dec.value, (ast.Attribute, ast.Name)) else ""
+        return f"{left}.{dec.attr}" if left else dec.attr
+    if isinstance(dec, ast.Name):
+        return dec.id
+    return ""
+
+
+def _parse_requirements(root: Path) -> list[str]:
+    deps: list[str] = []
+    for fname in ("requirements.txt", "requirements-dev.txt"):
+        f = root / fname
+        if f.exists():
+            for line in _read(f).splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("-"):
+                    continue
+                pkg = re.split(r"[<>=!;\\[\s]", line, maxsplit=1)[0].strip().lower()
+                if pkg:
+                    deps.append(pkg)
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        text = _read(pyproject)
+        # project.dependencies style
+        for m in re.finditer(r'^\s*["\']([A-Za-z0-9_.\-]+)["\']\s*[>=<~!]', text, re.M):
+            deps.append(m.group(1).lower())
+        for m in re.finditer(r'^\s*([A-Za-z0-9_.\-]+)\s*=\s*["\']', text, re.M):
+            # poetry style optional — skip tools
+            pass
+    seen, out = set(), []
+    for d in deps:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out[:60]
+
+
+def _readme_purpose(root: Path) -> str:
+    for name in ("README.md", "README.rst", "README.txt", "README"):
+        p = root / name
+        if not p.exists():
+            continue
+        text = _read(p, 20_000)
+        # first meaningful paragraph
+        lines = []
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") and len(s) < 4:
+                continue
+            if s.startswith("#"):
+                s = s.lstrip("#").strip()
+            if s.startswith("!") or s.startswith("[") or s.startswith("---"):
+                continue
+            if len(s) >= 20:
+                lines.append(s)
+            if len(lines) >= 3:
+                break
+        purpose = " ".join(lines)[:400]
+        return purpose
+    return ""
+
+
+def _looks_like_library(root: Path, deps: list[str], py_count: int) -> bool:
+    """Heuristic: packaging layout without a runnable bot entry."""
+    signals = 0
+    if (root / "setup.py").exists() or (root / "setup.cfg").exists():
+        signals += 1
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        t = _read(pyproject).lower()
+        if "[project]" in t or "[tool.poetry]" in t:
+            signals += 1
+        if "name" in t and ("aiogram" in t or "telegram" in t or "telebot" in t):
+            signals += 2
+    # many modules under package name matching framework
+    pkg_dirs = [p for p in root.iterdir() if p.is_dir() and (p / "__init__.py").exists()]
+    for d in pkg_dirs:
+        if d.name in ("aiogram", "telegram", "telebot", "pyrogram", "ptb"):
+            signals += 3
+    # no main/bot at root and huge file count
+    if py_count > 80 and not (root / "main.py").exists() and not (root / "bot.py").exists():
+        signals += 1
+    return signals >= 3
+
+
+class _FileAnalysis:
+    __slots__ = (
+        "rel", "imports", "classes", "functions", "commands", "handlers",
+        "env_vars", "tg_score", "fw_hits", "lines", "has_async", "has_typing",
+        "is_entry_candidate",
+    )
+
     def __init__(self, rel: str) -> None:
         self.rel = rel
         self.imports: list[str] = []
@@ -180,434 +254,493 @@ class _ModuleAnalyzer(ast.NodeVisitor):
         self.commands: list[DetectedCommand] = []
         self.handlers: list[DetectedHandler] = []
         self.env_vars: list[EnvVarInfo] = []
-        self.is_tg = False
+        self.tg_score = 0
+        self.fw_hits: set[str] = set()
+        self.lines = 0
         self.has_async = False
         self.has_typing = False
-        self.lines = 0
-
-    def visit_Import(self, node: ast.Import) -> Any:
-        for a in node.names:
-            self.imports.append(a.name.split(".")[0])
-            if a.name.startswith(("telegram", "aiogram", "telebot", "pyrogram")):
-                self.is_tg = True
-        self.generic_visit(node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> Any:
-        mod = (node.module or "").split(".")[0]
-        if mod:
-            self.imports.append(mod)
-        if (node.module or "").startswith(("telegram", "aiogram", "telebot")):
-            self.is_tg = True
-        if node.module and (
-            "typing" in (node.module or "")
-            or any(a.name in ("Optional", "List", "Dict", "Any") for a in node.names)
-        ):
-            self.has_typing = True
-        self.generic_visit(node)
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> Any:
-        bases = [_base_name(b) for b in node.bases]
-        methods = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        decs = _decorator_names(node.decorator_list)
-        kind = "class"
-        if "BaseModel" in bases or "StrictModel" in bases or "BaseSettings" in bases:
-            kind = "pydantic"
-        elif "dataclass" in decs:
-            kind = "dataclass"
-        elif node.name.endswith("Engine") or "Engine" in bases:
-            kind = "engine"
-        elif node.name.endswith("Service"):
-            kind = "service"
-        self.classes.append(
-            ClassInfo(
-                name=node.name,
-                file=self.rel,
-                bases=[b for b in bases if b],
-                methods=methods[:20],
-                kind=kind,
-            )
-        )
-        self.generic_visit(node)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
-        self._fn(node, False)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> Any:
-        self.has_async = True
-        self._fn(node, True)
-
-    def _fn(self, node: ast.FunctionDef | ast.AsyncFunctionDef, is_async: bool) -> None:
-        decs = _decorator_names(node.decorator_list)
-        self.functions.append(
-            FunctionInfo(
-                name=node.name,
-                file=self.rel,
-                is_async=is_async,
-                decorators=decs,
-            )
-        )
-        # classic bot handlers by name
-        if node.name in ("start", "help", "status", "admin", "start_cmd", "help_cmd", "status_cmd"):
-            cmd = node.name.replace("_cmd", "")
-            self.commands.append(
-                DetectedCommand(
-                    name=cmd,
-                    source_file=self.rel,
-                    evidence=f"def {node.name}",
-                    registration="def",
-                )
-            )
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> Any:
-        fname = _base_name(node.func)
-        # CommandHandler("start", ...)
-        if fname == "CommandHandler" and node.args:
-            a0 = node.args[0]
-            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
-                name = a0.value.lstrip("/").lower()
-                if name and name.isidentifier():
-                    self.commands.append(
-                        DetectedCommand(
-                            name=name,
-                            source_file=self.rel,
-                            evidence=f'CommandHandler("{name}")',
-                            registration="CommandHandler",
-                        )
-                    )
-                    self.handlers.append(
-                        DetectedHandler(kind="command", name=name, source_file=self.rel)
-                    )
-                    self.is_tg = True
-        if fname in ("CallbackQueryHandler", "MessageHandler", "ConversationHandler"):
-            kind = {
-                "CallbackQueryHandler": "callback",
-                "MessageHandler": "message",
-                "ConversationHandler": "conversation",
-            }[fname]
-            self.handlers.append(DetectedHandler(kind=kind, name=fname, source_file=self.rel))
-            self.is_tg = True
-        if fname == "BotCommand" and node.args:
-            a0 = node.args[0]
-            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
-                name = a0.value.lstrip("/").lower()
-                if name:
-                    self.commands.append(
-                        DetectedCommand(
-                            name=name,
-                            source_file=self.rel,
-                            evidence=f'BotCommand("{name}")',
-                            registration="BotCommand",
-                        )
-                    )
-        # os.getenv("X") / getenv("X")
-        if fname in ("getenv", "environ") or (
-            isinstance(node.func, ast.Attribute) and node.func.attr == "getenv"
-        ):
-            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-                self.env_vars.append(EnvVarInfo(name=node.args[0].value, source_file=self.rel))
-        self.generic_visit(node)
+        self.is_entry_candidate = False
 
 
-def _analyze_python_file(path: Path, root: Path) -> _ModuleAnalyzer | None:
+def _add_cmd(
+    out: list[DetectedCommand],
+    name: str,
+    rel: str,
+    evidence: str,
+    registration: str,
+) -> None:
+    name = (name or "").lstrip("/").lower().strip()
+    if not name or len(name) > 32:
+        return
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", name):
+        return
+    if name in ("name", "true", "false", "none", "self", "text", "command", "commands", "message"):
+        return
+    out.append(
+        DetectedCommand(name=name, source_file=rel, evidence=evidence[:100], registration=registration)
+    )
+
+
+def _analyze_file(path: Path, root: Path) -> _FileAnalysis | None:
     tree = _parse_ast(path)
     if tree is None:
         return None
     rel = str(path.relative_to(root)).replace("\\", "/")
-    an = _ModuleAnalyzer(rel)
+    an = _FileAnalysis(rel)
     an.lines = len(_read(path).splitlines())
-    an.visit(tree)
+    src = _read(path, 200_000)
+
+    # quick framework hits from source text (complements imports)
+    low = src.lower()
+    if "aiogram" in low:
+        an.fw_hits.add("aiogram")
+        an.tg_score += 2
+    if "python-telegram-bot" in low or "telegram.ext" in low:
+        an.fw_hits.add("python-telegram-bot")
+        an.tg_score += 2
+    if "telebot" in low or "pytelegrambotapi" in low:
+        an.fw_hits.add("pyTelegramBotAPI")
+        an.tg_score += 2
+    if "pyrogram" in low:
+        an.fw_hits.add("pyrogram")
+        an.tg_score += 2
+
+    for node in tree.body:
+        _visit_stmt(node, an)
+
+    # walk all nodes for Call patterns
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            _visit_call(node, an)
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                root_mod = a.name.split(".")[0]
+                an.imports.append(root_mod)
+                _fw_from_import(root_mod, a.name, an)
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            root_mod = mod.split(".")[0]
+            if root_mod:
+                an.imports.append(root_mod)
+                _fw_from_import(root_mod, mod, an)
+            if "typing" in mod:
+                an.has_typing = True
+
+    if re.search(r'if\s+__name__\s*==\s*["\']__main__["\']', src):
+        an.is_entry_candidate = True
+    if any(x in src for x in ("start_polling", "run_polling", "infinity_polling", "dp.start_polling", "application.run")):
+        an.is_entry_candidate = True
+        an.tg_score += 3
+
     return an
+
+
+def _fw_from_import(root_mod: str, full: str, an: _FileAnalysis) -> None:
+    full_l = full.lower()
+    if root_mod in ("telegram",) or full_l.startswith("telegram."):
+        an.fw_hits.add("python-telegram-bot")
+        an.tg_score += 2
+    if root_mod == "aiogram" or full_l.startswith("aiogram"):
+        an.fw_hits.add("aiogram")
+        an.tg_score += 2
+    if root_mod in ("telebot",) or "telebot" in full_l:
+        an.fw_hits.add("pyTelegramBotAPI")
+        an.tg_score += 2
+    if root_mod == "pyrogram":
+        an.fw_hits.add("pyrogram")
+        an.tg_score += 2
+
+
+def _visit_stmt(node: ast.stmt, an: _FileAnalysis) -> None:
+    if isinstance(node, ast.ClassDef):
+        bases = [_base(b) for b in node.bases]
+        methods = [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        kind = "class"
+        if any(b in ("BaseModel", "StrictModel", "BaseSettings") for b in bases):
+            kind = "pydantic"
+        elif node.name.endswith("Engine"):
+            kind = "engine"
+        elif node.name.endswith("Service"):
+            kind = "service"
+        an.classes.append(
+            ClassInfo(name=node.name, file=an.rel, bases=[b for b in bases if b], methods=methods[:20], kind=kind)
+        )
+        for n in node.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                _visit_function(n, an, inside_class=True)
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        _visit_function(node, an, inside_class=False)
+
+
+def _visit_function(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    an: _FileAnalysis,
+    inside_class: bool,
+) -> None:
+    if isinstance(node, ast.AsyncFunctionDef):
+        an.has_async = True
+    decs = []
+    for d in node.decorator_list:
+        chain = _decorator_chain(d)
+        decs.append(chain)
+        _commands_from_decorator(d, chain, node.name, an)
+
+    if not inside_class:
+        an.functions.append(
+            FunctionInfo(name=node.name, file=an.rel, is_async=isinstance(node, ast.AsyncFunctionDef), decorators=decs)
+        )
+
+
+def _commands_from_decorator(dec: ast.expr, chain: str, func_name: str, an: _FileAnalysis) -> None:
+    chain_l = chain.lower()
+    # telebot: @bot.message_handler(commands=['start', 'help'])
+    if "message_handler" in chain_l:
+        an.tg_score += 2
+        an.handlers.append(DetectedHandler(kind="message", name=func_name, source_file=an.rel))
+        if isinstance(dec, ast.Call):
+            for kw in dec.keywords:
+                if kw.arg == "commands":
+                    _extract_command_list(kw.value, an, "telebot_decorator")
+        return
+
+    # aiogram: @router.message(Command("x")) or CommandStart()
+    if chain_l.endswith(".message") or chain_l.endswith(".callback_query") or "router" in chain_l:
+        an.tg_score += 2
+        kind = "callback" if "callback" in chain_l else "message"
+        an.handlers.append(DetectedHandler(kind=kind, name=func_name, source_file=an.rel))
+        if isinstance(dec, ast.Call):
+            for arg in list(dec.args) + [kw.value for kw in dec.keywords]:
+                _extract_aiogram_filters(arg, an, func_name)
+        # CommandStart on function name start
+        if func_name in ("start", "start_handler", "cmd_start"):
+            _add_cmd(an.commands, "start", an.rel, f"@{chain} def {func_name}", "aiogram_decorator")
+        return
+
+    # pyrogram style handlers
+    if "on_message" in chain_l or "on_callback" in chain_l:
+        an.tg_score += 2
+        an.handlers.append(DetectedHandler(kind="message", name=func_name, source_file=an.rel))
+
+
+def _extract_aiogram_filters(node: ast.expr, an: _FileAnalysis, func_name: str) -> None:
+    if isinstance(node, ast.Call):
+        name = _call_name(node)
+        if name in ("CommandStart", "CommandHelp"):
+            cmd = "start" if "Start" in name else "help"
+            _add_cmd(an.commands, cmd, an.rel, f"{name}()", "aiogram_filter")
+            return
+        if name == "Command":
+            # Command("products") or Command("a", "b")
+            for a in node.args:
+                s = _const_str(a)
+                if s:
+                    _add_cmd(an.commands, s, an.rel, f'Command("{s}")', "aiogram_filter")
+                elif isinstance(a, (ast.List, ast.Tuple)):
+                    for elt in a.elts:
+                        s2 = _const_str(elt)
+                        if s2:
+                            _add_cmd(an.commands, s2, an.rel, f'Command("{s2}")', "aiogram_filter")
+            return
+        for a in node.args:
+            _extract_aiogram_filters(a, an, func_name)
+        for kw in node.keywords:
+            _extract_aiogram_filters(kw.value, an, func_name)
+
+
+def _extract_command_list(node: ast.expr, an: _FileAnalysis, reg: str) -> None:
+    if isinstance(node, (ast.List, ast.Tuple)):
+        for elt in node.elts:
+            s = _const_str(elt)
+            if s:
+                _add_cmd(an.commands, s, an.rel, f"commands=['{s}']", reg)
+    s = _const_str(node)
+    if s:
+        _add_cmd(an.commands, s, an.rel, f"commands='{s}'", reg)
+
+
+def _visit_call(node: ast.Call, an: _FileAnalysis) -> None:
+    fname = _call_name(node)
+
+    # PTB: CommandHandler("start", ...)
+    if fname == "CommandHandler":
+        an.tg_score += 3
+        an.handlers.append(DetectedHandler(kind="command", name="CommandHandler", source_file=an.rel))
+        if node.args:
+            s = _const_str(node.args[0])
+            if s:
+                _add_cmd(an.commands, s, an.rel, f'CommandHandler("{s}")', "CommandHandler")
+            elif isinstance(node.args[0], (ast.List, ast.Tuple)):
+                for elt in node.args[0].elts:
+                    s2 = _const_str(elt)
+                    if s2:
+                        _add_cmd(an.commands, s2, an.rel, f'CommandHandler("{s2}")', "CommandHandler")
+
+    if fname in ("CallbackQueryHandler", "MessageHandler", "ConversationHandler"):
+        an.tg_score += 2
+        kind = {
+            "CallbackQueryHandler": "callback",
+            "MessageHandler": "message",
+            "ConversationHandler": "conversation",
+        }[fname]
+        an.handlers.append(DetectedHandler(kind=kind, name=fname, source_file=an.rel))
+
+    if fname == "BotCommand" and node.args:
+        s = _const_str(node.args[0])
+        if s:
+            _add_cmd(an.commands, s, an.rel, f'BotCommand("{s}")', "BotCommand")
+
+    # aiogram include_router / start_polling
+    if fname in ("include_router", "start_polling", "run_polling"):
+        an.tg_score += 2
+
+    # getenv
+    if fname == "getenv" or (isinstance(node.func, ast.Attribute) and node.func.attr == "getenv"):
+        if node.args:
+            s = _const_str(node.args[0])
+            if s and s.isupper():
+                an.env_vars.append(EnvVarInfo(name=s, source_file=an.rel))
 
 
 def _detect_layers(root: Path, py_files: list[Path]) -> list[LayerInfo]:
     counts: Counter[str] = Counter()
     for p in py_files:
         parts = p.relative_to(root).parts
-        if len(parts) >= 2:
-            # telegram_bot_engine/formal_engine/...
-            if parts[0] == "telegram_bot_engine" and len(parts) >= 2:
-                counts[parts[1]] += 1
-            else:
-                counts[parts[0]] += 1
-        elif len(parts) == 1:
-            counts["(root)"] += 1
-    layers = []
-    for name, cnt in counts.most_common(15):
-        if name == "(root)":
+        if not parts:
             continue
-        layers.append(
-            LayerInfo(
-                name=name,
-                path=name if name != "telegram_bot_engine" else name,
-                file_count=cnt,
-                role=_LAYER_ROLES.get(name, ""),
-            )
-        )
+        if parts[0] == "telegram_bot_engine" and len(parts) >= 2:
+            counts[parts[1]] += 1
+        else:
+            counts[parts[0]] += 1
+    layers = []
+    for name, cnt in counts.most_common(12):
+        if name.endswith(".py"):
+            continue
+        layers.append(LayerInfo(name=name, path=name, file_count=cnt, role=_LAYER_ROLES.get(name, "")))
     return layers
 
 
-def _architecture(
-    is_tg: bool,
-    is_gen: bool,
-    layers: list[LayerInfo],
-    engines: list[str],
-) -> tuple[str, str]:
-    if is_gen:
-        return (
-            "generation_engine",
-            "محرك توليد بوتات تليجرام متعدد الطبقات (فهم → تخطيط → توليد → تحقق).",
-        )
-    if is_tg:
-        return "telegram_bot", "مشروع بوت تليجرام."
-    if any(l.name in ("app", "handlers", "services") for l in layers):
-        return "modular", "مشروع بايثون متعدد الطبقات."
-    if engines:
-        return "modular", "نظام محركات متخصصة."
-    return "unknown", "هيكل عام."
-
-
-def _confidence(
-    *,
-    py_count: int,
-    is_tg: bool,
-    is_gen: bool,
-    commands: int,
-    entries: int,
-    classes: int,
-    deps: int,
-    layers: int,
-) -> float:
-    c = 0.2
-    if py_count:
-        c += 0.15
-    if is_tg:
-        c += 0.15
-    if is_gen:
-        c += 0.15
-    if commands:
-        c += 0.1
-    if entries:
-        c += 0.08
-    if classes >= 5:
-        c += 0.08
-    if deps:
-        c += 0.05
-    if layers >= 3:
-        c += 0.09
-    return round(min(0.99, c), 3)
-
-
 class RepoUnderstandingService:
-    """Deep deterministic repository understanding."""
-
     def run(self, root_path: str | Path, remote_url: str = "") -> RepoContract:
         root = Path(root_path).resolve()
         if not root.exists() or not root.is_dir():
             return RepoContract(
-                root_path=str(root),
-                remote_url=remote_url,
-                confidence=0.0,
-                summary="المسار غير موجود",
-                notes=["path_missing"],
+                root_path=str(root), remote_url=remote_url, confidence=0.0,
+                summary="المسار غير موجود", notes=["path_missing"],
             )
 
         files = list(_iter_files(root))
         py_files = [p for p in files if p.suffix == ".py"]
+        all_py_including_tests = [
+            p for p in root.rglob("*.py")
+            if ".git" not in p.parts and "__pycache__" not in p.parts
+        ]
 
-        # size ranking
-        top_files: list[FileEntry] = []
-        for p in sorted(files, key=lambda x: x.stat().st_size if x.exists() else 0, reverse=True)[:30]:
+        top_files = []
+        for p in sorted(files, key=lambda x: x.stat().st_size if x.exists() else 0, reverse=True)[:25]:
             try:
                 sz = p.stat().st_size
             except Exception:
                 sz = 0
-            top_files.append(
-                FileEntry(path=str(p.relative_to(root)).replace("\\", "/"), size=sz, kind=_kind(p))
-            )
+            top_files.append(FileEntry(path=str(p.relative_to(root)).replace("\\", "/"), size=sz, kind=_kind(p)))
 
-        dirs = sorted(
-            {
-                str(p.relative_to(root)).replace("\\", "/").split("/")[0]
-                for p in files
-                if p.relative_to(root).parts
-            }
-        )[:25]
-
-        languages: list[str] = []
-        if py_files:
+        dirs = sorted({p.relative_to(root).parts[0] for p in files if p.relative_to(root).parts})[:25]
+        languages = []
+        if py_files or all_py_including_tests:
             languages.append("python")
         if any(p.suffix == ".js" for p in files):
             languages.append("javascript")
-        if any(p.suffix == ".ts" for p in files):
-            languages.append("typescript")
 
         deps = _parse_requirements(root)
+        purpose = _readme_purpose(root)
 
-        # AST pass (cap for speed on huge repos)
-        analyzers: list[_ModuleAnalyzer] = []
-        for p in py_files[:200]:
-            an = _analyze_python_file(p, root)
+        analyses: list[_FileAnalysis] = []
+        # Prefer entry-like files first, scan up to 150 app files
+        ranked = sorted(
+            py_files,
+            key=lambda p: (
+                0 if p.name in ("main.py", "bot.py", "app.py") else 1,
+                0 if "handler" in str(p).lower() else 1,
+                str(p),
+            ),
+        )
+        for p in ranked[:150]:
+            an = _analyze_file(p, root)
             if an:
-                analyzers.append(an)
+                analyses.append(an)
 
-        all_cmds: list[DetectedCommand] = []
-        all_handlers: list[DetectedHandler] = []
-        all_classes: list[ClassInfo] = []
-        all_fns: list[FunctionInfo] = []
-        all_env: list[EnvVarInfo] = []
-        import_counter: Counter[str] = Counter()
-        is_tg = False
-        has_async = False
-        has_typing = False
+        imports = Counter()
+        commands_raw: list[DetectedCommand] = []
+        handlers: list[DetectedHandler] = []
+        classes: list[ClassInfo] = []
+        functions: list[FunctionInfo] = []
+        env_vars: list[EnvVarInfo] = []
+        fw_hits: Counter[str] = Counter()
+        tg_score = 0
         total_lines = 0
+        has_async = has_typing = False
 
-        for an in analyzers:
-            all_cmds.extend(an.commands)
-            all_handlers.extend(an.handlers)
-            all_classes.extend(an.classes)
-            all_fns.extend(an.functions)
-            all_env.extend(an.env_vars)
-            import_counter.update(an.imports)
-            is_tg = is_tg or an.is_tg
+        for an in analyses:
+            imports.update(an.imports)
+            commands_raw.extend(an.commands)
+            handlers.extend(an.handlers)
+            classes.extend(an.classes)
+            functions.extend(an.functions)
+            env_vars.extend(an.env_vars)
+            for h in an.fw_hits:
+                fw_hits[h] += 1
+            tg_score += an.tg_score
+            total_lines += an.lines
             has_async = has_async or an.has_async
             has_typing = has_typing or an.has_typing
-            total_lines += an.lines
 
-        # frameworks from deps + imports
+        # frameworks
         frameworks: list[str] = []
-        blob = " ".join(deps).lower() + " " + " ".join(import_counter.keys()).lower()
-        for needle, name in _FRAMEWORK_MAP.items():
-            if needle in blob and name not in frameworks:
+        for d in deps:
+            key = d.lower().replace("_", "-")
+            if key in _FW and _FW[key] not in frameworks:
+                frameworks.append(_FW[key])
+            if "telegram" in key and "python-telegram-bot" not in frameworks:
+                if key in ("python-telegram-bot", "telegram"):
+                    frameworks.append("python-telegram-bot")
+        for name, _ in fw_hits.most_common():
+            if name not in frameworks:
                 frameworks.append(name)
 
-        # dedupe commands — prefer CommandHandler registration
+        # command dedupe prefer stronger registration
+        rank = {
+            "CommandHandler": 5,
+            "aiogram_filter": 5,
+            "telebot_decorator": 5,
+            "BotCommand": 4,
+            "aiogram_decorator": 3,
+            "def": 1,
+        }
         cmd_map: dict[str, DetectedCommand] = {}
-        rank = {"CommandHandler": 3, "BotCommand": 2, "def": 1, "decorator": 2, "": 0}
-        for c in all_cmds:
+        for c in commands_raw:
             prev = cmd_map.get(c.name)
             if prev is None or rank.get(c.registration, 0) > rank.get(prev.registration, 0):
                 cmd_map[c.name] = c
-        # order start/help first
-        def _ck(c: DetectedCommand) -> tuple:
-            return (0 if c.name in ("start", "help") else 1, c.name)
-
-        commands = sorted(cmd_map.values(), key=_ck)[:25]
+        commands = sorted(
+            cmd_map.values(),
+            key=lambda c: (0 if c.name in ("start", "help") else 1, c.name),
+        )[:25]
 
         # handlers dedupe
-        h_seen = set()
-        handlers: list[DetectedHandler] = []
-        for h in all_handlers:
+        h_seen, handlers_u = set(), []
+        for h in handlers:
             k = (h.kind, h.source_file, h.name)
             if k not in h_seen:
                 h_seen.add(k)
-                handlers.append(h)
+                handlers_u.append(h)
 
-        # entry points with score
+        # entry points
         entries: list[EntryPoint] = []
         for rel, score in _ENTRY_NAMES.items():
             if (root / rel).exists():
                 entries.append(EntryPoint(path=rel, reason="standard_name", score=score))
-        for an in analyzers:
-            if an.rel.startswith("tests/") or "test" in an.rel.lower():
-                continue
-            # has if __name__
-            src = _read(root / an.rel, 80_000)
-            if re.search(r'if\s+__name__\s*==\s*["\']__main__["\']', src):
-                if not any(e.path == an.rel for e in entries):
-                    score = 70
-                    if "CommandHandler" in src or "Application" in src:
-                        score = 92
-                    entries.append(EntryPoint(path=an.rel, reason="__main__", score=score))
+        for an in analyses:
+            if an.is_entry_candidate and not any(e.path == an.rel for e in entries):
+                score = 75 + min(an.tg_score, 20)
+                entries.append(EntryPoint(path=an.rel, reason="runtime_entry", score=score))
         entries = sorted(entries, key=lambda e: -e.score)[:8]
 
-        # layers, engines, services, models
         layers = _detect_layers(root, py_files)
-        engines = sorted({c.name for c in all_classes if c.kind == "engine" and c.name not in ("Engine", "BaseEngine", "FakeEngine", "NamingEngine")})[:30]
-        services = sorted({c.name for c in all_classes if c.kind == "service"})[:20]
-        data_models = sorted({c.name for c in all_classes if c.kind == "pydantic"})[:30]
+        engines = sorted({c.name for c in classes if c.kind == "engine" and not c.name.startswith(("Base", "Fake"))})[:25]
+        services = sorted({c.name for c in classes if c.kind == "service"})[:20]
+        data_models = sorted({c.name for c in classes if c.kind == "pydantic"})[:25]
 
-        # generation engine signals
-        is_gen = any(
-            x in import_counter or (root / "telegram_bot_engine").exists()
-            for x in ()
-        )
+        is_library = _looks_like_library(root, deps, len(all_py_including_tests))
         is_gen = (root / "telegram_bot_engine").exists() or any(
-            "generate_bot" in f.name or f.name == "CodegenService" for f in all_classes + all_fns  # type: ignore
+            n in {c.name for c in classes} | {f.name for f in functions}
+            for n in ("CodegenService", "UnderstandingService", "generate_bot", "PlanningService")
         )
-        is_gen = (root / "telegram_bot_engine").exists() or any(
-            getattr(x, "name", "") in ("CodegenService", "UnderstandingService", "PlanningService", "generate_bot")
-            for x in list(all_classes) + list(all_fns)
+        is_tg_app = (tg_score >= 3 or bool(commands) or bool(handlers_u)) and not is_library
+        # library that is a telegram framework
+        is_tg_lib = is_library and any(
+            x in frameworks for x in ("aiogram", "python-telegram-bot", "pyTelegramBotAPI", "pyrogram")
         )
 
-        # key classes: engines, services, pydantic, large method sets
+        if is_gen:
+            style = "generation_engine"
+            arch = "محرك توليد بوتات تليجرام (فهم → تخطيط → توليد)."
+        elif is_tg_lib:
+            style = "library"
+            arch = f"مكتبة/إطار عمل تليجرام ({', '.join(frameworks[:3])}) — ليست بوت تطبيقي."
+        elif is_tg_app:
+            style = "telegram_bot"
+            primary = frameworks[0] if frameworks else "telegram"
+            arch = f"بوت تليجرام تطبيقي على {primary}."
+        elif is_library:
+            style = "library"
+            arch = "حزمة/مكتبة Python."
+        else:
+            style = "modular" if layers else "unknown"
+            arch = "مشروع Python عام."
+
+        # confidence
+        conf = 0.25
+        if languages:
+            conf += 0.1
+        if is_tg_app or is_tg_lib or is_gen:
+            conf += 0.2
+        if commands:
+            conf += 0.15
+        if entries:
+            conf += 0.1
+        if frameworks:
+            conf += 0.1
+        if purpose:
+            conf += 0.05
+        if layers:
+            conf += 0.05
+        conf = round(min(0.99, conf), 3)
+
+        notes = []
+        if is_library and not is_tg_app:
+            notes.append("classified_as_library_not_app")
+        if is_tg_app and not commands:
+            notes.append("telegram_app_but_no_commands_extracted")
+        if not entries and is_tg_app:
+            notes.append("no_clear_entry_point")
+
+        if is_gen:
+            summary = f"محرك توليد — {len(engines)} محرك، {len(commands)} أوامر واجهة."
+        elif is_tg_lib:
+            summary = f"مكتبة تليجرام ({', '.join(frameworks[:2])}) — ليس بوت جاهز للتشغيل كمنتج نهائي."
+        elif is_tg_app:
+            summary = f"بوت تليجرام — أوامر: {', '.join('/'+c.name for c in commands[:8]) or 'غير مستخرجة بعد'}."
+        else:
+            summary = f"مشروع Python — {len(classes)} صنف، {len(py_files)} ملف."
+        if purpose:
+            summary += f" | README: {purpose[:160]}"
+
         key_classes = sorted(
-            all_classes,
-            key=lambda c: (
-                0 if c.kind in ("engine", "service") else 1 if c.kind == "pydantic" else 2,
-                -len(c.methods),
-                c.name,
-            ),
-        )[:25]
-
+            classes,
+            key=lambda c: (0 if c.kind in ("engine", "service") else 1 if c.kind == "pydantic" else 2, -len(c.methods), c.name),
+        )[:20]
         key_functions = [
-            f
-            for f in all_fns
+            f for f in functions
             if f.name in ("main", "generate_bot", "understand", "plan", "smart_clone", "understand_repo")
-            or f.name.startswith("generate_")
+            or any(x in f.name for x in ("start", "handler", "poll"))
         ][:20]
 
-        # env vars dedupe
-        env_map = {e.name: e for e in all_env if e.name and e.name.isupper()}
-        env_vars = list(env_map.values())[:30]
-
-        # modules sample (largest)
-        modules_sample: list[ModuleInfo] = []
-        for an in sorted(analyzers, key=lambda a: -a.lines)[:15]:
+        env_map = {e.name: e for e in env_vars if e.name.isupper()}
+        modules_sample = []
+        for an in sorted(analyses, key=lambda a: -a.lines)[:12]:
             modules_sample.append(
                 ModuleInfo(
                     path=an.rel,
-                    imports=sorted(set(an.imports))[:15],
-                    classes=[c.name for c in an.classes][:10],
-                    functions=[f.name for f in an.functions][:10],
+                    imports=sorted(set(an.imports))[:12],
+                    classes=[c.name for c in an.classes][:8],
+                    functions=[f.name for f in an.functions][:8],
                     lines=an.lines,
                 )
             )
 
-        style, arch_summary = _architecture(is_tg, is_gen, layers, engines)
-
-        has_tests = any("tests" in str(p) or p.name.startswith("test_") for p in py_files)
-
-        notes: list[str] = []
-        if not py_files:
-            notes.append("no_python_files")
-        if is_tg and not commands:
-            notes.append("telegram_signals_but_no_registered_commands")
-        if not entries:
-            notes.append("no_clear_entry_point")
-        if is_gen:
-            notes.append("project_is_generation_engine_not_simple_bot")
-
-        conf = _confidence(
-            py_count=len(py_files),
-            is_tg=is_tg,
-            is_gen=is_gen,
-            commands=len(commands),
-            entries=len(entries),
-            classes=len(all_classes),
-            deps=len(deps),
-            layers=len(layers),
+        has_tests = any(
+            "tests" in str(p) or p.name.startswith("test_")
+            for p in all_py_including_tests
         )
-
-        if is_gen:
-            summary = (
-                f"محرك توليد بوتات — {len(engines)} محرك، "
-                f"{len(commands)} أوامر واجهة، {len(data_models)} نموذج بيانات."
-            )
-        elif is_tg:
-            summary = f"بوت تليجرام — {len(commands)} أمر مسجّل، {len(handlers)} handler."
-        else:
-            summary = f"مشروع Python — {len(all_classes)} صنف، {len(py_files)} ملف."
 
         return RepoContract(
             root_path=str(root),
@@ -618,13 +751,13 @@ class RepoUnderstandingService:
             architecture_style=style,
             entry_points=entries,
             commands=commands,
-            handlers=handlers[:40],
+            handlers=handlers_u[:40],
             dependencies=deps,
             layers=layers,
             key_classes=key_classes,
             key_functions=key_functions,
             modules_sample=modules_sample,
-            env_vars=env_vars,
+            env_vars=list(env_map.values())[:25],
             data_models=data_models,
             services=services,
             engines=engines,
@@ -633,23 +766,26 @@ class RepoUnderstandingService:
             total_lines=total_lines,
             top_files=top_files,
             top_dirs=dirs,
-            is_telegram_bot=is_tg,
-            is_generation_engine=is_gen,
+            is_telegram_bot=bool(is_tg_app),
+            is_generation_engine=bool(is_gen),
             confidence=conf,
             summary=summary,
-            architecture_summary=arch_summary,
+            architecture_summary=arch,
             notes=notes,
             quality_signals={
                 "has_tests": has_tests,
                 "has_typing": has_typing,
                 "has_async": has_async,
-                "class_count": len(all_classes),
-                "function_count": len(all_fns),
-                "ast_modules_scanned": len(analyzers),
+                "tg_score": tg_score,
+                "is_library": is_library,
+                "readme_purpose": bool(purpose),
+                "ast_files_scanned": len(analyses),
+                "class_count": len(classes),
             },
             raw_stats={
-                "top_imports": [n for n, _ in import_counter.most_common(15)],
-                "handler_kinds": sorted({h.kind for h in handlers}),
+                "top_imports": [n for n, _ in imports.most_common(12)],
+                "fw_hits": dict(fw_hits),
+                "purpose": purpose[:300],
             },
         )
 
