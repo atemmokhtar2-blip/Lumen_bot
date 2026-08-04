@@ -85,6 +85,7 @@ from ..engines.generators import (
     SecurityPermissionEngine,
     ServiceManagementEngine,
     MessageQueueEngine,
+    TaskSchedulerEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -556,6 +557,11 @@ def bootstrap(
     message_queue_engine = MessageQueueEngine()
     registry.register_engine(message_queue_engine)
 
+    # -- task scheduler engine (Specification 063) -------------------------
+    # MAXIMUM CRITICAL: schedule tasks with deps, policies, load awareness.
+    task_scheduler_engine = TaskSchedulerEngine()
+    registry.register_engine(task_scheduler_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -789,6 +795,10 @@ def bootstrap(
                      engine_id="message_queue",
                      priority=148,
                      dependencies=["service_management"])
+    manager.register(task_scheduler_engine,
+                     engine_id="task_scheduler",
+                     priority=149,
+                     dependencies=["message_queue"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
