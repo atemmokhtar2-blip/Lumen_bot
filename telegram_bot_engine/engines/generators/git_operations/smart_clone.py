@@ -71,10 +71,23 @@ def _inject_token(url: str, token: Optional[str]) -> str:
 def looks_like_clone_request(text: str) -> bool:
     t = (text or "").lower()
     triggers = (
-        "اسحب", "clone", "سحب", "نزل المستودع", "نزل الريبو",
+        "اسحب", "clone", "سحب", "نزل المستودع", "نزل الريبو", "نزل الريبو",
         "git clone", "pull repo", "clone repo", "جيب المستودع",
+        "اسحب المستودع", "اسحب الريبو", "سحب المستودع", "clone this",
+        "pull this", "download repo", "هاته من جيت", "من جithub",
     )
-    return any(x in t for x in triggers) and extract_repo_url(text) is not None
+    has_trigger = any(x in t for x in triggers)
+    has_url = extract_repo_url(text) is not None
+    # URL alone on its own line with github.com is enough if message is short
+    if has_url and not has_trigger:
+        stripped = (text or "").strip()
+        # pure link or link + few words
+        if len(stripped) < 120 and "github.com" in stripped.lower():
+            # avoid treating long bot specs that happen to mention github
+            non_url = _URL_RE.sub("", stripped).strip()
+            if len(non_url) < 40:
+                return True
+    return has_trigger and has_url
 
 
 def smart_clone(

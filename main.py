@@ -272,6 +272,59 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_live_deploy_token(message, context, request, pending)
         return
 
+    # --- Smart Git: clone repo from natural language + URL ---
+    try:
+        from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
+            looks_like_clone_request,
+            smart_clone,
+            extract_repo_url,
+        )
+    except Exception:
+        looks_like_clone_request = None  # type: ignore
+
+    if looks_like_clone_request and looks_like_clone_request(request):
+        status = await message.reply_text("📥 جاري سحب المستودع...")
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+        dest = Path(OUTPUT_DIR) / "clones"
+        dest.mkdir(parents=True, exist_ok=True)
+
+        def _do_clone():
+            return smart_clone(request, dest_dir=dest)
+
+        try:
+            result = await asyncio.to_thread(_do_clone)
+        except Exception as e:
+            logger.exception("Clone failed")
+            await status.edit_text(f"❌ فشل سحب المستودع: {type(e).__name__}: {str(e)[:200]}")
+            return
+
+        if result.ok:
+            lines = [
+                "✅ تم سحب المستودع بنجاح",
+                f"• الرابط: `{result.url or ''}`",
+                f"• المسار: `{result.path or ''}`",
+            ]
+            await status.edit_text("\n".join(lines))
+            # zip and send if small enough
+            if result.path and Path(result.path).exists():
+                try:
+                    zip_path = _make_zip_from_path(result.path)
+                    if zip_path and zip_path.exists() and zip_path.stat().st_size < 45 * 1024 * 1024:
+                        with open(zip_path, "rb") as f:
+                            await message.reply_document(
+                                document=f,
+                                filename=f"{Path(result.path).name}.zip",
+                                caption="📦 نسخة من المستودع المسحوب",
+                            )
+                except Exception:
+                    logger.exception("Failed to zip cloned repo")
+        else:
+            err = (result.message or "فشل غير معروف")
+            if result.stderr:
+                err += f"\n`{result.stderr[:300]}`"
+            await status.edit_text(f"❌ {err}")
+        return
+
     if len(request) < 5:
         await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
         return
