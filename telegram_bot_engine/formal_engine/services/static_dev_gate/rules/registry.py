@@ -20,9 +20,13 @@ from .symbolic_rule import (
 from .pattern_rule import (
     HighComplexityRule, DuplicatedCodeRule, MissingExceptRule,
 )
+from .contract_rule import (
+    MissingAnnotationRule, TypeMismatchRule, BadBinOpRule, UnsatPreconditionRule,
+)
 
-# Order = execution order (core first)
+# Order = execution order (core → structural → flow → contracts → symbolic)
 _RULE_CLASSES = [
+    # syntax / project
     SyntaxRule,
     HandlerConsistencyRule,
     ExpectedCommandsRule,
@@ -31,6 +35,7 @@ _RULE_CLASSES = [
     TelegramEntryRule,
     EmptyExceptRule,
     BareExceptRule,
+    # dataflow
     UseBeforeDefRule,
     UnusedLocalRule,
     DangerousSinkRule,
@@ -39,13 +44,20 @@ _RULE_CLASSES = [
     UnreachableCodeRule,
     MaybeNoneRule,
     ResourceLeakRule,
+    # patterns (structural)
+    HighComplexityRule,
+    DuplicatedCodeRule,
+    MissingExceptRule,
+    # contracts / types
+    MissingAnnotationRule,
+    TypeMismatchRule,
+    BadBinOpRule,
+    UnsatPreconditionRule,
+    # symbolic (path-sensitive, last)
     SymbolicDivZeroRule,
     SymbolicAssertRule,
     SymbolicNoneAccessRule,
     SymbolicAlwaysRaiseRule,
-    HighComplexityRule,
-    DuplicatedCodeRule,
-    MissingExceptRule,
 ]
 
 
