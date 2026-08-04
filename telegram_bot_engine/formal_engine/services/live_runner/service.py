@@ -20,6 +20,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import ast
 
 
 @dataclass
@@ -711,6 +712,176 @@ def _module_to_package(module: str) -> str | None:
     return None
 
 
+
+def _local_top_level_modules(root: Path) -> set[str]:
+    """Names that resolve to local packages/modules inside the project (not third-party)."""
+    local: set[str] = set()
+    try:
+        for p in root.rglob("*"):
+            if any(x in p.parts for x in (".git", ".venv", ".tbe_venv", ".tbe_deps", "__pycache__", "site-packages")):
+                continue
+            if p.is_file() and p.suffix == ".py":
+                if p.name == "__init__.py":
+                    # package dir name
+                    if p.parent != root:
+                        local.add(p.parent.name)
+                else:
+                    local.add(p.stem)
+            elif p.is_dir() and (p / "__init__.py").exists():
+                local.add(p.name)
+    except Exception:
+        pass
+    return local
+
+
+def _ast_imports_in_file(path: Path) -> list[str]:
+    """Return dotted module roots imported in a single Python file via AST."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"), filename=str(path))
+    except Exception:
+        return []
+    mods: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = (alias.name or "").strip()
+                if name and name not in mods:
+                    mods.append(name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                name = node.module.strip()
+                if name and name not in mods:
+                    mods.append(name)
+    return mods
+
+
+def _collect_project_third_party_imports(root: Path, limit_files: int = 80) -> list[str]:
+    """
+    Scan project .py files with AST and return third-party import roots
+    that likely need a pip package.
+    """
+    local = _local_top_level_modules(root)
+    found: list[str] = []
+    count = 0
+    preferred = []
+    for name in ("main.py", "bot.py", "app.py", "run.py"):
+        p = root / name
+        if p.exists():
+            preferred.append(p)
+    others = []
+    try:
+        for p in root.rglob("*.py"):
+            if any(x in p.parts for x in (".git", ".venv", ".tbe_venv", ".tbe_deps", "__pycache__", "site-packages", "tests", "test")):
+                continue
+            if p in preferred:
+                continue
+            others.append(p)
+            if len(preferred) + len(others) >= limit_files:
+                break
+    except Exception:
+        pass
+
+    for p in preferred + others:
+        count += 1
+        for mod in _ast_imports_in_file(p):
+            top = mod.split(".")[0]
+            if not top or top in _STDLIB_SKIP or top in local:
+                continue
+            # keep full dotted for better mapping (google.generativeai)
+            if mod not in found:
+                found.append(mod)
+    return found
+
+
+def _packages_from_modules(modules: list[str]) -> list[str]:
+    """Map module list → unique PyPI packages (skip None)."""
+    pkgs: list[str] = []
+    seen: set[str] = set()
+    for mod in modules:
+        pkg = _module_to_package(mod)
+        if not pkg:
+            continue
+        key = pkg.lower()
+        if key not in seen:
+            seen.add(key)
+            pkgs.append(pkg)
+    return pkgs
+
+
+def _failing_file_from_log(log: str, root: Path) -> Path | None:
+    """Best-effort absolute path of the last traceback frame under root."""
+    if not log:
+        return None
+    frames = re.findall(r'File "([^"]+)", line (\d+)', log)
+    if not frames:
+        return None
+    for path_s, _ln in reversed(frames):
+        p = Path(path_s)
+        try:
+            if p.exists() and p.suffix == ".py":
+                # prefer files under root
+                try:
+                    p.resolve().relative_to(root.resolve())
+                    return p
+                except Exception:
+                    if p.name and (root / p.name).exists():
+                        return root / p.name
+                    return p
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_missing_via_source(root: Path, log: str) -> list[str]:
+    """
+    When traceback only says 'google', open the failing file and AST-read
+    the real import targets. Filters out local project modules.
+    """
+    extra: list[str] = []
+    fp = _failing_file_from_log(log, root)
+    if fp is None:
+        return extra
+    local = _local_top_level_modules(root)
+    for mod in _ast_imports_in_file(fp):
+        top = mod.split(".")[0]
+        if top in _STDLIB_SKIP or top in local:
+            continue
+        if mod not in extra:
+            extra.append(mod)
+    return extra
+
+
+def _pip_install_packages_direct(
+    py: str, packages: list[str], root: Path, mode: str, isolation: Path
+) -> tuple[bool, str]:
+    """Install specific packages one-shot (stronger than only editing requirements)."""
+    if not packages:
+        return True, ""
+    logs: list[str] = []
+    if mode.startswith("target"):
+        base = [py, "-m", "pip", "install", "--target", str(isolation)]
+    else:
+        base = [py, "-m", "pip", "install"]
+    cmd = base + packages
+    code, log = _run_pip(cmd, root, timeout=300)
+    logs.append(f"$ {' '.join(cmd)}\n{log}")
+    return code == 0, "\n".join(logs)[-4000:]
+
+
+def _preflight_ensure_deps(root: Path) -> list[str]:
+    """
+    Before first run: AST-scan project imports, map to packages,
+    append any missing ones to requirements.txt.
+    Returns list of packages added.
+    """
+    mods = _collect_project_third_party_imports(root)
+    pkgs = _packages_from_modules(mods)
+    if not pkgs:
+        return []
+    return _ensure_packages_in_requirements(root, pkgs)
+
+
+
 def _packages_already_in_requirements(root: Path) -> set[str]:
     """Return normalized package names already listed in any requirements file."""
     present: set[str] = set()
@@ -850,7 +1021,16 @@ class LiveRunnerService:
                 details={"repair_notes": repair_notes},
             )
 
-        heal_notes: list[str] = []
+        # Pre-flight: AST-scan imports and ensure third-party packages are listed
+        preflight_added: list[str] = []
+        try:
+            preflight_added = _preflight_ensure_deps(root)
+        except Exception:
+            preflight_added = []
+
+        heal_notes: list[str] = list(preflight_added)
+        if preflight_added:
+            heal_notes = [f"preflight:{p}" for p in preflight_added]
         all_install_log = ""
         last_report: LiveRunReport | None = None
 
@@ -909,12 +1089,26 @@ class LiveRunnerService:
                     report.message = f"{report.message} | الموقع: `{loc}`"
                 return report
 
-            # Map modules → packages and append to requirements
+            # Strengthen: also AST-read the failing source file for real imports
+            combined_log = (
+                (report.run_log or "")
+                + "\n"
+                + (report.install_log or "")
+                + "\n"
+                + "\n".join(report.errors or [])
+            )
+            source_mods = _resolve_missing_via_source(root, combined_log)
+            for sm in source_mods:
+                if sm not in missing_mods:
+                    missing_mods.append(sm)
+
+            # Map modules → packages
             packages: list[str] = []
             for mod in missing_mods:
                 pkg = _module_to_package(mod)
                 if pkg:
-                    packages.append(pkg)
+                    if pkg not in packages:
+                        packages.append(pkg)
                 else:
                     heal_notes.append(f"skipped:{mod}")
 
@@ -926,12 +1120,25 @@ class LiveRunnerService:
                 return report
 
             added = _ensure_packages_in_requirements(root, packages)
-            if not added:
-                # already listed but still missing at runtime → force reinstall next loop
-                heal_notes.append(f"reinstall_try:{','.join(packages)}")
-            else:
+            if added:
                 for a in added:
                     heal_notes.append(a)
+            else:
+                heal_notes.append(f"reinstall_try:{','.join(packages)}")
+
+            # Direct pip install of the specific packages (stronger than -r alone)
+            try:
+                py_h, mode_h, isolation_h, _note_h = _ensure_runtime(root)
+                ok_direct, direct_log = _pip_install_packages_direct(
+                    py_h, packages, root, mode_h, isolation_h
+                )
+                all_install_log = (all_install_log + "\n--- direct heal pip ---\n" + direct_log).strip()
+                if ok_direct:
+                    heal_notes.append(f"direct_pip:{','.join(packages)}")
+                else:
+                    heal_notes.append(f"direct_pip_failed:{','.join(packages)}")
+            except Exception as e:
+                heal_notes.append(f"direct_pip_error:{type(e).__name__}")
 
             # continue loop → reinstall + rerun
 
