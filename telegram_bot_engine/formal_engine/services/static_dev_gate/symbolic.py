@@ -76,7 +76,12 @@ class SymValue:
 
     @property
     def may_be_none(self) -> bool:
-        return self.kind in (SymKind.NONE, SymKind.UNKNOWN, SymKind.SYMBOL)
+        """
+        True only when None is plausible from analysis — not for plain
+        symbolic parameters (update/context), which caused noise on
+        every `context.args` / `update.message` access.
+        """
+        return self.kind in (SymKind.NONE, SymKind.UNKNOWN)
 
     def may_be_zero(self) -> bool:
         if self.kind == SymKind.CONCRETE:
@@ -290,29 +295,66 @@ def eval_expr(node: ast.AST, state: PathState) -> SymValue:
     if c is not None:
         return c
 
+    # Unwrap async / yield wrappers so inner div/attr analysis still runs
+    if isinstance(node, ast.Await):
+        return eval_expr(node.value, state)
+    if isinstance(node, (ast.Yield, ast.YieldFrom)):
+        if isinstance(node, ast.YieldFrom):
+            return eval_expr(node.value, state) if node.value is not None else SymValue.unknown("yield")
+        return eval_expr(node.value, state) if node.value is not None else SymValue.unknown("yield")
+
     if isinstance(node, ast.Name):
         return state.get(node.id)
 
     if isinstance(node, ast.Attribute):
         base = eval_expr(node.value, state)
-        if base.may_be_none:
+        origin = f"{base.origin}.{node.attr}" if base.origin else node.attr
+        # chain on symbolic params (update/context) stays symbolic — no noise
+        if base.kind == SymKind.SYMBOL:
+            return SymValue.symbol(origin)
+        if base.is_none:
             state.findings.append(SymFinding(
                 kind="none_access",
-                severity="error" if base.is_none else "warning",
+                severity="error",
+                lineno=getattr(node, "lineno", 0) or 0,
+                message=f"وصول لصفة `{node.attr}` على قيمة None",
+                path_id=state.path_id,
+                path_condition=state.constraints.summary(),
+            ))
+            return SymValue.none(origin)
+        # UNKNOWN from .get / optional only
+        if base.kind == SymKind.UNKNOWN and base.origin in (
+            "get", "subscript", "none", "call", "ifexp",
+        ):
+            state.findings.append(SymFinding(
+                kind="none_access",
+                severity="warning",
                 lineno=getattr(node, "lineno", 0) or 0,
                 message=f"وصول لصفة `{node.attr}` على قيمة قد تكون None",
                 path_id=state.path_id,
                 path_condition=state.constraints.summary(),
             ))
-        return SymValue.unknown(f"{base.origin}.{node.attr}")
+        return SymValue.unknown(origin)
 
     if isinstance(node, ast.Subscript):
         base = eval_expr(node.value, state)
-        eval_expr(node.slice, state) if not isinstance(node.slice, ast.Slice) else None
-        if base.may_be_none:
+        if not isinstance(node.slice, ast.Slice):
+            eval_expr(node.slice, state)
+        if base.is_none:
             state.findings.append(SymFinding(
                 kind="none_access",
-                severity="error" if base.is_none else "warning",
+                severity="error",
+                lineno=getattr(node, "lineno", 0) or 0,
+                message="فهرسة على قيمة None",
+                path_id=state.path_id,
+                path_condition=state.constraints.summary(),
+            ))
+        elif base.kind == SymKind.UNKNOWN and base.origin in (
+            "get", "subscript", "none", "call", "ifexp",
+        ):
+            state.findings.append(SymFinding(
+                kind="none_access",
+                severity="warning",
                 lineno=getattr(node, "lineno", 0) or 0,
                 message="فهرسة على قيمة قد تكون None",
                 path_id=state.path_id,
@@ -408,6 +450,14 @@ def eval_expr(node: ast.AST, state: PathState) -> SymValue:
             if isinstance(node.op, ast.And):
                 return SymValue.concrete(all(v.value for v in vals))
             return SymValue.concrete(any(v.value for v in vals))
+        # x or ["0"] → prefer concrete fallback so subscript is safe
+        if isinstance(node.op, ast.Or):
+            for v in reversed(vals):
+                if v.kind == SymKind.CONCRETE and v.value not in (None, False, 0, ""):
+                    return v
+            return vals[-1] if vals else SymValue.unknown("boolop")
+        if isinstance(node.op, ast.And):
+            return vals[-1] if vals else SymValue.unknown("boolop")
         return SymValue.unknown("boolop")
 
     if isinstance(node, ast.IfExp):
@@ -420,12 +470,45 @@ def eval_expr(node: ast.AST, state: PathState) -> SymValue:
         return SymValue.unknown("ifexp")
 
     if isinstance(node, ast.Call):
+        # method call on possibly-None: y.upper() / product.get(...)
+        if isinstance(node.func, ast.Attribute):
+            base = eval_expr(node.func.value, state)
+            if base.is_none:
+                state.findings.append(SymFinding(
+                    kind="none_access",
+                    severity="error",
+                    lineno=getattr(node, "lineno", 0) or 0,
+                    message=f"استدعاء `{node.func.attr}()` على قيمة None",
+                    path_id=state.path_id,
+                    path_condition=state.constraints.summary(),
+                ))
+            elif base.kind == SymKind.UNKNOWN and base.origin in (
+                "get", "subscript", "none", "call", "ifexp",
+            ):
+                state.findings.append(SymFinding(
+                    kind="none_access",
+                    severity="warning",
+                    lineno=getattr(node, "lineno", 0) or 0,
+                    message=f"استدعاء `{node.func.attr}()` على قيمة قد تكون None",
+                    path_id=state.path_id,
+                    path_condition=state.constraints.summary(),
+                ))
+            # dict.get → UNKNOWN (maybe none) for downstream
+            if node.func.attr == "get":
+                for a in node.args:
+                    eval_expr(a, state)
+                for kw in node.keywords:
+                    if kw.value is not None:
+                        eval_expr(kw.value, state)
+                return SymValue.unknown("get")
+        else:
+            eval_expr(node.func, state)
         for a in node.args:
             eval_expr(a, state)
         for kw in node.keywords:
             if kw.value is not None:
                 eval_expr(kw.value, state)
-        # known pure constructors
+        # known pure constructors — int() result may be zero
         if isinstance(node.func, ast.Name) and node.func.id in (
             "int", "str", "float", "bool", "list", "dict", "set", "tuple"
         ):
