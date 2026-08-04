@@ -18,6 +18,15 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 
+
+_TAINT_SOURCE_ATTRS = {
+    ("message", "text"),
+    ("message", "caption"),
+    ("query", "data"),
+    ("update", "text"),
+}
+_TAINT_SOURCE_NAMES = {"user_input", "text", "raw", "payload", "data"}
+
 _DANGEROUS_CALLS = {
     "eval",
     "exec",
@@ -51,6 +60,11 @@ class FunctionFlow:
     use_before_def: list[tuple[str, int]] = field(default_factory=list)  # name, lineno
     unused_locals: set[str] = field(default_factory=set)
     dangerous_sinks: list[tuple[str, int, str]] = field(default_factory=list)  # call, line, detail
+    # name that is tainted -> sink label, lineno
+    tainted_to_sink: list[tuple[str, str, int]] = field(default_factory=list)
+    has_await: bool = False
+    is_async: bool = False
+    unreachable_lines: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -89,8 +103,13 @@ class _FlowVisitor(ast.NodeVisitor):
         self.events: list[NameEvent] = []
         self.use_before_def: list[tuple[str, int]] = []
         self.dangerous_sinks: list[tuple[str, int, str]] = []
+        self.tainted_to_sink: list[tuple[str, str, int]] = []
+        self.tainted: set[str] = set()
+        self.has_await = False
+        self.unreachable_lines: list[int] = []
         self._used: set[str] = set()
         self._assigned_locals: set[str] = set()
+        self._returned = False
 
     def _use(self, name: str, lineno: int) -> None:
         if name in ("True", "False", "None"):
@@ -120,9 +139,18 @@ class _FlowVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         # evaluate value first (uses), then defs
         self.visit(node.value)
+        tainted_value = False
+        for n in ast.walk(node.value):
+            if isinstance(n, ast.Name) and (n.id in self.tainted or n.id in _TAINT_SOURCE_NAMES):
+                tainted_value = True
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+                if (n.value.id, n.attr) in _TAINT_SOURCE_ATTRS or n.value.id in self.tainted:
+                    tainted_value = True
         for t in node.targets:
             for n in _assign_targets(t):
                 self._def(n, node.lineno)
+                if tainted_value:
+                    self.tainted.add(n)
             self.visit(t)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -208,6 +236,40 @@ class _FlowVisitor(ast.NodeVisitor):
                     detail = "f-string"
             if risky or label in ("eval", "exec"):
                 self.dangerous_sinks.append((label, node.lineno, detail))
+            # taint → sink
+            for a in node.args:
+                if isinstance(a, ast.Name) and a.id in self.tainted:
+                    self.tainted_to_sink.append((a.id, label or "call", node.lineno))
+                if isinstance(a, ast.Attribute):
+                    base = a.value.id if isinstance(a.value, ast.Name) else ""
+                    if base in self.tainted or (base, a.attr) in _TAINT_SOURCE_ATTRS:
+                        self.tainted_to_sink.append((f"{base}.{a.attr}", label or "call", node.lineno))
+
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        self.visit(node.value)
+        if isinstance(node.value, ast.Name):
+            pair = (node.value.id, node.attr)
+            if pair in _TAINT_SOURCE_ATTRS:
+                # attribute load of user-controlled field — mark synthetic use
+                self.tainted.add(node.value.id)
+        if isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
+            if node.value.id in self.tainted:
+                pass
+
+    def visit_Await(self, node: ast.Await) -> None:
+        self.has_await = True
+        self.visit(node.value)
+
+    def visit_Return(self, node: ast.Return) -> None:
+        if node.value is not None:
+            self.visit(node.value)
+        self._returned = True
+
+    def visit_Raise(self, node: ast.Raise) -> None:
+        if node.exc is not None:
+            self.visit(node.exc)
+        self._returned = True
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         # nested function: do not flatten into parent flow
@@ -270,6 +332,11 @@ def analyze_function_flow(
         if name not in v._used and name not in params:
             unused.add(name)
 
+    # seed taint from telegram-ish parameter names
+    for p in params:
+        if p in ("message", "update", "query", "text", "user_input"):
+            v.tainted.add(p)
+
     return FunctionFlow(
         qualname=qual,
         file=file,
@@ -279,6 +346,10 @@ def analyze_function_flow(
         use_before_def=v.use_before_def,
         unused_locals=unused,
         dangerous_sinks=v.dangerous_sinks,
+        tainted_to_sink=v.tainted_to_sink,
+        has_await=v.has_await,
+        is_async=isinstance(node, ast.AsyncFunctionDef),
+        unreachable_lines=v.unreachable_lines,
     )
 
 

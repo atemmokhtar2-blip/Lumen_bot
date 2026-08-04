@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 
 from .models import AnalysisContext, ModuleInfo
+from .dataflow import analyze_module_flow
+from .symbols import build_symbol_table
 
 _SKIP = {
     ".git", "__pycache__", ".venv", "venv", ".tbe_venv", ".tbe_deps",
@@ -148,6 +150,13 @@ def build_context(
         except Exception:
             continue
         info = _extract_module_info(rel, source)
+        if info.tree is not None:
+            try:
+                info.symbol_table = build_symbol_table(info.tree, rel)
+                info.flow = analyze_module_flow(info.tree, rel)
+            except Exception:
+                info.symbol_table = None
+                info.flow = None
         ctx.modules[rel] = info
         ctx.all_functions |= info.functions
         ctx.all_classes |= info.classes

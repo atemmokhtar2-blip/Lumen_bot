@@ -92,6 +92,9 @@ class ModuleInfo:
     imports: list[tuple[str, int]] = field(default_factory=list)  # module, lineno
     # command, handler_name, lineno, style
     command_regs: list[tuple[str, str, int, str]] = field(default_factory=list)
+    # filled by context builder (single pass analysis)
+    flow: object | None = None  # ModuleFlow
+    symbol_table: object | None = None  # SymbolTable
 
 
 @dataclass

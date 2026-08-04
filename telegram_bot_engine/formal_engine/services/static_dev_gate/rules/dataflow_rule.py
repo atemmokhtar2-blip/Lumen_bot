@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from ..dataflow import analyze_module_flow
+from ..dataflow import analyze_module_flow, ModuleFlow
 from ..models import AnalysisContext, StaticFinding
 from .base import RuleMeta
+
+
+def _flow_for(m) -> ModuleFlow | None:
+    if m.flow is not None:
+        return m.flow  # type: ignore[return-value]
+    if not m.tree:
+        return None
+    return analyze_module_flow(m.tree, m.path)
 
 
 class UseBeforeDefRule:
@@ -17,9 +25,9 @@ class UseBeforeDefRule:
     def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
         out: list[StaticFinding] = []
         for m in ctx.module_list():
-            if not m.tree:
+            flow = _flow_for(m)
+            if not flow:
                 continue
-            flow = analyze_module_flow(m.tree, m.path)
             for fn in flow.functions:
                 seen: set[tuple[str, int]] = set()
                 for name, ln in fn.use_before_def:
@@ -27,10 +35,15 @@ class UseBeforeDefRule:
                     if key in seen:
                         continue
                     seen.add(key)
-                    # skip common false positives from outer scopes / imports
                     if name in m.functions or name in m.classes:
                         continue
-                    if any(imp[0].split(".")[-1] == name or imp[0].split(".")[0] == name for imp in m.imports):
+                    st = m.symbol_table
+                    if st is not None and getattr(st, "has_global", lambda n: False)(name):
+                        continue
+                    if any(
+                        imp[0].split(".")[-1] == name or imp[0].split(".")[0] == name
+                        for imp in m.imports
+                    ):
                         continue
                     out.append(
                         StaticFinding(
@@ -56,9 +69,9 @@ class UnusedLocalRule:
     def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
         out: list[StaticFinding] = []
         for m in ctx.module_list():
-            if not m.tree:
+            flow = _flow_for(m)
+            if not flow:
                 continue
-            flow = analyze_module_flow(m.tree, m.path)
             for fn in flow.functions:
                 for name in sorted(fn.unused_locals):
                     out.append(
@@ -78,16 +91,16 @@ class UnusedLocalRule:
 class DangerousSinkRule:
     meta = RuleMeta(
         "dangerous_sink",
-        "استدعاءات خطرة مع مدخلات ديناميكية (eval/exec/system…)",
+        "استدعاءات خطرة مع مدخلات ديناميكية",
         tags=("dataflow", "security", "gate"),
     )
 
     def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
         out: list[StaticFinding] = []
         for m in ctx.module_list():
-            if not m.tree:
+            flow = _flow_for(m)
+            if not flow:
                 continue
-            flow = analyze_module_flow(m.tree, m.path)
             for fn in flow.functions:
                 for call, ln, detail in fn.dangerous_sinks:
                     out.append(
@@ -99,6 +112,72 @@ class DangerousSinkRule:
                             lineno=ln,
                             message_ar=f"استدعاء خطر `{call}` ({detail}) في `{fn.qualname}`",
                             evidence=detail,
+                        )
+                    )
+        return out
+
+
+class TaintToSinkRule:
+    meta = RuleMeta(
+        "taint_to_sink",
+        "بيانات مستخدم (message/update) تصل لاستدعاء حساس",
+        tags=("dataflow", "security", "telegram", "gate"),
+    )
+
+    def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
+        out: list[StaticFinding] = []
+        for m in ctx.module_list():
+            flow = _flow_for(m)
+            if not flow:
+                continue
+            for fn in flow.functions:
+                for src, sink, ln in fn.tainted_to_sink:
+                    # only high-risk sinks
+                    risky = any(
+                        x in sink
+                        for x in ("eval", "exec", "system", "popen", "Popen", "pickle", "compile")
+                    )
+                    if not risky:
+                        continue
+                    out.append(
+                        StaticFinding(
+                            severity="error",
+                            code="taint_to_sink",
+                            rule_id=self.meta.id,
+                            file=m.path,
+                            lineno=ln,
+                            message_ar=f"تدفق غير آمن: `{src}` → `{sink}` في `{fn.qualname}`",
+                            evidence=f"{src}->{sink}",
+                        )
+                    )
+        return out
+
+
+class AsyncNoAwaitRule:
+    meta = RuleMeta(
+        "async_no_await",
+        "دالة async بدون await (قد تكون خطأ تصميم)",
+        tags=("quality", "async"),
+    )
+
+    def check(self, ctx: AnalysisContext) -> list[StaticFinding]:
+        out: list[StaticFinding] = []
+        for m in ctx.module_list():
+            flow = _flow_for(m)
+            if not flow:
+                continue
+            for fn in flow.functions:
+                if fn.is_async and not fn.has_await:
+                    # allow simple reply-only handlers that still should await — flag as warning
+                    out.append(
+                        StaticFinding(
+                            severity="warning",
+                            code="async_no_await",
+                            rule_id=self.meta.id,
+                            file=m.path,
+                            lineno=fn.lineno,
+                            message_ar=f"دالة async `{fn.qualname}` بدون أي await",
+                            evidence=fn.qualname,
                         )
                     )
         return out
