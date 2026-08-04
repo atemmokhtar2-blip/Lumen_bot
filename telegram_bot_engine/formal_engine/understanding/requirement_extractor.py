@@ -32,13 +32,20 @@ from .document_structure import analyze_structure
 
 
 def _clean_name(raw: str | None, full: str) -> str:
+    # Prefer short explicit names: باسم X / اسمه X / named X
     m = re.search(
-        r"(?:باسم|named|name[:\s]+)\s*([A-Za-z0-9][A-Za-z0-9 \-_]{1,50})",
+        r"(?:باسم|اسمه|اسمها|named|name[:\s]+)\s*([A-Za-z][A-Za-z0-9 \-_]{0,40})",
         full,
         re.I,
     )
     if m:
-        return re.sub(r"\s+", " ", m.group(1)).strip()[:64]
+        cand = re.sub(r"\s+", " ", m.group(1)).strip()[:64]
+        if 2 <= len(cand) <= 40:
+            return cand
+    # Latin brand-like tokens (ShopX, ShopX Pro) — case sensitive capital start
+    m = re.search(r"\b([A-Z][A-Za-z0-9]{1,30}(?:\s+[A-Z][A-Za-z0-9]{1,20})?)\b", full)
+    if m:
+        return m.group(1).strip()[:64]
     if raw:
         name = re.sub(r"\s*[-–—]\s*Telegram.*$", "", raw, flags=re.I)
         name = re.sub(r"\s*V?\d+\.\d+.*$", "", name, flags=re.I)
@@ -50,8 +57,9 @@ def _clean_name(raw: str | None, full: str) -> str:
             return name
     for line in full.splitlines()[:15]:
         s = line.strip()
-        if 3 < len(s) < 60 and not s.startswith(("#", "-", "•", "بوت")):
-            return s[:64]
+        if 3 < len(s) < 40 and not s.startswith(("#", "-", "•", "بوت", "عايز", "اعمل")):
+            if re.match(r"^[A-Za-z0-9][A-Za-z0-9 \-_]{1,38}$", s):
+                return s[:64]
     return "TelegramBot"
 
 

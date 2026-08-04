@@ -49,6 +49,18 @@ _HEADING_PATTERNS = [
     re.compile(r"^(?:#{1,3}\s*)?(واجهة\s*تيليجرام|telegram\s*ui)\s*:?\s*$", re.I),
     re.compile(r"^(?:#{1,3}\s*)?(الأداء|performance)\s*:?\s*$", re.I),
     re.compile(r"^(?:#{1,3}\s*)?(الهدف\s*النهائي|final\s*goal)\s*:?\s*$", re.I),
+
+    re.compile(r"^(?:#{1,3}\s*)?(الأوامر|commands|bot\s*commands)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(الأزرار|buttons|القائمة|menu)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(الميزات|المميزات|features)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(المتطلبات|requirements)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(قاعدة\s*البيانات|database)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(الكيانات|نماذج\s*البيانات|data\s*models|entities)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(التكامل|integrations)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(الأمان|security)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(الهدف\s*النهائي|final\s*goal)\s*:?\s*$", re.I),
+    re.compile(r"^(?:#{1,3}\s*)?(وصف|description)\s*:?\s*$", re.I),
+
 ]
 
 

@@ -261,7 +261,9 @@ ARCHITECTURE_RULES: list[str] = [
 
 
 def detect_archetype(text: str) -> str:
-    """Score archetypes by signal density; return best match or custom."""
+    """Score archetypes by signal density + massive lexicon; return best match."""
+    from .lexicon_ar_en import score_domains
+
     t = text.lower()
     scores: dict[str, int] = {}
     for name, meta in BOT_ARCHETYPES.items():
@@ -270,18 +272,45 @@ def detect_archetype(text: str) -> str:
             if s.lower() in t:
                 score += 2 if len(s) > 3 else 1
         scores[name] = score
+    # lexicon boost
+    for domain, sc in score_domains(text).items():
+        scores[domain] = scores.get(domain, 0) + sc
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "custom"
 
 
 def extract_feature_tags(text: str) -> list[dict[str, str]]:
-    t = text.lower()
+    from .lexicon_ar_en import extract_features_fast
+
+    # category map for known ids
+    cat_map = {fid: cat for phrases, fid, cat in FEATURE_LEXICON}
+    # also from FEATURE_PHRASES categories inferred
+    default_cat = {
+        "shopping_cart": "commerce", "payments": "commerce", "product_catalog": "commerce",
+        "order_management": "commerce", "inventory": "commerce", "coupons": "commerce",
+        "admin_panel": "admin", "notifications": "messaging", "broadcast": "messaging",
+        "welcome_message": "group", "moderation": "group", "ticketing": "support",
+        "file_handling": "media", "database": "infra", "concurrency": "infra",
+        "task_queue": "infra", "arabic_rtl": "i18n", "english": "i18n",
+        "subscriptions": "commerce", "gamification": "engagement",
+        "conversation_state": "ux", "inline_buttons": "ux", "bot_commands": "ux",
+        "multi_language": "i18n", "analytics": "ops", "auth": "security",
+        "search": "ux", "ratings": "engagement", "shipping": "commerce",
+        "invoicing": "commerce", "booking": "commerce", "crm": "ops",
+    }
     found = []
     seen = set()
+    # legacy lexicon
     for phrases, fid, cat in FEATURE_LEXICON:
+        t = text.lower()
         if any(p.lower() in t for p in phrases) and fid not in seen:
             seen.add(fid)
             found.append({"id": fid, "category": cat})
+    # massive lexicon
+    for fid in extract_features_fast(text):
+        if fid not in seen:
+            seen.add(fid)
+            found.append({"id": fid, "category": default_cat.get(fid, cat_map.get(fid, "general"))})
     return found
 
 
