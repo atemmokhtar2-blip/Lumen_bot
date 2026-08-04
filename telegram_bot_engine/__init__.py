@@ -2,9 +2,11 @@
 Telegram Bot Generation Engine
 ==============================
 
-Main entry: generate_bot() — powered exclusively by the Formal Engine
-(deterministic understanding + clean code generation). No legacy AI/heuristic
-understanding or old code-generation engines on the hot path.
+Microservice pipeline:
+  UnderstandingService (text → ProgramContract)
+  → validate contract
+  → CodegenService (ProgramContract → files)  [blind to raw text]
+  → post_verify
 """
 
 from __future__ import annotations
@@ -34,32 +36,20 @@ def __getattr__(name: str):
 
 
 def generate_bot(request: str, work_dir=None):
-    """
-    Generate a complete Telegram bot project from a natural-language description.
-
-    Uses ONLY the Formal Engine:
-      1. Formal understanding → FormalBotSpec
-      2. Formal generation → clean project on disk
-    """
     from pathlib import Path
     import tempfile
     import time
 
     from .core.result import GenerationResult, StageResult
-    from .formal_engine.understanding.requirement_extractor import extract_formal_spec
-    from .formal_engine.generation.project_generator import generate_project
-    from .formal_engine.generation.post_verify import verify_generated_project
+    from .formal_engine.services.understanding_service import understand
+    from .formal_engine.services.codegen_service import generate_from_contract
 
     t0 = time.perf_counter()
     request = (request or "").strip()
     if not request:
         return GenerationResult(
-            success=False,
-            project_path=None,
-            stages=[],
-            validation_reports=[],
-            errors=["Empty request"],
-            metadata={},
+            success=False, project_path=None, stages=[], validation_reports=[],
+            errors=["Empty request"], metadata={},
         )
 
     if work_dir is None:
@@ -69,57 +59,51 @@ def generate_bot(request: str, work_dir=None):
         work_dir.mkdir(parents=True, exist_ok=True)
 
     stages = []
-    errors = []
+    errors: list[str] = []
 
-    # --- Stage 1: Formal Understanding ---
+    # --- Service 1: Understanding ---
     try:
-        spec = extract_formal_spec(request)
+        contract, validation = understand(request)
         stages.append(
             StageResult.ok(
-                "formal_understanding",
+                "understanding_service",
                 outputs={
-                    "bot_name": spec.bot_name,
-                    "bot_type": spec.bot_type.value,
-                    "intent": {
-                        "raw": request,
-                        "bot_type": spec.bot_type.value,
-                        "bot_name": spec.bot_name,
-                        "features": [getattr(f, "name", str(f)) for f in spec.features],
-                        "commands": [
-                            {"name": getattr(c, "command", "start"), "description": getattr(c, "description", "")}
-                            for c in (spec.ui.commands if spec.ui else [])
-                        ],
-                        "source": "formal_understanding",
-                    },
+                    "bot_name": contract.bot_name,
+                    "bot_kind": contract.bot_kind.value,
+                    "commands": [c.name for c in contract.commands],
+                    "buttons": [b.label for b in contract.buttons],
+                    "entities": [e.name for e in contract.entities],
+                    "contract_ok": validation.ok,
+                    "contract_errors": validation.errors,
+                    "contract_warnings": validation.warnings,
                 },
             )
         )
+        if not validation.ok:
+            errors.extend(validation.errors)
+            return GenerationResult(
+                success=False, project_path=None, stages=stages, validation_reports=[],
+                errors=errors, metadata={"engine": "formal_microservices", "phase": "understanding"},
+            )
     except Exception as exc:
-        errors.append(f"Formal understanding failed: {exc}")
-        stages.append(StageResult.failed("formal_understanding", errors=[str(exc)]))
+        errors.append(f"UnderstandingService failed: {exc}")
+        stages.append(StageResult.failed("understanding_service", errors=[str(exc)]))
         return GenerationResult(
-            success=False,
-            project_path=None,
-            stages=stages,
-            validation_reports=[],
-            errors=errors,
-            metadata={"engine": "formal"},
+            success=False, project_path=None, stages=stages, validation_reports=[],
+            errors=errors, metadata={"engine": "formal_microservices"},
         )
 
-    # --- Stage 2: Formal Generation ---
+    # --- Service 2: Codegen (blind to request text) ---
     project_dir = work_dir / "generated_bot"
     try:
-        path = generate_project(spec, project_dir)
+        path, verify = generate_from_contract(contract, project_dir)
         files = sorted(str(p.relative_to(path)) for p in path.rglob("*") if p.is_file())
-        verify = verify_generated_project(path)
         stages.append(
             StageResult.ok(
-                "formal_generation",
+                "codegen_service",
                 outputs={
                     "project_path": str(path),
                     "files_created": files,
-                    "bot_name": spec.bot_name,
-                    "bot_type": spec.bot_type.value,
                     "verify": verify,
                 },
             )
@@ -127,19 +111,15 @@ def generate_bot(request: str, work_dir=None):
         if not verify.get("ok"):
             errors.extend(verify.get("errors") or [])
     except Exception as exc:
-        errors.append(f"Formal generation failed: {exc}")
-        stages.append(StageResult.failed("formal_generation", errors=[str(exc)]))
+        errors.append(f"CodegenService failed: {exc}")
+        stages.append(StageResult.failed("codegen_service", errors=[str(exc)]))
         return GenerationResult(
-            success=False,
-            project_path=None,
-            stages=stages,
-            validation_reports=[],
-            errors=errors,
-            metadata={"engine": "formal"},
+            success=False, project_path=None, stages=stages, validation_reports=[],
+            errors=errors, metadata={"engine": "formal_microservices"},
         )
 
     elapsed = time.perf_counter() - t0
-    ok = (not errors) and bool(verify.get("ok", True))
+    ok = not errors and bool(verify.get("ok", True))
     return GenerationResult(
         success=ok,
         project_path=str(path),
@@ -147,14 +127,15 @@ def generate_bot(request: str, work_dir=None):
         validation_reports=[],
         errors=errors,
         metadata={
-            "engine": "formal",
-            "bot_name": spec.bot_name,
-            "bot_type": spec.bot_type.value,
+            "engine": "formal_microservices",
+            "bot_name": contract.bot_name,
+            "bot_type": contract.bot_kind.value,
             "files_created": files,
             "elapsed_ms": round(elapsed * 1000, 1),
             "button_count": (verify.get("info") or {}).get("button_count", 0),
             "verify_ok": verify.get("ok"),
-            "buttons": [b.text for b in (spec.ui.main_buttons or [])],
-            "commands": [c.command for c in (spec.ui.commands or [])],
+            "buttons": [b.label for b in contract.buttons],
+            "commands": [c.name for c in contract.commands],
+            "contract_warnings": validation.warnings,
         },
     )
