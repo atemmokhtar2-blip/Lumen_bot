@@ -49,6 +49,7 @@ from .runtime_simulation import RuntimeSimulationEngine
 from .self_healing import SelfHealingEngine
 from .integration_verification import IntegrationVerificationEngine
 from .unit_test_generation import UnitTestGenerationEngine
+from .e2e_scenario_testing import E2EScenarioTestingEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -94,4 +95,5 @@ __all__ = [
     "SelfHealingEngine",
     "IntegrationVerificationEngine",
     "UnitTestGenerationEngine",
+    "E2EScenarioTestingEngine",
 ]

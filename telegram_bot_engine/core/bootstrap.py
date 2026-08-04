@@ -66,6 +66,7 @@ from ..engines.generators import (
     SelfHealingEngine,
     IntegrationVerificationEngine,
     UnitTestGenerationEngine,
+    E2EScenarioTestingEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -442,6 +443,11 @@ def bootstrap(
     unit_test_generation_engine = UnitTestGenerationEngine()
     registry.register_engine(unit_test_generation_engine)
 
+    # -- intelligent e2e scenario testing engine (Specification 044) ------
+    # ULTRA CRITICAL: real-user scenario testing; any failed scenario blocks.
+    e2e_scenario_testing_engine = E2EScenarioTestingEngine()
+    registry.register_engine(e2e_scenario_testing_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -599,6 +605,10 @@ def bootstrap(
                      engine_id="unit_test_generation",
                      priority=129,
                      dependencies=["integration_verification"])
+    manager.register(e2e_scenario_testing_engine,
+                     engine_id="e2e_scenario_testing",
+                     priority=130,
+                     dependencies=["unit_test_generation"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
