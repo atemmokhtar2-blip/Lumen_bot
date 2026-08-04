@@ -67,6 +67,7 @@ from ..engines.generators import (
     IntegrationVerificationEngine,
     UnitTestGenerationEngine,
     E2EScenarioTestingEngine,
+    ProductionReadinessEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -448,6 +449,11 @@ def bootstrap(
     e2e_scenario_testing_engine = E2EScenarioTestingEngine()
     registry.register_engine(e2e_scenario_testing_engine)
 
+    # -- production readiness certification engine (Specification 045) ----
+    # MAXIMUM CRITICAL: final certificate; Telegram token gate CLOSED until certified.
+    production_readiness_engine = ProductionReadinessEngine()
+    registry.register_engine(production_readiness_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -609,6 +615,10 @@ def bootstrap(
                      engine_id="e2e_scenario_testing",
                      priority=130,
                      dependencies=["unit_test_generation"])
+    manager.register(production_readiness_engine,
+                     engine_id="production_readiness",
+                     priority=131,
+                     dependencies=["e2e_scenario_testing"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
