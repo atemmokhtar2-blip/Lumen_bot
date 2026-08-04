@@ -689,14 +689,24 @@ class TypeDetector:
             # Dependencies: feature components depend on the bot
             # application and, if they use a database, on the
             # database session / repository.
-            deps: List[str] = list(ic.dependencies)
-            if "bot_application" not in deps:
+            # Never allow a component to depend on itself.
+            deps: List[str] = [
+                d for d in list(ic.dependencies)
+                if d and d != comp_name
+            ]
+            if (
+                "bot_application" not in deps
+                and comp_name != "bot_application"
+            ):
                 deps.append("bot_application")
             if requires_database and comp_type in (
                 COMPONENT_TYPE_SERVICE, COMPONENT_TYPE_HANDLER,
                 COMPONENT_TYPE_COMMAND,
             ):
-                if "database_repository" not in deps:
+                if (
+                    "database_repository" not in deps
+                    and comp_name != "database_repository"
+                ):
                     deps.append("database_repository")
 
             components.append(DetectedComponent(

@@ -178,6 +178,12 @@ _FEATURE_DEFS: Dict[str, tuple] = {
         "Downloads media (videos, audio, images) from external sources.",
         [],
     ),
+    "message_handler": (
+        "message_handler",
+        "Message Handler / Echo Reply",
+        "Handles incoming text messages and sends a reply.",
+        [],
+    ),
 }
 
 
@@ -216,6 +222,9 @@ def run(state: Dict, report: AnalysisReport) -> List[str]:
     kw_by_name = {kw.keyword: kw for kw in report.keywords}
 
     features: List[Feature] = []
+    # NOTE: populated below; if still empty after keyword scan, a
+    # minimal message_handler feature is injected so simple bot
+    # requests (e.g. "اعمل بوت بيرد ب هاي") are not blocked.
 
     for canonical, (machine_name, display_name, description, related_entities) in _FEATURE_DEFS.items():
         if canonical in keyword_canonicals:
@@ -238,11 +247,29 @@ def run(state: Dict, report: AnalysisReport) -> List[str]:
             if rel in feature_names and rel != feat.name:
                 feat.related_features.append(rel)
 
+    # Fallback: any Telegram-bot request without matched feature keywords
+    # still needs at least one feature or the blueprint validator blocks.
+    if not features:
+        machine_name, display_name, description, related_entities = _FEATURE_DEFS[
+            "message_handler"
+        ]
+        features.append(Feature(
+            name=machine_name,
+            display_name=display_name,
+            description=description,
+            keywords=["message_handler"],
+            confidence=0.7,
+            related_entities=list(related_entities),
+            related_features=[],
+        ))
+        feature_names = [f.name for f in features]
+        warnings.append(
+            "No explicit features matched; defaulted to message_handler "
+            "for a basic Telegram reply bot."
+        )
+
     report.features = features
     state["feature_names"] = set(feature_names)
-
-    if not features:
-        warnings.append("No features were extracted from the request.")
 
     return warnings
 

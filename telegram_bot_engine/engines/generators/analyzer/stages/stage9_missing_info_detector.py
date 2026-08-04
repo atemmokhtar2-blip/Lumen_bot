@@ -76,6 +76,9 @@ def run(state: Dict, report: AnalysisReport) -> List[str]:
         ))
 
     # 3. Update mode — polling vs webhook
+    # Default to polling for Telegram bots when the user did not specify.
+    # Blocking generation solely for this is wrong: every simple bot can
+    # ship with polling, and webhook remains an explicit production choice.
     has_polling = "polling" in keyword_canonicals
     has_webhook = "webhook" in keyword_canonicals
     if not has_polling and not has_webhook:
@@ -84,7 +87,7 @@ def run(state: Dict, report: AnalysisReport) -> List[str]:
             question="How should the bot receive updates from Telegram?",
             options=["polling (recommended for development)", "webhook (recommended for production)"],
             default="polling",
-            required=True,
+            required=False,
         ))
 
     # 4. Database choice — if features need a database but none was chosen

@@ -112,6 +112,10 @@ _KEYWORDS: List[tuple] = [
      ["chat", "conversation", "chatbot", "محادثة", "دردشة"], 0.8),
     ("media_download", "feature",
      ["download", "تحميل", "تنزيل", "تنزيلات"], 0.85),
+    # Simple text reply / echo bots (very common first requests)
+    ("message_handler", "feature",
+     ["reply", "echo", "respond", "message handler", "text reply",
+      "بيرد", "يرد", "رد", "يردو", "رسالة", "هاي", "hello", "hi"], 0.9),
 
     # --- technology keywords ----------------------------------------------
     ("python", "technology",

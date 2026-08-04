@@ -97,7 +97,8 @@ class RelationAnalyzer:
                         f"(dangling dependency)."
                     )
             # Replace depends_on with the resolved list.
-            comp.depends_on = resolved
+            # Drop self-dependencies — they are never valid.
+            comp.depends_on = [d for d in resolved if d != comp.name]
 
         return edges, warnings
 
