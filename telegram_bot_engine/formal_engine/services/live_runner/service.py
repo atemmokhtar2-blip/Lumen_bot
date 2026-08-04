@@ -231,8 +231,26 @@ def _parse_req_line(line: str) -> tuple[str, str] | None:
     return name, rest.strip()
 
 
+def _parse_req_line(line: str) -> tuple[str, str] | None:
+    raw = line.strip()
+    if not raw or raw.startswith("#") or raw.startswith("-"):
+        return None
+    m = re.match(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(\[[^\]]+\])?\s*(.*)$", raw)
+    if not m:
+        return None
+    name = m.group(1).lower().replace("_", "-")
+    rest = (m.group(2) or "") + (m.group(3) or "")
+    return name, rest.strip()
+
+
+# Transitive deps often hard-pinned in bot repos while frameworks need another version
+_TRANSITIVE_WHEN = {
+    "aiogram": {"aiofiles", "magic-filter", "aiohttp"},
+    "python-telegram-bot": {"httpx", "httpcore"},
+}
+
+
 def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
-    """Clean requirements: skip blanks, editables, nested -r."""
     warnings: list[str] = []
     lines_out: list[str] = []
     for line in req.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -254,33 +272,73 @@ def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
     return cleaned, warnings
 
 
+def _present_packages(lines: list[str]) -> set[str]:
+    names = set()
+    for ln in lines:
+        p = _parse_req_line(ln)
+        if p:
+            names.add(p[0])
+    return names
+
+
+def _preemptive_loosen(cleaned: Path) -> tuple[Path, list[str]]:
+    """
+    Before first pip install: unpin transitive deps that commonly conflict
+    when their parent framework is also listed.
+    """
+    lines = [ln.strip() for ln in cleaned.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    present = _present_packages(lines)
+    to_unpin: set[str] = set()
+    for framework, trans in _TRANSITIVE_WHEN.items():
+        if framework in present:
+            to_unpin |= {t for t in trans if t in present}
+
+    notes: list[str] = []
+    out: list[str] = []
+    for raw in lines:
+        parsed = _parse_req_line(raw)
+        if not parsed:
+            out.append(raw)
+            continue
+        name, rest = parsed
+        if name in to_unpin and "==" in rest:
+            extras = ""
+            em = re.match(r"(\[[^\]]+\])", rest)
+            if em:
+                extras = em.group(1)
+            notes.append(f"preemptive_unpin:{name} ({rest})")
+            out.append(name + extras)
+        else:
+            out.append(raw)
+
+    path = cleaned.parent / ".tbe_requirements_ready.txt"
+    path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+    return path, notes
+
+
 def _conflict_packages_from_log(log: str) -> set[str]:
-    """Extract package names involved in ResolutionImpossible conflicts."""
     names: set[str] = set()
-    # "The user requested aiofiles==24.1.0"
     for m in re.finditer(r"user requested\s+([A-Za-z0-9_.\-]+)", log, re.I):
         names.add(m.group(1).lower().replace("_", "-"))
-    # "aiogram 3.7.0 depends on aiofiles~=23.2.1"
-    for m in re.finditer(r"^\s*([A-Za-z0-9_.\-]+)\s+[\d.]+\s+depends on\s+([A-Za-z0-9_.\-]+)", log, re.I | re.M):
+    for m in re.finditer(
+        r"([A-Za-z0-9_.\-]+)\s+[\d.]+\s+depends on\s+([A-Za-z0-9_.\-]+)",
+        log,
+        re.I,
+    ):
         names.add(m.group(1).lower().replace("_", "-"))
         names.add(m.group(2).lower().replace("_", "-"))
-    # "Cannot install ... and aiofiles==24.1.0"
     for m in re.finditer(r"\band\s+([A-Za-z0-9_.\-]+)==", log, re.I):
         names.add(m.group(1).lower().replace("_", "-"))
     return names
 
 
-def _loosen_requirements(cleaned: Path, conflict_pkgs: set[str]) -> tuple[Path, list[str]]:
-    """
-    Auto-fix strategy for pin conflicts:
-      - For packages in conflict_pkgs that are hard-pinned (==): drop the pin
-        so the primary framework (aiogram/ptb/...) can resolve a compatible version.
-      - Keep top-level frameworks pinned if possible.
-    """
+def _loosen_requirements(src: Path, conflict_pkgs: set[str]) -> tuple[Path, list[str]]:
+    protect = {
+        "aiogram", "python-telegram-bot", "pytelegrambotapi", "telebot", "pyrogram",
+    }
     notes: list[str] = []
-    protect = {"aiogram", "python-telegram-bot", "pytelegrambotapi", "telebot", "pyrogram"}
     out: list[str] = []
-    for line in cleaned.read_text(encoding="utf-8", errors="ignore").splitlines():
+    for line in src.read_text(encoding="utf-8", errors="ignore").splitlines():
         raw = line.strip()
         if not raw:
             continue
@@ -289,30 +347,52 @@ def _loosen_requirements(cleaned: Path, conflict_pkgs: set[str]) -> tuple[Path, 
             out.append(raw)
             continue
         name, rest = parsed
-        if name in conflict_pkgs and name not in protect and "==" in rest:
-            # drop hard pin — leave bare package name (or extras only)
+        if name in conflict_pkgs and name not in protect and ("==" in rest or "~=" in rest or ">=" in rest):
             extras = ""
             em = re.match(r"(\[[^\]]+\])", rest)
             if em:
                 extras = em.group(1)
-            new_line = name + extras
             notes.append(f"loosened:{name} ({rest} → unpinned)")
-            out.append(new_line)
-        elif name in conflict_pkgs and name not in protect and "~=" in rest:
-            # already soft — leave
-            out.append(raw)
+            out.append(name + extras)
         else:
             out.append(raw)
-
-    fixed = cleaned.parent / ".tbe_requirements_fixed.txt"
+    fixed = src.parent / ".tbe_requirements_fixed.txt"
     fixed.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
     return fixed, notes
 
 
+def _unpin_all_hard_pins(src: Path) -> tuple[Path, list[str]]:
+    protect = {
+        "aiogram", "python-telegram-bot", "pytelegrambotapi", "telebot", "pyrogram",
+    }
+    notes: list[str] = []
+    out: list[str] = []
+    for line in src.read_text(encoding="utf-8", errors="ignore").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        parsed = _parse_req_line(raw)
+        if not parsed:
+            out.append(raw)
+            continue
+        name, rest = parsed
+        if name not in protect and "==" in rest:
+            extras = ""
+            em = re.match(r"(\[[^\]]+\])", rest)
+            if em:
+                extras = em.group(1)
+            notes.append(f"unpin_all:{name}")
+            out.append(name + extras)
+        else:
+            out.append(raw)
+    path = src.parent / ".tbe_requirements_unpinned.txt"
+    path.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+    return path, notes
+
+
 def _run_pip(cmd: list[str], root: Path, timeout: int = 300) -> tuple[int, str]:
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(root))
-    log = ((r.stdout or "") + "\n" + (r.stderr or ""))
-    return r.returncode, log
+    return r.returncode, ((r.stdout or "") + "\n" + (r.stderr or ""))
 
 
 def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Path) -> tuple[bool, str, list[str]]:
@@ -323,53 +403,47 @@ def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Pa
     if not cleaned.read_text(encoding="utf-8").strip():
         return True, "requirements empty after sanitize — skipped", warns
 
-    logs: list[str] = []
+    ready, prenotes = _preemptive_loosen(cleaned)
+    warns.extend(prenotes)
+    logs: list[str] = [f"--- install using {ready.name} (preemptive fixes: {len(prenotes)}) ---"]
 
     if mode.startswith("venv"):
-        code0, log0 = _run_pip(
-            [py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
-            root,
-            timeout=180,
-        )
-        logs.append(log0[-1500:])
+        _run_pip([py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], root, timeout=180)
         base_cmd = [py, "-m", "pip", "install", "-r"]
     else:
         base_cmd = [py, "-m", "pip", "install", "--target", str(isolation), "-r"]
 
-    # attempt 1: as cleaned
-    code, log = _run_pip(base_cmd + [str(cleaned)], root)
+    # Pass 1: preemptive-ready file
+    code, log = _run_pip(base_cmd + [str(ready)], root)
     logs.append(log)
     if code == 0:
         return True, "\n".join(logs)[-8000:], warns
 
-    # attempt 2: auto-loosen conflicting hard pins
-    if "ResolutionImpossible" in log or "conflicting dependencies" in log:
-        conflict_pkgs = _conflict_packages_from_log(log)
-        if conflict_pkgs:
-            fixed, notes = _loosen_requirements(cleaned, conflict_pkgs)
-            warns.extend(notes)
-            logs.append(f"--- auto-fix conflicts: {sorted(conflict_pkgs)} ---")
-            code2, log2 = _run_pip(base_cmd + [str(fixed)], root)
-            logs.append(log2)
-            if code2 == 0:
-                warns.append("auto_fixed_dependency_conflicts")
-                return True, "\n".join(logs)[-8000:], warns
-            # attempt 3: unpin ALL == pins except protected frameworks
-            fixed2, notes2 = _loosen_requirements(
-                cleaned,
-                {
-                    (_parse_req_line(ln) or ("", ""))[0]
-                    for ln in cleaned.read_text(encoding="utf-8").splitlines()
-                    if _parse_req_line(ln)
-                },
-            )
-            warns.extend(notes2)
-            logs.append("--- auto-fix: unpin all non-framework hard pins ---")
-            code3, log3 = _run_pip(base_cmd + [str(fixed2)], root)
-            logs.append(log3)
-            if code3 == 0:
-                warns.append("auto_fixed_all_hard_pins")
-                return True, "\n".join(logs)[-8000:], warns
+    # Pass 2: conflict-based loosen
+    if "ResolutionImpossible" in log or "conflicting dependencies" in log or code != 0:
+        conflict_pkgs = _conflict_packages_from_log(log) or {
+            (_parse_req_line(ln) or ("", ""))[0]
+            for ln in ready.read_text(encoding="utf-8").splitlines()
+            if _parse_req_line(ln)
+        }
+        fixed, notes = _loosen_requirements(ready, conflict_pkgs)
+        warns.extend(notes)
+        logs.append(f"--- auto-fix conflicts: {sorted(conflict_pkgs)} ---")
+        code2, log2 = _run_pip(base_cmd + [str(fixed)], root)
+        logs.append(log2)
+        if code2 == 0:
+            warns.append("auto_fixed_dependency_conflicts")
+            return True, "\n".join(logs)[-8000:], warns
+
+        # Pass 3: unpin all non-framework hard pins
+        unpinned, notes3 = _unpin_all_hard_pins(ready)
+        warns.extend(notes3)
+        logs.append("--- auto-fix: unpin all non-framework hard pins ---")
+        code3, log3 = _run_pip(base_cmd + [str(unpinned)], root)
+        logs.append(log3)
+        if code3 == 0:
+            warns.append("auto_fixed_all_hard_pins")
+            return True, "\n".join(logs)[-8000:], warns
 
     return False, "\n".join(logs)[-8000:], warns
 
