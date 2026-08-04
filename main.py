@@ -59,24 +59,29 @@ def _is_allowed(user_id: int | None) -> bool:
 
 
 
-def _detect_host_intent(text: str) -> str:
-    """Return host action via ChatRouter (natural Arabic/English). Chat routes only."""
+def _chat_route(text: str):
+    """Single entry: natural language → capability (chat never writes code)."""
     try:
         from telegram_bot_engine.formal_engine.services.chat_router import route_message
-        r = route_message(text or "")
-        if not r.ok:
-            return "none"
-        return {
-            "host_start": "start",
-            "host_stop": "stop",
-            "host_status": "status",
-            "host_diagnose": "diagnose",
-        }.get(r.capability_id, "none")
+        return route_message(text or "")
     except Exception:
+        return None
+
+
+def _detect_host_intent(text: str) -> str:
+    """Return host action via ChatRouter."""
+    r = _chat_route(text)
+    if r is None or not getattr(r, "ok", False):
         t = (text or "").strip().lower()
         if any(k in t for k in ("استضف", "استضافة", "host")):
             return "start"
         return "none"
+    return {
+        "host_start": "start",
+        "host_stop": "stop",
+        "host_status": "status",
+        "host_diagnose": "diagnose",
+    }.get(r.capability_id, "none")
 
 
 def _looks_like_bot_token(text: str) -> bool:
@@ -672,20 +677,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             detect_repo_intent,
         )
         action, _ = detect_repo_intent(request)
-        # Route to repo-dev when intent is about the active repo OR explicit develop words
+        # ChatRouter knows system capabilities — prefer it for routing only
+        _rt = _chat_route(request)
+        _cap = getattr(_rt, "capability_id", "") if _rt and getattr(_rt, "ok", False) else ""
+        _repo_caps = {
+            "static_analysis", "package_health", "upgrade_recommend",
+            "upgrade_apply", "repo_develop",
+        }
         develop_hints = (
             "أضف", "اضف", "ضيف", "عدل", "عدّل", "اشرح", "الأوامر", "الاوامر",
             "امسح", "أعد", "طور", "طوّر", "هيكل", "command", "add", "explain",
             "stats", "fix", "modify", "ساعد", "تقدر",
             "خطة تطوير", "فجوات", "أين أعد", "تطوير المستودع", "سد فجوات",
         )
-        if action != "unknown" or any(h in request.lower() for h in develop_hints) or any(h in request for h in develop_hints):
+        if (
+            _cap in _repo_caps
+            or action != "unknown"
+            or any(h in request.lower() for h in develop_hints)
+            or any(h in request for h in develop_hints)
+        ):
             status = await message.reply_text("🛠 جاري التنفيذ على المستودع النشط...")
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
+            # Canonical phrase when ChatRouter recognized capability but wording was soft
+            _cap_to_phrase = {
+                "static_analysis": "تحليل استاتيكي",
+                "package_health": "صحة الحزم",
+                "upgrade_recommend": "توصيات الترقية",
+                "upgrade_apply": "طبّق الترقيات الآمنة",
+                "repo_develop": request,
+            }
+            _dev_text = request
+            if _cap in _cap_to_phrase and action == "unknown":
+                _dev_text = _cap_to_phrase[_cap]
+
             def _run_dev():
                 return handle_repo_request(
-                    request,
+                    _dev_text,
                     active["path"],
                     contract_dict=active.get("contract"),
                 )
@@ -723,6 +751,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 except Exception:
                     logger.exception("zip after repo dev failed")
             return
+
+
+    # ChatRouter: help / list capabilities (route only)
+    _rt_help = _chat_route(request)
+    if _rt_help and getattr(_rt_help, "ok", False) and _rt_help.capability_id == "help":
+        try:
+            from telegram_bot_engine.formal_engine.services.chat_router import get_router
+            await message.reply_text(get_router().help_text())
+        except Exception:
+            await message.reply_text("مساعدة: اسحب مستودع | ولّد بوت | استضافة | تحليل استاتيكي")
+        return
 
     if len(request) < 5:
         await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
