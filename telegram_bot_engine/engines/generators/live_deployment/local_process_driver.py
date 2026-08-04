@@ -150,16 +150,37 @@ class LocalProcessDriver(DeploymentProvider):
         time.sleep(2.5)
         rc = proc.poll()
         if rc is not None:
-            tail = self._read_log(run_log, limit=40)
-            # Prefer traceback / Error lines
-            useful = [ln for ln in tail if any(k in ln for k in ("Error", "Traceback", "Exception", "error", "Missing"))]
-            show = useful[-8:] if useful else tail[-8:]
+            tail = self._read_log(run_log, limit=60)
+            useful = [
+                ln for ln in tail
+                if any(k in ln for k in ("Error", "Traceback", "Exception", "error", "Missing", "module"))
+            ]
+            show = useful[-12:] if useful else tail[-12:]
+            run_text = "\n".join(tail)
+            try:
+                log_f.close()
+            except Exception:
+                pass
+            healed = self._heal_and_restart(
+                path=path,
+                entry=entry,
+                bot_token=bot_token,
+                service_name=service_name,
+                dep_id=dep_id,
+                run_log=run_log,
+                install_log=install_log,
+                run_text=run_text,
+                max_rounds=2,
+            )
+            if healed.status == DEPLOY_RUNNING:
+                return healed
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
                 message=(
                     f"Bot process exited immediately (code={rc}). "
+                    f"Heal: {healed.message}. "
                     f"Run log: {' | '.join(show) if show else 'empty'}"
                 ),
             )
@@ -247,13 +268,20 @@ class LocalProcessDriver(DeploymentProvider):
             _ensure_runtime,
             _find_requirements,
             _pip_install,
+            _preflight_ensure_deps,
         )
+
+        pre_notes: list = []
+        try:
+            pre_notes = _preflight_ensure_deps(project_path)
+        except Exception as e:
+            pre_notes = [f"preflight_error:{type(e).__name__}"]
 
         py, mode, isolation, note = _ensure_runtime(project_path)
         req = _find_requirements(project_path)
         ok, log, warns = _pip_install(py, req, project_path, mode, isolation)
         install_log.write_text(
-            f"mode={mode}\nnote={note}\nwarns={warns}\n\n{log}",
+            f"mode={mode}\nnote={note}\npreflight={pre_notes}\nwarns={warns}\n\n{log}",
             encoding="utf-8",
         )
         if not ok:
@@ -263,6 +291,142 @@ class LocalProcessDriver(DeploymentProvider):
             )
         # If venv mode still has no usable pip path issues — py is already selected
         return py, mode, isolation
+
+
+    def _heal_and_restart(
+        self,
+        path: Path,
+        entry: Path,
+        bot_token: str,
+        service_name: str,
+        dep_id: str,
+        run_log: Path,
+        install_log: Path,
+        run_text: str,
+        max_rounds: int = 2,
+    ) -> DeploymentStatus:
+        """Error Intelligence decides packages → pip install → restart process."""
+        from telegram_bot_engine.formal_engine.services.error_intelligence import analyze_logs
+        from telegram_bot_engine.formal_engine.services.live_runner.service import (
+            _ensure_runtime,
+            _ensure_packages_in_requirements,
+            _pip_install_packages_direct,
+            _resolve_missing_via_source,
+            _module_to_package,
+        )
+        from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+            discover_token_env_names,
+        )
+
+        last_msg = ""
+        for round_i in range(max_rounds):
+            install_txt = ""
+            if install_log.exists():
+                try:
+                    install_txt = install_log.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+            contract = analyze_logs(
+                run_log=run_text,
+                install_log=install_txt,
+                phase="run",
+            )
+            packages: list[str] = list(contract.heal_packages or [])
+            for sm in _resolve_missing_via_source(path, run_text):
+                pkg = _module_to_package(sm)
+                if pkg and pkg not in packages:
+                    packages.append(pkg)
+            if not packages and contract.primary and contract.primary.suggested_package:
+                packages = [contract.primary.suggested_package]
+            if not packages:
+                import re as _re
+                for m in _re.finditer(r"No module named ['\"]([^'\"]+)['\"]", run_text or ""):
+                    full = m.group(1)
+                    pkg = _module_to_package(full) or _module_to_package(full.split(".")[0])
+                    if pkg and pkg not in packages:
+                        packages.append(pkg)
+            if not packages:
+                summary = (
+                    contract.primary.summary_ar if contract.primary else (run_text or "")[:300]
+                )
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message=f"Bot process exited; not healable. {summary}",
+                )
+
+            _ensure_packages_in_requirements(path, packages)
+            py, mode, isolation, _note = _ensure_runtime(path)
+            ok_d, dlog = _pip_install_packages_direct(py, packages, path, mode, isolation)
+            try:
+                with open(install_log, "a", encoding="utf-8") as f:
+                    f.write(f"\n--- host heal round {round_i + 1}: {packages} ok={ok_d} ---\n{dlog}\n")
+            except Exception:
+                pass
+            if not ok_d:
+                last_msg = f"heal pip failed for {packages}"
+                continue
+
+            child_env = os.environ.copy()
+            child_env["PYTHONUNBUFFERED"] = "1"
+            for key in discover_token_env_names(path):
+                child_env[key] = bot_token
+            for key in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
+                child_env[key] = bot_token
+            child_env.pop("PORT", None)
+            if mode.startswith("target"):
+                pp = child_env.get("PYTHONPATH", "")
+                child_env["PYTHONPATH"] = str(isolation) + (os.pathsep + pp if pp else "")
+
+            log_f = open(run_log, "a", encoding="utf-8")
+            log_f.write(f"\n--- host heal restart round {round_i + 1} packages={packages} ---\n")
+            log_f.flush()
+            proc = subprocess.Popen(
+                [py, str(entry)],
+                cwd=str(path),
+                env=child_env,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            time.sleep(2.5)
+            rc = proc.poll()
+            if rc is None:
+                _RUNNING[dep_id] = {
+                    "proc": proc,
+                    "project_path": str(path),
+                    "entry": str(entry),
+                    "log_path": str(run_log),
+                    "install_log": str(install_log),
+                    "python": py,
+                    "started_at": time.time(),
+                    "log_file": log_f,
+                }
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    service_id=service_name,
+                    status=DEPLOY_RUNNING,
+                    message=(
+                        f"Bot process running after heal "
+                        f"(pid={proc.pid}, packages={packages}, entry={entry.name})."
+                    ),
+                    dry_run=False,
+                )
+            run_text = "\n".join(self._read_log(run_log, limit=80))
+            last_msg = f"still exiting code={rc} after heal {packages}"
+            try:
+                log_f.close()
+            except Exception:
+                pass
+
+        return DeploymentStatus(
+            provider=self.name,
+            deployment_id=dep_id,
+            status=DEPLOY_FAILED,
+            message=last_msg or "heal exhausted",
+        )
 
     def _stop_by_project(self, project_path: str) -> None:
         to_stop = [

@@ -268,15 +268,35 @@ def analyze_logs(
             exc_t, exc_m = ("", first)
             if em:
                 exc_t, exc_m = em.group(1), em.group(2)
+            missing = ""
+            suggested_pkg = ""
+            mm = re.search(r"No module named ['\"]([^'\"]+)['\"]", e)
+            if mm:
+                missing = mm.group(1).strip()
+                suggested_pkg = _module_to_package(missing) or ""
+                if not suggested_pkg and "." in missing:
+                    suggested_pkg = _module_to_package(missing.split(".")[0]) or ""
+                if suggested_pkg:
+                    action = "install_package"
+                    cat = "dependency"
+                    sev = "high"
+                    title = "مكتبة ناقصة"
+            summary = (exc_m or e)[:200]
+            if missing:
+                summary = f"الموديول `{missing}` غير مثبت."
+                if suggested_pkg:
+                    summary += f" الحزمة المقترحة: `{suggested_pkg}`."
             diagnosed.append(DiagnosedError(
                 category=cat,  # type: ignore[arg-type]
                 severity=sev,  # type: ignore[arg-type]
                 title=title,
-                summary_ar=(exc_m or e)[:200],
-                exception_type=exc_t,
+                summary_ar=summary,
+                exception_type=exc_t or ("ModuleNotFoundError" if missing else ""),
                 exception_message=(exc_m or "")[:400],
+                missing_module=missing,
+                suggested_package=suggested_pkg,
                 suggested_action=action,  # type: ignore[arg-type]
-                confidence=0.7 if cat != "unknown" else 0.4,
+                confidence=0.85 if suggested_pkg else (0.7 if cat != "unknown" else 0.4),
                 evidence=[e[:300]],
             ))
             break  # one primary free-text diagnosis is enough
