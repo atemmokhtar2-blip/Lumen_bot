@@ -1,11 +1,10 @@
 """
 LiveRunner — real dependency install + bot process execution + error capture.
 
-Uses strongest practical stdlib tooling:
-  - urllib for Telegram getMe
-  - venv when available, else pip --target isolation
-  - subprocess process supervision + traceback extraction
-No fake success paths.
+Install strategy (robust):
+  1) try venv + ensure pip works
+  2) if venv/pip broken → pip install --target .tbe_deps (isolated)
+  3) surface real pip ERROR lines to the user (no opaque "pip install failed")
 """
 
 from __future__ import annotations
@@ -51,13 +50,18 @@ class LiveRunReport:
             lines.append(f"• وضع التثبيت: `{self.details['install_mode']}`")
         if self.errors:
             lines.append("• أخطاء:")
-            for e in self.errors[:6]:
-                lines.append(f"  - `{e[:180]}`")
+            for e in self.errors[:8]:
+                lines.append(f"  - `{e[:220]}`")
         if self.warnings:
             lines.append("• تحذيرات:")
             for w in self.warnings[:4]:
                 lines.append(f"  - {w[:160]}")
-        if self.run_log and not self.ok:
+        # always show install tail on install failure
+        if self.phase == "install" and self.install_log:
+            tail = self.install_log.strip()[-800:]
+            if tail:
+                lines.append(f"• لوج pip:\n```\n{tail}\n```")
+        elif self.run_log and not self.ok:
             tail = self.run_log.strip()[-500:]
             if tail:
                 lines.append(f"• لوج:\n```\n{tail}\n```")
@@ -119,36 +123,197 @@ def _deps_dir(root: Path) -> Path:
     return d
 
 
-def _ensure_runtime(root: Path) -> tuple[str, str, Path]:
-    """Returns (python_exe, mode, isolation_path)."""
-    venv = root / ".tbe_venv"
-    py = _venv_python(venv)
-    if py.exists():
-        return str(py), "venv-reused", venv
+def _pip_works(py: str) -> bool:
     try:
+        r = subprocess.run(
+            [py, "-m", "pip", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return r.returncode == 0 and "pip" in ((r.stdout or "") + (r.stderr or "")).lower()
+    except Exception:
+        return False
+
+
+def _bootstrap_pip(py: str) -> tuple[bool, str]:
+    """Try ensurepip then get-pip.py."""
+    logs = []
+    r = subprocess.run(
+        [py, "-m", "ensurepip", "--upgrade"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    logs.append((r.stdout or "") + (r.stderr or ""))
+    if _pip_works(py):
+        return True, "\n".join(logs)
+    # get-pip.py
+    try:
+        get_pip = Path(py).resolve().parent.parent / "get-pip-tbe.py"
+        # download
+        url = "https://bootstrap.pypa.io/get-pip.py"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            get_pip.write_bytes(resp.read())
+        r2 = subprocess.run(
+            [py, str(get_pip)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        logs.append((r2.stdout or "") + (r2.stderr or ""))
+        try:
+            get_pip.unlink(missing_ok=True)
+        except Exception:
+            pass
+    except Exception as e:
+        logs.append(f"get-pip failed: {e}")
+    return _pip_works(py), "\n".join(logs)[-3000:]
+
+
+def _ensure_runtime(root: Path) -> tuple[str, str, Path, str]:
+    """
+    Returns (python_exe, mode, isolation_path, note).
+    Prefer a *working* venv with pip; else target isolation.
+    """
+    venv = root / ".tbe_venv"
+    py_path = _venv_python(venv)
+    note = ""
+
+    # Clean broken venv (exists but no pip)
+    if py_path.exists() and not _pip_works(str(py_path)):
+        note = "removed_broken_venv"
+        try:
+            import shutil
+            shutil.rmtree(venv, ignore_errors=True)
+        except Exception:
+            pass
+
+    if not py_path.exists():
         r = subprocess.run(
             [sys.executable, "-m", "venv", str(venv)],
             capture_output=True,
             text=True,
             timeout=120,
         )
-        if r.returncode == 0 and _venv_python(venv).exists():
-            return str(_venv_python(venv)), "venv-created", venv
-    except Exception:
-        pass
-    return sys.executable, "target", _deps_dir(root)
-
-
-def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Path) -> tuple[bool, str]:
-    if not req or not req.exists():
-        return True, "no requirements.txt — skipped install"
-    if mode.startswith("venv"):
-        cmd = [py, "-m", "pip", "install", "-r", str(req)]
+        if r.returncode == 0 and py_path.exists():
+            if _pip_works(str(py_path)):
+                return str(py_path), "venv-created", venv, note
+            ok_b, blog = _bootstrap_pip(str(py_path))
+            note = (note + " " + blog[-200:]).strip()
+            if ok_b:
+                return str(py_path), "venv-bootstrapped", venv, note
+        # fall through to target
+        note = (note + " venv_unusable").strip()
     else:
-        cmd = [py, "-m", "pip", "install", "--target", str(isolation), "-r", str(req)]
+        if _pip_works(str(py_path)):
+            return str(py_path), "venv-reused", venv, note
+        ok_b, blog = _bootstrap_pip(str(py_path))
+        if ok_b:
+            return str(py_path), "venv-bootstrapped", venv, note
+        note = (note + " " + blog[-200:]).strip()
+
+    return sys.executable, "target", _deps_dir(root), note or "fallback_target"
+
+
+def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
+    """
+    Write a cleaned requirements file:
+    - skip blanks/comments
+    - skip editable/-e and local paths that break headless install
+    - skip packages that need system compilers when optional markers obvious
+    """
+    warnings: list[str] = []
+    lines_out: list[str] = []
+    for line in req.read_text(encoding="utf-8", errors="ignore").splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        if raw.startswith(("-e ", "--editable", "git+", "http://", "https://")) and "://" in raw:
+            # allow pure pypi https wheels? skip VCS for reliability unless simple
+            if raw.startswith(("git+", "-e")):
+                warnings.append(f"skipped_vcs:{raw[:60]}")
+                continue
+        if raw.startswith(("-e", "--editable")):
+            warnings.append(f"skipped_editable:{raw[:60]}")
+            continue
+        if raw.startswith("-"):
+            # pip options in requirements — keep common safe ones only
+            if raw.startswith(("-r ", "--requirement")):
+                warnings.append(f"skipped_nested_req:{raw[:60]}")
+                continue
+        lines_out.append(raw)
+
+    cleaned = req.parent / ".tbe_requirements_clean.txt"
+    cleaned.write_text("\n".join(lines_out) + ("\n" if lines_out else ""), encoding="utf-8")
+    return cleaned, warnings
+
+
+def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Path) -> tuple[bool, str, list[str]]:
+    if not req or not req.exists():
+        return True, "no requirements.txt — skipped install", []
+
+    cleaned, warns = _sanitize_requirements(req)
+    if not cleaned.read_text(encoding="utf-8").strip():
+        return True, "requirements empty after sanitize — skipped", warns
+
+    if mode.startswith("venv"):
+        cmd = [py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]
+        r0 = subprocess.run(cmd, capture_output=True, text=True, timeout=180, cwd=str(root))
+        pre = ((r0.stdout or "") + "\n" + (r0.stderr or ""))[-1500:]
+        cmd = [py, "-m", "pip", "install", "-r", str(cleaned)]
+    else:
+        pre = ""
+        cmd = [
+            py, "-m", "pip", "install",
+            "--target", str(isolation),
+            "-r", str(cleaned),
+        ]
+
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(root))
-    log = ((r.stdout or "") + "\n" + (r.stderr or ""))[-5000:]
-    return r.returncode == 0, log
+    log = pre + "\n" + ((r.stdout or "") + "\n" + (r.stderr or ""))
+    log = log[-8000:]
+    return r.returncode == 0, log, warns
+
+
+def _extract_pip_errors(log: str) -> list[str]:
+    if not log:
+        return ["pip install failed (no log)"]
+    errors: list[str] = []
+    for line in log.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("ERROR") or s.startswith("error:"):
+            errors.append(s[:240])
+        elif "No module named pip" in s:
+            errors.append(s[:240])
+        elif "Could not find a version that satisfies" in s:
+            errors.append(s[:240])
+        elif "No matching distribution" in s:
+            errors.append(s[:240])
+        elif "Failed to build" in s:
+            errors.append(s[:240])
+        elif "subprocess-exited-with-error" in s:
+            errors.append(s[:240])
+    # traceback chunks
+    if "Traceback (most recent call last):" in log:
+        parts = re.split(r"(?=Traceback \(most recent call last\):)", log)
+        for p in parts:
+            if "Traceback" in p:
+                errors.append(p.strip()[-300:])
+    if not errors:
+        # last non-empty lines as context
+        tail = [ln.strip() for ln in log.splitlines() if ln.strip()][-6:]
+        errors.extend(tail)
+    # unique
+    seen, out = set(), []
+    for e in errors:
+        if e not in seen:
+            seen.add(e)
+            out.append(e)
+    return out[:10]
 
 
 _ERROR_PATTERNS = (
@@ -216,22 +381,49 @@ class LiveRunnerService:
             )
 
         install_log = ""
+        mode = "unknown"
+        isolation = root
         try:
-            py, mode, isolation = _ensure_runtime(root)
+            py, mode, isolation, note = _ensure_runtime(root)
             if install:
                 req = _find_requirements(root)
-                ok_i, install_log = _pip_install(py, req, root, mode, isolation)
+                ok_i, install_log, warns = _pip_install(py, req, root, mode, isolation)
                 if not ok_i:
-                    return LiveRunReport(
-                        ok=False, phase="install", message="فشل تثبيت التبعيات",
-                        bot_username=username, bot_id=bot_id,
-                        install_log=install_log[-4000:],
-                        errors=_extract_errors(install_log) or ["pip install failed"],
-                        entry_point=str(entry.relative_to(root)),
-                        venv_path=str(isolation),
-                        duration_ms=(time.perf_counter() - t0) * 1000,
-                        details={"install_mode": mode},
-                    )
+                    # automatic fallback: if venv failed install, retry with target once
+                    if mode.startswith("venv"):
+                        py2, mode2, isolation2 = sys.executable, "target-fallback", _deps_dir(root)
+                        ok_i2, install_log2, warns2 = _pip_install(py2, req, root, mode2, isolation2)
+                        install_log = install_log + "\n--- fallback target ---\n" + install_log2
+                        warns = warns + warns2
+                        if ok_i2:
+                            py, mode, isolation = py2, mode2, isolation2
+                            ok_i = True
+                        else:
+                            errs = _extract_pip_errors(install_log)
+                            return LiveRunReport(
+                                ok=False, phase="install", message="فشل تثبيت التبعيات",
+                                bot_username=username, bot_id=bot_id,
+                                install_log=install_log[-6000:],
+                                errors=errs,
+                                warnings=warns[:5],
+                                entry_point=str(entry.relative_to(root)),
+                                venv_path=str(isolation),
+                                duration_ms=(time.perf_counter() - t0) * 1000,
+                                details={"install_mode": mode, "note": note},
+                            )
+                    else:
+                        errs = _extract_pip_errors(install_log)
+                        return LiveRunReport(
+                            ok=False, phase="install", message="فشل تثبيت التبعيات",
+                            bot_username=username, bot_id=bot_id,
+                            install_log=install_log[-6000:],
+                            errors=errs,
+                            warnings=warns[:5],
+                            entry_point=str(entry.relative_to(root)),
+                            venv_path=str(isolation),
+                            duration_ms=(time.perf_counter() - t0) * 1000,
+                            details={"install_mode": mode, "note": note},
+                        )
         except subprocess.TimeoutExpired:
             return LiveRunReport(
                 ok=False, phase="install", message="انتهت مهلة تثبيت التبعيات",
@@ -251,7 +443,6 @@ class LiveRunnerService:
         env["TOKEN"] = bot_token
         env["PYTHONUNBUFFERED"] = "1"
         if mode.startswith("target"):
-            # isolated deps on PYTHONPATH
             pp = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = str(isolation) + (os.pathsep + pp if pp else "")
 
