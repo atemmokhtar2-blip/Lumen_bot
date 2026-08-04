@@ -84,6 +84,7 @@ from ..engines.generators import (
     ConfigurationManagementEngine,
     SecurityPermissionEngine,
     ServiceManagementEngine,
+    MessageQueueEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -550,6 +551,11 @@ def bootstrap(
     service_management_engine = ServiceManagementEngine()
     registry.register_engine(service_management_engine)
 
+    # -- message queue engine (Specification 062) --------------------------
+    # MAXIMUM CRITICAL: reliable inter-engine messaging, DLQ, dedupe.
+    message_queue_engine = MessageQueueEngine()
+    registry.register_engine(message_queue_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -779,6 +785,10 @@ def bootstrap(
                      engine_id="service_management",
                      priority=147,
                      dependencies=["security_permission"])
+    manager.register(message_queue_engine,
+                     engine_id="message_queue",
+                     priority=148,
+                     dependencies=["service_management"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
