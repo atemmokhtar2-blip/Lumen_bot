@@ -77,6 +77,7 @@ from ..engines.generators import (
     EngineEcosystemEngine,
     EngineOrchestratorEngine,
     ExecutionContextEngine,
+    SynchronizationEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -508,6 +509,11 @@ def bootstrap(
     execution_context_engine = ExecutionContextEngine()
     registry.register_engine(execution_context_engine)
 
+    # -- intelligent synchronization engine (Specification 055) ------------
+    # CRITICAL: all engines see same data; conflict-free atomic sync.
+    synchronization_engine = SynchronizationEngine()
+    registry.register_engine(synchronization_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -709,6 +715,10 @@ def bootstrap(
                      engine_id="execution_context",
                      priority=140,
                      dependencies=["engine_orchestrator"])
+    manager.register(synchronization_engine,
+                     engine_id="synchronization",
+                     priority=141,
+                     dependencies=["execution_context"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
