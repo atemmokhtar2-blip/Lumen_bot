@@ -53,6 +53,21 @@ class LiveRunReport:
             lines.append("• أخطاء:")
             for e in self.errors[:8]:
                 lines.append(f"  - `{e[:220]}`")
+        # Error Intelligence diagnosis (foundation for hosting health reports)
+        if not self.ok:
+            try:
+                from ..error_intelligence import analyze_logs
+                contract = analyze_logs(
+                    run_log=self.run_log or "",
+                    install_log=self.install_log or "",
+                    phase=self.phase or "",
+                    extra_errors=list(self.errors or []),
+                )
+                if contract.primary:
+                    lines.append("• تشخيص:")
+                    lines.append(contract.to_user_summary())
+            except Exception:
+                pass
         if self.warnings:
             lines.append("• تحذيرات:")
             for w in self.warnings[:4]:
