@@ -1,4 +1,4 @@
-"""StaticDevGate — AST + symbols + dataflow + symbolic + taint rule engine."""
+"""StaticDevGate — AST + symbols + dataflow + symbolic + patterns rule engine."""
 
 from .models import StaticFinding, StaticReport, AnalysisContext, ModuleInfo
 from .service import analyze_project, verify_after_edit, plan_command_adds
@@ -27,6 +27,16 @@ from .symbolic import (
     ConstraintStore,
     SymFinding,
 )
+from .patterns import (
+    analyze_source_patterns,
+    analyze_module_patterns,
+    analyze_function_patterns,
+    PatternModuleResult,
+    FunctionPatternInfo,
+    PatternFinding,
+    cyclomatic_complexity,
+    register_pattern,
+)
 from .symbols import SymbolTable, Symbol, build_symbol_table
 from .rules.registry import all_rules, rules_by_id
 
@@ -39,5 +49,8 @@ __all__ = [
     "analyze_source_symbolic", "analyze_module_symbolic", "analyze_function_symbolic",
     "SymbolicFunctionResult", "SymbolicModuleResult",
     "SymValue", "SymKind", "Predicate", "ConstraintStore", "SymFinding",
+    "analyze_source_patterns", "analyze_module_patterns", "analyze_function_patterns",
+    "PatternModuleResult", "FunctionPatternInfo", "PatternFinding",
+    "cyclomatic_complexity", "register_pattern",
     "SymbolTable", "Symbol", "build_symbol_table",
 ]

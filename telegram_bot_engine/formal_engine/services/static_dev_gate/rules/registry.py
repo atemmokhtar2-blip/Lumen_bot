@@ -17,6 +17,9 @@ from .symbolic_rule import (
     SymbolicDivZeroRule, SymbolicAssertRule,
     SymbolicNoneAccessRule, SymbolicAlwaysRaiseRule,
 )
+from .pattern_rule import (
+    HighComplexityRule, DuplicatedCodeRule, MissingExceptRule,
+)
 
 # Order = execution order (core first)
 _RULE_CLASSES = [
@@ -40,6 +43,9 @@ _RULE_CLASSES = [
     SymbolicAssertRule,
     SymbolicNoneAccessRule,
     SymbolicAlwaysRaiseRule,
+    HighComplexityRule,
+    DuplicatedCodeRule,
+    MissingExceptRule,
 ]
 
 
