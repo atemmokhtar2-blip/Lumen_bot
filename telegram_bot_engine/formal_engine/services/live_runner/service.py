@@ -523,7 +523,8 @@ def _extract_errors(log: str) -> list[str]:
 # Auto-Heal: missing dependency → add to requirements → reinstall → rerun
 # ---------------------------------------------------------------------------
 
-# Common import-name → PyPI package mappings (deterministic, no LLM)
+# Common import-name → PyPI package mappings (deterministic, no LLM).
+# Longer dotted keys are preferred over short ones (see _module_to_package).
 _MODULE_TO_PACKAGE: dict[str, str] = {
     "telegram": "python-telegram-bot",
     "telegram.ext": "python-telegram-bot",
@@ -573,6 +574,15 @@ _MODULE_TO_PACKAGE: dict[str, str] = {
     "stripe": "stripe",
     "openai": "openai",
     "anthropic": "anthropic",
+    # Google ecosystem — NEVER install bare "google" (namespace package only)
+    "google.generativeai": "google-generativeai",
+    "google.genai": "google-genai",
+    "google.cloud": "google-cloud-core",
+    "google.auth": "google-auth",
+    "google.oauth2": "google-auth",
+    "googleapiclient": "google-api-python-client",
+    "google.api_core": "google-api-core",
+    "google.protobuf": "protobuf",
 }
 
 # stdlib modules we must never try to pip-install
@@ -593,8 +603,32 @@ _STDLIB_SKIP = {
 }
 
 
+def _extract_import_hints_from_traceback(log: str) -> list[str]:
+    """
+    From traceback text, pull the actual import targets shown on source lines,
+    e.g.  'import google.generativeai as genai'  →  'google.generativeai'
+    """
+    if not log:
+        return []
+    hints: list[str] = []
+    # lines that look like source from the failing frame
+    for m in re.finditer(
+        r"(?:^|\n)\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|import\s+([A-Za-z_][\w.]*))",
+        log,
+    ):
+        mod = (m.group(1) or m.group(2) or "").strip()
+        if mod and mod not in hints:
+            hints.append(mod)
+    return hints
+
+
 def _extract_missing_modules(log: str) -> list[str]:
-    """Extract module names from ModuleNotFoundError / ImportError lines."""
+    """
+    Extract module names from ModuleNotFoundError / ImportError.
+
+    Prefers the full dotted name when the traceback shows the real import
+    (e.g. google.generativeai) so mapping can pick the correct PyPI package.
+    """
     if not log:
         return []
     found: list[str] = []
@@ -603,25 +637,77 @@ def _extract_missing_modules(log: str) -> list[str]:
         r"ImportError:\s*No module named ['\"]([^'\"]+)['\"]",
         r"ImportError:\s*cannot import name ['\"][^'\"]+['\"] from ['\"]([^'\"]+)['\"]",
     ]
+    raw_missing: list[str] = []
     for pat in patterns:
         for m in re.finditer(pat, log):
             mod = m.group(1).strip()
-            # take top-level package only (a.b.c → a)
-            top = mod.split(".")[0]
-            if top and top not in found:
-                found.append(top)
+            if mod and mod not in raw_missing:
+                raw_missing.append(mod)
+
+    hints = _extract_import_hints_from_traceback(log)
+
+    # If error says 'google' but traceback imported 'google.generativeai',
+    # promote the longer hint that starts with the missing name.
+    for miss in raw_missing:
+        promoted = False
+        for h in hints:
+            if h == miss or h.startswith(miss + "."):
+                if h not in found:
+                    found.append(h)
+                promoted = True
+        if not promoted:
+            if miss not in found:
+                found.append(miss)
+
+    # also keep pure hints that clearly failed
+    for h in hints:
+        if h not in found and any(h == m or h.startswith(m + ".") or m.startswith(h + ".") for m in raw_missing):
+            found.append(h)
+
     return found
 
 
+# Namespace / meta packages that must NEVER be pip-installed under their bare name
+_BARE_NAMESPACE_BLOCKLIST = {
+    "google",  # always a namespace; real packages are google-generativeai etc.
+    "src",
+    "lib",
+    "test",
+    "tests",
+}
+
+
 def _module_to_package(module: str) -> str | None:
-    """Map import name to a PyPI package. Returns None for stdlib / unknown risky."""
-    if not module or module in _STDLIB_SKIP:
+    """Map import name to a PyPI package. Returns None for stdlib / unsafe bare names."""
+    if not module:
         return None
-    if module in _MODULE_TO_PACKAGE:
-        return _MODULE_TO_PACKAGE[module]
-    # Heuristic: if it looks like a normal package name, use it as-is
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,60}", module):
-        return module
+    mod = module.strip()
+    top = mod.split(".")[0]
+    if top in _STDLIB_SKIP or mod in _STDLIB_SKIP:
+        return None
+    if top in _BARE_NAMESPACE_BLOCKLIST and "." not in mod:
+        # bare 'google' without subpath → refuse; caller should promote via traceback hints
+        return None
+
+    # Prefer longest matching dotted key
+    if mod in _MODULE_TO_PACKAGE:
+        return _MODULE_TO_PACKAGE[mod]
+    # try progressive prefixes: a.b.c → a.b → a
+    parts = mod.split(".")
+    for i in range(len(parts) - 1, 0, -1):
+        prefix = ".".join(parts[:i])
+        if prefix in _MODULE_TO_PACKAGE:
+            return _MODULE_TO_PACKAGE[prefix]
+
+    if top in _MODULE_TO_PACKAGE:
+        return _MODULE_TO_PACKAGE[top]
+
+    if top in _BARE_NAMESPACE_BLOCKLIST:
+        return None
+
+    # Heuristic: normal single-segment package name only
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{1,60}", mod):
+        return mod
     return None
 
 
