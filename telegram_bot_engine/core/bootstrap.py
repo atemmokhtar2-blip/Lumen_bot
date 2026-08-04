@@ -71,6 +71,7 @@ from ..engines.generators import (
     RepositoryManagementEngine,
     GitOperationsEngine,
     FileSystemEngine,
+    WorkspaceManagementEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -472,6 +473,11 @@ def bootstrap(
     file_system_engine = FileSystemEngine()
     registry.register_engine(file_system_engine)
 
+    # -- intelligent workspace management engine (Specification 049) ------
+    # CRITICAL: isolated project workspaces; lifecycle; snapshots; recovery.
+    workspace_management_engine = WorkspaceManagementEngine()
+    registry.register_engine(workspace_management_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -649,6 +655,10 @@ def bootstrap(
                      engine_id="file_system",
                      priority=134,
                      dependencies=["git_operations"])
+    manager.register(workspace_management_engine,
+                     engine_id="workspace_management",
+                     priority=135,
+                     dependencies=["file_system"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

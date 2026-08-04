@@ -54,6 +54,7 @@ from .production_readiness import ProductionReadinessEngine
 from .repository_management import RepositoryManagementEngine
 from .git_operations import GitOperationsEngine
 from .file_system import FileSystemEngine
+from .workspace_management import WorkspaceManagementEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -104,4 +105,5 @@ __all__ = [
     "RepositoryManagementEngine",
     "GitOperationsEngine",
     "FileSystemEngine",
+    "WorkspaceManagementEngine",
 ]
