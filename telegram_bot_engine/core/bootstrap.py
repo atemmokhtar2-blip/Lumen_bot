@@ -68,6 +68,7 @@ from ..engines.generators import (
     UnitTestGenerationEngine,
     E2EScenarioTestingEngine,
     ProductionReadinessEngine,
+    RepositoryManagementEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -454,6 +455,11 @@ def bootstrap(
     production_readiness_engine = ProductionReadinessEngine()
     registry.register_engine(production_readiness_engine)
 
+    # -- intelligent repository management engine (Specification 046) -----
+    # CRITICAL: ownership+permission gated; never autonomous.
+    repository_management_engine = RepositoryManagementEngine()
+    registry.register_engine(repository_management_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -619,6 +625,10 @@ def bootstrap(
                      engine_id="production_readiness",
                      priority=131,
                      dependencies=["e2e_scenario_testing"])
+    manager.register(repository_management_engine,
+                     engine_id="repository_management",
+                     priority=132,
+                     dependencies=["production_readiness"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
