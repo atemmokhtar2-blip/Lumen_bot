@@ -100,6 +100,8 @@ class RepoIntelligence(StrictModel):
     risks: list[RepoRisk] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
     change_surface: list[str] = Field(default_factory=list)  # files safe to extend
+    package_health_score: float | None = None
+    package_alerts: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
     def to_user_lines(self) -> list[str]:
@@ -124,6 +126,10 @@ class RepoIntelligence(StrictModel):
             lines.append("• خطوات تالية: " + "؛ ".join(self.next_actions[:5]))
         if self.change_surface:
             lines.append("• سطح التعديل: " + ", ".join(f"`{x}`" for x in self.change_surface[:6]))
+        if self.package_health_score is not None:
+            lines.append(f"• صحة الحزم (PyPI): {self.package_health_score:.0%}")
+        if self.package_alerts:
+            lines.append("• تنبيهات حزم: " + " | ".join(self.package_alerts[:5]))
         return lines
 
 

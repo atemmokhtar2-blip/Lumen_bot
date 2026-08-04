@@ -105,6 +105,12 @@ def detect_repo_intent(text: str) -> tuple[str, dict[str, Any]]:
 
     # Phase-2 development intelligence
     if any(k in t for k in (
+        "صحة الحزم", "حالة الحزم", "package health", "package reality",
+        "هل المكتبات", "إصدارات", "اصدارات", "outdated", "pypi",
+    )):
+        return "package_health", params
+
+    if any(k in t for k in (
         "سد فجوات", "سد الفجوات", "أضف التبعيات", "اضف التبعيات",
         "apply deps", "fix deps", "dependency gaps", "فجوات التبعيات",
     )):
@@ -529,6 +535,21 @@ class RepoDevService:
                 contract=new_contract,
             )
 
+
+        if action == "package_health":
+            from ..package_reality import assess_repo_packages
+            report = assess_repo_packages(root)
+            return RepoDevResult(
+                ok=True,
+                action="package_health",
+                message=report.to_user_text(),
+                contract=contract,
+                data={
+                    "health_score": report.health_score,
+                    "outdated": report.outdated_count,
+                    "major_lag": report.major_lag_count,
+                },
+            )
 
         if action == "apply_dev":
             from ..active_dev import apply_development_request

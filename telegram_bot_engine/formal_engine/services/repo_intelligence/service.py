@@ -312,6 +312,38 @@ def build_repo_intelligence(contract: RepoContract) -> RepoIntelligence:
     if not actions:
         actions.append("راجع الملخص الهيكلي وحدّد هدف التطوير")
 
+    notes: list[str] = []
+    # Package Reality (live PyPI) — best-effort, never breaks understand
+    package_health_score = None
+    package_alerts: list[str] = []
+    try:
+        from ..package_reality import assess_repo_packages
+        preport = assess_repo_packages(root)
+        package_health_score = preport.health_score
+        for p in preport.packages:
+            if p.status in ("yanked", "major_lag", "not_on_pypi", "outdated"):
+                package_alerts.append(f"{p.name}:{p.status}")
+        package_alerts = package_alerts[:12]
+        if preport.major_lag_count or preport.yanked_count:
+            risks.append(RepoRisk(
+                code="package_health",
+                severity="high" if preport.yanked_count or preport.major_lag_count else "medium",
+                message_ar=(
+                    f"صحة الحزم: outdated={preport.outdated_count} "
+                    f"major_lag={preport.major_lag_count} yanked={preport.yanked_count}"
+                ),
+            ))
+            score = max(0.0, score - 0.05 * preport.major_lag_count - 0.08 * preport.yanked_count)
+            score = round(min(0.99, score), 3)
+            host_ready = bool(
+                contract.is_telegram_bot
+                and contract.entry_points
+                and score >= 0.55
+                and not any(r.code == "no_entry" for r in risks)
+            )
+    except Exception as e:
+        notes.append(f"package_reality_skip:{type(e).__name__}")
+
     return RepoIntelligence(
         host_readiness=score,
         host_ready=host_ready,
@@ -321,7 +353,9 @@ def build_repo_intelligence(contract: RepoContract) -> RepoIntelligence:
         risks=risks[:15],
         next_actions=actions[:8],
         change_surface=surface[:10],
-        notes=["repo_intelligence_v1"],
+        package_health_score=package_health_score,
+        package_alerts=package_alerts,
+        notes=notes + ["repo_intelligence_v1"],
     )
 
 
