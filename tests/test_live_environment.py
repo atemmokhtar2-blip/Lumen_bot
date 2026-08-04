@@ -381,3 +381,47 @@ def test_mode_target_or_venv(tmp_proj):
 def test_report_duration_field():
     r = LiveRunReport(ok=True, phase="run", message="ok", duration_ms=12.5)
     assert "12" in r.to_user_text() or "ms" in r.to_user_text()
+
+
+# --- source repair & env discovery ---
+def test_repair_escaped_quotes(tmp_path):
+    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+        repair_project_sources, syntax_check_entry, discover_token_env_names,
+    )
+    p = tmp_path / "bot.py"
+    p.write_text("x = \\'hello\\'\n", encoding="utf-8")
+    # actually write the broken form
+    p.write_bytes(b"x = \\'hello\\'\n")
+    notes = repair_project_sources(tmp_path)
+    ok, err = syntax_check_entry(p)
+    assert ok, (err, notes, p.read_text())
+
+
+def test_discover_custom_token_env(tmp_path):
+    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import discover_token_env_names
+    (tmp_path / "bot.py").write_text(
+        'import os\nT=os.getenv("MY_CUSTOM_BOT_TOKEN")\nU=os.environ.get("TELEGRAM_TOKEN")\n',
+        encoding="utf-8",
+    )
+    names = discover_token_env_names(tmp_path)
+    assert "MY_CUSTOM_BOT_TOKEN" in names
+    assert "TELEGRAM_TOKEN" in names
+
+
+def test_repair_logging_format_line(tmp_path):
+    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+        repair_python_file, syntax_check_entry,
+    )
+    p = tmp_path / "bot.py"
+    p.write_text(
+        "import logging\nlogging.basicConfig(\n"
+        "    format=\\'%(asctime)s - %(name)s\\',\n"
+        "    level=logging.INFO\n)\n",
+        encoding="utf-8",
+    )
+    # ensure broken
+    ok0, _ = syntax_check_entry(p)
+    assert not ok0
+    notes = repair_python_file(p)
+    ok, err = syntax_check_entry(p)
+    assert ok, (err, notes)

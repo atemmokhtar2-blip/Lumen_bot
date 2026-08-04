@@ -551,6 +551,20 @@ class LiveRunnerService:
                 duration_ms=(time.perf_counter() - t0) * 1000,
             )
 
+        # Auto-repair common source syntax issues (e.g. \\' written literally)
+        from .source_fix import repair_project_sources, discover_token_env_names, syntax_check_entry
+        repair_notes = repair_project_sources(root)
+        ok_syn, syn_err = syntax_check_entry(entry)
+        if not ok_syn:
+            return LiveRunReport(
+                ok=False, phase="validate",
+                message=f"SyntaxError في `{entry.name}` بعد محاولة الإصلاح: {syn_err}",
+                bot_username=username, bot_id=bot_id,
+                errors=[syn_err] + repair_notes[:5],
+                duration_ms=(time.perf_counter() - t0) * 1000,
+                details={"repair_notes": repair_notes},
+            )
+
         install_log = ""
         mode = "unknown"
         isolation = root
@@ -609,10 +623,14 @@ class LiveRunnerService:
             )
 
         env = os.environ.copy()
-        env["TELEGRAM_BOT_TOKEN"] = bot_token
-        env["BOT_TOKEN"] = bot_token
-        env["TOKEN"] = bot_token
         env["PYTHONUNBUFFERED"] = "1"
+        # Discover token env names from source and inject token into all of them
+        token_envs = discover_token_env_names(root)
+        for key in token_envs:
+            env[key] = bot_token
+        # hard defaults
+        for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
+            env[key] = bot_token
         if mode.startswith("target"):
             pp = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = str(isolation) + (os.pathsep + pp if pp else "")

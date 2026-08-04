@@ -101,14 +101,27 @@ class LocalProcessDriver(DeploymentProvider):
                 ),
             )
 
+        from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+            repair_project_sources,
+            discover_token_env_names,
+            syntax_check_entry,
+        )
+        repair_notes = repair_project_sources(path)
+        ok_syn, syn_err = syntax_check_entry(entry)
+        if not ok_syn:
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=dep_id,
+                status=DEPLOY_FAILED,
+                message=f"SyntaxError in {entry.name}: {syn_err}. repair={repair_notes[:3]}",
+            )
+
         child_env = os.environ.copy()
-        # Cover common token env names used by bot templates
-        child_env["BOT_TOKEN"] = bot_token
-        child_env["TELEGRAM_BOT_TOKEN"] = bot_token
-        child_env["TOKEN"] = bot_token
-        child_env["TG_TOKEN"] = bot_token
-        child_env["API_TOKEN"] = bot_token
         child_env["PYTHONUNBUFFERED"] = "1"
+        for key in discover_token_env_names(path):
+            child_env[key] = bot_token
+        for key in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
+            child_env[key] = bot_token
         child_env.pop("PORT", None)
         if mode.startswith("target"):
             pp = child_env.get("PYTHONPATH", "")
