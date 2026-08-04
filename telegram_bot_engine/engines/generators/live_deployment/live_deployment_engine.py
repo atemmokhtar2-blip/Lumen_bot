@@ -25,6 +25,7 @@ from .environment_generator import EnvironmentGenerator
 from .functional_tester import FunctionalTester
 from .health_checker import HealthChecker
 from .quality_gate import QualityGate
+from .local_process_driver import LocalProcessDriver
 from .railway_driver import RailwayDriver
 from .report_data import (
     LiveDeploymentReport,
@@ -46,20 +47,22 @@ class LiveDeploymentEngine(BaseEngine):
             name="live_deployment",
             version="1.0.0",
             description=(
-                "Deploys the generated bot, validates the Telegram token, "
-                "runs health checks and smart functional tests, and returns "
-                "a full deployment report. Railway is a provider driver only."
+                "Installs dependencies, runs the generated bot as a real "
+                "process, validates the Telegram token, health-checks, "
+                "runs functional tests. Railway remains an optional provider."
             ),
             tags=[
-                "deployment", "railway", "token", "health", "testing",
-                "secrets", "live", "maximum-critical",
+                "deployment", "local-process", "railway", "token", "health",
+                "testing", "secrets", "live", "maximum-critical",
             ],
             metadata={"specification": "065", "priority": "MAXIMUM CRITICAL"},
         )
         self._token_validator = TokenValidator()
         self._secrets = get_secrets_manager()
         self._env_gen = EnvironmentGenerator()
-        self._provider = RailwayDriver()
+        # Primary: real local process (pip install + run main.py)
+        self._provider = LocalProcessDriver()
+        self._railway = RailwayDriver()
         self._health = HealthChecker()
         self._functional = FunctionalTester()
         self._quality = QualityGate()
@@ -182,19 +185,18 @@ class LiveDeploymentEngine(BaseEngine):
             bot_token=bot_token,
         )
 
-        # 4) Deploy via provider interface (Railway driver)
-        env_vars = {"BOT_TOKEN": "***"}  # never pass raw token into provider logs
-        # Provider gets real token only through a side channel when needed
+        # 4) REAL deploy: pip install + start bot process (never log token)
         try:
-            # For dry-run / real deploy we still pass token in env_vars to the
-            # provider only if it is configured; Railway driver does not log it.
-            deploy_env = {"BOT_TOKEN": bot_token} if self._provider.configured else {}
             deployment = self._provider.deploy(
                 project_path,
-                env_vars=deploy_env,
+                env_vars={"BOT_TOKEN": bot_token},
                 service_name=Path(project_path).name[:40] or "generated-bot",
             )
             report.deployment = deployment
+            # Give polling a moment to connect to Telegram
+            if deployment.status == DEPLOY_RUNNING:
+                import time
+                time.sleep(2.5)
         except Exception as e:
             report.runtime_errors.append(RuntimeErrorRecord(
                 error_type=type(e).__name__,

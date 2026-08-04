@@ -109,8 +109,8 @@ async def _handle_live_deploy_token(message, context, token: str, pending: dict)
         )
     if dep:
         lines.append(
-            f"• النشر: `{_escape_md(dep.status)}`"
-            + (" (dry-run)" if dep.dry_run else "")
+            f"• التشغيل: `{_escape_md(dep.status)}`"
+            + (" (dry-run)" if dep.dry_run else " — عملية حقيقية")
         )
         if dep.message:
             lines.append(f"  {_escape_md(dep.message[:200])}")
@@ -129,6 +129,10 @@ async def _handle_live_deploy_token(message, context, token: str, pending: dict)
         lines.append("• ملاحظات:")
         for f in report.findings[:4]:
             lines.append(f"  - {_escape_md(f.message[:120])}")
+    if tv and tv.bot_username and dep and dep.status == "running":
+        lines.append(
+            f"\n🚀 البوت شغال — افتح @{_escape_md(tv.bot_username)} وأرسل /start"
+        )
 
     await _safe_edit_text(status, "\n".join(lines), use_markdown=True)
 
