@@ -661,6 +661,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "أضف", "اضف", "ضيف", "عدل", "عدّل", "اشرح", "الأوامر", "الاوامر",
             "امسح", "أعد", "طور", "طوّر", "هيكل", "command", "add", "explain",
             "stats", "fix", "modify", "ساعد", "تقدر",
+            "خطة تطوير", "فجوات", "أين أعد", "تطوير المستودع", "سد فجوات",
         )
         if action != "unknown" or any(h in request.lower() for h in develop_hints) or any(h in request for h in develop_hints):
             status = await message.reply_text("🛠 جاري التنفيذ على المستودع النشط...")

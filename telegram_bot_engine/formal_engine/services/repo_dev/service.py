@@ -103,8 +103,29 @@ def detect_repo_intent(text: str) -> tuple[str, dict[str, Any]]:
     if any(k in t for k in ("حالة", "status", "ماذا تستطيع", "تقدر تعمل ايه", "capabilities", "ساعد", "help")):
         return "help", params
 
+    # Phase-2 development intelligence
+    if any(k in t for k in (
+        "سد فجوات", "سد الفجوات", "أضف التبعيات", "اضف التبعيات",
+        "apply deps", "fix deps", "dependency gaps", "فجوات التبعيات",
+    )):
+        return "apply_deps", params
+
+    if any(k in t for k in (
+        "أين أعدل", "اين اعدل", "أين أعدّل", "اماكن التعديل", "أهداف التعديل",
+        "where to edit", "edit targets", "سطح التعديل",
+    )):
+        return "edit_targets", params
+
+    if any(k in t for k in (
+        "خطة تطوير", "خطة التطوير", "dev plan", "develop plan",
+        "طور المستودع", "طوّر المستودع", "تطوير المستودع",
+        "عايز اطور", "عايز أطور", "أريد تطوير", "develop repo",
+        "ملخص تطوير", "تطوير نشط", "dev brief", "وضع التطوير",
+    )):
+        return "dev_plan", params
+
     if any(k in t for k in ("عدل", "عدّل", "modify", "change", "طور", "طوّر", "fix", "أصلح", "صلح")):
-        return "unsupported_edit", params
+        return "dev_plan", params
 
     return "unknown", params
 
@@ -347,7 +368,7 @@ class RepoDevService:
                 ok=True,
                 action="help",
                 message=(
-                    "🔧 *قدرات التطوير على المستودع النشط*\n"
+                    "🔧 *قدرات التطوير على المستودع النشط (بعد الفهم الكامل)*\n"
                     "• اشرح الهيكل / ما هذا المشروع\n"
                     "• الأوامر — عرض الأوامر المكتشفة\n"
                     "• قائمة الملفات\n"
@@ -487,6 +508,72 @@ class RepoDevService:
                 message=f"تم حذف /{cmd} من `{entry.relative_to(root)}` (أفضل جهد حتمي).",
                 changed_files=[str(entry.relative_to(root))],
                 contract=new_contract,
+            )
+
+
+        if action == "dev_plan":
+            from ..repo_dev_intelligence import build_dev_plan
+            plan = build_dev_plan(contract, text)
+            return RepoDevResult(
+                ok=True,
+                action="dev_plan",
+                message=plan.to_user_text(),
+                contract=contract,
+                data={"steps": [s.id for s in plan.steps], "targets": plan.targets},
+            )
+
+        if action == "dev_brief":
+            from ..repo_dev_intelligence import build_dev_plan
+            plan = build_dev_plan(contract, "تطوير تكراري للمستودع النشط")
+            lines = [
+                "🚀 *وضع تطوير المستودع النشط*",
+                contract.to_user_summary(),
+                "",
+                plan.to_user_text(),
+            ]
+            return RepoDevResult(
+                ok=True,
+                action="dev_brief",
+                message=chr(10).join(lines),
+                contract=contract,
+            )
+
+        if action == "edit_targets":
+            from ..repo_dev_intelligence import suggest_edit_targets
+            targets = suggest_edit_targets(contract)
+            body = chr(10).join(f"• `{t}`" for t in targets) if targets else "• لا أهداف واضحة"
+            msg = "🎯 *أهداف التعديل المقترحة:*" + chr(10) + body
+            return RepoDevResult(
+                ok=True,
+                action="edit_targets",
+                message=msg,
+                contract=contract,
+                data={"targets": targets},
+            )
+
+        if action == "apply_deps":
+            from ..repo_dev_intelligence import apply_dependency_gaps
+            added, msg = apply_dependency_gaps(root, contract)
+            new_contract = contract
+            if added:
+                new_contract = understand_repo(root, remote_url=contract.remote_url or "")
+            return RepoDevResult(
+                ok=True,
+                action="apply_deps",
+                message=msg,
+                changed_files=["requirements.txt"] if added else [],
+                contract=new_contract,
+                data={"added": added},
+            )
+
+        if action == "unsupported_edit":
+            from ..repo_dev_intelligence import build_dev_plan
+            plan = build_dev_plan(contract, text)
+            return RepoDevResult(
+                ok=True,
+                action="dev_plan",
+                message=plan.to_user_text(),
+                contract=contract,
             )
 
         return RepoDevResult(
