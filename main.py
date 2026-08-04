@@ -58,6 +58,36 @@ def _is_allowed(user_id: int | None) -> bool:
     return user_id is not None and user_id in ALLOWED_USER_IDS
 
 
+def _escape_md(text: object) -> str:
+    """Escape Telegram legacy Markdown special characters in dynamic text."""
+    s = str(text) if text is not None else ""
+    for ch in ("\\", "`", "*", "_", "[", "]", "(", ")"):
+        s = s.replace(ch, f"\\{ch}")
+    return s
+
+
+async def _safe_edit_text(message, text: str, *, use_markdown: bool = True) -> None:
+    """edit_text with Markdown; fall back to plain text if Telegram rejects entities."""
+    if use_markdown:
+        try:
+            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+            return
+        except Exception as e:
+            err = str(e).lower()
+            if "can't parse entities" in err or "parse entities" in err:
+                logger.warning("Markdown parse failed, retrying as plain text: %s", e)
+            else:
+                raise
+    # Plain text fallback (strip simple md markers for readability)
+    plain = (
+        text.replace("\\", "")
+        .replace("*", "")
+        .replace("`", "")
+        .replace("_", "")
+    )
+    await message.edit_text(plain)
+
+
 def _make_zip_from_path(project_path: str | Path) -> Path | None:
     """Create a zip of the generated project. Returns zip path or None."""
     project_path = Path(project_path)
@@ -191,17 +221,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"• المراحل الناجحة: {ok_stages}/{total_stages}",
         ]
         if project_path:
-            summary_lines.append(f"• المسار: `{project_path}`")
+            summary_lines.append(f"• المسار: `{_escape_md(project_path)}`")
         if errors:
             summary_lines.append("• أخطاء:")
             for e in errors[:5]:
-                summary_lines.append(f"  - {e}")
+                # Dynamic engine errors often contain _, *, ` — escape them
+                summary_lines.append(f"  - {_escape_md(e)}")
 
         summary_lines.append(
             "\n_ملاحظة: لا تزال هناك محركات قيد التطوير، قد تكون بعض الأجزاء غير مكتملة._"
         )
 
-        await status_msg.edit_text("\n".join(summary_lines), parse_mode=ParseMode.MARKDOWN)
+        await _safe_edit_text(status_msg, "\n".join(summary_lines), use_markdown=True)
 
         # Try to send zip if project exists
         if project_path and Path(project_path).exists():
@@ -228,11 +259,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except Exception as e:
         logger.exception("Generation failed")
-        err_text = str(e)[:400]
-        await status_msg.edit_text(
+        err_text = _escape_md(str(e)[:400])
+        await _safe_edit_text(
+            status_msg,
             f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`\n\n"
             "قد يكون السبب محركات غير مكتملة بعد. حاول لاحقاً.",
-            parse_mode=ParseMode.MARKDOWN,
+            use_markdown=True,
         )
     finally:
         # Optional cleanup of very old temp dirs can be added later.
