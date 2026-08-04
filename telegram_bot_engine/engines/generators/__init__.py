@@ -52,6 +52,7 @@ from .unit_test_generation import UnitTestGenerationEngine
 from .e2e_scenario_testing import E2EScenarioTestingEngine
 from .production_readiness import ProductionReadinessEngine
 from .repository_management import RepositoryManagementEngine
+from .git_operations import GitOperationsEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -100,4 +101,5 @@ __all__ = [
     "E2EScenarioTestingEngine",
     "ProductionReadinessEngine",
     "RepositoryManagementEngine",
+    "GitOperationsEngine",
 ]

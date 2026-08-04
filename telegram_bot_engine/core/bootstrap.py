@@ -69,6 +69,7 @@ from ..engines.generators import (
     E2EScenarioTestingEngine,
     ProductionReadinessEngine,
     RepositoryManagementEngine,
+    GitOperationsEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -460,6 +461,11 @@ def bootstrap(
     repository_management_engine = RepositoryManagementEngine()
     registry.register_engine(repository_management_engine)
 
+    # -- intelligent git operations engine (Specification 047) ------------
+    # CRITICAL: git ops after user/perm/repo checks; dangerous ops need confirm.
+    git_operations_engine = GitOperationsEngine()
+    registry.register_engine(git_operations_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -629,6 +635,10 @@ def bootstrap(
                      engine_id="repository_management",
                      priority=132,
                      dependencies=["production_readiness"])
+    manager.register(git_operations_engine,
+                     engine_id="git_operations",
+                     priority=133,
+                     dependencies=["repository_management"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
