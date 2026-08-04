@@ -87,6 +87,7 @@ from ..engines.generators import (
     MessageQueueEngine,
     TaskSchedulerEngine,
     WorkflowExecutionEngine,
+    LiveDeploymentEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -568,6 +569,11 @@ def bootstrap(
     workflow_execution_engine = WorkflowExecutionEngine()
     registry.register_engine(workflow_execution_engine)
 
+    # -- live deployment engine (Specification 065) ------------------------
+    # MAXIMUM CRITICAL: token, secrets, deploy, health, functional tests.
+    live_deployment_engine = LiveDeploymentEngine()
+    registry.register_engine(live_deployment_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -809,6 +815,10 @@ def bootstrap(
                      engine_id="workflow_execution",
                      priority=150,
                      dependencies=["task_scheduler"])
+    manager.register(live_deployment_engine,
+                     engine_id="live_deployment",
+                     priority=151,
+                     dependencies=["workflow_execution"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

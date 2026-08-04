@@ -58,6 +58,81 @@ def _is_allowed(user_id: int | None) -> bool:
     return user_id is not None and user_id in ALLOWED_USER_IDS
 
 
+def _looks_like_bot_token(text: str) -> bool:
+    import re
+    return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", (text or "").strip()))
+
+
+async def _handle_live_deploy_token(message, context, token: str, pending: dict) -> None:
+    """Spec 065: validate token, deploy, health-check, functional tests."""
+    status = await message.reply_text(
+        "🔐 جاري التحقق من التوكن وتشغيل Live Deployment..."
+    )
+    project_path = pending.get("project_path")
+    owner_id = pending.get("owner_user_id")
+
+    def _run():
+        from telegram_bot_engine.engines.generators.live_deployment import (
+            LiveDeploymentEngine,
+        )
+        engine = LiveDeploymentEngine()
+        return engine.run_live_deployment(
+            project_path=project_path,
+            bot_token=token,
+            owner_user_id=owner_id,
+        )
+
+    try:
+        report = await asyncio.to_thread(_run)
+    except Exception as e:
+        logger.exception("Live deployment failed")
+        await status.edit_text(f"❌ فشل Live Deployment: {type(e).__name__}")
+        return
+    finally:
+        # Drop token from any local vars as soon as possible
+        token = ""  # noqa: F841
+
+    context.user_data.pop("pending_deploy", None)
+
+    tv = report.token_validation
+    dep = report.deployment
+    health = report.health
+    lines = [
+        f"{'✅' if report.passed else '⚠️'} *تقرير Live Deployment*",
+        f"• الحكم: `{_escape_md(report.verdict)}`",
+        f"• الجودة: {report.quality_score:.0%}",
+    ]
+    if tv:
+        lines.append(
+            f"• التوكن: {'صالح' if tv.valid else 'غير صالح'}"
+            + (f" (@{_escape_md(tv.bot_username)})" if tv.bot_username else "")
+        )
+    if dep:
+        lines.append(
+            f"• النشر: `{_escape_md(dep.status)}`"
+            + (" (dry-run)" if dep.dry_run else "")
+        )
+        if dep.message:
+            lines.append(f"  {_escape_md(dep.message[:200])}")
+    if health:
+        lines.append(
+            f"• الصحة: {'Online' if health.online else 'Offline'}"
+            f" ({health.latency_ms:.0f}ms)"
+        )
+    lines.append(
+        f"• الاختبارات: {report.tests_passed}/{report.tests_total} ناجحة"
+    )
+    for t in report.functional_tests[:5]:
+        mark = {"pass": "✅", "fail": "❌", "skip": "⏭", "error": "💥"}.get(t.status, "•")
+        lines.append(f"  {mark} {_escape_md(t.name)}: {_escape_md(t.message[:80])}")
+    if report.findings:
+        lines.append("• ملاحظات:")
+        for f in report.findings[:4]:
+            lines.append(f"  - {_escape_md(f.message[:120])}")
+
+    await _safe_edit_text(status, "\n".join(lines), use_markdown=True)
+
+
 def _escape_md(text: object) -> str:
     """Escape Telegram legacy Markdown special characters in dynamic text."""
     s = str(text) if text is not None else ""
@@ -187,6 +262,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request or request.startswith("/"):
         return
 
+    # Spec 065 — if user is sending a bot token after successful generation
+    pending = (context.user_data or {}).get("pending_deploy")
+    if pending and _looks_like_bot_token(request):
+        await _handle_live_deploy_token(message, context, request, pending)
+        return
+
     if len(request) < 5:
         await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
         return
@@ -252,6 +333,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     )
             else:
                 await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
+
+            # Spec 065: after successful project, offer live deploy via token
+            if success:
+                context.user_data["pending_deploy"] = {
+                    "project_path": str(project_path),
+                    "owner_user_id": user.id if user else None,
+                }
+                await message.reply_text(
+                    "✅ تم إنشاء المشروع بنجاح.\n\n"
+                    "إذا أردت تجربة البوت مباشرة، أرسل:\n"
+                    "Telegram Bot Token\n\n"
+                    "(من @BotFather — لن يتم حفظ التوكن في الكود أو اللوجات)"
+                )
         elif not success:
             await message.reply_text(
                 "لم يُنشأ مشروع. جرّب وصفاً أبسط أو أوضح."

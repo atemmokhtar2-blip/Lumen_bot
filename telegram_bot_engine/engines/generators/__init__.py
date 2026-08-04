@@ -70,6 +70,7 @@ from .service_management import ServiceManagementEngine
 from .message_queue import MessageQueueEngine
 from .task_scheduler import TaskSchedulerEngine
 from .workflow_execution import WorkflowExecutionEngine
+from .live_deployment import LiveDeploymentEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -136,4 +137,5 @@ __all__ = [
     "MessageQueueEngine",
     "TaskSchedulerEngine",
     "WorkflowExecutionEngine",
+    "LiveDeploymentEngine",
 ]
