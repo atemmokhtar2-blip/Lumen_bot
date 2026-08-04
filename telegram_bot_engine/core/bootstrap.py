@@ -80,6 +80,7 @@ from ..engines.generators import (
     SynchronizationEngine,
     ResourceManagementEngine,
     SystemMonitoringEngine,
+    CentralLoggingEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -526,6 +527,11 @@ def bootstrap(
     system_monitoring_engine = SystemMonitoringEngine()
     registry.register_engine(system_monitoring_engine)
 
+    # -- central logging & audit engine (Specification 058) ----------------
+    # CRITICAL: single log sink; immutable; redact secrets; search; rotate.
+    central_logging_engine = CentralLoggingEngine()
+    registry.register_engine(central_logging_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -739,6 +745,10 @@ def bootstrap(
                      engine_id="system_monitoring",
                      priority=143,
                      dependencies=["resource_management"])
+    manager.register(central_logging_engine,
+                     engine_id="central_logging",
+                     priority=144,
+                     dependencies=["system_monitoring"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)
