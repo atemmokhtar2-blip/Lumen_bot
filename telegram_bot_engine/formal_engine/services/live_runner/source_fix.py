@@ -1,8 +1,7 @@
 """
 Pre-run source repair + env discovery (deterministic, no LLM).
 
-1) Fix common SyntaxError patterns (escaped quotes written literally)
-2) Discover token-related env var names from source via AST + regex
+Handles multi-escaped quotes that survive a single replace pass.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-# Common token-ish env names we always include if present in code or as defaults
 _DEFAULT_TOKEN_ENVS = (
     "TELEGRAM_BOT_TOKEN",
     "BOT_TOKEN",
@@ -23,10 +21,7 @@ _DEFAULT_TOKEN_ENVS = (
     "BOTTOKEN",
 )
 
-_TOKEN_NAME_HINT = re.compile(
-    r"(TOKEN|BOT|TELEGRAM|TG_|API_TOKEN)",
-    re.I,
-)
+_TOKEN_NAME_HINT = re.compile(r"(TOKEN|BOT|TELEGRAM|TG_|API_TOKEN)", re.I)
 
 
 def _iter_py_files(root: Path, limit: int = 40) -> Iterable[Path]:
@@ -49,53 +44,113 @@ def _iter_py_files(root: Path, limit: int = 40) -> Iterable[Path]:
 
 def fix_escaped_quotes_in_source(text: str) -> tuple[str, list[str]]:
     """
-    Fix literal backslash-quotes that break Python parsing:
-      format=\'...\'  -> format='...'
-      \"...\" inside normal code lines when file was double-escaped.
+    Aggressively normalize broken escaped quotes written into source files.
+
+    Examples that must become valid:
+      format=\'...\'
+      format=\\'...\\'
+      format=\\\'...\\\'
     """
     notes: list[str] = []
     original = text
 
-    # Pattern: =\'...\'  or (\'...\') on a line — replace \' with '
-    def repl_single(m: re.Match) -> str:
-        return m.group(0).replace("\\'", "'")
+    try:
+        ast.parse(original)
+        return original, []
+    except SyntaxError:
+        pass
 
-    new = re.sub(r"\\'([^\\'\\n]*)\\'", lambda m: "'" + m.group(1) + "'", text)
-    if new != text:
-        notes.append("fixed_escaped_single_quotes")
-        text = new
+    # 1) Repeatedly collapse \'+  sequences before a quote into a bare quote
+    #    \\' -> \' -> '
+    prev = None
+    cur = text
+    rounds = 0
+    while prev != cur and rounds < 10:
+        prev = cur
+        # one or more backslashes immediately before a single or double quote
+        nxt = re.sub(r"\\+(')", r"\1", cur)
+        nxt = re.sub(r'\\+(")', r"\1", nxt)
+        cur = nxt
+        rounds += 1
+    if cur != text:
+        notes.append(f"collapsed_backslash_quotes_rounds={rounds}")
+        text = cur
 
-    # Also handle format=\'...\' where only opening/closing escaped
-    new2 = text.replace("\\'", "'")
-    # Avoid breaking valid escape sequences in real strings that use \\'
-    # Only apply full replace if file still doesn't parse and original had the bad pattern
-    if "\\'" in original:
-        try:
-            ast.parse(original)
-            # original already valid — don't touch
-            return original, []
-        except SyntaxError:
-            text = original.replace("\\'", "'")
-            notes.append("replaced_all_escaped_single_quotes")
+    # 2) Line-continuation orphans: trailing \ before non-newline junk on same line
+    #    e.g. format=\ 'x'  (backslash space)
+    new_lines = []
+    changed_lines = 0
+    for line in text.splitlines(keepends=True):
+        # if line has odd dangling backslash patterns outside strings — hard;
+        # focus on `=\s*\\` before quote already handled
+        stripped = line.rstrip("\n\r")
+        if re.search(r"=\\\s*['\"]", stripped):
+            fixed_line = re.sub(r"=\\\s*(['\"])", r"=\1", stripped)
+            if line.endswith("\r\n"):
+                fixed_line += "\r\n"
+            elif line.endswith("\n"):
+                fixed_line += "\n"
+            line = fixed_line
+            changed_lines += 1
+        new_lines.append(line)
+    if changed_lines:
+        notes.append(f"fixed_eq_backslash_quote_lines={changed_lines}")
+        text = "".join(new_lines)
 
-    # Fix \" -> " only when file has SyntaxError with line continuation
+    # 3) If still broken, try logging.basicConfig format= rewrite from common template
     try:
         ast.parse(text)
         return text, notes
-    except SyntaxError:
-        if '\\"' in text:
-            candidate = text.replace('\\"', '"')
-            try:
-                ast.parse(candidate)
-                notes.append("fixed_escaped_double_quotes")
-                return candidate, notes
-            except SyntaxError:
-                pass
+    except SyntaxError as e:
+        notes.append(f"still_after_collapse:{e.msg}@line{e.lineno}")
+
+    # 4) Targeted fix on the failing line: strip all backslashes before quotes on that line
+    try:
+        lines = text.splitlines(keepends=True)
+        # lineno is 1-based
+        err = None
+        try:
+            ast.parse(text)
+        except SyntaxError as e:
+            err = e
+        if err and err.lineno and 1 <= err.lineno <= len(lines):
+            idx = err.lineno - 1
+            old = lines[idx]
+            fixed_line = re.sub(r"\\+(['\"])", r"\1", old)
+            # also remove lone backslash before end of assignment fragments
+            fixed_line = re.sub(r"=\\+", "=", fixed_line)
+            if fixed_line != old:
+                lines[idx] = fixed_line
+                text2 = "".join(lines)
+                try:
+                    ast.parse(text2)
+                    notes.append(f"line_surgery@{err.lineno}")
+                    return text2, notes
+                except SyntaxError as e2:
+                    notes.append(f"line_surgery_failed:{e2.msg}")
+                    text = text2
+    except Exception as ex:
+        notes.append(f"line_surgery_error:{ex}")
+
+    # 5) Nuclear option for format= lines: rewrite to a safe format string
+    text3, n = re.subn(
+        r"format\s*=\s*\\*['\"].*?\\*['\"]",
+        "format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'",
+        text,
+        flags=re.S,
+    )
+    if n:
+        notes.append(f"rewrote_format_kwargs={n}")
+        try:
+            ast.parse(text3)
+            return text3, notes
+        except SyntaxError as e:
+            notes.append(f"format_rewrite_failed:{e.msg}")
+
     return text, notes
 
 
 def repair_python_file(path: Path) -> list[str]:
-    """Attempt in-place repair of common syntax issues. Returns notes."""
     notes: list[str] = []
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -104,7 +159,7 @@ def repair_python_file(path: Path) -> list[str]:
 
     try:
         ast.parse(raw)
-        return []  # already valid
+        return []
     except SyntaxError as e:
         notes.append(f"syntax_error_before:{e.msg}@line{e.lineno}")
 
@@ -116,7 +171,15 @@ def repair_python_file(path: Path) -> list[str]:
         notes.append("repaired_and_saved")
         return notes
     except SyntaxError as e:
+        # last resort: write fixed anyway if closer? no — keep original if still invalid
         notes.append(f"still_broken:{e.msg}@line{e.lineno}")
+        # Show failing line content for diagnostics
+        try:
+            lines = fixed.splitlines()
+            if e.lineno and 1 <= e.lineno <= len(lines):
+                notes.append(f"failing_line_repr={lines[e.lineno - 1]!r}"[:200])
+        except Exception:
+            pass
         return notes
 
 
@@ -136,24 +199,17 @@ def discover_env_vars_from_file(path: Path) -> set[str]:
     except Exception:
         return names
 
-    # Regex fast path
     for m in re.finditer(
-        r"""(?:os\.getenv|os\.environ\.get|getenv)\s*\(\s*['"]([A-Z][A-Z0-9_]{1,64})['"]""",
+        r"""(?:os\.getenv|os\.environ\.get|getenv)\s*\(\s*['"]([A-Za-z_][A-Za-z0-9_]{1,64})['"]""",
         src,
     ):
         names.add(m.group(1))
     for m in re.finditer(
-        r"""os\.environ\s*\[\s*['"]([A-Z][A-Z0-9_]{1,64})['"]\s*\]""",
-        src,
-    ):
-        names.add(m.group(1))
-    for m in re.finditer(
-        r"""(?:os\.environ\.get|getenv)\s*\(\s*['"]([A-Za-z_][A-Za-z0-9_]{1,64})['"]""",
+        r"""os\.environ\s*\[\s*['"]([A-Za-z_][A-Za-z0-9_]{1,64})['"]\s*\]""",
         src,
     ):
         names.add(m.group(1))
 
-    # AST path
     try:
         tree = ast.parse(src)
     except SyntaxError:
@@ -175,7 +231,6 @@ def discover_env_vars_from_file(path: Path) -> set[str]:
             self.generic_visit(node)
 
         def visit_Subscript(self, node: ast.Subscript) -> None:
-            # os.environ["X"]
             if isinstance(node.value, ast.Attribute) and node.value.attr == "environ":
                 sl = node.slice
                 if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
@@ -187,23 +242,14 @@ def discover_env_vars_from_file(path: Path) -> set[str]:
 
 
 def discover_token_env_names(root: Path) -> list[str]:
-    """
-    Return ordered unique env var names likely used for the bot token.
-    Token-ish names first, then other discovered envs.
-    """
     found: set[str] = set()
     for p in _iter_py_files(root, limit=30):
         found |= discover_env_vars_from_file(p)
 
-    tokenish = []
-    other = []
+    tokenish, other = [], []
     for n in sorted(found):
-        if _TOKEN_NAME_HINT.search(n):
-            tokenish.append(n)
-        else:
-            other.append(n)
+        (tokenish if _TOKEN_NAME_HINT.search(n) else other).append(n)
 
-    # Always ensure defaults are available for injection order
     ordered = []
     for n in list(tokenish) + list(_DEFAULT_TOKEN_ENVS):
         if n not in ordered:
