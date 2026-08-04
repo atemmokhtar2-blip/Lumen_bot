@@ -357,6 +357,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status.edit_text(f"❌ {err}")
         return
 
+    # --- Active repo development (must run before generate_bot) ---
+    active = (context.user_data or {}).get("active_repo")
+    if active and active.get("path") and Path(active["path"]).exists():
+        from telegram_bot_engine.formal_engine.services.repo_dev import (
+            handle_repo_request,
+            detect_repo_intent,
+        )
+        action, _ = detect_repo_intent(request)
+        # Route to repo-dev when intent is about the active repo OR explicit develop words
+        develop_hints = (
+            "أضف", "اضف", "ضيف", "عدل", "عدّل", "اشرح", "الأوامر", "الاوامر",
+            "امسح", "أعد", "طور", "طوّر", "هيكل", "command", "add", "explain",
+            "stats", "fix", "modify", "ساعد", "تقدر",
+        )
+        if action != "unknown" or any(h in request.lower() for h in develop_hints) or any(h in request for h in develop_hints):
+            status = await message.reply_text("🛠 جاري التنفيذ على المستودع النشط...")
+            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+
+            def _run_dev():
+                return handle_repo_request(
+                    request,
+                    active["path"],
+                    contract_dict=active.get("contract"),
+                )
+
+            try:
+                dev = await asyncio.to_thread(_run_dev)
+            except Exception as e:
+                logger.exception("RepoDev failed")
+                await status.edit_text(f"❌ فشل التنفيذ على المستودع: {type(e).__name__}: {str(e)[:200]}")
+                return
+
+            if dev.contract is not None:
+                context.user_data["active_repo"] = {
+                    "path": active["path"],
+                    "url": active.get("url"),
+                    "contract": dev.contract.model_dump(mode="json"),
+                }
+
+            text_out = dev.message
+            if dev.changed_files:
+                text_out += "\n• ملفات تغيّرت: " + ", ".join(f"`{f}`" for f in dev.changed_files)
+            await status.edit_text(text_out)
+
+            # If file changed, offer zip of repo
+            if dev.ok and dev.changed_files and Path(active["path"]).exists():
+                try:
+                    zip_path = _make_zip_from_path(active["path"])
+                    if zip_path and zip_path.exists() and zip_path.stat().st_size < 45 * 1024 * 1024:
+                        with open(zip_path, "rb") as f:
+                            await message.reply_document(
+                                document=f,
+                                filename=f"{Path(active['path']).name}_updated.zip",
+                                caption="📦 المستودع بعد التعديل",
+                            )
+                except Exception:
+                    logger.exception("zip after repo dev failed")
+            return
+
     if len(request) < 5:
         await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
         return
