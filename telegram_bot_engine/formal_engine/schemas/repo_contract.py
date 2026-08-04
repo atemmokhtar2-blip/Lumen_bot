@@ -127,6 +127,36 @@ class RepoIntelligence(StrictModel):
         return lines
 
 
+
+class DeepFunction(StrictModel):
+    """One function/method with its outbound calls — literal structural understanding."""
+    qualname: str
+    file: str
+    lineno: int = 0
+    end_lineno: int = 0
+    is_async: bool = False
+    args: list[str] = Field(default_factory=list)
+    decorators: list[str] = Field(default_factory=list)
+    calls: list[str] = Field(default_factory=list)
+    docstring: str = ""
+
+
+class CodeGraph(StrictModel):
+    """Whole-repo code graph built in one AST pass (target < 2s)."""
+    modules_indexed: int = 0
+    function_count: int = 0
+    class_count: int = 0
+    call_edge_count: int = 0
+    lines_covered: int = 0
+    index_ms: float = 0.0
+    syntax_errors: list[str] = Field(default_factory=list)
+    # Cap stored detail for message size; counts above are complete
+    functions: list[DeepFunction] = Field(default_factory=list)
+    # qualname -> callees (sample of densest / entry-related)
+    call_graph_sample: dict[str, list[str]] = Field(default_factory=dict)
+    module_function_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class RepoContract(StrictModel):
     schema_version: str = "2.1"
     root_path: str
@@ -166,6 +196,7 @@ class RepoContract(StrictModel):
     quality_signals: dict[str, Any] = Field(default_factory=dict)
     raw_stats: dict[str, Any] = Field(default_factory=dict)
     intelligence: RepoIntelligence | None = None
+    code_graph: CodeGraph | None = None
 
     def to_user_summary(self) -> str:
         lines = [
@@ -206,6 +237,16 @@ class RepoContract(StrictModel):
             lines.append(f"• ملخص: {self.summary}")
         if self.notes:
             lines.append("• ملاحظات: " + " | ".join(self.notes[:5]))
+        if self.code_graph is not None:
+            g = self.code_graph
+            lines.append(
+                f"• خريطة الكود: {g.function_count} دالة / {g.class_count} صنف / "
+                f"{g.call_edge_count} استدعاء / {g.modules_indexed} موديول "
+                f"({g.index_ms:.0f}ms)"
+            )
+        if self.intelligence is not None:
+            lines.append("🧠 *ذكاء المستودع:*")
+            lines.extend(self.intelligence.to_user_lines())
         qs = self.quality_signals or {}
         if qs:
             bits = []

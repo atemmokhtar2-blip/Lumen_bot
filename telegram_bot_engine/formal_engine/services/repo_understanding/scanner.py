@@ -20,6 +20,8 @@ from typing import Any, Iterable
 
 from ...schemas.repo_contract import (
     ClassInfo,
+    CodeGraph,
+    DeepFunction,
     DetectedCommand,
     DetectedHandler,
     EntryPoint,
@@ -243,7 +245,7 @@ class _FileAnalysis:
     __slots__ = (
         "rel", "imports", "classes", "functions", "commands", "handlers",
         "env_vars", "tg_score", "fw_hits", "lines", "has_async", "has_typing",
-        "is_entry_candidate",
+        "is_entry_candidate", "deep_functions", "deep_class_count", "syntax_error",
     )
 
     def __init__(self, rel: str) -> None:
@@ -260,6 +262,9 @@ class _FileAnalysis:
         self.has_async = False
         self.has_typing = False
         self.is_entry_candidate = False
+        self.deep_functions: list[DeepFunction] = []
+        self.deep_class_count = 0
+        self.syntax_error: str = ""
 
 
 def _add_cmd(
@@ -278,6 +283,65 @@ def _add_cmd(
         return
     out.append(
         DetectedCommand(name=name, source_file=rel, evidence=evidence[:100], registration=registration)
+    )
+
+
+
+def _call_name_deep(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _call_name_deep(node.value)
+        return f"{base}.{node.attr}" if base else node.attr
+    if isinstance(node, ast.Call):
+        return _call_name_deep(node.func)
+    if isinstance(node, ast.Subscript):
+        return _call_name_deep(node.value)
+    return ""
+
+
+def _deep_index_function(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    an: _FileAnalysis,
+    parent: str = "",
+) -> None:
+    """Record every function/method with its outbound calls (literal AST understanding)."""
+    calls: list[str] = []
+    seen: set[str] = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call):
+            nm = _call_name_deep(n.func)
+            if nm and nm not in seen:
+                seen.add(nm)
+                calls.append(nm)
+            if len(calls) >= 50:
+                break
+    args = [a.arg for a in node.args.args if a.arg not in ("self", "cls")]
+    decos: list[str] = []
+    for d in node.decorator_list:
+        dn = _call_name_deep(d) if not isinstance(d, ast.Call) else _call_name_deep(d.func)
+        if not dn:
+            dn = _decorator_chain(d)
+        if dn:
+            decos.append(dn)
+    doc = ""
+    try:
+        doc = (ast.get_docstring(node) or "")[:160]
+    except Exception:
+        pass
+    qual = f"{parent}.{node.name}" if parent else node.name
+    an.deep_functions.append(
+        DeepFunction(
+            qualname=qual,
+            file=an.rel,
+            lineno=int(getattr(node, "lineno", 0) or 0),
+            end_lineno=int(getattr(node, "end_lineno", 0) or getattr(node, "lineno", 0) or 0),
+            is_async=isinstance(node, ast.AsyncFunctionDef),
+            args=args[:16],
+            decorators=decos[:10],
+            calls=calls[:40],
+            docstring=doc,
+        )
     )
 
 
@@ -307,6 +371,21 @@ def _analyze_file(path: Path, root: Path) -> _FileAnalysis | None:
 
     for node in tree.body:
         _visit_stmt(node, an)
+
+    # Deep literal index: every function/method + outbound calls
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _deep_index_function(node, an)
+        elif isinstance(node, ast.ClassDef):
+            an.deep_class_count += 1
+            for n in node.body:
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    _deep_index_function(n, an, parent=node.name)
+                elif isinstance(n, ast.ClassDef):  # nested class methods
+                    an.deep_class_count += 1
+                    for n2 in n.body:
+                        if isinstance(n2, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            _deep_index_function(n2, an, parent=f"{node.name}.{n.name}")
 
     # walk all nodes for Call patterns
     for node in ast.walk(tree):
@@ -554,19 +633,23 @@ class RepoUnderstandingService:
         purpose = _readme_purpose(root)
 
         analyses: list[_FileAnalysis] = []
-        # Prefer entry-like files first, scan up to 150 app files
+        # Full-repo AST pass (cap 400 modules) — deep function/call index in same walk
+        import time as _time
+        _t_index = _time.perf_counter()
         ranked = sorted(
             py_files,
             key=lambda p: (
                 0 if p.name in ("main.py", "bot.py", "app.py") else 1,
                 0 if "handler" in str(p).lower() else 1,
+                0 if "test" not in str(p).lower() else 2,
                 str(p),
             ),
         )
-        for p in ranked[:80]:
+        for p in ranked[:400]:
             an = _analyze_file(p, root)
             if an:
                 analyses.append(an)
+        _index_ms = (_time.perf_counter() - _t_index) * 1000.0
 
         imports = Counter()
         commands_raw: list[DetectedCommand] = []
@@ -749,6 +832,47 @@ class RepoUnderstandingService:
             for p in all_py_including_tests
         )
 
+        # --- Code graph (literal: every indexed function + calls) ---
+        all_deep: list[DeepFunction] = []
+        mod_counts: dict[str, int] = {}
+        call_edges = 0
+        class_count = 0
+        syntax_errors: list[str] = []
+        for an in analyses:
+            class_count += an.deep_class_count
+            mod_counts[an.rel] = len(an.deep_functions)
+            for df in an.deep_functions:
+                all_deep.append(df)
+                call_edges += len(df.calls)
+            if an.syntax_error:
+                syntax_errors.append(f"{an.rel}: {an.syntax_error}")
+        # Prefer storing functions from entry/handler modules, then densest
+        def _fn_rank(f: DeepFunction) -> tuple:
+            p = f.file.lower()
+            return (
+                0 if any(x in p for x in ("main.py", "bot.py", "handler")) else 1,
+                -len(f.calls),
+                f.file,
+                f.lineno,
+            )
+        stored = sorted(all_deep, key=_fn_rank)[:250]
+        call_sample: dict[str, list[str]] = {}
+        for f in stored[:80]:
+            if f.calls:
+                call_sample[f"{f.file}::{f.qualname}"] = f.calls[:20]
+        code_graph = CodeGraph(
+            modules_indexed=len(analyses),
+            function_count=len(all_deep),
+            class_count=class_count,
+            call_edge_count=call_edges,
+            lines_covered=total_lines,
+            index_ms=round(_index_ms, 1),
+            syntax_errors=syntax_errors[:20],
+            functions=stored,
+            call_graph_sample=call_sample,
+            module_function_counts=dict(sorted(mod_counts.items(), key=lambda x: -x[1])[:40]),
+        )
+
         return RepoContract(
             root_path=str(root),
             repo_name=root.name,
@@ -793,7 +917,10 @@ class RepoUnderstandingService:
                 "top_imports": [n for n, _ in imports.most_common(12)],
                 "fw_hits": dict(fw_hits),
                 "purpose": purpose[:300],
+                "deep_functions": len(all_deep),
+                "deep_call_edges": call_edges,
             },
+            code_graph=code_graph,
         )
 
 
