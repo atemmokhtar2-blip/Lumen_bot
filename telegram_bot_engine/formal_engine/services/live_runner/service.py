@@ -217,37 +217,102 @@ def _ensure_runtime(root: Path) -> tuple[str, str, Path, str]:
     return sys.executable, "target", _deps_dir(root), note or "fallback_target"
 
 
+def _parse_req_line(line: str) -> tuple[str, str] | None:
+    """Return (name, rest) for a requirement line, or None if not a package pin."""
+    raw = line.strip()
+    if not raw or raw.startswith("#") or raw.startswith("-"):
+        return None
+    # name[extras]? (==|>=|<=|~=|!=|>|<) version
+    m = re.match(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(\[[^\]]+\])?\s*(.*)$", raw)
+    if not m:
+        return None
+    name = m.group(1).lower().replace("_", "-")
+    rest = (m.group(2) or "") + (m.group(3) or "")
+    return name, rest.strip()
+
+
 def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
-    """
-    Write a cleaned requirements file:
-    - skip blanks/comments
-    - skip editable/-e and local paths that break headless install
-    - skip packages that need system compilers when optional markers obvious
-    """
+    """Clean requirements: skip blanks, editables, nested -r."""
     warnings: list[str] = []
     lines_out: list[str] = []
     for line in req.read_text(encoding="utf-8", errors="ignore").splitlines():
         raw = line.strip()
         if not raw or raw.startswith("#"):
             continue
-        if raw.startswith(("-e ", "--editable", "git+", "http://", "https://")) and "://" in raw:
-            # allow pure pypi https wheels? skip VCS for reliability unless simple
-            if raw.startswith(("git+", "-e")):
-                warnings.append(f"skipped_vcs:{raw[:60]}")
-                continue
-        if raw.startswith(("-e", "--editable")):
-            warnings.append(f"skipped_editable:{raw[:60]}")
+        if raw.startswith(("-e ", "--editable")) or raw.startswith("git+"):
+            warnings.append(f"skipped_vcs_or_editable:{raw[:60]}")
+            continue
+        if raw.startswith(("-r ", "--requirement")):
+            warnings.append(f"skipped_nested_req:{raw[:60]}")
             continue
         if raw.startswith("-"):
-            # pip options in requirements — keep common safe ones only
-            if raw.startswith(("-r ", "--requirement")):
-                warnings.append(f"skipped_nested_req:{raw[:60]}")
-                continue
+            continue
         lines_out.append(raw)
 
     cleaned = req.parent / ".tbe_requirements_clean.txt"
     cleaned.write_text("\n".join(lines_out) + ("\n" if lines_out else ""), encoding="utf-8")
     return cleaned, warnings
+
+
+def _conflict_packages_from_log(log: str) -> set[str]:
+    """Extract package names involved in ResolutionImpossible conflicts."""
+    names: set[str] = set()
+    # "The user requested aiofiles==24.1.0"
+    for m in re.finditer(r"user requested\s+([A-Za-z0-9_.\-]+)", log, re.I):
+        names.add(m.group(1).lower().replace("_", "-"))
+    # "aiogram 3.7.0 depends on aiofiles~=23.2.1"
+    for m in re.finditer(r"^\s*([A-Za-z0-9_.\-]+)\s+[\d.]+\s+depends on\s+([A-Za-z0-9_.\-]+)", log, re.I | re.M):
+        names.add(m.group(1).lower().replace("_", "-"))
+        names.add(m.group(2).lower().replace("_", "-"))
+    # "Cannot install ... and aiofiles==24.1.0"
+    for m in re.finditer(r"\band\s+([A-Za-z0-9_.\-]+)==", log, re.I):
+        names.add(m.group(1).lower().replace("_", "-"))
+    return names
+
+
+def _loosen_requirements(cleaned: Path, conflict_pkgs: set[str]) -> tuple[Path, list[str]]:
+    """
+    Auto-fix strategy for pin conflicts:
+      - For packages in conflict_pkgs that are hard-pinned (==): drop the pin
+        so the primary framework (aiogram/ptb/...) can resolve a compatible version.
+      - Keep top-level frameworks pinned if possible.
+    """
+    notes: list[str] = []
+    protect = {"aiogram", "python-telegram-bot", "pytelegrambotapi", "telebot", "pyrogram"}
+    out: list[str] = []
+    for line in cleaned.read_text(encoding="utf-8", errors="ignore").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        parsed = _parse_req_line(raw)
+        if not parsed:
+            out.append(raw)
+            continue
+        name, rest = parsed
+        if name in conflict_pkgs and name not in protect and "==" in rest:
+            # drop hard pin — leave bare package name (or extras only)
+            extras = ""
+            em = re.match(r"(\[[^\]]+\])", rest)
+            if em:
+                extras = em.group(1)
+            new_line = name + extras
+            notes.append(f"loosened:{name} ({rest} → unpinned)")
+            out.append(new_line)
+        elif name in conflict_pkgs and name not in protect and "~=" in rest:
+            # already soft — leave
+            out.append(raw)
+        else:
+            out.append(raw)
+
+    fixed = cleaned.parent / ".tbe_requirements_fixed.txt"
+    fixed.write_text("\n".join(out) + ("\n" if out else ""), encoding="utf-8")
+    return fixed, notes
+
+
+def _run_pip(cmd: list[str], root: Path, timeout: int = 300) -> tuple[int, str]:
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(root))
+    log = ((r.stdout or "") + "\n" + (r.stderr or ""))
+    return r.returncode, log
 
 
 def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Path) -> tuple[bool, str, list[str]]:
@@ -258,23 +323,55 @@ def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Pa
     if not cleaned.read_text(encoding="utf-8").strip():
         return True, "requirements empty after sanitize — skipped", warns
 
-    if mode.startswith("venv"):
-        cmd = [py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]
-        r0 = subprocess.run(cmd, capture_output=True, text=True, timeout=180, cwd=str(root))
-        pre = ((r0.stdout or "") + "\n" + (r0.stderr or ""))[-1500:]
-        cmd = [py, "-m", "pip", "install", "-r", str(cleaned)]
-    else:
-        pre = ""
-        cmd = [
-            py, "-m", "pip", "install",
-            "--target", str(isolation),
-            "-r", str(cleaned),
-        ]
+    logs: list[str] = []
 
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(root))
-    log = pre + "\n" + ((r.stdout or "") + "\n" + (r.stderr or ""))
-    log = log[-8000:]
-    return r.returncode == 0, log, warns
+    if mode.startswith("venv"):
+        code0, log0 = _run_pip(
+            [py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+            root,
+            timeout=180,
+        )
+        logs.append(log0[-1500:])
+        base_cmd = [py, "-m", "pip", "install", "-r"]
+    else:
+        base_cmd = [py, "-m", "pip", "install", "--target", str(isolation), "-r"]
+
+    # attempt 1: as cleaned
+    code, log = _run_pip(base_cmd + [str(cleaned)], root)
+    logs.append(log)
+    if code == 0:
+        return True, "\n".join(logs)[-8000:], warns
+
+    # attempt 2: auto-loosen conflicting hard pins
+    if "ResolutionImpossible" in log or "conflicting dependencies" in log:
+        conflict_pkgs = _conflict_packages_from_log(log)
+        if conflict_pkgs:
+            fixed, notes = _loosen_requirements(cleaned, conflict_pkgs)
+            warns.extend(notes)
+            logs.append(f"--- auto-fix conflicts: {sorted(conflict_pkgs)} ---")
+            code2, log2 = _run_pip(base_cmd + [str(fixed)], root)
+            logs.append(log2)
+            if code2 == 0:
+                warns.append("auto_fixed_dependency_conflicts")
+                return True, "\n".join(logs)[-8000:], warns
+            # attempt 3: unpin ALL == pins except protected frameworks
+            fixed2, notes2 = _loosen_requirements(
+                cleaned,
+                {
+                    (_parse_req_line(ln) or ("", ""))[0]
+                    for ln in cleaned.read_text(encoding="utf-8").splitlines()
+                    if _parse_req_line(ln)
+                },
+            )
+            warns.extend(notes2)
+            logs.append("--- auto-fix: unpin all non-framework hard pins ---")
+            code3, log3 = _run_pip(base_cmd + [str(fixed2)], root)
+            logs.append(log3)
+            if code3 == 0:
+                warns.append("auto_fixed_all_hard_pins")
+                return True, "\n".join(logs)[-8000:], warns
+
+    return False, "\n".join(logs)[-8000:], warns
 
 
 def _extract_pip_errors(log: str) -> list[str]:
