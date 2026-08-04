@@ -86,6 +86,7 @@ from ..engines.generators import (
     ServiceManagementEngine,
     MessageQueueEngine,
     TaskSchedulerEngine,
+    WorkflowExecutionEngine,
 )
 from ..logging import EngineLogger
 from ..manager import CoreEngineManager
@@ -562,6 +563,11 @@ def bootstrap(
     task_scheduler_engine = TaskSchedulerEngine()
     registry.register_engine(task_scheduler_engine)
 
+    # -- workflow execution engine (Specification 064) ---------------------
+    # MAXIMUM CRITICAL: workflow stages, checkpoints, resume, rollback.
+    workflow_execution_engine = WorkflowExecutionEngine()
+    registry.register_engine(workflow_execution_engine)
+
     # -- validators --------------------------------------------------------
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
@@ -799,6 +805,10 @@ def bootstrap(
                      engine_id="task_scheduler",
                      priority=149,
                      dependencies=["message_queue"])
+    manager.register(workflow_execution_engine,
+                     engine_id="workflow_execution",
+                     priority=150,
+                     dependencies=["task_scheduler"])
 
     # -- output & pipeline -------------------------------------------------
     output_manager = OutputManager(config=config)

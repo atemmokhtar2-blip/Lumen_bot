@@ -69,6 +69,7 @@ from .security_permission import SecurityPermissionEngine
 from .service_management import ServiceManagementEngine
 from .message_queue import MessageQueueEngine
 from .task_scheduler import TaskSchedulerEngine
+from .workflow_execution import WorkflowExecutionEngine
 
 __all__ = [
     "IntentParserEngine",
@@ -134,4 +135,5 @@ __all__ = [
     "ServiceManagementEngine",
     "MessageQueueEngine",
     "TaskSchedulerEngine",
+    "WorkflowExecutionEngine",
 ]
