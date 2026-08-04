@@ -269,51 +269,140 @@ class BlueprintComposerEngine(BaseEngine):
         raw = intent.get("raw", "telegram bot")
         bot_type = intent.get("bot_type", "general")
         features = intent.get("features", [])
+        intent_commands = intent.get("commands") or []
 
-        self._log.info("Composing blueprint",
-                       {"bot_type": bot_type, "features": features})
+        self._log.info(
+            "Composing blueprint",
+            {
+                "bot_type": bot_type,
+                "features": features,
+                "intent_commands": len(intent_commands),
+            },
+        )
 
+        # Prefer commands understood from the request (simulates AI planning
+        # from understanding). Fall back to type profile only when empty.
+        commands = self._commands_from_intent(intent_commands)
         profile_fn = _PROFILES.get(bot_type, _general_profile)
         profile = profile_fn(intent)
+
+        if not commands:
+            commands = list(profile.get("commands") or _common_commands())
+        else:
+            # Keep start/help ordering; do NOT merge profile domain commands
+            # (that was the bug: company bot got ban/mute from group_admin).
+            pass
+
+        handlers = list(profile.get("handlers") or [])
+        # Welcome handler only when welcome/moderation features ask for it
+        if "welcome" in features or any(
+            c.name == "welcome_settings" for c in commands
+        ):
+            if not any(getattr(h, "name", "") == "new_members" for h in handlers):
+                handlers.append(
+                    HandlerSpec(
+                        name="new_members",
+                        handler_type="message",
+                        triggers=["new_chat_members"],
+                        description="Greet new members",
+                    )
+                )
 
         name = _slugify(raw)[:40]
         if not name.replace("_", "").isalnum():
             name = "generated_bot"
 
+        fw = intent.get("framework") or "python-telegram-bot"
         meta = BotMeta(
             name=name,
-            display_name=raw,
+            display_name=raw[:80],
             description=raw,
             bot_type=bot_type,
+            framework=fw if fw != "python-telegram-bot" else "python-telegram-bot",
         )
 
         project = ProjectSpec(
             name=name,
             description=raw,
             python_version=intent.get("language_version", "3.11"),
-            dependencies=self._default_dependencies(bot_type, features),
+            dependencies=self._default_dependencies(bot_type, features, fw),
         )
+
+        # Database when domain needs persistence
+        database = profile.get("database") or DatabaseSpec()
+        if bot_type in ("company_ops", "task_manager", "store") or any(
+            f in features for f in ("employees", "tasks", "attendance", "database")
+        ):
+            if not getattr(database, "enabled", False):
+                database = DatabaseSpec(
+                    enabled=True,
+                    backend="sqlite",
+                    models=[],
+                    connection_string_env="DATABASE_URL",
+                )
 
         blueprint = Blueprint(
             meta=meta,
             project=project,
-            commands=profile.get("commands", []),
-            handlers=profile.get("handlers", []),
+            commands=commands,
+            handlers=handlers,
             conversations=profile.get("conversations", []),
-            database=profile.get("database", DatabaseSpec()),
+            database=database,
             middlewares=profile.get("middlewares", []),
             integrations=profile.get("integrations", []),
-            extra={"features": features},
+            extra={
+                "features": features,
+                "intent_summary": intent.get("summary", ""),
+                "domain_scores": intent.get("domain_scores", {}),
+            },
         )
 
-        self._log.info("Blueprint composed",
-                       {"name": name, "commands": blueprint.command_names()})
+        self._log.info(
+            "Blueprint composed",
+            {"name": name, "bot_type": bot_type, "commands": blueprint.command_names()},
+        )
         return self.ok(outputs={"blueprint": blueprint})
 
     @staticmethod
-    def _default_dependencies(bot_type: str, features: List[str]) -> List[str]:
-        deps = ["python-telegram-bot>=20.7"]
-        if "database" in features or bot_type in ("store", "group_admin", "ai_assistant"):
+    def _commands_from_intent(intent_commands: List) -> List[CommandSpec]:
+        out: List[CommandSpec] = []
+        seen = set()
+        for item in intent_commands:
+            if isinstance(item, CommandSpec):
+                name = item.name
+                if name in seen:
+                    continue
+                seen.add(name)
+                out.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").lstrip("/").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append(
+                CommandSpec(
+                    name=name,
+                    description=str(item.get("description") or name),
+                    admin_only=bool(item.get("admin_only", False)),
+                    group_only=bool(item.get("group_only", False)),
+                    response_type=str(item.get("response_type") or "text"),
+                )
+            )
+        return out
+
+    @staticmethod
+    def _default_dependencies(
+        bot_type: str, features: List[str], framework: str = "python-telegram-bot"
+    ) -> List[str]:
+        if framework == "aiogram":
+            deps = ["aiogram>=3.4", "python-dotenv>=1.0"]
+        else:
+            deps = ["python-telegram-bot>=21.0", "python-dotenv>=1.0"]
+        if "database" in features or bot_type in (
+            "store", "group_admin", "ai_assistant", "company_ops", "task_manager"
+        ):
             deps.append("SQLAlchemy>=2.0")
         if "ai" in features or bot_type == "ai_assistant":
             deps.append("openai>=1.0")

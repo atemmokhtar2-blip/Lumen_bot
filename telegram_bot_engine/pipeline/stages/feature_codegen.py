@@ -130,6 +130,12 @@ def start_reply_from_context(context: Any, commands: Sequence[Dict[str, Any]]) -
     if m:
         return m.group(1).strip()
 
+    # Explicit simple replies
+    if re.search(r"hello\s*world", request, re.I):
+        return "Hello World"
+    if "هاي" in request and "إدارة" not in request and "ادارة" not in request:
+        return "هاي"
+
     lines = ["تم تشغيل البوت."]
     if request.strip():
         first = request.strip().splitlines()[0].strip()
