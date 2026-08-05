@@ -128,7 +128,8 @@ def _infer_type(attr: str) -> str:
              "duration_min", "duration_weeks", "level", "count", "total", "percent",
              "ratio", "progress", "weight", "points"):
         return "int"
-    if a in ("paid", "active", "enabled", "done", "completed", "is_admin"):
+    if a in ("paid", "active", "enabled", "done", "completed", "is_admin", "banned",
+             "passed", "verified", "locked"):
         return "bool"
     return "str"
 
