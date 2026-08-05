@@ -247,6 +247,18 @@ def infer(program: DSLProgram) -> InferenceResult:
         "hotel_id": "أرسل الفندق",
         "progress": "أرسل نسبة التقدم",
         "price": "أرسل السعر",
+        "name": "أرسل الاسم",
+        "phone": "أرسل رقم الهاتف",
+        "address": "أرسل العنوان",
+        "email": "أرسل البريد الإلكتروني",
+        "status": "أرسل الحالة",
+        "date": "أرسل التاريخ",
+        "time": "أرسل الوقت",
+        "city": "أرسل المدينة",
+        "notes": "أرسل الملاحظات",
+        "description": "أرسل الوصف",
+        "quantity": "أرسل الكمية",
+        "title": "أرسل العنوان/الاسم",
     }
 
     # Arabic / English phrases in descriptions → field keys (text-grounded)
@@ -255,7 +267,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
         ("الصف", "grade"), ("المستوى", "grade"), ("grade", "grade"),
         ("الهاتف", "phone"), ("الجوال", "phone"), ("رقم الهاتف", "phone"), ("phone", "phone"),
-        ("العنوان", "title"), ("title", "title"),
+        ("العنوان", "address"), ("address", "address"), ("title", "title"),
         ("الوصف", "description"), ("description", "description"),
         ("السعر", "price"), ("price", "price"),
         ("الكورس", "course_id"), ("رقم الكورس", "course_id"), ("كود الكورس", "course_id"),
@@ -300,6 +312,8 @@ def infer(program: DSLProgram) -> InferenceResult:
     _INPUT_VERBS = (
         "create", "add", "register", "book", "order", "submit", "new", "enroll",
         "open", "signup", "sign_up", "join", "apply", "insert", "post",
+        "delivery", "shipping", "invoice", "support", "ticket", "appointment",
+        "reserve", "request", "form",
     )
     _SKIP_CMDS = {
         "cancel", "list", "admin", "stats", "broadcast", "ban", "help", "start",
@@ -422,8 +436,12 @@ def infer(program: DSLProgram) -> InferenceResult:
         # still no fields but description asks to collect → minimal name step
         if not fields and any(h in desc for h in _DESC_INPUT_HINTS):
             fields = _fields_from_description(desc) or ["name"]
+        if not fields and ent_name:
+            # entity exists but no explicit fields — use non-id attributes
+            fields = _pick_wizard_fields(ent_name, desc)
         if not fields:
-            continue
+            # last resort structural minimum when command is clearly collect-style
+            fields = ["name"]
         steps = [{"key": f, "prompt": _prompt_for(f)} for f in fields]
         wizards.append({
             "id": cmd.name,

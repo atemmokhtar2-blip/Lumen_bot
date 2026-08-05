@@ -515,17 +515,57 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("")
     lines.append("")
 
-    # keyboard from inferred buttons
-    # keyboard from inferred buttons
-    lines.append("def main_keyboard() -> InlineKeyboardMarkup | None:")
+    # Keyboard: prefer user buttons; else structural buttons from real commands
+    # (not a domain pack — each button is 1:1 with an extracted command).
+    kb_items: list[tuple[str, str]] = []
     if buttons:
+        for b in buttons:
+            kb_items.append((b.label, b.callback_id or _ident(b.label)))
+    else:
+        for c in commands:
+            if c.name in ("start", "help"):
+                continue
+            label = (c.description or c.name).strip()[:40] or c.name
+            kb_items.append((label, f"cmd:{c.name}"))
+
+    # button callback_id → command name (for routing)
+    btn_to_cmd: dict[str, str] = {}
+    for label, cb in kb_items:
+        # direct cmd:name
+        if cb.startswith("cmd:"):
+            btn_to_cmd[cb] = cb[4:]
+            continue
+        # match label/cb to a command name or description
+        for c in commands:
+            if c.name in ("start", "help"):
+                continue
+            if cb == c.name or cb == f"cmd_{c.name}" or _ident(label) == c.name:
+                btn_to_cmd[cb] = c.name
+                break
+            desc = (c.description or "").strip()
+            if desc and (desc == label or desc in label or label in desc):
+                btn_to_cmd[cb] = c.name
+                break
+            if any(tok in label for tok in (c.name, c.name.replace("_", " ")) if len(tok) > 2):
+                btn_to_cmd[cb] = c.name
+                break
+
+    lines.append("BUTTON_TO_CMD: dict[str, str] = {")
+    for cb, cn in btn_to_cmd.items():
+        lines.append(f"    {_py(cb)}: {_py(cn)},")
+    lines.append("}")
+    lines.append("")
+    lines.append("")
+
+    lines.append("def main_keyboard() -> InlineKeyboardMarkup | None:")
+    if kb_items:
         lines.append("    rows = []")
         row: list[str] = []
-        for i, b in enumerate(buttons):
+        for i, (label, cb) in enumerate(kb_items):
             row.append(
-                f"InlineKeyboardButton({_py(b.label)}, callback_data={_py(b.callback_id)})"
+                f"InlineKeyboardButton({_py(label)}, callback_data={_py(cb)})"
             )
-            if len(row) == 2 or i == len(buttons) - 1:
+            if len(row) == 2 or i == len(kb_items) - 1:
                 lines.append(f"    rows.append([{', '.join(row)}])")
                 row = []
         lines.append("    return InlineKeyboardMarkup(rows)")
@@ -546,7 +586,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("    context.user_data.clear()")
     if first_step:
         lines.append(f"    context.user_data[\"state\"] = {_py(first_step)}")
-    if buttons:
+    if kb_items:
         lines.append("    kb = main_keyboard()")
         lines.append(f"    await message.reply_text({_py(start_msg)}, reply_markup=kb)")
     else:
@@ -804,6 +844,24 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("    await query.answer()")
     lines.append("    data = query.data or \"\"")
     lines.append("    context.user_data[\"choice\"] = data")
+    lines.append("    # Route button → command/flow (structural mapping, no domain packs)")
+    lines.append("    target_cmd = BUTTON_TO_CMD.get(data) or \"\"")
+    lines.append("    if not target_cmd and data.startswith(\"cmd:\"):")
+    lines.append("        target_cmd = data[4:]")
+    lines.append("    if target_cmd and target_cmd in FLOWS and FLOWS[target_cmd]:")
+    lines.append("        if query.message is not None:")
+    lines.append("            await _start_flow(query.message, context, target_cmd)")
+    lines.append("        return")
+    lines.append("    if target_cmd:")
+    lines.append("        # Non-wizard command: acknowledge + point user to slash command")
+    lines.append("        msg = f\"استخدم /{target_cmd} أو أكمل من هنا.\"")
+    lines.append("        ruled = logic.apply_rules({\"choice\": data, \"text\": data, \"intent\": target_cmd, **dict(context.user_data.get(\"collected\") or {})})")
+    lines.append("        context.user_data[\"collected\"] = ruled")
+    lines.append("        if ruled.get(\"_messages\"):")
+    lines.append("            msg = \" | \".join(str(m) for m in ruled[\"_messages\"][:5])")
+    lines.append("        if query.message is not None:")
+    lines.append("            await query.edit_message_text(msg)")
+    lines.append("        return")
     lines.append("    ruled = logic.apply_rules({\"choice\": data, \"text\": data, **dict(context.user_data.get(\"collected\") or {})})")
     lines.append("    context.user_data[\"collected\"] = ruled")
     lines.append("    if ruled.get(\"_messages\"):")
@@ -813,7 +871,6 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         dname = _ident(inf.decisions[0].name)
         lines.append(f"    branch = logic.{dname}(data)")
         lines.append("    context.user_data[\"branch\"] = branch")
-        lines.append("    # try match branch to a step prompt")
         if step_ids:
             lines.append(f"    _prompts = {_py(step_labels)}")
             lines.append("    msg = _prompts.get(branch) or str(branch)")
@@ -821,7 +878,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         else:
             lines.append("    await query.edit_message_text(str(branch))")
     else:
-        lines.append("    await query.edit_message_text(data)")
+        lines.append("    await query.edit_message_text(data or \"تم\")")
     lines.append("")
     return "\n".join(lines) + "\n"
 

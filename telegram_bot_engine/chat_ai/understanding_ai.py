@@ -87,7 +87,11 @@ class UnderstandingAIResult:
 
 
 def _enabled() -> bool:
-    v = (os.environ.get("UNDERSTANDING_AI") or "1").strip().lower()
+    # HARD DISABLED — generation path is formal-only (zero LLM).
+    # UNDERSTANDING_AI_FORCE=1 only for offline experiments.
+    if (os.environ.get("UNDERSTANDING_AI_FORCE") or "").strip() not in ("1", "true", "yes"):
+        return False
+    v = (os.environ.get("UNDERSTANDING_AI") or "0").strip().lower()
     return v not in ("0", "false", "no", "off")
 
 

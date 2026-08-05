@@ -288,6 +288,31 @@ def _entities_from_text(text: str) -> list[EntityNode]:
             if re.search(pat, text, re.I):
                 add(ename, attrs)
 
+    # Enrich attributes from textual field signals (grounded only — word must appear)
+    field_signals = [
+        (r"اسم|name", "name"),
+        (r"هاتف|موبايل|تليفون|phone|mobile", "phone"),
+        (r"عنوان|address", "address"),
+        (r"ايميل|بريد|email", "email"),
+        (r"سعر|price", "price"),
+        (r"كمية|quantity|qty", "quantity"),
+        (r"حالة|status", "status"),
+        (r"تاريخ|date", "date"),
+        (r"وقت|time", "time"),
+        (r"ملاحظات|notes|comment", "notes"),
+        (r"مدينة|city", "city"),
+        (r"وصف|description", "description"),
+    ]
+    mentioned = [fid for pat, fid in field_signals if re.search(pat, text, re.I)]
+    if mentioned and found:
+        for ent in found:
+            existing = set(ent.attributes or [])
+            for fid in mentioned:
+                if fid not in existing and fid not in _GHOST:
+                    ent.attributes.append(fid)
+                    ent.attr_types[fid] = _infer_type(fid)
+                    existing.add(fid)
+
     return found
 
 
@@ -333,6 +358,7 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب|يطلب\s*اوردر", "new_order", "طلب جديد"),
             (r"(?<![a-z])اوردر(?![a-z])|(?<!\w)order(?!\w)", "new_order", "اوردر"),
             (r"تتبع|track", "track", "تتبع"),
+            (r"طلبات|طلب(?!\s*جديد)", "order", "طلب"),
             (r"يقبل\s*الطلب|قبول\s*الطلب|accept\s*order", "accept_order", "قبول طلب"),
             (r"المنيو|قائمة\s*الطعام|(?<!\w)menu(?!\w)", "menu", "المنيو"),
             (r"اوردرات[يى]|طلباتي|my\s*orders|يشوف\s*اوردر", "my_orders", "اوردراتي"),
@@ -1112,6 +1138,19 @@ def extract_dsl(text: str) -> DSLProgram:
     wants_db = any(k in full or k in t for k in ("قاعدة بيانات", "database", "يحفظ", "تخزين", "sqlite", "postgres"))
     wants_files = any(k in full or k in t for k in ("صورة", "ملف", "رفع", "photo", "file", "upload", "document"))
     h = hashlib.sha256(full.encode("utf-8")).hexdigest()[:16]
+    # Structural buttons from commands when user did not list any buttons.
+    # Not a domain pack: each button maps 1:1 to an extracted command.
+    if not buttons:
+        seen_btn: set[str] = set()
+        for c in commands:
+            if c.name in ("start", "help"):
+                continue
+            label = (c.description or c.name or "").strip()
+            if not label or label in seen_btn or len(label) > 48:
+                continue
+            seen_btn.add(label)
+            buttons.append(ButtonNode(label=label, callback_id=f"cmd:{c.name}"))
+
     return DSLProgram(
         relations=relations,
         operations=operations,

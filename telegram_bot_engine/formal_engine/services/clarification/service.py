@@ -36,7 +36,7 @@ class ClarificationResult:
 
 
 _MIN_MEANINGFUL_COMMANDS = 1  # beyond start/help
-_MIN_SCORE = 0.45
+_MIN_SCORE = 0.40
 
 
 def _extract_bot_name(text: str) -> str:
@@ -198,10 +198,10 @@ def assess_spec(user_text: str) -> ClarificationResult:
 def build_clarification_message(result: ClarificationResult) -> str:
     """Human-readable Arabic message with the questions to ask."""
     lines = [
-        "📌 محتاج تفاصيل أكتر عشان أعمل بوت مكتمل (مش start/help بس).",
+        "📌 عشان أعمل بوت *مكتمل* محتاج منك تفاصيل واضحة (مش /start و /help بس).",
     ]
     if result.bot_name:
-        lines.append(f"• الاسم الحالي: {result.bot_name}")
+        lines.append(f"• الاسم: {result.bot_name}")
     if result.summary.get("commands"):
         lines.append(
             "• أوامر فهمتها: "
@@ -211,13 +211,27 @@ def build_clarification_message(result: ClarificationResult) -> str:
         lines.append("• لسه مفيش أوامر واضحة غير /start و /help")
 
     lines.append("")
-    lines.append("جاوب على الأسئلة دي (تقدر تبعت كل الإجابات في رسالة واحدة):")
-    for i, q in enumerate(result.questions, 1):
-        lines.append(f"\n{i}) {q}")
-
-    lines.append(
-        "\n✅ بعد ما تبعت التفاصيل هولّد المشروع فورًا من كلامك فقط — بدون قوالب جاهزة."
-    )
+    lines.append("ابعت رد واحد فيه:")
+    lines.append("")
+    lines.append("الأوامر:")
+    lines.append("/register — تسجيل")
+    lines.append("/order — طلب جديد")
+    lines.append("/track — تتبع")
+    lines.append("/my_orders — طلباتي")
+    lines.append("")
+    lines.append("الكيانات:")
+    lines.append("Customer (name, phone)")
+    lines.append("Order (address, phone, status)")
+    lines.append("")
+    lines.append("الأزرار:")
+    lines.append("تسجيل، طلب جديد، تتبع، طلباتي")
+    lines.append("")
+    if result.questions:
+        lines.append("أو جاوب على:")
+        for i, q in enumerate(result.questions, 1):
+            lines.append(f"{i}) {q}")
+        lines.append("")
+    lines.append("✅ هبني البوت من كلامك فقط — بدون قوالب جاهزة وبدون ذكاء اصطناعي.")
     return "\n".join(lines)
 
 
