@@ -350,72 +350,30 @@ def _commands_from_text(text: str) -> list[CommandNode]:
 
     explicit = [c.name for c in found if c.name not in ("start", "help")]
 
-    # Freeform / stems / verbs ONLY when user did not list explicit /commands
+    # NO freeform keyword→command packs (they hallucinate features from prose).
+    # Natural language without /commands is handled by SpecTranslator upstream.
+    # Formal extractor only accepts:
+    #   1) explicit /command tokens (above)
+    #   2) section lines: name — description  (ascii command id)
     if not explicit:
-        freeform: list[tuple[str, str, str]] = [
-            (r"تسجيل\s*عميل|register\s*customer", "register_customer", "تسجيل عميل"),
-            (r"تسجيل\s*سائق|register\s*driver", "register_driver", "تسجيل سائق"),
-            (r"تسجيل|يسجل|signup|sign\s*up|register", "register", "تسجيل"),
-            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب", "new_order", "طلب جديد"),
-            (r"تتبع|track", "track", "تتبع"),
-            (r"طلباتي|اوردراتي|my\s*orders", "my_orders", "طلباتي"),
-            (r"المنيو|قائمة\s*الطعام|(?<!\w)menu(?!\w)", "menu", "المنيو"),
-            (r"حجز|book(?:ing)?\b", "book", "حجز"),
-            (r"مواعيدي|my\s*appointments", "my_appointments", "مواعيدي"),
-            (r"إحصائ|احصائ|stats", "stats", "إحصائيات"),
-            (r"أدمن|ادمن|admin|لوحة\s*الإدارة", "admin", "ادمن"),
-            (r"بحث|search", "search", "بحث"),
-            (r"دفع|payment|pay\b", "pay", "دفع"),
-            (r"تقييم|rate\b|review\b", "rate", "تقييم"),
-            (r"دعم|support", "support", "دعم"),
-            (r"توصيل|delivery", "delivery", "توصيل"),
-            (r"إلغاء|cancel", "cancel", "إلغاء"),
-            (r"تأكيد|confirm", "confirm", "تأكيد"),
-            (r"رصيد|balance|wallet", "wallet", "رصيد"),
-            (r"ملف\s*شخصي|profile", "profile", "ملف شخصي"),
-            (r"إعدادات|settings", "settings", "إعدادات"),
-        ]
-        for pat, cmd, desc in freeform:
-            if re.search(pat, text, re.I):
-                add(cmd, desc)
-
-        for m in re.finditer(
-            r"(?:فيه|فيها|يحتوي|يشمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
-            text,
-            re.I,
-        ):
-            chunk = m.group(1)
-            for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
-                part = part.strip()
-                if not (2 <= len(part) <= 40):
-                    continue
-                for pat, cmd, desc in freeform:
-                    if re.search(pat, part, re.I):
-                        add(cmd, desc or part)
-
-        for line in text.splitlines():
+        for line in _section_lines(
+            text, "الأوامر", "الاوامر", "commands", "الأوامر المطلوبة", "functions", "الوظائف"
+        ) or text.splitlines():
             body = _strip_bullet(line)
-            if not body or len(body) > 48 or body.endswith(":"):
+            if not body or len(body) > 120 or _looks_like_rule(body):
                 continue
-            if _looks_like_rule(body):
+            # /cmd already handled; here: register — تسجيل  |  register: signup
+            m = re.match(
+                r"^[/`']?(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})[`']?\s*[-–—:：]\s*(?P<desc>.+)$",
+                body,
+            )
+            if m:
+                add(m.group("cmd"), m.group("desc").strip()[:100])
                 continue
-            for pat, cmd, desc in freeform:
-                if re.search(pat, body, re.I):
-                    add(cmd, body[:100] if len(body) >= 3 else desc)
-                    break
-
-        verb_cmd = [
-            (r"(?:يسجل|تسجيل)\s+\S+", "register", "تسجيل"),
-            (r"(?:يتابع|تتبع)\s+\S+", "track", "تتبع"),
-            (r"(?:يحجز|حجز)\s+\S+", "book", "حجز"),
-            (r"(?:يطلب|اطلب)\s+\S+", "order", "طلب"),
-            (r"(?:يبحث|بحث)\s+عن\s+\S+", "search", "بحث"),
-            (r"(?:يدفع|دفع)\s+\S+", "pay", "دفع"),
-            (r"(?:يقيم|تقييم)\s+\S+", "rate", "تقييم"),
-        ]
-        for pat, cmd, desc in verb_cmd:
-            if re.search(pat, text, re.I):
-                add(cmd, desc)
+            # bare /cmd on its own line
+            m = re.match(r"^/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\s*$", body)
+            if m:
+                add(m.group("cmd"), m.group("cmd"))
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
@@ -466,20 +424,8 @@ def _buttons_from_text(text: str) -> list[ButtonNode]:
     for m in re.finditer(r"(?:زر|button)\s*[:=]?\s*[«\"'\[]([^»\"'\]]{2,40})[»\"'\]]", text, re.I):
         add(m.group(1).strip())
 
-    # Free-form: mirror key command intents as UI labels when none listed
-    if not buttons:
-        for lab, pat in (
-            ("تسجيل", r"تسجيل|register"),
-            ("طلب جديد", r"طلب\s*جديد|اوردر|new\s*order"),
-            ("تتبع", r"تتبع|track"),
-            ("المنيو", r"منيو|menu"),
-            ("طلباتي", r"طلباتي|my\s*orders"),
-            ("مهامي", r"مهامي|my\s*tasks"),
-            ("الأدمن", r"أدمن|ادمن|admin"),
-        ):
-            if re.search(pat, text, re.I):
-                add(lab)
-
+    # No keyword→button packs (hallucinate UI from prose).
+    # If user listed no buttons, extract_dsl adds 1:1 labels from commands later.
     return buttons[:24]
 
 

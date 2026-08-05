@@ -116,7 +116,7 @@ def generate_bot(request: str, work_dir=None):
                 # Use grounded sectioned text for formal path; ground against original words
                 if tr.structured_text.strip():
                     formal_text = tr.structured_text
-                    grounding_src = original_request + "\n" + tr.structured_text
+                    grounding_src = original_request  # NEVER ground against AI output (self-justifies hallucinations)
             else:
                 stages.append(
                     StageResult.ok(

@@ -445,12 +445,10 @@ def infer(program: DSLProgram) -> InferenceResult:
                 ent_name = caps[0]
         fields = _pick_wizard_fields(ent_name, desc, kind)
         if not fields and kind == "collect":
-            if any(h in desc for h in _DESC_INPUT_HINTS):
-                fields = _fields_from_description(desc) or ["name"]
-            elif ent_name:
+            # Only fields evidenced in command description or entity attrs — never invent "name"
+            fields = _fields_from_description(desc)
+            if not fields and ent_name:
                 fields = _pick_wizard_fields(ent_name, desc, kind)
-            if not fields:
-                fields = ["name"]
         if not fields and kind == "lookup":
             fields = ["id"]
         if not fields:

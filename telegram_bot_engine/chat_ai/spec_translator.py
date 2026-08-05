@@ -694,10 +694,7 @@ def ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], di
             if lab and lab not in out["buttons"]:
                 out["buttons"].append(lab)
 
-    soft_fields = {
-        "id", "name", "phone", "status", "user_id", "address", "email",
-        "date", "time", "notes", "title", "description", "price", "quantity",
-    }
+    # Fields must appear in user text (or evidence). No soft-field inventory.
     for e in data.get("entities") or []:
         if not isinstance(e, dict):
             continue
@@ -715,7 +712,7 @@ def ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], di
             fs = re.sub(r"[^a-z0-9_]", "", str(f).lower())
             if not fs:
                 continue
-            if fs == "id" or _grounded_token(fs, raw, text_n) or (entity_ok and fs in soft_fields):
+            if fs == "id" or _grounded_token(fs, raw, text_n, evidence):
                 if fs not in fields_out:
                     fields_out.append(fs)
             else:
