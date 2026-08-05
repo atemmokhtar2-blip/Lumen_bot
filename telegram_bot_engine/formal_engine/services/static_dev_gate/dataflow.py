@@ -956,12 +956,20 @@ class _FlowVisitor(ast.NodeVisitor):
                 elif isinstance(a, ast.Call):
                     risky = True
                     detail = "call-arg"
-            if risky or label in ("eval", "exec") or is_sql:
-                sink_label = label or (
-                    f"*.{node.func.attr}" if is_sql and isinstance(node.func, ast.Attribute)
-                    else "call"
+            # eval/exec always; OS/subprocess when dynamic; SQL only when user-tainted
+            critical = label in ("eval", "exec", "compile", "__import__") or any(
+                label == d or label.endswith("." + d.split(".")[-1])
+                for d in (
+                    "os.system", "os.popen", "subprocess.call", "subprocess.run",
+                    "subprocess.Popen", "pickle.loads", "pickle.load",
                 )
-                self.dangerous_sinks.append((sink_label, node.lineno, detail))
+            )
+            if critical and (risky or label in ("eval", "exec", "compile", "__import__")):
+                self.dangerous_sinks.append((label or "call", node.lineno, detail))
+            elif is_sql:
+                tainted_arg = any(_expr_carries_taint(a, self.tainted) for a in node.args)
+                if tainted_arg:
+                    self.dangerous_sinks.append((label or "execute", node.lineno, "tainted-sql"))
             # taint → sink (names, attrs, f-strings, % format)
             for a in node.args:
                 if _expr_carries_taint(a, self.tainted):

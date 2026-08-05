@@ -156,7 +156,7 @@ ENTITY_SIGNALS: list[tuple[list[str], str]] = [
     (["سلة", "cart"], "CartItem"),
     (["طلب", "order", "checkout"], "Order"),
     (["دفع", "payment", "stripe", "فوري"], "Payment"),
-    (["تذكرة", "ticket", "شكوى", "دعم"], "Ticket"),
+    (["تذكرة", "ticket", "شكوى", "تذاكر", "فتح تذكرة"], "Ticket"),
     (["رسالة تذكرة", "ticket message", "رد على تذكرة"], "TicketMessage"),
     (["ترحيب", "welcome", "قواعد المجموعة", "group settings"], "GroupSettings"),
     (["حظر", "ban", "كتم", "mute", "طرد"], "ModAction"),

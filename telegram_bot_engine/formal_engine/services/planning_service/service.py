@@ -57,37 +57,21 @@ def _cnames(c: ProgramContract) -> set[str]:
 
 
 def _ensure_from_entities(c: ProgramContract, decisions: list[str]):
-    """Each entity → service + list command named after entity (structural)."""
+    """Each entity → service only. Commands stay text-grounded (never invent /order /user)."""
     entities = list(c.entities)
     services = list(c.services)
     cmds = list(c.commands)
     snames = _snames(c)
-    cnames = _cnames(c)
 
     for ent in entities:
         snake = _snake(ent.name)
         if not snake:
             continue
-        # service per entity
         if snake not in snames and f"{snake}s" not in snames:
             services.append(ServiceUnit(name=snake, responsibility=f"ops for {ent.name}"))
             decisions.append(f"service_from_entity:{ent.name}->{snake}")
             snames.add(snake)
-        # list command: prefer plural simple form
-        cmd_name = snake if len(snake) > 2 else f"list_{snake}"
-        # avoid clashing with start/help
-        if cmd_name in ("start", "help"):
-            cmd_name = f"list_{snake}"
-        if cmd_name not in cnames:
-            cmds.append(
-                CommandUnit(
-                    name=cmd_name,
-                    description=f"{ent.name}",
-                    admin_only=False,
-                )
-            )
-            decisions.append(f"command_from_entity:{ent.name}->{cmd_name}")
-            cnames.add(cmd_name)
+    # deliberately no command_from_entity — user must list commands in the text
 
     return entities, services, cmds
 
