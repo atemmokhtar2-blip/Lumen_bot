@@ -302,6 +302,35 @@ def analyze_function_patterns(
             evidence=label,
         ))
 
+    # empty / pass-only handler bodies (conversation & command handlers)
+    body = list(node.body or [])
+    # skip docstring
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+        body = body[1:]
+    is_handler = (
+        node.name.endswith("_handler")
+        or node.name in ("start_handler", "help_handler", "callback_handler", "message_handler")
+    )
+    if is_handler:
+        if not body or all(isinstance(s, ast.Pass) for s in body):
+            info.findings.append(PatternFinding(
+                kind="empty_handler_body",
+                severity="error",
+                lineno=node.lineno,
+                message=f"Handler فارغ `{qual}` — لا منطق تنفيذي",
+                qualname=qual,
+                evidence="pass",
+            ))
+        elif len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value is None:
+            info.findings.append(PatternFinding(
+                kind="empty_handler_body",
+                severity="warning",
+                lineno=node.lineno,
+                message=f"Handler `{qual}` يعيد فورًا بلا عمل",
+                qualname=qual,
+                evidence="return",
+            ))
+
     return info
 
 

@@ -24,13 +24,15 @@ from .patterns import analyze_module_patterns
 from .dataflow import analyze_module_flow
 from .contracts import analyze_module_contracts
 from .symbolic import analyze_module_symbolic
+from .conversation_flow import analyze_conversation_flow
 
 
 PHASE_ORDER = (
-    "patterns",    # 2 structural
-    "dataflow",    # 3 control + data flow
-    "contracts",   # 4 design by contract / types
-    "symbolic",    # 5 path-sensitive
+    "patterns",           # structural AST
+    "dataflow",           # control + data flow
+    "contracts",          # types / design by contract
+    "symbolic",           # path-sensitive code
+    "conversation_flow",  # state machine / NL flows
 )
 
 
@@ -141,6 +143,33 @@ def _run_phase_analyzers(ctx: AnalysisContext) -> list[PhaseResult]:
             {"functions": s_n, "paths": s_paths},
         ))
 
+    # --- conversation / flow graph (project-level) ---
+    try:
+        flow_rep = analyze_conversation_flow(ctx.root)
+        n_err = len(flow_rep.errors)
+        phases.append(PhaseResult(
+            "conversation_flow",
+            flow_rep.ok,
+            f"states={len(flow_rep.states)} paths={flow_rep.paths_explored} errors={n_err}",
+            dict(flow_rep.coverage),
+        ))
+        # inject findings into static report later via meta; attach on ctx
+        ctx.meta = getattr(ctx, "meta", {}) or {}
+        ctx.meta["conversation_flow"] = {
+            "ok": flow_rep.ok,
+            "findings": [
+                {"severity": f.severity, "code": f.code, "message": f.message, "path": f.path}
+                for f in flow_rep.findings
+            ],
+            "coverage": flow_rep.coverage,
+        }
+        # promote errors into static findings list after run_rules — store for run_pipeline
+        ctx.meta["conversation_flow_errors"] = [
+            f for f in flow_rep.findings if f.severity == "error"
+        ]
+    except Exception as e:
+        phases.append(PhaseResult("conversation_flow", False, f"{type(e).__name__}: {e}"))
+
     return phases
 
 
@@ -164,16 +193,39 @@ def run_pipeline(
     )
     phase_results = _run_phase_analyzers(ctx)
     static = run_rules(ctx, tags=tags)
+    # promote conversation_flow errors into static findings
+    cf_meta = (getattr(ctx, "meta", None) or {}).get("conversation_flow") or {}
+    for item in cf_meta.get("findings") or []:
+        if item.get("severity") != "error":
+            continue
+        static.findings.append(
+            StaticFinding(
+                severity="error",
+                code=item.get("code") or "conversation_flow",
+                file=item.get("path") or "conversation_flow",
+                message_ar=item.get("message") or "",
+                lineno=0,
+                rule_id="conversation_flow",
+                evidence=item.get("evidence") or "",
+            )
+        )
+    static.errors = sum(1 for f in static.findings if f.severity == "error")
+    static.warnings = sum(1 for f in static.findings if f.severity == "warning")
+    static.infos = sum(1 for f in static.findings if f.severity == "info")
+    static.ok = static.errors == 0
     ok = static.ok and all(p.ok for p in phase_results)
+    meta = {
+        "phase_order": list(PHASE_ORDER),
+        "module_count": len(ctx.modules),
+        "rules_run": list(static.rules_run),
+    }
+    if cf_meta:
+        meta["conversation_flow"] = cf_meta
     return PipelineReport(
         ok=ok,
         static=static,
         phases=phase_results,
-        meta={
-            "phase_order": list(PHASE_ORDER),
-            "module_count": len(ctx.modules),
-            "rules_run": list(static.rules_run),
-        },
+        meta=meta,
     )
 
 

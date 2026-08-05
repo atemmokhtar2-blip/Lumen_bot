@@ -68,3 +68,4 @@ __all__ = [
     "SymbolTable", "Symbol", "build_symbol_table",
 ]
 from .fidelity import check_project_fidelity, FidelityReport, fidelity_as_dict
+from .conversation_flow import analyze_conversation_flow, ConversationFlowReport
