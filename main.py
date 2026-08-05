@@ -764,8 +764,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ------------------------------------------------------------------
-    # Clarification (rule-based, ZERO LLM) + Formal generation
-    # No SmartChat / g4f on the generation path.
+    # Progressive clarification (ONE question at a time, ZERO LLM)
+    # + Formal generation. No SmartChat / g4f on generation path.
     # ------------------------------------------------------------------
     from telegram_bot_engine.formal_engine.services.clarification import (
         assess_spec,
@@ -773,37 +773,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         merge_answers,
     )
 
-    # Continue a pending clarification dialogue
     pending_spec = (context.user_data or {}).get("pending_spec")
     if pending_spec:
-        # User is answering clarification questions
         original = pending_spec.get("original") or ""
         prior_extra = pending_spec.get("extra") or ""
-        merged = merge_answers(original, request, prior_extra)
+        step = pending_spec.get("step") or ""
+        merged = merge_answers(original, request, prior_extra, step=step)
         assessment = assess_spec(merged)
         if not assessment.ready:
-            # Still incomplete — keep asking, accumulate answers
+            new_extra = merge_answers("", request, prior_extra, step=step)
             context.user_data["pending_spec"] = {
                 "original": original,
-                "extra": (prior_extra + "\n" + request).strip(),
+                "extra": new_extra.strip(),
                 "round": int(pending_spec.get("round") or 1) + 1,
+                "step": assessment.next_step or "",
             }
-            # After 3 rounds, force generate with whatever we have
-            if context.user_data["pending_spec"]["round"] >= 3:
+            # After 5 short rounds, generate with whatever we have
+            if context.user_data["pending_spec"]["round"] >= 5:
                 context.user_data.pop("pending_spec", None)
                 request = merged
-                # fall through to generation
             else:
                 await message.reply_text(build_clarification_message(assessment))
                 return
         else:
             context.user_data.pop("pending_spec", None)
             request = merged
-            # fall through to generation with full merged text
     else:
-        # Fresh message — assess before generating
-        if len(request) < 3:
-            await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
+        if len(request) < 2:
+            await message.reply_text("اكتب وصف البوت أو اسمه عشان أبدأ.")
             return
 
         assessment = assess_spec(request)
@@ -812,6 +809,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "original": request,
                 "extra": "",
                 "round": 1,
+                "step": assessment.next_step or "purpose",
             }
             await message.reply_text(build_clarification_message(assessment))
             return
