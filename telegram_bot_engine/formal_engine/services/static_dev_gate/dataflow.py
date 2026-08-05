@@ -926,11 +926,17 @@ class _FlowVisitor(ast.NodeVisitor):
             isinstance(node.func, ast.Attribute)
             and node.func.attr in _SQL_SINK_ATTRS
         )
-        is_dangerous = (
-            label in _DANGEROUS_CALLS
-            or any(label.endswith("." + d.split(".")[-1]) for d in _DANGEROUS_CALLS)
-            or is_sql
-        )
+        # exact label or full dotted suffix — never match bare ".run" to subprocess.run
+        is_dangerous = label in _DANGEROUS_CALLS or is_sql
+        if not is_dangerous:
+            for d in _DANGEROUS_CALLS:
+                if "." in d and (label == d or label.endswith("." + d)):
+                    is_dangerous = True
+                    break
+                # attribute-only sinks like execute already handled via is_sql / exact
+                if "." not in d and label == d:
+                    is_dangerous = True
+                    break
         if is_dangerous:
             detail = "call"
             risky = False
