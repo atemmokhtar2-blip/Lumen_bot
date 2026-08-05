@@ -293,33 +293,8 @@ def _cmd_handler(
 
 
 def _service(name: str, responsibility: str = "") -> str:
-    """Generic service — handle() + optional repo; no domain branches."""
-    cls = "".join(p.capitalize() for p in _ident(name).split("_")) + "Service"
-    return (
-        f'"""Service {name} — {responsibility or name}."""\n'
-        "from __future__ import annotations\n"
-        "from typing import Any\n\n\n"
-        f"class {cls}:\n"
-        "    def __init__(self, repo: Any = None) -> None:\n"
-        "        self._repo = repo\n\n"
-        "    async def handle(self, user_id: int = 0, args: list | None = None) -> str:\n"
-        "        args = list(args or [])\n"
-        "        if self._repo is not None and hasattr(self._repo, \"list_all\"):\n"
-        "            if args and hasattr(self._repo, \"get\"):\n"
-        "                row = await self._repo.get(str(args[0]))\n"
-        "                if row is None:\n"
-        "                    return \"غير موجود.\"\n"
-        "                return str(row)\n"
-        "            rows = await self._repo.list_all()\n"
-        "            if not rows:\n"
-        "                return \"لا بيانات.\"\n"
-        "            return \"\\n\".join(str(r) for r in rows[:30])\n"
-        f"        return \"{name}: ok\"\n\n"
-        "    async def ensure_user(self, telegram_id: int, username: str | None = None, full_name: str = \"\") -> None:\n"
-        "        if self._repo is not None and hasattr(self._repo, \"ensure\"):\n"
-        "            await self._repo.ensure(telegram_id, username, full_name)\n"
-    )
-
+    from .behavior import emit_rich_service
+    return emit_rich_service(name, responsibility)
 
 
 def _repository_module(c: ProgramContract) -> str:
@@ -448,6 +423,23 @@ def _container_module(c: ProgramContract, services: list) -> str:
         else:
             a("        from app.services.user import UserService")
             a("        self.users = UserService(repo=repos.make_user_repo())")
+    # structural command→service aliases (name overlap only)
+    from .behavior import resolve_service_for_command
+    svc_names = [_ident(s.name) for s in services]
+    ent_names = [e.name for e in (c.entities or [])]
+    from .behavior import primary_entity_snake
+    primary = primary_entity_snake(c)
+    for cmd in c.commands or []:
+        if cmd.name in ("start", "help"):
+            continue
+        ident = _ident(cmd.name)
+        if ident in svc_names:
+            continue
+        bound = resolve_service_for_command(cmd.name, svc_names, ent_names)
+        if not bound and primary and primary in svc_names:
+            bound = primary
+        if bound and bound != ident:
+            a(f"        self.{ident} = self.{bound}")
     a("")
     a("")
     a("@lru_cache")
@@ -717,6 +709,16 @@ class CodegenService:
         fw = normalize_framework(
             getattr(contract.architecture, "framework", "") if contract.architecture else ""
         )
+        from .behavior import (
+            resolve_service_for_command,
+            emit_cmd_aiogram as emit_cmd_aio_beh,
+            emit_messages_aiogram as emit_msg_aio_beh,
+            emit_callbacks_aiogram as emit_cb_aio_beh,
+            emit_messages_ptb,
+        )
+        svc_names = [_ident(s.name) for s in svcs]
+        ent_names = [e.name for e in (contract.entities or [])]
+
         if fw == "aiogram":
             _write(app / "main.py", emit_main_aiogram(contract, cmds))
             rows = []
@@ -730,21 +732,22 @@ class CodegenService:
                 handlers / "start.py",
                 emit_start_aiogram(contract, welcome_text(contract), help_text(cmds), rows),
             )
-            _write(handlers / "callbacks.py", emit_callbacks_aiogram(contract))
-            _write(handlers / "messages.py", emit_messages_aiogram(contract))
+            _write(handlers / "callbacks.py", emit_cb_aio_beh(contract))
+            _write(handlers / "messages.py", emit_msg_aio_beh(contract))
             for cmd in cmds:
                 if cmd.name in ("start", "help"):
                     continue
                 ident = _ident(cmd.name)
+                bound = resolve_service_for_command(cmd.name, svc_names, ent_names)
                 _write(
                     handlers / f"cmd_{ident}.py",
-                    emit_cmd_aiogram(cmd.name, cmd.description, cmd.admin_only),
+                    emit_cmd_aio_beh(cmd.name, cmd.description, cmd.admin_only, bound),
                 )
         else:
             _write(app / "main.py", emit_main_ptb(contract, cmds))
             _write(handlers / "start.py", _start(contract, commands=cmds, buttons=btns))
             _write(handlers / "callbacks.py", _callbacks(contract))
-            _write(handlers / "messages.py", _messages(contract))
+            _write(handlers / "messages.py", emit_messages_ptb(contract))
             entity_names = [e.name for e in contract.entities]
             for cmd in cmds:
                 if cmd.name in ("start", "help"):
