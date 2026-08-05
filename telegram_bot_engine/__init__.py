@@ -96,6 +96,17 @@ def generate_bot(request: str, work_dir=None):
             )
         )
 
+        # Grounding gate stage (text fidelity — drop ungrounded surface)
+        g = getattr(build, "grounding", None)
+        if g is not None:
+            stages.append(
+                StageResult.ok(
+                    "grounding_gate",
+                    outputs=g.to_dict() if hasattr(g, "to_dict") else {},
+                    warnings=list(getattr(g, "warnings", None) or []),
+                )
+            )
+
         # Codegen stage (transpiler output)
         files = list(build.files or [])
         stages.append(
@@ -192,6 +203,11 @@ def generate_bot(request: str, work_dir=None):
                 "dsl_operations": build.dsl_operations,
                 "dsl_rules": build.dsl_rules,
                 "verify_ok": verify_ok,
+                "grounding": (
+                    build.grounding.to_dict()
+                    if getattr(build, "grounding", None) is not None
+                    else None
+                ),
             },
         )
 
