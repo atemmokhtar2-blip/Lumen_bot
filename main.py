@@ -860,9 +860,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 # Dynamic engine errors often contain _, *, ` — escape them
                 summary_lines.append(f"  - {_escape_md(e)}")
 
-        summary_lines.append(
-            "\n_المحرك: Formal Engine — بدون نماذج لغوية._"
-        )
+        # Keep summary short — no engine marketing blurb after generation
 
         await _safe_edit_text(status_msg, "\n".join(summary_lines), use_markdown=True)
 
@@ -900,17 +898,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await message.reply_text("\n".join(g_lines))
 
             if ready:
-                # Project delivery only — do not ask for bot token after generation
-                context.user_data.pop("pending_deploy", None)
-                context.user_data.pop("pending_live_run", None)
+                context.user_data["pending_deploy"] = {
+                    "project_path": str(project_path),
+                    "owner_user_id": user.id if user else None,
+                }
+                context.user_data["pending_live_run"] = {
+                    "project_path": str(project_path),
+                    "owner_user_id": user.id if user else None,
+                }
                 await message.reply_text(
-                    "✅ المشروع جاهز للتجربة.\n"
-                    "📦 وصلك ملف zip أعلاه — نزّله واستخدمه مباشرة."
+                    "📦 المشروع جاهز.\n"
+                    "🔑 أرسل توكن البوت من @BotFather لتجربته."
                 )
             else:
                 await message.reply_text(
-                    "⚠️ المشروع اتولّد لكن المراجعة/الترجمة لم تمر بالكامل.\n"
-                    "راجع الأخطاء في الملخص أعلاه."
+                    "⚠️ المشروع اتولّد لكن في أخطاء — راجع الملخص أعلاه."
                 )
 
         elif not success:
