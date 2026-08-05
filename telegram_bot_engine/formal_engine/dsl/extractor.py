@@ -274,49 +274,51 @@ def _entities_from_text(text: str) -> list[EntityNode]:
 
     # 4) Free-form Arabic nouns → entity only if the word appears in text
     if not found:
+        # Minimal entity shells only — attributes ONLY if those words appear in text.
         noun_map: list[tuple[str, str, list[str]]] = [
-            (r"عميل|عملاء|customer|clients?", "Customer", ["id", "name", "phone"]),
-            (r"سائق|driver", "Driver", ["id", "name", "phone"]),
-            (r"طلب|اوردر|order", "Order", ["id", "status", "user_id"]),
-            (r"مهمة|task", "Task", ["id", "title", "status", "owner_id"]),
-            (r"صنف|منتج|item|product", "Product", ["id", "title", "price"]),
-            (r"مريض|patient", "Patient", ["id", "name", "phone"]),
-            (r"طبيب|doctor", "Doctor", ["id", "name", "specialty"]),
-            (r"موعد|مواعيد|appointment", "Appointment", ["id", "date", "time", "status"]),
+            (r"عميل|عملاء|customer|clients?", "Customer", ["name", "phone"]),
+            (r"سائق|drivers?", "Driver", ["name", "phone", "license"]),
+            (r"طلب|اوردر|orders?", "Order", ["status", "address", "phone"]),
+            (r"مهمة|tasks?", "Task", ["title", "status"]),
+            (r"صنف|منتج|products?|items?", "Product", ["title", "price"]),
+            (r"موعد|مواعيد|appointments?", "Appointment", ["date", "time", "status"]),
         ]
-        for pat, ename, attrs in noun_map:
-            if re.search(pat, text, re.I):
-                add(ename, attrs)
+        # field token must appear as a word-ish span in text (not substring of باسم etc.)
+        _field_word = {
+            "name": r"(?<![ا-ي])(?:الاسم|name)(?![ا-يa-z])",
+            "phone": r"هاتف|موبايل|تليفون|جوال|phone|mobile",
+            "address": r"عنوان|address",
+            "status": r"حالة|status",
+            "title": r"عنوان|title|اسم\s*الصنف|اسم\s*المنتج",
+            "price": r"سعر|price",
+            "license": r"رخصة|license",
+            "date": r"تاريخ|date",
+            "time": r"(?<![ا-ي])وقت(?![ا-ي])|\btime\b",
+        }
+        for pat, ename, candidate_attrs in noun_map:
+            if not re.search(pat, text, re.I):
+                continue
+            attrs = ["id"]
+            for a in candidate_attrs:
+                wp = _field_word.get(a)
+                if wp and re.search(wp, text, re.I):
+                    attrs.append(a)
+            add(ename, attrs)
 
-    # Enrich attributes from textual field signals (grounded only — word must appear)
-    field_signals = [
-        (r"اسم|name", "name"),
-        (r"هاتف|موبايل|تليفون|phone|mobile", "phone"),
-        (r"عنوان|address", "address"),
-        (r"ايميل|بريد|email", "email"),
-        (r"سعر|price", "price"),
-        (r"كمية|quantity|qty", "quantity"),
-        (r"حالة|status", "status"),
-        (r"تاريخ|date", "date"),
-        (r"وقت|time", "time"),
-        (r"ملاحظات|notes|comment", "notes"),
-        (r"مدينة|city", "city"),
-        (r"وصف|description", "description"),
-    ]
-    mentioned = [fid for pat, fid in field_signals if re.search(pat, text, re.I)]
-    if mentioned and found:
-        for ent in found:
-            existing = set(ent.attributes or [])
-            for fid in mentioned:
-                if fid not in existing and fid not in _GHOST:
-                    ent.attributes.append(fid)
-                    ent.attr_types[fid] = _infer_type(fid)
-                    existing.add(fid)
-
+    # NO global field pollution.
+    # Attributes come only from explicit entity declarations in the user text
+    # (parentheses / section lines). Never spray phone/price/name onto every entity.
     return found
 
 
 def _commands_from_text(text: str) -> list[CommandNode]:
+    """Extract commands with anti-hallucination rules.
+
+    Priority:
+      1) Explicit /command tokens (and optional section)
+      2) Only if none: grounded freeform / stems / verbs from user words
+    Never mix freeform packs on top of an explicit command list.
+    """
     found: list[CommandNode] = []
     seen: set[str] = set()
 
@@ -330,7 +332,6 @@ def _commands_from_text(text: str) -> list[CommandNode]:
         )
         found.append(CommandNode(name=cmd, description=(desc or cmd)[:100], admin_only=admin))
 
-    # Prefer explicit commands section first
     section = _section_lines(text, "الأوامر", "الاوامر", "commands", "الأوامر المطلوبة")
     scan_text = "\n".join(section) if section else text
 
@@ -340,7 +341,6 @@ def _commands_from_text(text: str) -> list[CommandNode]:
     ):
         add(m.group("cmd"), m.group("desc").strip())
 
-    # Also scan full text for any missed /commands
     if section:
         for m in re.finditer(
             r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,100})",
@@ -348,114 +348,74 @@ def _commands_from_text(text: str) -> list[CommandNode]:
         ):
             add(m.group("cmd"), m.group("desc").strip())
 
-    # Grounded surface commands — phrase MUST appear in user text.
-    # Always scan: supplements explicit /commands, never invents without signal.
-    freeform: list[tuple[str, str, str]] = [
+    explicit = [c.name for c in found if c.name not in ("start", "help")]
+
+    # Freeform / stems / verbs ONLY when user did not list explicit /commands
+    if not explicit:
+        freeform: list[tuple[str, str, str]] = [
             (r"تسجيل\s*عميل|register\s*customer", "register_customer", "تسجيل عميل"),
             (r"تسجيل\s*سائق|register\s*driver", "register_driver", "تسجيل سائق"),
             (r"تسجيل|يسجل|signup|sign\s*up|register", "register", "تسجيل"),
-            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب|يطلب\s*اوردر", "new_order", "طلب جديد"),
-            (r"(?<![a-z])اوردر(?![a-z])|(?<!\w)order(?!\w)", "new_order", "اوردر"),
+            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب", "new_order", "طلب جديد"),
             (r"تتبع|track", "track", "تتبع"),
-            (r"طلبات|طلب(?!\s*جديد)", "order", "طلب"),
-            (r"يقبل\s*الطلب|قبول\s*الطلب|accept\s*order", "accept_order", "قبول طلب"),
+            (r"طلباتي|اوردراتي|my\s*orders", "my_orders", "طلباتي"),
             (r"المنيو|قائمة\s*الطعام|(?<!\w)menu(?!\w)", "menu", "المنيو"),
-            (r"اوردرات[يى]|طلباتي|my\s*orders|يشوف\s*اوردر", "my_orders", "اوردراتي"),
-            (r"مهامي|my\s*tasks", "my_tasks", "مهامي"),
-            (r"مهمة\s*جديدة|new\s*task", "new_task", "مهمة جديدة"),
-            (r"عملائي|my\s*clients", "my_clients", "عملائي"),
-            (r"ضيف\s*صنف|إضافة\s*صنف|add\s*item|add\s*product", "add_item", "إضافة صنف"),
-            (r"إحصائ|احصائ|stats|statistics", "stats", "إحصائيات"),
-            (r"أدمن|ادمن|admin|لوحة\s*الإدارة|لوحة\s*الادارة", "admin", "ادمن"),
-            (r"بث|broadcast", "broadcast", "بث"),
-            (r"حظر|ban\b", "ban", "حظر"),
             (r"حجز|book(?:ing)?\b", "book", "حجز"),
             (r"مواعيدي|my\s*appointments", "my_appointments", "مواعيدي"),
+            (r"إحصائ|احصائ|stats", "stats", "إحصائيات"),
+            (r"أدمن|ادمن|admin|لوحة\s*الإدارة", "admin", "ادمن"),
             (r"بحث|search", "search", "بحث"),
             (r"دفع|payment|pay\b", "pay", "دفع"),
             (r"تقييم|rate\b|review\b", "rate", "تقييم"),
-            (r"دعم|support|ticket", "support", "دعم"),
-            (r"ملف\s*شخصي|profile", "profile", "ملف شخصي"),
-            (r"إعدادات|settings", "settings", "إعدادات"),
+            (r"دعم|support", "support", "دعم"),
+            (r"توصيل|delivery", "delivery", "توصيل"),
             (r"إلغاء|cancel", "cancel", "إلغاء"),
             (r"تأكيد|confirm", "confirm", "تأكيد"),
-            (r"توصيل|delivery", "delivery", "توصيل"),
-            (r"شحن|shipping", "shipping", "شحن"),
-            (r"فاتورة|invoice", "invoice", "فاتورة"),
-            (r"رصيد|balance|wallet", "balance", "رصيد"),
-            (r"إشعار|notification", "notifications", "إشعارات"),
-            (r"دعوة|invite", "invite", "دعوة"),
-            (r"اشتراك|subscribe", "subscribe", "اشتراك"),
+            (r"رصيد|balance|wallet", "wallet", "رصيد"),
+            (r"ملف\s*شخصي|profile", "profile", "ملف شخصي"),
+            (r"إعدادات|settings", "settings", "إعدادات"),
         ]
-    for pat, cmd, desc in freeform:
-        if re.search(pat, text, re.I):
-            add(cmd, desc)
+        for pat, cmd, desc in freeform:
+            if re.search(pat, text, re.I):
+                add(cmd, desc)
 
-    # Structural lists: "فيه X و Y" — re-match known stems against listed parts only
-    for m in re.finditer(
-        r"(?:فيه|فيها|يحتوي|يشمل|يقدر|تقدر|يعمل|تعمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
-        text,
-        re.I,
-    ):
-        chunk = m.group(1)
-        for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
-            part = part.strip()
-            if not (2 <= len(part) <= 40):
+        for m in re.finditer(
+            r"(?:فيه|فيها|يحتوي|يشمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
+            text,
+            re.I,
+        ):
+            chunk = m.group(1)
+            for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
+                part = part.strip()
+                if not (2 <= len(part) <= 40):
+                    continue
+                for pat, cmd, desc in freeform:
+                    if re.search(pat, part, re.I):
+                        add(cmd, desc or part)
+
+        for line in text.splitlines():
+            body = _strip_bullet(line)
+            if not body or len(body) > 48 or body.endswith(":"):
+                continue
+            if _looks_like_rule(body):
                 continue
             for pat, cmd, desc in freeform:
-                if re.search(pat, part, re.I):
-                    add(cmd, desc or part)
+                if re.search(pat, body, re.I):
+                    add(cmd, body[:100] if len(body) >= 3 else desc)
+                    break
 
-
-    # Structural short-line features (bullet / numbered / plain lines under 40 chars)
-    # Only when line itself carries a grounded stem — no invention.
-    _STEM_LINE: list[tuple[str, str, str]] = [
-        (r"تسجيل", "register", "تسجيل"),
-        (r"تتبع", "track", "تتبع"),
-        (r"طلب\s*جديد|اوردر\s*جديد", "order", "طلب جديد"),
-        (r"طلباتي|اوردراتي", "my_orders", "طلباتي"),
-        (r"حجز", "book", "حجز"),
-        (r"مواعيدي", "my_appointments", "مواعيدي"),
-        (r"المنيو|قائمة\s*الطعام", "menu", "المنيو"),
-        (r"إحصائ", "stats", "إحصائيات"),
-        (r"بحث", "search", "بحث"),
-        (r"دفع", "pay", "دفع"),
-        (r"دعم", "support", "دعم"),
-        (r"توصيل", "delivery", "توصيل"),
-        (r"ملف\s*شخصي", "profile", "ملف شخصي"),
-        (r"إعدادات", "settings", "إعدادات"),
-        (r"إلغاء", "cancel", "إلغاء"),
-        (r"تأكيد", "confirm", "تأكيد"),
-        (r"اشتراك", "subscribe", "اشتراك"),
-        (r"دعوة", "invite", "دعوة"),
-        (r"رصيد", "balance", "رصيد"),
-        (r"تقييم", "rate", "تقييم"),
-    ]
-    for line in text.splitlines():
-        body = _strip_bullet(line)
-        if not body or len(body) > 48 or body.endswith(":"):
-            continue
-        if _looks_like_rule(body):
-            continue
-        for pat, cmd, desc in _STEM_LINE:
-            if re.search(pat, body, re.I):
-                add(cmd, desc if len(body) < 3 else body[:100])
-                break
-
-    # Arabic verb phrases grounded in text: يسجل X / يتابع X / يحجز X ...
-    _VERB_CMD: list[tuple[str, str, str]] = [
-        (r"(?:يسجل|تسجيل)\s+\S+", "register", "تسجيل"),
-        (r"(?:يتابع|تتبع)\s+\S+", "track", "تتبع"),
-        (r"(?:يحجز|حجز)\s+\S+", "book", "حجز"),
-        (r"(?:يطلب|اطلب)\s+\S+", "order", "طلب"),
-        (r"(?:يعرض|عرض)\s+\S+", "list_items", "عرض"),
-        (r"(?:يبحث|بحث)\s+عن\s+\S+", "search", "بحث"),
-        (r"(?:يدفع|دفع)\s+\S+", "pay", "دفع"),
-        (r"(?:يقيم|تقييم)\s+\S+", "rate", "تقييم"),
-    ]
-    for pat, cmd, desc in _VERB_CMD:
-        if re.search(pat, text, re.I):
-            add(cmd, desc)
+        verb_cmd = [
+            (r"(?:يسجل|تسجيل)\s+\S+", "register", "تسجيل"),
+            (r"(?:يتابع|تتبع)\s+\S+", "track", "تتبع"),
+            (r"(?:يحجز|حجز)\s+\S+", "book", "حجز"),
+            (r"(?:يطلب|اطلب)\s+\S+", "order", "طلب"),
+            (r"(?:يبحث|بحث)\s+عن\s+\S+", "search", "بحث"),
+            (r"(?:يدفع|دفع)\s+\S+", "pay", "دفع"),
+            (r"(?:يقيم|تقييم)\s+\S+", "rate", "تقييم"),
+        ]
+        for pat, cmd, desc in verb_cmd:
+            if re.search(pat, text, re.I):
+                add(cmd, desc)
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
