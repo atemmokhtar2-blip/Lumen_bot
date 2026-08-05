@@ -1,5 +1,5 @@
-"""Deterministic Code Generation – clean, error-free, faithful to FormalBotSpec."""
+"""Post-generation verification only — codegen lives in services/codegen_service."""
 
-from .project_generator import generate_project
+from .post_verify import verify_generated_project
 
-__all__ = ["generate_project"]
+__all__ = ["verify_generated_project"]

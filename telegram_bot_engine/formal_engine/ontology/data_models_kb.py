@@ -148,16 +148,7 @@ ENTITY_LIBRARY: dict[str, list[tuple[str, str]]] = {
 }
 
 # Domain → required entities
-DOMAIN_ENTITIES: dict[str, list[str]] = {
-    "ecommerce": ["User", "Product", "CartItem", "Order", "Payment", "Notification"],
-    "ticketing": ["User", "Ticket", "TicketMessage", "Notification"],
-    "admin": ["User", "GroupSettings", "ModAction"],
-    "assistant": ["User", "Conversation"],
-    "document": ["User", "DocumentJob"],
-    "notification": ["User", "Subscriber", "Broadcast"],
-    "game": ["User", "Player", "GameSession"],
-    "custom": ["User"],
-}
+# DOMAIN_ENTITIES removed — entities come from text signals only
 
 # Phrase → entity hints (for free-form long text)
 ENTITY_SIGNALS: list[tuple[list[str], str]] = [

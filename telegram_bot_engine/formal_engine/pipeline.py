@@ -189,13 +189,12 @@ def run_pipeline(user_text: str, output_dir: str | Path):
     """
     Backward-compatible entry → (FormalBotSpec, Path, float).
     Prefer run_formal_pipeline for full gate results.
+    Never falls back to legacy template generators.
     """
     result = run_formal_pipeline(user_text, output_dir)
     if result.spec is None or result.project_path is None:
-        from .understanding.requirement_extractor import extract_formal_spec
-        from .generation.project_generator import generate_project
-
-        spec = extract_formal_spec(user_text or "")
-        path = generate_project(spec, output_dir)
-        return spec, path, result.seconds
+        raise RuntimeError(
+            "formal pipeline failed: "
+            + "; ".join(result.errors[:5] or ["unknown"])
+        )
     return result.spec, result.project_path, result.seconds
