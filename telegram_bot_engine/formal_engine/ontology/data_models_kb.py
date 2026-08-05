@@ -175,8 +175,33 @@ def resolve_data_models(archetype: str, text: str) -> list[dict[str, Any]]:
     """Return models grounded in TEXT signals only — never archetype packs."""
     needed: list[str] = []
     t = text.lower()
+    full = text or ""
+
+    # Meta / bot-builder contexts: do NOT inject commerce entities from example words
+    is_meta = any(
+        s in full or s in t
+        for s in (
+            "بناء بوت", "بناء بوتات", "بوت بناء", "صانع بوتات", "مولد بوتات",
+            "bot builder", "bot generator", "create bots", "build bots",
+            "meta bot", "meta-bot", "بوت يبني", "يبني بوتات", "انشاء بوتات",
+            "إنشاء بوتات", "generate bot", "bot factory", "ai agent", "محرك بوتات",
+        )
+    )
+    commerce_entities = {"Product", "CartItem", "Order", "Payment"}
+
     for phrases, entity in ENTITY_SIGNALS:
         if any(p.lower() in t for p in phrases) and entity not in needed:
+            if is_meta and entity in commerce_entities:
+                # only keep if the entity is explicitly requested as a data model
+                explicit = (
+                    f"كيان {entity}" in full
+                    or f"نموذج {entity}" in full
+                    or f"model {entity.lower()}" in t
+                    or f"entity {entity.lower()}" in t
+                    or f"جدول {entity}" in full
+                )
+                if not explicit:
+                    continue
             needed.append(entity)
     # User only if text mentions users / accounts / telegram ids
     if "User" not in needed and any(

@@ -110,6 +110,8 @@ class FlowStep(StrictModel):
     action: str
     next_id: str | None = None
     label: str = ""
+    # Optional branches for non-linear wizards (choice nodes)
+    branches: list[dict] = Field(default_factory=list)
 
 
 class FlowUnit(StrictModel):

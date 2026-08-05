@@ -142,7 +142,13 @@ def formal_spec_to_contract(spec: FormalBotSpec, raw_text: str = "") -> ProgramC
             FlowUnit(
                 name=flow_name,
                 steps=[
-                    FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"), label=str(s.get("label") or "")[:200])
+                    FlowStep(
+                        id=s["id"],
+                        action=s["action"],
+                        next_id=s.get("next_id"),
+                        label=str(s.get("label") or "")[:200],
+                        branches=list(s.get("branches") or []),
+                    )
                     for s in step_dicts
                 ],
             )

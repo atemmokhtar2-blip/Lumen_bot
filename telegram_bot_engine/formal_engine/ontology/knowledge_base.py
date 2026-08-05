@@ -115,10 +115,33 @@ ARCHITECTURE_RULES: list[str] = [
 
 
 def detect_archetype(text: str) -> str:
-    """Score archetypes by signal density + massive lexicon; return best match."""
+    """
+    Score archetypes by signal density + massive lexicon; return best match.
+    Primary-intent aware: meta/bot-builder descriptions must not collapse to ecommerce
+    just because example words (متجر/دفع/سلة) appear inside the prompt.
+    """
     from .lexicon_ar_en import score_domains
 
     t = text.lower()
+    full = text or ""
+
+    # ── Primary-intent gates (hard overrides) ─────────────────────────────
+    # Meta / bot-builder / codegen platforms
+    meta_signals = (
+        "بناء بوت", "بناء بوتات", "بوت بناء", "صانع بوتات", "مولد بوتات",
+        "bot builder", "bot generator", "create bots", "build bots",
+        "meta bot", "meta-bot", "بوت يبني", "يبني بوتات", "انشاء بوتات",
+        "إنشاء بوتات", "generate bot", "bot factory", "ai agent", "محرك بوتات",
+    )
+    if any(s in full or s in t for s in meta_signals):
+        return "custom"
+
+    # Delivery / multi-role ops platforms
+    if any(k in full for k in ("توصيل", "سائق")) or (
+        "driver" in t and "customer" in t
+    ):
+        return "custom"
+
     scores: dict[str, int] = {}
     for name, meta in BOT_ARCHETYPES.items():
         score = 0
@@ -126,11 +149,24 @@ def detect_archetype(text: str) -> str:
             if s.lower() in t:
                 score += 2 if len(s) > 3 else 1
         scores[name] = score
-    # lexicon boost
+
+    # lexicon boost (but dampened for secondary mentions)
     for domain, sc in score_domains(text).items():
         scores[domain] = scores.get(domain, 0) + sc
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "custom"
+
+    # Require stronger evidence for ecommerce when text is long & multi-topic
+    if len(full) > 800 and scores.get("ecommerce", 0) > 0:
+        primary_ecom = (
+            "متجر إلكتروني", "online store", "ecommerce", "shopping cart",
+            "سلة مشتريات", "كتالوج منتجات", "product catalog",
+        )
+        primary_hits = sum(1 for p in primary_ecom if p in t or p in full)
+        if primary_hits == 0:
+            # secondary words only → suppress ecommerce
+            scores["ecommerce"] = max(0, scores["ecommerce"] - 8)
+
+    best = max(scores, key=scores.get) if scores else "custom"
+    return best if scores.get(best, 0) > 0 else "custom"
 
 
 def extract_feature_tags(text: str) -> list[dict[str, str]]:
@@ -154,15 +190,33 @@ def extract_feature_tags(text: str) -> list[dict[str, str]]:
     }
     found = []
     seen = set()
+    t = text.lower()
+    full = text or ""
+    is_meta = any(
+        s in full or s in t
+        for s in (
+            "بناء بوت", "بناء بوتات", "بوت بناء", "صانع بوتات", "مولد بوتات",
+            "bot builder", "bot generator", "create bots", "build bots",
+            "meta bot", "meta-bot", "بوت يبني", "يبني بوتات", "انشاء بوتات",
+            "إنشاء بوتات", "generate bot", "bot factory", "ai agent", "محرك بوتات",
+        )
+    )
+    commerce_fids = {
+        "shopping_cart", "product_catalog", "order_management",
+        "inventory", "coupons", "shipping", "invoicing",
+    }
     # legacy lexicon
     for phrases, fid, cat in FEATURE_LEXICON:
-        t = text.lower()
         if any(p.lower() in t for p in phrases) and fid not in seen:
+            if is_meta and fid in commerce_fids:
+                continue
             seen.add(fid)
             found.append({"id": fid, "category": cat})
     # massive lexicon
     for fid in extract_features_fast(text):
         if fid not in seen:
+            if is_meta and fid in commerce_fids:
+                continue
             seen.add(fid)
             found.append({"id": fid, "category": default_cat.get(fid, cat_map.get(fid, "general"))})
     return found

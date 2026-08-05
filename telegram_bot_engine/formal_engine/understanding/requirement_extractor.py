@@ -171,15 +171,27 @@ def _extract_commands_from_text(text: str) -> list[dict]:
 
 
 def _extract_buttons_from_text(text: str) -> list[dict]:
-    """Buttons from dedicated sections or short menu labels — text only."""
+    """
+    Buttons from dedicated sections, inline mentions, and menu labels — text only.
+    Stronger extraction for long complex specs (no domain packs).
+    """
     buttons: list[dict] = []
     seen: set[str] = set()
 
     def _add(label: str) -> None:
         label = re.sub(r"\s+", " ", (label or "").strip())
-        if not label or label in seen or len(label) > 48:
+        # strip trailing punctuation
+        label = re.sub(r"[.،,;:]+$", "", label).strip()
+        if not label or label in seen or len(label) > 48 or len(label) < 2:
             return
-        if any(x in label for x in ("المستخدم", "يجب", "أنشئ", "اضغط على", "http")):
+        # reject instructional / narrative phrases
+        bad = (
+            "المستخدم", "يجب", "أنشئ", "اضغط على", "http", "يقوم", "يعرض",
+            "يطلب", "ثم ", "إذا ", "لو ", "when ", "then ", "user ",
+        )
+        if any(x in label for x in bad):
+            return
+        if label.startswith(("/", "#", "http")):
             return
         seen.add(label)
         cb = re.sub(r"[^\w]+", "_", label, flags=re.UNICODE).strip("_").lower()[:40]
@@ -187,17 +199,17 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
             cb = f"btn_{len(buttons)}"
         buttons.append({"text": label, "callback_data": cb})
 
-    block = _section_block(text, "الأزرار", "buttons", "أزرار", "القائمة", "القائمه", "menu")
+    block = _section_block(
+        text, "الأزرار", "buttons", "أزرار", "القائمة", "القائمه", "menu",
+        "أزرار تفاعلية", "inline buttons", "keyboard",
+    )
     emoji_line = re.compile(
         r"^[\s\-•*]*(?P<label>(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]+)\s*[^\n]{1,40})\s*$"
     )
-    sources = [block] if block.strip() else []
-    sources.append(text)
 
-    for src in sources:
-        if not (src or "").strip():
-            continue
-        for line in src.splitlines():
+    # 1) Dedicated buttons section first
+    if block.strip():
+        for line in block.splitlines():
             s = line.strip()
             if not s or len(s) > 50:
                 continue
@@ -205,18 +217,50 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
             if m:
                 _add(m.group("label").strip())
                 continue
-            # section bullet labels: - طلب جديد
-            if block and src is block:
-                m2 = re.match(r"^[\s\-•*]+(.+)$", s)
-                if m2:
-                    _add(m2.group(1).strip())
-                    continue
-                # plain short label lines in buttons section
-                if 2 <= len(s) <= 40 and not s.endswith(":") and "/" not in s:
-                    _add(s)
-        if buttons and block and src is block:
-            break
-    return buttons
+            m2 = re.match(r"^[\s\-•*\d\.]+(.+)$", s)
+            if m2:
+                _add(m2.group(1).strip())
+                continue
+            if 2 <= len(s) <= 40 and not s.endswith(":") and "/" not in s:
+                _add(s)
+
+    # 2) Inline patterns anywhere: زر "X" / button "X" / [X] / «X»
+    for m in re.finditer(
+        r"(?:زر|button|btn)\s*[:=]?\s*[«\"'\[]([^»\"'\]]{2,40})[»\"'\]]",
+        text,
+        re.I,
+    ):
+        _add(m.group(1).strip())
+    for m in re.finditer(
+        r"[«\"\[]([^\n»\"\]]{2,30})[»\"\]]\s*(?:\(زر\)|زر|button)",
+        text,
+        re.I,
+    ):
+        _add(m.group(1).strip())
+
+    # 3) "أزرار: A, B, C" or "buttons: A / B / C"
+    for m in re.finditer(
+        r"(?:الأزرار|أزرار|buttons|menu)\s*[:=]\s*([^\n]{5,120})",
+        text,
+        re.I,
+    ):
+        chunk = m.group(1)
+        for part in re.split(r"[,،/|•\-]+", chunk):
+            part = part.strip()
+            if 2 <= len(part) <= 40:
+                _add(part)
+
+    # 4) Fallback: short emoji+label lines in full text (if still empty)
+    if not buttons:
+        for line in text.splitlines():
+            s = line.strip()
+            if not s or len(s) > 45:
+                continue
+            m = emoji_line.match(s)
+            if m:
+                _add(m.group("label").strip())
+
+    return buttons[:30]
 
 
 def _map_type(archetype: str) -> BotType:
@@ -499,13 +543,24 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     qflags = _extract_quality_flags(full)
 
     archetype = detect_archetype(full)
-    # Long-spec: multi-role ops platforms should not collapse to game/utility
+    # Long-spec: multi-role ops platforms / meta bot-builders must stay custom
     _low = full.lower()
     if any(k in full for k in ("توصيل", "سائق", "Delivery")) or (
         "driver" in _low and "customer" in _low
     ):
-        if archetype in ("game", "utility"):
+        if archetype in ("game", "utility", "ecommerce"):
             archetype = "custom"
+    # Meta / bot-builder hard override (belt-and-suspenders with detect_archetype)
+    if any(
+        s in full or s in _low
+        for s in (
+            "بناء بوت", "بناء بوتات", "بوت بناء", "صانع بوتات", "مولد بوتات",
+            "bot builder", "bot generator", "create bots", "build bots",
+            "meta bot", "meta-bot", "بوت يبني", "يبني بوتات", "انشاء بوتات",
+            "إنشاء بوتات", "generate bot", "bot factory", "ai agent", "محرك بوتات",
+        )
+    ):
+        archetype = "custom"
     # Archetype is soft labeling only — NEVER injects commands/buttons/handlers.
     feature_tags_raw = extract_feature_tags(full)
     feature_tag_ids = [f["id"] for f in feature_tags_raw]
@@ -545,6 +600,19 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
         services.append("task_queue")
     if requires_payments:
         services.append("payments")
+    # Derive dedicated services from command stems so /new_bot ≠ cart
+    _svc_skip = {"start", "help", "menu", "cancel"}
+    for c in text_cmds:
+        cmd = (c.get("command") or "").lower()
+        if not cmd or cmd in _svc_skip:
+            continue
+        # group bot-related commands under a bots service
+        if any(k in cmd for k in ("bot", "bots", "template", "wizard")):
+            if "bots" not in services:
+                services.append("bots")
+            continue
+        if cmd not in services and len(cmd) > 2:
+            services.append(cmd)
     integrations = ["telegram"]
     if mentions_postgres:
         integrations.append("postgres")

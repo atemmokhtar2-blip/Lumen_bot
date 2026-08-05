@@ -666,6 +666,14 @@ def _main(c: ProgramContract, commands=None) -> str:
         "    app.add_handler(CallbackQueryHandler(callback_handler))",
         "    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))",
     ]
+    # Real media handlers when contract requires file/photo handling (no stubs)
+    if getattr(c.tech, "file_handling", False) or "file_handling" in (c.feature_tags or []):
+        regs.append(
+            "    app.add_handler(MessageHandler(filters.PHOTO, message_handler))"
+        )
+        regs.append(
+            "    app.add_handler(MessageHandler(filters.Document.ALL, message_handler))"
+        )
     bot_cmds_lines = []
     for x in cmds:
         bot_cmds_lines.append(
