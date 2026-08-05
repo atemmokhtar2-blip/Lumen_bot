@@ -259,6 +259,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         "description": "أرسل الوصف",
         "quantity": "أرسل الكمية",
         "title": "أرسل العنوان/الاسم",
+        "id": "أرسل رقم / معرّف التتبع",
     }
 
     # Arabic / English phrases in descriptions → field keys (text-grounded)
@@ -308,145 +309,158 @@ def infer(program: DSLProgram) -> InferenceResult:
             found.append(key)
         return found[:6]
 
-    # Dynamic wizards from user commands + entities (no fixed domain map)
+    # ── Flow Composer: classify commands → collect / lookup / mine / list ──
+    # No domain packs. Classification is structural from command name + desc + entities.
     _INPUT_VERBS = (
         "create", "add", "register", "book", "order", "submit", "new", "enroll",
         "open", "signup", "sign_up", "join", "apply", "insert", "post",
         "delivery", "shipping", "invoice", "support", "ticket", "appointment",
-        "reserve", "request", "form",
+        "reserve", "request", "form", "subscribe", "invite", "rate",
     )
+    _LOOKUP_CMDS = {
+        "track", "search", "status", "info", "find", "lookup", "check", "query",
+    }
+    _MINE_PREFIX = ("my_",)
+    _MINE_CMDS = {
+        "progress", "score", "history", "balance", "profile", "settings",
+    }
+    _LIST_CMDS = {
+        "list", "menu", "catalog", "courses", "products", "items", "orders",
+        "stats", "statistics", "dashboard",
+    }
     _SKIP_CMDS = {
-        "cancel", "list", "admin", "stats", "broadcast", "ban", "help", "start",
+        "cancel", "admin", "broadcast", "ban", "help", "start",
         "show", "view", "get", "delete", "remove", "drop", "reject", "accept",
-        "deliver", "arrive", "optimize", "report", "pay", "quiz", "score",
-        "progress", "courses", "my_courses", "status", "info", "track",
-        "available_orders", "search", "remind",
+        "deliver", "arrive", "optimize", "report", "pay", "quiz",
+        "available_orders", "remind", "confirm", "notifications",
     }
     _SKIP_STEMS = (
-        "cancel", "delete", "remove", "drop", "list", "stats", "admin",
-        "broadcast", "ban", "available", "track", "search", "show", "view",
+        "cancel", "delete", "remove", "drop", "stats", "admin",
+        "broadcast", "ban", "available", "show", "view",
     )
     _DESC_INPUT_HINTS = (
         "يجمع", "اجمع", "يطلب", "اطلب", "يسجل", "تسجيل", "يحتاج", "ادخل",
         "أدخل", "enter", "collect", "gather", "ask for", "requires", "اسم",
-        "بريد", "هاتف", "صف", "collects",
+        "بريد", "هاتف", "صف", "collects", "حجز", "طلب",
     )
 
-    # Soft semantic hints: command/desc token → preferred entity stem
     _CMD_ENTITY_HINTS: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
-        (("register", "signup", "student", "طالب", "تسجيل"), ("student", "user", "member")),
-        (("enroll", "join", "اشتراك", "تسجيل_كورس"), ("enrollment", "enrolment", "registration")),
+        (("register", "signup", "student", "طالب", "تسجيل"), ("customer", "student", "user", "member", "driver")),
+        (("enroll", "join", "اشتراك"), ("enrollment", "enrolment", "registration")),
         (("course", "كورس", "مادة"), ("course", "class", "subject")),
-        (("order", "طلب", "شراء"), ("order", "purchase")),
-        (("book", "حجز"), ("booking", "reservation", "appointment")),
-        (("ticket", "تذكرة", "بلاغ"), ("ticket", "issue")),
-        (("product", "منتج", "سلعة"), ("product", "item")),
+        (("order", "طلب", "شراء", "new_order"), ("order", "purchase")),
+        (("book", "حجز", "appointment"), ("booking", "reservation", "appointment")),
+        (("ticket", "تذكرة", "بلاغ", "support"), ("ticket", "issue")),
+        (("product", "منتج", "سلعة", "add_item"), ("product", "item")),
         (("quiz", "اختبار"), ("quizattempt", "quiz", "attempt")),
+        (("delivery", "توصيل"), ("order", "delivery")),
+        (("track", "تتبع", "search"), ("order", "ticket", "booking")),
+        (("my_orders", "my_tasks", "my_appointments", "my_clients"), ("order", "task", "appointment", "customer")),
     ]
 
-    def _is_input_cmd(cname: str, desc: str = "") -> bool:
-        """True only for collect/create style commands — never list/track/admin.
-        Matching is token-based (snake_case parts), NOT raw substring, so
-        'order' does not fire inside 'available_orders'.
-        """
+    def _cmd_kind(cname: str, desc: str = "") -> str:
         c = cname.lower()
-        if c in _SKIP_CMDS or c.startswith("my_"):
-            return False
+        if c in _SKIP_CMDS:
+            return "skip"
         parts = [p for p in c.replace("-", "_").split("_") if p]
-        if any(s in parts for s in _SKIP_STEMS):
-            return False
-        # verb as whole path segment only
+        if any(s in parts for s in _SKIP_STEMS) and c not in _LOOKUP_CMDS:
+            return "skip"
+        if c in _LOOKUP_CMDS or any(x in parts for x in ("track", "search", "find", "lookup")):
+            return "lookup"
+        if c.startswith(_MINE_PREFIX) or c in _MINE_CMDS:
+            return "mine"
+        if c in _LIST_CMDS or any(x in parts for x in ("list", "menu", "catalog")):
+            return "list"
         if any(v in parts for v in _INPUT_VERBS):
-            return True
+            return "collect"
         if any(c == v or c.startswith(v + "_") or c.endswith("_" + v) for v in _INPUT_VERBS):
-            # still block if a skip stem is present (available_orders)
-            if any(s in parts for s in _SKIP_STEMS):
-                return False
-            return True
+            return "collect"
         d = desc or ""
         if any(h in d for h in _DESC_INPUT_HINTS):
-            # description says يجمع/يحتاج but command is list-like → still skip
-            if any(s in parts for s in _SKIP_STEMS):
-                return False
-            return True
-        return False
+            return "collect"
+        return "action"
 
     def _entity_for_command(cmd_name: str, cmd_desc: str) -> str | None:
-        """Match entity by name overlap + soft Arabic/English hints."""
-        c = (cmd_name + " " + (cmd_desc or "")).lower().replace("_", " ")
-        caps = [k for k in entity_fields if k and k[0].isupper()]
-        best = None
-        best_score = 0
-        for ename in caps:
-            score = 0
+        cn = (cmd_name or "").lower()
+        cd = (cmd_desc or "").lower()
+        best, best_score = None, 0
+        for ename, fields in entity_fields.items():
             el = ename.lower()
-            if el in c.replace(" ", ""):
-                score += 6
-            for tok in re.findall(r"[a-z]{3,}", el):
-                if tok in c:
-                    score += 2
-            if el.endswith("s") and el[:-1] in c:
-                score += 3
-            # soft hints — prefer entity whose stem matches command verb
-            for triggers, stems in _CMD_ENTITY_HINTS:
-                if any(t in c for t in triggers):
-                    if any(s in el for s in stems):
-                        score += 5
-                    # stronger: command name itself is a stem of entity (enroll→Enrollment)
-                    cn_only = cmd_name.lower().replace("_", "")
-                    if any(cn_only and cn_only in s for s in stems) or any(
-                        s.startswith(cn_only) or cn_only.startswith(s[: max(4, len(s) // 2)])
-                        for s in stems if len(s) >= 4
-                    ):
-                        score += 4
+            score = 0
+            if el in cn or cn in el:
+                score += 8
+            for stems_cmd, stems_ent in _CMD_ENTITY_HINTS:
+                if any(s in cn or s in cd for s in stems_cmd):
+                    if any(s in el for s in stems_ent):
+                        score += 6
+            # stem overlap
+            stems = {el, el.rstrip("s")}
+            cn_only = cn.replace("_", "")
+            if any(cn_only and cn_only in s for s in stems):
+                score += 4
             if score > best_score:
                 best_score = score
                 best = ename
-        if best_score > 0:
-            return best
-        return None
+        return best if best_score > 0 else None
 
-    def _pick_wizard_fields(ent_name: str | None, desc: str) -> list[str]:
-        """Prefer fields mentioned in description; else entity attrs (skip ids/flags)."""
+    def _pick_wizard_fields(ent_name: str | None, desc: str, kind: str) -> list[str]:
         from_desc = _fields_from_description(desc)
         if from_desc:
             return from_desc
+        if kind == "lookup":
+            return ["id"]
         if not ent_name:
             return []
         fields = entity_fields.get(ent_name) or entity_fields.get(ent_name.lower()) or []
-        skip = {"id", "user_id", "banned", "paid", "active", "enabled", "passed", "verified", "locked"}
-        return [f for f in fields if f.lower() not in skip][:6]
+        skip = {
+            "id", "user_id", "banned", "paid", "active", "enabled",
+            "passed", "verified", "locked", "status",
+        }
+        # prefer human-input fields first
+        prefer = ["name", "phone", "address", "email", "title", "date", "time", "city", "notes", "description", "quantity", "price"]
+        ordered = [f for f in prefer if f in fields or f.lower() in {x.lower() for x in fields}]
+        for f in fields:
+            if f.lower() not in skip and f not in ordered:
+                ordered.append(f)
+        return ordered[:6]
 
     for cmd in program.commands:
         cn = cmd.name
         desc = getattr(cmd, "description", "") or ""
-        if not _is_input_cmd(cn, desc):
+        kind = _cmd_kind(cn, desc)
+        if kind in ("skip", "action", "list", "mine"):
+            # list/mine handled by transpiler handlers without multi-step wizard
             continue
         ent_name = _entity_for_command(cn, desc)
         caps = [k for k in entity_fields if k and k[0].isupper()]
         if not ent_name and len(caps) == 1:
             ent_name = caps[0]
-        # Prefer Enrollment entity for enroll/join even if Course also scored
-        if cn.lower() in ("enroll", "join", "enrol"):
+        if kind == "lookup" and not ent_name and caps:
+            # prefer Order/Ticket-like for track
             for cand in caps:
-                if "enroll" in cand.lower() or "registration" in cand.lower():
+                if any(s in cand.lower() for s in ("order", "ticket", "booking", "task")):
                     ent_name = cand
                     break
-        fields = _pick_wizard_fields(ent_name, desc)
-        # still no fields but description asks to collect → minimal name step
-        if not fields and any(h in desc for h in _DESC_INPUT_HINTS):
-            fields = _fields_from_description(desc) or ["name"]
-        if not fields and ent_name:
-            # entity exists but no explicit fields — use non-id attributes
-            fields = _pick_wizard_fields(ent_name, desc)
+            if not ent_name:
+                ent_name = caps[0]
+        fields = _pick_wizard_fields(ent_name, desc, kind)
+        if not fields and kind == "collect":
+            if any(h in desc for h in _DESC_INPUT_HINTS):
+                fields = _fields_from_description(desc) or ["name"]
+            elif ent_name:
+                fields = _pick_wizard_fields(ent_name, desc, kind)
+            if not fields:
+                fields = ["name"]
+        if not fields and kind == "lookup":
+            fields = ["id"]
         if not fields:
-            # last resort structural minimum when command is clearly collect-style
-            fields = ["name"]
+            continue
         steps = [{"key": f, "prompt": _prompt_for(f)} for f in fields]
         wizards.append({
             "id": cmd.name,
             "command": cmd.name,
             "entity": ent_name or "record",
+            "kind": kind,
             "steps": steps,
         })
 

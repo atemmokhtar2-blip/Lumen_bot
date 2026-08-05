@@ -275,14 +275,14 @@ def _entities_from_text(text: str) -> list[EntityNode]:
     # 4) Free-form Arabic nouns → entity only if the word appears in text
     if not found:
         noun_map: list[tuple[str, str, list[str]]] = [
-            (r"عميل|customer", "Customer", ["id", "name", "phone"]),
+            (r"عميل|عملاء|customer|clients?", "Customer", ["id", "name", "phone"]),
             (r"سائق|driver", "Driver", ["id", "name", "phone"]),
             (r"طلب|اوردر|order", "Order", ["id", "status", "user_id"]),
             (r"مهمة|task", "Task", ["id", "title", "status", "owner_id"]),
             (r"صنف|منتج|item|product", "Product", ["id", "title", "price"]),
             (r"مريض|patient", "Patient", ["id", "name", "phone"]),
             (r"طبيب|doctor", "Doctor", ["id", "name", "specialty"]),
-            (r"موعد|appointment", "Appointment", ["id", "date", "status"]),
+            (r"موعد|مواعيد|appointment", "Appointment", ["id", "date", "time", "status"]),
         ]
         for pat, ename, attrs in noun_map:
             if re.search(pat, text, re.I):
@@ -349,9 +349,8 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             add(m.group("cmd"), m.group("desc").strip())
 
     # Grounded surface commands — phrase MUST appear in user text.
-    # Linguistic surface → ascii command id. Never invents without textual signal.
-    if len([c for c in found if c.name not in ("start", "help")]) == 0:
-        freeform: list[tuple[str, str, str]] = [
+    # Always scan: supplements explicit /commands, never invents without signal.
+    freeform: list[tuple[str, str, str]] = [
             (r"تسجيل\s*عميل|register\s*customer", "register_customer", "تسجيل عميل"),
             (r"تسجيل\s*سائق|register\s*driver", "register_driver", "تسجيل سائق"),
             (r"تسجيل|يسجل|signup|sign\s*up|register", "register", "تسجيل"),
@@ -388,24 +387,75 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             (r"دعوة|invite", "invite", "دعوة"),
             (r"اشتراك|subscribe", "subscribe", "اشتراك"),
         ]
-        for pat, cmd, desc in freeform:
-            if re.search(pat, text, re.I):
-                add(cmd, desc)
+    for pat, cmd, desc in freeform:
+        if re.search(pat, text, re.I):
+            add(cmd, desc)
 
-        # Structural lists: "فيه X و Y" — re-match known stems against listed parts only
-        for m in re.finditer(
-            r"(?:فيه|فيها|يحتوي|يشمل|يقدر|تقدر|يعمل|تعمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
-            text,
-            re.I,
-        ):
-            chunk = m.group(1)
-            for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
-                part = part.strip()
-                if not (2 <= len(part) <= 40):
-                    continue
-                for pat, cmd, desc in freeform:
-                    if re.search(pat, part, re.I):
-                        add(cmd, desc or part)
+    # Structural lists: "فيه X و Y" — re-match known stems against listed parts only
+    for m in re.finditer(
+        r"(?:فيه|فيها|يحتوي|يشمل|يقدر|تقدر|يعمل|تعمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
+        text,
+        re.I,
+    ):
+        chunk = m.group(1)
+        for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
+            part = part.strip()
+            if not (2 <= len(part) <= 40):
+                continue
+            for pat, cmd, desc in freeform:
+                if re.search(pat, part, re.I):
+                    add(cmd, desc or part)
+
+
+    # Structural short-line features (bullet / numbered / plain lines under 40 chars)
+    # Only when line itself carries a grounded stem — no invention.
+    _STEM_LINE: list[tuple[str, str, str]] = [
+        (r"تسجيل", "register", "تسجيل"),
+        (r"تتبع", "track", "تتبع"),
+        (r"طلب\s*جديد|اوردر\s*جديد", "order", "طلب جديد"),
+        (r"طلباتي|اوردراتي", "my_orders", "طلباتي"),
+        (r"حجز", "book", "حجز"),
+        (r"مواعيدي", "my_appointments", "مواعيدي"),
+        (r"المنيو|قائمة\s*الطعام", "menu", "المنيو"),
+        (r"إحصائ", "stats", "إحصائيات"),
+        (r"بحث", "search", "بحث"),
+        (r"دفع", "pay", "دفع"),
+        (r"دعم", "support", "دعم"),
+        (r"توصيل", "delivery", "توصيل"),
+        (r"ملف\s*شخصي", "profile", "ملف شخصي"),
+        (r"إعدادات", "settings", "إعدادات"),
+        (r"إلغاء", "cancel", "إلغاء"),
+        (r"تأكيد", "confirm", "تأكيد"),
+        (r"اشتراك", "subscribe", "اشتراك"),
+        (r"دعوة", "invite", "دعوة"),
+        (r"رصيد", "balance", "رصيد"),
+        (r"تقييم", "rate", "تقييم"),
+    ]
+    for line in text.splitlines():
+        body = _strip_bullet(line)
+        if not body or len(body) > 48 or body.endswith(":"):
+            continue
+        if _looks_like_rule(body):
+            continue
+        for pat, cmd, desc in _STEM_LINE:
+            if re.search(pat, body, re.I):
+                add(cmd, desc if len(body) < 3 else body[:100])
+                break
+
+    # Arabic verb phrases grounded in text: يسجل X / يتابع X / يحجز X ...
+    _VERB_CMD: list[tuple[str, str, str]] = [
+        (r"(?:يسجل|تسجيل)\s+\S+", "register", "تسجيل"),
+        (r"(?:يتابع|تتبع)\s+\S+", "track", "تتبع"),
+        (r"(?:يحجز|حجز)\s+\S+", "book", "حجز"),
+        (r"(?:يطلب|اطلب)\s+\S+", "order", "طلب"),
+        (r"(?:يعرض|عرض)\s+\S+", "list_items", "عرض"),
+        (r"(?:يبحث|بحث)\s+عن\s+\S+", "search", "بحث"),
+        (r"(?:يدفع|دفع)\s+\S+", "pay", "دفع"),
+        (r"(?:يقيم|تقييم)\s+\S+", "rate", "تقييم"),
+    ]
+    for pat, cmd, desc in _VERB_CMD:
+        if re.search(pat, text, re.I):
+            add(cmd, desc)
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
