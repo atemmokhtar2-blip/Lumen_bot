@@ -1,5 +1,5 @@
 """
-Deep Requirement Extractor — knowledge + data models + architecture rules.
+Deep Requirement Extractor — text-grounded only (no KB command/model packs).
 Designed for long natural language (3000+ characters).
 """
 
@@ -11,7 +11,6 @@ from ..ontology.architecture_rules import apply_architecture_rules
 from ..ontology.data_models_kb import ENTITY_LIBRARY, resolve_data_models
 from ..ontology.knowledge_base import (
     detect_archetype,
-    enrich_from_archetype,
     extract_feature_tags,
 )
 from ..schemas.formal_spec import (
@@ -349,30 +348,14 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     ):
         if archetype in ("game", "utility"):
             archetype = "custom"
-    knowledge = enrich_from_archetype(archetype)
+    # Archetype is soft labeling only — NEVER injects commands/buttons/handlers.
     feature_tags_raw = extract_feature_tags(full)
     feature_tag_ids = [f["id"] for f in feature_tags_raw]
 
     text_cmds = _extract_commands_from_text(full)
     text_btns = _extract_buttons_from_text(full)
 
-    # Seed from knowledge if text incomplete
-    if not text_cmds and knowledge.get("default_commands"):
-        text_cmds = [
-            {"command": n, "description": d, "admin_only": a}
-            for n, d, a in knowledge["default_commands"]
-        ]
-    else:
-        # merge knowledge defaults without overriding text
-        have = {c["command"] for c in text_cmds}
-        for n, d, a in knowledge.get("default_commands") or []:
-            if n not in have:
-                text_cmds.append({"command": n, "description": d, "admin_only": a})
-
-    if not text_btns and knowledge.get("default_buttons"):
-        text_btns = [{"text": t, "callback_data": c} for t, c in knowledge["default_buttons"]]
-
-    # Ensure start/help early
+    # Structural minimum only — never KB default_commands / default_buttons
     have = {c["command"] for c in text_cmds}
     if "start" not in have:
         text_cmds.insert(0, {"command": "start", "description": "تشغيل البوت", "admin_only": False})
@@ -396,11 +379,22 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     )
     mentions_postgres = any(k in tlow for k in ("postgres", "postgresql"))
 
-    services = list(knowledge.get("services") or [])
-    integrations = list(knowledge.get("integrations") or ["telegram"])
-    handler_names = [h["name"] for h in (knowledge.get("handlers") or [])]
+    # Services / handlers / integrations — grounded, not from archetype packs
+    services: list[str] = []
+    if requires_files:
+        services.append("storage")
+    if requires_queue:
+        services.append("task_queue")
+    if requires_payments:
+        services.append("payments")
+    integrations = ["telegram"]
+    if mentions_postgres:
+        integrations.append("postgres")
+    if requires_queue:
+        integrations.append("redis")
+    handler_names = [c["command"] for c in text_cmds]
 
-    # Data models from KB
+    # Data models from TEXT signals only (see resolve_data_models)
     resolved_models = resolve_data_models(archetype, full)
     model_names = [m["name"] for m in resolved_models]
 
@@ -452,21 +446,21 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
                     )
                 )
 
-    handlers = [
-        HandlerSpec(
-            name=h["name"],
-            handler_type=h.get("type", "command"),
-            triggers=list(h.get("triggers") or []),
-            admin_only=bool(h.get("admin_only", False)),
-        )
-        for h in (knowledge.get("handlers") or [])
-    ]
-    # Ensure handlers for all commands from rules
-    existing = {h.name for h in handlers}
+    # Handlers only from text/rule command names — never archetype handler packs
+    handlers = []
+    existing: set[str] = set()
     for hname in ctx["handler_names"]:
         if hname not in existing and not hname.startswith("cb_"):
+            admin = any(
+                c.get("command") == hname and c.get("admin_only") for c in ctx.get("commands") or []
+            )
             handlers.append(
-                HandlerSpec(name=hname, handler_type="command", triggers=[f"/{hname}"])
+                HandlerSpec(
+                    name=hname,
+                    handler_type="command",
+                    triggers=[f"/{hname}"],
+                    admin_only=bool(admin),
+                )
             )
             existing.add(hname)
 

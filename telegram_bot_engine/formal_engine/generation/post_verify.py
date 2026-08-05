@@ -6,6 +6,8 @@ import ast
 from pathlib import Path
 from typing import Any
 
+from ..services.static_dev_gate.fidelity import check_project_fidelity, fidelity_as_dict
+
 
 def verify_generated_project(project_dir: str | Path) -> dict[str, Any]:
     root = Path(project_dir)
@@ -53,8 +55,14 @@ def verify_generated_project(project_dir: str | Path) -> dict[str, Any]:
 
     info["command_handlers"] = len(list((root / "app" / "handlers").glob("cmd_*.py"))) if (root / "app" / "handlers").exists() else 0
 
+    fid = check_project_fidelity(root)
+    fid_d = fidelity_as_dict(fid)
+    errors.extend(fid_d.get("errors") or [])
+    warnings.extend(fid_d.get("warnings") or [])
+    info["fidelity"] = fid_d.get("coverage") or {}
+
     return {
-        "ok": len(errors) == 0 and info["ast_ok"],
+        "ok": len(errors) == 0 and info["ast_ok"] and fid.ok,
         "errors": errors,
         "warnings": warnings,
         "info": info,

@@ -181,13 +181,18 @@ def apply_architecture_rules(ctx: dict[str, Any]) -> tuple[dict[str, Any], list[
         for effect in rule.effects:
             if effect.startswith("ensure_command:"):
                 cmd = effect.split(":", 1)[1]
-                if cmd not in commands:
-                    admin = cmd in ("admin", "ban", "mute", "broadcast")
+                # structural only — never inject domain command packs
+                if cmd in ("start", "help", "admin") and cmd not in commands:
+                    admin = cmd == "admin"
                     commands[cmd] = (cmd, admin)
             elif effect.startswith("ensure_service:"):
-                services.add(effect.split(":", 1)[1])
+                svc = effect.split(":", 1)[1]
+                # tech hooks only
+                if svc in ("storage", "task_queue", "payments") or svc in services:
+                    services.add(svc)
             elif effect.startswith("ensure_model:"):
-                models.add(effect.split(":", 1)[1])
+                # models come from text signals only — skip library injection
+                pass
             elif effect.startswith("ensure_integration:"):
                 integrations.add(effect.split(":", 1)[1])
             elif effect.startswith("ensure_handler:"):

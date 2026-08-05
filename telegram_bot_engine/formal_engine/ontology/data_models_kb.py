@@ -181,14 +181,16 @@ ENTITY_SIGNALS: list[tuple[list[str], str]] = [
 
 
 def resolve_data_models(archetype: str, text: str) -> list[dict[str, Any]]:
-    """Return list of {name, fields: [{name, type}]} for FormalBotSpec."""
-    needed: list[str] = list(DOMAIN_ENTITIES.get(archetype, ["User"]))
+    """Return models grounded in TEXT signals only — never archetype packs."""
+    needed: list[str] = []
     t = text.lower()
     for phrases, entity in ENTITY_SIGNALS:
         if any(p.lower() in t for p in phrases) and entity not in needed:
             needed.append(entity)
-    # Always include User
-    if "User" not in needed:
+    # User only if text mentions users / accounts / telegram ids
+    if "User" not in needed and any(
+        k in t for k in ("مستخدم", "user", "حساب", "telegram", "عميل", "customer")
+    ):
         needed.insert(0, "User")
 
     models = []

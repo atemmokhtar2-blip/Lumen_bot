@@ -67,3 +67,4 @@ __all__ = [
     "ContractModuleResult", "FunctionContract", "ContractFinding", "TypeTag",
     "SymbolTable", "Symbol", "build_symbol_table",
 ]
+from .fidelity import check_project_fidelity, FidelityReport, fidelity_as_dict
