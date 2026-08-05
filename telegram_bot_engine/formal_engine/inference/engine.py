@@ -3,6 +3,7 @@ Inference Engine — loops, decision trees, unique schemas, deep rules.
 """
 
 from __future__ import annotations
+import re
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,6 +49,7 @@ class InferenceResult:
     receives: list[str] = field(default_factory=list)
     emits: list[str] = field(default_factory=list)
     compute_steps: list[dict[str, Any]] = field(default_factory=list)
+    wizards: list[dict[str, Any]] = field(default_factory=list)
     relations: list[RelationNode] = field(default_factory=list)
     entities: list[EntityNode] = field(default_factory=list)
     commands: list[CommandNode] = field(default_factory=list)
@@ -178,5 +180,145 @@ def infer(program: DSLProgram) -> InferenceResult:
                 "outputs": list(op.outputs),
             }
         )
+
     result.compute_steps.sort(key=lambda x: x.get("ordinal") or 0)
+
+    # Multi-screen wizards: command → ordered field prompts from entity attrs
+    wizards: list[dict] = []
+    entity_fields: dict[str, list[str]] = {}
+    for e in program.entities:
+        fields = []
+        for a in (e.attributes or []):
+            name = a if isinstance(a, str) else getattr(a, "name", str(a))
+            name = str(name).strip()
+            if name and name.lower() not in ("id", "user_id", "status", "available", "paid", "active", "enabled"):
+                fields.append(name)
+        if fields:
+            entity_fields[e.name] = fields
+            entity_fields[e.name.lower()] = fields
+
+    # Arabic prompt labels for common fields
+    _PROMPT = {
+        "origin": "أرسل المنشأ / نقطة الانطلاق",
+        "destination": "أرسل الوجهة",
+        "weight": "أرسل الوزن (رقم)",
+        "amount": "أرسل المبلغ (رقم)",
+        "name": "أرسل الاسم",
+        "phone": "أرسل رقم الهاتف",
+        "city": "أرسل المدينة",
+        "license": "أرسل رقم الرخصة",
+        "plate": "أرسل رقم اللوحة",
+        "type": "أرسل النوع",
+        "title": "أرسل العنوان",
+        "code": "أرسل الكود",
+        "topic": "أرسل موضوع الشكوى",
+        "body": "أكتب نص الشكوى",
+        "comment": "أكتب تعليقك",
+        "rating": "أرسل التقييم من 1 إلى 5",
+        "score": "أرسل الدرجة",
+        "status": "أرسل الحالة",
+        "check_in": "أرسل تاريخ الوصول",
+        "check_out": "أرسل تاريخ المغادرة",
+        "slot": "أرسل الموعد/الوقت",
+        "notes": "أرسل ملاحظاتك",
+        "items": "أرسل عناصر الطلب",
+        "sku": "أرسل رمز الصنف",
+        "stock": "أرسل الكمية",
+        "issue": "صف المشكلة",
+        "severity": "أرسل مستوى الخطورة (رقم)",
+        "faculty": "أرسل الكلية",
+        "year": "أرسل السنة",
+        "student_id": "أرسل الرقم الجامعي",
+        "nationality": "أرسل الجنسية",
+        "company": "أرسل اسم الشركة",
+        "capacity_kg": "أرسل السعة بالكيلو",
+        "mileage": "أرسل قراءة العداد",
+        "liters": "أرسل عدد اللترات",
+        "cost": "أرسل التكلفة",
+        "stops": "أرسل نقاط التوقف",
+        "distance_km": "أرسل المسافة",
+        "driver_id": "أرسل معرّف السائق",
+        "course_id": "أرسل كود المادة",
+        "room_id": "أرسل رقم الغرفة",
+        "hotel_id": "أرسل الفندق",
+    }
+
+    def _prompt_for(field: str) -> str:
+        f = field.lower()
+        if f in _PROMPT:
+            return _PROMPT[f]
+        return f"أرسل {field}"
+
+    # Dynamic wizards from user commands + entities (no fixed domain map)
+    # Only "input" commands: create/add/register/book/order/submit — never cancel/list/admin
+    _INPUT_VERBS = ("create", "add", "register", "book", "order", "submit", "new", "enroll", "open")
+    _SKIP_VERBS = ("cancel", "list", "my_", "admin", "stats", "broadcast", "ban", "help", "start",
+                   "show", "view", "get", "delete", "remove", "drop", "reject", "accept", "deliver",
+                   "arrive", "optimize", "report", "set_price", "pay")  # pay may be simple amount-only
+
+    def _is_input_cmd(cname: str) -> bool:
+        c = cname.lower()
+        if any(c.startswith(s) or f"_{s}" in f"_{c}" for s in _SKIP_VERBS if s.endswith("_") or s in ("my_",)):
+            if c.startswith("my_") or c in ("admin", "stats", "help", "start", "broadcast", "ban"):
+                return False
+        if any(s in c for s in ("cancel", "delete", "remove", "drop", "reject", "accept", "list", "stats", "admin", "broadcast", "ban", "help", "start", "my_", "optimize", "report")):
+            return False
+        if any(v in c for v in _INPUT_VERBS):
+            return True
+        # command description may signal input
+        return False
+
+    def _entity_for_command(cmd_name: str, cmd_desc: str) -> str | None:
+        """Match entity by name overlap with command — fully from declared entities."""
+        c = (cmd_name + " " + (cmd_desc or "")).lower().replace("_", " ")
+        best = None
+        best_score = 0
+        for ename, fields in entity_fields.items():
+            if ename != ename:  # noqa — keep lower keys skipped
+                continue
+            # only canonical Capitalized names
+            if not ename or ename[0].islower():
+                continue
+            score = 0
+            el = ename.lower()
+            if el in c.replace(" ", ""):
+                score += 5
+            # token overlap
+            for tok in re.findall(r"[a-z]{3,}", el):
+                if tok in c:
+                    score += 2
+            # singular/plural rough
+            if el.endswith("s") and el[:-1] in c:
+                score += 3
+            if score > best_score:
+                best_score = score
+                best = ename
+        return best if best_score > 0 else None
+
+    for cmd in program.commands:
+        cn = cmd.name
+        if not _is_input_cmd(cn):
+            continue
+        desc = getattr(cmd, "description", "") or ""
+        ent_name = _entity_for_command(cn, desc)
+        # fallback: first entity if only one and create-like
+        if not ent_name and len([k for k in entity_fields if k and k[0].isupper()]) == 1:
+            ent_name = next(k for k in entity_fields if k and k[0].isupper())
+        if not ent_name:
+            continue
+        fields = entity_fields.get(ent_name) or entity_fields.get(ent_name.lower()) or []
+        if not fields:
+            continue
+        fields = fields[:6]
+        steps = [{"key": f, "prompt": _prompt_for(f)} for f in fields]
+        wizards.append({
+            "id": cmd.name,
+            "command": cmd.name,
+            "entity": ent_name,
+            "steps": steps,
+        })
+
+
+    result.wizards = wizards
+
     return result

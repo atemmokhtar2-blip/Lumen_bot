@@ -85,60 +85,96 @@ def _emit_schema_module(inf: InferenceResult) -> str:
 
 
 def _emit_store_module(inf: InferenceResult) -> str:
+    """SQLite-backed stores — ready for real hosting (persistent)."""
     lines = [
-        '"""Stores derived from inferred schemas only."""',
+        '"""SQLite stores derived from inferred schemas — hosting-ready."""',
         "from __future__ import annotations",
         "from typing import Any",
+        "import json",
+        "import sqlite3",
         "import uuid",
-        "from app.models import *",
+        "from pathlib import Path",
+        "",
+        "_DB_PATH = Path(__file__).resolve().parent.parent / 'data' / 'bot.db'",
+        "",
+        "def _conn() -> sqlite3.Connection:",
+        "    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)",
+        "    c = sqlite3.connect(str(_DB_PATH))",
+        "    c.row_factory = sqlite3.Row",
+        "    return c",
+        "",
+        "class _BaseStore:",
+        "    table: str = 'records'",
+        "",
+        "    def __init__(self) -> None:",
+        "        with _conn() as c:",
+        "            c.execute(",
+        "                f'CREATE TABLE IF NOT EXISTS {self.table} ('",
+        "                'id TEXT PRIMARY KEY, user_id INTEGER, payload TEXT, status TEXT, created_at TEXT'",
+        "                ')'",
+        "            )",
+        "            c.commit()",
+        "",
+        "    async def create(self, **fields: Any) -> str:",
+        "        oid = str(fields.get('id') or uuid.uuid4())",
+        "        payload = dict(fields, id=oid)",
+        "        uid = fields.get('user_id')",
+        "        status = str(fields.get('status') or '')",
+        "        with _conn() as c:",
+        "            c.execute(",
+        "                f\"INSERT OR REPLACE INTO {self.table} (id, user_id, payload, status, created_at) VALUES (?,?,?,?,datetime('now'))\",",
+        "                (oid, uid, json.dumps(payload, ensure_ascii=False, default=str), status),",
+        "            )",
+        "            c.commit()",
+        "        return oid",
+        "",
+        "    async def get(self, oid: str) -> Any:",
+        "        with _conn() as c:",
+        "            row = c.execute(f'SELECT payload FROM {self.table} WHERE id=?', (str(oid),)).fetchone()",
+        "        return json.loads(row['payload']) if row else None",
+        "",
+        "    async def list_all(self) -> list[Any]:",
+        "        with _conn() as c:",
+        "            rows = c.execute(f'SELECT payload FROM {self.table} ORDER BY created_at DESC').fetchall()",
+        "        return [json.loads(r['payload']) for r in rows]",
+        "",
+        "    async def list_by_user(self, user_id: int) -> list[Any]:",
+        "        with _conn() as c:",
+        "            rows = c.execute(",
+        "                f'SELECT payload FROM {self.table} WHERE user_id=? ORDER BY created_at DESC',",
+        "                (user_id,),",
+        "            ).fetchall()",
+        "        return [json.loads(r['payload']) for r in rows]",
+        "",
+        "    async def update_status(self, oid: str, status: str) -> bool:",
+        "        with _conn() as c:",
+        "            row = c.execute(f'SELECT payload FROM {self.table} WHERE id=?', (str(oid),)).fetchone()",
+        "            if not row:",
+        "                return False",
+        "            data = json.loads(row['payload'])",
+        "            data['status'] = status",
+        "            c.execute(",
+        "                f'UPDATE {self.table} SET payload=?, status=? WHERE id=?',",
+        "                (json.dumps(data, ensure_ascii=False, default=str), status, str(oid)),",
+        "            )",
+        "            c.commit()",
+        "        return True",
         "",
     ]
     schemas = inf.schemas or []
     if not schemas:
         lines += [
-            "class RecordStore:",
-            "    def __init__(self) -> None:",
-            "        self._rows: dict[str, Any] = {}",
-            "",
-            "    async def create(self, **fields: Any) -> str:",
-            "        oid = str(fields.get(\"id\") or uuid.uuid4())",
-            "        self._rows[oid] = dict(fields, id=oid)",
-            "        return oid",
-            "",
-            "    async def get(self, oid: str) -> Any:",
-            "        return self._rows.get(str(oid))",
-            "",
-            "    async def list_all(self) -> list[Any]:",
-            "        return list(self._rows.values())",
-            "",
-            "    async def list_by_user(self, user_id: int) -> list[Any]:",
-            "        return [r for r in self._rows.values() if getattr(r, \"user_id\", None) == user_id or (isinstance(r, dict) and r.get(\"user_id\") == user_id)]",
+            "class RecordStore(_BaseStore):",
+            "    table = 'records'",
             "",
         ]
         return "\n".join(lines) + "\n"
 
     for sch in schemas:
         cname = _cls(sch.table)
-        lines.append(f"class {cname}Store:")
-        lines.append("    def __init__(self) -> None:")
-        lines.append("        self._rows: dict[str, Any] = {}")
-        lines.append("")
-        lines.append("    async def create(self, **fields: Any) -> str:")
-        lines.append("        oid = str(fields.get(\"id\") or uuid.uuid4())")
-        lines.append(f"        allowed = set({cname}.__dataclass_fields__.keys())")
-        lines.append(f"        obj = {cname}(**{{k: v for k, v in fields.items() if k in allowed}})")
-        lines.append("        obj.id = oid")
-        lines.append("        self._rows[oid] = obj")
-        lines.append("        return oid")
-        lines.append("")
-        lines.append("    async def get(self, oid: str) -> Any:")
-        lines.append("        return self._rows.get(str(oid))")
-        lines.append("")
-        lines.append("    async def list_all(self) -> list[Any]:")
-        lines.append("        return list(self._rows.values())")
-        lines.append("")
-        lines.append("    async def list_by_user(self, user_id: int) -> list[Any]:")
-        lines.append("        return [r for r in self._rows.values() if getattr(r, \"user_id\", None) == user_id]")
+        tname = "".join(ch if ch.isalnum() else "_" for ch in sch.table.lower())[:40] or "records"
+        lines.append(f"class {cname}Store(_BaseStore):")
+        lines.append(f"    table = {_py(tname)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -178,6 +214,10 @@ def _emit_logic_module(inf: InferenceResult) -> str:
     lines.append("        if val is None or str(val).strip() == \"\":")
     lines.append("            return False")
     lines.append("        a = _as_number(val)")
+    lines.append("        if isinstance(right, str) and str(right).startswith(\"@\"):")
+    lines.append("            right = ctx.get(str(right)[1:])")
+    lines.append("            if right is None or str(right).strip() == \"\":")
+    lines.append("                return False")
     lines.append("        b = _as_number(right)")
     lines.append("        if op == \"gt\":")
     lines.append("            return a > b")
@@ -188,6 +228,14 @@ def _emit_logic_module(inf: InferenceResult) -> str:
     lines.append("        return a <= b")
     lines.append("    if op == \"ne\":")
     lines.append("        return str(val) != str(right)")
+    lines.append("    if isinstance(val, bool):")
+    lines.append("        truthy_r = str(right).lower() in (\"1\", \"true\", \"yes\", \"ok\")")
+    lines.append("        falsy_r = str(right).lower() in (\"0\", \"false\", \"no\", \"\")")
+    lines.append("        if truthy_r:")
+    lines.append("            return val is True")
+    lines.append("        if falsy_r:")
+    lines.append("            return val is False")
+
     lines.append("    # eq default — exact / contains (reject empty val unless right empty)")
     lines.append("    sv, sr = str(val if val is not None else \"\"), str(right if right is not None else \"\")")
     lines.append("    if not sv and sr:")
@@ -266,9 +314,9 @@ def _emit_logic_module(inf: InferenceResult) -> str:
     lines.append("                ok = any(_check_condition(c, out) for c in conds)")
     lines.append("            else:")
     lines.append("                ok = all(_check_condition(c, out) for c in conds)")
-    lines.append("        # compute rules always run")
+    lines.append("        # compute runs only with answers list")
     lines.append("        if rule.get(\"kind\") == \"compute\":")
-    lines.append("            ok = True")
+    lines.append("            ok = isinstance(out.get(\"answers\"), (list, tuple)) and len(list(out.get(\"answers\") or [])) > 0")
     lines.append("        if not ok:")
     lines.append("            continue")
     lines.append("        matched.append(str(rule.get(\"name\") or \"\"))")
@@ -370,6 +418,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     step_ids = [_ident(s["name"]) for s in steps]
     step_labels = { _ident(s["name"]): str(s.get("label") or s["name"])[:200] for s in steps }
     first_step = step_ids[0] if step_ids else None
+    wizards = list(getattr(inf, "wizards", None) or [])
+    wizard_by_cmd = {str(w.get("command") or w.get("id")): w for w in wizards}
 
     # map command → store name by stem overlap with schemas
     schema_names = [_ident(s.table) for s in schemas]
@@ -399,7 +449,39 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         "",
         "",
     ]
+    _wiz = list(getattr(inf, "wizards", None) or [])
+    lines.append("FLOWS: dict[str, list[dict[str, str]]] = {")
+    for w in _wiz:
+        wid = str(w.get("id") or w.get("command") or "flow")
+        lines.append(f"    {_py(wid)}: [")
+        for st in (w.get("steps") or []):
+            lines.append(
+                "        {\"key\": %s, \"prompt\": %s}," % (_py(st.get("key")), _py(st.get("prompt")))
+            )
+        lines.append("    ],")
+    lines.append("}")
+    lines.append("FLOW_ENTITY: dict[str, str] = {")
+    for w in _wiz:
+        wid = str(w.get("id") or w.get("command") or "flow")
+        lines.append(f"    {_py(wid)}: {_py(w.get('entity') or 'record')},")
+    lines.append("}")
+    lines.append("")
+    lines.append("")
+    lines.append("async def _start_flow(message, context, flow_id: str) -> None:")
+    lines.append("    steps = FLOWS.get(flow_id) or []")
+    lines.append("    if not steps:")
+    lines.append("        await message.reply_text('flow empty')")
+    lines.append("        return")
+    lines.append("    context.user_data.clear()")
+    lines.append("    context.user_data['flow'] = flow_id")
+    lines.append("    context.user_data['step'] = 0")
+    lines.append("    context.user_data['data'] = {}")
+    lines.append("    context.user_data['state'] = f'flow:{flow_id}:0'")
+    lines.append("    await message.reply_text(steps[0]['prompt'])")
+    lines.append("")
+    lines.append("")
 
+    # keyboard from inferred buttons
     # keyboard from inferred buttons
     lines.append("def main_keyboard() -> InlineKeyboardMarkup | None:")
     if buttons:
@@ -460,6 +542,12 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("        return")
         lines.append("    user = update.effective_user")
         lines.append("    uid = user.id if user else 0")
+        if cmd.name in wizard_by_cmd:
+            lines.append(f"    await _start_flow(message, context, {_py(cmd.name)})")
+            lines.append("    return")
+            lines.append("")
+            lines.append("")
+            continue
         if cmd.admin_only:
             lines.append("    from app.config import get_settings")
             lines.append("    settings = get_settings()")
@@ -480,11 +568,75 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append(f"    store = getattr(container, {_py(store)}, None)")
         else:
             lines.append("    store = getattr(container, \"primary_store\", None)")
+        # Dynamic command → rule context from command name (no domain packs)
+        lines.append("    payload: dict = {\"user_id\": uid}")
+        lines.append("    if args:")
+        lines.append("        payload[\"args\"] = args")
+        lines.append("        payload[\"text\"] = \" \".join(args)")
+        cn = cmd.name.lower()
+        # derive intent token from command stem dynamically
+        intent_token = cn
+        for prefix in ("create_", "add_", "register_", "my_", "set_"):
+            if cn.startswith(prefix):
+                intent_token = cn[len(prefix):] or cn
+                break
+        # verb intents from command name
+        verb_map = [
+            (("cancel", "drop", "delete", "remove"), "cancel"),
+            (("accept",), "accept"),
+            (("reject",), "reject"),
+            (("deliver",), "deliver"),
+            (("assign",), "assign"),
+            (("start_trip", "starttrip"), "start"),
+            (("pay", "invoice", "fee", "bill"), "pay"),
+            (("book", "appointment", "حجز"), "book"),
+            (("create", "add", "register", "enroll", "order"), "create"),
+            (("borrow",), "borrow"),
+            (("complaint",), "complaint"),
+            (("review", "rate", "feedback"), "review"),
+            (("checkin", "check_in"), "checkin"),
+            (("checkout", "check_out"), "checkout"),
+        ]
+        resolved = None
+        for stems, intent in verb_map:
+            if any(s in cn for s in stems):
+                resolved = intent
+                break
+        if resolved:
+            lines.append(f"    payload[\"intent\"] = {_py(resolved)}")
+            if resolved == "cancel":
+                # dynamic status expectation from common flows
+                lines.append("    payload.setdefault(\"status\", \"pending\")")
+                lines.append("    if \"book\" in \"" + cn + "\" or \"appoint\" in \"" + cn + "\":")
+                lines.append("        payload[\"status\"] = \"booked\"")
+            elif resolved in ("accept", "reject"):
+                lines.append("    payload.setdefault(\"status\", \"pending\")")
+            elif resolved == "assign":
+                lines.append("    payload[\"available\"] = True")
+                lines.append("    payload[\"before\"] = \"التعيين\"")
+            elif resolved == "book":
+                lines.append("    payload[\"available\"] = True")
+                lines.append("    payload[\"before\"] = \"الحجز\"")
+            elif resolved == "pay":
+                lines.append("    payload[\"paid\"] = True")
+            elif resolved == "create" and "shipment" in cn:
+                lines.append("    payload[\"intent\"] = \"create\"")
+        elif cmd.name in wizard_by_cmd:
+            lines.append(f"    payload[\"intent\"] = {_py(cmd.name)}")
+        # run rules then action
+        # run rules then action
+        # run rules then action
+        # run rules then action
+        lines.append("    ruled = logic.apply_rules(payload)")
+        lines.append("    if ruled.get(\"_messages\"):")
+        lines.append("        await message.reply_text(\" | \".join(str(m) for m in ruled[\"_messages\"][:5]))")
         if action:
-            lines.append(f"    result = await logic.{action}(store=store, user_id=uid, payload={{}}, args=args)")
-            lines.append("    await message.reply_text(str(result))")
+            lines.append(f"    result = await logic.{action}(store=store, user_id=uid, payload=ruled, args=args)")
+            lines.append("    if result and result not in (\"ok\",):")
+            lines.append("        await message.reply_text(str(result))")
         else:
-            lines.append(f"    await message.reply_text({_py(cmd.name)})")
+            lines.append(f"    if not ruled.get(\"_messages\"):")
+            lines.append(f"        await message.reply_text({_py(cmd.name)})")
         # show keyboard when buttons exist
         if buttons:
             lines.append("    kb = main_keyboard()")
@@ -494,65 +646,106 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("")
 
     # message handler — fixed state machine using same step ids
+        # Multi-screen message handler — wizard steps then rules
     lines.append("async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    message = update.effective_message")
     lines.append("    if message is None:")
     lines.append("        return")
     lines.append("    ud = context.user_data")
-    lines.append("    state = ud.get(\"state\")")
     lines.append("    text = (message.text or \"\").strip()")
     lines.append("    if message.photo:")
     lines.append("        text = message.photo[-1].file_id")
     lines.append("    elif message.document:")
     lines.append("        text = message.document.file_id")
+    lines.append("    flow_id = ud.get(\"flow\")")
+    lines.append("    steps = FLOWS.get(str(flow_id) or \"\") or []")
+    lines.append("    if flow_id and steps:")
+    lines.append("        step_i = int(ud.get(\"step\") or 0)")
+    lines.append("        data = dict(ud.get(\"data\") or {})")
+    lines.append("        if step_i < 0 or step_i >= len(steps):")
+    lines.append("            ud.clear()")
+    lines.append("            await message.reply_text(\"انتهت الشاشات — /start\")")
+    lines.append("            return")
+    lines.append("        key = steps[step_i][\"key\"]")
+    lines.append("        data[key] = text")
+    lines.append("        # numeric helpers")
+    lines.append("        if str(text).replace('.', '', 1).isdigit():")
+    lines.append("            try:")
+    lines.append("                data[key] = float(text) if '.' in text else int(text)")
+    lines.append("            except Exception:")
+    lines.append("                pass")
+    lines.append("        ud[\"data\"] = data")
+    lines.append("        step_i += 1")
+    lines.append("        if step_i < len(steps):")
+    lines.append("            ud[\"step\"] = step_i")
+    lines.append("            ud[\"state\"] = f\"flow:{flow_id}:{step_i}\"")
+    lines.append("            await message.reply_text(steps[step_i][\"prompt\"])")
+    lines.append("            return")
+    lines.append("        # completed wizard — apply rules + create entity")
+    lines.append("        user = update.effective_user")
+    lines.append("        uid = user.id if user else 0")
+    lines.append("        payload = dict(data)")
+    lines.append("        payload[\"user_id\"] = uid")
+    lines.append("        payload[\"intent\"] = str(flow_id)")
+    lines.append("        # sensible defaults for rule engine")
+    lines.append("        if \"weight\" in payload and payload.get(\"weight\"):")
+    lines.append("            pass")
+    lines.append("        ruled = logic.apply_rules(payload)")
+    lines.append("        msgs = list(ruled.get(\"_messages\") or [])")
+    lines.append("        entity = FLOW_ENTITY.get(str(flow_id)) or ruled.get(\"_create\")")
+    lines.append("        container = get_container()")
+    lines.append("        store = getattr(container, \"primary_store\", None)")
+    lines.append("        if store is not None and hasattr(store, \"create\"):")
+    lines.append("            try:")
+    lines.append("                oid = await store.create(**{k: v for k, v in ruled.items() if not str(k).startswith(\"_\")})")
+    lines.append("                msgs.append(f\"saved:{entity or 'record'}:{oid}\")")
+    lines.append("            except Exception as exc:")
+    lines.append("                msgs.append(f\"save_error:{exc}\")")
+    lines.append("        ud.clear()")
+    lines.append("        summary = \" | \".join(str(m) for m in msgs[:6]) if msgs else f\"تم — {entity or flow_id}\"")
+    lines.append("        kb = main_keyboard()")
+    lines.append("        if kb is not None:")
+    lines.append("            await message.reply_text(summary, reply_markup=kb)")
+    lines.append("        else:")
+    lines.append("            await message.reply_text(summary)")
+    lines.append("        return")
+    lines.append("    # legacy single-state path")
+    lines.append("    state = ud.get(\"state\")")
     lines.append("    if not state:")
     lines.append("        kb = main_keyboard()")
     lines.append("        if kb is not None:")
-    lines.append("            await message.reply_text(\"use /start\", reply_markup=kb)")
+    lines.append("            await message.reply_text(\"استخدم /start أو اختر أمراً\", reply_markup=kb)")
     lines.append("        else:")
-    lines.append("            await message.reply_text(\"use /start\")")
+    lines.append("            await message.reply_text(\"استخدم /start\")")
     lines.append("        return")
     lines.append("    collected = dict(ud.get(\"collected\") or {})")
     lines.append("    collected[str(state)] = text")
-    lines.append("    ud[\"collected\"] = collected")
     lines.append("    collected[\"text\"] = text")
-    lines.append("    collected[\"choice\"] = text")
     lines.append("    if str(text).replace('.', '', 1).isdigit():")
     lines.append("        collected.setdefault(\"progress\", int(float(text)))")
     lines.append("        collected.setdefault(\"score\", int(float(text)))")
     lines.append("    ruled = logic.apply_rules(collected)")
     lines.append("    ud[\"collected\"] = ruled")
-    lines.append("    collected = ruled")
     lines.append("    if ruled.get(\"_messages\"):")
     lines.append("        await message.reply_text(\" | \".join(str(m) for m in ruled[\"_messages\"][:5]))")
-    if inf.decisions:
-        dname = _ident(inf.decisions[0].name)
-        lines.append(f"    branch = logic.{dname}(text)")
-        lines.append("    ud[\"branch\"] = branch")
     if step_ids:
-        lines.append(f"    _order = {_py(step_ids)}")
-        lines.append(f"    _prompts = {_py(step_labels)}")
+        lines.append(f"    order = {_py(step_ids)}")
         lines.append("    try:")
-        lines.append("        idx = _order.index(str(state))")
+        lines.append("        idx = order.index(str(state))")
+        lines.append("        if idx + 1 < len(order):")
+        lines.append("            nxt = order[idx + 1]")
+        lines.append("            ud[\"state\"] = nxt")
+        lines.append(f"            labels = {_py(step_labels)}")
+        lines.append("            await message.reply_text(labels.get(nxt, nxt))")
+        lines.append("        else:")
+        lines.append("            ud[\"state\"] = None")
+        lines.append("            await message.reply_text(\"اكتملت الخطوات\")")
         lines.append("    except ValueError:")
-        lines.append("        idx = -1")
-        lines.append("    if idx >= 0 and idx + 1 < len(_order):")
-        lines.append("        nxt = _order[idx + 1]")
-        lines.append("        ud[\"state\"] = nxt")
-        lines.append("        await message.reply_text(_prompts.get(nxt, nxt))")
-        lines.append("        return")
-    lines.append("    ud.pop(\"state\", None)")
-    lines.append("    container = get_container()")
-    lines.append("    store = getattr(container, \"primary_store\", None)")
-    if action_names:
-        lines.append("    _uid = message.from_user.id if message.from_user else 0")
-        lines.append(f"    result = await logic.{action_names[0]}(store=store, user_id=_uid, payload=collected)")
-        lines.append("    await message.reply_text(str(result))")
-    else:
-        lines.append("    await message.reply_text(str(collected))")
+        lines.append("        pass")
     lines.append("")
     lines.append("")
 
+    # callback handler
     # callback handler — uses inferred decision + button targets
     lines.append("async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    query = update.callback_query")

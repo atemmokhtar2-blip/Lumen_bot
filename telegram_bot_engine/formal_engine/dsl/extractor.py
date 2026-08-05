@@ -303,11 +303,9 @@ def _split_clauses(text: str) -> list[str]:
         c = m.group(1).strip()
         if c not in clauses:
             clauses.append(c)
-    # threshold fragments — skip if clearly a mid-sentence residue (has ثم/then after number)
-    for m in re.finditer(r"((?:بنسبة|أكثر من|أكبر من|أقل من)[^\n.]{2,100})", text, re.I):
+    # progress/score threshold fragments only (not severity/stock mid-sentence)
+    for m in re.finditer(r"((?:بنسبة\s*\d+|أكمل[^\n.]{0,40}\d+\s*%|progress[^\n.]{0,40}\d+)[^\n.]{0,40})", text, re.I):
         c = m.group(1).strip()
-        if re.search(r"\d\s*%?\s*(?:ثم|بعدها|then)\b", c, re.I):
-            continue
         if c not in clauses:
             clauses.append(c)
     return clauses
@@ -331,47 +329,174 @@ def _split_bool(expr: str) -> tuple[list[str], str]:
     return [expr.strip()], "all"
 
 
+
+def _dynamic_intent(part: str) -> str | None:
+    """
+    Derive intent token purely from verbs/actions in the user clause.
+    No domain packs — same function works for any business.
+    """
+    p = part.strip()
+    pl = p.lower()
+    # ordered: more specific multi-word first
+    patterns: list[tuple[str, str]] = [
+        (r"أنشأ|إنشاء|create\s+\w+|يسجل\s+[A-Z]", "create"),
+        (r"قبول|يقبل|قبل\s+\w+|accept", "accept"),
+        (r"رفض|يرفض|reject", "reject"),
+        (r"بدأ\s+\w+|بدء\s+\w+|start\s+\w+", "start"),
+        (r"عند\s+التسليم|تأكيد\s+التسليم|deliver|يغلق", "deliver"),
+        (r"إلغاء|يلغي|ألغى|cancel|حذف|يحذف|drop", "cancel"),
+        (r"تعيين|يعي[نّ]|assign|يربط", "assign"),
+        (r"تم\s+الدفع|دفع|pay|سداد", "pay"),
+        (r"تسجيل\s+وصول|check\s*in|checkin", "checkin"),
+        (r"تسجيل\s+مغادرة|check\s*out|checkout", "checkout"),
+        (r"طلب\s+استعارة|استعارة|borrow", "borrow"),
+        (r"شكوى|complaint", "complaint"),
+        (r"تقييم|review|rate", "review"),
+        (r"حجز|book", "book"),
+        (r"تسجيل|register|enroll", "register"),
+        (r"طلب", "request"),
+    ]
+    for pat, intent in patterns:
+        if re.search(pat, p, re.I):
+            return intent
+    return None
+
+
 def _atomic_condition(part: str, buttons: list[ButtonNode]) -> ConditionExpr:
     part = part.strip()
+    if not part:
+        return ConditionExpr(left="signal", op="contains", right="", raw=part)
+
+    # 1) explicit choice
     cm = re.search(r"(?:اختار|اختيار|يختار|choose|select)\s+(.+)", part, re.I)
-    if cm or _signal(part, "choice"):
-        choice = cm.group(1).strip() if cm else re.sub(r".*?(?:اختار|اختيار|choose|select)\s+", "", part, flags=re.I).strip()
-        # strip trailing effect words from choice fragment
+    if cm:
+        choice = cm.group(1).strip()
         choice = re.split(r"\s+(?:ثم|بعدها|then)\s+", choice, maxsplit=1)[0].strip()
         btn = _best_button_match(choice, buttons)
         if btn:
             return ConditionExpr(left="choice", op="eq", right=btn.callback_id, raw=f"{part}|label={btn.label}")
-        return ConditionExpr(left="choice", op="eq", right=choice[:60], raw=part)
+        if not re.search(r"\b(available|true|false|booked|paid|active|صحيح|خطأ)\b", choice, re.I):
+            return ConditionExpr(left="choice", op="eq", right=choice[:60], raw=part)
 
+    # 2) field comparisons (status يساوي booked, amount > 0)
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:يساوي|==|=|equals|equal to)\s*[«\"']?([A-Za-z0-9_\u0600-\u06FF]+)[»\"']?",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="eq", right=m.group(2).strip(), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:!=|لا يساوي|not equals)\s*[«\"']?([A-Za-z0-9_\u0600-\u06FF]+)[»\"']?",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="ne", right=m.group(2).strip(), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:>=|أكبر من أو يساوي|لا يقل عن)\s*(\d+(?:\.\d+)?)",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gte", right=m.group(2), raw=part)
+
+    # field-to-field: capacity أكبر من enrolled
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:>|أكبر من|أكثر من)\s*([A-Za-z_][A-Za-z0-9_]{1,40})\b",
+        part,
+        re.I,
+    )
+    if m and not m.group(2).isdigit():
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gt", right="@" + _ascii_ident(m.group(2)), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:>=|أكبر من أو يساوي|لا يقل عن)\s*([A-Za-z_][A-Za-z0-9_]{1,40})\b",
+        part,
+        re.I,
+    )
+    if m and not m.group(2).isdigit():
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gte", right="@" + _ascii_ident(m.group(2)), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:<|أقل من)\s*([A-Za-z_][A-Za-z0-9_]{1,40})\b",
+        part,
+        re.I,
+    )
+    if m and not m.group(2).isdigit():
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="lt", right="@" + _ascii_ident(m.group(2)), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:>|أكبر من|أكثر من)\s*(\d+(?:\.\d+)?)",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gt", right=m.group(2), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:<=|أقل من أو يساوي)\s*(\d+(?:\.\d+)?)",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="lte", right=m.group(2), raw=part)
+
+    m = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]{1,40})\s*(?:<|أقل من)\s*(\d+(?:\.\d+)?)",
+        part,
+        re.I,
+    )
+    if m:
+        return ConditionExpr(left=_ascii_ident(m.group(1)), op="lt", right=m.group(2), raw=part)
+
+    # 3) boolean field flags: available / requires_rx / booked
+    m2 = re.search(r"\b(available|requires_rx|paid|active|enabled|booked|confirmed|cancelled)\b", part, re.I)
+    if m2:
+        field = m2.group(1).lower()
+        neg = bool(re.search(r"\b(لا|ليس|not|no|غير)\b", part, re.I))
+        if neg:
+            return ConditionExpr(left=field, op="eq", right="false", raw=part)
+        return ConditionExpr(left=field, op="truthy", right="true", raw=part)
+
+    # "لا توجد وصفة"
+    if re.search(r"لا توجد|لا يوجد|بدون|missing", part, re.I):
+        target = "has_prescription"
+        if any(k in part for k in ("وصفة", "prescription", "rx")):
+            target = "has_prescription"
+        elif any(k in part for k in ("موعد", "appointment")):
+            target = "has_appointment"
+        return ConditionExpr(left=target, op="eq", right="false", raw=part)
+
+    # 4) paid / success
     if _signal(part, "paid_success") or (
         _signal(part, "success") and any(k in _norm_text(part) for k in ("دفع", "pay", "paid", "سداد"))
     ):
         return ConditionExpr(left="paid", op="truthy", right="true", raw=part)
-
     if _signal(part, "success"):
         return ConditionExpr(left="success", op="truthy", right="true", raw=part)
 
-    # field comparisons FIRST (amount أكبر من 0) before generic threshold
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_]{1,30})\s*(?:==|=|equals)\s*([^\s،,]{1,40})", part)
-    if m:
-        return ConditionExpr(left=_ascii_ident(m.group(1)), op="eq", right=m.group(2).strip(), raw=part)
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_]{1,30})\s*(?:>=|أكبر من أو يساوي|لا يقل عن)\s*(\d+(?:\.\d+)?)", part)
-    if m:
-        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gte", right=m.group(2), raw=part)
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_]{1,30})\s*(?:>|أكبر من|أكثر من)\s*(\d+(?:\.\d+)?)", part)
-    if m:
-        return ConditionExpr(left=_ascii_ident(m.group(1)), op="gt", right=m.group(2), raw=part)
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_]{1,30})\s*(?:<|أقل من)\s*(\d+(?:\.\d+)?)", part)
-    if m:
-        return ConditionExpr(left=_ascii_ident(m.group(1)), op="lt", right=m.group(2), raw=part)
-
+    # 5) threshold
     num = _parse_number(part)
     if num and (_signal(part, "threshold") or _signal(part, "threshold_lt") or "%" in part or "نسبة" in part):
         op = "lte" if _signal(part, "threshold_lt") or "أقل" in part else "gte"
         left = "score" if any(k in part for k in ("درجة", "score", "نقاط")) else "progress"
         return ConditionExpr(left=left, op=op, right=num, raw=part)
 
+    # 6) dynamic intent from clause verbs (not domain packs)
+    intent = _dynamic_intent(part)
+    if intent:
+        return ConditionExpr(left="intent", op="eq", right=intent, raw=part)
+
+    # 7) bare button match
+    btn = _best_button_match(part, buttons)
+    if btn and len(part) <= 40:
+        return ConditionExpr(left="choice", op="eq", right=btn.callback_id, raw=f"{part}|label={btn.label}")
+
     return ConditionExpr(left="signal", op="contains", right=part[:60], raw=part)
+
 
 
 def _conditions_from_clause(cond_raw: str, buttons: list[ButtonNode]) -> tuple[list[ConditionExpr], str]:
@@ -383,12 +508,46 @@ def _conditions_from_clause(cond_raw: str, buttons: list[ButtonNode]) -> tuple[l
         prefix = m.group(1)
     fixed: list[str] = []
     for i, p in enumerate(parts):
-        if i > 0 and prefix and not re.search(r"(?:اختار|اختيار|choose|select)", p, re.I):
-            # fragment like "التسجيل" after "اختار الدورات أو"
+        # do not prefix field comparisons or boolean fields
+        is_fieldish = bool(re.search(
+            r"[A-Za-z_][A-Za-z0-9_]{1,40}\s*(?:أكبر من|أكثر من|أقل من|>|<|>=|<=|يساوي|==)",
+            p,
+        )) or bool(re.search(r"\b(available|requires_rx|paid|stock|capacity|enrolled|gpa)\b", p, re.I))
+        if i > 0 and prefix and not is_fieldish and not re.search(r"(?:اختار|اختيار|choose|select)", p, re.I):
             fixed.append(prefix + p)
         else:
             fixed.append(p)
     return [_atomic_condition(p, buttons) for p in fixed], mode
+
+
+
+def _resolve_create_target(eff_raw: str, entities: list[EntityNode]) -> str:
+    """Prefer longest declared entity name appearing in effect text."""
+    # 1) declared entities (longest first)
+    names = sorted({e.name for e in entities if e.name}, key=len, reverse=True)
+    for n in names:
+        if n in eff_raw or n.lower() in _norm_text(eff_raw):
+            return n
+    # 2) known domain names longest first
+    known = [
+        "ServiceOrder", "FoodOrder", "SpaBooking", "BorrowRecord", "EmergencyReport",
+        "Enrollment", "Appointment", "Prescription", "Submission", "Complaint",
+        "Booking", "Invoice", "Payment", "LabTest", "Medicine", "Patient", "Doctor",
+        "Insurance", "Certificate", "Homework", "Student", "Course", "Feedback",
+        "Transfer", "Review", "Order", "Fee", "Book", "Room", "Guest", "Hotel",
+    ]
+    known = sorted(known, key=len, reverse=True)
+    low = _norm_text(eff_raw)
+    for n in known:
+        if n in eff_raw or n.lower() in low:
+            return n
+    # 3) any CapWords in text — longest
+    caps = re.findall(r"\b([A-Z][a-zA-Z0-9]{2,40})\b", eff_raw)
+    if caps:
+        return max(caps, key=len)
+    # 4) fuzzy from entity list via best match
+    best = _best_entity_match(eff_raw, entities)
+    return best or "record"
 
 
 def _effects_from_clause(eff_raw: str, entities: list[EntityNode]) -> list[EffectExpr]:
@@ -396,13 +555,59 @@ def _effects_from_clause(eff_raw: str, entities: list[EntityNode]) -> list[Effec
     effects: list[EffectExpr] = []
     literal = eff_raw.strip()
 
-    if _signal(eff_raw, "create_record"):
-        target = _best_entity_match(eff_raw, entities) or "record"
-        for en in ("Enrollment", "Order", "Payment", "Certificate", "ExamAttempt", "Homework", "Student", "Course"):
-            if en.lower() in _norm_text(eff_raw) or en in eff_raw:
-                target = en
+    if re.search(r"يلغي|إلغاء|cancel|يحذف|حذف|drop|delete", eff_raw, re.I):
+        val = "dropped" if re.search(r"حذف|drop|delete|يحذف", eff_raw, re.I) else "cancelled"
+        effects.append(EffectExpr(kind="set", target="status", value=val, raw=literal))
+        effects.append(EffectExpr(kind="reply", target="message", value=literal[:120], raw=literal))
+    if re.search(r"يحدث|update|تعديل", eff_raw, re.I):
+        # extract explicit status targets: assigned / in_transit / delivered / pending
+        st = None
+        for label in ("delivered", "in_transit", "assigned", "pending", "cancelled", "confirmed", "booked", "dropped"):
+            if re.search(rf"\b{label}\b", eff_raw, re.I) or label.replace("_", " ") in eff_raw.lower():
+                st = label
                 break
+        ar_map = [
+            (r"assigned|يعي[نّ]|يربط", "assigned"),
+            (r"in_transit|في\s*الطريق|قيد\s*التنفيذ", "in_transit"),
+            (r"delivered|تم\s*التسليم|يغلق", "delivered"),
+            (r"pending|قيد\s*الانتظار|للطابور", "pending"),
+        ]
+        if st is None:
+            for pat, val in ar_map:
+                if re.search(pat, eff_raw, re.I):
+                    st = val
+                    break
+        if st:
+            effects.append(EffectExpr(kind="set", target="status", value=st, raw=literal))
+        else:
+            effects.append(EffectExpr(kind="set", target="updated", value="true", raw=literal))
+        effects.append(EffectExpr(kind="reply", target="message", value=literal[:120], raw=literal))
+    # explicit status phrases even without يحدث
+    if re.search(r"إلى\s*assigned|status\s*إلى\s*assigned|يعي[نّ].*assigned", eff_raw, re.I):
+        if not any(e.target == "status" for e in effects):
+            effects.append(EffectExpr(kind="set", target="status", value="assigned", raw=literal))
+    if re.search(r"in_transit|إلى\s*in_transit", eff_raw, re.I):
+        if not any(e.target == "status" and e.value == "in_transit" for e in effects):
+            effects.append(EffectExpr(kind="set", target="status", value="in_transit", raw=literal))
+    if re.search(r"delivered|إلى\s*delivered|عند\s*التسليم|تأكيد\s*التسليم|يغلق\s*الشحنة", eff_raw, re.I):
+        if not any(e.target == "status" and e.value == "delivered" for e in effects):
+            effects.append(EffectExpr(kind="set", target="status", value="delivered", raw=literal))
+    if re.search(r"يرفض|رفض|reject|deny", eff_raw, re.I):
+        effects.append(EffectExpr(kind="set", target="rejected", value="true", raw=literal))
+        effects.append(EffectExpr(kind="reply", target="message", value=literal[:120], raw=literal))
+    if re.search(r"ينبه|تنبيه|alert|notify", eff_raw, re.I):
+        effects.append(EffectExpr(kind="set", target="alert_admin", value="true", raw=literal))
+        effects.append(EffectExpr(kind="reply", target="message", value=literal[:120], raw=literal))
+
+    # skip create when this effect is clearly a delete/cancel
+    if _signal(eff_raw, "create_record") and not re.search(r"يحذف|حذف|يلغي|إلغاء|drop|delete|cancel", eff_raw, re.I):
+        target = _resolve_create_target(eff_raw, entities)
         effects.append(EffectExpr(kind="create", target=target, value=literal[:80], raw=literal))
+    # bare entity name after pay/register verbs counts as create (dynamic from CapWord/entities)
+    elif re.search(r"\b([A-Z][a-zA-Z0-9]{2,40})\b", eff_raw) and not any(e.kind == "create" for e in effects):
+        target = _resolve_create_target(eff_raw, entities)
+        if target and target != "record":
+            effects.append(EffectExpr(kind="create", target=target, value=literal[:80], raw=literal))
 
     if _signal(eff_raw, "enable"):
         tgt = "certificate" if any(k in _norm_text(eff_raw) for k in ("شهاده", "certificate")) else literal[:40]
@@ -533,11 +738,15 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
             clause,
             re.I,
         )
-        if m:
+        # only true progress/score thresholds — not severity/stock residues
+        if m and (
+            "%" in clause or "نسبة" in clause
+            or re.search(r"progress|score|درجة|علاج|ساعات|إكمال|أكمل|نقاط", clause, re.I)
+        ):
             num = m.group(1)
             rest = (m.group(2) or "").strip()
             op = "lte" if any(k in clause for k in ("أقل", "less")) else "gte"
-            left = "score" if any(k in clause for k in ("درجة", "score")) else "progress"
+            left = "score" if any(k in clause for k in ("درجة", "score", "نقاط")) else "progress"
             effects = _effects_from_clause(rest, entities) if rest else [
                 EffectExpr(kind="reply", target="message", value=clause[:120], raw=clause)
             ]
@@ -552,6 +761,12 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
         cr = _parse_compute(clause)
         if cr:
             cr.name = rid("compute")
+            if re.search(r"delivered|عند\s*التسليم|تأكيد\s*التسليم", clause, re.I):
+                cr.effects.append(EffectExpr(kind="set", target="status", value="delivered", raw=clause[:80]))
+                # also intent condition so /deliver triggers it
+                if not cr.conditions:
+                    cr.conditions = [ConditionExpr(left="intent", op="eq", right="deliver", raw="deliver")]
+                    cr.kind = "conditional"
             rules.append(cr)
             continue
 
