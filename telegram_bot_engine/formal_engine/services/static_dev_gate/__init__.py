@@ -69,3 +69,4 @@ __all__ = [
 ]
 from .fidelity import check_project_fidelity, FidelityReport, fidelity_as_dict
 from .conversation_flow import analyze_conversation_flow, ConversationFlowReport
+from .final_gate import run_final_gate, FinalGateReport

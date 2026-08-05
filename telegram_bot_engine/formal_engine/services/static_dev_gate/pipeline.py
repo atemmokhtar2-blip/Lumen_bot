@@ -33,6 +33,7 @@ PHASE_ORDER = (
     "contracts",          # types / design by contract
     "symbolic",           # path-sensitive code
     "conversation_flow",  # state machine / NL flows
+    "fidelity",           # contract ↔ project coverage
 )
 
 
@@ -170,6 +171,31 @@ def _run_phase_analyzers(ctx: AnalysisContext) -> list[PhaseResult]:
     except Exception as e:
         phases.append(PhaseResult("conversation_flow", False, f"{type(e).__name__}: {e}"))
 
+
+    # --- fidelity (contract coverage) ---
+    try:
+        from .fidelity import check_project_fidelity
+        fid = check_project_fidelity(ctx.root)
+        phases.append(PhaseResult(
+            "fidelity",
+            fid.ok,
+            f"cmd={fid.coverage.get('commands_ratio')} ent={fid.coverage.get('entities_ratio')}",
+            dict(fid.coverage or {}),
+        ))
+        ctx.meta = getattr(ctx, "meta", {}) or {}
+        ctx.meta["fidelity"] = {
+            "ok": fid.ok,
+            "coverage": fid.coverage,
+            "errors": [f.message for f in fid.errors],
+        }
+        for f in fid.errors:
+            # store for promotion
+            ctx.meta.setdefault("fidelity_errors", []).append(
+                {"severity": "error", "code": f.code, "message": f.message, "path": "fidelity"}
+            )
+    except Exception as e:
+        phases.append(PhaseResult("fidelity", False, f"{type(e).__name__}: {e}"))
+
     return phases
 
 
@@ -206,6 +232,19 @@ def run_pipeline(
                 message_ar=item.get("message") or "",
                 lineno=0,
                 rule_id="conversation_flow",
+                evidence=item.get("evidence") or "",
+            )
+        )
+
+    for item in (getattr(ctx, "meta", None) or {}).get("fidelity_errors") or []:
+        static.findings.append(
+            StaticFinding(
+                severity="error",
+                code=item.get("code") or "fidelity",
+                file=item.get("path") or "fidelity",
+                message_ar=item.get("message") or "",
+                lineno=0,
+                rule_id="fidelity",
                 evidence=item.get("evidence") or "",
             )
         )
