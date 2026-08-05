@@ -581,28 +581,27 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     final_model_names = ctx["model_names"]
     data_models: list[DataModelSpec] = []
     for name in final_model_names:
-        lib = ENTITY_LIBRARY.get(name)
-        if lib:
+        # Prefer text-grounded resolve_data_models — never dump full ENTITY_LIBRARY packs
+        hit = next((m for m in resolved_models if m["name"] == name), None)
+        if hit:
             data_models.append(
                 DataModelSpec(
                     name=name,
-                    fields=[n for n, _ in lib],
-                    typed_fields=[FieldSpec(name=n, type_hint=ty) for n, ty in lib],
+                    fields=hit["field_names"],
+                    typed_fields=[
+                        FieldSpec(name=f["name"], type_hint=f["type"]) for f in hit["fields"]
+                    ],
                 )
             )
-        else:
-            # find in resolved
-            hit = next((m for m in resolved_models if m["name"] == name), None)
-            if hit:
-                data_models.append(
-                    DataModelSpec(
-                        name=name,
-                        fields=hit["field_names"],
-                        typed_fields=[
-                            FieldSpec(name=f["name"], type_hint=f["type"]) for f in hit["fields"]
-                        ],
-                    )
-                )
+            continue
+        # unknown name: minimal structural fields only
+        data_models.append(
+            DataModelSpec(
+                name=name,
+                fields=["id"],
+                typed_fields=[FieldSpec(name="id", type_hint="str")],
+            )
+        )
 
     # Handlers only from text/rule command names — never archetype handler packs
     handlers = []

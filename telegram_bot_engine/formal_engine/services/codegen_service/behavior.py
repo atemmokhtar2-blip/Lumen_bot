@@ -52,6 +52,40 @@ def resolve_service_for_command(
     return None
 
 
+
+
+def primary_entity_fields(c: "ProgramContract") -> list[str]:
+    """Field names from primary entity on the contract (no domain defaults)."""
+    primary = None
+    for e in c.entities or []:
+        sn = snake_entity(e.name)
+        if sn and sn != "user":
+            primary = e
+            break
+    if primary is None and c.entities:
+        primary = c.entities[0]
+    if primary is None:
+        return []
+    skip = {"id", "created_at", "updated_at", "telegram_id"}
+    names: list[str] = []
+    for f in primary.fields or []:
+        n = (f.name or "").strip()
+        if n and n not in skip and n not in names:
+            names.append(n)
+    return names
+
+
+def field_prompts(fields: list[str], states_count: int) -> list[tuple[str, str]]:
+    """Pair sequential collect steps with entity fields; extra states keep generic prompts."""
+    out: list[tuple[str, str]] = []
+    for i in range(max(states_count, len(fields))):
+        if i < len(fields):
+            out.append((fields[i], f"أرسل: {fields[i]}"))
+        else:
+            out.append((f"field_{i+1}", f"أدخل القيمة {i+1}"))
+    return out
+
+
 def primary_entity_snake(c: "ProgramContract") -> str | None:
     for e in c.entities or []:
         sn = snake_entity(e.name)
@@ -102,9 +136,14 @@ def emit_rich_service(name: str, responsibility: str = "") -> str:
     )
 
 
+
 def emit_messages_ptb(c: "ProgramContract") -> str:
+    """PTB conversation runner — same structural rules as aiogram."""
+    # Generate aiogram version then adapt imports/API is heavy; dual emit:
     states = list(c.conversation_states or [])
-    if not states:
+    fields = primary_entity_fields(c)
+    primary = primary_entity_snake(c) or "item"
+    if not states and not fields:
         return (
             '"""Text fallback."""\n'
             "from __future__ import annotations\n"
@@ -116,26 +155,27 @@ def emit_messages_ptb(c: "ProgramContract") -> str:
             "        return\n"
             '    await message.reply_text("استخدم /start أو الأزرار.")\n'
         )
-    first = states[0].name
-    primary = primary_entity_snake(c) or "item"
-    next_lit = ",\n".join(
-        f"    {_py(s.name)}: {_py(s.next_state) if s.next_state else None}" for s in states
-    )
-    prompt_lit = ",\n".join(
-        f"    {_py(s.name)}: {_py(s.prompt or s.name)}" for s in states
-    )
+    if fields:
+        steps = [(f, f"أرسل: {f}") for f in fields]
+    else:
+        steps = [(s.name, s.prompt or s.name) for s in states] or [("value", "أدخل القيمة")]
+    ids = [f"s{i+1}" for i in range(len(steps))]
+    next_map = {ids[i]: (ids[i + 1] if i + 1 < len(ids) else None) for i in range(len(ids))}
+    prompt_map = {ids[i]: steps[i][1] for i in range(len(ids))}
+    field_map = {ids[i]: steps[i][0] for i in range(len(ids))}
+    first = ids[0]
+    next_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in next_map.items())
+    prompt_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in prompt_map.items())
+    field_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in field_map.items())
     return (
-        '"""Conversation runner — states from ProgramContract only."""\n'
+        '"""Conversation runner PTB — fields from contract entities."""\n'
         "from __future__ import annotations\n"
         "from telegram import Update\n"
         "from telegram.ext import ContextTypes\n"
         "from app.container import get_container\n\n"
-        "_NEXT: dict[str, str | None] = {\n"
-        f"{next_lit}\n"
-        "}\n"
-        "_PROMPTS: dict[str, str] = {\n"
-        f"{prompt_lit}\n"
-        "}\n"
+        f"_NEXT = {{\n{next_lit}\n}}\n"
+        f"_PROMPTS = {{\n{prompt_lit}\n}}\n"
+        f"_FIELDS = {{\n{field_lit}\n}}\n"
         f"_FIRST = {_py(first)}\n"
         f"_PRIMARY_SVC = {_py(primary)}\n\n\n"
         "async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:\n"
@@ -147,34 +187,37 @@ def emit_messages_ptb(c: "ProgramContract") -> str:
         "    if not state:\n"
         '        await message.reply_text("استخدم /start أو الأزرار.")\n'
         "        return\n"
-        '    collected = list(ud.get("collected") or [])\n'
-        "    collected.append(message.text.strip())\n"
-        '    ud["collected"] = collected\n'
+        '    data = dict(ud.get("collected") or {})\n'
+        "    field = _FIELDS.get(state) or state\n"
+        "    data[field] = message.text.strip()\n"
+        '    ud["collected"] = data\n'
         "    nxt = _NEXT.get(state)\n"
         "    if nxt:\n"
         '        ud["state"] = nxt\n'
         "        await message.reply_text(_PROMPTS.get(nxt) or nxt)\n"
         "        return\n"
         '    ud["state"] = None\n'
-        '    payload = {f"field_{i+1}": v for i, v in enumerate(collected)}\n'
-        '    payload["raw"] = " | ".join(collected)\n'
         "    container = get_container()\n"
         "    svc = getattr(container, _PRIMARY_SVC, None)\n"
         "    user = update.effective_user\n"
         "    uid = user.id if user is not None else 0\n"
         '    if svc is not None and hasattr(svc, "handle"):\n'
-        "        result = await svc.handle(user_id=uid, args=[], payload=payload)\n"
+        "        result = await svc.handle(user_id=uid, args=[], payload=data)\n"
         "        await message.reply_text(result if isinstance(result, str) else str(result))\n"
-        '        ud["collected"] = []\n'
+        '        ud["collected"] = {}\n'
         "        return\n"
-        '    await message.reply_text("تم حفظ المدخلات: " + " | ".join(collected))\n'
-        '    ud["collected"] = []\n'
+        '    await message.reply_text("تم الحفظ: " + str(data))\n'
+        '    ud["collected"] = {}\n'
     )
+
 
 
 def emit_messages_aiogram(c: "ProgramContract") -> str:
     states = list(c.conversation_states or [])
-    if not states:
+    fields = primary_entity_fields(c)
+    primary = primary_entity_snake(c) or "item"
+
+    if not states and not fields:
         return (
             '"""Text fallback — aiogram."""\n'
             "from __future__ import annotations\n"
@@ -184,32 +227,48 @@ def emit_messages_aiogram(c: "ProgramContract") -> str:
             "        return\n"
             '    await message.answer("استخدم /start أو الأزرار.")\n'
         )
-    first = states[0].name
-    primary = primary_entity_snake(c) or "item"
-    next_lit = ",\n".join(
-        f"    {_py(s.name)}: {_py(s.next_state) if s.next_state else None}" for s in states
-    )
-    prompt_lit = ",\n".join(
-        f"    {_py(s.name)}: {_py(s.prompt or s.name)}" for s in states
-    )
+
+    # Build collect chain: prefer entity fields; else contract states
+    if fields:
+        steps = [(f, f"أرسل: {f}") for f in fields]
+    else:
+        steps = [(s.name, s.prompt or s.name) for s in states]
+
+    if not steps:
+        steps = [("value", "أدخل القيمة")]
+
+    # state ids s1..sn
+    ids = [f"s{i+1}" for i in range(len(steps))]
+    next_map = {ids[i]: (ids[i + 1] if i + 1 < len(ids) else None) for i in range(len(ids))}
+    prompt_map = {ids[i]: steps[i][1] for i in range(len(ids))}
+    field_map = {ids[i]: steps[i][0] for i in range(len(ids))}
+    first = ids[0]
+
+    next_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in next_map.items())
+    prompt_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in prompt_map.items())
+    field_lit = ",\n".join(f"    {_py(k)}: {_py(v)}" for k, v in field_map.items())
+
     return (
-        '"""Conversation runner — aiogram — states from contract."""\n'
+        '"""Conversation runner — fields/states from ProgramContract only."""\n'
         "from __future__ import annotations\n"
         "from aiogram.types import Message\n"
         "from app.container import get_container\n\n"
         "_USER_STATE: dict[int, str | None] = {}\n"
-        "_USER_DATA: dict[int, list[str]] = {}\n"
+        "_USER_DATA: dict[int, dict] = {}\n"
         "_NEXT: dict[str, str | None] = {\n"
         f"{next_lit}\n"
         "}\n"
         "_PROMPTS: dict[str, str] = {\n"
         f"{prompt_lit}\n"
         "}\n"
+        "_FIELDS: dict[str, str] = {\n"
+        f"{field_lit}\n"
+        "}\n"
         f"_FIRST = {_py(first)}\n"
         f"_PRIMARY_SVC = {_py(primary)}\n\n\n"
         "def start_flow(user_id: int) -> str:\n"
         "    _USER_STATE[user_id] = _FIRST\n"
-        "    _USER_DATA[user_id] = []\n"
+        "    _USER_DATA[user_id] = {}\n"
         "    prompt = _PROMPTS.get(_FIRST)\n"
         "    if prompt is None:\n"
         "        return str(_FIRST)\n"
@@ -223,26 +282,25 @@ def emit_messages_aiogram(c: "ProgramContract") -> str:
         "    if not state:\n"
         '        await message.answer("استخدم /start أو الأزرار.")\n'
         "        return\n"
-        "    collected = list(_USER_DATA.get(uid) or [])\n"
-        "    collected.append(message.text.strip())\n"
-        "    _USER_DATA[uid] = collected\n"
+        "    data = dict(_USER_DATA.get(uid) or {})\n"
+        "    field = _FIELDS.get(state) or state\n"
+        "    data[field] = message.text.strip()\n"
+        "    _USER_DATA[uid] = data\n"
         "    nxt = _NEXT.get(state)\n"
         "    if nxt:\n"
         "        _USER_STATE[uid] = nxt\n"
         "        await message.answer(_PROMPTS.get(nxt) or nxt)\n"
         "        return\n"
         "    _USER_STATE[uid] = None\n"
-        '    payload = {f"field_{i+1}": v for i, v in enumerate(collected)}\n'
-        '    payload["raw"] = " | ".join(collected)\n'
         "    container = get_container()\n"
         "    svc = getattr(container, _PRIMARY_SVC, None)\n"
         '    if svc is not None and hasattr(svc, "handle"):\n'
-        "        result = await svc.handle(user_id=uid, args=[], payload=payload)\n"
+        "        result = await svc.handle(user_id=uid, args=[], payload=data)\n"
         "        await message.answer(result if isinstance(result, str) else str(result))\n"
-        "        _USER_DATA[uid] = []\n"
+        "        _USER_DATA[uid] = {}\n"
         "        return\n"
-        '    await message.answer("تم حفظ المدخلات: " + " | ".join(collected))\n'
-        "    _USER_DATA[uid] = []\n"
+        '    await message.answer("تم الحفظ: " + str(data))\n'
+        "    _USER_DATA[uid] = {}\n"
     )
 
 
@@ -290,11 +348,15 @@ def emit_cmd_aiogram(
     return "\n".join(lines) + "\n"
 
 
+
 def emit_callbacks_aiogram(c: "ProgramContract") -> str:
-    has_states = bool(c.conversation_states)
+    """Buttons: first starts flow; later buttons list primary entity (structural)."""
+    has_flow = bool(c.conversation_states) or bool(primary_entity_fields(c))
+    primary = primary_entity_snake(c) or "item"
+    buttons = list(c.buttons or [])
     cases = []
-    for b in c.buttons or []:
-        if has_states:
+    for i, b in enumerate(buttons):
+        if i == 0 and has_flow:
             cases.append(
                 f"    if data == {_py(b.callback_id)}:\n"
                 "        user = callback.from_user\n"
@@ -308,13 +370,21 @@ def emit_callbacks_aiogram(c: "ProgramContract") -> str:
         else:
             cases.append(
                 f"    if data == {_py(b.callback_id)}:\n"
-                f"        if callback.message:\n"
-                f"            await callback.message.edit_text({_py(b.label)})\n"
-                f"        return\n"
+                "        from app.container import get_container\n"
+                "        container = get_container()\n"
+                f"        svc = getattr(container, {_py(primary)}, None)\n"
+                "        user = callback.from_user\n"
+                "        uid = user.id if user is not None else 0\n"
+                "        text = " + _py(b.label) + "\n"
+                '        if svc is not None and hasattr(svc, "handle"):\n'
+                "            text = await svc.handle(user_id=uid, args=[])\n"
+                "        if callback.message:\n"
+                "            await callback.message.answer(text if isinstance(text, str) else str(text))\n"
+                "        return\n"
             )
     body = "\n".join(cases) if cases else "    pass\n"
     return (
-        '"""Callbacks — aiogram — wired to conversation flow when states exist."""\n'
+        '"""Callbacks — structural flow/list from contract buttons."""\n'
         "from __future__ import annotations\n"
         "from aiogram.types import CallbackQuery\n\n\n"
         "async def callback_handler(callback: CallbackQuery) -> None:\n"
@@ -324,3 +394,4 @@ def emit_callbacks_aiogram(c: "ProgramContract") -> str:
         + "    if callback.message:\n"
         '        await callback.message.edit_text(f"Action: {data}")\n'
     )
+

@@ -184,14 +184,59 @@ def resolve_data_models(archetype: str, text: str) -> list[dict[str, Any]]:
     ):
         needed.insert(0, "User")
 
+    # Fields: minimal structural set + only library fields whose name/hint appears in text.
+    # Never dump full domain entity packs blindly.
+    tlow = text.lower()
+    field_hints = {
+        "address": ("عنوان", "address", "موقع"),
+        "phone": ("هاتف", "phone", "جوال", "رقم"),
+        "status": ("حالة", "status"),
+        "total": ("إجمالي", "total", "سعر"),
+        "items": ("منتجات", "items", "سلع"),
+        "payment_method": ("دفع", "payment"),
+        "subject": ("موضوع", "subject"),
+        "body": ("وصف", "body", "محتوى"),
+        "priority": ("أولوية", "priority"),
+        "slot": ("موعد", "slot", "وقت"),
+        "name": ("اسم", "name"),
+        "price": ("سعر", "price"),
+        "stock": ("مخزون", "stock"),
+        "full_name": ("اسم", "full_name"),
+        "username": ("username", "مستخدم"),
+        "qty": ("كمية", "qty"),
+        "description": ("وصف", "description"),
+    }
     models = []
     for name in needed:
-        fields = ENTITY_LIBRARY.get(name)
-        if not fields:
-            fields = [("id", "str"), ("created_at", "str")]
+        lib = ENTITY_LIBRARY.get(name) or [("id", "str")]
+        chosen: list[tuple[str, str]] = []
+        # always id
+        for n, ty in lib:
+            if n == "id" and (n, ty) not in chosen:
+                chosen.append((n, ty))
+        if name == "User":
+            for n, ty in lib:
+                if n in ("telegram_id", "full_name", "username") and (n, ty) not in chosen:
+                    chosen.append((n, ty))
+        else:
+            # user_id if present in lib
+            for n, ty in lib:
+                if n == "user_id" and (n, ty) not in chosen:
+                    chosen.append((n, ty))
+            for n, ty in lib:
+                if n in ("id", "user_id", "created_at", "updated_at"):
+                    continue
+                hints = field_hints.get(n, (n, n.replace("_", " ")))
+                if any(h.lower() in tlow or h in text for h in hints):
+                    if (n, ty) not in chosen:
+                        chosen.append((n, ty))
+        if len(chosen) <= 1 and name != "User":
+            # at least id + user_id structural
+            if not any(n == "user_id" for n, _ in chosen):
+                chosen.append(("user_id", "int"))
         models.append({
             "name": name,
-            "fields": [{"name": n, "type": ty} for n, ty in fields],
-            "field_names": [n for n, _ in fields],
+            "fields": [{"name": n, "type": ty} for n, ty in chosen],
+            "field_names": [n for n, _ in chosen],
         })
     return models
