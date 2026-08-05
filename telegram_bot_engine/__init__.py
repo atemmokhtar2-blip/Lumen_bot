@@ -39,6 +39,11 @@ def generate_bot(request: str, work_dir=None):
 
     Uses the Formal DSL pipeline exclusively (no LLM, no ProgramContract unpack).
     Returns GenerationResult compatible with main.py reporting.
+
+    HARD RULE — no fixed domain templates:
+      Commands, buttons, entities, rules, flows, and handlers come ONLY from
+      the user text. Never inject shop/ticket/ecommerce/education packs or
+      canned domain skeletons.
     """
     from pathlib import Path
     import tempfile

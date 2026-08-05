@@ -305,12 +305,17 @@ def infer(program: DSLProgram) -> InferenceResult:
         "cancel", "list", "admin", "stats", "broadcast", "ban", "help", "start",
         "show", "view", "get", "delete", "remove", "drop", "reject", "accept",
         "deliver", "arrive", "optimize", "report", "pay", "quiz", "score",
-        "progress", "courses", "my_courses", "status", "info",
+        "progress", "courses", "my_courses", "status", "info", "track",
+        "available_orders", "search", "remind",
     }
+    _SKIP_STEMS = (
+        "cancel", "delete", "remove", "drop", "list", "stats", "admin",
+        "broadcast", "ban", "available", "track", "search", "show", "view",
+    )
     _DESC_INPUT_HINTS = (
         "يجمع", "اجمع", "يطلب", "اطلب", "يسجل", "تسجيل", "يحتاج", "ادخل",
         "أدخل", "enter", "collect", "gather", "ask for", "requires", "اسم",
-        "بريد", "هاتف", "صف",
+        "بريد", "هاتف", "صف", "collects",
     )
 
     # Soft semantic hints: command/desc token → preferred entity stem
@@ -326,15 +331,29 @@ def infer(program: DSLProgram) -> InferenceResult:
     ]
 
     def _is_input_cmd(cname: str, desc: str = "") -> bool:
+        """True only for collect/create style commands — never list/track/admin.
+        Matching is token-based (snake_case parts), NOT raw substring, so
+        'order' does not fire inside 'available_orders'.
+        """
         c = cname.lower()
         if c in _SKIP_CMDS or c.startswith("my_"):
             return False
-        if any(s in c for s in ("cancel", "delete", "remove", "drop", "list", "stats", "admin", "broadcast", "ban")):
+        parts = [p for p in c.replace("-", "_").split("_") if p]
+        if any(s in parts for s in _SKIP_STEMS):
             return False
-        if any(v in c for v in _INPUT_VERBS):
+        # verb as whole path segment only
+        if any(v in parts for v in _INPUT_VERBS):
+            return True
+        if any(c == v or c.startswith(v + "_") or c.endswith("_" + v) for v in _INPUT_VERBS):
+            # still block if a skip stem is present (available_orders)
+            if any(s in parts for s in _SKIP_STEMS):
+                return False
             return True
         d = desc or ""
         if any(h in d for h in _DESC_INPUT_HINTS):
+            # description says يجمع/يحتاج but command is list-like → still skip
+            if any(s in parts for s in _SKIP_STEMS):
+                return False
             return True
         return False
 

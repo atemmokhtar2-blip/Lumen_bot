@@ -870,10 +870,13 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
         # Arabic soft conditional without ثم:
         # لو الطالب دفع بنجاح يفتح له الكورس
         # لو الدرجة أكبر من أو تساوي 60 يعتبر ناجح
+        # لو السائق قبل الطلب تتغير الحالة إلى accepted
         m = re.search(
             r"(?:إذا|لو|if)\s+(?P<cond>.+?)\s+"
             r"(?P<eff>(?:يفتح|يعتبر|يعيد|يفعل|يسمح|يمنع|يرفض|يقبل|يحفظ|يسجل|يرسل|يعرض|"
-            r"enable|open|unlock|pass|fail|allow|deny|save|send|show)\S*\s*.+)$",
+            r"تتغير|يتغير|تصير|يصبح|ينب[ّ]?ه|ينبه|يرفض|يُخفى|يخفى|"
+            r"enable|open|unlock|pass|fail|allow|deny|save|send|show|reject|alert|"
+            r"change|set|update)\S*\s*.+)$",
             clause,
             re.I,
         )
@@ -888,7 +891,7 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
                 re.I,
             )
             if tm:
-                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط")) else "progress"
+                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط", "تقييم")) else "progress"
                 conditions = [ConditionExpr(left=left, op="gte", right=tm.group(1), raw=cond_raw[:80])]
             tm2 = re.search(
                 r"(?:أقل من أو تساوي|أقل من|<=|≤|less than)\s*(\d+(?:\.\d+)?)",
@@ -896,11 +899,22 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
                 re.I,
             )
             if tm2 and not tm:
-                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط")) else "progress"
+                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط", "تقييم")) else "progress"
                 conditions = [ConditionExpr(left=left, op="lt", right=tm2.group(1), raw=cond_raw[:80])]
             if not conditions:
                 conditions = [ConditionExpr(left="signal", op="truthy", right="", raw=cond_raw[:80])]
             effects = _effects_from_clause(eff_raw, entities)
+            # status assignment: تتغير الحالة إلى accepted
+            sm = re.search(
+                r"(?:الحالة|status)\s*(?:إلى|to|=)\s*([A-Za-z_][A-Za-z0-9_]{1,32})",
+                eff_raw,
+                re.I,
+            )
+            if sm:
+                effects.insert(
+                    0,
+                    EffectExpr(kind="set", target="status", value=sm.group(1).lower(), raw=eff_raw[:80]),
+                )
             if mode == "any" and conditions:
                 conditions[0].raw = f"ANY|{conditions[0].raw}"
             rules.append(RuleNode(name=rid("rule"), kind="conditional", conditions=conditions, effects=effects, raw=clause[:160]))

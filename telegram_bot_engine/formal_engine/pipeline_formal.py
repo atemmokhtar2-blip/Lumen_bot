@@ -2,6 +2,12 @@
 Formal Logic & DSL Engine pipeline.
 
 text → Custom DSL → Inference Engine → Micro-Transpiler → Formal Verification
+
+HARD RULE — zero fixed domain templates:
+  Every command, button, entity, rule, flow, and handler is derived from the
+  user specification only. No shop/ticket/ecommerce/education packs, no canned
+  skeletons, no default domain command lists. Structural helpers (e.g. ensuring
+  /start and /help exist) are the only allowed minima.
 """
 
 from __future__ import annotations
