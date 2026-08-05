@@ -900,24 +900,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await message.reply_text("\n".join(g_lines))
 
             if ready:
-                context.user_data["pending_deploy"] = {
-                    "project_path": str(project_path),
-                    "owner_user_id": user.id if user else None,
-                }
-                context.user_data["pending_live_run"] = {
-                    "project_path": str(project_path),
-                    "owner_user_id": user.id if user else None,
-                }
+                # Project delivery only — do not ask for bot token after generation
+                context.user_data.pop("pending_deploy", None)
+                context.user_data.pop("pending_live_run", None)
                 await message.reply_text(
-                    "✅ المشروع عدّى الفهم + التوليد + المراجعة الاستاتيكية + py_compile.\n\n"
-                    "🔑 أرسل توكن البوت الآن لتجربة حية (من @BotFather).\n"
-                    "التوكن لا يُحفظ في الكود أو اللوجات.\n\n"
-                    "بعد التشغيل: اضبط الصلاحيات حسب نوع البوت (خاص / مجموعة / قناة)."
+                    "✅ المشروع جاهز للتجربة.\n"
+                    "📦 وصلك ملف zip أعلاه — نزّله واستخدمه مباشرة."
                 )
             else:
                 await message.reply_text(
-                    "⚠️ المشروع اتولّد لكن المراجعة الاستاتيكية/الترجمة لم تمر بالكامل.\n"
-                    "راجع الأخطاء قبل إرسال التوكن."
+                    "⚠️ المشروع اتولّد لكن المراجعة/الترجمة لم تمر بالكامل.\n"
+                    "راجع الأخطاء في الملخص أعلاه."
                 )
 
         elif not success:

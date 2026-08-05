@@ -54,25 +54,32 @@ def _norm(s: str) -> str:
     return s
 
 
-def _text_has_cmd(text_n: str, raw: str, name: str) -> bool:
-    """Command is grounded if /name or name appears as a command token in text."""
+def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
+    """Command grounded via /name, name token, or description phrase in user text."""
     n = (name or "").lower().strip()
     if not n:
         return False
     if n in _STRUCTURAL_CMDS:
         return True
-    # explicit /command
     if re.search(rf"/{re.escape(n)}\b", raw, re.I):
         return True
     if re.search(rf"/{re.escape(n)}\b", text_n):
         return True
-    # bare token in commands section style
     if re.search(rf"(?:^|[\s,|]){re.escape(n)}(?:\s*[-–—:]|\s|$)", text_n, re.M):
         return True
-    # snake parts all present (register_customer)
     parts = [p for p in n.split("_") if len(p) >= 3]
     if len(parts) >= 2 and all(p in text_n for p in parts):
         return True
+    d = (desc or "").strip()
+    if d and len(d) >= 2:
+        if d in raw or _norm(d) in text_n:
+            return True
+        toks = [t for t in re.split(r"\s+", d) if len(t) >= 3]
+        if toks and sum(1 for t in toks if _norm(t) in text_n or t in raw) >= max(1, len(toks) - 1):
+            return True
+    for part in n.split("_"):
+        if len(part) >= 4 and re.search(rf"\b{re.escape(part)}\b", text_n):
+            return True
     return False
 
 
@@ -80,11 +87,27 @@ def _text_has_entity(text_n: str, raw: str, name: str) -> bool:
     n = (name or "").strip()
     if not n:
         return False
-    # CapWord exact in original text
     if re.search(rf"\b{re.escape(n)}\b", raw):
         return True
     if n.lower() in text_n:
         return True
+    # Arabic free-form nouns → English entity names
+    ar_map = {
+        "customer": ("عميل", "عملاء", "customer"),
+        "driver": ("سائق", "سواق", "driver"),
+        "order": ("طلب", "اوردر", "order"),
+        "task": ("مهمة", "مهام", "task"),
+        "product": ("صنف", "منتج", "product", "item"),
+        "patient": ("مريض", "patient"),
+        "doctor": ("طبيب", "doctor"),
+        "appointment": ("موعد", "appointment"),
+        "user": ("مستخدم", "user"),
+    }
+    key = n.lower()
+    for stem, words in ar_map.items():
+        if stem in key:
+            if any(w in raw for w in words) or any(_norm(w) in text_n for w in words):
+                return True
     return False
 
 
@@ -94,11 +117,14 @@ def _text_has_button(text_n: str, raw: str, label: str) -> bool:
         return False
     if lab in raw:
         return True
-    if _norm(lab) in text_n:
+    ln = _norm(lab)
+    if ln in text_n:
         return True
-    # significant token overlap (≥1 token len≥3)
+    # drop leading ال
+    if ln.startswith("ال") and len(ln) > 4 and ln[2:] in text_n:
+        return True
     toks = [t for t in re.split(r"\s+", lab) if len(t) >= 3]
-    if toks and all(_norm(t) in text_n for t in toks):
+    if toks and all(_norm(t) in text_n or _norm(t).lstrip("ال") in text_n for t in toks):
         return True
     return False
 
@@ -155,7 +181,8 @@ def apply_grounding_gate(program: DSLProgram, user_text: str) -> tuple[DSLProgra
         name = (c.name or "").lower()
         if name in seen_cmd:
             continue
-        if _text_has_cmd(text_n, raw, name):
+        desc = getattr(c, "description", "") or ""
+        if _text_has_cmd(text_n, raw, name, desc):
             kept_cmds.append(c)
             seen_cmd.add(name)
         else:

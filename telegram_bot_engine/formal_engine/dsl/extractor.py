@@ -272,6 +272,22 @@ def _entities_from_text(text: str) -> list[EntityNode]:
     ):
         add(m.group(1), _parse_attrs(m.group(2)))
 
+    # 4) Free-form Arabic nouns → entity only if the word appears in text
+    if not found:
+        noun_map: list[tuple[str, str, list[str]]] = [
+            (r"عميل|customer", "Customer", ["id", "name", "phone"]),
+            (r"سائق|driver", "Driver", ["id", "name", "phone"]),
+            (r"طلب|اوردر|order", "Order", ["id", "status", "user_id"]),
+            (r"مهمة|task", "Task", ["id", "title", "status", "owner_id"]),
+            (r"صنف|منتج|item|product", "Product", ["id", "title", "price"]),
+            (r"مريض|patient", "Patient", ["id", "name", "phone"]),
+            (r"طبيب|doctor", "Doctor", ["id", "name", "specialty"]),
+            (r"موعد|appointment", "Appointment", ["id", "date", "status"]),
+        ]
+        for pat, ename, attrs in noun_map:
+            if re.search(pat, text, re.I):
+                add(ename, attrs)
+
     return found
 
 
@@ -306,6 +322,34 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             text,
         ):
             add(m.group("cmd"), m.group("desc").strip())
+
+    # Free-form Arabic/English surface: only when user did not list /commands.
+    # Grounded phrase → command id (NOT a domain pack: phrase must appear in text).
+    if len([c for c in found if c.name not in ("start", "help")]) == 0:
+        freeform: list[tuple[str, str, str]] = [
+            # (regex_on_user_text, cmd, description)
+            (r"تسجيل\s*عميل|register\s*customer", "register_customer", "تسجيل عميل"),
+            (r"تسجيل\s*سائق|register\s*driver", "register_driver", "تسجيل سائق"),
+            (r"تسجيل|يسجل|signup|sign\s*up|register", "register", "تسجيل"),
+            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب", "new_order", "طلب جديد"),
+            (r"تتبع|track", "track", "تتبع"),
+            (r"يقبل\s*الطلب|قبول\s*الطلب|accept\s*order", "accept_order", "قبول طلب"),
+            (r"المنيو|قائمة\s*الطعام|menu|المنيو", "menu", "عرض المنيو"),
+            (r"اوردرات[يى]|طلباتي|my\s*orders", "my_orders", "طلباتي"),
+            (r"مهامي|my\s*tasks", "my_tasks", "مهامي"),
+            (r"مهمة\s*جديدة|new\s*task", "new_task", "مهمة جديدة"),
+            (r"عملائي|my\s*clients", "my_clients", "عملائي"),
+            (r"ضيف\s*صنف|إضافة\s*صنف|add\s*item|add\s*product", "add_item", "إضافة صنف"),
+            (r"إحصائ|احصائ|stats|statistics", "stats", "إحصائيات"),
+            (r"أدمن|ادمن|admin|لوحة\s*الإدارة|لوحة\s*الادارة", "admin", "ادمن"),
+            (r"بث|broadcast", "broadcast", "بث"),
+            (r"حظر|ban", "ban", "حظر"),
+            (r"حجز|book\b", "book", "حجز"),
+            (r"مواعيدي|my\s*appointments", "my_appointments", "مواعيدي"),
+        ]
+        for pat, cmd, desc in freeform:
+            if re.search(pat, text, re.I):
+                add(cmd, desc)
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
@@ -355,6 +399,21 @@ def _buttons_from_text(text: str) -> list[ButtonNode]:
 
     for m in re.finditer(r"(?:زر|button)\s*[:=]?\s*[«\"'\[]([^»\"'\]]{2,40})[»\"'\]]", text, re.I):
         add(m.group(1).strip())
+
+    # Free-form: mirror key command intents as UI labels when none listed
+    if not buttons:
+        for lab, pat in (
+            ("تسجيل", r"تسجيل|register"),
+            ("طلب جديد", r"طلب\s*جديد|اوردر|new\s*order"),
+            ("تتبع", r"تتبع|track"),
+            ("المنيو", r"منيو|menu"),
+            ("طلباتي", r"طلباتي|my\s*orders"),
+            ("مهامي", r"مهامي|my\s*tasks"),
+            ("الأدمن", r"أدمن|ادمن|admin"),
+        ):
+            if re.search(pat, text, re.I):
+                add(lab)
+
     return buttons[:24]
 
 
