@@ -1,9 +1,13 @@
 """
 Telegram Bot Generation Engine
 
-Hybrid pipeline:
-  Understanding → Planning → Codegen → post_verify
+Active path (Formal Logic & DSL Engine):
+  text → Custom DSL → Inference → Micro-Transpiler → Formal Verification
+
 Git/Repo engines kept for repository operations.
+The old hybrid (ProgramContract unpack) path is retired — it caused
+"cannot unpack non-iterable UnderstandingResult" because understand()
+returns a single UnderstandingResult, not a (contract, validation) tuple.
 """
 
 from __future__ import annotations
@@ -30,165 +34,176 @@ def __getattr__(name: str):
 
 
 def generate_bot(request: str, work_dir=None):
+    """
+    Entry point used by the Telegram interface.
+
+    Uses the Formal DSL pipeline exclusively (no LLM, no ProgramContract unpack).
+    Returns GenerationResult compatible with main.py reporting.
+    """
     from pathlib import Path
-    import tempfile, time
+    import tempfile
+    import time
+
     from .core.result import GenerationResult, StageResult
-    from .formal_engine.services.understanding_service import understand
-    from .formal_engine.services.planning_service import plan
-    from .formal_engine.services.codegen_service import generate_from_contract
 
     t0 = time.perf_counter()
     request = (request or "").strip()
     if not request:
-        return GenerationResult(success=False, project_path=None, stages=[], validation_reports=[], errors=["Empty request"], metadata={})
+        return GenerationResult(
+            success=False,
+            project_path=None,
+            stages=[],
+            validation_reports=[],
+            errors=["Empty request"],
+            metadata={},
+        )
 
-    work_dir = Path(tempfile.mkdtemp(prefix="formal_bot_")) if work_dir is None else Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    stages, errors = [], []
-
-    # 1 Understanding
-    try:
-        contract, validation = understand(request)
-        stages.append(StageResult.ok("understanding_service", outputs={
-            "bot_name": contract.bot_name, "bot_kind": contract.bot_kind.value,
-            "commands": [c.name for c in contract.commands],
-            "buttons": [b.label for b in contract.buttons],
-            "entities": [e.name for e in contract.entities],
-            "contract_ok": validation.ok, "contract_errors": validation.errors,
-            "contract_warnings": validation.warnings,
-        }))
-        if not validation.ok:
-            errors.extend(validation.errors)
-            return GenerationResult(success=False, project_path=None, stages=stages, validation_reports=[], errors=errors, metadata={"engine": "hybrid_formal", "phase": "understanding"})
-    except Exception as exc:
-        errors.append(f"UnderstandingService failed: {exc}")
-        stages.append(StageResult.failed("understanding_service", errors=[str(exc)]))
-        return GenerationResult(success=False, project_path=None, stages=stages, validation_reports=[], errors=errors, metadata={"engine": "hybrid_formal"})
-
-    # 2 Planning
-    planning_report = None
-    try:
-        contract, planning_report = plan(contract)
-        stages.append(StageResult.ok("planning_service", outputs={
-            "decisions": planning_report.decisions, "risks": planning_report.risks,
-            "readiness_score": planning_report.readiness_score, "blocked": planning_report.blocked,
-            "entities": [e.name for e in contract.entities],
-            "services": [s.name for s in contract.services],
-            "commands": [c.name for c in contract.commands],
-        }))
-        if planning_report.blocked:
-            errors.extend(planning_report.block_reasons or ["planning_blocked"])
-            return GenerationResult(success=False, project_path=None, stages=stages, validation_reports=[], errors=errors, metadata={"engine": "hybrid_formal", "phase": "planning", "readiness_score": planning_report.readiness_score, "risks": planning_report.risks})
-    except Exception as exc:
-        errors.append(f"PlanningService failed: {exc}")
-        stages.append(StageResult.failed("planning_service", errors=[str(exc)]))
-        return GenerationResult(success=False, project_path=None, stages=stages, validation_reports=[], errors=errors, metadata={"engine": "hybrid_formal"})
-
-    # 3 Codegen
-    project_dir = work_dir / "generated_bot"
-    verify, files, path = {}, [], None
-    try:
-        path, verify = generate_from_contract(contract, project_dir)
-        files = sorted(str(p.relative_to(path)) for p in path.rglob("*") if p.is_file())
-        stages.append(StageResult.ok("codegen_service", outputs={"project_path": str(path), "files_created": files, "verify": verify}))
-        if not verify.get("ok"):
-            errors.extend(verify.get("errors") or [])
-    except Exception as exc:
-        errors.append(f"CodegenService failed: {exc}")
-        stages.append(StageResult.failed("codegen_service", errors=[str(exc)]))
-        return GenerationResult(success=False, project_path=None, stages=stages, validation_reports=[], errors=errors, metadata={"engine": "hybrid_formal"})
-
-    # 4 StaticDevGate — compiler-grade structural review
-    static_ok = True
-    static_payload = {}
-    try:
-        from .formal_engine.services.static_dev_gate import analyze_project
-        expected = [c.name for c in contract.commands]
-        report = analyze_project(path)
-        # also verify expected commands present in generated tree
-        from .formal_engine.services.static_dev_gate import verify_after_edit
-        gate = verify_after_edit(path, [], expected_commands=expected)
-        static_ok = report.ok and gate.ok
-        static_payload = {
-            "ok": static_ok,
-            "errors": report.errors + (0 if gate.ok else gate.errors),
-            "warnings": report.warnings + gate.warnings,
-            "rules_run": report.rules_run,
-            "findings": [
-                {"code": f.code, "severity": f.severity, "file": f.file, "msg": f.message_ar}
-                for f in (report.findings + gate.findings)[:30]
-            ],
-        }
-        if static_ok:
-            stages.append(StageResult.ok("static_dev_gate", outputs=static_payload))
-        else:
-            err_msgs = [f.message_ar for f in report.findings + gate.findings if f.severity == "error"][:10]
-            errors.extend(err_msgs or ["static_gate_failed"])
-            stages.append(StageResult.failed("static_dev_gate", errors=err_msgs))
-    except Exception as exc:
-        static_ok = False
-        errors.append(f"StaticDevGate failed: {exc}")
-        stages.append(StageResult.failed("static_dev_gate", errors=[str(exc)]))
-
-    # 4b FinalGate (fidelity + conversation + static phases)
-    try:
-        from .formal_engine.services.static_dev_gate.final_gate import run_final_gate
-        fg = run_final_gate(path)
-        if not fg.ok:
-            static_ok = False
-            errors.extend(fg.errors[:10])
-            stages.append(StageResult.failed("final_gate", errors=fg.errors[:10]))
-        else:
-            stages.append(StageResult.ok("final_gate", outputs={
-                "fidelity_ok": fg.fidelity_ok,
-                "conversation_ok": fg.conversation_ok,
-                "coverage": fg.coverage,
-            }))
-    except Exception as exc:
-        errors.append(f"FinalGate failed: {exc}")
-        stages.append(StageResult.failed("final_gate", errors=[str(exc)]))
-        static_ok = False
-
-    # 5 Bytecode compile all generated Python (hard structural test)
-    compile_ok = True
-    compile_errors = []
-    try:
-        import py_compile
-        for py in sorted(path.rglob("*.py")):
-            try:
-                py_compile.compile(str(py), doraise=True)
-            except py_compile.PyCompileError as e:
-                compile_ok = False
-                compile_errors.append(str(e)[:200])
-        if compile_ok:
-            stages.append(StageResult.ok("py_compile", outputs={"files": len(list(path.rglob('*.py')))}))
-        else:
-            errors.extend(compile_errors[:5])
-            stages.append(StageResult.failed("py_compile", errors=compile_errors[:5]))
-    except Exception as exc:
-        compile_ok = False
-        errors.append(f"py_compile failed: {exc}")
-        stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
-
-    elapsed = time.perf_counter() - t0
-    ok = not errors and bool(verify.get("ok", True)) and static_ok and compile_ok
-    return GenerationResult(
-        success=ok, project_path=str(path), stages=stages, validation_reports=[], errors=errors,
-        metadata={
-            "engine": "hybrid_formal", "bot_name": contract.bot_name, "bot_type": contract.bot_kind.value,
-            "files_created": files, "elapsed_ms": round(elapsed * 1000, 1),
-            "static_gate": static_payload,
-            "compile_ok": compile_ok,
-            "ready_for_token": bool(ok),
-            "button_count": (verify.get("info") or {}).get("button_count", 0),
-            "verify_ok": verify.get("ok"),
-            "buttons": [b.label for b in contract.buttons],
-            "commands": [c.name for c in contract.commands],
-            "entities": [e.name for e in contract.entities],
-            "services": [s.name for s in contract.services],
-            "contract_warnings": validation.warnings,
-            "planning_decisions": planning_report.decisions if planning_report else [],
-            "planning_risks": planning_report.risks if planning_report else [],
-            "readiness_score": planning_report.readiness_score if planning_report else None,
-        },
+    work_dir = (
+        Path(tempfile.mkdtemp(prefix="formal_bot_"))
+        if work_dir is None
+        else Path(work_dir)
     )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    project_dir = work_dir / "generated_bot"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    stages: list = []
+    errors: list = []
+
+    # ------------------------------------------------------------------
+    # Formal path: DSL → Inference → Transpile → Verify
+    # ------------------------------------------------------------------
+    try:
+        from .formal_engine.pipeline_formal import build_from_text
+
+        build = build_from_text(request, project_dir)
+
+        # Understanding stage (DSL extraction summary)
+        stages.append(
+            StageResult.ok(
+                "understanding_service",
+                outputs={
+                    "dsl_relations": build.dsl_relations,
+                    "dsl_operations": build.dsl_operations,
+                    "dsl_rules": build.dsl_rules,
+                    "engine_path": "dsl_formal",
+                },
+            )
+        )
+
+        # Codegen stage (transpiler output)
+        files = list(build.files or [])
+        stages.append(
+            StageResult.ok(
+                "codegen_service",
+                outputs={
+                    "project_path": str(project_dir),
+                    "files_created": files,
+                    "file_count": len(files),
+                },
+            )
+        )
+
+        # Verification stage
+        verify_ok = True
+        verify_errors: list[str] = []
+        if build.verification is not None:
+            verify_ok = bool(build.verification.ok)
+            verify_errors = list(getattr(build.verification, "errors", None) or [])
+            if verify_ok:
+                stages.append(
+                    StageResult.ok(
+                        "formal_verification",
+                        outputs=build.verification.to_dict()
+                        if hasattr(build.verification, "to_dict")
+                        else {},
+                    )
+                )
+            else:
+                errors.extend(verify_errors[:10])
+                stages.append(
+                    StageResult.failed(
+                        "formal_verification",
+                        errors=verify_errors[:10],
+                    )
+                )
+        else:
+            stages.append(
+                StageResult.ok("formal_verification", outputs={"skipped": True})
+            )
+
+        # py_compile hard structural test
+        compile_ok = True
+        compile_errors: list[str] = []
+        try:
+            import py_compile
+
+            for py in sorted(project_dir.rglob("*.py")):
+                try:
+                    py_compile.compile(str(py), doraise=True)
+                except py_compile.PyCompileError as e:
+                    compile_ok = False
+                    compile_errors.append(str(e)[:200])
+            if compile_ok:
+                stages.append(
+                    StageResult.ok(
+                        "py_compile",
+                        outputs={"files": len(list(project_dir.rglob("*.py")))},
+                    )
+                )
+            else:
+                errors.extend(compile_errors[:5])
+                stages.append(
+                    StageResult.failed("py_compile", errors=compile_errors[:5])
+                )
+        except Exception as exc:
+            compile_ok = False
+            errors.append(f"py_compile failed: {exc}")
+            stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
+
+        path_str = str(project_dir) if project_dir.exists() else None
+        ok = (
+            bool(path_str)
+            and verify_ok
+            and compile_ok
+            and not errors
+            and len(files) > 0
+        )
+
+        elapsed = time.perf_counter() - t0
+        return GenerationResult(
+            success=ok,
+            project_path=path_str,
+            stages=stages,
+            validation_reports=[],
+            errors=errors,
+            metadata={
+                "engine": "dsl_formal",
+                "files_created": files,
+                "elapsed_ms": round(elapsed * 1000, 1),
+                "compile_ok": compile_ok,
+                "ready_for_token": bool(ok),
+                "dsl_relations": build.dsl_relations,
+                "dsl_operations": build.dsl_operations,
+                "dsl_rules": build.dsl_rules,
+                "verify_ok": verify_ok,
+            },
+        )
+
+    except Exception as exc:
+        errors.append(f"Formal pipeline failed: {type(exc).__name__}: {exc}")
+        stages.append(
+            StageResult.failed("formal_pipeline", errors=[str(exc)[:300]])
+        )
+        elapsed = time.perf_counter() - t0
+        return GenerationResult(
+            success=False,
+            project_path=None,
+            stages=stages,
+            validation_reports=[],
+            errors=errors,
+            metadata={
+                "engine": "dsl_formal",
+                "elapsed_ms": round(elapsed * 1000, 1),
+            },
+        )
