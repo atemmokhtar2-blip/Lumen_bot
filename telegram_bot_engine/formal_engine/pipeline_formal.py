@@ -24,6 +24,7 @@ class FormalBuildResult:
     verification: VerificationReport | None = None
     dsl_relations: int = 0
     dsl_operations: int = 0
+    dsl_rules: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class FormalBuildResult:
             "files": list(self.files),
             "dsl_relations": self.dsl_relations,
             "dsl_operations": self.dsl_operations,
+            "dsl_rules": self.dsl_rules,
             "verification": self.verification.to_dict() if self.verification else None,
         }
 
@@ -54,4 +56,5 @@ def build_from_text(user_text: str, out_dir: str | Path) -> FormalBuildResult:
         verification=report,
         dsl_relations=len(program.relations),
         dsl_operations=len(program.operations),
+        dsl_rules=len(getattr(program, 'rules', []) or []),
     )

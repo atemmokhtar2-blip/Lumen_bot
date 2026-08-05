@@ -1,10 +1,5 @@
 """
-Inference Engine.
-
-Rules (as specified):
-  - إذا كان هناك "تكرار"   → حلقات (Loops)
-  - إذا كان هناك "قرار"    → أشجار شرطية (Decision Trees)
-  - إذا كان هناك "تخزين"   → مخطط قاعدة بيانات فريد (unique Schema)
+Inference Engine — loops, decision trees, unique schemas, deep rules.
 """
 
 from __future__ import annotations
@@ -12,7 +7,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..dsl.ast import DSLProgram, EntityNode, OperationNode, RelationNode
+from ..dsl.ast import (
+    ButtonNode,
+    CommandNode,
+    DSLProgram,
+    EntityNode,
+    OperationNode,
+    RelationNode,
+    RuleNode,
+)
 
 
 @dataclass
@@ -31,9 +34,8 @@ class DecisionPlan:
 
 @dataclass
 class SchemaPlan:
-    """Unique schema — not a generic table."""
     table: str
-    columns: list[tuple[str, str]] = field(default_factory=list)  # (name, py_type)
+    columns: list[tuple[str, str]] = field(default_factory=list)
     primary_key: str = "id"
 
 
@@ -48,94 +50,124 @@ class InferenceResult:
     compute_steps: list[dict[str, Any]] = field(default_factory=list)
     relations: list[RelationNode] = field(default_factory=list)
     entities: list[EntityNode] = field(default_factory=list)
+    commands: list[CommandNode] = field(default_factory=list)
+    buttons: list[ButtonNode] = field(default_factory=list)
+    rules: list[RuleNode] = field(default_factory=list)
+    wants_database: bool = False
+    wants_files: bool = False
+
+
+def _col_type(name: str, hinted: str | None = None) -> str:
+    if hinted in ("int", "bool", "str", "float"):
+        return hinted
+    a = (name or "").lower()
+    if a == "user_id":
+        return "int"
+    if a in ("price", "amount", "score", "qty", "quantity", "stock", "duration",
+             "duration_min", "duration_weeks", "level", "count", "total", "progress"):
+        return "int"
+    if a in ("paid", "active", "enabled", "done", "completed", "is_admin"):
+        return "bool"
+    return "str"
 
 
 def _schema_from_entity(e: EntityNode, rels: list[RelationNode]) -> SchemaPlan:
     cols: list[tuple[str, str]] = [("id", "str")]
     seen = {"id"}
-    # attributes on entity
     for a in e.attributes:
         if a and a not in seen:
             seen.add(a)
-            cols.append((a, "str"))
-    # requires operands become columns
+            cols.append((a, _col_type(a, (e.attr_types or {}).get(a))))
     for r in rels:
         if r.entity and r.entity.name.lower() == e.name.lower() and r.requires:
             for op in r.requires.operands:
                 if op and op not in seen:
                     seen.add(op)
-                    cols.append((op, "str"))
-    # structural user link when entity is not User
-    if e.name.lower() != "user" and "user_id" not in seen:
+                    cols.append((op, _col_type(op)))
+    if e.name.lower() not in ("user", "student") and "user_id" not in seen:
         cols.append(("user_id", "int"))
     return SchemaPlan(table=e.name.lower(), columns=cols, primary_key="id")
 
 
 def infer(program: DSLProgram) -> InferenceResult:
-    """Apply formal inference rules on DSLProgram → structural plans."""
     result = InferenceResult(
         relations=list(program.relations),
         entities=list(program.entities),
+        commands=list(program.commands),
+        buttons=list(program.buttons),
+        rules=list(program.rules),
+        wants_database=bool(program.wants_database),
+        wants_files=bool(program.wants_files),
     )
 
-    # Index operations by kind
     by_kind: dict[str, list[OperationNode]] = {}
     for op in program.operations:
         by_kind.setdefault(op.kind, []).append(op)
 
-    # Rule: repetition → Loops
     for op in by_kind.get("loop", []):
         result.loops.append(
-            LoopPlan(
-                name=op.name,
-                iterable=(op.inputs[0] if op.inputs else "items"),
-                body_ops=list(op.body_refs),
-            )
+            LoopPlan(name=op.name, iterable=(op.inputs[0] if op.inputs else "items"), body_ops=list(op.body_refs))
         )
 
-    # Rule: decision → Decision Trees
     for op in by_kind.get("decision", []):
-        branches = []
-        # pull branch labels from compute steps meta if present
-        for c in by_kind.get("compute", []):
-            label = (c.meta or {}).get("label") or ""
-            if any(k in label for k in ("إذا", "لو", "if ", "اختيار")):
-                branches.append({"label": label[:80], "target": c.name})
-        if not branches:
-            branches = [
-                {"label": "branch_a", "target": "path_a"},
-                {"label": "branch_b", "target": "path_b"},
-            ]
+        branches = list((op.meta or {}).get("branches") or [])
+        if not branches and program.buttons:
+            branches = [{"label": b.label, "target": b.callback_id} for b in program.buttons]
+        # enrich branches from choice rules
+        for rule in program.rules:
+            if rule.kind != "conditional":
+                continue
+            for c in rule.conditions:
+                if c.left == "choice" and c.right:
+                    target = c.right
+                    for e in rule.effects:
+                        if e.kind == "goto" and e.target:
+                            target = e.target
+                            break
+                    branches.append({"label": c.right, "target": target})
+        # dedupe by label
+        seen_l: set[str] = set()
+        uniq = []
+        for b in branches:
+            lab = str(b.get("label") or "")
+            if lab and lab not in seen_l:
+                seen_l.add(lab)
+                uniq.append(b)
+        if not uniq:
+            uniq = [{"label": "branch_a", "target": "path_a"}, {"label": "branch_b", "target": "path_b"}]
         result.decisions.append(
-            DecisionPlan(
-                name=op.name,
-                discriminant=(op.inputs[0] if op.inputs else "choice"),
-                branches=branches,
-            )
+            DecisionPlan(name=op.name, discriminant=(op.inputs[0] if op.inputs else "choice"), branches=uniq)
         )
 
-    # Rule: storage → unique Schema (per entity, not generic table)
+    # if rules exist but no decision op, still build decision from choice rules
+    if not result.decisions:
+        branches = []
+        for rule in program.rules:
+            for c in rule.conditions:
+                if c.left == "choice" and c.right:
+                    branches.append({"label": c.right, "target": c.right})
+        if program.buttons:
+            for b in program.buttons:
+                branches.append({"label": b.label, "target": b.callback_id})
+        if branches:
+            result.decisions.append(DecisionPlan(name="BranchOnChoice", discriminant="choice", branches=branches))
+
     store_ops = by_kind.get("store", [])
     if store_ops or program.entities:
         for e in program.entities:
             result.schemas.append(_schema_from_entity(e, program.relations))
-        # if storage signaled but no entities, synthesize one schema from relation requires
         if not result.schemas and store_ops:
-            cols = [("id", "str"), ("user_id", "int"), ("payload", "str")]
-            result.schemas.append(SchemaPlan(table="record", columns=cols))
+            result.schemas.append(SchemaPlan(table="record", columns=[("id", "str"), ("user_id", "int"), ("payload", "str")]))
 
-    # Actions from relations
     for r in program.relations:
         if r.action and r.action.name:
             result.actions.append(r.action.name)
 
-    # receive / emit
     for op in by_kind.get("receive", []):
         result.receives.append(op.name)
     for op in by_kind.get("emit", []):
         result.emits.append(op.name)
 
-    # sequential compute steps
     for op in by_kind.get("compute", []):
         result.compute_steps.append(
             {
@@ -147,5 +179,4 @@ def infer(program: DSLProgram) -> InferenceResult:
             }
         )
     result.compute_steps.sort(key=lambda x: x.get("ordinal") or 0)
-
     return result
