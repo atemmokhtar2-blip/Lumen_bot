@@ -138,6 +138,73 @@ def _parse_number(s: str) -> str | None:
     return m.group(1) if m else None
 
 
+# ── section helpers (explicit structured specs) ───────────────────────────
+
+_SECTION_STOP = (
+    "الأوامر", "الاوامر", "commands",
+    "الأزرار", "الازرار", "ازرار", "buttons", "القائمة الرئيسية", "القائمة",
+    "القواعد", "قواعد", "rules", "الشروط",
+    "الكيانات", "كيانات", "entities", "النماذج", "نماذج البيانات", "data models",
+    "الخدمات", "خدمات", "services",
+    "الميزات", "ميزات", "features",
+    "المتطلبات", "طريقة", "الإطار", "قاعدة البيانات", "database",
+    "roles", "الأدوار",
+)
+
+
+def _section_lines(text: str, *titles: str) -> list[str]:
+    """Return body lines under the first matching section header until next section."""
+    lines = (text or "").splitlines()
+    start = None
+    titles_l = [t.lower() for t in titles]
+    for i, line in enumerate(lines):
+        s = line.strip().lower().rstrip(":：")
+        if len(s) > 60:
+            continue
+        if any(t in s for t in titles_l):
+            start = i + 1
+            break
+    if start is None:
+        return []
+    out: list[str] = []
+    for line in lines[start:]:
+        raw = line.strip()
+        if not raw:
+            if out:
+                continue
+            continue
+        low = raw.lower().rstrip(":：")
+        # next section header
+        if len(raw) < 50 and any(k in low for k in _SECTION_STOP):
+            # allow continuing if this line is still content under same section style
+            if not any(t in low for t in titles_l):
+                break
+        out.append(raw)
+    return out
+
+
+def _strip_bullet(s: str) -> str:
+    return re.sub(r"^[\s\-•*️⃣\d\.\)\(]+", "", (s or "").strip()).strip()
+
+
+def _looks_like_rule(s: str) -> bool:
+    t = (s or "").strip()
+    if re.match(r"^(?:لو|إذا|اذا|if)\b", t, re.I):
+        return True
+    if re.search(r"(?:ثم|بعدها|then)\b", t, re.I) and re.search(r"(?:لو|إذا|اذا|if)\b", t, re.I):
+        return True
+    return False
+
+
+def _parse_attrs(raw: str) -> list[str]:
+    attrs: list[str] = []
+    for p in re.split(r"[,،/;|&]+", raw or ""):
+        a = _ascii_ident(p).lower()
+        if a and a not in _GHOST and len(a) >= 1:
+            attrs.append(a)
+    return attrs
+
+
 # ── surface: entities / commands / buttons ────────────────────────────────
 
 def _entities_from_text(text: str) -> list[EntityNode]:
@@ -153,18 +220,57 @@ def _entities_from_text(text: str) -> list[EntityNode]:
             return
         seen.add(key)
         attrs = [a for a in (attrs or []) if a and a not in _GHOST]
-        found.append(EntityNode(name=n[:1].upper() + n[1:], attributes=attrs, attr_types={a: _infer_type(a) for a in attrs}))
+        found.append(
+            EntityNode(
+                name=n[:1].upper() + n[1:],
+                attributes=attrs,
+                attr_types={a: _infer_type(a) for a in attrs},
+            )
+        )
 
+    # 1) Explicit section: الكيانات / entities / نماذج
+    for line in _section_lines(
+        text,
+        "الكيانات", "كيانات", "entities", "النماذج", "نماذج البيانات",
+        "data models", "models",
+    ):
+        body = _strip_bullet(line)
+        if not body or _looks_like_rule(body):
+            continue
+        # Student (id, name, email)  |  Student: id, name
+        m = re.match(
+            r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*"
+            r"(?:[\(:：]\s*([^\)\n]{1,120})[\)]?)?",
+            body,
+        )
+        if m:
+            add(m.group(1), _parse_attrs(m.group(2) or ""))
+            continue
+        m = re.match(
+            r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*[-–—:：]\s*(.+)$",
+            body,
+        )
+        if m:
+            add(m.group(1), _parse_attrs(m.group(2)))
+
+    # 2) Inline patterns: كيان Student يحتاج ... / entity Student (a, b)
     for m in re.finditer(
         r"(?:كيان|نموذج|جدول|entity|model|table)\s+[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?"
+        r"(?:\s*[\(:：]\s*([^\)\n]{1,120})[\)]?)?"
         r"(?:\s+(?:يحتاج|يتطلب|requires|needs)\s+([^\n.]{3,120}))?",
         text,
         re.I,
     ):
-        attrs = []
-        if m.group(2):
-            attrs = [_ascii_ident(p).lower() for p in re.split(r"[,، و&/]+", m.group(2)) if _ascii_ident(p)]
+        attrs = _parse_attrs(m.group(2) or "") + _parse_attrs(m.group(3) or "")
         add(m.group(1), attrs)
+
+    # 3) CapWord lists anywhere: Student (id, name, email)
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9_]{1,40})\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*){0,12})\s*\)",
+        text,
+    ):
+        add(m.group(1), _parse_attrs(m.group(2)))
+
     return found
 
 
@@ -177,11 +283,29 @@ def _commands_from_text(text: str) -> list[CommandNode]:
         if not cmd or len(cmd) < 2 or cmd in seen or cmd in ("http", "https", "www", "telegram", "python"):
             return
         seen.add(cmd)
-        admin = cmd in _ADMIN_CMDS or any(k in (desc or "").lower() for k in ("أدمن", "admin", "مشرف", "إدارة"))
+        admin = cmd in _ADMIN_CMDS or any(
+            k in (desc or "") for k in ("أدمن", "ادمن", "admin", "مشرف", "إدارة", "للأدمن")
+        )
         found.append(CommandNode(name=cmd, description=(desc or cmd)[:100], admin_only=admin))
 
-    for m in re.finditer(r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,80})", text):
+    # Prefer explicit commands section first
+    section = _section_lines(text, "الأوامر", "الاوامر", "commands", "الأوامر المطلوبة")
+    scan_text = "\n".join(section) if section else text
+
+    for m in re.finditer(
+        r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,100})",
+        scan_text,
+    ):
         add(m.group("cmd"), m.group("desc").strip())
+
+    # Also scan full text for any missed /commands
+    if section:
+        for m in re.finditer(
+            r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,100})",
+            text,
+        ):
+            add(m.group("cmd"), m.group("desc").strip())
+
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
         seen.add("start")
@@ -199,33 +323,35 @@ def _buttons_from_text(text: str) -> list[ButtonNode]:
         label = re.sub(r"[.،,;:]+$", "", label).strip()
         if not label or label in seen or not (2 <= len(label) <= 48):
             return
-        if any(x in label for x in ("يجب", "أنشئ", "http", "يقوم")):
+        # Never treat rules / commands / entities as buttons
+        if _looks_like_rule(label):
+            return
+        if label.startswith("/"):
+            return
+        if any(x in label for x in ("يجب", "أنشئ", "http", "يقوم", "يحتاج", "يتطلب")):
+            return
+        if re.match(r"^[A-Za-z][A-Za-z0-9_]*\s*\(", label):
             return
         seen.add(label)
         cb = re.sub(r"[^\w]+", "_", label, flags=re.UNICODE).strip("_").lower()[:40] or f"btn_{len(buttons)}"
         cb_ascii = re.sub(r"[^a-zA-Z0-9_]", "_", cb)
         cb_ascii = re.sub(r"_+", "_", cb_ascii).strip("_") or f"btn_{len(buttons)}"
-        buttons.append(ButtonNode(label=label, callback_id=cb_ascii[:40]))
+        buttons.append(ButtonNode(label=label, callback_id=cb_ascii[:40] or f"btn_{len(buttons)}"))
 
-    lines = text.splitlines()
-    start = None
-    for i, line in enumerate(lines):
-        s = line.strip().lower()
-        if any(k in s for k in ("الأزرار", "ازرار", "buttons", "القائمة", "menu")) and len(s) < 40:
-            start = i + 1
-            break
-    if start is not None:
-        for line in lines[start:]:
-            s = line.strip()
-            if not s:
-                continue
-            if len(s) < 30 and any(k in s for k in ("الأوامر", "الكيانات", "طريقة", "commands", "features", "المتطلبات")):
-                break
-            m = re.match(r"^[\s\-•*]+(.+)$", s)
-            if m:
-                add(m.group(1).strip())
-            elif 2 <= len(s) <= 40 and "/" not in s and not s.endswith(":"):
-                add(s)
+    for line in _section_lines(
+        text,
+        "الأزرار", "الازرار", "ازرار", "buttons",
+        "القائمة الرئيسية", "القائمة", "main menu", "menu buttons",
+    ):
+        body = _strip_bullet(line)
+        if not body or body.endswith(":"):
+            continue
+        if _looks_like_rule(body):
+            continue
+        if len(body) < 50 and any(k in body.lower() for k in _SECTION_STOP):
+            continue
+        add(body)
+
     for m in re.finditer(r"(?:زر|button)\s*[:=]?\s*[«\"'\[]([^»\"'\]]{2,40})[»\"'\]]", text, re.I):
         add(m.group(1).strip())
     return buttons[:24]
@@ -712,7 +838,17 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
 
     clauses = _split_clauses(text)
 
+    # Explicit rules section lines as extra clauses
+    for line in _section_lines(text, "القواعد", "قواعد", "rules", "الشروط", "conditions"):
+        body = _strip_bullet(line)
+        if body and len(body) >= 6:
+            clauses.append(body)
+
     for clause in clauses:
+        clause = _strip_bullet(clause)
+        if not clause:
+            continue
+
         # conditional: إذا/لو … ثم …
         m = re.search(
             r"(?:إذا|لو|if)\s+(?P<cond>.+?)\s+(?:ثم|بعدها|بعد ذلك|then)\s+(?P<eff>.+)$",
@@ -725,6 +861,45 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
             conditions, mode = _conditions_from_clause(cond_raw, buttons)
             effects = _effects_from_clause(eff_raw, entities)
             # encode composite mode on first condition raw tag
+            if mode == "any" and conditions:
+                conditions[0].raw = f"ANY|{conditions[0].raw}"
+            rules.append(RuleNode(name=rid("rule"), kind="conditional", conditions=conditions, effects=effects, raw=clause[:160]))
+            continue
+
+        # Arabic soft conditional without ثم:
+        # لو الطالب دفع بنجاح يفتح له الكورس
+        # لو الدرجة أكبر من أو تساوي 60 يعتبر ناجح
+        m = re.search(
+            r"(?:إذا|لو|if)\s+(?P<cond>.+?)\s+"
+            r"(?P<eff>(?:يفتح|يعتبر|يعيد|يفعل|يسمح|يمنع|يرفض|يقبل|يحفظ|يسجل|يرسل|يعرض|"
+            r"enable|open|unlock|pass|fail|allow|deny|save|send|show)\S*\s*.+)$",
+            clause,
+            re.I,
+        )
+        if m:
+            cond_raw = m.group("cond").strip()
+            eff_raw = m.group("eff").strip()
+            conditions, mode = _conditions_from_clause(cond_raw, buttons)
+            # numeric threshold inside condition: أكبر من أو تساوي 60
+            tm = re.search(
+                r"(?:أكبر من أو تساوي|أكبر من|أكثر من|لا يقل عن|>=|≥|at least|greater than or equal)\s*(\d+(?:\.\d+)?)",
+                cond_raw,
+                re.I,
+            )
+            if tm:
+                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط")) else "progress"
+                conditions = [ConditionExpr(left=left, op="gte", right=tm.group(1), raw=cond_raw[:80])]
+            tm2 = re.search(
+                r"(?:أقل من أو تساوي|أقل من|<=|≤|less than)\s*(\d+(?:\.\d+)?)",
+                cond_raw,
+                re.I,
+            )
+            if tm2 and not tm:
+                left = "score" if any(k in cond_raw for k in ("درجة", "score", "نقاط")) else "progress"
+                conditions = [ConditionExpr(left=left, op="lt", right=tm2.group(1), raw=cond_raw[:80])]
+            if not conditions:
+                conditions = [ConditionExpr(left="signal", op="truthy", right="", raw=cond_raw[:80])]
+            effects = _effects_from_clause(eff_raw, entities)
             if mode == "any" and conditions:
                 conditions[0].raw = f"ANY|{conditions[0].raw}"
             rules.append(RuleNode(name=rid("rule"), kind="conditional", conditions=conditions, effects=effects, raw=clause[:160]))

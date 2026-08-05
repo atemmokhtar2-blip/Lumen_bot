@@ -201,6 +201,7 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
     block = _section_block(
         text, "الأزرار", "buttons", "أزرار", "القائمة", "القائمه", "menu",
         "أزرار تفاعلية", "inline buttons", "keyboard",
+        "القائمة الرئيسية", "main menu", "menu buttons",
     )
     emoji_line = re.compile(
         r"^[\s\-•*]*(?P<label>(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]+)\s*[^\n]{1,40})\s*$"
@@ -621,6 +622,62 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
 
     # Data models from TEXT signals only (see resolve_data_models)
     resolved_models = resolve_data_models(archetype, full)
+
+    # Explicit section: الكيانات / entities — Student (id, name, email)
+    _ent_block = _section_block(
+        full,
+        "الكيانات", "كيانات", "entities", "النماذج", "نماذج البيانات",
+        "data models", "models",
+    )
+    _explicit_models: list[dict] = []
+    _seen_ent: set[str] = set()
+    for _line in (_ent_block or "").splitlines():
+        _s = re.sub(r"^[\s\-•*\d\.]+", "", _line.strip()).strip()
+        if not _s:
+            continue
+        _m = re.match(
+            r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*"
+            r"(?:[\(:：]\s*([^\)\n]{1,120})[\)]?)?",
+            _s,
+        )
+        if not _m:
+            continue
+        _ename = _m.group(1)
+        if _ename.lower() in _seen_ent:
+            continue
+        _seen_ent.add(_ename.lower())
+        _fields_raw = _m.group(2) or "id"
+        _fnames = [
+            re.sub(r"[^a-zA-Z0-9_]", "", p.strip()).lower()
+            for p in re.split(r"[,،/;|]+", _fields_raw)
+            if re.sub(r"[^a-zA-Z0-9_]", "", p.strip())
+        ]
+        if not _fnames:
+            _fnames = ["id"]
+        _explicit_models.append({
+            "name": _ename[:1].upper() + _ename[1:],
+            "field_names": _fnames,
+            "fields": [{"name": f, "type": "str"} for f in _fnames],
+        })
+    for _m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9_]{1,40})\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*){0,12})\s*\)",
+        full,
+    ):
+        _ename = _m.group(1)
+        if _ename.lower() in _seen_ent:
+            continue
+        _seen_ent.add(_ename.lower())
+        _fnames = [p.strip().lower() for p in _m.group(2).split(",")]
+        _explicit_models.append({
+            "name": _ename,
+            "field_names": _fnames,
+            "fields": [{"name": f, "type": "str"} for f in _fnames],
+        })
+    if _explicit_models:
+        resolved_models = _explicit_models + [
+            m for m in resolved_models
+            if str(m.get("name", "")).lower() not in _seen_ent
+        ]
     model_names = [m["name"] for m in resolved_models]
 
     ctx = {
