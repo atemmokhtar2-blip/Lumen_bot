@@ -109,6 +109,7 @@ class FlowStep(StrictModel):
     id: str
     action: str
     next_id: str | None = None
+    label: str = ""
 
 
 class FlowUnit(StrictModel):

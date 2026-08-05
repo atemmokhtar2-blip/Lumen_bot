@@ -6,6 +6,8 @@ Does NOT write project files. Does NOT generate Python sources.
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import re
 from typing import Any
@@ -139,7 +141,7 @@ def formal_spec_to_contract(spec: FormalBotSpec, raw_text: str = "") -> ProgramC
             FlowUnit(
                 name=flow_name,
                 steps=[
-                    FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"))
+                    FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"), label=str(s.get("label") or "")[:200])
                     for s in step_dicts
                 ],
             )
@@ -152,50 +154,52 @@ def formal_spec_to_contract(spec: FormalBotSpec, raw_text: str = "") -> ProgramC
                 FlowUnit(
                     name=flow_name,
                     steps=[
-                        FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"))
+                        FlowStep(id=s["id"], action=s["action"], next_id=s.get("next_id"), label=str(s.get("label") or "")[:200])
                         for s in step_dicts
                     ],
                 )
             )
 
-    # Permissions derived from commands (not templates — from contract inputs)
+    # Permissions: prefer extracted roles from text; else derive from commands
     user_cmds = [c.name for c in commands if not c.admin_only]
     admin_cmds = [c.name for c in commands if c.admin_only]
-    permissions = [
-        PermissionUnit(role="user", allows=user_cmds + [b.callback_id for b in buttons]),
-        PermissionUnit(role="admin", allows=list({*user_cmds, *admin_cmds, *[b.callback_id for b in buttons]})),
-    ]
+    permissions: list[PermissionUnit] = []
+    for r in (spec.roles or []):
+        rname = (r.name or "user").strip().lower()
+        # map Arabic role names to role keys without domain packs
+        if any(k in rname for k in ("admin", "أدمن", "ادمن", "مشرف", "مدير", "manager")):
+            key = "admin"
+        else:
+            key = re.sub(r"[^a-z0-9_\u0600-\u06ff]+", "_", rname)[:32] or "user"
+        allows = list(user_cmds) if key != "admin" else list({*user_cmds, *admin_cmds})
+        # permission strings that look like commands
+        for perm in (r.permissions or []):
+            m = re.search(r"/([a-zA-Z][a-zA-Z0-9_]{1,32})", perm)
+            if m and m.group(1) not in allows:
+                allows.append(m.group(1))
+        permissions.append(PermissionUnit(role=key, allows=allows + [b.callback_id for b in buttons]))
+    if not permissions:
+        permissions = [
+            PermissionUnit(role="user", allows=user_cmds + [b.callback_id for b in buttons]),
+            PermissionUnit(role="admin", allows=list({*user_cmds, *admin_cmds, *[b.callback_id for b in buttons]})),
+        ]
 
     # Conversation states from flows
     conversation_states: list[ConversationStateUnit] = []
     for fl in flows:
         for step in fl.steps:
+            # prefer human label from flow step when present
+            prompt = getattr(step, "label", None) or step.action.replace("_", " ")
             conversation_states.append(
                 ConversationStateUnit(
                     name=f"{fl.name}__{step.id}",
-                    prompt=step.action.replace("_", " "),
+                    prompt=str(prompt)[:200],
                     next_state=(f"{fl.name}__{step.next_id}" if step.next_id else None),
-                    collects_field=step.id if step.action.startswith(("collect", "ask", "pick")) else None,
+                    collects_field=step.id if str(step.action).startswith(("collect", "ask", "pick")) else None,
                 )
             )
 
-    # Booking kind boost entities if missing
     kind = _map_kind(spec.bot_type.value, list(spec.feature_tags or []))
-    entity_names = {e.name for e in entities}
-    if kind == BotKind.BOOKING and "Appointment" not in entity_names:
-        entities.append(
-            EntityUnit(
-                name="Appointment",
-                fields=[
-                    FieldUnit(name="id", field_type=FieldType.STR),
-                    FieldUnit(name="user_id", field_type=FieldType.INT),
-                    FieldUnit(name="slot", field_type=FieldType.STR),
-                    FieldUnit(name="status", field_type=FieldType.STR),
-                ],
-            )
-        )
-        if not any(s.name == "booking" for s in services):
-            services.append(ServiceUnit(name="booking", responsibility="appointments"))
 
     return ProgramContract(
         bot_name=spec.bot_name,

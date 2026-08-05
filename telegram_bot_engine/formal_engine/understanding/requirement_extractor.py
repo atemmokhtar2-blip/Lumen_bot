@@ -89,32 +89,110 @@ def _section_block(text: str, *titles: str) -> str:
     return "\n".join(buf)
 
 
+
 def _extract_commands_from_text(text: str) -> list[dict]:
-    found = []
-    seen = set()
-    # Always scan full text for /command tokens (works for inline lists)
-    for m in re.finditer(r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b", text):
-        cmd = m.group("cmd").lower()
-        if cmd in seen:
-            continue
+    """
+    Extract commands grounded in the user text only.
+    Patterns (no domain packs):
+      - /cmd tokens
+      - lines under أوامر/commands sections
+      - "الأمر X" / "command X" / "أمر: name"
+      - quoted command names in Arabic lists
+    """
+    found: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(cmd: str, desc: str = "", admin: bool | None = None) -> None:
+        cmd = (cmd or "").strip().lower().lstrip("/")
+        cmd = re.sub(r"[^a-z0-9_]", "", cmd)
+        if not cmd or len(cmd) < 2 or cmd in seen:
+            return
+        if cmd in (
+            "http", "https", "www", "command", "commands", "cmd",
+            "bot", "telegram", "python", "true", "false", "none",
+        ):
+            return
         seen.add(cmd)
-        # optional description after dash on same segment
-        rest = text[m.end(): m.end() + 80]
+        d = (desc or cmd).strip()[:100]
+        is_admin = admin if admin is not None else (
+            cmd in ("admin", "panel", "stats", "ban", "mute", "broadcast")
+            or any(k in d for k in ("أدمن", "admin", "إدارة", "مشرف"))
+        )
+        found.append({"command": cmd, "description": d or cmd, "admin_only": bool(is_admin)})
+
+    # 1) slash tokens anywhere
+    for m in re.finditer(r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b", text):
+        rest = text[m.end(): m.end() + 100]
         dm = re.match(r"\s*[-–—:：]\s*([^/\n]{1,80})", rest)
-        desc = dm.group(1).strip() if dm else cmd
-        admin = cmd in ("admin", "panel", "stats", "ban", "mute", "broadcast") or "أدمن" in desc
-        found.append({"command": cmd, "description": desc[:100], "admin_only": admin})
+        desc = dm.group(1).strip() if dm else m.group("cmd")
+        _add(m.group("cmd"), desc)
+
+    # 2) section: الأوامر / commands
+    block = _section_block(text, "الأوامر", "commands", "أوامر البوت", "bot commands")
+    for src in (block,):
+        if not (src or "").strip():
+            continue
+        for line in src.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            # /cmd — desc
+            m = re.match(r"^[\s\-•*\d\.]*/*([a-zA-Z][a-zA-Z0-9_]{1,32})\s*[-–—:：]?\s*(.*)$", s)
+            if m and not s.lower().startswith("http"):
+                _add(m.group(1), m.group(2) or m.group(1))
+                continue
+            # أمر name أو الأمر name
+            m2 = re.search(
+                r"(?:الأمر|امر|command)\s*[:=]?\s*/*([a-zA-Z][a-zA-Z0-9_]{1,32})",
+                s,
+                re.I,
+            )
+            if m2:
+                _add(m2.group(1), s)
+
+    # 3) prose: "أمر /foo" or "command foo"
+    for m in re.finditer(
+        r"(?:الأمر|امر|أمر|command)\s+/*([a-zA-Z][a-zA-Z0-9_]{1,32})",
+        text,
+        re.I,
+    ):
+        _add(m.group(1))
+
+    # 4) numbered list items that are clearly command names (ascii token)
+    for m in re.finditer(
+        r"(?:^|\n)\s*(?:\d+|[\u0660-\u0669]+)[\.\)]\s*/*([a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:]?\s*([^\n]{0,80})",
+        text,
+    ):
+        _add(m.group(1), m.group(2))
+
     return found
 
 
 def _extract_buttons_from_text(text: str) -> list[dict]:
-    buttons = []
-    seen = set()
-    block = _section_block(text, "الأزرار", "buttons", "أزرار", "القائمة")
+    """Buttons from dedicated sections or short menu labels — text only."""
+    buttons: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(label: str) -> None:
+        label = re.sub(r"\s+", " ", (label or "").strip())
+        if not label or label in seen or len(label) > 48:
+            return
+        if any(x in label for x in ("المستخدم", "يجب", "أنشئ", "اضغط على", "http")):
+            return
+        seen.add(label)
+        cb = re.sub(r"[^\w]+", "_", label, flags=re.UNICODE).strip("_").lower()[:40]
+        if not cb:
+            cb = f"btn_{len(buttons)}"
+        buttons.append({"text": label, "callback_data": cb})
+
+    block = _section_block(text, "الأزرار", "buttons", "أزرار", "القائمة", "القائمه", "menu")
     emoji_line = re.compile(
-        r"^[\s\-•*]*(?P<label>(?:[🛒🧺📦📞⚙️📋🏠⭐🔥🚀📄💬🛍✅❌🎮🏆📝📊📅🗓🕐]+)\s*[^\n]{1,40})\s*$"
+        r"^[\s\-•*]*(?P<label>(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]+)\s*[^\n]{1,40})\s*$"
     )
-    for src in (block, text):
+    sources = [block] if block.strip() else []
+    sources.append(text)
+
+    for src in sources:
         if not (src or "").strip():
             continue
         for line in src.splitlines():
@@ -122,15 +200,19 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
             if not s or len(s) > 50:
                 continue
             m = emoji_line.match(s)
-            if not m:
+            if m:
+                _add(m.group("label").strip())
                 continue
-            label = m.group("label").strip()
-            if label in seen or any(x in label for x in ("المستخدم", "يجب", "أنشئ", "اضغط")):
-                continue
-            seen.add(label)
-            cb = re.sub(r"[^\w]+", "_", label, flags=re.UNICODE).strip("_").lower()[:40] or f"btn_{len(buttons)}"
-            buttons.append({"text": label, "callback_data": cb})
-        if buttons:
+            # section bullet labels: - طلب جديد
+            if block and src is block:
+                m2 = re.match(r"^[\s\-•*]+(.+)$", s)
+                if m2:
+                    _add(m2.group(1).strip())
+                    continue
+                # plain short label lines in buttons section
+                if 2 <= len(s) <= 40 and not s.endswith(":") and "/" not in s:
+                    _add(s)
+        if buttons and block and src is block:
             break
     return buttons
 
@@ -232,55 +314,77 @@ def _extract_architecture(text: str) -> "ArchitectureSpec":
     )
 
 
+
 def _extract_roles(text: str) -> list:
-    """Extract roles + permission bullets from long multi-section specs."""
+    """
+    Extract roles + permissions from text structure — no fixed domain packs.
+    Supports: standalone role headers, "الأدوار" section, Role: lines.
+    """
     roles: list[RoleSpec] = []
     lines = text.splitlines()
-    role_pat = re.compile(
-        r"^(Admin|Manager|Driver|Customer|الأدمن|المدير|السائق|العميل|مشرف|مدير|سائق|عميل)\s*:?\s*$",
+
+    role_header = re.compile(
+        r"^(?:#{1,3}\s*)?(?P<name>Admin|Manager|Driver|Customer|Owner|User|"
+        r"الأدمن|الادمن|المدير|السائق|العميل|المشرف|مشرف|مدير|سائق|عميل|مستخدم|مالك)\s*:?\s*$",
         re.I,
     )
+    # inline: الدور: السائق
+    inline_role = re.compile(
+        r"(?:الدور|role)\s*[:=]\s*(?P<name>[\w\u0600-\u06FF]{2,30})",
+        re.I,
+    )
+
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        m = role_pat.match(line)
+        m = role_header.match(line)
         if not m:
+            im = inline_role.search(line)
+            if im:
+                roles.append(RoleSpec(name=im.group("name").strip(), permissions=[]))
             i += 1
             continue
-        rname = m.group(1).strip()
+        rname = m.group("name").strip()
         perms: list[str] = []
         j = i + 1
         while j < len(lines):
             ln = lines[j].strip()
-            if role_pat.match(ln):
+            if role_header.match(ln) or inline_role.search(ln):
                 break
             if ln.startswith("=") and len(ln) >= 5:
                 break
             if re.search(
-                r"إشعارات|صلاحيات|Logging|Error Handling|Dockerfile|Environment|Production",
+                r"^(?:إشعارات|صلاحيات النظام|Logging|Error Handling|Dockerfile|"
+                r"Environment|Production|الأوامر|الأزرار)\b",
                 ln,
                 re.I,
             ):
                 break
-            if ln in ("يمكنه:", "يمكنه", "permissions:", "can:"):
+            if ln in ("يمكنه:", "يمكنه", "permissions:", "can:", "صلاحياته:", "صلاحيات:"):
                 j += 1
                 continue
-            # bullet or plain short capability line
             if ln.startswith(("-", "•", "*", "–")) or (
-                2 < len(ln) < 80
+                2 < len(ln) < 100
                 and not ln.endswith(":")
                 and not ln.lower().startswith("http")
             ):
                 perm = ln.lstrip("-•*– \t").strip()
-                if perm and perm not in perms and not role_pat.match(perm):
+                if perm and perm not in perms and not role_header.match(perm):
                     perms.append(perm[:100])
             j += 1
-            if j - i > 50:
+            if j - i > 60:
                 break
-        roles.append(RoleSpec(name=rname, permissions=perms[:25]))
+        roles.append(RoleSpec(name=rname, permissions=perms[:30]))
         i = j
 
-    # dedupe by normalized name (keep richest permissions)
+    # section titled الأدوار: collect headers inside
+    sec = _section_block(text, "الأدوار", "roles", "Roles", "الصلاحيات")
+    if sec:
+        for m in role_header.finditer(sec):
+            name = m.group("name").strip()
+            if not any(r.name.lower() == name.lower() for r in roles):
+                roles.append(RoleSpec(name=name, permissions=[]))
+
     best: dict[str, RoleSpec] = {}
     for r in roles:
         key = r.name.lower()
@@ -290,25 +394,77 @@ def _extract_roles(text: str) -> list:
 
 
 def _extract_flow_steps(text: str) -> list[str]:
-    steps = []
-    # /start section
+    """
+    Ordered behavioral steps from text:
+      - /start narrative blocks
+      - numbered / Arabic numbered lists
+      - إذا / ثم / يقوم chains
+      - طريقة العمل / workflow sections
+    """
+    steps: list[str] = []
+    seen: set[str] = set()
+
+    def _push(s: str) -> None:
+        s = re.sub(r"^[\-•*\d\.\)\s\u0660-\u0669]+", "", (s or "").strip())
+        s = re.sub(r"\s+", " ", s).strip()
+        if 3 < len(s) < 160 and s not in seen:
+            seen.add(s)
+            steps.append(s)
+
+    # A) /start narrative window
     m = re.search(
-        r"(?:عند\s*الضغط\s*على\s*/start|/start\s*:?)(.{0,800})",
+        r"(?:عند\s*الضغط\s*على\s*/start|/start\s*:?)(.{0,1200})",
         text,
         re.I | re.S,
     )
-    block = m.group(1) if m else ""
-    if not block:
-        return steps
-    for ln in block.splitlines():
-        s = ln.strip()
-        if re.match(r"^[\-•*\d]", s) or s.startswith("إذا") or s.startswith("يقوم") or s.startswith("ثم"):
-            s = re.sub(r"^[\-•*\d\.\)\s]+", "", s).strip()
-            if 3 < len(s) < 120:
-                steps.append(s)
-        if len(steps) >= 12:
+    if m:
+        for ln in m.group(1).splitlines():
+            s = ln.strip()
+            if re.match(r"^[\-•*\d]", s) or s.startswith(("إذا", "لو", "يقوم", "ثم", "بعدها", "ويرسل", "يعرض")):
+                _push(s)
+            if len(steps) >= 15:
+                break
+
+    # B) workflow section via flow_extractor helpers (inline to avoid cycles)
+    section = ""
+    lines = text.splitlines()
+    start_i = None
+    for i, line in enumerate(lines):
+        s = line.strip().lower()
+        if any(k in s for k in ("طريقة العمل", "workflow", "how it works", "خطوات", "السيناريو")) and len(s) < 48:
+            start_i = i + 1
             break
-    return steps
+    if start_i is not None:
+        buf = []
+        for line in lines[start_i:]:
+            s = line.strip()
+            if s and len(s) < 28 and any(
+                k in s for k in ("الأوامر", "الأزرار", "الميزات", "commands", "buttons", "الأدوار")
+            ):
+                break
+            buf.append(line)
+        section = "\n".join(buf)
+
+    body = section if section.strip() else text
+    for m in re.finditer(
+        r"(?:^|\n)\s*(?:\d+|[\u0660-\u0669]+)[\.\)\-\:]\s*([^\n]{5,160})",
+        body,
+    ):
+        _push(m.group(1))
+
+    # C) conditional chains in prose
+    for m in re.finditer(
+        r"((?:إذا|لو)\s+[^\n.]{5,100}(?:\.|$))",
+        text,
+    ):
+        _push(m.group(1))
+    for m in re.finditer(
+        r"((?:ثم|بعدها|بعد ذلك)\s+[^\n.]{5,100})",
+        text,
+    ):
+        _push(m.group(1))
+
+    return steps[:25]
 
 
 def _extract_quality_flags(text: str) -> dict:
