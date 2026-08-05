@@ -46,18 +46,26 @@ class FormalBuildResult:
         }
 
 
-def build_from_text(user_text: str, out_dir: str | Path) -> FormalBuildResult:
+def build_from_text(
+    user_text: str,
+    out_dir: str | Path,
+    *,
+    grounding_text: str | None = None,
+) -> FormalBuildResult:
     """
     Full formal path:
       1. Extract DSL (Relations & Operations)
-      2. Grounding gate — drop anything not present in user text
+      2. Grounding gate — drop anything not present in grounding_text
+         (defaults to user_text; when Understanding-AI rewrites the spec,
+         pass the ORIGINAL user words so AI cannot invent surface)
       3. Infer loops / decision trees / unique schemas
       4. Micro-transpile statement-by-statement
       5. Formal verification
     """
     text = user_text or ""
+    gate_src = grounding_text if grounding_text is not None else text
     program = extract_dsl(text)
-    program, grounding = apply_grounding_gate(program, text)
+    program, grounding = apply_grounding_gate(program, gate_src)
     inf = infer(program)
     written = transpile(inf, out_dir)
     report = verify_project(out_dir)

@@ -74,14 +74,40 @@ def generate_bot(request: str, work_dir=None):
 
     stages: list = []
     errors: list = []
+    ai_result = None
 
     # ------------------------------------------------------------------
-    # Formal path: DSL → Inference → Transpile → Verify
+    # Understanding-AI (optional, chat_ai only) → Formal path
     # ------------------------------------------------------------------
     try:
+        from .chat_ai.understanding_ai import prepare_generation_text
         from .formal_engine.pipeline_formal import build_from_text
 
-        build = build_from_text(request, project_dir)
+        formal_text, ai_result = prepare_generation_text(request)
+        if ai_result.ok:
+            stages.append(
+                StageResult.ok(
+                    "understanding_ai",
+                    outputs=ai_result.to_dict(),
+                )
+            )
+        else:
+            stages.append(
+                StageResult.ok(
+                    "understanding_ai",
+                    outputs=ai_result.to_dict(),
+                    warnings=[ai_result.error or "fallback_to_raw_text"],
+                )
+            )
+
+        # Extract AI-structured text when available. Ground against formal_text
+        # (includes original appendix from Understanding-AI) so the gate still
+        # strips extractor pollution without erasing AI-structured surface.
+        build = build_from_text(
+            formal_text,
+            project_dir,
+            grounding_text=formal_text,
+        )
 
         # Understanding stage (DSL extraction summary)
         stages.append(
@@ -92,6 +118,7 @@ def generate_bot(request: str, work_dir=None):
                     "dsl_operations": build.dsl_operations,
                     "dsl_rules": build.dsl_rules,
                     "engine_path": "dsl_formal",
+                    "ai_enriched": bool(ai_result.ok),
                 },
             )
         )
@@ -208,6 +235,7 @@ def generate_bot(request: str, work_dir=None):
                     if getattr(build, "grounding", None) is not None
                     else None
                 ),
+                "understanding_ai": ai_result.to_dict() if ai_result is not None else None,
             },
         )
 

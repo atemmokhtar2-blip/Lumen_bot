@@ -7,7 +7,7 @@ Responsibilities:
   - Recommend the correct system capability (or return a helpful reply).
   - NEVER generate code, NEVER touch formal_engine, NEVER invent success.
 
-This module is the sole allowed consumer of g4f in the entire project.
+g4f is allowed only in chat_ai (SmartChat + Understanding-AI). Never inside formal_engine.
 """
 
 from __future__ import annotations
