@@ -130,6 +130,25 @@ def generate_bot(request: str, work_dir=None):
         errors.append(f"StaticDevGate failed: {exc}")
         stages.append(StageResult.failed("static_dev_gate", errors=[str(exc)]))
 
+    # 4b FinalGate (fidelity + conversation + static phases)
+    try:
+        from .formal_engine.services.static_dev_gate.final_gate import run_final_gate
+        fg = run_final_gate(path)
+        if not fg.ok:
+            static_ok = False
+            errors.extend(fg.errors[:10])
+            stages.append(StageResult.failed("final_gate", errors=fg.errors[:10]))
+        else:
+            stages.append(StageResult.ok("final_gate", outputs={
+                "fidelity_ok": fg.fidelity_ok,
+                "conversation_ok": fg.conversation_ok,
+                "coverage": fg.coverage,
+            }))
+    except Exception as exc:
+        errors.append(f"FinalGate failed: {exc}")
+        stages.append(StageResult.failed("final_gate", errors=[str(exc)]))
+        static_ok = False
+
     # 5 Bytecode compile all generated Python (hard structural test)
     compile_ok = True
     compile_errors = []

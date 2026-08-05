@@ -25,15 +25,26 @@ def verify_after_edit(
     changed_files: list[str],
     expected_commands: list[str] | None = None,
 ) -> StaticReport:
+    """
+    After edits: prefer focused files, but when expected_commands is set
+    scan the whole project so handler definitions are visible (app/handlers/*).
+    """
     root_p = Path(root)
     focus = list(changed_files or [])
-    for name in ("main.py", "bot.py", "app.py", "active_dev_commands.py"):
+    for name in (
+        "main.py",
+        "bot.py",
+        "app.py",
+        "app/main.py",
+        "active_dev_commands.py",
+    ):
         if (root_p / name).is_file() and name not in focus:
             focus.append(name)
-    # Gate uses core + telegram tags primarily, but run all enabled rules
+    # Full tree when verifying command registration against definitions
+    focus_arg = None if expected_commands else (focus or None)
     return analyze(
         str(root_p),
-        focus_files=focus,
+        focus_files=focus_arg,
         expected_commands=expected_commands,
     )
 

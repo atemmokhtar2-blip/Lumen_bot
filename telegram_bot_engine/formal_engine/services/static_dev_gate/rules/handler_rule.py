@@ -1,6 +1,12 @@
 from __future__ import annotations
+import re
 from ..models import AnalysisContext, StaticFinding
 from .base import RuleMeta
+
+
+def _norm(cmd: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (cmd or "").lower())
+
 
 class HandlerConsistencyRule:
     meta = RuleMeta(
@@ -51,23 +57,39 @@ class ExpectedCommandsRule:
         if not ctx.expected_commands:
             return []
         found: set[str] = set()
+        found_norm: set[str] = set()
         for m in ctx.module_list():
             for cmd, _, _, _ in m.command_regs:
                 found.add(cmd.lower())
-            # string presence for generated modules
+                found_norm.add(_norm(cmd))
+            src = m.source or ""
             for cmd in ctx.expected_commands:
-                if f'CommandHandler("{cmd}"' in m.source or f"Command('{cmd}')" in m.source:
-                    found.add(cmd.lower())
-                if f'commands=["{cmd}"]' in m.source or f"commands=['{cmd}']" in m.source:
-                    found.add(cmd.lower())
+                c = cmd.lower()
+                patterns = (
+                    f'CommandHandler("{c}"',
+                    f"CommandHandler('{c}'",
+                    f'Command("{c}")',
+                    f"Command('{c}')",
+                    f'commands=["{c}"]',
+                    f"commands=['{c}']",
+                    f'BotCommand("{c}"',
+                    f"BotCommand('{c}'",
+                    f'BotCommand(command="{c}"',
+                    f"BotCommand(command='{c}'",
+                )
+                if any(p in src for p in patterns):
+                    found.add(c)
+                    found_norm.add(_norm(c))
         out: list[StaticFinding] = []
         for cmd in ctx.expected_commands:
-            if cmd.lower() not in found:
-                out.append(StaticFinding(
-                    severity="error",
-                    code="expected_command_missing",
-                    rule_id=self.meta.id,
-                    file="gate",
-                    message_ar=f"بعد التعديل: الأمر /{cmd} غير ظاهر في التسجيل",
-                ))
+            c = cmd.lower()
+            if c in found or _norm(c) in found_norm:
+                continue
+            out.append(StaticFinding(
+                severity="error",
+                code="expected_command_missing",
+                rule_id=self.meta.id,
+                file="gate",
+                message_ar=f"بعد التعديل: الأمر /{cmd} غير ظاهر في التسجيل",
+            ))
         return out

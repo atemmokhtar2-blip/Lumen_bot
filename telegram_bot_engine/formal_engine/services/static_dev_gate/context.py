@@ -69,6 +69,31 @@ def _extract_module_info(rel: str, source: str) -> ModuleInfo:
         if cmd:
             info.command_regs.append((cmd, handler, getattr(node, "lineno", 0) or 0, "ptb"))
 
+
+    # aiogram 3: register(handler, Command("cmd")) and CommandFilter
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fname = _call_name(node.func)
+        # Command("x") as standalone or inside register args
+        if fname == "Command" and node.args:
+            a0 = node.args[0]
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str) and a0.value:
+                # try find handler from parent register call — source fallback below
+                info.command_regs.append((a0.value, "", getattr(node, "lineno", 0) or 0, "aiogram"))
+        if fname.endswith("register") or fname == "register":
+            # dp.message.register(handler, Command("x"))
+            handler = ""
+            if node.args and isinstance(node.args[0], ast.Name):
+                handler = node.args[0].id
+            for arg in node.args[1:]:
+                if isinstance(arg, ast.Call) and _call_name(arg.func) == "Command" and arg.args:
+                    a0 = arg.args[0]
+                    if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                        info.command_regs.append(
+                            (a0.value, handler, getattr(node, "lineno", 0) or 0, "aiogram")
+                        )
+
     # aiogram @...Command("x")
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -94,6 +119,12 @@ def _extract_module_info(rel: str, source: str) -> ModuleInfo:
     ):
         for cm in re.findall(r"['\"]([A-Za-z0-9_]+)['\"]", m.group(1)):
             info.command_regs.append((cm, "", 0, "telebot"))
+
+    # source scan backup: Command("cmd") / Command('cmd')
+    for m in re.finditer(r'Command\(\s*[\'"]([A-Za-z0-9_]+)[\'"]\s*\)', source):
+        info.command_regs.append((m.group(1), "", 0, "aiogram"))
+    for m in re.finditer(r'CommandHandler\(\s*[\'"]([A-Za-z0-9_]+)[\'"]', source):
+        info.command_regs.append((m.group(1), "", 0, "ptb"))
 
     return info
 
