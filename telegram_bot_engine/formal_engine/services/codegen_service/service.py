@@ -251,7 +251,7 @@ def _cmd_handler(
     admin_only: bool,
     entity_names: list[str] | None = None,
 ) -> str:
-    """Command handler — wires to container services when available."""
+    """Command handler — generic dispatch to container service if present."""
     fn = f"{_ident(name)}_handler"
     desc = description or name
     lines: list[str] = [
@@ -284,46 +284,20 @@ def _cmd_handler(
                 "        return",
             ]
         )
-    # service dispatch by command name
-    service_map = {
-        "orders": ("orders", "list_orders"),
-        "order": ("orders", "get_order"),
-        "neworder": ("orders", "create_order_stub"),
-        "products": ("catalog", "list_products"),
-        "catalog": ("catalog", "list_products"),
-        "track": ("orders", "track"),
-        "delivery": ("orders", "track"),
-        "notifications": ("notifications", "list_for_user"),
-        "profile": ("users", "get_profile"),
-        "search": ("catalog", "search"),
-        "stats": ("orders", "stats"),
-        "analytics": ("orders", "stats"),
-        "admin": ("orders", "stats"),
-        "files": ("storage", "list_files"),
-        "customers": ("users", "list_users"),
-        "docs": ("storage", "list_files"),
-        "rate": ("orders", "list_orders"),
-        "group": ("users", "list_users"),
-    }
-    svc_pair = service_map.get(name)
-    lines.append("    container = get_container()")
-    lines.append("    args = list(context.args or [])")
-    lines.append("    user = update.effective_user")
-    lines.append("    uid = user.id if user is not None else 0")
-    if svc_pair:
-        svc, method = svc_pair
-        lines.extend(
-            [
-                f"    svc = getattr(container, {_py(svc)}, None)",
-                f"    if svc is not None and hasattr(svc, {_py(method)}):",
-                f"        result = await svc.{method}(user_id=uid, args=args)",
-                "        text = result if isinstance(result, str) else str(result)",
-                "        await message.reply_text(text)",
-                "        return",
-            ]
-        )
     lines.extend(
         [
+            "    container = get_container()",
+            "    args = list(context.args or [])",
+            "    user = update.effective_user",
+            "    uid = user.id if user is not None else 0",
+            f"    svc = getattr(container, {_py(name)}, None)",
+            "    if svc is None:",
+            f"        svc = getattr(container, {_py(_ident(name))}, None)",
+            '    if svc is not None and hasattr(svc, "handle"):',
+            "        result = await svc.handle(user_id=uid, args=args)",
+            "        text = result if isinstance(result, str) else str(result)",
+            "        await message.reply_text(text)",
+            "        return",
             f'    await message.reply_text({_py("/" + name + " — " + desc)})',
             "",
         ]
@@ -332,265 +306,168 @@ def _cmd_handler(
 
 
 def _service(name: str, responsibility: str = "") -> str:
+    """Generic service — handle() + optional repo; no domain branches."""
     cls = "".join(p.capitalize() for p in _ident(name).split("_")) + "Service"
-    ident = _ident(name)
-    # entity-aware methods
-    methods = [
-        "    async def run(self, *args, **kwargs):",
-        f'        return {{"ok": True, "service": {_py(name)}}}',
-        "",
-    ]
-    if ident in ("orders", "core"):
-        methods = [
-            "    async def list_orders(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        rows = await self._repo.list_by_user(user_id) if self._repo else []",
-            '        if not rows:',
-            '            return "لا توجد طلبات حالياً."',
-            '        return "الطلبات:\\n" + "\\n".join(str(r) for r in rows[:20])',
-            "",
-            "    async def get_order(self, user_id: int = 0, args: list | None = None) -> str:",
-            '        oid = (args or [""])[0]',
-            "        if not oid:",
-            '            return "استخدم: /order <id>"',
-            "        row = await self._repo.get(oid) if self._repo else None",
-            "        if row is None:",
-            '            return "الطلب غير موجود."',
-            "        return str(row)",
-            "",
-            "    async def create_order_stub(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        if self._repo is None:",
-            '            return "خدمة الطلبات غير مهيأة."',
-            "        oid = await self._repo.create(user_id=user_id, items=list(args or []))",
-            '        return f"تم إنشاء الطلب: {oid}"',
-            "",
-            "    async def track(self, user_id: int = 0, args: list | None = None) -> str:",
-            '        oid = (args or [""])[0]',
-            "        if not oid or self._repo is None:",
-            '            return "أدخل: /track <order_id>"',
-            "        row = await self._repo.get(oid)",
-            "        if row is None:",
-            '            return "الطلب غير موجود."',
-            '        status = getattr(row, "status", "unknown")',
-            '        return f"حالة الطلب {oid}: {status}"',
-            "",
-            "    async def stats(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        n = await self._repo.count() if self._repo else 0",
-            '        return f"إجمالي السجلات: {n}"',
-            "",
-        ]
-    elif ident in ("catalog",):
-        methods = [
-            "    async def list_products(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        rows = await self._repo.list_all() if self._repo else []",
-            '        if not rows:',
-            '            return "لا منتجات في الكتالوج."',
-            '        return "المنتجات:\\n" + "\\n".join(str(r) for r in rows[:20])',
-            "",
-            "    async def search(self, user_id: int = 0, args: list | None = None) -> str:",
-            '        q = " ".join(args or []).strip()',
-            "        if not q:",
-            '            return "استخدم: /search <كلمة>"',
-            "        rows = await self._repo.search(q) if self._repo else []",
-            '        return "نتائج:\\n" + "\\n".join(str(r) for r in rows[:20]) if rows else "لا نتائج."',
-            "",
-        ]
-    elif ident in ("users",):
-        methods = [
-            "    async def ensure_user(self, telegram_id: int, username: str | None = None, full_name: str = \"\") -> None:",
-            "        if self._repo is not None:",
-            "            await self._repo.ensure(telegram_id, username, full_name)",
-            "",
-            "    async def get_profile(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        if self._repo is None:",
-            '            return "الملف غير موجود — اضغط /start."',
-            "        row = await self._repo.get_by_telegram(user_id)",
-            "        if row is None:",
-            '            return "الملف غير موجود — اضغط /start."',
-            "        return str(row)",
-            "",
-            "    async def list_users(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        rows = await self._repo.list_all() if self._repo else []",
-            '        return "المستخدمون:\\n" + "\\n".join(str(r) for r in rows[:30]) if rows else "لا مستخدمين."',
-            "",
-        ]
-    elif ident in ("notifications",):
-        methods = [
-            "    async def list_for_user(self, user_id: int = 0, args: list | None = None) -> str:",
-            "        rows = await self._repo.list_by_user(user_id) if self._repo else []",
-            '        return "الإشعارات:\\n" + "\\n".join(str(r) for r in rows[:20]) if rows else "لا إشعارات."',
-            "",
-        ]
-    elif ident in ("storage",):
-        methods = [
-            "    async def list_files(self, user_id: int = 0, args: list | None = None) -> str:",
-            '        return "لا ملفات مرفوعة بعد."',
-            "",
-        ]
+    return (
+        f'"""Service {name} — {responsibility or name}."""\n'
+        "from __future__ import annotations\n"
+        "from typing import Any\n\n\n"
+        f"class {cls}:\n"
+        "    def __init__(self, repo: Any = None) -> None:\n"
+        "        self._repo = repo\n\n"
+        "    async def handle(self, user_id: int = 0, args: list | None = None) -> str:\n"
+        "        args = list(args or [])\n"
+        "        if self._repo is not None and hasattr(self._repo, \"list_all\"):\n"
+        "            if args and hasattr(self._repo, \"get\"):\n"
+        "                row = await self._repo.get(str(args[0]))\n"
+        "                if row is None:\n"
+        "                    return \"غير موجود.\"\n"
+        "                return str(row)\n"
+        "            rows = await self._repo.list_all()\n"
+        "            if not rows:\n"
+        "                return \"لا بيانات.\"\n"
+        "            return \"\\n\".join(str(r) for r in rows[:30])\n"
+        f"        return \"{name}: ok\"\n\n"
+        "    async def ensure_user(self, telegram_id: int, username: str | None = None, full_name: str = \"\") -> None:\n"
+        "        if self._repo is not None and hasattr(self._repo, \"ensure\"):\n"
+        "            await self._repo.ensure(telegram_id, username, full_name)\n"
+    )
 
-    return f'''"""Service {name} — {responsibility or name}."""
-from __future__ import annotations
-from typing import Any
-
-
-class {cls}:
-    def __init__(self, repo: Any = None) -> None:
-        self._repo = repo
-
-{"".join(line + chr(10) for line in methods)}'''
 
 
 def _repository_module(c: ProgramContract) -> str:
-    """In-memory repositories derived from entities — swap for SQL later."""
-    entity_names = [e.name for e in (c.entities or [])]
-    has_order = any("order" in n.lower() for n in entity_names)
-    has_product = any("product" in n.lower() for n in entity_names)
-    has_user = any("user" in n.lower() for n in entity_names)
-    has_notif = any("notification" in n.lower() for n in entity_names)
-
-    lines = [
-        '"""Repositories — contract entities. In-memory default; DATABASE_URL ready."""',
-        "from __future__ import annotations",
-        "import uuid",
-        "from typing import Any",
-        "from app import models",
-        "",
-        "",
-        "class InMemoryStore:",
-        "    def __init__(self) -> None:",
-        "        self._data: dict[str, list[Any]] = {}",
-        "",
-        "    def bucket(self, name: str) -> list[Any]:",
-        '        return self._data.setdefault(name, [])',
-        "",
-        "",
-        "_STORE = InMemoryStore()",
-        "",
-    ]
-    if has_order or True:
-        lines += [
-            "class OrderRepository:",
-            "    async def list_by_user(self, user_id: int) -> list[Any]:",
-            '        return [x for x in _STORE.bucket("orders") if getattr(x, "user_id", None) == user_id]',
-            "",
-            "    async def get(self, oid: str) -> Any | None:",
-            '        for x in _STORE.bucket("orders"):',
-            '            if getattr(x, "id", None) == oid:',
-            "                return x",
-            "        return None",
-            "",
-            "    async def create(self, user_id: int, items: list | None = None) -> str:",
-            "        oid = uuid.uuid4().hex[:12]",
-            "        obj = models.Order(",
-            "            id=oid, user_id=user_id, items=list(items or []),",
-            '            total=0, status="pending", created_at="",',
-            "        ) if hasattr(models, 'Order') else {\"id\": oid, \"user_id\": user_id, \"status\": \"pending\"}",
-            '        _STORE.bucket("orders").append(obj)',
-            "        return oid",
-            "",
-            "    async def count(self) -> int:",
-            '        return len(_STORE.bucket("orders"))',
-            "",
-            "",
-        ]
-    if has_product or True:
-        lines += [
-            "class ProductRepository:",
-            "    async def list_all(self) -> list[Any]:",
-            '        return list(_STORE.bucket("products"))',
-            "",
-            "    async def search(self, q: str) -> list[Any]:",
-            "        ql = q.lower()",
-            '        return [x for x in _STORE.bucket("products") if ql in str(x).lower()]',
-            "",
-            "",
-        ]
-    if has_user or True:
-        lines += [
-            "class UserRepository:",
-            "    async def ensure(self, telegram_id: int, username: str | None, full_name: str) -> None:",
-            '        for x in _STORE.bucket("users"):',
-            '            if getattr(x, "telegram_id", None) == telegram_id:',
-            "                return",
-            "        if hasattr(models, 'User'):",
-            "            obj = models.User(",
-            "                id=telegram_id, telegram_id=telegram_id,",
-            "                username=username, full_name=full_name or '',",
-            '                language="ar", is_admin=False, created_at="",',
-            "            )",
-            "        else:",
-            '            obj = {"telegram_id": telegram_id, "full_name": full_name}',
-            '        _STORE.bucket("users").append(obj)',
-            "",
-            "    async def get_by_telegram(self, telegram_id: int) -> Any | None:",
-            '        for x in _STORE.bucket("users"):',
-            '            if getattr(x, "telegram_id", None) == telegram_id:',
-            "                return x",
-            "        return None",
-            "",
-            "    async def list_all(self) -> list[Any]:",
-            '        return list(_STORE.bucket("users"))',
-            "",
-            "",
-        ]
-    if has_notif:
-        lines += [
-            "class NotificationRepository:",
-            "    async def list_by_user(self, user_id: int) -> list[Any]:",
-            '        return [x for x in _STORE.bucket("notifications") if getattr(x, "user_id", None) == user_id]',
-            "",
-            "",
-        ]
-    return "\n".join(lines) + "\n"
+    """Generic in-memory repositories — structural per entity name."""
+    entities = list(c.entities or [])
+    L: list[str] = []
+    def a(s: str = "") -> None:
+        L.append(s)
+    a('"""Repositories — one store per entity (structural)."""')
+    a("from __future__ import annotations")
+    a("import uuid")
+    a("from typing import Any")
+    a("")
+    a("")
+    a("class InMemoryStore:")
+    a("    def __init__(self) -> None:")
+    a("        self._data: dict[str, list[Any]] = {}")
+    a("")
+    a("    def bucket(self, name: str) -> list[Any]:")
+    a('        return self._data.setdefault(name, [])')
+    a("")
+    a("")
+    a("_STORE = InMemoryStore()")
+    a("")
+    a("")
+    a("class GenericRepository:")
+    a("    def __init__(self, bucket: str) -> None:")
+    a("        self._bucket = bucket")
+    a("")
+    a("    async def list_all(self) -> list[Any]:")
+    a("        return list(_STORE.bucket(self._bucket))")
+    a("")
+    a("    async def list_by_user(self, user_id: int) -> list[Any]:")
+    a("        out = []")
+    a("        for x in _STORE.bucket(self._bucket):")
+    a('            uid = x.get("user_id") if isinstance(x, dict) else getattr(x, "user_id", None)')
+    a("            if uid == user_id:")
+    a("                out.append(x)")
+    a("        return out")
+    a("")
+    a("    async def get(self, oid: str) -> Any | None:")
+    a("        for x in _STORE.bucket(self._bucket):")
+    a('            xid = x.get("id") if isinstance(x, dict) else getattr(x, "id", "")')
+    a("            if str(xid) == str(oid):")
+    a("                return x")
+    a("        return None")
+    a("")
+    a("    async def create(self, **kwargs: Any) -> str:")
+    a("        oid = str(kwargs.get('id') or uuid.uuid4().hex[:12])")
+    a("        row = dict(kwargs)")
+    a('        row["id"] = oid')
+    a("        _STORE.bucket(self._bucket).append(row)")
+    a("        return oid")
+    a("")
+    a("    async def count(self) -> int:")
+    a("        return len(_STORE.bucket(self._bucket))")
+    a("")
+    a("    async def ensure(self, telegram_id: int, username: str | None, full_name: str) -> None:")
+    a("        for x in _STORE.bucket(self._bucket):")
+    a('            tid = x.get("telegram_id") if isinstance(x, dict) else getattr(x, "telegram_id", None)')
+    a("            if tid == telegram_id:")
+    a("                return")
+    a('        _STORE.bucket(self._bucket).append({"telegram_id": telegram_id, "username": username, "full_name": full_name})')
+    a("")
+    a("    async def get_by_telegram(self, telegram_id: int) -> Any | None:")
+    a("        for x in _STORE.bucket(self._bucket):")
+    a('            tid = x.get("telegram_id") if isinstance(x, dict) else getattr(x, "telegram_id", None)')
+    a("            if tid == telegram_id:")
+    a("                return x")
+    a("        return None")
+    a("")
+    a("    async def search(self, q: str) -> list[Any]:")
+    a("        ql = q.lower()")
+    a("        return [x for x in _STORE.bucket(self._bucket) if ql in str(x).lower()]")
+    a("")
+    for e in entities:
+        snake = _ident(e.name)
+        a(f"def make_{snake}_repo() -> GenericRepository:")
+        a(f"    return GenericRepository({_py(e.name.lower())})")
+        a("")
+    if not entities:
+        a("def make_default_repo() -> GenericRepository:")
+        a('    return GenericRepository("default")')
+        a("")
+    return "\n".join(L) + "\n"
 
 
 def _container_module(c: ProgramContract, services: list) -> str:
-    """Simple DI container wiring services ↔ repositories."""
-    svc_names = [_ident(s.name) for s in services]
-    lines = [
-        '"""Dependency injection container — wiring from ProgramContract."""',
-        "from __future__ import annotations",
-        "from functools import lru_cache",
-        "from app import repositories as repos",
-        "",
-    ]
+    """DI container — wire services to matching entity repos when names align."""
+    entity_snakes = {_ident(e.name) for e in (c.entities or [])}
+    L: list[str] = []
+    def a(s: str = "") -> None:
+        L.append(s)
+    a('"""Dependency injection container — structural wiring."""')
+    a("from __future__ import annotations")
+    a("from functools import lru_cache")
+    a("from app import repositories as repos")
+    a("")
     for s in services:
         ident = _ident(s.name)
         cls = "".join(p.capitalize() for p in ident.split("_")) + "Service"
-        lines.append(f"from app.services.{ident} import {cls}")
-    lines += ["", "", "class Container:", "    def __init__(self) -> None:"]
-    # repos
-    lines.append("        self._orders_repo = repos.OrderRepository()")
-    lines.append("        self._products_repo = repos.ProductRepository()")
-    lines.append("        self._users_repo = repos.UserRepository()")
-    if any("notification" in e.name.lower() for e in (c.entities or [])):
-        lines.append("        self._notif_repo = repos.NotificationRepository()")
+        a(f"from app.services.{ident} import {cls}")
+    a("")
+    a("")
+    a("class Container:")
+    a("    def __init__(self) -> None:")
+    if not services:
+        a("        pass")
     for s in services:
         ident = _ident(s.name)
         cls = "".join(p.capitalize() for p in ident.split("_")) + "Service"
-        if ident in ("orders", "core"):
-            lines.append(f"        self.{ident} = {cls}(repo=self._orders_repo)")
-        elif ident == "catalog":
-            lines.append(f"        self.{ident} = {cls}(repo=self._products_repo)")
-        elif ident == "users":
-            lines.append(f"        self.{ident} = {cls}(repo=self._users_repo)")
-        elif ident == "notifications":
-            lines.append(f"        self.{ident} = {cls}(repo=getattr(self, '_notif_repo', None))")
+        match = None
+        if ident in entity_snakes:
+            match = ident
         else:
-            lines.append(f"        self.{ident} = {cls}()")
-    # aliases for handlers
-    if "orders" not in svc_names:
-        lines.append("        from app.services.orders import OrdersService")
-        # may not exist - only if we always add orders service in enrichment
-        pass
-    lines += [
-        "",
-        "",
-        "@lru_cache",
-        "def get_container() -> Container:",
-        "    return Container()",
-        "",
-    ]
-    return "\n".join(lines) + "\n"
+            stem = ident.rstrip("s")
+            if stem in entity_snakes:
+                match = stem
+        if match:
+            a(f"        self.{ident} = {cls}(repo=repos.make_{match}_repo())")
+        else:
+            a(f"        self.{ident} = {cls}()")
+    if "user" in entity_snakes:
+        if any(_ident(s.name) == "user" for s in services):
+            a("        self.users = self.user")
+        else:
+            a("        from app.services.user import UserService")
+            a("        self.users = UserService(repo=repos.make_user_repo())")
+    a("")
+    a("")
+    a("@lru_cache")
+    a("def get_container() -> Container:")
+    a("    return Container()")
+    a("")
+    return "\n".join(L) + "\n"
 
 
 def _middleware_module() -> str:
@@ -808,6 +685,17 @@ class CodegenService:
         cmds = effective_commands(contract)
         btns = effective_buttons(contract)
         svcs = effective_services(contract)
+        # structural: ensure a service module exists for each entity name
+        from ...schemas.program_contract import ServiceUnit
+        have = {_ident(s.name) for s in svcs}
+        extra = []
+        for e in contract.entities or []:
+            snake = _ident(e.name)
+            if snake and snake not in have:
+                extra.append(ServiceUnit(name=snake, responsibility=e.name))
+                have.add(snake)
+        if extra:
+            svcs = list(svcs) + extra
 
         _write(root / "requirements.txt", _requirements(contract))
         _write(root / ".env.example", _env(contract))
