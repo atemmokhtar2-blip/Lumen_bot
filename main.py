@@ -763,7 +763,58 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await message.reply_text("مساعدة: اسحب مستودع | ولّد بوت | استضافة | تحليل استاتيكي")
         return
 
-    if len(request) < 5:
+    # ------------------------------------------------------------------
+    # SmartChat (g4f) — chat layer only. Never enters formal_engine.
+    # Used when intent is unclear or the user needs clarification.
+    # ------------------------------------------------------------------
+    _rt_final = _chat_route(request)
+    _high_conf_generate = (
+        _rt_final
+        and getattr(_rt_final, "ok", False)
+        and _rt_final.capability_id == "generate_bot"
+        and getattr(_rt_final, "confidence", 0) >= 0.55
+    )
+
+    if not _high_conf_generate:
+        try:
+            from telegram_bot_engine.chat_ai import smart_chat_reply
+
+            await context.bot.send_chat_action(
+                chat_id=message.chat_id, action=ChatAction.TYPING
+            )
+            smart = await asyncio.to_thread(smart_chat_reply, request)
+
+            if smart.type == "reply" or smart.type == "error":
+                await message.reply_text(smart.text or "وضح أكثر من فضلك.")
+                return
+
+            if smart.type == "route" and smart.capability_id:
+                # Only allow safe soft-routing here. Actual generation still
+                # goes through the formal path below when capability is generate_bot.
+                if smart.capability_id == "generate_bot" and smart.confidence >= 0.45:
+                    if smart.text:
+                        await message.reply_text(smart.text)
+                    # fall through to formal generation with original request
+                elif smart.capability_id == "help":
+                    try:
+                        from telegram_bot_engine.formal_engine.services.chat_router import get_router
+                        await message.reply_text(get_router().help_text())
+                    except Exception:
+                        await message.reply_text(smart.text or "مساعدة: اكتب «مساعدة»")
+                    return
+                else:
+                    # Soft guidance only — do not invent success
+                    hint = smart.text or f"يبدو أنك تقصد: {smart.capability_id}"
+                    await message.reply_text(
+                        f"{hint}\n\n"
+                        "جرّب صياغة أوضح أو اكتب «مساعدة» لعرض كل القدرات."
+                    )
+                    return
+        except Exception as e:
+            logger.exception("SmartChat layer failed: %s", e)
+            # Fall through to formal path on unexpected error
+
+    if len(request) < 3:
         await message.reply_text("الوصف قصير جداً. أرسل وصفاً أوضح للبوت المطلوب.")
         return
 
