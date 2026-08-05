@@ -10,7 +10,6 @@ import re
 from ..ontology.architecture_rules import apply_architecture_rules
 from ..ontology.data_models_kb import ENTITY_LIBRARY, resolve_data_models
 from ..ontology.knowledge_base import (
-    detect_archetype,
     extract_feature_tags,
 )
 from ..schemas.formal_spec import (
@@ -542,7 +541,7 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     flow_steps = _extract_flow_steps(full)
     qflags = _extract_quality_flags(full)
 
-    archetype = detect_archetype(full)
+    archetype = "CUSTOM"  # packs removed; formal path uses DSL
     # Long-spec: multi-role ops platforms / meta bot-builders must stay custom
     _low = full.lower()
     if any(k in full for k in ("توصيل", "سائق", "Delivery")) or (
