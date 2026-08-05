@@ -42,13 +42,18 @@
 
 ```
 نص المستخدم
-  → UnderstandingService  (استخراج عقد من النص)
-  → PlanningService       (إكمال بنيوي بدون أوامر مخترعة)
-  → CodegenService        (ملفات من العقد فقط)
-  → StaticDevGate         (أنماط + تدفق + رمزي + عقود)
-  → FinalGate             (fidelity + conversation + static)
-  → py_compile
+  → ClarificationService  (قاعدة فقط — يسأل لو النص ناقص، بدون LLM)
+  → extract_dsl           (أوامر/كيانات/أزرار/قواعد من النص فقط)
+  → grounding_gate
+  → infer → micro-transpile → verify → py_compile
 ```
+
+### 4) حلقة التوضيح (تم)
+
+- لو النص غامض (مثل «اعمل بوت اسمه عبود») → **لا يولّد** بوت start/help فقط.
+- يسأل المستخدم عن الأوامر/الكيانات/الأزرار حسب الفجوات.
+- يجمع الإجابات ويولّد من كلام المستخدم فقط.
+- **ممنوع** SmartChat / g4f / Understanding-AI في مسار التوليد.
 
 ---
 

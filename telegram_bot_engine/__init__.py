@@ -1,13 +1,14 @@
 """
 Telegram Bot Generation Engine
 
-Active path (Formal Logic & DSL Engine):
+Active path (Formal Logic & DSL Engine ONLY — zero LLM):
   text → Custom DSL → Inference → Micro-Transpiler → Formal Verification
 
-Git/Repo engines kept for repository operations.
-The old hybrid (ProgramContract unpack) path is retired — it caused
-"cannot unpack non-iterable UnderstandingResult" because understand()
-returns a single UnderstandingResult, not a (contract, validation) tuple.
+HARD RULES:
+  - No LLM / g4f / Understanding-AI on the generation path.
+  - No fixed domain templates or canned command packs.
+  - Commands, buttons, entities, rules come ONLY from user text.
+  - Structural minima only: /start and /help.
 """
 
 from __future__ import annotations
@@ -37,13 +38,8 @@ def generate_bot(request: str, work_dir=None):
     """
     Entry point used by the Telegram interface.
 
-    Uses the Formal DSL pipeline exclusively (no LLM, no ProgramContract unpack).
-    Returns GenerationResult compatible with main.py reporting.
-
-    HARD RULE — no fixed domain templates:
-      Commands, buttons, entities, rules, flows, and handlers come ONLY from
-      the user text. Never inject shop/ticket/ecommerce/education packs or
-      canned domain skeletons.
+    Uses the Formal DSL pipeline exclusively.
+    NO LLM. NO Understanding-AI. NO domain templates.
     """
     from pathlib import Path
     import tempfile
@@ -74,42 +70,17 @@ def generate_bot(request: str, work_dir=None):
 
     stages: list = []
     errors: list = []
-    ai_result = None
 
-    # ------------------------------------------------------------------
-    # Understanding-AI (optional, chat_ai only) → Formal path
-    # ------------------------------------------------------------------
     try:
-        from .chat_ai.understanding_ai import prepare_generation_text
         from .formal_engine.pipeline_formal import build_from_text
 
-        formal_text, ai_result = prepare_generation_text(request)
-        if ai_result.ok:
-            stages.append(
-                StageResult.ok(
-                    "understanding_ai",
-                    outputs=ai_result.to_dict(),
-                )
-            )
-        else:
-            stages.append(
-                StageResult.ok(
-                    "understanding_ai",
-                    outputs=ai_result.to_dict(),
-                    warnings=[ai_result.error or "fallback_to_raw_text"],
-                )
-            )
-
-        # Extract AI-structured text when available. Ground against formal_text
-        # (includes original appendix from Understanding-AI) so the gate still
-        # strips extractor pollution without erasing AI-structured surface.
+        # Formal path only — raw user text, no AI enrichment
         build = build_from_text(
-            formal_text,
+            request,
             project_dir,
-            grounding_text=formal_text,
+            grounding_text=request,
         )
 
-        # Understanding stage (DSL extraction summary)
         stages.append(
             StageResult.ok(
                 "understanding_service",
@@ -118,12 +89,11 @@ def generate_bot(request: str, work_dir=None):
                     "dsl_operations": build.dsl_operations,
                     "dsl_rules": build.dsl_rules,
                     "engine_path": "dsl_formal",
-                    "ai_enriched": bool(ai_result.ok),
+                    "ai_enriched": False,
                 },
             )
         )
 
-        # Grounding gate stage (text fidelity — drop ungrounded surface)
         g = getattr(build, "grounding", None)
         if g is not None:
             stages.append(
@@ -134,7 +104,6 @@ def generate_bot(request: str, work_dir=None):
                 )
             )
 
-        # Codegen stage (transpiler output)
         files = list(build.files or [])
         stages.append(
             StageResult.ok(
@@ -147,7 +116,6 @@ def generate_bot(request: str, work_dir=None):
             )
         )
 
-        # Verification stage
         verify_ok = True
         verify_errors: list[str] = []
         if build.verification is not None:
@@ -175,7 +143,6 @@ def generate_bot(request: str, work_dir=None):
                 StageResult.ok("formal_verification", outputs={"skipped": True})
             )
 
-        # py_compile hard structural test
         compile_ok = True
         compile_errors: list[str] = []
         try:
@@ -204,6 +171,15 @@ def generate_bot(request: str, work_dir=None):
             errors.append(f"py_compile failed: {exc}")
             stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
 
+        # Surface extracted commands for reporting
+        cmd_names: list[str] = []
+        try:
+            from .formal_engine.dsl.extractor import extract_dsl
+            prog = extract_dsl(request)
+            cmd_names = [c.name for c in prog.commands]
+        except Exception:
+            pass
+
         path_str = str(project_dir) if project_dir.exists() else None
         ok = (
             bool(path_str)
@@ -230,12 +206,13 @@ def generate_bot(request: str, work_dir=None):
                 "dsl_operations": build.dsl_operations,
                 "dsl_rules": build.dsl_rules,
                 "verify_ok": verify_ok,
+                "commands": cmd_names,
                 "grounding": (
                     build.grounding.to_dict()
                     if getattr(build, "grounding", None) is not None
                     else None
                 ),
-                "understanding_ai": ai_result.to_dict() if ai_result is not None else None,
+                "understanding_ai": None,
             },
         )
 

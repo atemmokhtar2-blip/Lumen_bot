@@ -323,19 +323,19 @@ def _commands_from_text(text: str) -> list[CommandNode]:
         ):
             add(m.group("cmd"), m.group("desc").strip())
 
-    # Free-form Arabic/English surface: only when user did not list /commands.
-    # Grounded phrase → command id (NOT a domain pack: phrase must appear in text).
+    # Grounded surface commands — phrase MUST appear in user text.
+    # Linguistic surface → ascii command id. Never invents without textual signal.
     if len([c for c in found if c.name not in ("start", "help")]) == 0:
         freeform: list[tuple[str, str, str]] = [
-            # (regex_on_user_text, cmd, description)
             (r"تسجيل\s*عميل|register\s*customer", "register_customer", "تسجيل عميل"),
             (r"تسجيل\s*سائق|register\s*driver", "register_driver", "تسجيل سائق"),
             (r"تسجيل|يسجل|signup|sign\s*up|register", "register", "تسجيل"),
-            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب|يطلب\s*اوردر|اوردر", "new_order", "اوردر"),
+            (r"طلب\s*جديد|اوردر\s*جديد|new\s*order|إنشاء\s*طلب|يطلب\s*اوردر", "new_order", "طلب جديد"),
+            (r"(?<![a-z])اوردر(?![a-z])|(?<!\w)order(?!\w)", "new_order", "اوردر"),
             (r"تتبع|track", "track", "تتبع"),
             (r"يقبل\s*الطلب|قبول\s*الطلب|accept\s*order", "accept_order", "قبول طلب"),
-            (r"المنيو|قائمة\s*الطعام|menu", "menu", "المنيو"),
-            (r"اوردرات[يى]|طلباتي|my\s*orders|يشوف\s*اوردر", "my_orders", "اوردرات"),
+            (r"المنيو|قائمة\s*الطعام|(?<!\w)menu(?!\w)", "menu", "المنيو"),
+            (r"اوردرات[يى]|طلباتي|my\s*orders|يشوف\s*اوردر", "my_orders", "اوردراتي"),
             (r"مهامي|my\s*tasks", "my_tasks", "مهامي"),
             (r"مهمة\s*جديدة|new\s*task", "new_task", "مهمة جديدة"),
             (r"عملائي|my\s*clients", "my_clients", "عملائي"),
@@ -343,13 +343,43 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             (r"إحصائ|احصائ|stats|statistics", "stats", "إحصائيات"),
             (r"أدمن|ادمن|admin|لوحة\s*الإدارة|لوحة\s*الادارة", "admin", "ادمن"),
             (r"بث|broadcast", "broadcast", "بث"),
-            (r"حظر|ban", "ban", "حظر"),
-            (r"حجز|book\b", "book", "حجز"),
+            (r"حظر|ban\b", "ban", "حظر"),
+            (r"حجز|book(?:ing)?\b", "book", "حجز"),
             (r"مواعيدي|my\s*appointments", "my_appointments", "مواعيدي"),
+            (r"بحث|search", "search", "بحث"),
+            (r"دفع|payment|pay\b", "pay", "دفع"),
+            (r"تقييم|rate\b|review\b", "rate", "تقييم"),
+            (r"دعم|support|ticket", "support", "دعم"),
+            (r"ملف\s*شخصي|profile", "profile", "ملف شخصي"),
+            (r"إعدادات|settings", "settings", "إعدادات"),
+            (r"إلغاء|cancel", "cancel", "إلغاء"),
+            (r"تأكيد|confirm", "confirm", "تأكيد"),
+            (r"توصيل|delivery", "delivery", "توصيل"),
+            (r"شحن|shipping", "shipping", "شحن"),
+            (r"فاتورة|invoice", "invoice", "فاتورة"),
+            (r"رصيد|balance|wallet", "balance", "رصيد"),
+            (r"إشعار|notification", "notifications", "إشعارات"),
+            (r"دعوة|invite", "invite", "دعوة"),
+            (r"اشتراك|subscribe", "subscribe", "اشتراك"),
         ]
         for pat, cmd, desc in freeform:
             if re.search(pat, text, re.I):
                 add(cmd, desc)
+
+        # Structural lists: "فيه X و Y" — re-match known stems against listed parts only
+        for m in re.finditer(
+            r"(?:فيه|فيها|يحتوي|يشمل|يقدر|تقدر|يعمل|تعمل|features?)\s*[:：]?\s*([^\n.]{4,120})",
+            text,
+            re.I,
+        ):
+            chunk = m.group(1)
+            for part in re.split(r"[,،/|•\-]+|\s+و\s+", chunk):
+                part = part.strip()
+                if not (2 <= len(part) <= 40):
+                    continue
+                for pat, cmd, desc in freeform:
+                    if re.search(pat, part, re.I):
+                        add(cmd, desc or part)
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
