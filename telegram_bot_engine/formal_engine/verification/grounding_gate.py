@@ -80,6 +80,23 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
     for part in n.split("_"):
         if len(part) >= 4 and re.search(rf"\b{re.escape(part)}\b", text_n):
             return True
+    # Common AR/EN intent synonyms (must still appear in user text)
+    synonyms = {
+        "register": ("تسجيل", "يسجل", "register", "signup"),
+        "new_order": ("طلب جديد", "اوردر", "order", "طلب"),
+        "my_orders": ("طلباتي", "اوردرات", "my orders"),
+        "menu": ("منيو", "menu", "قائمه الطعام", "قائمة الطعام"),
+        "track": ("تتبع", "track"),
+        "accept_order": ("يقبل", "قبول", "accept"),
+        "admin": ("ادمن", "أدمن", "admin", "مشرف"),
+        "stats": ("احصائ", "إحصائ", "stats"),
+        "add_item": ("صنف", "منتج", "add item"),
+        "book": ("حجز", "book"),
+    }
+    for key, words in synonyms.items():
+        if key == n or key in n:
+            if any(w in raw for w in words) or any(_norm(w) in text_n for w in words):
+                return True
     return False
 
 
