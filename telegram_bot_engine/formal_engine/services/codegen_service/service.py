@@ -43,21 +43,8 @@ def _write(path: Path, content: str) -> None:
 
 
 def _requirements(c: ProgramContract) -> str:
-    deps = [
-        "python-telegram-bot>=21.0,<22",
-        "python-dotenv>=1.0.0",
-        "pydantic>=2.5,<3",
-        "pydantic-settings>=2.1,<3",
-    ]
-    if c.tech.database == "postgres" or "postgres" in c.integrations:
-        deps += ["asyncpg>=0.29.0", "sqlalchemy[asyncio]>=2.0"]
-    else:
-        deps.append("aiosqlite>=0.20.0")
-    if c.tech.async_queue or "redis" in c.integrations:
-        deps += ["redis>=5.0", "arq>=0.26.0"]
-    if c.tech.payments or "stripe" in c.integrations:
-        deps.append("stripe>=8.0")
-    return "\n".join(dict.fromkeys(deps)) + "\n"
+    from .framework_emit import requirements_for
+    return "\n".join(requirements_for(c)) + "\n"
 
 
 def _env(c: ProgramContract) -> str:
@@ -715,22 +702,69 @@ class CodegenService:
         _write(app / "middlewares.py", _middleware_module())
         _write(app / "filters.py", _filters_module())
         _write(app / "utils.py", _utils_module())
-        _write(app / "main.py", _main(contract, commands=cmds))
-        _write(handlers / "start.py", _start(contract, commands=cmds, buttons=btns))
-        _write(handlers / "callbacks.py", _callbacks(contract))
-        _write(handlers / "messages.py", _messages(contract))
+        from .framework_emit import (
+            emit_main_aiogram,
+            emit_main_ptb,
+            emit_start_aiogram,
+            emit_cmd_aiogram,
+            emit_callbacks_aiogram,
+            emit_messages_aiogram,
+            normalize_framework,
+            layer_paths_to_create,
+        )
+        from .enrichment import welcome_text, help_text
+
+        fw = normalize_framework(
+            getattr(contract.architecture, "framework", "") if contract.architecture else ""
+        )
+        if fw == "aiogram":
+            _write(app / "main.py", emit_main_aiogram(contract, cmds))
+            rows = []
+            for b in btns:
+                rows.append(
+                    f"        [InlineKeyboardButton(text={_py(b.label)}, callback_data={_py(b.callback_id)})]"
+                )
+            if not rows:
+                rows = ['        [InlineKeyboardButton(text="القائمة", callback_data="main_menu")]']
+            _write(
+                handlers / "start.py",
+                emit_start_aiogram(contract, welcome_text(contract), help_text(cmds), rows),
+            )
+            _write(handlers / "callbacks.py", emit_callbacks_aiogram(contract))
+            _write(handlers / "messages.py", emit_messages_aiogram(contract))
+            for cmd in cmds:
+                if cmd.name in ("start", "help"):
+                    continue
+                ident = _ident(cmd.name)
+                _write(
+                    handlers / f"cmd_{ident}.py",
+                    emit_cmd_aiogram(cmd.name, cmd.description, cmd.admin_only),
+                )
+        else:
+            _write(app / "main.py", emit_main_ptb(contract, cmds))
+            _write(handlers / "start.py", _start(contract, commands=cmds, buttons=btns))
+            _write(handlers / "callbacks.py", _callbacks(contract))
+            _write(handlers / "messages.py", _messages(contract))
+            entity_names = [e.name for e in contract.entities]
+            for cmd in cmds:
+                if cmd.name in ("start", "help"):
+                    continue
+                ident = _ident(cmd.name)
+                _write(
+                    handlers / f"cmd_{ident}.py",
+                    _cmd_handler(cmd.name, cmd.description, cmd.admin_only, entity_names),
+                )
+
         if contract.conversation_states:
             _write(app / "states.py", _states_module(contract))
 
-        entity_names = [e.name for e in contract.entities]
-        for cmd in cmds:
-            if cmd.name in ("start", "help"):
+        for rel in layer_paths_to_create(contract):
+            path = root / rel
+            if path.exists():
                 continue
-            ident = _ident(cmd.name)
-            _write(
-                handlers / f"cmd_{ident}.py",
-                _cmd_handler(cmd.name, cmd.description, cmd.admin_only, entity_names),
-            )
+            if rel.endswith("__init__.py"):
+                _write(path, '"""Architecture layer package."""' + chr(10))
+
 
         for svc in svcs:
             _write(

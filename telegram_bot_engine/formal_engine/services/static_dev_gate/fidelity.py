@@ -111,18 +111,23 @@ def check_project_fidelity(project_dir: str | Path) -> FidelityReport:
         if not name:
             continue
         covered = False
+        def _registered(cmd: str) -> bool:
+            # PTB
+            if f'CommandHandler("{cmd}"' in main or f"CommandHandler('{cmd}'" in main:
+                return True
+            # aiogram 3
+            if f'Command("{cmd}")' in main or f"Command('{cmd}')" in main:
+                return True
+            return False
+
         if name in ("start", "help"):
-            covered = f'CommandHandler("{name}"' in main or f"CommandHandler('{name}'" in main
+            covered = _registered(name)
             if name == "start" and "start_handler" not in start and "start_handler" not in main:
                 covered = False
         else:
-            # require dedicated handler module (codegen layout) + registration
             safe = re.sub(r"[^a-z0-9_]", "_", name)
             cmd_file = handlers_dir / f"cmd_{safe}.py"
-            registered = (
-                f'CommandHandler("{name}"' in main or f"CommandHandler('{name}'" in main
-            )
-            covered = cmd_file.exists() and registered
+            covered = cmd_file.exists() and _registered(name)
         if covered:
             coverage["commands_covered"] += 1
         else:
@@ -229,6 +234,85 @@ def check_project_fidelity(project_dir: str | Path) -> FidelityReport:
                     "العقد يطلب postgres لكن requirements لا تتضمن asyncpg/psycopg",
                 )
             )
+
+
+    # --- framework from architecture ---
+    arch = contract.get("architecture") or {}
+    fw = (arch.get("framework") or "").lower()
+    req = root / "requirements.txt"
+    req_txt = req.read_text(encoding="utf-8") if req.exists() else ""
+    if "aiogram" in fw:
+        if "aiogram" not in req_txt:
+            findings.append(
+                FidelityFinding(
+                    "error",
+                    "framework_mismatch",
+                    "العقد يطلب aiogram لكن requirements لا تتضمنه",
+                )
+            )
+        main = _main_src(root)
+        if "aiogram" not in main and "Dispatcher" not in main:
+            findings.append(
+                FidelityFinding(
+                    "error",
+                    "framework_main_mismatch",
+                    "العقد يطلب aiogram لكن main.py ليس على aiogram",
+                )
+            )
+    elif fw and "telegram" in fw:
+        if "python-telegram-bot" not in req_txt and "telegram" not in req_txt:
+            findings.append(
+                FidelityFinding(
+                    "warning",
+                    "framework_ptb_soft",
+                    "توقّع python-telegram-bot في requirements",
+                )
+            )
+
+    # --- declared layers exist ---
+    layers = list(arch.get("layers") or [])
+    layer_map = {
+        "handlers": "app/handlers",
+        "services": "app/services",
+        "repositories": "app/repositories.py",
+        "middlewares": "app/middlewares.py",
+        "filters": "app/filters.py",
+        "models": "app/models.py",
+        "config": "app/config.py",
+        "configurations": "app/config.py",
+        "utils": "app/utils.py",
+        "utilities": "app/utils.py",
+        "domain": "app/domain",
+        "usecases": "app/usecases",
+    }
+    for layer in layers:
+        key = "".join(ch for ch in layer.lower() if ch.isalnum() or ch == "_")
+        # soft match
+        path = None
+        for k, v in layer_map.items():
+            if k in key or key in k:
+                path = v
+                break
+        if path is None:
+            continue
+        full = root / path
+        if not full.exists():
+            findings.append(
+                FidelityFinding(
+                    "error",
+                    "missing_declared_layer",
+                    f"طبقة معلنة في العقد ناقصة: {layer} → {path}",
+                    evidence=layer,
+                )
+            )
+    if arch.get("dependency_injection") and not (root / "app" / "container.py").exists():
+        findings.append(
+            FidelityFinding(
+                "error",
+                "missing_di_container",
+                "العقد يطلب Dependency Injection بلا container.py",
+            )
+        )
 
     # coverage ratios
     def _ratio(a: int, b: int) -> float:

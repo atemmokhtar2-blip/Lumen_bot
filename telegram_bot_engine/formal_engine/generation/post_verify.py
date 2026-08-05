@@ -48,10 +48,16 @@ def verify_generated_project(project_dir: str | Path) -> dict[str, Any]:
     main = root / "app" / "main.py"
     if main.exists():
         msrc = main.read_text(encoding="utf-8")
-        if "CommandHandler(\"start\"" not in msrc and "CommandHandler('start'" not in msrc:
+        has_start = (
+            'CommandHandler("start"' in msrc
+            or "CommandHandler('start'" in msrc
+            or 'Command("start")' in msrc
+            or "Command('start')" in msrc
+        )
+        if not has_start:
             errors.append("main.py does not register /start")
-        if "CallbackQueryHandler" not in msrc:
-            warnings.append("no CallbackQueryHandler — button taps may not respond")
+        if "CallbackQueryHandler" not in msrc and "callback_query" not in msrc:
+            warnings.append("no callback handler — button taps may not respond")
 
     info["command_handlers"] = len(list((root / "app" / "handlers").glob("cmd_*.py"))) if (root / "app" / "handlers").exists() else 0
 

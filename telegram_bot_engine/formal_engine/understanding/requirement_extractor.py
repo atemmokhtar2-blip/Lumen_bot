@@ -110,6 +110,8 @@ def _extract_commands_from_text(text: str) -> list[dict]:
         if cmd in (
             "http", "https", "www", "command", "commands", "cmd",
             "bot", "telegram", "python", "true", "false", "none",
+            "postgresql", "postgres", "sqlite", "mysql", "redis",
+            "docker", "aiogram", "pyrogram",
         ):
             return
         seen.add(cmd)

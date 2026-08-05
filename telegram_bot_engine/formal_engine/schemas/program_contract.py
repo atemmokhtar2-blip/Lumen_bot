@@ -146,6 +146,14 @@ class QualityFlags(StrictModel):
     modular_code: bool = True
 
 
+class ArchitectureFlags(StrictModel):
+    """From FormalBotSpec.architecture — text-grounded, not domain templates."""
+    style: str = ""
+    framework: str = "python-telegram-bot"  # python-telegram-bot | aiogram
+    layers: list[str] = Field(default_factory=list)
+    dependency_injection: bool = False
+
+
 class ProgramContract(StrictModel):
     """
     Strong program contract — codegen input, understanding output.
@@ -174,6 +182,7 @@ class ProgramContract(StrictModel):
     feature_tags: list[str] = Field(default_factory=list)
     tech: TechFlags = Field(default_factory=TechFlags)
     quality: QualityFlags = Field(default_factory=QualityFlags)
+    architecture: ArchitectureFlags = Field(default_factory=ArchitectureFlags)
     hard_constraints: list[str] = Field(default_factory=list)
     architecture_rules_applied: list[str] = Field(default_factory=list)
 

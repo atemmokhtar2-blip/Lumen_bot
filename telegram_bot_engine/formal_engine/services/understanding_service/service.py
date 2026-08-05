@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from ...schemas.program_contract import (
+    ArchitectureFlags,
     BotKind,
     ButtonUnit,
     CommandUnit,
@@ -230,6 +231,12 @@ def formal_spec_to_contract(spec: FormalBotSpec, raw_text: str = "") -> ProgramC
             modular_code=bool(spec.quality.modular_code),
         ),
         hard_constraints=list(spec.hard_constraints or []),
+        architecture=ArchitectureFlags(
+            style=getattr(spec.architecture, "style", "") or "",
+            framework=getattr(spec.architecture, "framework", "python-telegram-bot") or "python-telegram-bot",
+            layers=list(getattr(spec.architecture, "layers", None) or []),
+            dependency_injection=bool(getattr(spec.architecture, "dependency_injection", False)),
+        ),
         architecture_rules_applied=list(spec.architecture_rules_applied or []),
     ).ensure_minimums()
 
