@@ -154,18 +154,12 @@ class Nullability(str, Enum):
     UNKNOWN = "unknown"
 
     def join(self, other: "Nullability") -> "Nullability":
-        """Lattice join (merge of two branches)."""
-        order = {
-            Nullability.UNKNOWN: 0,
-            Nullability.MAYBE_NONE: 1,
-            Nullability.DEFINITE_NONE: 2,
-            Nullability.NOT_NONE: 3,
-        }
-        # If either side is maybe / mixed → maybe_none
+        """Lattice join (merge of two branches / expression sides)."""
         if self == other:
             return self
+        # UNKNOWN never collapses into DEFINITE_NONE — becomes MAYBE_NONE
         if Nullability.UNKNOWN in (self, other):
-            return other if self == Nullability.UNKNOWN else self
+            return Nullability.MAYBE_NONE
         if {self, other} == {Nullability.DEFINITE_NONE, Nullability.NOT_NONE}:
             return Nullability.MAYBE_NONE
         if Nullability.MAYBE_NONE in (self, other):

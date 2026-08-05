@@ -156,23 +156,26 @@ def _models(c: ProgramContract) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _start(c: ProgramContract) -> str:
+def _start(c: ProgramContract, commands=None, buttons=None) -> str:
+    from .enrichment import effective_buttons, effective_commands, help_text, welcome_text
+
+    cmds = commands if commands is not None else effective_commands(c)
+    btns = buttons if buttons is not None else effective_buttons(c)
     rows = []
-    for b in c.buttons:
+    for b in btns:
         rows.append(
             f"        [InlineKeyboardButton({_py(b.label)}, callback_data={_py(b.callback_id)})]"
         )
     if not rows:
-        rows = ['        [InlineKeyboardButton("Menu", callback_data="main_menu")]']
+        rows = ['        [InlineKeyboardButton("القائمة", callback_data="main_menu")]']
     kb = ",\n".join(rows)
-    welcome = f"Welcome to {c.bot_name}"
-    if c.summary:
-        welcome = f"{c.bot_name}\n{(c.summary[:180]).replace('*', '')}"
-    help_txt = "\n".join(f"/{x.name} — {x.description}" for x in c.commands) or "/start"
-    return f'''"""UI entry — buttons/commands from ProgramContract only."""
+    welcome = welcome_text(c)
+    help_txt = help_text(cmds)
+    return f'''"""UI entry — commands/buttons derived from ProgramContract."""
 from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+from app.container import get_container
 
 
 def main_keyboard() -> InlineKeyboardMarkup:
@@ -186,6 +189,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message = update.effective_message
     if message is None:
         return
+    user = update.effective_user
+    container = get_container()
+    if user is not None and hasattr(container, "users"):
+        await container.users.ensure_user(
+            telegram_id=user.id,
+            username=user.username,
+            full_name=(user.full_name or user.first_name or ""),
+        )
     await message.reply_text({_py(welcome)}, reply_markup=main_keyboard())
 
 
@@ -234,17 +245,22 @@ def _callbacks(c: ProgramContract) -> str:
 
 
 
-def _cmd_handler(name: str, description: str, admin_only: bool, entity_names: list[str] | None = None) -> str:
-    """Universal command handler — NO domain templates. Contract-driven only."""
+def _cmd_handler(
+    name: str,
+    description: str,
+    admin_only: bool,
+    entity_names: list[str] | None = None,
+) -> str:
+    """Command handler — wires to container services when available."""
     fn = f"{_ident(name)}_handler"
     desc = description or name
-    ents = list(entity_names or [])[:8]
     lines: list[str] = [
-        f'"""Command /{name} from ProgramContract (universal handler)."""',
+        f'"""Command /{name} — {desc}."""',
         "from __future__ import annotations",
         "",
         "from telegram import Update",
         "from telegram.ext import ContextTypes",
+        "from app.container import get_container",
     ]
     if admin_only or name == "admin":
         lines.append("from app.config import get_settings")
@@ -268,40 +284,362 @@ def _cmd_handler(name: str, description: str, admin_only: bool, entity_names: li
                 "        return",
             ]
         )
+    # service dispatch by command name
+    service_map = {
+        "orders": ("orders", "list_orders"),
+        "order": ("orders", "get_order"),
+        "neworder": ("orders", "create_order_stub"),
+        "products": ("catalog", "list_products"),
+        "catalog": ("catalog", "list_products"),
+        "track": ("orders", "track"),
+        "delivery": ("orders", "track"),
+        "notifications": ("notifications", "list_for_user"),
+        "profile": ("users", "get_profile"),
+        "search": ("catalog", "search"),
+        "stats": ("orders", "stats"),
+        "analytics": ("orders", "stats"),
+        "admin": ("orders", "stats"),
+        "files": ("storage", "list_files"),
+        "customers": ("users", "list_users"),
+        "docs": ("storage", "list_files"),
+        "rate": ("orders", "list_orders"),
+        "group": ("users", "list_users"),
+    }
+    svc_pair = service_map.get(name)
+    lines.append("    container = get_container()")
+    lines.append("    args = list(context.args or [])")
+    lines.append("    user = update.effective_user")
+    lines.append("    uid = user.id if user is not None else 0")
+    if svc_pair:
+        svc, method = svc_pair
+        lines.extend(
+            [
+                f"    svc = getattr(container, {_py(svc)}, None)",
+                f"    if svc is not None and hasattr(svc, {_py(method)}):",
+                f"        result = await svc.{method}(user_id=uid, args=args)",
+                "        text = result if isinstance(result, str) else str(result)",
+                "        await message.reply_text(text)",
+                "        return",
+            ]
+        )
     lines.extend(
         [
-            "    args = list(context.args or [])",
-            f"    description = {_py(desc)}",
-            f"    entities = {_py(ents)}",
-            f'    parts = ["/{name}: " + description]',
-            "    if args:",
-            '        parts.append("args: " + ", ".join(args))',
-            "    if entities:",
-            '        parts.append("entities: " + ", ".join(entities))',
-            '    await message.reply_text("\\n".join(parts))',
+            f'    await message.reply_text({_py("/" + name + " — " + desc)})',
             "",
         ]
     )
     return "\n".join(lines) + "\n"
 
 
-
-def _service(name: str) -> str:
+def _service(name: str, responsibility: str = "") -> str:
     cls = "".join(p.capitalize() for p in _ident(name).split("_")) + "Service"
-    return f'''"""Service {name} from ProgramContract.services."""
+    ident = _ident(name)
+    # entity-aware methods
+    methods = [
+        "    async def run(self, *args, **kwargs):",
+        f'        return {{"ok": True, "service": {_py(name)}}}',
+        "",
+    ]
+    if ident in ("orders", "core"):
+        methods = [
+            "    async def list_orders(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        rows = await self._repo.list_by_user(user_id) if self._repo else []",
+            '        if not rows:',
+            '            return "لا توجد طلبات حالياً."',
+            '        return "الطلبات:\\n" + "\\n".join(str(r) for r in rows[:20])',
+            "",
+            "    async def get_order(self, user_id: int = 0, args: list | None = None) -> str:",
+            '        oid = (args or [""])[0]',
+            "        if not oid:",
+            '            return "استخدم: /order <id>"',
+            "        row = await self._repo.get(oid) if self._repo else None",
+            "        if row is None:",
+            '            return "الطلب غير موجود."',
+            "        return str(row)",
+            "",
+            "    async def create_order_stub(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        if self._repo is None:",
+            '            return "خدمة الطلبات غير مهيأة."',
+            "        oid = await self._repo.create(user_id=user_id, items=list(args or []))",
+            '        return f"تم إنشاء الطلب: {oid}"',
+            "",
+            "    async def track(self, user_id: int = 0, args: list | None = None) -> str:",
+            '        oid = (args or [""])[0]',
+            "        if not oid or self._repo is None:",
+            '            return "أدخل: /track <order_id>"',
+            "        row = await self._repo.get(oid)",
+            "        if row is None:",
+            '            return "الطلب غير موجود."',
+            '        status = getattr(row, "status", "unknown")',
+            '        return f"حالة الطلب {oid}: {status}"',
+            "",
+            "    async def stats(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        n = await self._repo.count() if self._repo else 0",
+            '        return f"إجمالي السجلات: {n}"',
+            "",
+        ]
+    elif ident in ("catalog",):
+        methods = [
+            "    async def list_products(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        rows = await self._repo.list_all() if self._repo else []",
+            '        if not rows:',
+            '            return "لا منتجات في الكتالوج."',
+            '        return "المنتجات:\\n" + "\\n".join(str(r) for r in rows[:20])',
+            "",
+            "    async def search(self, user_id: int = 0, args: list | None = None) -> str:",
+            '        q = " ".join(args or []).strip()',
+            "        if not q:",
+            '            return "استخدم: /search <كلمة>"',
+            "        rows = await self._repo.search(q) if self._repo else []",
+            '        return "نتائج:\\n" + "\\n".join(str(r) for r in rows[:20]) if rows else "لا نتائج."',
+            "",
+        ]
+    elif ident in ("users",):
+        methods = [
+            "    async def ensure_user(self, telegram_id: int, username: str | None = None, full_name: str = \"\") -> None:",
+            "        if self._repo is not None:",
+            "            await self._repo.ensure(telegram_id, username, full_name)",
+            "",
+            "    async def get_profile(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        if self._repo is None:",
+            '            return "الملف غير موجود — اضغط /start."',
+            "        row = await self._repo.get_by_telegram(user_id)",
+            "        if row is None:",
+            '            return "الملف غير موجود — اضغط /start."',
+            "        return str(row)",
+            "",
+            "    async def list_users(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        rows = await self._repo.list_all() if self._repo else []",
+            '        return "المستخدمون:\\n" + "\\n".join(str(r) for r in rows[:30]) if rows else "لا مستخدمين."',
+            "",
+        ]
+    elif ident in ("notifications",):
+        methods = [
+            "    async def list_for_user(self, user_id: int = 0, args: list | None = None) -> str:",
+            "        rows = await self._repo.list_by_user(user_id) if self._repo else []",
+            '        return "الإشعارات:\\n" + "\\n".join(str(r) for r in rows[:20]) if rows else "لا إشعارات."',
+            "",
+        ]
+    elif ident in ("storage",):
+        methods = [
+            "    async def list_files(self, user_id: int = 0, args: list | None = None) -> str:",
+            '        return "لا ملفات مرفوعة بعد."',
+            "",
+        ]
+
+    return f'''"""Service {name} — {responsibility or name}."""
 from __future__ import annotations
-import logging
-logger = logging.getLogger(__name__)
+from typing import Any
+
 
 class {cls}:
-    def run(self, *args, **kwargs):
-        logger.info("service %s", {_py(name)})
-        return {{"ok": True, "service": {_py(name)}}}
+    def __init__(self, repo: Any = None) -> None:
+        self._repo = repo
+
+{"".join(line + chr(10) for line in methods)}'''
+
+
+def _repository_module(c: ProgramContract) -> str:
+    """In-memory repositories derived from entities — swap for SQL later."""
+    entity_names = [e.name for e in (c.entities or [])]
+    has_order = any("order" in n.lower() for n in entity_names)
+    has_product = any("product" in n.lower() for n in entity_names)
+    has_user = any("user" in n.lower() for n in entity_names)
+    has_notif = any("notification" in n.lower() for n in entity_names)
+
+    lines = [
+        '"""Repositories — contract entities. In-memory default; DATABASE_URL ready."""',
+        "from __future__ import annotations",
+        "import uuid",
+        "from typing import Any",
+        "from app import models",
+        "",
+        "",
+        "class InMemoryStore:",
+        "    def __init__(self) -> None:",
+        "        self._data: dict[str, list[Any]] = {}",
+        "",
+        "    def bucket(self, name: str) -> list[Any]:",
+        '        return self._data.setdefault(name, [])',
+        "",
+        "",
+        "_STORE = InMemoryStore()",
+        "",
+    ]
+    if has_order or True:
+        lines += [
+            "class OrderRepository:",
+            "    async def list_by_user(self, user_id: int) -> list[Any]:",
+            '        return [x for x in _STORE.bucket("orders") if getattr(x, "user_id", None) == user_id]',
+            "",
+            "    async def get(self, oid: str) -> Any | None:",
+            '        for x in _STORE.bucket("orders"):',
+            '            if getattr(x, "id", None) == oid:',
+            "                return x",
+            "        return None",
+            "",
+            "    async def create(self, user_id: int, items: list | None = None) -> str:",
+            "        oid = uuid.uuid4().hex[:12]",
+            "        obj = models.Order(",
+            "            id=oid, user_id=user_id, items=list(items or []),",
+            '            total=0, status="pending", created_at="",',
+            "        ) if hasattr(models, 'Order') else {\"id\": oid, \"user_id\": user_id, \"status\": \"pending\"}",
+            '        _STORE.bucket("orders").append(obj)',
+            "        return oid",
+            "",
+            "    async def count(self) -> int:",
+            '        return len(_STORE.bucket("orders"))',
+            "",
+            "",
+        ]
+    if has_product or True:
+        lines += [
+            "class ProductRepository:",
+            "    async def list_all(self) -> list[Any]:",
+            '        return list(_STORE.bucket("products"))',
+            "",
+            "    async def search(self, q: str) -> list[Any]:",
+            "        ql = q.lower()",
+            '        return [x for x in _STORE.bucket("products") if ql in str(x).lower()]',
+            "",
+            "",
+        ]
+    if has_user or True:
+        lines += [
+            "class UserRepository:",
+            "    async def ensure(self, telegram_id: int, username: str | None, full_name: str) -> None:",
+            '        for x in _STORE.bucket("users"):',
+            '            if getattr(x, "telegram_id", None) == telegram_id:',
+            "                return",
+            "        if hasattr(models, 'User'):",
+            "            obj = models.User(",
+            "                id=telegram_id, telegram_id=telegram_id,",
+            "                username=username, full_name=full_name or '',",
+            '                language="ar", is_admin=False, created_at="",',
+            "            )",
+            "        else:",
+            '            obj = {"telegram_id": telegram_id, "full_name": full_name}',
+            '        _STORE.bucket("users").append(obj)',
+            "",
+            "    async def get_by_telegram(self, telegram_id: int) -> Any | None:",
+            '        for x in _STORE.bucket("users"):',
+            '            if getattr(x, "telegram_id", None) == telegram_id:',
+            "                return x",
+            "        return None",
+            "",
+            "    async def list_all(self) -> list[Any]:",
+            '        return list(_STORE.bucket("users"))',
+            "",
+            "",
+        ]
+    if has_notif:
+        lines += [
+            "class NotificationRepository:",
+            "    async def list_by_user(self, user_id: int) -> list[Any]:",
+            '        return [x for x in _STORE.bucket("notifications") if getattr(x, "user_id", None) == user_id]',
+            "",
+            "",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _container_module(c: ProgramContract, services: list) -> str:
+    """Simple DI container wiring services ↔ repositories."""
+    svc_names = [_ident(s.name) for s in services]
+    lines = [
+        '"""Dependency injection container — wiring from ProgramContract."""',
+        "from __future__ import annotations",
+        "from functools import lru_cache",
+        "from app import repositories as repos",
+        "",
+    ]
+    for s in services:
+        ident = _ident(s.name)
+        cls = "".join(p.capitalize() for p in ident.split("_")) + "Service"
+        lines.append(f"from app.services.{ident} import {cls}")
+    lines += ["", "", "class Container:", "    def __init__(self) -> None:"]
+    # repos
+    lines.append("        self._orders_repo = repos.OrderRepository()")
+    lines.append("        self._products_repo = repos.ProductRepository()")
+    lines.append("        self._users_repo = repos.UserRepository()")
+    if any("notification" in e.name.lower() for e in (c.entities or [])):
+        lines.append("        self._notif_repo = repos.NotificationRepository()")
+    for s in services:
+        ident = _ident(s.name)
+        cls = "".join(p.capitalize() for p in ident.split("_")) + "Service"
+        if ident in ("orders", "core"):
+            lines.append(f"        self.{ident} = {cls}(repo=self._orders_repo)")
+        elif ident == "catalog":
+            lines.append(f"        self.{ident} = {cls}(repo=self._products_repo)")
+        elif ident == "users":
+            lines.append(f"        self.{ident} = {cls}(repo=self._users_repo)")
+        elif ident == "notifications":
+            lines.append(f"        self.{ident} = {cls}(repo=getattr(self, '_notif_repo', None))")
+        else:
+            lines.append(f"        self.{ident} = {cls}()")
+    # aliases for handlers
+    if "orders" not in svc_names:
+        lines.append("        from app.services.orders import OrdersService")
+        # may not exist - only if we always add orders service in enrichment
+        pass
+    lines += [
+        "",
+        "",
+        "@lru_cache",
+        "def get_container() -> Container:",
+        "    return Container()",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _middleware_module() -> str:
+    return '''"""Middlewares — logging / access hooks."""
+from __future__ import annotations
+import logging
+from telegram import Update
+from telegram.ext import ContextTypes
+
+logger = logging.getLogger(__name__)
+
+
+async def log_updates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user is None:
+        logger.info("update user=<anonymous>")
+        return
+    logger.info("update user=%s", user.id)
 '''
 
 
-def _main(c: ProgramContract) -> str:
-    extra = [x for x in c.commands if x.name not in ("start", "help")]
+def _filters_module() -> str:
+    return '''"""Custom filters placeholder — extend per contract."""
+from __future__ import annotations
+from telegram.ext import filters
+
+# Re-export common filters for handlers
+TEXT = filters.TEXT
+COMMAND = filters.COMMAND
+'''
+
+
+def _utils_module() -> str:
+    return '''"""Utilities."""
+from __future__ import annotations
+
+
+def clamp_text(text: str, limit: int = 3500) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+'''
+
+
+def _main(c: ProgramContract, commands=None) -> str:
+    from .enrichment import effective_commands
+
+    cmds = commands if commands is not None else effective_commands(c)
+    extra = [x for x in cmds if x.name not in ("start", "help")]
     imports = [
         "from app.handlers.start import start_handler, help_handler",
         "from app.handlers.callbacks import callback_handler",
@@ -320,14 +658,14 @@ def _main(c: ProgramContract) -> str:
         "    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))",
     ]
     bot_cmds_lines = []
-    for x in c.commands:
+    for x in cmds:
         bot_cmds_lines.append(
             f"        BotCommand({_py(x.name)}, {_py((x.description or x.name)[:50])}),"
         )
     bot_cmds_block = "\n".join(bot_cmds_lines) if bot_cmds_lines else '        BotCommand("start", "start"),'
     log = _ident(c.bot_name) or "bot"
     return (
-        f'"""\n{c.bot_name} — assembled from ProgramContract (codegen blind to user text).\n"""\n'
+        f'"""\n{c.bot_name} — assembled from ProgramContract (enriched tags/entities).\n"""\n'
         "from __future__ import annotations\n"
         "import logging\n"
         "import sys\n"
@@ -452,14 +790,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 class CodegenService:
-    """Microservice: ProgramContract → files. Blind to user text."""
+    """Microservice: ProgramContract → files. Blind to raw NL; uses full contract."""
 
     def run(self, contract: ProgramContract, output_dir: str | Path) -> tuple[Path, dict]:
+        from .enrichment import (
+            effective_buttons,
+            effective_commands,
+            effective_services,
+        )
+
         root = Path(output_dir).resolve()
         root.mkdir(parents=True, exist_ok=True)
         app = root / "app"
         handlers = app / "handlers"
-        services = app / "services"
+        services_dir = app / "services"
+
+        cmds = effective_commands(contract)
+        btns = effective_buttons(contract)
+        svcs = effective_services(contract)
 
         _write(root / "requirements.txt", _requirements(contract))
         _write(root / ".env.example", _env(contract))
@@ -471,18 +819,23 @@ class CodegenService:
         )
         _write(app / "__init__.py", '"""app"""\n')
         _write(handlers / "__init__.py", '"""handlers"""\n')
-        _write(services / "__init__.py", '"""services"""\n')
+        _write(services_dir / "__init__.py", '"""services"""\n')
         _write(app / "config.py", _config(contract))
         _write(app / "models.py", _models(contract))
-        _write(app / "main.py", _main(contract))
-        _write(handlers / "start.py", _start(contract))
+        _write(app / "repositories.py", _repository_module(contract))
+        _write(app / "container.py", _container_module(contract, svcs))
+        _write(app / "middlewares.py", _middleware_module())
+        _write(app / "filters.py", _filters_module())
+        _write(app / "utils.py", _utils_module())
+        _write(app / "main.py", _main(contract, commands=cmds))
+        _write(handlers / "start.py", _start(contract, commands=cmds, buttons=btns))
         _write(handlers / "callbacks.py", _callbacks(contract))
         _write(handlers / "messages.py", _messages(contract))
         if contract.conversation_states:
             _write(app / "states.py", _states_module(contract))
 
         entity_names = [e.name for e in contract.entities]
-        for cmd in contract.commands:
+        for cmd in cmds:
             if cmd.name in ("start", "help"):
                 continue
             ident = _ident(cmd.name)
@@ -491,8 +844,11 @@ class CodegenService:
                 _cmd_handler(cmd.name, cmd.description, cmd.admin_only, entity_names),
             )
 
-        for svc in contract.services:
-            _write(services / f"{_ident(svc.name)}.py", _service(svc.name))
+        for svc in svcs:
+            _write(
+                services_dir / f"{_ident(svc.name)}.py",
+                _service(svc.name, svc.responsibility),
+            )
 
         verify = verify_generated_project(root)
         return root, verify
