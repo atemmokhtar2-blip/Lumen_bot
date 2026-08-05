@@ -66,7 +66,7 @@ def primary_entity_fields(c: "ProgramContract") -> list[str]:
         primary = c.entities[0]
     if primary is None:
         return []
-    skip = {"id", "created_at", "updated_at", "telegram_id"}
+    skip = {"id", "created_at", "updated_at", "telegram_id", "user_id"}
     names: list[str] = []
     for f in primary.fields or []:
         n = (f.name or "").strip()
