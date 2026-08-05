@@ -828,6 +828,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
             return
 
+        meta0 = getattr(result, "metadata", None) or {}
+        if meta0.get("needs_clarification"):
+            qs = meta0.get("clarification_questions") or []
+            lines = [
+                "📌 محتاج تفاصيل أوضح عشان أترجم طلبك لمواصفة دقيقة.",
+                "",
+            ]
+            if qs:
+                for i, q in enumerate(qs, 1):
+                    lines.append(f"{i}) {q}")
+            else:
+                lines.append("اكتب وظائف البوت بجمل قصيرة (تسجيل، تتبع، طلبات…).")
+            lines.append("")
+            lines.append("💬 جاوب بجملة عادية — المترجم يحوّلها والمحرك يبني الكود.")
+            context.user_data["pending_spec"] = {
+                "original": request,
+                "extra": "",
+                "round": 1,
+                "step": "purpose",
+            }
+            await status_msg.edit_text("\n".join(lines))
+            return
+
         success = getattr(result, "success", False)
         project_path = getattr(result, "project_path", None)
         errors = getattr(result, "errors", []) or []

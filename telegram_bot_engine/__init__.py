@@ -1,13 +1,17 @@
 """
 Telegram Bot Generation Engine
 
-Active path (Formal Logic & DSL Engine ONLY — zero LLM):
-  text → Custom DSL → Inference → Micro-Transpiler → Formal Verification
+Active path:
+  user text
+    → [SpecTranslator AI: translate only → JSON]
+    → [Grounding against original text]
+    → Formal DSL → Inference → Flow Composer → Transpile → Verify
 
 HARD RULES:
-  - No LLM / g4f / Understanding-AI on the generation path.
-  - No fixed domain templates or canned command packs.
-  - Commands, buttons, entities, rules come ONLY from user text.
+  - AI may ONLY translate speech → structured spec (no code generation).
+  - Grounding drops anything not evidenced in the user text.
+  - Formal engine is the ONLY code generator.
+  - No domain templates / canned packs.
   - Structural minima only: /start and /help.
 """
 
@@ -38,8 +42,8 @@ def generate_bot(request: str, work_dir=None):
     """
     Entry point used by the Telegram interface.
 
-    Uses the Formal DSL pipeline exclusively.
-    NO LLM. NO Understanding-AI. NO domain templates.
+    AI SpecTranslator (optional): speech → structured spec only.
+    Formal engine: only code generator. No domain templates.
     """
     from pathlib import Path
     import tempfile
@@ -48,7 +52,8 @@ def generate_bot(request: str, work_dir=None):
     from .core.result import GenerationResult, StageResult
 
     t0 = time.perf_counter()
-    request = (request or "").strip()
+    original_request = (request or "").strip()
+    request = original_request
     if not request:
         return GenerationResult(
             success=False,
@@ -70,15 +75,75 @@ def generate_bot(request: str, work_dir=None):
 
     stages: list = []
     errors: list = []
+    translator_meta = None
+    formal_text = request
+    grounding_src = original_request
 
     try:
+        # ── SpecTranslator: AI translates only (never generates code) ──
+        try:
+            from .chat_ai.spec_translator import prepare_formal_text
+            formal_text, tr = prepare_formal_text(original_request)
+            translator_meta = tr.to_dict()
+            if tr.ok:
+                stages.append(
+                    StageResult.ok(
+                        "spec_translator",
+                        outputs=tr.to_dict(),
+                        warnings=[
+                            f"dropped:{k}:{v}"
+                            for k, v in (tr.dropped or {}).items()
+                            if v
+                        ][:8],
+                    )
+                )
+                if tr.needs_clarification and not (tr.grounded_json or {}).get("commands"):
+                    elapsed = time.perf_counter() - t0
+                    return GenerationResult(
+                        success=False,
+                        project_path=None,
+                        stages=stages,
+                        validation_reports=[],
+                        errors=["needs_clarification"],
+                        metadata={
+                            "engine": "spec_translator",
+                            "needs_clarification": True,
+                            "clarification_questions": list(tr.clarification_questions or []),
+                            "spec_translator": translator_meta,
+                            "elapsed_ms": round(elapsed * 1000, 1),
+                        },
+                    )
+                # Use grounded sectioned text for formal path; ground against original words
+                if tr.structured_text.strip():
+                    formal_text = tr.structured_text
+                    grounding_src = original_request + "\n" + tr.structured_text
+            else:
+                stages.append(
+                    StageResult.ok(
+                        "spec_translator",
+                        outputs=tr.to_dict(),
+                        warnings=[tr.error or "fallback_raw_text"],
+                    )
+                )
+                formal_text = original_request
+                grounding_src = original_request
+        except Exception as tr_exc:
+            stages.append(
+                StageResult.ok(
+                    "spec_translator",
+                    outputs={"ok": False, "error": f"{type(tr_exc).__name__}:{tr_exc}"},
+                    warnings=["translator_exception_fallback"],
+                )
+            )
+            formal_text = original_request
+            grounding_src = original_request
+
         from .formal_engine.pipeline_formal import build_from_text
 
-        # Formal path only — raw user text, no AI enrichment
         build = build_from_text(
-            request,
+            formal_text,
             project_dir,
-            grounding_text=request,
+            grounding_text=grounding_src,
         )
 
         stages.append(
@@ -89,7 +154,7 @@ def generate_bot(request: str, work_dir=None):
                     "dsl_operations": build.dsl_operations,
                     "dsl_rules": build.dsl_rules,
                     "engine_path": "dsl_formal",
-                    "ai_enriched": False,
+                    "translator_used": bool(translator_meta and translator_meta.get("ok")),
                 },
             )
         )
@@ -175,7 +240,7 @@ def generate_bot(request: str, work_dir=None):
         cmd_names: list[str] = []
         try:
             from .formal_engine.dsl.extractor import extract_dsl
-            prog = extract_dsl(request)
+            prog = extract_dsl(formal_text)
             cmd_names = [c.name for c in prog.commands]
         except Exception:
             pass
@@ -212,7 +277,7 @@ def generate_bot(request: str, work_dir=None):
                     if getattr(build, "grounding", None) is not None
                     else None
                 ),
-                "understanding_ai": None,
+                "spec_translator": translator_meta,
             },
         )
 
