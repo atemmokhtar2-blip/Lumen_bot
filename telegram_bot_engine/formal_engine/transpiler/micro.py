@@ -426,7 +426,27 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     action_names = [_ident(a) for a in (inf.actions or [])]
 
     def store_for_cmd(cmd: str) -> str | None:
-        c = cmd.lower()
+        c = cmd.lower().replace("-", "_")
+        soft: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
+            (("enroll", "my_course", "my_courses", "progress", "score", "quiz"), ("enrollment", "enrolment", "registration")),
+            (("register", "student", "ban", "user"), ("student", "user", "member")),
+            (("order", "cart"), ("order", "purchase")),
+            (("ticket", "complaint"), ("ticket", "issue")),
+            (("product", "item", "catalog"), ("product", "item")),
+            (("book", "appoint"), ("booking", "reservation", "appointment")),
+            # bare course list last so my_courses does not win as course
+            (("courses", "course_list", "catalog"), ("course", "class", "subject")),
+        ]
+        for triggers, stems in soft:
+            if any(t in c for t in triggers):
+                for sn in schema_names:
+                    if any(st in sn for st in stems):
+                        return sn
+        # exact-ish course command
+        if c in ("course", "courses") or c.endswith("_courses"):
+            for sn in schema_names:
+                if "course" in sn and "enroll" not in sn:
+                    return sn
         for sn in schema_names:
             if sn in c or c in sn or c.rstrip("s") == sn or sn.rstrip("s") == c:
                 return sn
@@ -438,6 +458,20 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             if c in an or an.endswith(c) or c in an.replace("manage", ""):
                 return an
         return action_names[0] if action_names else None
+
+    def cmd_kind(cmd: str) -> str:
+        c = cmd.lower()
+        if c in ("stats", "statistics", "dashboard") or c.endswith("_stats"):
+            return "stats"
+        if c.startswith("my_") or c in ("progress", "score", "history"):
+            return "mine"
+        if c in ("courses", "catalog") or any(x in c for x in ("list", "products", "items", "tickets", "orders")):
+            return "list"
+        if any(x in c for x in ("ban", "delete", "remove", "cancel", "drop")):
+            return "mutate"
+        if any(x in c for x in ("broadcast", "notify")):
+            return "broadcast"
+        return "generic"
 
     lines: list[str] = [
         '"""Handlers from inferred commands/buttons/steps only."""',
@@ -500,7 +534,11 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("")
     lines.append("")
 
-    # start
+    # start — welcome + short command map
+    start_bits = ["مرحباً بك 👋"]
+    for c in commands[:12]:
+        start_bits.append(f"/{c.name} — {c.description or c.name}")
+    start_msg = "\n".join(start_bits)
     lines.append("async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    message = update.effective_message")
     lines.append("    if message is None:")
@@ -510,10 +548,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append(f"    context.user_data[\"state\"] = {_py(first_step)}")
     if buttons:
         lines.append("    kb = main_keyboard()")
-        start_msg = step_labels.get(first_step or "", "start") if first_step else "start"
         lines.append(f"    await message.reply_text({_py(start_msg)}, reply_markup=kb)")
     else:
-        start_msg = step_labels.get(first_step or "", "start") if first_step else "start"
         lines.append(f"    await message.reply_text({_py(start_msg)})")
     lines.append("")
     lines.append("")
@@ -568,80 +604,94 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append(f"    store = getattr(container, {_py(store)}, None)")
         else:
             lines.append("    store = getattr(container, \"primary_store\", None)")
-        # Dynamic command → rule context from command name (no domain packs)
-        lines.append("    payload: dict = {\"user_id\": uid}")
+        cn = cmd.name.lower()
+        kind = cmd_kind(cmd.name)
+        lines.append("    payload: dict = {\"user_id\": uid, \"intent\": %s}" % _py(cn))
         lines.append("    if args:")
         lines.append("        payload[\"args\"] = args")
         lines.append("        payload[\"text\"] = \" \".join(args)")
-        cn = cmd.name.lower()
-        # derive intent token from command stem dynamically
-        intent_token = cn
-        for prefix in ("create_", "add_", "register_", "my_", "set_"):
-            if cn.startswith(prefix):
-                intent_token = cn[len(prefix):] or cn
-                break
-        # verb intents from command name
-        verb_map = [
-            (("cancel", "drop", "delete", "remove"), "cancel"),
-            (("accept",), "accept"),
-            (("reject",), "reject"),
-            (("deliver",), "deliver"),
-            (("assign",), "assign"),
-            (("start_trip", "starttrip"), "start"),
-            (("pay", "invoice", "fee", "bill"), "pay"),
-            (("book", "appointment", "حجز"), "book"),
-            (("create", "add", "register", "enroll", "order"), "create"),
-            (("borrow",), "borrow"),
-            (("complaint",), "complaint"),
-            (("review", "rate", "feedback"), "review"),
-            (("checkin", "check_in"), "checkin"),
-            (("checkout", "check_out"), "checkout"),
-        ]
-        resolved = None
-        for stems, intent in verb_map:
-            if any(s in cn for s in stems):
-                resolved = intent
-                break
-        if resolved:
-            lines.append(f"    payload[\"intent\"] = {_py(resolved)}")
-            if resolved == "cancel":
-                # dynamic status expectation from common flows
-                lines.append("    payload.setdefault(\"status\", \"pending\")")
-                lines.append("    if \"book\" in \"" + cn + "\" or \"appoint\" in \"" + cn + "\":")
-                lines.append("        payload[\"status\"] = \"booked\"")
-            elif resolved in ("accept", "reject"):
-                lines.append("    payload.setdefault(\"status\", \"pending\")")
-            elif resolved == "assign":
-                lines.append("    payload[\"available\"] = True")
-                lines.append("    payload[\"before\"] = \"التعيين\"")
-            elif resolved == "book":
-                lines.append("    payload[\"available\"] = True")
-                lines.append("    payload[\"before\"] = \"الحجز\"")
-            elif resolved == "pay":
-                lines.append("    payload[\"paid\"] = True")
-            elif resolved == "create" and "shipment" in cn:
-                lines.append("    payload[\"intent\"] = \"create\"")
-        elif cmd.name in wizard_by_cmd:
-            lines.append(f"    payload[\"intent\"] = {_py(cmd.name)}")
-        # run rules then action
-        # run rules then action
-        # run rules then action
-        # run rules then action
+        # intent soft mapping for rule engine
+        if any(x in cn for x in ("pay", "invoice")):
+            lines.append("    payload[\"paid\"] = True")
+            lines.append("    payload[\"intent\"] = \"pay\"")
+        elif any(x in cn for x in ("ban", "block")):
+            lines.append("    payload[\"banned\"] = True")
+            lines.append("    payload[\"intent\"] = \"ban\"")
         lines.append("    ruled = logic.apply_rules(payload)")
-        lines.append("    if ruled.get(\"_messages\"):")
-        lines.append("        await message.reply_text(\" | \".join(str(m) for m in ruled[\"_messages\"][:5]))")
-        if action:
-            lines.append(f"    result = await logic.{action}(store=store, user_id=uid, payload=ruled, args=args)")
-            lines.append("    if result and result not in (\"ok\",):")
-            lines.append("        await message.reply_text(str(result))")
+        lines.append("    msgs = list(ruled.get(\"_messages\") or [])")
+        # --- behavioral paths by command kind ---
+        if kind == "list":
+            lines.append("    rows = []")
+            lines.append("    if store is not None and hasattr(store, \"list_all\"):")
+            lines.append("        try:")
+            lines.append("            rows = await store.list_all()")
+            lines.append("        except Exception as exc:")
+            lines.append("            msgs.append(f\"list_error:{exc}\")")
+            lines.append("    if rows:")
+            lines.append("        lines_out = []")
+            lines.append("        for i, row in enumerate(rows[:20], 1):")
+            lines.append("            if isinstance(row, dict):")
+            lines.append("                summary = \" | \".join(f\"{k}={v}\" for k, v in list(row.items())[:6])")
+            lines.append("            else:")
+            lines.append("                summary = str(row)[:120]")
+            lines.append("            lines_out.append(f\"{i}. {summary}\")")
+            lines.append("        await message.reply_text(\"\\n\".join(lines_out))")
+            lines.append("    elif not msgs:")
+            lines.append(f"        await message.reply_text({_py((cmd.description or cmd.name) + ' — لا توجد عناصر بعد')})")
+        elif kind == "mine":
+            lines.append("    rows = []")
+            lines.append("    if store is not None and hasattr(store, \"list_by_user\"):")
+            lines.append("        try:")
+            lines.append("            rows = await store.list_by_user(uid)")
+            lines.append("        except Exception as exc:")
+            lines.append("            msgs.append(f\"mine_error:{exc}\")")
+            lines.append("    if rows:")
+            lines.append("        lines_out = []")
+            lines.append("        for i, row in enumerate(rows[:20], 1):")
+            lines.append("            if isinstance(row, dict):")
+            lines.append("                summary = \" | \".join(f\"{k}={v}\" for k, v in list(row.items())[:6])")
+            lines.append("            else:")
+            lines.append("                summary = str(row)[:120]")
+            lines.append("            lines_out.append(f\"{i}. {summary}\")")
+            lines.append("        await message.reply_text(\"\\n\".join(lines_out))")
+            lines.append("    elif not msgs:")
+            lines.append(f"        await message.reply_text({_py((cmd.description or 'لا توجد بيانات خاصة بك بعد'))})")
+        elif kind == "stats":
+            lines.append("    count = 0")
+            lines.append("    if store is not None and hasattr(store, \"list_all\"):")
+            lines.append("        try:")
+            lines.append("            count = len(await store.list_all())")
+            lines.append("        except Exception:")
+            lines.append("            count = 0")
+            lines.append("    await message.reply_text(f\"إحصائيات: {count} سجل\")")
+        elif kind == "mutate":
+            lines.append("    target = args[0] if args else None")
+            lines.append("    if target and store is not None and hasattr(store, \"update_status\"):")
+            lines.append("        try:")
+            lines.append("            ok = await store.update_status(str(target), \"banned\" if \"ban\" in %s else \"updated\")" % _py(cn))
+            lines.append("            msgs.append(\"done\" if ok else \"not_found\")")
+            lines.append("        except Exception as exc:")
+            lines.append("            msgs.append(f\"mutate_error:{exc}\")")
+            lines.append("    if msgs:")
+            lines.append("        await message.reply_text(\" | \".join(str(m) for m in msgs[:5]))")
+            lines.append("    else:")
+            lines.append(f"        await message.reply_text({_py((cmd.description or cmd.name) + ' — أرسل المعرّف كوسيط')})")
+        elif kind == "broadcast":
+            lines.append(f"    await message.reply_text({_py('أرسل نص الرسالة بعد الأمر: /' + cmd.name + ' النص')})")
         else:
-            lines.append(f"    if not ruled.get(\"_messages\"):")
-            lines.append(f"        await message.reply_text({_py(cmd.name)})")
-        # show keyboard when buttons exist
+            # generic: rules + optional action + meaningful fallback
+            lines.append("    if msgs:")
+            lines.append("        await message.reply_text(\" | \".join(str(m) for m in msgs[:5]))")
+            if action:
+                lines.append(f"    result = await logic.{action}(store=store, user_id=uid, payload=ruled, args=args)")
+                lines.append("    if result and result not in (\"ok\",):")
+                lines.append("        await message.reply_text(str(result))")
+            lines.append("    if not msgs:")
+            lines.append(f"        await message.reply_text({_py(cmd.description or cmd.name)})")
         if buttons:
             lines.append("    kb = main_keyboard()")
-            lines.append("    if kb is not None:")
-            lines.append(f"        await message.reply_text({_py(cmd.description or cmd.name)}, reply_markup=kb)")
+            lines.append("    if kb is not None and %s not in (\"list\", \"mine\", \"stats\"):" % _py(kind))
+            lines.append(f"        await message.reply_text({_py('—')}, reply_markup=kb)")
         lines.append("")
         lines.append("")
 
