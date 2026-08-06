@@ -49,25 +49,43 @@ _MODEL_CANDIDATES = (
 
 # ─────────────────────────── system prompts ──────────────────────────────
 
-_EXTRACT_SYSTEM = """You are a Spec Translator for Telegram bots. You output ONLY valid JSON.
+_EXTRACT_SYSTEM = """You are a STRICT Spec Translator for Telegram bots. You output ONLY valid JSON.
 
-ABSOLUTE OUTPUT RULES:
+═══════════════════════════════════════════════════════════════
+ABSOLUTE CONSTRAINTS (NEVER VIOLATE):
+═══════════════════════════════════════════════════════════════
+1. You ONLY understand and translate. You NEVER write any code (no Python, no
+   JavaScript, no SQL, no shell). You output a JSON SPEC only.
+2. The user's text is the ONLY source of truth.
+3. You MUST NOT invent, translate, rename, or "improve" any name the user wrote.
+   - If the user wrote Arabic words like "اسم الكتاب", the field name MUST be
+     a snake_case transliteration of EXACTLY those Arabic words
+     (e.g. "اسم_الكتاب"), NEVER an English translation like "title".
+   - If the user wrote "اسم المؤلف", the field name is "اسم_المؤلف",
+     NEVER "author".
+   - NEVER substitute English translations for the user's own words.
+4. evidence.quote MUST be a VERBATIM (exact character-for-character) substring
+   copied directly from the user's original text. Do NOT paraphrase, do NOT
+   translate, do NOT summarize the quote. Copy the exact span of words.
+5. Do NOT invent features, commands, fields, entities, or buttons the user did
+   not mention or clearly imply.
+6. Extract ALL functions the user mentioned (lists, "and", "فيه X و Y",
+   "زرار X و زرار Y").
+7. Create a button in buttons[] for EVERY command the user mentions as a
+   button ("زرار", "button", "زر"). Each button's target_command must match
+   a command name. If the user says "زرار X", create BOTH a command AND a button.
+
+═══════════════════════════════════════════════════════════════
+OUTPUT RULES:
+═══════════════════════════════════════════════════════════════
 - Reply with a single JSON object. Nothing else.
 - No markdown. No code fences. No ```json. No explanations. No greetings.
 - First character must be { and last character must be }.
 - Use double quotes for all keys and string values (strict JSON).
 
-ROLE:
-- Translate the user's natural language into a structured bot specification.
-- Do NOT write Python or any code.
-- Do NOT invent features the user did not mention or clearly imply.
-- Extract ALL functions the user mentioned (lists, "and", "فيه X و Y", "زرار X وزرار Y").
-- CRITICAL: Create a button in buttons[] for EVERY command the user mentions as a
-  button ("زرار", "button", "زر"). Each button's target_command must match a command name.
-- If the user mentions "زرار X" (button X), create BOTH a command AND a button for it.
-- The user is the ONLY source of truth — never add commands/buttons they didn't ask for.
-
+═══════════════════════════════════════════════════════════════
 SCHEMA (output exactly this shape):
+═══════════════════════════════════════════════════════════════
 {
   "bot_name": "",
   "bot_kind": "custom",
@@ -75,17 +93,17 @@ SCHEMA (output exactly this shape):
   "language": "ar",
   "commands": [
     {
-      "name": "register",
-      "description": "تسجيل",
+      "name": "add_book",
+      "description": "اضافة كتاب",
       "admin_only": false,
-      "evidence": {"quote": "تسجيل", "confidence": 0.9}
+      "evidence": {"quote": "اضافة كتاب", "confidence": 0.9}
     }
   ],
   "buttons": [
-    {"label": "تسجيل", "callback_id": "register", "target_command": "register", "evidence": {"quote": "تسجيل"}}
+    {"label": "اضافة كتاب", "callback_id": "add_book", "target_command": "add_book", "evidence": {"quote": "اضافة كتاب"}}
   ],
   "entities": [
-    {"name": "Customer", "fields": [{"name": "name", "field_type": "str"}, {"name": "phone", "field_type": "str"}], "evidence": {"quote": "عملاء"}}
+    {"name": "Book", "fields": [{"name": "اسم_الكتاب", "field_type": "str"}, {"name": "اسم_المؤلف", "field_type": "str"}, {"name": "isbn", "field_type": "str"}], "evidence": {"quote": "اسم الكتاب واسم المؤلف ورقم ISBN"}}
   ],
   "rules": [
     {"condition": "if registered then save", "effect": "save record", "evidence": {"quote": "يحفظ"}}
@@ -95,56 +113,107 @@ SCHEMA (output exactly this shape):
   "clarification_questions": []
 }
 
+═══════════════════════════════════════════════════════════════
 FIELD RULES:
-- commands[].name: lowercase English [a-z0-9_], no slash, never start/help.
-- commands[].description: keep user language when possible.
-- entities[].name: PascalCase English identifier.
-- entities[].fields[].name: lowercase English field id.
+═══════════════════════════════════════════════════════════════
+- commands[].name: a SHORT Latin slug [a-z0-9_] transliterated from the user's
+  words (e.g. "اضافة كتاب" → "add_book"). Never start/help.
+- commands[].description: the user's OWN words (Arabic), verbatim or
+  near-verbatim.
+- entities[].name: a SHORT PascalCase Latin slug (e.g. "Book", "Patient",
+  "Product"). This is a class label, NOT a translation of field content.
+- entities[].fields[].name: ⚠️ CRITICAL. Use a snake_case transliteration of
+  the EXACT Arabic words the user wrote. The user wrote "اسم الكتاب" → field
+  name is "اسم_الكتاب". The user wrote "رقم ISBN" → field name is "isbn"
+  (already Latin). The user wrote "السعر" → field name is "السعر". NEVER
+  translate to English. NEVER invent fields the user did not mention.
 - entities[].fields[].field_type: one of str, int, bool, float, list.
-- evidence.quote: short verbatim phrase from the user text.
-- If the user message is too vague: needs_clarification=true with 1-3 questions in the user's language.
+- evidence.quote: a VERBATIM phrase copied character-for-character from the
+  user text. This is how the system verifies you didn't hallucinate.
+- If the user message is too vague: needs_clarification=true with 1-3
+  questions in the user's language.
 """
 
-_AUDIT_SYSTEM = """You are a fidelity auditor for bot specs.
-Given the original user text and a JSON spec, output ONLY a corrected JSON object (same schema as input).
-- Add commands/entities/fields clearly present in the user text but missing in JSON.
-- CRITICAL: Ensure every "زرار" / "button" / "زر" the user mentioned has BOTH a command
-  AND a button in buttons[] with target_command matching the command name.
-- Remove items with no support in the user text.
-- Improve evidence.quote to short verbatim spans from the user text.
-- No markdown, no prose, no code fences. First char { last char }.
+_AUDIT_SYSTEM = """You are a STRICT fidelity auditor for bot specs.
+
+Given the original user text and a JSON spec, output ONLY a corrected JSON
+object (same schema as input).
+
+═══════════════════════════════════════════════════════════════
+ABSOLUTE RULES:
+═══════════════════════════════════════════════════════════════
+1. You ONLY audit and correct the JSON. You NEVER write any code.
+2. Add commands/entities/fields that are clearly present in the user text but
+   missing in the JSON.
+3. Ensure every "زرار" / "button" / "زر" the user mentioned has BOTH a command
+   AND a button in buttons[] with target_command matching the command name.
+4. Remove items with NO support in the user text.
+5. ⚠️ FIELD NAMES: Verify every entities[].fields[].name is a snake_case
+   transliteration of the EXACT Arabic words the user wrote. If you find an
+   English translation (e.g. "title" instead of "اسم_الكتاب"), FIX IT back to
+   the Arabic transliteration. The user's own words are sacred.
+6. ⚠️ EVIDENCE: Improve every evidence.quote to be a VERBATIM substring copied
+   character-for-character from the user text. No paraphrasing, no translation.
+7. No markdown, no prose, no code fences. First char { last char }.
 """
 
-_INFER_SYSTEM = """You are a deep inference engine for Telegram bot specs.
-Given a JSON spec, enrich EVERY command with its behavioral semantics. Output ONLY JSON (same overall shape, but commands are deeper).
+_INFER_SYSTEM = """You are a STRICT deep inference engine for Telegram bot specs.
+
+You ONLY enrich the JSON with behavioral semantics. You NEVER write any code.
+Given a JSON spec, enrich EVERY command with its behavioral semantics. Output
+ONLY JSON (same overall shape, but commands are deeper).
+
+═══════════════════════════════════════════════════════════════
+ABSOLUTE RULES:
+═══════════════════════════════════════════════════════════════
+1. You NEVER write code. You ONLY add semantic labels to existing JSON.
+2. Do NOT invent new commands or entities — only enrich existing ones.
+3. ⚠️ FIELD NAMES: When building collects_fields and flow_steps[].key, you MUST
+   reuse the EXACT field names already present in entities[].fields[].name.
+   Do NOT translate them to English. If the entity has a field "اسم_الكتاب",
+   then flow_steps[].key MUST be "اسم_الكتاب", NOT "title".
+4. ⚠️ flow_steps[].prompt: write the prompt in the USER's language (Arabic),
+   asking for the field using the user's own words. E.g. for field "اسم_الكتاب"
+   the prompt is "أدخل اسم الكتاب:".
 
 For EACH command add/complete these fields:
-- "kind": one of: start, help, collect, lookup, list, stats, broadcast, action, info, navigate, custom
-    * collect  = gathers several fields from the user (a wizard / form)
-    * lookup   = queries one record by id/key
-    * list     = lists / browses multiple records
-    * stats    = aggregate numbers / dashboard
+- "kind": one of: start, help, collect, lookup, list, stats, broadcast, action,
+  info, navigate, custom
+    * collect  = gathers several fields from the user (a wizard / form). If the
+      user said a button "يدخل" (enters) several pieces of data → kind=collect.
+    * lookup   = queries one record by id/key/name
+    * list     = lists / browses multiple records ("كل الكتب", "عرض المنتجات")
+    * stats    = aggregate numbers / dashboard ("احصائيات", "مبيعاتي")
     * broadcast= admin sends to many users
-    * action   = performs a side-effect (send, notify, toggle, delete)
+    * action   = performs a side-effect (send, notify, toggle, delete, cancel)
     * info     = static informational reply
     * navigate = opens a menu / keyboard
+    * custom   = ONLY use this if the command truly fits none of the above
 - "entity": the entity name this command operates on (empty if none)
-- "collects_fields": list of field keys the command gathers from the user (empty if none)
+- "collects_fields": list of field keys the command gathers from the user
+  (MUST match entity field names exactly). Empty if none.
 - "post_action": one of: store, confirm, notify, compute, none
     * store   = persist collected data into the entity store
     * confirm = echo back the collected data
     * notify  = send a notification
     * compute = run a calculation and reply
-- "reply_text": a short reply message (for info/start/help/action commands)
-- "flow_steps": for collect commands, an ordered list of {"key": field, "prompt": message, "action": "ask"}
+- "reply_text": a short reply message in the USER's language (for
+  info/start/help/action commands)
+- "flow_steps": for collect commands, an ordered list of
+  {"key": <exact field name>, "prompt": <Arabic prompt>, "action": "ask"}.
+  One step per field in collects_fields.
 
-Also ensure every entity has typed fields (field_type: str/int/bool/float).
-Do NOT invent new commands or entities — only enrich existing ones.
+⚠️ CLASSIFICATION IS CRITICAL. If a command's description says the user
+"enters/inputs/fills" multiple fields, it is "collect" — NOT "custom". If the
+description says "show all / list / كل", it is "list". If it says "stats /
+احصائيات", it is "stats". Defaulting everything to "custom" is a FAILURE.
+
 No markdown, no prose. First char { last char }.
 """
 
 _RETRY_SYSTEM = """You previously returned invalid JSON. Output ONLY one corrected JSON object.
-No markdown, no fences, no prose. First char { last char }. Same schema. Fix the errors listed."""
+No markdown, no fences, no prose. First char { last char }. Same schema. Fix the errors listed.
+Remember: NEVER translate Arabic field names to English. NEVER write code. evidence.quote must be verbatim from the user text."""
 
 
 # ─────────────────────────── result type ─────────────────────────────────
@@ -393,15 +462,149 @@ def _evidence_grounded(evidence_quote: str, original_norm: str, original_tokens:
     return False
 
 
+# ── Arabic-aware token matching for field/entity name grounding ──
+
+# Common Arabic-Latin transliteration pairs for when the user wrote Latin words
+# but we need to check if a Latin slug maps back to Arabic words.
+_LATIN_AR_HINTS = {
+    # (latin slug token) : set of arabic words that justify it
+    "isbn": {"isbn", "رقم"},
+    "id": {"id", "معرف", "رقم"},
+    "phone": {"phone", "هاتف", "تليفون", "رقم"},
+    "tel": {"tel", "هاتف", "تليفون"},
+    "email": {"email", "بريد", "ايميل"},
+    "name": {"name", "اسم", "الاسم"},
+    "title": {"title", "اسم", "عنوان"},
+    "author": {"author", "مؤلف", "اسم"},
+    "book": {"book", "كتاب"},
+    "product": {"product", "منتج"},
+    "price": {"price", "سعر", "السعر"},
+    "qty": {"qty", "quantity", "كمية"},
+    "quantity": {"quantity", "qty", "كمية"},
+    "order": {"order", "طلب", "اوردر"},
+    "patient": {"patient", "مريض"},
+    "date": {"date", "تاريخ"},
+    "time": {"time", "وقت", "ساعة"},
+    "customer": {"customer", "عميل", "زبون"},
+    "client": {"client", "عميل", "زبون"},
+    "count": {"count", "عدد"},
+    "total": {"total", "اجمالي", "مجموع"},
+    "city": {"city", "مدينة"},
+    "address": {"address", "عنوان", "العنوان"},
+}
+
+# Arabic field name -> set of arabic words that justify it (for arabic slugs)
+def _arabic_slug_to_words(slug: str) -> set[str]:
+    """Split an arabic snake_case slug into its component words."""
+    if not slug:
+        return set()
+    parts = re.split(r"[_\s]+", slug)
+    out = set()
+    for p in parts:
+        p = p.strip()
+        if p:
+            out.add(p)
+    return out
+
+
+def _name_grounded(
+    name: str,
+    original_norm: str,
+    original_tokens: set[str],
+    *,
+    is_field: bool = False,
+) -> bool:
+    """
+    Decide whether a field name or entity name is traceable to the original
+    user text. This is STRICTER than evidence grounding: it checks the actual
+    data name, not just the evidence quote.
+
+    A name is grounded if:
+      1. It (normalized) appears as a substring of the original — covers Arabic
+         slugs like 'اسم_الكتاب' (after stripping underscores 'اسم الكتاب').
+      2. Its component tokens all appear in the original tokens — covers
+         multi-word Arabic slugs.
+      3. It's a Latin slug and each token maps (via _LATIN_AR_HINTS) to an
+         Arabic word that IS in the original — covers 'isbn', 'phone', etc.
+      4. It's a short Latin slug (≤8 chars) and at least one hint word is in
+         the original.
+      5. It's a pure-Latin entity class label (Book, Patient, Product) and the
+         corresponding Arabic word appears in the original (كتاب, مريض, منتج).
+    """
+    name = (name or "").strip()
+    if not name:
+        return False
+    # Normalize: lowercase, strip arabic diacritics, remove underscores for
+    # substring matching
+    nn = _normalize_text(name).replace("_", " ").strip()
+    nn_compact = nn.replace(" ", "")
+    on_compact = original_norm.replace(" ", "")
+
+    # 1. substring (compact, ignores spaces) — strong evidence
+    if nn and nn in original_norm:
+        return True
+    if nn_compact and len(nn_compact) >= 3 and nn_compact in on_compact:
+        return True
+
+    # 2. all component tokens in original
+    tokens = set(nn.split()) if nn else set()
+    if tokens:
+        # For arabic slugs, require a meaningful overlap
+        overlap = tokens & original_tokens
+        # If every token is in the original → grounded
+        if overlap and len(overlap) >= max(1, (len(tokens) * 3) // 4):
+            return True
+        # If at least half the tokens match → grounded
+        if len(overlap) >= max(1, len(tokens) // 2):
+            return True
+
+    # 3. Latin slug → check hint map
+    is_latin = bool(re.match(r"^[a-z0-9_]+$", name))
+    if is_latin:
+        lat_tokens = [t for t in name.split("_") if t]
+        matched_any = False
+        for lt in lat_tokens:
+            hints = _LATIN_AR_HINTS.get(lt.lower())
+            if hints:
+                if hints & original_tokens:
+                    matched_any = True
+                    break
+        if matched_any:
+            return True
+        # 4. short slug, single hint word present
+        if len(name) <= 12 and lat_tokens:
+            for lt in lat_tokens:
+                hints = _LATIN_AR_HINTS.get(lt.lower())
+                if hints and (hints & original_tokens):
+                    return True
+
+    # 5. entity class label: Book → كتاب, Patient → مريض, Product → منتج
+    if not is_field and is_latin:
+        label_low = name.lower()
+        hints = _LATIN_AR_HINTS.get(label_low)
+        if hints and (hints & original_tokens):
+            return True
+
+    return False
+
+
 def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """
     Drop commands/buttons/entities/rules whose evidence is not traceable to the
     original user text. Returns (grounded_data, dropped_report).
     Never drops /start or /help (structural minima).
+
+    ENHANCED (v2.1): Also validates field names, entity names, and flow_step
+    keys against the original text using _name_grounded(). Hallucinated
+    English-translated field names are dropped. Flow_step keys that don't
+    match any grounded entity field are dropped/reset.
     """
     original_norm = _normalize_text(original)
     original_tokens = _token_set(original)
-    dropped: dict[str, list[str]] = {"commands": [], "buttons": [], "entities": [], "rules": []}
+    dropped: dict[str, list[str]] = {
+        "commands": [], "buttons": [], "entities": [], "rules": [],
+        "fields": [], "flow_steps": [],
+    }
 
     def _ev_quote(ev: Any) -> str:
         if isinstance(ev, dict):
@@ -410,7 +613,7 @@ def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], d
             return ev
         return ""
 
-    # commands
+    # commands: evidence grounding (OR description grounding)
     cmds = data.get("commands") or []
     kept_cmds = []
     for c in cmds:
@@ -421,32 +624,32 @@ def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], d
             kept_cmds.append(c)
             continue
         ev = _ev_quote(c.get("evidence"))
-        if _evidence_grounded(ev, original_norm, original_tokens):
+        desc = c.get("description") or ""
+        if (_evidence_grounded(ev, original_norm, original_tokens)
+                or _evidence_grounded(desc, original_norm, original_tokens)):
             kept_cmds.append(c)
         else:
             dropped["commands"].append(name or "?")
     data["commands"] = kept_cmds
 
-    # buttons
+    # buttons: evidence grounding (OR label grounding)
     btns = data.get("buttons") or []
     kept_btns = []
     for b in btns:
         if not isinstance(b, dict):
             continue
         ev = _ev_quote(b.get("evidence"))
-        if _evidence_grounded(ev, original_norm, original_tokens):
+        label = b.get("label") or ""
+        if (_evidence_grounded(ev, original_norm, original_tokens)
+                or _evidence_grounded(label, original_norm, original_tokens)):
             kept_btns.append(b)
         else:
             dropped["buttons"].append(b.get("label") or b.get("callback_id") or "?")
     data["buttons"] = kept_btns
 
-    # ── Button-completeness safety net ──
-    # If the user mentioned buttons ("زرار"/"button"/"زر") in their text, ensure
-    # every grounded command (except start/help) has a matching button. This is a
-    # data-level fix — NOT a hardcoded template. The commands themselves come 100%
-    # from the AI translator; we only ensure the UI surface is complete.
+    # Button-completeness safety net
     has_buttons_in_text = any(
-        kw in original_norm for kw in ("زرار", "زر ", "زر.", "زرار", "button", "buttons", "زرّار")
+        kw in original_norm for kw in ("زرار", "زر ", "زر.", "زرار", "button", "buttons", "زرّار", "زر")
     )
     if has_buttons_in_text and kept_cmds:
         existing_btn_targets = {
@@ -460,7 +663,6 @@ def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], d
                 continue
             if cname in existing_btn_targets:
                 continue
-            # Auto-create a button for this command using its description as label
             label = c.get("description") or cname
             kept_btns.append({
                 "label": label,
@@ -470,32 +672,116 @@ def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], d
             })
         data["buttons"] = kept_btns
 
-    # entities
+    # entities: evidence grounding + FIELD NAME grounding
     ents = data.get("entities") or []
     kept_ents = []
     for e in ents:
         if not isinstance(e, dict):
             continue
         ev = _ev_quote(e.get("evidence"))
-        if _evidence_grounded(ev, original_norm, original_tokens):
-            kept_ents.append(e)
-        else:
-            dropped["entities"].append(e.get("name") or "?")
+        ent_name = e.get("name") or ""
+        if not (_evidence_grounded(ev, original_norm, original_tokens)
+                or _name_grounded(ent_name, original_norm, original_tokens)):
+            dropped["entities"].append(ent_name or "?")
+            continue
+        # Validate each field name against the original text
+        fields = e.get("fields") or []
+        kept_fields = []
+        for fld in fields:
+            if not isinstance(fld, dict):
+                continue
+            fname = fld.get("name") or ""
+            if not fname:
+                continue
+            if _name_grounded(fname, original_norm, original_tokens, is_field=True):
+                kept_fields.append(fld)
+            else:
+                fev = _ev_quote(fld.get("evidence"))
+                if fev and _evidence_grounded(fev, original_norm, original_tokens):
+                    kept_fields.append(fld)
+                else:
+                    dropped["fields"].append(f"{ent_name}.{fname}")
+        e["fields"] = kept_fields
+        kept_ents.append(e)
     data["entities"] = kept_ents
 
-    # rules
+    # Build a set of all grounded field names (for flow_step validation)
+    grounded_field_names: set[str] = set()
+    for e in kept_ents:
+        for fld in (e.get("fields") or []):
+            if isinstance(fld, dict):
+                fn = (fld.get("name") or "").strip()
+                if fn:
+                    grounded_field_names.add(fn)
+                    grounded_field_names.add(fn.lower())
+
+    # commands (again): validate flow_steps + collects_fields
+    for c in kept_cmds:
+        if not isinstance(c, dict):
+            continue
+        cfields = c.get("collects_fields") or []
+        if cfields:
+            kept_cf = []
+            for cf in cfields:
+                cfn = (cf or "").strip()
+                if not cfn:
+                    continue
+                if (cfn in grounded_field_names
+                        or cfn.lower() in grounded_field_names
+                        or _name_grounded(cfn, original_norm, original_tokens, is_field=True)):
+                    kept_cf.append(cfn)
+                else:
+                    dropped["fields"].append(f"{c.get('name','')}.collects:{cfn}")
+            c["collects_fields"] = kept_cf
+
+        fsteps = c.get("flow_steps") or []
+        if fsteps:
+            kept_fs = []
+            for fs in fsteps:
+                if not isinstance(fs, dict):
+                    continue
+                fkey = (fs.get("key") or "").strip()
+                if not fkey:
+                    continue
+                if (fkey in grounded_field_names
+                        or fkey.lower() in grounded_field_names
+                        or _name_grounded(fkey, original_norm, original_tokens, is_field=True)):
+                    kept_fs.append(fs)
+                else:
+                    dropped["flow_steps"].append(f"{c.get('name','')}.flow:{fkey}")
+            c["flow_steps"] = kept_fs
+
+            # If we dropped all flow_steps but the command is collect, rebuild
+            # them from collects_fields (which are already validated)
+            if not kept_fs and (c.get("kind") == "collect"):
+                cf = c.get("collects_fields") or []
+                rebuilt = []
+                for fk in cf:
+                    rebuilt.append({
+                        "key": fk,
+                        "prompt": f"أدخل {fk}:",
+                        "action": "ask",
+                    })
+                c["flow_steps"] = rebuilt
+
+    data["commands"] = kept_cmds
+
+    # rules: evidence grounding (OR condition grounding)
     rules = data.get("rules") or []
     kept_rules = []
     for r in rules:
         if not isinstance(r, dict):
             continue
         ev = _ev_quote(r.get("evidence"))
-        if _evidence_grounded(ev, original_norm, original_tokens):
+        cond = r.get("condition") or ""
+        if (_evidence_grounded(ev, original_norm, original_tokens)
+                or _evidence_grounded(cond, original_norm, original_tokens)):
             kept_rules.append(r)
         else:
             dropped["rules"].append(r.get("condition") or r.get("name") or "?")
     data["rules"] = kept_rules
 
+    return data, dropped
     return data, dropped
 
 
@@ -589,13 +875,76 @@ def translate_rich_spec(user_text: str, *, timeout: int | None = None) -> Transl
                     payload = json.dumps(data, ensure_ascii=False)[:8000]
                     inferred = _call_for_json(
                         client, model, _INFER_SYSTEM,
-                        f"Enrich this spec JSON. For each command add kind, entity, collects_fields, post_action, reply_text, flow_steps. Ensure entity fields are typed.\n\n{payload}",
+                        (f"Enrich this spec JSON. For each command add kind, entity, "
+                         f"collects_fields, post_action, reply_text, flow_steps. "
+                         f"Ensure entity fields are typed. "
+                         f"CRITICAL: kind must NOT be 'custom' for commands that collect "
+                         f"data (use 'collect'), list records (use 'list'), or show "
+                         f"stats (use 'stats'). flow_steps[].key MUST reuse the exact "
+                         f"field names from entities[].fields[].name.\n\n"
+                         f"Original user text for reference:\n{text[:3000]}\n\n"
+                         f"Spec to enrich:\n{payload}"),
                     )
                     if inferred and inferred.get("commands"):
                         data = inferred
                         passes_done = 3
                 except Exception as inf_e:
                     logger.warning("deep inference skipped: %s", inf_e)
+
+            # ── PASS 3b: CUSTOM re-inference safety net ──
+            # If after inference, commands that clearly collect data are still
+            # 'custom' with no collects_fields, do a targeted re-inference.
+            if _infer_enabled() and (time.perf_counter() - t0) < timeout - 4:
+                cmds_check = data.get("commands") or []
+                needs_reinfer = False
+                for c in cmds_check:
+                    if not isinstance(c, dict):
+                        continue
+                    kind = (c.get("kind") or "").lower()
+                    cf = c.get("collects_fields") or []
+                    desc = (c.get("description") or "").lower()
+                    # Detect collect-like commands mis-classified as custom
+                    collect_hints = any(
+                        kw in desc for kw in (
+                            "بيدخل", "يدخل", "ادخال",
+                            "تسجيل", "اضافة", "جديد",
+                            "enter", "input", "add", "register", "collect",
+                        )
+                    )
+                    if kind == "custom" and not cf and collect_hints:
+                        needs_reinfer = True
+                        break
+                if needs_reinfer:
+                    try:
+                        payload = json.dumps(data, ensure_ascii=False)[:8000]
+                        reinferred = _call_for_json(
+                            client, model, _INFER_SYSTEM,
+                            (f"Some commands were mis-classified as 'custom' but they "
+                             f"clearly collect data from the user (their description "
+                             f"mentions entering/adding/registering). Re-classify them "
+                             f"as 'collect' with proper collects_fields and flow_steps. "
+                             f"Also classify list-like commands as 'list' and stats-like "
+                             f"as 'stats'. flow_steps[].key MUST reuse exact field names "
+                             f"from entities[].fields[].name. NEVER translate Arabic "
+                             f"field names to English.\n\n"
+                             f"Original user text:\n{text[:3000]}\n\n"
+                             f"Spec to fix:\n{payload}"),
+                        )
+                        if reinferred and reinferred.get("commands"):
+                            # Only accept if it improved classification
+                            old_custom = sum(
+                                1 for c in (data.get("commands") or [])
+                                if isinstance(c, dict) and (c.get("kind") or "").lower() == "custom"
+                            )
+                            new_custom = sum(
+                                1 for c in (reinferred.get("commands") or [])
+                                if isinstance(c, dict) and (c.get("kind") or "").lower() == "custom"
+                            )
+                            if new_custom < old_custom:
+                                data = reinferred
+                                passes_done = 3
+                    except Exception as ri_e:
+                        logger.warning("custom re-inference skipped: %s", ri_e)
 
             # ── PASS 4: Evidence grounding ──
             grounded, dropped = _ground_spec(data, text)

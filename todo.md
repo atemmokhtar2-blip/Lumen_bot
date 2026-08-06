@@ -1,58 +1,58 @@
-# Spec-Driven Engine Overhaul — Bug Fix & Chat Intelligence
+# Task 5: Fix AI Hallucination + Real AI Chat Layer
 
-## Phase 1: Diagnose the "buttons/commands not working" bug [x]
-- [x] Generate a real bot from an Arabic spec and inspect the generated handlers
-- [x] Test the generated bot's actual runtime behavior (simulate Telegram updates)
-- [x] Identify exactly where commands break: AI translator output vs transpiler code generation
-- [x] Check if /start, /help, and user-defined commands all produce working handlers
-- [x] Check if inline keyboard buttons (callback_handler) properly dispatch to commands
-- [x] Check if the wizard flow (collect kind) properly saves data to the store
+## Problem (from user)
+- AI translator STILL hallucinates: output doesn't match user's text (English field names instead of Arabic)
+- AI should ONLY understand/translate, NEVER write code — add strict constraints
+- Chat is dumb: treats everything as a bot command. Need a REAL AI chat layer that:
+  - Understands what the user wants (AI-powered, not regex)
+  - Acts as a developer companion
+  - Has iron memory per user
+  - Connected to the engine/translators
+- Many errors in the bot/system
 
-**DIAGNOSIS**: Bug is in the Code Generation Engine (محرك التوليد), specifically `spec_transpiler.py`:
-- Container defines stores as `self.order_store = OrderStore()` (snake_case)
-- Handlers tried `getattr(container, 'OrderStore', None)` (PascalCase) → returned None
-- All data operations (lookup, list, stats, wizard save) silently failed
-- Button dispatch logic was correct (BUTTON_TO_CMD maps callback_ids correctly)
+## Plan
 
-## Phase 2: Fix the broken commands/buttons [x]
-- [x] Fix the store attribute resolution (container.order_store vs container.OrderStore)
-- [x] Fix the flow completion store resolution (broken .replace('store', 'Store') logic)
-- [x] Verify callback_handler button dispatch works (tested — all buttons dispatch correctly)
-- [x] Verify wizard flow collects and stores data correctly (tested — data saved to store)
-- [x] Ensure every command in the spec generates a fully functional handler
-- [x] Full runtime simulation: 16/17 tests pass (1 false negative in test assertion, handler works)
+### Phase 1: Strict AI Constraints + Anti-Hallucination [x]
+- [x] Rewrite `_EXTRACT_SYSTEM` prompt: strict "understand only, never code" + require field names/entity names use user's own words
+- [x] Rewrite `_INFER_SYSTEM` prompt: require flow_step keys grounded in original text
+- [x] Add `_name_grounded()` post-grounding check: validate field names + entity names against original text (not just evidence)
+- [x] Fix deep inference: re-infer commands that come back as CUSTOM with no fields
+- [x] Require evidence quotes to be VERBATIM spans from original text
+- [x] TESTED: fields now Arabic (اسم_الكتاب not title), kinds correct (collect/list/stats not custom)
 
-## Phase 3: Strengthen the AI translator (no constants, all from user) [x]
-- [x] Ensure SpecTranslator v2 extracts ALL commands/buttons from user text (tested with Arabic spec — 8 commands, 6 buttons extracted)
-- [x] Ensure no hardcoded command lists leak into the generated bot (v2 has no _SYN dictionary, grounding uses evidence+similarity)
-- [x] Ensure evidence grounding doesn't drop legitimate user commands (dropped: 0 commands, 0 buttons in test)
-- [x] Add button-completeness safety net (auto-create button for each command if user mentioned "زرار")
-- [x] Fix SQL reserved word bug (column names now quoted in CREATE TABLE and INSERT)
-- [x] Fix admin_only handler crash when settings not loaded (try/except fallback)
-- [x] Increase default translator timeout 30s → 90s (4-pass pipeline needs more time)
-- [x] Strengthen extraction & audit prompts (emphasize button per feature)
-- [x] Test with a real Arabic spec through the full v2 translator (6/6 buttons work end-to-end)
+### Phase 2: Real AI Chat Layer [x]
+- [x] Replaced `_emit_brain_module` with g4f-powered AI chat (not regex)
+- [x] Chat uses g4f to understand user messages with context + memory
+- [x] Iron memory: UserMemory class (messages up to 80, actions up to 50, profile)
+- [x] Developer companion persona: Arabic system prompt, knows bot spec
+- [x] Connected to engine: BOT_SELF baked from spec (commands/entities/buttons)
+- [x] Spec-aware fallback (_fallback_reply) when g4f unavailable
+- [x] Syntax verified: transpiler parses OK, handlers call brain.smart_reply
 
-## Phase 4: Add chat intelligence — context memory [x]
-- [x] Add a conversation context/memory layer to the generated bot (brain.py with ConversationMemory)
-- [x] Bot remembers what the user said across the session (per-user memory store)
-- [x] Bot can answer questions about the app it's developing (BOT_SELF baked from spec)
-- [x] Bot uses context to provide smarter responses (intent detection + smart_reply)
-- [x] Bot doesn't forget — knows what the user is developing (remember_action on every command)
-- [x] Verify brain tests pass (10/10 brain tests + handler integration test pass)
+### Phase 3: Fix System Errors [x]
+- [x] Fixed: _ar_ident() transliterates Arabic→Latin for valid Python identifiers
+- [x] Fixed: flow_step keys now meaningful (asm_alktab not 'x')
+- [x] Fixed: model dataclass fields now meaningful (asm_alktab, asm_almlf, rqm_isbn)
+- [x] Fixed: store columns now match model fields (consistent data flow)
+- [x] Fixed: container store attributes use _ar_ident for entity names
+- [x] Fixed: _emit_brain_module was missing return statement (returned None)
+- [x] Verified: store create+get+list_all+list_by_user all work with Arabic data
+- [x] Verified: brain BOT_SELF has correct Arabic entity fields for AI context
+- [x] Verified: iron memory (messages, actions, summary, context, history) works
+- [x] Verified: spec-aware fallback reply works (greeting, help, who-are-you)
 
-## Phase 5: Test & verify the fixes [x]
-- [x] Write a runtime handler simulation test (17/17 tests pass — all commands + buttons + wizard)
-- [x] Verify all commands work: start, help, collect, lookup, list, stats, broadcast, action, info
-- [x] Verify inline keyboard buttons dispatch correctly (all buttons dispatch to correct handlers)
-- [x] Verify wizard flow collects and stores data correctly (data saved to store, all fields captured)
-- [x] Verify chat context memory works (brain tests pass, integration test passes)
-- [x] py_compile all generated bots (all 9 files compile cleanly)
-- [x] Full end-to-end test: Arabic text → v2 translator → transpile → 6/6 buttons work runtime
-- [x] SQL reserved word fix verified (field 'order' works correctly)
-- [x] Admin-only handler resilience verified (no crash when settings not loaded)
+### Phase 4: Test & Verify [x]
+- [x] Hallucination test (library bot): field/entity names grounded in original text, dropped={}
+- [x] Hallucination test (restaurant bot): all Arabic field names grounded, dropped={}
+- [x] Command classification: COLLECT/LIST/STATS/LOOKUP/INFO (not all CUSTOM)
+- [x] E2E test 1 (library): 12 files generated, verification ok=True
+- [x] E2E test 2 (restaurant): 12 files generated, verification ok=True
+- [x] Runtime test: store create+get+list works with Arabic data
+- [x] Runtime test: brain iron memory + spec-aware fallback works
+- [x] Runtime test: model dataclass with transliterated fields works
+- [x] No meaningless 'x' field names in any generated bot
+- [x] Enum sanitization: invalid post_action='action' mapped to 'none'
 
-## Phase 6: Push to repo [x]
-- [x] Commit all changes (4 files: spec_transpiler.py, spec_translator_v2.py, todo.md, .gitignore)
-- [x] Push to branch feat/spec-driven-engine-overhaul (pushed successfully)
-- [x] Update Pull Request (PR #2 updated with detailed comment summarizing all fixes)
+### Phase 5: Push to Repo [ ]
+- [ ] Commit all changes
+- [ ] Push to PR #2 branch

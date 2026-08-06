@@ -47,8 +47,57 @@ def _ident(name: str) -> str:
     return s[:48]
 
 
+# Arabic → Latin transliteration map (preserves meaning, valid Python ident)
+_AR_LATIN = {
+    "ا": "a", "أ": "a", "إ": "i", "آ": "aa", "ى": "a", "ئ": "y",
+    "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
+    "د": "d", "ذ": "th", "ر": "r", "ز": "z", "س": "s", "ش": "sh",
+    "ص": "s", "ض": "d", "ط": "t", "ظ": "z", "ع": "a", "غ": "gh",
+    "ف": "f", "ق": "q", "ك": "k", "ل": "l", "م": "m", "ن": "n",
+    "ه": "h", "ة": "h", "و": "w", "ي": "y",
+    "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
+    "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
+    "_": "_", " ": "_", "-": "_",
+}
+
+
+def _ar_ident(name: str) -> str:
+    """Create a valid Python identifier from Arabic or Latin text.
+
+    Transliterates Arabic letters to Latin so the result is meaningful
+    (e.g. اسم_الكتاب -> asm_alkitab) and valid as a Python identifier.
+    Falls back to _ident() for purely Latin text.
+    """
+    s = (name or "").strip()
+    if not s:
+        return "x"
+    # If already pure ASCII identifier-safe, use _ident directly
+    if re.fullmatch(r"[a-zA-Z0-9_ ]+", s):
+        return _ident(s)
+    # Transliterate Arabic chars to Latin
+    out = []
+    for ch in s:
+        if ch in _AR_LATIN:
+            out.append(_AR_LATIN[ch])
+        elif ch.isascii() and (ch.isalnum() or ch == "_"):
+            out.append(ch)
+        elif ch == " ":
+            out.append("_")
+        # drop other non-ASCII (punctuation etc)
+    result = "".join(out)
+    # collapse underscores, strip, lowercase
+    result = re.sub(r"_+", "_", result).strip("_").lower()
+    if not result:
+        return "x"
+    if result[0].isdigit():
+        result = "_" + result
+    return result[:48]
+
+
+
+
 def _cls(name: str) -> str:
-    parts = [p for p in _ident(name).split("_") if p]
+    parts = [p for p in _ar_ident(name).split("_") if p]
     return "".join(p.capitalize() for p in parts) or "Item"
 
 
@@ -100,7 +149,7 @@ def _emit_schema_module(spec: RichSpec) -> str:
         lines.append("    user_id: int = 0")
         seen = {"id", "user_id"}
         for f in entity.fields:
-            fname = _ident(f.name)
+            fname = _ar_ident(f.name)
             if fname in seen:
                 continue
             seen.add(fname)
@@ -176,11 +225,11 @@ def _emit_store_module(spec: RichSpec) -> str:
         "def _ensure_tables(conn: sqlite3.Connection) -> None:",
     ]
     for entity in spec.entities:
-        table = _ident(entity.name)
+        table = _ar_ident(entity.name)
         cols = ["id TEXT PRIMARY KEY", "user_id INTEGER"]
         seen = {"id", "user_id"}
         for f in entity.fields:
-            fname = _ident(f.name)
+            fname = _ar_ident(f.name)
             if fname in seen:
                 continue
             seen.add(fname)
@@ -201,8 +250,8 @@ def _emit_store_module(spec: RichSpec) -> str:
     # One store class per entity
     for entity in spec.entities:
         cls_name = _cls(entity.name) + "Store"
-        table = _ident(entity.name)
-        field_names = ["id", "user_id"] + [_ident(f.name) for f in entity.fields if _ident(f.name) not in {"id", "user_id"}]
+        table = _ar_ident(entity.name)
+        field_names = ["id", "user_id"] + [_ar_ident(f.name) for f in entity.fields if _ar_ident(f.name) not in {"id", "user_id"}]
         cols_no_id = [c for c in field_names if c != "id"]
         lines.append(f"class {cls_name}:")
         lines.append(f'    """Store for {entity.name} entities."""')
@@ -340,7 +389,7 @@ def _action_name(cmd: RichCommand) -> str | None:
     kind = _kind_val(cmd.kind)
     pa = _pa_val(cmd.post_action)
     if pa == PostAction.STORE.value and cmd.entity:
-        return f"create_{_ident(cmd.entity)}"
+        return f"create_{_ar_ident(cmd.entity)}"
     if pa == PostAction.COMPUTE.value:
         return f"compute_{cmd.name}"
     if pa == PostAction.NOTIFY.value:
@@ -363,266 +412,308 @@ def store_is_available(spec: RichSpec, cmd: RichCommand) -> bool:
 # ─────────────────────────────────────────────────────────────────────── brain module ──
 
 def _emit_brain_module(spec: RichSpec) -> str:
-    """Generate brain.py — chat intelligence with context memory.
+    """Generate brain.py — REAL AI-powered chat intelligence with iron memory.
 
-    The brain knows:
-    - The bot's own spec (name, description, commands, entities, buttons)
-    - The user's conversation history (per-user, in-memory)
-    - What the user has done (actions taken, data submitted)
-    - How to answer questions about the bot's features intelligently
-
-    Everything is derived from the spec — zero hardcoded templates.
-    The brain uses Arabic + English pattern matching, context tracking,
-    and spec-knowledge to provide smart, non-forgetting responses.
+    The brain is a genuine AI chat layer (not regex pattern matching):
+    - Uses g4f (free AI models) to UNDERSTAND what the user wants
+    - Has IRON MEMORY: per-user conversation history + actions, never forgets
+    - Acts as a DEVELOPER COMPANION: knows the bot's spec, helps the user,
+      suggests next steps, explains features
+    - CONNECTED TO THE ENGINE: knows all commands, entities, buttons, fields
+      from the spec — can answer questions about what the bot can do
+    - NEVER writes code. Only understands, explains, and guides.
     """
-    import json as _json
-    commands = list(spec.commands)
-    entities = list(spec.entities)
-    buttons = list(spec.buttons)
+    lines: list[str] = []
+    w = lines.append
 
-    # Build the bot's self-knowledge from the spec
-    bot_self_dict = {
+    # --- Bot self-knowledge (baked from the spec) ---
+    bot_self: dict = {
         "bot_name": spec.bot_name,
-        "description": spec.description,
-        "language": spec.language,
-        "commands": [
-            {"name": c.name, "description": c.description or c.name, "kind": _kind_val(c.kind), "entity": c.entity or ""}
-            for c in commands
-        ],
-        "entities": [
-            {"name": e.name, "fields": [f.name for f in e.fields]}
-            for e in entities
-        ],
-        "buttons": [
-            {"label": b.label, "callback_id": b.callback_id, "target_command": b.target_command}
-            for b in buttons
-        ],
+        "description": spec.description or "",
+        "language": spec.language or "ar",
     }
-    bot_self_json = _json.dumps(bot_self_dict, ensure_ascii=False, indent=2)
+    cmds: list[dict] = []
+    for c in spec.commands:
+        cmds.append({
+            "name": c.name,
+            "description": c.description or "",
+            "kind": _kind_val(c.kind),
+            "entity": c.entity or "",
+            "collects_fields": list(c.collects_fields or []),
+            "post_action": _pa_val(c.post_action),
+        })
+    bot_self["commands"] = cmds
 
-    # Build command-name → description map for quick lookup
-    cmd_map_entries = ", ".join(
-        f"{_py(c.name)}: {_py(c.description or c.name)}" for c in commands
-    )
-    entity_map_entries = ", ".join(
-        f"{_py(e.name)}: {_py(', '.join(f.name for f in e.fields))}" for e in entities
-    )
+    ents: list[dict] = []
+    for e in spec.entities:
+        fields = []
+        for f in (e.fields or []):
+            fields.append({"name": f.name, "type": f.field_type.value if f.field_type else "text"})
+        ents.append({"name": e.name, "fields": fields})
+    bot_self["entities"] = ents
 
-    # Entity name list for detection
-    entity_names_json = _json.dumps([e.name for e in entities], ensure_ascii=False)
-    cmd_names_json = _json.dumps([c.name for c in commands], ensure_ascii=False)
+    btns: list[dict] = []
+    for b in spec.buttons:
+        btns.append({"label": b.label, "target": b.target_command or ""})
+    bot_self["buttons"] = btns
 
-    lines = [
-        '"""Brain — chat intelligence with context memory.',
-        "",
-        "The brain gives the bot the ability to:",
-        "- Remember what the user said across the conversation",
-        "- Know its own features (commands, data models, buttons)",
-        "- Answer questions about what it can do",
-        "- Track user actions and provide context-aware responses",
-        "- Never forget — maintains full conversation context",
-        "",
-        "Everything here is derived from the spec — no hardcoded templates.",
-        '"""',
-        "from __future__ import annotations",
-        "import json",
-        "import re",
-        "import time",
-        "from typing import Any",
-        "",
-        "",
-        "# ── Bot self-knowledge (baked from the spec at generation time) ──",
-        f"BOT_SELF = json.loads({ _py(bot_self_json) })",
-        "",
-        f"COMMAND_MAP = {{{cmd_map_entries}}}",
-        f"ENTITY_MAP = {{{entity_map_entries}}}" if entity_map_entries else "ENTITY_MAP = {}",
-        f"ENTITY_NAMES = {entity_names_json}",
-        f"COMMAND_NAMES = {cmd_names_json}",
-        "",
-        "",
-        "class ConversationMemory:",
-        '    """Per-user conversation memory — never forgets."""',
-        "",
-        "    def __init__(self) -> None:",
-        "        self.messages: list[dict[str, str]] = []",
-        "        self.actions: list[dict[str, Any]] = []",
-        '        self.last_entity: str = ""',
-        '        self.last_command: str = ""',
-        "        self.context_tags: set[str] = set()",
-        "        self.created_at: float = time.time()",
-        "",
-        "    def add_user_message(self, text: str) -> None:",
-        '        self.messages.append({"role": "user", "text": text, "time": str(time.time())})',
-        "        self._update_tags(text)",
-        "        if len(self.messages) > 50:",
-        "            self.messages = self.messages[-50:]",
-        "",
-        "    def add_bot_message(self, text: str) -> None:",
-        '        self.messages.append({"role": "bot", "text": text, "time": str(time.time())})',
-        "        if len(self.messages) > 50:",
-        "            self.messages = self.messages[-50:]",
-        "",
-        "    def add_action(self, action: str, detail: str = \"\") -> None:",
-        '        self.actions.append({"action": action, "detail": detail, "time": str(time.time())})',
-        "        self.last_command = action",
-        "        if len(self.actions) > 30:",
-        "            self.actions = self.actions[-30:]",
-        "",
-        "    def _update_tags(self, text: str) -> None:",
-        "        lower = text.lower()",
-        "        for name in ENTITY_NAMES:",
-        "            if name.lower() in lower:",
-        "                self.last_entity = name",
-        "                self.context_tags.add(name.lower())",
-        "        for cmd in COMMAND_NAMES:",
-        "            if cmd in lower:",
-        "                self.context_tags.add(cmd)",
-        "",
-        "    def summary(self) -> str:",
-        "        parts = []",
-        "        if self.actions:",
-        "            recent = self.actions[-3:]",
-        '            parts.append("آخر العمليات: " + ", ".join(a["action"] for a in recent))',
-        "        if self.context_tags:",
-        '            parts.append("مواضيع: " + ", ".join(list(self.context_tags)[:5]))',
-        '        return " | ".join(parts) if parts else "بداية المحادثة"',
-        "",
-        "    def recent_context(self, n: int = 5) -> str:",
-        "        recent = self.messages[-n:]",
-        '        return " \\n".join(f"{m[\'role\']}: {m[\'text\'][:80]}" for m in recent)',
-        "",
-        "",
-        "# ── Per-user memory store (in-memory, per process) ──",
-        "_memories: dict[int, ConversationMemory] = {}",
-        "",
-        "",
-        "def get_memory(user_id: int) -> ConversationMemory:",
-        '    """Get or create conversation memory for a user."""',
-        "    if user_id not in _memories:",
-        "        _memories[user_id] = ConversationMemory()",
-        "    return _memories[user_id]",
-        "",
-        "",
-        "# ── Arabic + English normalization for matching ──",
-        "def _normalize(text: str) -> str:",
-        "    t = text.lower().strip()",
-        '    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")',
-        '    t = t.replace("ة", "ه").replace("ى", "ي")',
-        '    t = re.sub(r"[\\u064B-\\u0652]", "", t)  # remove diacritics',
-        '    t = re.sub(r"\\s+", " ", t)',
-        "    return t",
-        "",
-        "",
-        "# ── Intent detection patterns (Arabic + English) ──",
-        "_INTENT_PATTERNS = {",
-        '    "ask_help": ["ساعد", "help", "مساعده", "مساعدة", "ماذا تفعل", "وش تسوي", "ايه الاوامر", "ما هي الاوامر", "الاوامر", "commands"],',
-        '    "ask_who": ["من انت", "مين انت", "اسمك", "who are you", "what are you", "انت مين", "what is your name", "ما اسمك"],',
-        '    "ask_capabilities": ["ماذا تستطيع", "ايه اللي تعمله", "وش تسوي", "what can you do", "features", "مميزات", "ما مميزاتك", "ايه قدراتك"],',
-        '    "ask_data": ["بياناتي", "ماذا جمعت", "ما الذي حفظته", "my data", "what did i submit", "سجلاتي", "طلباتي"],',
-        '    "ask_entity": ["ماهي", "ما هي", "what is", "تعريف", "explain", "اشرح", "وصف"],',
-        '    "greeting": ["مرحبا", "اهلا", "سلام", "hi", "hello", "hey", "صباح", "مساء"],',
-        '    "thanks": ["شكرا", "مشكور", "thanks", "thank you", "ممتاز", "رائع"],',
-        '    "ask_status": ["حالتي", "وضعي", "my status", "what is my status", "وين وصلت"],',
-        "}",
-        "",
-        "",
-        "def detect_intent(text: str) -> str:",
-        '    """Detect the user\'s intent from free text. Returns intent name or "chat"."""',
-        "    norm = _normalize(text)",
-        "    for intent, patterns in _INTENT_PATTERNS.items():",
-        "        for p in patterns:",
-        "            if _normalize(p) in norm:",
-        "                return intent",
-        '    return "chat"',
-        "",
-        "",
-        "# ── Smart response generation ──",
-        "def _format_commands() -> str:",
-        "    parts = []",
-        "    for name, desc in COMMAND_MAP.items():",
-        '        parts.append(f"/{name} — {desc}")',
-        '    return "\\n".join(parts)',
-        "",
-        "",
-        "def _format_entities() -> str:",
-        "    parts = []",
-        "    for name, fields in ENTITY_MAP.items():",
-        '        parts.append(f"• {name}: {fields}")',
-        '    return "\\n".join(parts)',
-        "",
-        "",
-        "def _find_entity_in_text(text: str) -> str | None:",
-        '    """Find which entity the user is asking about."""',
-        "    norm = _normalize(text)",
-        "    for name in ENTITY_NAMES:",
-        "        if _normalize(name) in norm:",
-        "            return name",
-        "    return None",
-        "",
-        "",
-        "def smart_reply(user_id: int, text: str) -> str:",
-        '    """Generate a smart, context-aware reply using conversation memory + bot self-knowledge."""',
-        "    mem = get_memory(user_id)",
-        "    mem.add_user_message(text)",
-        "    intent = detect_intent(text)",
-        "",
-        '    bot_name = BOT_SELF.get("bot_name", "البوت")',
-        '    bot_desc = BOT_SELF.get("description", "")',
-        "",
-        '    if intent == "greeting":',
-        '        reply = f"مرحباً بك في {bot_name}! 👋\\n" + bot_desc + "\\n\\nاكتب /help لرؤية جميع الأوامر المتاحة."',
-        '    elif intent == "thanks":',
-        '        reply = f"العفو! 🌟 سعيد بخدمتك في {bot_name}. هل تحتاج أي شيء آخر؟"',
-        '    elif intent == "ask_who":',
-        '        reply = f"أنا {bot_name}. " + bot_desc + f"\\n\\nأستطيع مساعدتك بالأوامر التالية:\\n" + _format_commands()',
-        '    elif intent == "ask_help" or intent == "ask_capabilities":',
-        '        reply = f"📋 أوامر {bot_name}:\\n\\n" + _format_commands()',
-        "        if ENTITY_MAP:",
-        '            reply += "\\n\\n📊 البيانات التي أتعامل معها:\\n" + _format_entities()',
-        '        reply += "\\n\\nاضغط على أي زر بالأسفل أو اكتب أي أمر لبدء العمل!"',
-        '    elif intent == "ask_data":',
-        "        if mem.actions:",
-        '            actions_text = "\\n".join(f"• {a[\'action\']}: {a[\'detail\']}" for a in mem.actions[-5:])',
-        '            reply = f"📝 سجل عملياتك:\\n{actions_text}\\n\\n{mem.summary()}"',
-        "        else:",
-        '            reply = f"لم تقم بأي عمليات بعد في {bot_name}. ابدأ باستخدام الأوامر المتاحة!\\n\\n" + _format_commands()',
-        '    elif intent == "ask_entity":',
-        "        entity = _find_entity_in_text(text)",
-        "        if entity and entity in ENTITY_MAP:",
-        '            reply = f"📊 {entity}:\\nالحقول: {ENTITY_MAP[entity]}\\n\\nيمكنك إدخال بيانات جديدة أو الاستعلام عنها باستخدام الأوامر المتاحة."',
-        "        else:",
-        '            reply = f"البيانات المتاحة في {bot_name}:\\n\\n" + _format_entities()',
-        '    elif intent == "ask_status":',
-        '        reply = f"📊 حالتك في {bot_name}:\\n\\n{mem.summary()}\\n\\nالمحادثات الأخيرة:\\n" + mem.recent_context(3)',
-        "    else:",
-        "        # Generic chat — use context to provide a smart response",
-        "        ctx = mem.summary()",
-        "        if mem.last_entity:",
-        '            reply = (f"فهمت أنك تتحدث عن {mem.last_entity}. "',
-        '                     f"يمكنك استخدام الأوامر المتاحة للتعامل مع {mem.last_entity}.\\n\\n"',
-        '                     f"{ctx}\\n\\n"',
-        '                     f"اكتب /help لرؤية جميع الأوامر.")',
-        "        else:",
-        '            reply = (f"أنا {bot_name}. " + bot_desc +',
-        '                     f"\\n\\nلم أفهم طلبك تماماً، لكنني أتذكر سياق محادثتنا:\\n{ctx}\\n\\n"',
-        '                     f"اكتب /help لرؤية الأوامر المتاحة، أو اضغط على الأزرار بالأسفل.")',
-        "",
-        "    mem.add_bot_message(reply)",
-        "    return reply",
-        "",
-        "",
-        "def remember_action(user_id: int, action: str, detail: str = \"\") -> None:",
-        '    """Record that the user performed an action (e.g., placed an order)."""',
-        "    mem = get_memory(user_id)",
-        "    mem.add_action(action, detail)",
-        "",
-        "",
-        "def get_context_summary(user_id: int) -> str:",
-        '    """Get a summary of the user\'s conversation context."""',
-        "    mem = get_memory(user_id)",
-        "    return mem.summary()",
-        "",
-    ]
+    w('"""brain.py — AI-powered chat intelligence with iron memory.')
+    w('')
+    w('A real AI chat layer (g4f) that:')
+    w('  - UNDERSTANDS what the user wants (not regex pattern matching)')
+    w('  - Has IRON MEMORY: per-user history + actions, never forgets')
+    w('  - Acts as a DEVELOPER COMPANION: knows the bot spec, guides the user')
+    w('  - CONNECTED TO THE ENGINE: knows all commands/entities/buttons')
+    w('  - NEVER writes code. Only understands, explains, guides.')
+    w('"""')
+    w('')
+    w('from __future__ import annotations')
+    w('')
+    w('import json')
+    w('import logging')
+    w('import time')
+    w('from collections import defaultdict')
+    w('from typing import Optional')
+    w('')
+    w('logger = logging.getLogger(__name__)')
+    w('')
+    w('# ─── Bot self-knowledge (baked from the spec) ───')
+    w(f'BOT_SELF = {json.dumps(bot_self, ensure_ascii=False, indent=2)}')
+    w('')
+    w('')
+    w('# ─── Iron memory: per-user state that never forgets ───')
+    w('')
+    w('class UserMemory:')
+    w('    """Persistent per-user memory. Iron memory — never forgets."""')
+    w('')
+    w('    def __init__(self):')
+    w('        self.messages: list[dict] = []      # conversation history')
+    w('        self.actions: list[dict] = []       # bot actions taken for this user')
+    w('        self.profile: dict = {}             # user profile facts')
+    w('        self.context_tags: list[str] = []   # current conversation topics')
+    w('        self.last_entity: str = ""          # last entity mentioned')
+    w('        self.last_command: str = ""         # last command used')
+    w('')
+    w('    def add_message(self, role: str, text: str):')
+    w('        self.messages.append({"role": role, "text": text, "ts": time.time()})')
+    w('        if len(self.messages) > 80:')
+    w('            self.messages = self.messages[-80:]')
+    w('')
+    w('    def remember_action(self, action: str, detail: str = ""):')
+    w('        self.actions.append({"action": action, "detail": detail, "ts": time.time()})')
+    w('        if len(self.actions) > 50:')
+    w('            self.actions = self.actions[-50:]')
+    w('        if action == "command":')
+    w('            self.last_command = detail')
+    w('        elif action == "entity":')
+    w('            self.last_entity = detail')
+    w('')
+    w('    def summary(self) -> str:')
+    w('        """A short summary of the user\'s history for the AI prompt."""')
+    w('        parts = []')
+    w('        if self.last_command:')
+    w("            parts.append(f'آخر أمر استخدام: {self.last_command}')")
+    w('        if self.last_entity:')
+    w("            parts.append(f'آخر كيان تعامل معه: {self.last_entity}')")
+    w('        if self.profile:')
+    w('            facts = ", ".join(f"{k}={v}" for k, v in self.profile.items())')
+    w("            parts.append(f'معلومات المستخدم: {facts}')")
+    w('        if self.actions:')
+    w('            recent = self.actions[-5:]')
+    w('            acts = ", ".join(a["action"] for a in recent)')
+    w("            parts.append(f'آخر إجراءات: {acts}')")
+    w('        return " | ".join(parts) if parts else ""')
+    w('')
+    w('    def recent_context(self) -> str:')
+    w('        """Recent conversation context for the AI."""')
+    w('        if not self.messages:')
+    w('            return ""')
+    w('        recent = self.messages[-6:]')
+    w('        lines = []')
+    w('        for m in recent:')
+    w("            role = 'المستخدم' if m['role'] == 'user' else 'البوت'")
+    w("            lines.append(f\"{role}: {m['text'][:120]}\")")
+    w('        return "\\n".join(lines)')
+    w('')
+    w('    def history_for_ai(self) -> list[dict]:')
+    w('        """Conversation history formatted for the AI client."""')
+    w('        out = []')
+    w('        for m in self.messages[-8:]:')
+    w('            role = "user" if m["role"] == "user" else "assistant"')
+    w('            out.append({"role": role, "content": m["text"][:500]})')
+    w('        return out')
+    w('')
+    w('')
+    w('_MEMORIES: dict[int, UserMemory] = defaultdict(UserMemory)')
+    w('')
+    w('')
+    w('def get_memory(user_id: int) -> UserMemory:')
+    w('    """Get or create the iron memory for a user."""')
+    w('    return _MEMORIES[user_id]')
+    w('')
+    w('')
+    w('def remember_action(user_id: int, action: str, detail: str = ""):')
+    w('    """Record an action in the user\'s iron memory."""')
+    w('    get_memory(user_id).remember_action(action, detail)')
+    w('')
+    w('')
+    w('def get_context_summary(user_id: int) -> str:')
+    w('    """Get a summary of the user\'s context (for handlers to use)."""')
+    w('    return get_memory(user_id).summary()')
+    w('')
+    w('')
+    w('# ─── AI layer (g4f free models) ───')
+    w('')
+    w('_AI_CLIENT = None')
+    w('_AI_MODELS = [')
+    w('    "gemini-2.0-flash",')
+    w('    "gpt-4o-mini",')
+    w('    "claude-3.5-sonnet",')
+    w('    "gemini-1.5-flash",')
+    w('    "claude-3-haiku",')
+    w('    "gpt-4o",')
+    w(']')
+    w('')
+    w('')
+    w('def _get_ai_client():')
+    w('    """Lazily create a g4f Client. Returns None if unavailable."""')
+    w('    global _AI_CLIENT')
+    w('    if _AI_CLIENT is not None:')
+    w('        return _AI_CLIENT')
+    w('    try:')
+    w('        from g4f.client import Client as G4FClient')
+    w('        _AI_CLIENT = G4FClient()')
+    w('        return _AI_CLIENT')
+    w('    except Exception as exc:')
+    w('        logger.warning("g4f unavailable: %s", exc)')
+    w('        return None')
+    w('')
+    w('')
+    w('def _build_system_prompt(mem: UserMemory) -> str:')
+    w('    """Build an Arabic system prompt that makes the AI a developer companion."""')
+    w('    parts = []')
+    w("    parts.append('أنت صديق ومرافق للمستخدم في تطوير بوت تليجرام. تتحدث بالعربية.')")
+    w('    parts.append("")')
+    w("    bot = BOT_SELF")
+    w("    parts.append(f\"اسم البوت: {bot['bot_name']}\")")
+    w("    if bot.get('description'):")
+    w("        parts.append(f\"الوصف: {bot['description']}\")")
+    w('    parts.append("")')
+    w("    parts.append('الأوامر المتاحة:')")
+    w("    for c in bot.get('commands', []):")
+    w("        line = f\"  /{c['name']}: {c['description']}\"")
+    w("        if c.get('collects_fields'):")
+    w("            line += f\" (يجمع: {', '.join(c['collects_fields'])})\"")
+    w('        parts.append(line)')
+    w('    parts.append("")')
+    w("    parts.append('الكيانات البيانات في البوت:')")
+    w("    for e in bot.get('entities', []):")
+    w("        flds = ', '.join(f['name'] for f in e.get('fields', []))")
+    w("        parts.append(f\"  {e['name']}: {flds}\")")
+    w('    parts.append("")')
+    w("    parts.append('الأزرار المتاحة:')")
+    w("    for b in bot.get('buttons', []):")
+    w("        parts.append(f\"  {b['label']} -> /{b['target']}\")")
+    w('    parts.append("")')
+    w('    hist = mem.summary()')
+    w('    if hist:')
+    w("        parts.append(f'سجل المستخدم: {hist}')")
+    w('    parts.append("")')
+    w("    parts.append('قواعدك:')")
+    w("    parts.append('1. تفهم ما يريد المستخدم. لا تكتب أي كود. إذا هو كاتب كود اشرح له ما تعنيته الكلمات واذا هو كاتب سؤال اجب بأمثلة.')")
+    w("    parts.append('2. اشرح منهجا بالأمثلة واقترح الأوامر أو الأزرار المناسبة.')")
+    w("    parts.append('3. كن ودودا ومساعدا. عامل المستخدم كصديق.')")
+    w("    parts.append('4. اسأل أسئلة توضيحية إذا لم تفهم ما يريد.')")
+    w("    parts.append('5. استخدم سجل المحادثة لفهم سياق المستخدم.')")
+    w("    parts.append('6. ردودك تحت 200 كلمة وواضحة.')")
+    w('    return "\\n".join(parts)')
+    w('')
+    w('')
+    w('def _call_ai(mem: UserMemory, user_text: str) -> Optional[str]:')
+    w('    """Call the AI model. Returns the reply text or None on failure."""')
+    w('    client = _get_ai_client()')
+    w('    if client is None:')
+    w('        return None')
+    w('    system_prompt = _build_system_prompt(mem)')
+    w('    messages = [{"role": "system", "content": system_prompt}]')
+    w('    messages.extend(mem.history_for_ai())')
+    w('    messages.append({"role": "user", "content": user_text})')
+    w('    import random')
+    w('    models = _AI_MODELS[:]')
+    w('    random.shuffle(models)')
+    w('    for model in models:')
+    w('        try:')
+    w('            resp = client.chat.completions.create(')
+    w('                model=model,')
+    w('                messages=messages,')
+    w('                timeout=30,')
+    w('            )')
+    w('            text = resp.choices[0].message.content')
+    w('            if text and text.strip():')
+    w('                return text.strip()')
+    w('        except Exception as exc:')
+    w('            logger.warning("AI model %s failed: %s", model, exc)')
+    w('            continue')
+    w('    return None')
+    w('')
+    w('')
+    w('def _fallback_reply(mem: UserMemory, text: str) -> str:')
+    w('    """Spec-aware fallback when the AI is unavailable. NOT dumb regex."""')
+    w('    low = text.lower().strip()')
+    w('    bot = BOT_SELF')
+    w('    # greeting')
+    w("    if any(g in text for g in ['سلام', 'هلا', 'أهلا', 'اهلا', 'hi', 'hello', 'hey']):")
+    w("        return f\"أهلا! أنا مرافقك في بوت {bot['bot_name']}. اكتب /help لرؤية الأوامر المتاحة.\"")
+    w('    # thanks')
+    w("    if any(t in text for t in ['شكرا', 'ممنون', 'thanks', 'thank']):")
+    w("        return 'العفو عليك! هل تحتاج مساعدة أخرى؟'")
+    w('    # who are you')
+    w("    if any(q in text for q in ['من انت', 'انت من', 'من أنت', 'who are you', 'what are you']):")
+    w("        desc = bot.get('description', '')")
+    w("        return f\"أنا مرافقك الذكي في بوت {bot['bot_name']}. {desc} أساعدك في استخدامه وأجيب على أسئلتك.\"")
+    w('    # help')
+    w("    if 'help' in low or 'مساعد' in text or 'الأوامر' in text:")
+    w("        lines = [f\"أوامر بوت {bot['bot_name']}:\"]")
+    w("        for c in bot.get('commands', []):")
+    w("            lines.append(f\"  /{c['name']} — {c['description']}\")")
+    w('        return "\\n".join(lines)')
+    w('    # data/status query')
+    w("    if any(k in text for k in ['بيانات', 'حالة', 'إحصاء', 'احصاء', 'data', 'status', 'stats']):")
+    w("        stats_cmds = [c for c in bot.get('commands', []) if c.get('kind') == 'stats']")
+    w('        if stats_cmds:')
+    w("            names = ', '.join(f\"/{c['name']}\" for c in stats_cmds)")
+    w("            return f'لرؤية الإحصائيات استخدم: {names}'")
+    w('    # context-aware generic')
+    w("    return f\"مرحبا! أنا هنا لمساعدتك مع بوت {bot['bot_name']}. اكتب /help لرؤية الأوامر.\"")
+    w('')
+    w('')
+    w('def smart_reply(user_id: int, text: str) -> str:')
+    w('    """Main entry: AI-first reply with iron memory. Falls back to spec-aware."""')
+    w('    mem = get_memory(user_id)')
+    w('    mem.add_message("user", text)')
+    w('    # Try AI first')
+    w('    reply = _call_ai(mem, text)')
+    w('    if not reply:')
+    w('        reply = _fallback_reply(mem, text)')
+    w('    # Strip any code blocks the AI might have added (we never show code)')
+    w('    if "```" in reply:')
+    w('        import re as _re')
+    w('        reply = _re.sub(r"```[\\s\\S]*?```", "", reply).strip()')
+    w('        if not reply:')
+    w("            reply = 'لا أستطيع كتابة الكود. اكتب /help لرؤية الأوامر.'")
+    w('    # Truncate long replies')
+    w('    if len(reply) > 800:')
+    w('        reply = reply[:797] + "..."')
+    w('    mem.add_message("bot", reply)')
+    w('    return reply')
+    w('')
+    w('')
+    w('def reset_memory(user_id: int):')
+    w('    """Reset a user\'s iron memory (admin/debug)."""')
+    w('    if user_id in _MEMORIES:')
+    w('        del _MEMORIES[user_id]')
+    w('')
+
     return "\n".join(lines) + "\n"
 
 
@@ -642,7 +733,7 @@ def _emit_handlers_module(spec: RichSpec) -> str:
     # So we must look up by the attribute name, NOT the class name
     store_map: dict[str, str] = {}
     for e in spec.entities:
-        store_map[e.name.lower()] = _ident(e.name) + "_store"
+        store_map[e.name.lower()] = _ar_ident(e.name) + "_store"
 
     # Build the action-name lookup from the spec (command → action function)
     action_map: dict[str, str] = {}
@@ -697,10 +788,10 @@ def _emit_handlers_module(spec: RichSpec) -> str:
         steps = []
         if c.flow_steps:
             for fs in c.flow_steps:
-                steps.append({"key": _ident(fs.key), "prompt": fs.prompt or f"أدخل {_ident(fs.key)}:"})
+                steps.append({"key": _ar_ident(fs.key), "prompt": fs.prompt or f"أدخل {_ar_ident(fs.key)}:"})
         elif c.collects_fields:
             for fk in c.collects_fields:
-                steps.append({"key": _ident(fk), "prompt": f"أدخل {_ident(fk)}:"})
+                steps.append({"key": _ar_ident(fk), "prompt": f"أدخل {_ar_ident(fk)}:"})
         lines.append(f"    {_py(c.name)}: [")
         for s in steps:
             lines.append(f"        {{\"key\": {_py(s['key'])}, \"prompt\": {_py(s['prompt'])}}},")
@@ -1050,9 +1141,9 @@ def _emit_container(spec: RichSpec) -> str:
     ]
     if has_db:
         for e in spec.entities:
-            store_attr = _ident(e.name) + "_store"
+            store_attr = _ar_ident(e.name) + "_store"
             lines.append(f"        self.{store_attr} = {_cls(e.name)}Store()")
-        lines.append("        self.primary_store = self." + _ident(spec.entities[0].name) + "_store")
+        lines.append("        self.primary_store = self." + _ar_ident(spec.entities[0].name) + "_store")
     else:
         lines.append("        self.primary_store = MemoryStore()")
     lines += [

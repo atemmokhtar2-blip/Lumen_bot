@@ -283,10 +283,114 @@ def validate_rich_spec(spec: RichSpec) -> RichSpecValidation:
     return RichSpecValidation(ok=len(errors) == 0, errors=errors, warnings=warnings)
 
 
+def _sanitize_enums(data: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize enum values in raw data before validation.
+
+    The AI translator sometimes produces invalid enum values (e.g. post_action='action'
+    which is a CommandKind, not a PostAction). This maps them to valid values.
+    """
+    valid_kinds = {k.value for k in CommandKind}
+    valid_post_actions = {k.value for k in PostAction}
+    valid_field_types = {k.value for k in FieldType}
+
+    # Map common AI mistakes for post_action
+    post_action_fix = {
+        "action": "none",      # 'action' is a CommandKind, not PostAction
+        "save": "store",
+        "persist": "store",
+        "insert": "store",
+        "create": "store",
+        "send": "notify",
+        "message": "notify",
+        "calculate": "compute",
+        "calc": "compute",
+        "echo": "confirm",
+        "display": "confirm",
+        "show": "confirm",
+        "default": "none",
+        "": "none",
+    }
+
+    # Map common AI mistakes for kind
+    kind_fix = {
+        "wizard": "collect",
+        "form": "collect",
+        "input": "collect",
+        "query": "lookup",
+        "search": "lookup",
+        "find": "lookup",
+        "browse": "list",
+        "show": "list",
+        "display": "list",
+        "dashboard": "stats",
+        "statistics": "stats",
+        "menu": "navigate",
+        "page": "navigate",
+        "static": "info",
+        "information": "info",
+        "": "custom",
+    }
+
+    commands = data.get("commands") or []
+    if isinstance(commands, list):
+        for c in commands:
+            if not isinstance(c, dict):
+                continue
+            # Sanitize kind
+            kind = (c.get("kind") or "").lower().strip()
+            if kind and kind not in valid_kinds:
+                c["kind"] = kind_fix.get(kind, "custom")
+            elif not kind:
+                c["kind"] = "custom"
+            # Sanitize post_action
+            pa = (c.get("post_action") or "").lower().strip()
+            if pa and pa not in valid_post_actions:
+                c["post_action"] = post_action_fix.get(pa, "none")
+            elif not pa:
+                c["post_action"] = "none"
+
+    # Sanitize entity field types
+    entities = data.get("entities") or []
+    if isinstance(entities, list):
+        for e in entities:
+            if not isinstance(e, dict):
+                continue
+            fields = e.get("fields") or []
+            if isinstance(fields, list):
+                for f in fields:
+                    if not isinstance(f, dict):
+                        continue
+                    ft = (f.get("field_type") or f.get("ftype") or "str").lower().strip()
+                    if ft not in valid_field_types:
+                        f["field_type"] = "str"
+                    else:
+                        f["field_type"] = ft
+                    # Ensure field_type key exists
+                    if "field_type" not in f:
+                        f["field_type"] = ft
+
+    # Sanitize flow step actions
+    for c in (data.get("commands") or []):
+        if not isinstance(c, dict):
+            continue
+        steps = c.get("flow_steps") or []
+        if isinstance(steps, list):
+            for s in steps:
+                if not isinstance(s, dict):
+                    continue
+                act = (s.get("action") or "ask").lower().strip()
+                if act not in ("ask", "store", "confirm", "compute", "notify"):
+                    s["action"] = "ask"
+
+    return data
+
+
 def rich_spec_from_dict(data: dict[str, Any]) -> RichSpec:
     """Parse a raw LLM JSON dict into a validated RichSpec, applying safe defaults."""
     if not isinstance(data, dict):
         raise ValueError("spec payload is not a dict")
+    # Sanitize enum values before validation (AI may produce invalid enums)
+    data = _sanitize_enums(data)
     # Ensure minimums so downstream never sees an empty bot
     spec = RichSpec.model_validate(data)
     spec = spec.ensure_minimums()
