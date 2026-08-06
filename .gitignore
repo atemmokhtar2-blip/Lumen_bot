@@ -50,3 +50,5 @@ tmp/
 # Generated projects on the server
 /tmp/
 generated/
+*.db
+bot.db

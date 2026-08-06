@@ -61,7 +61,11 @@ ROLE:
 - Translate the user's natural language into a structured bot specification.
 - Do NOT write Python or any code.
 - Do NOT invent features the user did not mention or clearly imply.
-- Extract ALL functions the user mentioned (lists, "and", "فيه X و Y").
+- Extract ALL functions the user mentioned (lists, "and", "فيه X و Y", "زرار X وزرار Y").
+- CRITICAL: Create a button in buttons[] for EVERY command the user mentions as a
+  button ("زرار", "button", "زر"). Each button's target_command must match a command name.
+- If the user mentions "زرار X" (button X), create BOTH a command AND a button for it.
+- The user is the ONLY source of truth — never add commands/buttons they didn't ask for.
 
 SCHEMA (output exactly this shape):
 {
@@ -104,6 +108,8 @@ FIELD RULES:
 _AUDIT_SYSTEM = """You are a fidelity auditor for bot specs.
 Given the original user text and a JSON spec, output ONLY a corrected JSON object (same schema as input).
 - Add commands/entities/fields clearly present in the user text but missing in JSON.
+- CRITICAL: Ensure every "زرار" / "button" / "زر" the user mentioned has BOTH a command
+  AND a button in buttons[] with target_command matching the command name.
 - Remove items with no support in the user text.
 - Improve evidence.quote to short verbatim spans from the user text.
 - No markdown, no prose, no code fences. First char { last char }.
@@ -434,6 +440,36 @@ def _ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], d
             dropped["buttons"].append(b.get("label") or b.get("callback_id") or "?")
     data["buttons"] = kept_btns
 
+    # ── Button-completeness safety net ──
+    # If the user mentioned buttons ("زرار"/"button"/"زر") in their text, ensure
+    # every grounded command (except start/help) has a matching button. This is a
+    # data-level fix — NOT a hardcoded template. The commands themselves come 100%
+    # from the AI translator; we only ensure the UI surface is complete.
+    has_buttons_in_text = any(
+        kw in original_norm for kw in ("زرار", "زر ", "زر.", "زرار", "button", "buttons", "زرّار")
+    )
+    if has_buttons_in_text and kept_cmds:
+        existing_btn_targets = {
+            (b.get("target_command") or "").lower().lstrip("/")
+            for b in kept_btns
+            if isinstance(b, dict)
+        }
+        for c in kept_cmds:
+            cname = (c.get("name") or "").lower().lstrip("/")
+            if cname in ("start", "help"):
+                continue
+            if cname in existing_btn_targets:
+                continue
+            # Auto-create a button for this command using its description as label
+            label = c.get("description") or cname
+            kept_btns.append({
+                "label": label,
+                "callback_id": cname,
+                "target_command": cname,
+                "evidence": c.get("evidence") or {"quote": label},
+            })
+        data["buttons"] = kept_btns
+
     # entities
     ents = data.get("entities") or []
     kept_ents = []
@@ -481,7 +517,7 @@ def translate_rich_spec(user_text: str, *, timeout: int | None = None) -> Transl
         return TranslatorV2Result(ok=False, error="disabled")
 
     timeout = timeout if timeout is not None else int(
-        os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "30")
+        os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "90")
     )
     forced = (os.environ.get("SPEC_TRANSLATOR_MODEL") or "").strip()
     candidates = (forced,) if forced else _MODEL_CANDIDATES

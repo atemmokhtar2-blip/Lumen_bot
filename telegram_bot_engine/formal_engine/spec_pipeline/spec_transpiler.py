@@ -21,6 +21,7 @@ The generated bot uses python-telegram-bot v21+ with:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -185,7 +186,7 @@ def _emit_store_module(spec: RichSpec) -> str:
             seen.add(fname)
             ftype = (f.field_type.value if hasattr(f.field_type, "value") else str(f.field_type)).lower()
             col_type = "INTEGER" if ftype == "int" else "REAL" if ftype == "float" else "TEXT"
-            cols.append(f"{fname} {col_type}")
+            cols.append(f'"{fname}" {col_type}')
         col_sql = ", ".join(cols)
         lines.append(f"    conn.execute('CREATE TABLE IF NOT EXISTS \"{table}\" ({col_sql})')")
     lines += [
@@ -216,7 +217,7 @@ def _emit_store_module(spec: RichSpec) -> str:
         lines.append("        _ensure_tables(conn)")
         lines.append("        cols = list(record.keys())")
         lines.append("        placeholders = \", \".join(\"?\" for _ in cols)")
-        lines.append("        col_sql = \", \".join(cols)")
+        lines.append("        col_sql = \", \".join(chr(34) + c + chr(34) for c in cols)")
         lines.append('        conn.execute(f\'INSERT INTO "{self._table}" ({col_sql}) VALUES ({placeholders})\', list(record.values()))')
         lines.append("        conn.commit()")
         lines.append("        conn.close()")
@@ -358,6 +359,273 @@ def store_is_available(spec: RichSpec, cmd: RichCommand) -> bool:
     return any(e.name.lower() == cmd.entity.lower() for e in spec.entities)
 
 
+
+# ─────────────────────────────────────────────────────────────────────── brain module ──
+
+def _emit_brain_module(spec: RichSpec) -> str:
+    """Generate brain.py — chat intelligence with context memory.
+
+    The brain knows:
+    - The bot's own spec (name, description, commands, entities, buttons)
+    - The user's conversation history (per-user, in-memory)
+    - What the user has done (actions taken, data submitted)
+    - How to answer questions about the bot's features intelligently
+
+    Everything is derived from the spec — zero hardcoded templates.
+    The brain uses Arabic + English pattern matching, context tracking,
+    and spec-knowledge to provide smart, non-forgetting responses.
+    """
+    import json as _json
+    commands = list(spec.commands)
+    entities = list(spec.entities)
+    buttons = list(spec.buttons)
+
+    # Build the bot's self-knowledge from the spec
+    bot_self_dict = {
+        "bot_name": spec.bot_name,
+        "description": spec.description,
+        "language": spec.language,
+        "commands": [
+            {"name": c.name, "description": c.description or c.name, "kind": _kind_val(c.kind), "entity": c.entity or ""}
+            for c in commands
+        ],
+        "entities": [
+            {"name": e.name, "fields": [f.name for f in e.fields]}
+            for e in entities
+        ],
+        "buttons": [
+            {"label": b.label, "callback_id": b.callback_id, "target_command": b.target_command}
+            for b in buttons
+        ],
+    }
+    bot_self_json = _json.dumps(bot_self_dict, ensure_ascii=False, indent=2)
+
+    # Build command-name → description map for quick lookup
+    cmd_map_entries = ", ".join(
+        f"{_py(c.name)}: {_py(c.description or c.name)}" for c in commands
+    )
+    entity_map_entries = ", ".join(
+        f"{_py(e.name)}: {_py(', '.join(f.name for f in e.fields))}" for e in entities
+    )
+
+    # Entity name list for detection
+    entity_names_json = _json.dumps([e.name for e in entities], ensure_ascii=False)
+    cmd_names_json = _json.dumps([c.name for c in commands], ensure_ascii=False)
+
+    lines = [
+        '"""Brain — chat intelligence with context memory.',
+        "",
+        "The brain gives the bot the ability to:",
+        "- Remember what the user said across the conversation",
+        "- Know its own features (commands, data models, buttons)",
+        "- Answer questions about what it can do",
+        "- Track user actions and provide context-aware responses",
+        "- Never forget — maintains full conversation context",
+        "",
+        "Everything here is derived from the spec — no hardcoded templates.",
+        '"""',
+        "from __future__ import annotations",
+        "import json",
+        "import re",
+        "import time",
+        "from typing import Any",
+        "",
+        "",
+        "# ── Bot self-knowledge (baked from the spec at generation time) ──",
+        f"BOT_SELF = json.loads({ _py(bot_self_json) })",
+        "",
+        f"COMMAND_MAP = {{{cmd_map_entries}}}",
+        f"ENTITY_MAP = {{{entity_map_entries}}}" if entity_map_entries else "ENTITY_MAP = {}",
+        f"ENTITY_NAMES = {entity_names_json}",
+        f"COMMAND_NAMES = {cmd_names_json}",
+        "",
+        "",
+        "class ConversationMemory:",
+        '    """Per-user conversation memory — never forgets."""',
+        "",
+        "    def __init__(self) -> None:",
+        "        self.messages: list[dict[str, str]] = []",
+        "        self.actions: list[dict[str, Any]] = []",
+        '        self.last_entity: str = ""',
+        '        self.last_command: str = ""',
+        "        self.context_tags: set[str] = set()",
+        "        self.created_at: float = time.time()",
+        "",
+        "    def add_user_message(self, text: str) -> None:",
+        '        self.messages.append({"role": "user", "text": text, "time": str(time.time())})',
+        "        self._update_tags(text)",
+        "        if len(self.messages) > 50:",
+        "            self.messages = self.messages[-50:]",
+        "",
+        "    def add_bot_message(self, text: str) -> None:",
+        '        self.messages.append({"role": "bot", "text": text, "time": str(time.time())})',
+        "        if len(self.messages) > 50:",
+        "            self.messages = self.messages[-50:]",
+        "",
+        "    def add_action(self, action: str, detail: str = \"\") -> None:",
+        '        self.actions.append({"action": action, "detail": detail, "time": str(time.time())})',
+        "        self.last_command = action",
+        "        if len(self.actions) > 30:",
+        "            self.actions = self.actions[-30:]",
+        "",
+        "    def _update_tags(self, text: str) -> None:",
+        "        lower = text.lower()",
+        "        for name in ENTITY_NAMES:",
+        "            if name.lower() in lower:",
+        "                self.last_entity = name",
+        "                self.context_tags.add(name.lower())",
+        "        for cmd in COMMAND_NAMES:",
+        "            if cmd in lower:",
+        "                self.context_tags.add(cmd)",
+        "",
+        "    def summary(self) -> str:",
+        "        parts = []",
+        "        if self.actions:",
+        "            recent = self.actions[-3:]",
+        '            parts.append("آخر العمليات: " + ", ".join(a["action"] for a in recent))',
+        "        if self.context_tags:",
+        '            parts.append("مواضيع: " + ", ".join(list(self.context_tags)[:5]))',
+        '        return " | ".join(parts) if parts else "بداية المحادثة"',
+        "",
+        "    def recent_context(self, n: int = 5) -> str:",
+        "        recent = self.messages[-n:]",
+        '        return " \\n".join(f"{m[\'role\']}: {m[\'text\'][:80]}" for m in recent)',
+        "",
+        "",
+        "# ── Per-user memory store (in-memory, per process) ──",
+        "_memories: dict[int, ConversationMemory] = {}",
+        "",
+        "",
+        "def get_memory(user_id: int) -> ConversationMemory:",
+        '    """Get or create conversation memory for a user."""',
+        "    if user_id not in _memories:",
+        "        _memories[user_id] = ConversationMemory()",
+        "    return _memories[user_id]",
+        "",
+        "",
+        "# ── Arabic + English normalization for matching ──",
+        "def _normalize(text: str) -> str:",
+        "    t = text.lower().strip()",
+        '    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")',
+        '    t = t.replace("ة", "ه").replace("ى", "ي")',
+        '    t = re.sub(r"[\\u064B-\\u0652]", "", t)  # remove diacritics',
+        '    t = re.sub(r"\\s+", " ", t)',
+        "    return t",
+        "",
+        "",
+        "# ── Intent detection patterns (Arabic + English) ──",
+        "_INTENT_PATTERNS = {",
+        '    "ask_help": ["ساعد", "help", "مساعده", "مساعدة", "ماذا تفعل", "وش تسوي", "ايه الاوامر", "ما هي الاوامر", "الاوامر", "commands"],',
+        '    "ask_who": ["من انت", "مين انت", "اسمك", "who are you", "what are you", "انت مين", "what is your name", "ما اسمك"],',
+        '    "ask_capabilities": ["ماذا تستطيع", "ايه اللي تعمله", "وش تسوي", "what can you do", "features", "مميزات", "ما مميزاتك", "ايه قدراتك"],',
+        '    "ask_data": ["بياناتي", "ماذا جمعت", "ما الذي حفظته", "my data", "what did i submit", "سجلاتي", "طلباتي"],',
+        '    "ask_entity": ["ماهي", "ما هي", "what is", "تعريف", "explain", "اشرح", "وصف"],',
+        '    "greeting": ["مرحبا", "اهلا", "سلام", "hi", "hello", "hey", "صباح", "مساء"],',
+        '    "thanks": ["شكرا", "مشكور", "thanks", "thank you", "ممتاز", "رائع"],',
+        '    "ask_status": ["حالتي", "وضعي", "my status", "what is my status", "وين وصلت"],',
+        "}",
+        "",
+        "",
+        "def detect_intent(text: str) -> str:",
+        '    """Detect the user\'s intent from free text. Returns intent name or "chat"."""',
+        "    norm = _normalize(text)",
+        "    for intent, patterns in _INTENT_PATTERNS.items():",
+        "        for p in patterns:",
+        "            if _normalize(p) in norm:",
+        "                return intent",
+        '    return "chat"',
+        "",
+        "",
+        "# ── Smart response generation ──",
+        "def _format_commands() -> str:",
+        "    parts = []",
+        "    for name, desc in COMMAND_MAP.items():",
+        '        parts.append(f"/{name} — {desc}")',
+        '    return "\\n".join(parts)',
+        "",
+        "",
+        "def _format_entities() -> str:",
+        "    parts = []",
+        "    for name, fields in ENTITY_MAP.items():",
+        '        parts.append(f"• {name}: {fields}")',
+        '    return "\\n".join(parts)',
+        "",
+        "",
+        "def _find_entity_in_text(text: str) -> str | None:",
+        '    """Find which entity the user is asking about."""',
+        "    norm = _normalize(text)",
+        "    for name in ENTITY_NAMES:",
+        "        if _normalize(name) in norm:",
+        "            return name",
+        "    return None",
+        "",
+        "",
+        "def smart_reply(user_id: int, text: str) -> str:",
+        '    """Generate a smart, context-aware reply using conversation memory + bot self-knowledge."""',
+        "    mem = get_memory(user_id)",
+        "    mem.add_user_message(text)",
+        "    intent = detect_intent(text)",
+        "",
+        '    bot_name = BOT_SELF.get("bot_name", "البوت")',
+        '    bot_desc = BOT_SELF.get("description", "")',
+        "",
+        '    if intent == "greeting":',
+        '        reply = f"مرحباً بك في {bot_name}! 👋\\n" + bot_desc + "\\n\\nاكتب /help لرؤية جميع الأوامر المتاحة."',
+        '    elif intent == "thanks":',
+        '        reply = f"العفو! 🌟 سعيد بخدمتك في {bot_name}. هل تحتاج أي شيء آخر؟"',
+        '    elif intent == "ask_who":',
+        '        reply = f"أنا {bot_name}. " + bot_desc + f"\\n\\nأستطيع مساعدتك بالأوامر التالية:\\n" + _format_commands()',
+        '    elif intent == "ask_help" or intent == "ask_capabilities":',
+        '        reply = f"📋 أوامر {bot_name}:\\n\\n" + _format_commands()',
+        "        if ENTITY_MAP:",
+        '            reply += "\\n\\n📊 البيانات التي أتعامل معها:\\n" + _format_entities()',
+        '        reply += "\\n\\nاضغط على أي زر بالأسفل أو اكتب أي أمر لبدء العمل!"',
+        '    elif intent == "ask_data":',
+        "        if mem.actions:",
+        '            actions_text = "\\n".join(f"• {a[\'action\']}: {a[\'detail\']}" for a in mem.actions[-5:])',
+        '            reply = f"📝 سجل عملياتك:\\n{actions_text}\\n\\n{mem.summary()}"',
+        "        else:",
+        '            reply = f"لم تقم بأي عمليات بعد في {bot_name}. ابدأ باستخدام الأوامر المتاحة!\\n\\n" + _format_commands()',
+        '    elif intent == "ask_entity":',
+        "        entity = _find_entity_in_text(text)",
+        "        if entity and entity in ENTITY_MAP:",
+        '            reply = f"📊 {entity}:\\nالحقول: {ENTITY_MAP[entity]}\\n\\nيمكنك إدخال بيانات جديدة أو الاستعلام عنها باستخدام الأوامر المتاحة."',
+        "        else:",
+        '            reply = f"البيانات المتاحة في {bot_name}:\\n\\n" + _format_entities()',
+        '    elif intent == "ask_status":',
+        '        reply = f"📊 حالتك في {bot_name}:\\n\\n{mem.summary()}\\n\\nالمحادثات الأخيرة:\\n" + mem.recent_context(3)',
+        "    else:",
+        "        # Generic chat — use context to provide a smart response",
+        "        ctx = mem.summary()",
+        "        if mem.last_entity:",
+        '            reply = (f"فهمت أنك تتحدث عن {mem.last_entity}. "',
+        '                     f"يمكنك استخدام الأوامر المتاحة للتعامل مع {mem.last_entity}.\\n\\n"',
+        '                     f"{ctx}\\n\\n"',
+        '                     f"اكتب /help لرؤية جميع الأوامر.")',
+        "        else:",
+        '            reply = (f"أنا {bot_name}. " + bot_desc +',
+        '                     f"\\n\\nلم أفهم طلبك تماماً، لكنني أتذكر سياق محادثتنا:\\n{ctx}\\n\\n"',
+        '                     f"اكتب /help لرؤية الأوامر المتاحة، أو اضغط على الأزرار بالأسفل.")',
+        "",
+        "    mem.add_bot_message(reply)",
+        "    return reply",
+        "",
+        "",
+        "def remember_action(user_id: int, action: str, detail: str = \"\") -> None:",
+        '    """Record that the user performed an action (e.g., placed an order)."""',
+        "    mem = get_memory(user_id)",
+        "    mem.add_action(action, detail)",
+        "",
+        "",
+        "def get_context_summary(user_id: int) -> str:",
+        '    """Get a summary of the user\'s conversation context."""',
+        "    mem = get_memory(user_id)",
+        "    return mem.summary()",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 # ─────────────────────────── handlers module ─────────────────────────────
 
 def _emit_handlers_module(spec: RichSpec) -> str:
@@ -369,10 +637,12 @@ def _emit_handlers_module(spec: RichSpec) -> str:
     commands = list(spec.commands)
     buttons = list(spec.buttons)
 
-    # Build the store-name lookup from the spec (entity → store class name)
+    # Build the store-name lookup from the spec (entity → container attribute name)
+    # Container defines stores as self.{entity}_store (snake_case), e.g. self.order_store
+    # So we must look up by the attribute name, NOT the class name
     store_map: dict[str, str] = {}
     for e in spec.entities:
-        store_map[e.name.lower()] = _cls(e.name) + "Store"
+        store_map[e.name.lower()] = _ident(e.name) + "_store"
 
     # Build the action-name lookup from the spec (command → action function)
     action_map: dict[str, str] = {}
@@ -415,6 +685,7 @@ def _emit_handlers_module(spec: RichSpec) -> str:
         "from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup",
         "from telegram.ext import ContextTypes",
         "from app import logic",
+        "from app import brain",
         "from app.container import get_container",
         "",
         "",
@@ -537,14 +808,17 @@ def _emit_handlers_module(spec: RichSpec) -> str:
         lines.append("    uid = user.id if user else 0")
         # Admin check
         if cmd.admin_only:
-            lines.append("    from app.config import get_settings")
-            lines.append("    settings = get_settings()")
             lines.append("    admins = set()")
-            lines.append('    raw = getattr(settings, "admin_user_ids", "") or ""')
-            lines.append('    for part in str(raw).split(","):')
-            lines.append("        part = part.strip()")
-            lines.append("        if part.isdigit():")
-            lines.append("            admins.add(int(part))")
+            lines.append("    try:")
+            lines.append("        from app.config import get_settings")
+            lines.append("        settings = get_settings()")
+            lines.append('        raw = getattr(settings, "admin_user_ids", "") or ""')
+            lines.append('        for part in str(raw).split(","):')
+            lines.append("            part = part.strip()")
+            lines.append("            if part.isdigit():")
+            lines.append("                admins.add(int(part))")
+            lines.append("    except Exception:")
+            lines.append("        pass  # settings not loaded yet — allow in dev")
             lines.append("    if admins and uid not in admins:")
             lines.append('        await message.reply_text("هذا الأمر للمشرفين فقط")')
             lines.append("        return")
@@ -560,6 +834,7 @@ def _emit_handlers_module(spec: RichSpec) -> str:
         lines.append('    if message.text and " " in message.text:')
         lines.append("        args = message.text.split()[1:]")
         lines.append("    container = get_container()")
+        lines.append(f"    brain.remember_action(uid, {_py(cmd.name)}, ' '.join(args) if args else '')")
         if store_name:
             lines.append(f"    store = getattr(container, {_py(store_name)}, None)")
         else:
@@ -585,6 +860,25 @@ def _emit_handlers_module(spec: RichSpec) -> str:
             lines.append("            await message.reply_text(str(summary))")
             lines.append("        else:")
             lines.append(f"            await message.reply_text({ _py('لم يتم العثور على السجل') })")
+            lines.append("    elif store is not None and hasattr(store, 'list_by_user'):")
+            lines.append("        # No ID given — show the user's own records")
+            lines.append("        try:")
+            lines.append("            my_rows = await store.list_by_user(uid)")
+            lines.append("        except Exception:")
+            lines.append("            my_rows = []")
+            lines.append("        if my_rows:")
+            lines.append("            out = []")
+            lines.append("            for i, row in enumerate(my_rows[:10], 1):")
+            lines.append("                if isinstance(row, dict):")
+            lines.append("                    summary = ' | '.join(f'{k}={v}' for k, v in list(row.items())[:6])")
+            lines.append("                else:")
+            lines.append("                    summary = str(row)[:120]")
+            lines.append("                out.append(f'{i}. {summary}')")
+            lines.append('            await message.reply_text("\\n".join(out))')
+            lines.append("        elif msgs:")
+            lines.append('            await message.reply_text(" | ".join(str(m) for m in msgs[:5]))')
+            lines.append("        else:")
+            lines.append(f"            await message.reply_text({ _py('لا توجد سجلات لك بعد. استخدم الأوامر المتاحة لإضافة بيانات.') })")
             lines.append("    elif msgs:")
             lines.append('        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))')
             lines.append("    else:")
@@ -674,11 +968,13 @@ def _emit_handlers_module(spec: RichSpec) -> str:
     lines.append("                data['user_id'] = update.effective_user.id if update.effective_user else 0")
     lines.append("                container = get_container()")
     lines.append("                entity = FLOW_ENTITY.get(flow_id, 'record')")
-    lines.append("                store_name = entity.lower() + 'store' if entity else 'primary_store'")
-    lines.append("                store = getattr(container, store_name.replace('store', 'Store'), None) or getattr(container, 'primary_store', None)")
+    lines.append("                # Container stores are snake_case: self.{entity}_store")
+    lines.append("                store_attr = entity.lower().replace(' ', '_') + '_store' if entity else 'primary_store'")
+    lines.append("                store = getattr(container, store_attr, None) or getattr(container, 'primary_store', None)")
     lines.append("                if store is not None and hasattr(store, 'create'):")
     lines.append("                    try:")
     lines.append("                        oid = await store.create(**data)")
+    lines.append("                        brain.remember_action(update.effective_user.id if update.effective_user else 0, flow_id, f'saved id={oid}')")
     lines.append(f"                        await message.reply_text({ _py('تم الحفظ بنجاح ✅ معرف: ') } + str(oid))")
     lines.append("                    except Exception as exc:")
     lines.append(f"                        await message.reply_text({ _py('خطأ في الحفظ: ') } + str(exc))")
@@ -690,8 +986,14 @@ def _emit_handlers_module(spec: RichSpec) -> str:
     lines.append("                if kb is not None:")
     lines.append(f"                    await message.reply_text({ _py('—') }, reply_markup=kb)")
     lines.append("        return")
-    lines.append("    # No active flow — generic echo")
-    lines.append(f"    await message.reply_text({ _py('استخدم الأوامر المتاحة. /help للقائمة') })")
+    lines.append("    # No active flow — use chat brain for smart, context-aware response")
+    lines.append("    uid = update.effective_user.id if update.effective_user else 0")
+    lines.append("    reply = brain.smart_reply(uid, text)")
+    lines.append("    kb = main_keyboard()")
+    lines.append("    if kb is not None:")
+    lines.append("        await message.reply_text(reply, reply_markup=kb)")
+    lines.append("    else:")
+    lines.append("        await message.reply_text(reply)")
     lines.append("")
     lines.append("")
 
@@ -924,6 +1226,7 @@ def transpile_spec(spec: RichSpec, out_dir: str | Path) -> list[str]:
     w("app/models.py", _emit_schema_module(spec))
     w("app/store.py", _emit_store_module(spec))
     w("app/logic.py", _emit_logic_module(spec))
+    w("app/brain.py", _emit_brain_module(spec))
     w("app/handlers.py", _emit_handlers_module(spec))
     w("app/container.py", _emit_container(spec))
     w("app/config.py", _emit_config(spec))

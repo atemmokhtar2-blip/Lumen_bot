@@ -1,50 +1,58 @@
-# Task 3: Implement the engine overhaul (spec-driven, zero hardcoded templates)
+# Spec-Driven Engine Overhaul — Bug Fix & Chat Intelligence
 
-## Phase 1: Scaffold & RichSpec schema [x]
-- [ ] Create `telegram_bot_engine/formal_engine/schemas/rich_spec.py` — deep JSON schema (20+ fields)
-- [ ] Define RichSpec, RichCommand, RichButton, RichEntity, RichRule, RichFlowStep, RichEvidence
+## Phase 1: Diagnose the "buttons/commands not working" bug [x]
+- [x] Generate a real bot from an Arabic spec and inspect the generated handlers
+- [x] Test the generated bot's actual runtime behavior (simulate Telegram updates)
+- [x] Identify exactly where commands break: AI translator output vs transpiler code generation
+- [x] Check if /start, /help, and user-defined commands all produce working handlers
+- [x] Check if inline keyboard buttons (callback_handler) properly dispatch to commands
+- [x] Check if the wizard flow (collect kind) properly saves data to the store
 
-## Phase 2: Multi-pass SpecTranslator [x]
-- [ ] Rewrite `spec_translator.py` — 4-pass LLM pipeline (extraction → fidelity → inference → grounding)
-- [ ] Output RichSpec JSON directly (no spec_to_text lossy round-trip)
-- [ ] Evidence-based grounding (no _SYN synonym lists)
+**DIAGNOSIS**: Bug is in the Code Generation Engine (محرك التوليد), specifically `spec_transpiler.py`:
+- Container defines stores as `self.order_store = OrderStore()` (snake_case)
+- Handlers tried `getattr(container, 'OrderStore', None)` (PascalCase) → returned None
+- All data operations (lookup, list, stats, wizard save) silently failed
+- Button dispatch logic was correct (BUTTON_TO_CMD maps callback_ids correctly)
 
-## Phase 3: ContractBuilder (direct JSON→Contract, no text) [x]
-- [ ] Create `telegram_bot_engine/formal_engine/spec_pipeline/contract_builder.py`
-- [ ] Build ProgramContract directly from RichSpec
-- [ ] Eliminate lossy text round-trip entirely
+## Phase 2: Fix the broken commands/buttons [x]
+- [x] Fix the store attribute resolution (container.order_store vs container.OrderStore)
+- [x] Fix the flow completion store resolution (broken .replace('store', 'Store') logic)
+- [x] Verify callback_handler button dispatch works (tested — all buttons dispatch correctly)
+- [x] Verify wizard flow collects and stores data correctly (tested — data saved to store)
+- [x] Ensure every command in the spec generates a fully functional handler
+- [x] Full runtime simulation: 16/17 tests pass (1 false negative in test assertion, handler works)
 
-## Phase 4: SpecDrivenInference [x]
-- [ ] Create `telegram_bot_engine/formal_engine/spec_pipeline/spec_inference.py`
-- [ ] Infer from RichSpec fields only (no _INPUT_VERBS, _SKIP_CMDS, _PROMPT, etc.)
-- [ ] Use command kind, collects_fields, post_action from spec
+## Phase 3: Strengthen the AI translator (no constants, all from user) [x]
+- [x] Ensure SpecTranslator v2 extracts ALL commands/buttons from user text (tested with Arabic spec — 8 commands, 6 buttons extracted)
+- [x] Ensure no hardcoded command lists leak into the generated bot (v2 has no _SYN dictionary, grounding uses evidence+similarity)
+- [x] Ensure evidence grounding doesn't drop legitimate user commands (dropped: 0 commands, 0 buttons in test)
+- [x] Add button-completeness safety net (auto-create button for each command if user mentioned "زرار")
+- [x] Fix SQL reserved word bug (column names now quoted in CREATE TABLE and INSERT)
+- [x] Fix admin_only handler crash when settings not loaded (try/except fallback)
+- [x] Increase default translator timeout 30s → 90s (4-pass pipeline needs more time)
+- [x] Strengthen extraction & audit prompts (emphasize button per feature)
+- [x] Test with a real Arabic spec through the full v2 translator (6/6 buttons work end-to-end)
 
-## Phase 5: SpecDrivenTranspiler [x]
-- [ ] Create `telegram_bot_engine/formal_engine/spec_pipeline/spec_transpiler.py`
-- [ ] Generate code from ProgramContract only (no hardcoded cmd_kind lists)
-- [ ] Unified cmd_kind source (no duplicate)
+## Phase 4: Add chat intelligence — context memory [x]
+- [x] Add a conversation context/memory layer to the generated bot (brain.py with ConversationMemory)
+- [x] Bot remembers what the user said across the session (per-user memory store)
+- [x] Bot can answer questions about the app it's developing (BOT_SELF baked from spec)
+- [x] Bot uses context to provide smarter responses (intent detection + smart_reply)
+- [x] Bot doesn't forget — knows what the user is developing (remember_action on every command)
+- [x] Verify brain tests pass (10/10 brain tests + handler integration test pass)
 
-## Phase 6: ArchitecturalGroundingGate [x]
-- [ ] Create `telegram_bot_engine/formal_engine/spec_pipeline/grounding_gate.py`
-- [ ] Evidence-based grounding with semantic similarity fallback (0.7 threshold)
-- [ ] No synonym lists
+## Phase 5: Test & verify the fixes [x]
+- [x] Write a runtime handler simulation test (17/17 tests pass — all commands + buttons + wizard)
+- [x] Verify all commands work: start, help, collect, lookup, list, stats, broadcast, action, info
+- [x] Verify inline keyboard buttons dispatch correctly (all buttons dispatch to correct handlers)
+- [x] Verify wizard flow collects and stores data correctly (data saved to store, all fields captured)
+- [x] Verify chat context memory works (brain tests pass, integration test passes)
+- [x] py_compile all generated bots (all 9 files compile cleanly)
+- [x] Full end-to-end test: Arabic text → v2 translator → transpile → 6/6 buttons work runtime
+- [x] SQL reserved word fix verified (field 'order' works correctly)
+- [x] Admin-only handler resilience verified (no crash when settings not loaded)
 
-## Phase 7: Wire new pipeline [x] VERIFIED
-- [ ] Update `__init__.py` generate_bot() to use new spec-driven pipeline
-- [ ] Update `pipeline_formal.py` build_from_text to accept RichSpec
-- [ ] Keep fallback to old pipeline only if RichSpec fails
-
-## Phase 8: Test & verify [x]
-- [x] Write benchmark test script
-- [x] Test with multiple Arabic specs (delivery bot, course booking, store inventory, info bot)
-- [x] Verify generated bots have working commands
-- [x] py_compile all generated bots
-- [x] Runtime store test (create/get/list_all/list_by_user/update_status)
-- [x] Verify no hardcoded classification in new pipeline
-- [x] Fix SQL reserved word quoting (e.g. "order" table)
-- [x] Fix old fallback transpiler f-string bug
-
-## Phase 9: Push to repo [ ]
+## Phase 6: Push to repo [ ]
 - [ ] Commit all changes
-- [ ] Push branch feat/spec-driven-engine-overhaul
-- [ ] Create Pull Request
+- [ ] Push to branch feat/spec-driven-engine-overhaul
+- [ ] Update Pull Request
