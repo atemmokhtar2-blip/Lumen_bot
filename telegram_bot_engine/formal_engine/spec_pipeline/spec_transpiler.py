@@ -210,6 +210,12 @@ def _emit_store_module(spec: RichSpec) -> str:
             "                r[\"status\"] = status",
             "                return True",
             "        return False",
+            "    async def search_by_field(self, **filters: Any) -> list[dict[str, Any]]:",
+            "        results = []",
+            "        for r in self._data:",
+            "            if all(str(r.get(k, '')) == str(v) for k, v in filters.items() if k != 'user_id'):",
+            "                results.append(r)",
+            "        return results",
             "",
         ]
         return "\n".join(lines) + "\n"
@@ -301,6 +307,26 @@ def _emit_store_module(spec: RichSpec) -> str:
         lines.append("        ok = cur.rowcount > 0")
         lines.append("        conn.close()")
         lines.append("        return ok")
+        lines.append("")
+        lines.append("    async def search_by_field(self, **filters: Any) -> list[dict[str, Any]]:")
+        lines.append("        conn = _conn()")
+        lines.append("        _ensure_tables(conn)")
+        lines.append("        results: list[dict[str, Any]] = []")
+        lines.append("        # Build WHERE clause from filters (skip user_id, that's handled by caller)")
+        lines.append("        conditions = []")
+        lines.append("        values: list[Any] = []")
+        lines.append("        for k, v in filters.items():")
+        lines.append("            if k in ('user_id', 'id'):")
+        lines.append("                continue")
+        lines.append("            conditions.append(f'\"{k}\" LIKE ?')")
+        lines.append("            values.append(f'%{v}%')")
+        lines.append("        if conditions:")
+        lines.append("            where_sql = ' AND '.join(conditions)")
+        lines.append(f"            rows = conn.execute(f'SELECT * FROM \"{{self._table}}\" WHERE {{where_sql}} ORDER BY rowid DESC LIMIT 20', values).fetchall()")
+        lines.append("        else:")
+        lines.append(f"            rows = conn.execute(f'SELECT * FROM \"{{self._table}}\" ORDER BY rowid DESC LIMIT 20').fetchall()")
+        lines.append("        conn.close()")
+        lines.append("        return [_row_to_dict(r) for r in rows]")
         lines.append("")
         lines.append("")
     return "\n".join(lines) + "\n"
@@ -742,8 +768,10 @@ def _emit_handlers_module(spec: RichSpec) -> str:
         if aname:
             action_map[c.name] = _ident(aname)
 
-    # Wizards: collect commands with flow_steps
-    wizard_cmds = [c for c in commands if _kind_val(c.kind) == CommandKind.COLLECT.value and (c.flow_steps or c.collects_fields)]
+    # Wizards: any command with flow_steps or collects_fields starts a multi-step flow.
+    # This includes COLLECT (store data) and LOOKUP (search by collected fields).
+    _flow_kinds = {CommandKind.COLLECT.value, CommandKind.LOOKUP.value}
+    wizard_cmds = [c for c in commands if _kind_val(c.kind) in _flow_kinds and (c.flow_steps or c.collects_fields)]
 
     # Button → command routing from the spec
     btn_to_cmd: dict[str, str] = {}
@@ -1054,24 +1082,61 @@ def _emit_handlers_module(spec: RichSpec) -> str:
     lines.append("            if ud['step'] < len(steps):")
     lines.append("                await message.reply_text(steps[ud['step']]['prompt'])")
     lines.append("            else:")
-    lines.append("                # Flow complete — store the data")
+    lines.append("                # Flow complete — dispatch by kind (collect=store, lookup=search)")
     lines.append("                data = ud.get('data', {})")
     lines.append("                data['user_id'] = update.effective_user.id if update.effective_user else 0")
     lines.append("                container = get_container()")
     lines.append("                entity = FLOW_ENTITY.get(flow_id, 'record')")
+    lines.append("                flow_kind = FLOW_KIND.get(flow_id, 'collect')")
     lines.append("                # Container stores are snake_case: self.{entity}_store")
     lines.append("                store_attr = entity.lower().replace(' ', '_') + '_store' if entity else 'primary_store'")
     lines.append("                store = getattr(container, store_attr, None) or getattr(container, 'primary_store', None)")
-    lines.append("                if store is not None and hasattr(store, 'create'):")
-    lines.append("                    try:")
-    lines.append("                        oid = await store.create(**data)")
-    lines.append("                        brain.remember_action(update.effective_user.id if update.effective_user else 0, flow_id, f'saved id={oid}')")
-    lines.append(f"                        await message.reply_text({ _py('تم الحفظ بنجاح ✅ معرف: ') } + str(oid))")
-    lines.append("                    except Exception as exc:")
-    lines.append(f"                        await message.reply_text({ _py('خطأ في الحفظ: ') } + str(exc))")
+    lines.append("                if flow_kind == 'lookup':")
+    lines.append("                    # LOOKUP flow — search the store using collected field values")
+    lines.append("                    search_data = {k: v for k, v in data.items() if k != 'user_id'}")
+    lines.append("                    if store is not None and hasattr(store, 'search_by_field'):")
+    lines.append("                        try:")
+    lines.append("                            results = await store.search_by_field(**search_data)")
+    lines.append("                        except Exception as exc:")
+    lines.append(f"                            await message.reply_text({ _py('خطأ في البحث: ') } + str(exc))")
+    lines.append("                            results = []")
+    lines.append("                    elif store is not None and hasattr(store, 'list_all'):")
+    lines.append("                        try:")
+    lines.append("                            all_rows = await store.list_all()")
+    lines.append("                        except Exception:")
+    lines.append("                            all_rows = []")
+    lines.append("                        # Fallback: filter client-side")
+    lines.append("                        results = []")
+    lines.append("                        for row in all_rows:")
+    lines.append("                            if all(str(row.get(k, '')) == str(v) for k, v in search_data.items()):")
+    lines.append("                                results.append(row)")
+    lines.append("                    else:")
+    lines.append("                        results = []")
+    lines.append("                    brain.remember_action(update.effective_user.id if update.effective_user else 0, flow_id, f'search found={len(results)}')")
+    lines.append("                    if results:")
+    lines.append("                        out = []")
+    lines.append("                        for i, row in enumerate(results[:10], 1):")
+    lines.append("                            if isinstance(row, dict):")
+    lines.append("                                summary = ' | '.join(f'{k}={v}' for k, v in list(row.items())[:6])")
+    lines.append("                            else:")
+    lines.append("                                summary = str(row)[:120]")
+    lines.append("                            out.append(f'{i}. {summary}')")
+    lines.append("                        _search_hdr = " + _py('نتائج البحث:\n'))
+    lines.append("                        await message.reply_text(_search_hdr + '\\n'.join(out))")
+    lines.append("                    else:")
+    lines.append(f"                        await message.reply_text({ _py('لم يتم العثور على نتائج مطابقة.') })")
     lines.append("                else:")
-    lines.append("                    summary = ' | '.join(f'{k}={v}' for k, v in data.items())")
-    lines.append(f"                    await message.reply_text({ _py('البيانات: ') } + summary)")
+    lines.append("                    # COLLECT flow — store the data")
+    lines.append("                    if store is not None and hasattr(store, 'create'):")
+    lines.append("                        try:")
+    lines.append("                            oid = await store.create(**data)")
+    lines.append("                            brain.remember_action(update.effective_user.id if update.effective_user else 0, flow_id, f'saved id={oid}')")
+    lines.append(f"                            await message.reply_text({ _py('تم الحفظ بنجاح ✅ معرف: ') } + str(oid))")
+    lines.append("                        except Exception as exc:")
+    lines.append(f"                            await message.reply_text({ _py('خطأ في الحفظ: ') } + str(exc))")
+    lines.append("                    else:")
+    lines.append("                        summary = ' | '.join(f'{k}={v}' for k, v in data.items())")
+    lines.append(f"                        await message.reply_text({ _py('البيانات: ') } + summary)")
     lines.append("                ud.clear()")
     lines.append("                kb = main_keyboard()")
     lines.append("                if kb is not None:")
@@ -1255,6 +1320,7 @@ def _emit_requirements(spec: RichSpec) -> str:
         "python-telegram-bot>=21.0",
         "pydantic>=2.0",
         "pydantic-settings>=2.0",
+        "g4f>=0.3",
     ]
     if spec.has_database():
         reqs += ["sqlalchemy[asyncio]>=2.0", "aiosqlite>=0.19"]

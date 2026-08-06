@@ -382,6 +382,36 @@ def _sanitize_enums(data: dict[str, Any]) -> dict[str, Any]:
                 if act not in ("ask", "store", "confirm", "compute", "notify"):
                     s["action"] = "ask"
 
+    # Sanitize buttons — ensure callback_id and target_command are present
+    import re as _re
+    buttons = data.get("buttons") or []
+    if isinstance(buttons, list):
+        cmd_names = {(c.get("name") or "").lower().strip() for c in (data.get("commands") or []) if isinstance(c, dict) and c.get("name")}
+        for b in buttons:
+            if not isinstance(b, dict):
+                continue
+            # Ensure callback_id exists
+            cb = (b.get("callback_id") or "").strip()
+            if not cb:
+                # Auto-fill from target_command
+                tc = (b.get("target_command") or "").strip()
+                if tc:
+                    cb = tc.lower().replace(" ", "_")
+                else:
+                    # Auto-fill from label
+                    label = (b.get("label") or "").strip()
+                    cb = _re.sub(r"[^a-zA-Z0-9\u0600-\u06FF]", "_", label).strip("_").lower() or "btn"
+                b["callback_id"] = cb
+            # Ensure target_command exists — try to match callback_id to a command
+            tc = (b.get("target_command") or "").strip()
+            if not tc:
+                cb_lower = b["callback_id"].lower()
+                if cb_lower in cmd_names:
+                    b["target_command"] = cb_lower
+                else:
+                    # Try matching label to command descriptions
+                    pass
+
     return data
 
 
