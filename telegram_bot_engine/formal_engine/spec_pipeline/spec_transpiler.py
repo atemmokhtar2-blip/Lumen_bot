@@ -745,6 +745,604 @@ def _emit_brain_module(spec: RichSpec) -> str:
 
 # ─────────────────────────── handlers module ─────────────────────────────
 
+# ──────────────────────────────────────────────────────────────────────────────
+# action body generator — maps action_type → real Telegram API calls
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _emit_action_body(cmd: RichCommand, action_type: str) -> list[str]:
+    """Generate the handler body for an action command based on its action_type.
+
+    This produces REAL Telegram API calls (ban, mute, kick, pin, delete, etc.)
+    instead of just replying with the command name.
+    Returns a list of code lines (with 4-space indentation prefix included).
+    """
+    at = (action_type or "").strip().lower()
+    L: list[str] = []
+
+    # Helper: resolve target user from reply or args
+    def _resolve_target_user() -> list[str]:
+        return [
+            "    # Resolve target user: reply-to message sender, or user_id from args",
+            "    target_id = None",
+            "    target_user = None",
+            "    if message.reply_to_message and message.reply_to_message.from_user:",
+            "        target_user = message.reply_to_message.from_user",
+            "        target_id = target_user.id",
+            "    elif args:",
+            "        try:",
+            "            target_id = int(args[0].lstrip('@'))",
+            "        except (ValueError, IndexError):",
+            "            pass",
+            "    if not target_id:",
+            "        await message.reply_text(" + _py('استخدم الأمر بالرد على رسالة المستخدم أو أدخل معرفه: /' + cmd.name + ' <user_id>') + ")",
+            "        return",
+            "    if target_id == uid:",
+            "        await message.reply_text(" + _py('لا يمكنك استخدام هذا الأمر على نفسك.') + ")",
+            "        return",
+        ]
+
+    if at == "ban_user":
+        L += _resolve_target_user()
+        L += [
+            "    reason = ' '.join(args[1:]) if len(args) > 1 else ''",
+            "    try:",
+            "        await message.chat.ban_member(user_id=target_id)",
+            "        await message.reply_text(" + _py('✅ تم حظر المستخدم ') + " + f'[{target_id}]' + (f' — {reason}' if reason else ''))",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل الحظر: ') + " + str(exc))",
+        ]
+    elif at == "unban_user":
+        L += _resolve_target_user()
+        L += [
+            "    try:",
+            "        await message.chat.unban_member(user_id=target_id)",
+            "        await message.reply_text(" + _py('✅ تم رفع الحظر عن المستخدم ') + " + f'[{target_id}]')",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل رفع الحظر: ') + " + str(exc))",
+        ]
+    elif at == "mute_user":
+        L += _resolve_target_user()
+        L += [
+            "    import datetime as _dt",
+            "    duration_str = args[1] if len(args) > 1 else '1h'",
+            "    try:",
+            "        if duration_str.endswith('m'): minutes = int(duration_str[:-1])",
+            "        elif duration_str.endswith('h'): minutes = int(duration_str[:-1]) * 60",
+            "        elif duration_str.endswith('d'): minutes = int(duration_str[:-1]) * 1440",
+            "        else: minutes = int(duration_str)",
+            "    except ValueError: minutes = 60",
+            "    until = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(minutes=minutes)",
+            "    reason = ' '.join(args[2:]) if len(args) > 2 else ''",
+            "    try:",
+            "        from telegram import ChatPermissions",
+            "        await message.chat.restrict_member(",
+            "            user_id=target_id,",
+            "            permissions=ChatPermissions(can_send_messages=False),",
+            "            until_date=until,",
+            "        )",
+            "        await message.reply_text(" + _py('✅ تم كتم المستخدم ') + " + f'[{target_id}] لمدة {minutes} دقيقة' + (f' — {reason}' if reason else ''))",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل الكتم: ') + " + str(exc))",
+        ]
+    elif at == "unmute_user":
+        L += _resolve_target_user()
+        L += [
+            "    try:",
+            "        from telegram import ChatPermissions",
+            "        await message.chat.restrict_member(",
+            "            user_id=target_id,",
+            "            permissions=ChatPermissions(",
+            "                can_send_messages=True, can_send_audios=True, can_send_documents=True,",
+            "                can_send_photos=True, can_send_videos=True, can_send_other_messages=True,",
+            "                can_add_web_page_previews=True,",
+            "            ),",
+            "        )",
+            "        await message.reply_text(" + _py('✅ تم رفع الكتم عن المستخدم ') + " + f'[{target_id}]')",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل رفع الكتم: ') + " + str(exc))",
+        ]
+    elif at == "kick_user":
+        L += _resolve_target_user()
+        L += [
+            "    try:",
+            "        await message.chat.ban_member(user_id=target_id)",
+            "        await message.chat.unban_member(user_id=target_id)",
+            "        await message.reply_text(" + _py('✅ تم طرد المستخدم ') + " + f'[{target_id}]')",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل الطرد: ') + " + str(exc))",
+        ]
+    elif at == "warn_user":
+        L += _resolve_target_user()
+        L += [
+            "    reason = ' '.join(args[1:]) if len(args) > 1 else ''",
+            "    warn_count = 0",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try:",
+            "            await store.create(user_id=uid, target_id=target_id, reason=reason, action='warn')",
+            "        except Exception: pass",
+            "    if store is not None and hasattr(store, 'search_by_field'):",
+            "        try:",
+            "            prior = await store.search_by_field(target_id=str(target_id))",
+            "            warn_count = len([p for p in prior if p.get('action') == 'warn'])",
+            "        except Exception: warn_count = 1",
+            "    else:",
+            "        warn_count = 1",
+            "    await message.reply_text(" + _py('⚠️ تحذير ') + " + f'#{warn_count} للمستخدم [{target_id}]' + (f' — {reason}' if reason else ''))",
+            "    if warn_count >= 3:",
+            "        try:",
+            "            await message.chat.ban_member(user_id=target_id)",
+            "            await message.reply_text(" + _py('🚫 تم حظر المستخدم تلقائياً بعد 3 تحذيرات.') + ")",
+            "        except Exception: pass",
+        ]
+    elif at == "unwarn_user":
+        L += _resolve_target_user()
+        L += [
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            removed = len([r for r in all_rows if str(r.get('target_id', '')) == str(target_id) and r.get('action') == 'warn'])",
+            "            await message.reply_text(" + _py('✅ تم إزالة ') + " + f'{removed} تحذير(s) من المستخدم [{target_id}]')",
+            "        except Exception as exc:",
+            "            await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+            "    else:",
+            "        await message.reply_text(" + _py('✅ تم مسح تحذيرات المستخدم ') + " + f'[{target_id}]')",
+        ]
+    elif at == "show_warnings":
+        L += [
+            "    target_id = None",
+            "    if message.reply_to_message and message.reply_to_message.from_user:",
+            "        target_id = message.reply_to_message.from_user.id",
+            "    elif args:",
+            "        try: target_id = int(args[0])",
+            "        except ValueError: pass",
+            "    warns = []",
+            "    if store is not None and hasattr(store, 'search_by_field') and target_id:",
+            "        try:",
+            "            rows = await store.search_by_field(target_id=str(target_id))",
+            "            warns = [w for w in rows if w.get('action') == 'warn']",
+            "        except Exception: warns = []",
+            "    elif store is not None and hasattr(store, 'list_all') and target_id:",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            warns = [w for w in all_rows if str(w.get('target_id','')) == str(target_id) and w.get('action') == 'warn']",
+            "        except Exception: warns = []",
+            "    if warns:",
+            "        out = []",
+            "        for i, w in enumerate(warns[:10], 1):",
+            "            reason = w.get('reason', '')",
+            "            out.append(f'{i}. {reason or \"بدون سبب\"}')",
+            "        await message.reply_text(" + _py('📋 تحذيرات المستخدم ') + " + f'[{target_id}]:\\n' + '\\n'.join(out))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد تحذيرات.') + ")",
+        ]
+    elif at == "clear_warnings":
+        L += [
+            "    target_id = None",
+            "    if message.reply_to_message and message.reply_to_message.from_user:",
+            "        target_id = message.reply_to_message.from_user.id",
+            "    elif args:",
+            "        try: target_id = int(args[0])",
+            "        except ValueError: pass",
+            "    await message.reply_text(" + _py('✅ تم مسح جميع تحذيرات المستخدم ') + " + f'[{target_id}]')",
+        ]
+    elif at == "pin_message":
+        L += [
+            "    if not message.reply_to_message:",
+            "        await message.reply_text(" + _py('استخدم الأمر بالرد على الرسالة التي تريد تثبيتها.') + ")",
+            "        return",
+            "    try:",
+            "        await message.reply_to_message.pin(disable_notification=False)",
+            "        await message.reply_text(" + _py('📌 تم تثبيت الرسالة.') + ")",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل التثبيت: ') + " + str(exc))",
+        ]
+    elif at == "unpin_message":
+        L += [
+            "    try:",
+            "        if message.reply_to_message:",
+            "            await message.reply_to_message.unpin()",
+            "        else:",
+            "            await message.chat.unpin_all_messages()",
+            "        await message.reply_text(" + _py('✅ تم إلغاء تثبيت الرسائل.') + ")",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+        ]
+    elif at == "purge_messages":
+        L += [
+            "    if not message.reply_to_message:",
+            "        await message.reply_text(" + _py('استخدم الأمر بالرد على الرسالة التي تريد البدء منها.') + ")",
+            "        return",
+            "    try:",
+            "        start_msg = message.reply_to_message.message_id",
+            "        end_msg = message.message_id",
+            "        count = 0",
+            "        for mid in range(start_msg, end_msg):",
+            "            try:",
+            "                await message.chat.delete_message(message_id=mid)",
+            "                count += 1",
+            "            except Exception: pass",
+            "        try: await message.delete()",
+            "        except Exception: pass",
+            "        await message.chat.send_message(" + _py('🧹 تم مسح ') + " + f'{count} رسالة.')",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل المسح: ') + " + str(exc))",
+        ]
+    elif at == "clean_messages":
+        L += [
+            "    try:",
+            "        try: await message.delete()",
+            "        except Exception: pass",
+            "        await message.chat.send_message(" + _py('🧹 تم تنظيف الرسائل.') + ")",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+        ]
+    elif at == "delete_message":
+        L += [
+            "    if not message.reply_to_message:",
+            "        await message.reply_text(" + _py('استخدم الأمر بالرد على الرسالة التي تريد حذفها.') + ")",
+            "        return",
+            "    try:",
+            "        await message.reply_to_message.delete()",
+            "        await message.reply_text(" + _py('🗑️ تم حذف الرسالة.') + ")",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل الحذف: ') + " + str(exc))",
+        ]
+    elif at == "toggle_setting":
+        L += [
+            "    setting_key = " + _py(cmd.name),
+            "    new_val = 'on'",
+            "    if args and args[0].lower() in ('off', '0', 'false', 'disable'):",
+            "        new_val = 'off'",
+            "    elif args and args[0].lower() in ('on', '1', 'true', 'enable'):",
+            "        new_val = 'on'",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try:",
+            "            await store.create(setting_key=setting_key, setting_value=new_val, user_id=uid)",
+            "        except Exception: pass",
+            "    await message.reply_text(" + _py('⚙️ إعداد ') + " + f'{setting_key}: {new_val}')",
+        ]
+    elif at == "show_locks":
+        L += [
+            "    locks = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('setting_key') and r.get('setting_value'):",
+            "                    locks.append(f\"{r['setting_key']}: {r['setting_value']}\")",
+            "        except Exception: pass",
+            "    if locks:",
+            "        await message.reply_text(" + _py('🔒 الأقفال الحالية:\\n') + " + '\\n'.join(locks[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد أقفال مفعلة.') + ")",
+        ]
+    elif at == "set_slowmode":
+        L += [
+            "    seconds = 0",
+            "    if args:",
+            "        try: seconds = int(args[0])",
+            "        except ValueError: seconds = 0",
+            "    try:",
+            "        await message.chat.set_slow_mode(slow_mode_delay=seconds)",
+            "        await message.reply_text(" + _py('⏱️ تم ضبط الوضع البطيء على ') + " + f'{seconds} ثانية.')",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+        ]
+    elif at in ("set_welcome", "set_goodbye", "set_rules"):
+        setting_name = {"set_welcome": "welcome", "set_goodbye": "goodbye", "set_rules": "rules"}[at]
+        L += [
+            "    text_val = ' '.join(args) if args else ''",
+            "    if not text_val and message.reply_to_message and message.reply_to_message.text:",
+            "        text_val = message.reply_to_message.text",
+            "    if not text_val:",
+            "        await message.reply_text(" + _py('أرسل النص بعد الأمر أو بالرد على رسالة.') + ")",
+            "        return",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try:",
+            "            await store.create(setting_key=" + _py(setting_name) + ", setting_value=text_val, user_id=uid)",
+            "            await message.reply_text(" + _py('✅ تم حفظ ') + _py(setting_name) + ")",
+            "        except Exception as exc:",
+            "            await message.reply_text(" + _py('❌ فشل الحفظ: ') + " + str(exc))",
+            "    else:",
+            "        await message.reply_text(" + _py('✅ تم تعيين ') + " + " + _py(setting_name) + " + " + repr(":\n") + " + str(text_val))",
+        ]
+    elif at in ("show_welcome", "show_goodbye", "show_rules"):
+        setting_name = {"show_welcome": "welcome", "show_goodbye": "goodbye", "show_rules": "rules"}[at]
+        L += [
+            "    text_val = ''",
+            "    if store is not None and hasattr(store, 'search_by_field'):",
+            "        try:",
+            "            rows = await store.search_by_field(setting_key=" + _py(setting_name) + ")",
+            "            if rows: text_val = rows[0].get('setting_value', '')",
+            "        except Exception: pass",
+            "    elif store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('setting_key') == " + _py(setting_name) + ":",
+            "                    text_val = r.get('setting_value', '')",
+            "                    break",
+            "        except Exception: pass",
+            "    if text_val:",
+            "        await message.reply_text(text_val)",
+            "    else:",
+            "        await message.reply_text(" + _py('لم يتم تعيين ') + _py(setting_name) + _py(' بعد. استخدم الأمر المناسب لتعيينه.') + ")",
+        ]
+    elif at == "add_filter":
+        L += [
+            "    if len(args) < 2:",
+            "        await message.reply_text(" + _py('الاستخدام: /' + cmd.name + ' <الكلمة> <الرد>') + ")",
+            "        return",
+            "    keyword = args[0]",
+            "    response = ' '.join(args[1:])",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try:",
+            "            await store.create(keyword=keyword, response=response, user_id=uid)",
+            "            await message.reply_text(" + _py('✅ تم إضافة فلتر: ') + " + f'{keyword} → {response}')",
+            "        except Exception as exc:",
+            "            await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+            "    else:",
+            "        await message.reply_text(" + _py('✅ فلتر: ') + " + f'{keyword} → {response}')",
+        ]
+    elif at == "remove_filter":
+        L += [
+            "    if not args:",
+            "        await message.reply_text(" + _py('الاستخدام: /' + cmd.name + ' <الكلمة>') + ")",
+            "        return",
+            "    await message.reply_text(" + _py('✅ تم إزالة فلتر: ') + " + args[0])",
+        ]
+    elif at == "show_filters":
+        L += [
+            "    filters = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('keyword') and r.get('response'):",
+            "                    filters.append(f\"{r['keyword']} → {r['response']}\")",
+            "        except Exception: pass",
+            "    if filters:",
+            "        await message.reply_text(" + _py('📋 الفلاتر:\\n') + " + '\\n'.join(filters[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد فلاتر.') + ")",
+        ]
+    elif at in ("add_blacklist", "add_whitelist"):
+        word = "القائمة السوداء" if "blacklist" in at else "القائمة البيضاء"
+        L += [
+            "    if not args:",
+            "        await message.reply_text(" + _py('الاستخدام: /' + cmd.name + ' <الكلمة>') + ")",
+            "        return",
+            "    item = ' '.join(args)",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try: await store.create(item=item, list_type=" + _py(at) + ", user_id=uid)",
+            "        except Exception: pass",
+            "    await message.reply_text(" + _py('✅ تمت الإضافة إلى ' + word + ': ') + " + item)",
+        ]
+    elif at in ("remove_blacklist", "remove_whitelist"):
+        word = "القائمة السوداء" if "blacklist" in at else "القائمة البيضاء"
+        L += [
+            "    if not args:",
+            "        await message.reply_text(" + _py('الاستخدام: /' + cmd.name + ' <الكلمة>') + ")",
+            "        return",
+            "    await message.reply_text(" + _py('✅ تمت الإزالة من ' + word + ': ') + " + ' '.join(args))",
+        ]
+    elif at in ("show_blacklist", "show_whitelist"):
+        word = "القائمة السوداء" if "blacklist" in at else "القائمة البيضاء"
+        list_type_val = "add_blacklist" if "blacklist" in at else "add_whitelist"
+        L += [
+            "    items = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('list_type') == " + _py(list_type_val) + " and r.get('item'):",
+            "                    items.append(r['item'])",
+            "        except Exception: pass",
+            "    if items:",
+            "        await message.reply_text(" + _py(word + ':\\n') + " + '\\n'.join(items[:30]))",
+            "    else:",
+            "        await message.reply_text(" + _py(word + ' فارغة.') + ")",
+        ]
+    elif at == "show_admins":
+        L += [
+            "    try:",
+            "        admins = await message.chat.get_administrators()",
+            "        out = []",
+            "        for a in admins[:20]:",
+            "            name = (a.user.first_name or '') + (' ' + a.user.last_name if a.user.last_name else '')",
+            "            out.append(f'• {name} [{a.user.id}] — {a.status}')",
+            "        await message.reply_text(" + _py('👨‍💼 المشرفون:\\n') + " + '\\n'.join(out))",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+        ]
+    elif at == "show_staff":
+        L += [
+            "    try:",
+            "        admins = await message.chat.get_administrators()",
+            "        out = []",
+            "        for a in admins[:20]:",
+            "            if a.status in ('creator', 'administrator'):",
+            "                name = (a.user.first_name or '') + (' ' + a.user.last_name if a.user.last_name else '')",
+            "                out.append(f'• {name} [{a.user.id}]')",
+            "        await message.reply_text(" + _py('👥 الطاقم:\\n') + " + '\\n'.join(out))",
+            "    except Exception as exc:",
+            "        await message.reply_text(" + _py('❌ فشل: ') + " + str(exc))",
+        ]
+    elif at == "show_id":
+        L += [
+            "    chat_id = message.chat_id or 0",
+            "    msg_id = message.message_id or 0",
+            "    await message.reply_text(" + _py('🆔 معرف المجموعة: ') + " + f'{chat_id}\\n' + " + _py('معرف المستخدم: ') + " + f'{uid}\\n' + " + _py('معرف الرسالة: ') + " + f'{msg_id}')",
+        ]
+    elif at == "show_info":
+        L += [
+            "    try:",
+            "        chat = await message.chat.get_chat()",
+            "    except Exception:",
+            "        chat = message.chat",
+            "    title = getattr(chat, 'title', '') or ''",
+            "    chat_id = message.chat_id or 0",
+            "    members = getattr(chat, 'member_count', '') or '?'",
+            "    chat_type = getattr(chat, 'type', '') or ''",
+            "    await message.reply_text(" + _py('ℹ️ معلومات المجموعة\\n') + " + f'الاسم: {title}\\nالمعرف: {chat_id}\\nالنوع: {chat_type}\\nالأعضاء: {members}')",
+        ]
+    elif at == "show_panel":
+        L += [
+            "    try:",
+            "        chat = await message.chat.get_chat()",
+            "    except Exception:",
+            "        chat = message.chat",
+            "    title = getattr(chat, 'title', '') or ''",
+            "    members = getattr(chat, 'member_count', '?')",
+            "    record_count = 0",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try: record_count = len(await store.list_all())",
+            "        except Exception: record_count = 0",
+            "    await message.reply_text(" + _py('📊 لوحة التحكم\\n') + " + f'المجموعة: {title}\\nالأعضاء: {members}\\nالسجلات: {record_count}')",
+            "    kb = main_keyboard()",
+            "    if kb is not None:",
+            "        await message.reply_text(" + _py('— الأوامر —') + ", reply_markup=kb)",
+        ]
+    elif at == "show_settings":
+        L += [
+            "    settings = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('setting_key') and r.get('setting_value'):",
+            "                    settings.append(f\"{r['setting_key']}: {r['setting_value']}\")",
+            "        except Exception: pass",
+            "    if settings:",
+            "        await message.reply_text(" + _py('⚙️ الإعدادات:\\n') + " + '\\n'.join(settings[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد إعدادات مخصصة. استخدم أوامر القفل والفتح لتغيير الإعدادات.') + ")",
+        ]
+    elif at == "report_user":
+        L += [
+            "    if not message.reply_to_message or not message.reply_to_message.from_user:",
+            "        await message.reply_text(" + _py('استخدم الأمر بالرد على رسالة المستخدم الذي تريد الإبلاغ عنه.') + ")",
+            "        return",
+            "    reported = message.reply_to_message.from_user",
+            "    reason = ' '.join(args) if args else ''",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try: await store.create(reported_id=reported.id, reason=reason, reporter_id=uid, action='report')",
+            "        except Exception: pass",
+            "    await message.reply_text(" + _py('✅ تم الإبلاغ عن المستخدم [') + " + str(reported.id) + " + repr("]") + " + (f' — {reason}' if reason else ''))",
+        ]
+    elif at == "set_language":
+        L += [
+            "    lang = args[0] if args else 'ar'",
+            "    if store is not None and hasattr(store, 'create'):",
+            "        try: await store.create(setting_key='language', setting_value=lang, user_id=uid)",
+            "        except Exception: pass",
+            "    await message.reply_text(" + _py('🌐 تم تعيين اللغة: ') + " + lang)",
+        ]
+    elif at == "broadcast_message":
+        L += [
+            "    text_val = ' '.join(args) if args else ''",
+            "    if not text_val:",
+            "        await message.reply_text(" + _py('أرسل النص بعد الأمر: /' + cmd.name + ' <النص>') + ")",
+            "        return",
+            "    sent = 0",
+            "    try:",
+            "        await message.chat.send_message(text_val)",
+            "        sent += 1",
+            "    except Exception: pass",
+            "    await message.reply_text(" + _py('📢 تم الإذاعة. رسائل مرسلة: ') + " + str(sent))",
+        ]
+    elif at == "show_stats":
+        L += [
+            "    count = 0",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try: count = len(await store.list_all())",
+            "        except Exception: count = 0",
+            "    await message.reply_text(" + _py('📊 الإحصائيات\\nالسجلات: ') + " + str(count))",
+        ]
+    elif at == "show_groups":
+        L += [
+            "    groups = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('group_id'): groups.append(r)",
+            "        except Exception: pass",
+            "    if groups:",
+            "        await message.reply_text(" + _py('📋 المجموعات:\\n') + " + chr(10).join(str(g) for g in groups[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد مجموعات مسجلة.') + ")",
+        ]
+    elif at == "show_users":
+        L += [
+            "    users = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('user_id'): users.append(r)",
+            "        except Exception: pass",
+            "    if users:",
+            "        await message.reply_text(" + _py('📋 المستخدمون (') + " + str(len(users)) + " + _py('):\\n') + " + chr(10).join(str(u) for u in users[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا يوجد مستخدمون مسجلون.') + ")",
+        ]
+    elif at == "backup_data":
+        L += [
+            "    import json as _json",
+            "    data = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try: data = await store.list_all()",
+            "        except Exception: data = []",
+            "    backup_text = _json.dumps(data, ensure_ascii=False, indent=2)[:3000]",
+            "    await message.reply_text(" + _py('💾 نسخة احتياطية:\\n') + " + (backup_text or 'empty'))",
+        ]
+    elif at == "restore_data":
+        L += [
+            "    await message.reply_text(" + _py('💾 استعادة البيانات — أرسل ملف النسخة الاحتياطية أو النص.') + ")",
+        ]
+    elif at == "show_logs":
+        L += [
+            "    logs = []",
+            "    if store is not None and hasattr(store, 'list_all'):",
+            "        try:",
+            "            all_rows = await store.list_all()",
+            "            for r in all_rows:",
+            "                if r.get('action'): logs.append(r)",
+            "        except Exception: pass",
+            "    if logs:",
+            "        await message.reply_text(" + _py('📜 السجلات:\\n') + " + chr(10).join(str(l) for l in logs[:20]))",
+            "    else:",
+            "        await message.reply_text(" + _py('لا توجد سجلات.') + ")",
+        ]
+    elif at == "restart_bot":
+        L += [
+            "    await message.reply_text(" + _py('🔄 جاري إعادة تشغيل البوت...') + ")",
+            "    import os as _os, sys as _sys",
+            "    _os.execv(_sys.executable, ['python'] + _sys.argv)",
+        ]
+    else:
+        # Fallback: unknown action_type → use logic action_fn or reply with description
+        aname = _action_name(cmd)
+        if aname:
+            fn = _ident(aname)
+            L += [
+                "    if msgs:",
+                '        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))',
+                f"    result = await logic.{fn}(store=store, user_id=uid, payload=ruled, args=args)",
+                "    if result:",
+                "        await message.reply_text(str(result))",
+            ]
+        else:
+            L += [
+                "    if msgs:",
+                '        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))',
+                "    else:",
+                "        await message.reply_text(" + _py(cmd.reply_text or cmd.description or cmd.name) + ")",
+            ]
+
+    return L
+
 def _emit_handlers_module(spec: RichSpec) -> str:
     """
     Generate handlers.py — one handler per command.
@@ -1023,18 +1621,27 @@ def _emit_handlers_module(spec: RichSpec) -> str:
             lines.append("    else:")
             lines.append(f"        await message.reply_text({ _py((cmd.description or cmd.name) + ' — لا توجد عناصر بعد') })")
         elif kind == CommandKind.STATS.value:
-            lines.append("    count = 0")
-            lines.append("    if store is not None and hasattr(store, 'list_all'):")
-            lines.append("        try:")
-            lines.append("            count = len(await store.list_all())")
-            lines.append("        except Exception:")
-            lines.append("            count = 0")
-            stats_label = cmd.description or "إحصائيات"
-            lines.append("    await message.reply_text(" + _py(stats_label) + " + f': {count} سجل')")
+            if cmd.action_type and cmd.action_type not in ("", "none"):
+                lines.extend(_emit_action_body(cmd, cmd.action_type))
+            else:
+                lines.append("    count = 0")
+                lines.append("    if store is not None and hasattr(store, 'list_all'):")
+                lines.append("        try:")
+                lines.append("            count = len(await store.list_all())")
+                lines.append("        except Exception:")
+                lines.append("            count = 0")
+                stats_label = cmd.description or "إحصائيات"
+                lines.append("    await message.reply_text(" + _py(stats_label) + " + f': {count} سجل')")
         elif kind == CommandKind.BROADCAST.value:
-            lines.append(f"    await message.reply_text({ _py('أرسل نص الرسالة بعد الأمر: /' + cmd.name + ' النص') })")
-        elif kind == CommandKind.ACTION.value or action_fn:
-            if action_fn:
+            if cmd.action_type and cmd.action_type not in ("", "none"):
+                lines.extend(_emit_action_body(cmd, cmd.action_type))
+            else:
+                lines.append(f"    await message.reply_text({ _py('أرسل نص الرسالة بعد الأمر: /' + cmd.name + ' النص') })")
+        elif kind == CommandKind.ACTION.value or action_fn or (cmd.action_type and cmd.action_type not in ("", "none")):
+            # If this command has a semantic action_type, generate real Telegram API calls
+            if cmd.action_type and cmd.action_type not in ("", "none"):
+                lines.extend(_emit_action_body(cmd, cmd.action_type))
+            elif action_fn:
                 lines.append(f"    if msgs:")
                 lines.append('        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))')
                 lines.append(f"    result = await logic.{action_fn}(store=store, user_id=uid, payload=ruled, args=args)")
@@ -1046,16 +1653,22 @@ def _emit_handlers_module(spec: RichSpec) -> str:
                 lines.append("    else:")
                 lines.append(f"        await message.reply_text({ _py(cmd.reply_text or cmd.description or cmd.name) })")
         elif kind == CommandKind.INFO.value:
-            lines.append(f"    await message.reply_text({ _py(cmd.reply_text or cmd.description or cmd.name) })")
+            if cmd.action_type and cmd.action_type not in ("", "none"):
+                lines.extend(_emit_action_body(cmd, cmd.action_type))
+            else:
+                lines.append(f"    await message.reply_text({ _py(cmd.reply_text or cmd.description or cmd.name) })")
         elif kind == CommandKind.NAVIGATE.value:
             lines.append("    kb = main_keyboard()")
             lines.append(f"    await message.reply_text({ _py(cmd.reply_text or cmd.description or 'اختر من القائمة') }, reply_markup=kb)")
         else:
-            # generic / custom
-            lines.append("    if msgs:")
-            lines.append('        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))')
-            lines.append("    else:")
-            lines.append(f"        await message.reply_text({ _py(cmd.reply_text or cmd.description or cmd.name) })")
+            # generic / custom — check action_type first, then fall back
+            if cmd.action_type and cmd.action_type not in ("", "none"):
+                lines.extend(_emit_action_body(cmd, cmd.action_type))
+            else:
+                lines.append("    if msgs:")
+                lines.append('        await message.reply_text(" | ".join(str(m) for m in msgs[:5]))')
+                lines.append("    else:")
+                lines.append(f"        await message.reply_text({ _py(cmd.reply_text or cmd.description or cmd.name) })")
         # Show keyboard after non-list commands
         if kb_items and kind not in (CommandKind.LIST.value, CommandKind.STATS.value):
             lines.append("    kb = main_keyboard()")

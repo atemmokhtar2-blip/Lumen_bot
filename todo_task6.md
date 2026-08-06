@@ -16,4 +16,4 @@
 - [x] Re-run behavior_test.py — 25/25 PASSED
 - [x] E2E search test — 22/22 PASSED (search flow completion works)
 - [x] Full AI E2E test — 24/24 PASSED (AI translate → transpile → all commands work)
-- [ ] Push fixes to repo (PR #2)
+- [x] Push fixes to repo (commit 45e3330 on feat/spec-driven-engine-overhaul)

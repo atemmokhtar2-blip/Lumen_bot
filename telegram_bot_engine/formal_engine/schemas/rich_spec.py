@@ -122,6 +122,8 @@ class RichCommand(RichModel):
     post_action: PostAction = PostAction.NONE
     reply_text: str = Field(default="", description="Static reply for info/start/help commands")
     flow_steps: list[RichFlowStep] = Field(default_factory=list)
+    action_type: str = Field(default="", description="Semantic action identifier (ban_user, mute_user, kick_user, pin_message, delete_messages, toggle_setting, set_welcome, set_rules, add_filter, show_stats, broadcast_message, show_admins, show_staff, show_id, show_info, report_user, set_language, show_settings, etc.) — drives real Telegram API calls in the transpiler")
+    target_args: str = Field(default="", description="Natural-language description of arguments this command takes (e.g. 'user_id or reply to message', 'duration + reason') — used to guide the handler")
     evidence: RichEvidence = Field(default_factory=RichEvidence)
 
     @field_validator("name")
@@ -130,6 +132,16 @@ class RichCommand(RichModel):
         v = v.lower().lstrip("/")
         if not v.replace("_", "").isalnum():
             raise ValueError(f"invalid command name: {v}")
+        return v
+
+    @field_validator("action_type")
+    @classmethod
+    def _norm_action_type(cls, v: str) -> str:
+        v = (v or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if v and not v.replace("_", "").isalnum():
+            # keep only alphanumeric + underscore
+            import re as _re
+            v = _re.sub(r"[^a-z0-9_]", "", v)
         return v
 
 
@@ -411,6 +423,90 @@ def _sanitize_enums(data: dict[str, Any]) -> dict[str, Any]:
                 else:
                     # Try matching label to command descriptions
                     pass
+
+    # ── Auto-infer action_type from command name when AI didn't provide it ──
+    # This is a safety net: if the AI classified a command as kind=action (or custom
+    # for a well-known group-management verb) but didn't set action_type, we infer it
+    # from the command name so the transpiler can generate a real Telegram API call.
+    _NAME_ACTION_MAP = {
+        "ban": "ban_user",
+        "unban": "unban_user",
+        "mute": "mute_user",
+        "unmute": "unmute_user",
+        "kick": "kick_user",
+        "warn": "warn_user",
+        "unwarn": "unwarn_user",
+        "warnings": "show_warnings",
+        "clearwarnings": "clear_warnings",
+        "pin": "pin_message",
+        "unpin": "unpin_message",
+        "purge": "purge_messages",
+        "clean": "clean_messages",
+        "delete": "delete_message",
+        "slowmode": "set_slowmode",
+        "lock": "toggle_setting",
+        "unlock": "toggle_setting",
+        "locks": "show_locks",
+        "welcome": "show_welcome",
+        "goodbye": "show_goodbye",
+        "setwelcome": "set_welcome",
+        "setgoodbye": "set_goodbye",
+        "setrules": "set_rules",
+        "rules": "show_rules",
+        "captcha": "toggle_setting",
+        "antilink": "toggle_setting",
+        "antispam": "toggle_setting",
+        "antiflood": "toggle_setting",
+        "antibot": "toggle_setting",
+        "filter": "add_filter",
+        "unfilter": "remove_filter",
+        "filters": "show_filters",
+        "blacklist": "add_blacklist",
+        "unblacklist": "remove_blacklist",
+        "blacklists": "show_blacklist",
+        "whitelist": "add_whitelist",
+        "unwhitelist": "remove_whitelist",
+        "whitelists": "show_whitelist",
+        "broadcast": "broadcast_message",
+        "stats": "show_stats",
+        "groups": "show_groups",
+        "users": "show_users",
+        "backup": "backup_data",
+        "restore": "restore_data",
+        "logs": "show_logs",
+        "maintenance": "toggle_setting",
+        "restart": "restart_bot",
+        "panel": "show_panel",
+        "admins": "show_admins",
+        "staff": "show_staff",
+        "id": "show_id",
+        "info": "show_info",
+        "report": "report_user",
+        "language": "set_language",
+        "settings": "show_settings",
+    }
+    for c in (data.get("commands") or []):
+        if not isinstance(c, dict):
+            continue
+        at = (c.get("action_type") or "").strip().lower()
+        if not at:
+            cname = (c.get("name") or "").strip().lower().lstrip("/")
+            if cname in _NAME_ACTION_MAP:
+                c["action_type"] = _NAME_ACTION_MAP[cname]
+                # Also upgrade kind to action if it was custom and the action is a real verb
+                if (c.get("kind") or "custom") == "custom":
+                    verb_actions = {
+                        "ban_user", "unban_user", "mute_user", "unmute_user",
+                        "kick_user", "warn_user", "unwarn_user", "clear_warnings",
+                        "pin_message", "unpin_message", "purge_messages",
+                        "clean_messages", "delete_message", "set_slowmode",
+                        "toggle_setting", "add_filter", "remove_filter",
+                        "add_blacklist", "remove_blacklist", "add_whitelist",
+                        "remove_whitelist", "broadcast_message", "restart_bot",
+                        "report_user",
+                    }
+                    if c["action_type"] in verb_actions:
+                        c["kind"] = "action"
 
     return data
 

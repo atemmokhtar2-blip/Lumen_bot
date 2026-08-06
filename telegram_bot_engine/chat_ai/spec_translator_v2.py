@@ -163,11 +163,12 @@ You ONLY enrich the JSON with behavioral semantics. You NEVER write any code.
 Given a JSON spec, enrich EVERY command with its behavioral semantics. Output
 ONLY JSON (same overall shape, but commands are deeper).
 
-═══════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════════════════════
 ABSOLUTE RULES:
-═══════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════════════════════
 1. You NEVER write code. You ONLY add semantic labels to existing JSON.
-2. Do NOT invent new commands or entities — only enrich existing ones.
+2. Do NOT invent new commands — only enrich existing ones. You MAY add entities
+   (database tables) the user clearly described if they are missing.
 3. ⚠️ FIELD NAMES: When building collects_fields and flow_steps[].key, you MUST
    reuse the EXACT field names already present in entities[].fields[].name.
    Do NOT translate them to English. If the entity has a field "اسم_الكتاب",
@@ -183,12 +184,38 @@ For EACH command add/complete these fields:
       user said a button "يدخل" (enters) several pieces of data → kind=collect.
     * lookup   = queries one record by id/key/name
     * list     = lists / browses multiple records ("كل الكتب", "عرض المنتجات")
-    * stats    = aggregate numbers / dashboard ("احصائيات", "مبيعاتي")
-    * broadcast= admin sends to many users
-    * action   = performs a side-effect (send, notify, toggle, delete, cancel)
-    * info     = static informational reply
-    * navigate = opens a menu / keyboard
+    * stats    = aggregate numbers / dashboard ("إحصائيات", "مبيعاتي", "stats")
+    * broadcast= admin sends to many users ("broadcast", "إذاعة")
+    * action   = performs a side-effect (send, notify, toggle, delete, cancel,
+                 ban, mute, kick, warn, pin, lock, unlock, set rules/welcome)
+    * info     = static informational reply (rules, admins, staff, id, info)
+    * navigate = opens a menu / keyboard (panel, settings menu)
     * custom   = ONLY use this if the command truly fits none of the above
+
+- "action_type": CRITICAL for action/info/stats commands. Set a semantic
+  identifier that tells the engine WHAT Telegram API operation to perform.
+  Use these exact values when applicable:
+    * Member moderation: ban_user, unban_user, mute_user, unmute_user,
+      kick_user, warn_user, unwarn_user, show_warnings, clear_warnings
+    * Message operations: pin_message, unpin_message, purge_messages,
+      clean_messages, delete_message
+    * Group settings: toggle_setting (for lock/unlock/antilink/antispam/
+      antiflood/antibot/captcha/maintenance), show_locks, set_slowmode,
+      set_welcome, set_goodbye, set_rules, show_welcome, show_goodbye,
+      show_rules
+    * Filters/Lists: add_filter, remove_filter, show_filters,
+      add_blacklist, remove_blacklist, show_blacklist,
+      add_whitelist, remove_whitelist, show_whitelist
+    * Admin/Info: show_panel, show_admins, show_staff, show_id, show_info,
+      report_user, set_language, show_settings
+    * Owner/System: broadcast_message, show_stats, show_groups, show_users,
+      backup_data, restore_data, show_logs, restart_bot
+  If the command does not match any of these, leave action_type empty.
+
+- "target_args": describe what arguments the command takes, in natural language.
+  Examples: "user_id or reply to a message", "duration + reason",
+  "on/off toggle", "the text to broadcast", "none".
+
 - "entity": the entity name this command operates on (empty if none)
 - "collects_fields": list of field keys the command gathers from the user
   (MUST match entity field names exactly). Empty if none.
@@ -203,10 +230,36 @@ For EACH command add/complete these fields:
   {"key": <exact field name>, "prompt": <Arabic prompt>, "action": "ask"}.
   One step per field in collects_fields.
 
-⚠️ CLASSIFICATION IS CRITICAL. If a command's description says the user
-"enters/inputs/fills" multiple fields, it is "collect" — NOT "custom". If the
-description says "show all / list / كل", it is "list". If it says "stats /
-احصائيات", it is "stats". Defaulting everything to "custom" is a FAILURE.
+⚠️ CLASSIFICATION IS CRITICAL. Defaulting everything to "custom" is a FAILURE.
+  - If a command's description says the user "enters/inputs/fills" multiple
+    fields, it is "collect" — NOT "custom".
+  - If the description says "show all / list / كل", it is "list".
+  - If it says "stats / إحصائيات", it is "stats".
+  - If it is a moderation verb (ban, mute, kick, warn, pin, delete, lock,
+    unlock, purge), it is "action" with the matching action_type.
+  - If it shows static info (rules, admins, staff, id, info), it is "info"
+    with the matching action_type (show_rules, show_admins, etc.).
+  - If it collects text to save (setrules, setwelcome, setgoodbye), it is
+    "collect" with flow_steps and action_type set_rules/set_welcome/set_goodbye.
+
+⚠️ ENTITIES: If the user's text describes database tables or data structures
+  (e.g. "users, groups, admins, warnings, bans, mutes, filters, rules, logs"),
+  make sure entities[] contains one entry per table with appropriate fields.
+  If entities are missing, ADD them based on what the user described. Each
+  entity name should be PascalCase (User, Group, Admin, Warning, Ban, Mute,
+  Filter, Rule, Log, GroupSetting, Statistic). Include sensible fields:
+    * User: user_id(int), username(str), first_name(str), joined_at(str)
+    * Group: group_id(int), title(str), members_count(int)
+    * Admin: user_id(int), group_id(int), role(str)
+    * GroupSetting: group_id(int), setting_key(str), setting_value(str)
+    * Warning: user_id(int), group_id(int), reason(str), count(int)
+    * Ban: user_id(int), group_id(int), reason(str)
+    * Mute: user_id(int), group_id(int), until(str), reason(str)
+    * Filter: group_id(int), keyword(str), response(str)
+    * Rule: group_id(int), rules_text(str)
+    * Log: group_id(int), action(str), admin_id(int), target_id(int), at(str)
+    * Statistic: group_id(int), metric(str), value(int)
+  Only add entities the user actually mentioned or clearly implied.
 
 No markdown, no prose. First char { last char }.
 """
@@ -491,6 +544,44 @@ _LATIN_AR_HINTS = {
     "total": {"total", "اجمالي", "مجموع"},
     "city": {"city", "مدينة"},
     "address": {"address", "عنوان", "العنوان"},
+    # ── Group management terms ──
+    "user": {"user", "مستخدم", "الاعضاء", "اعضاء", "عضو", "المستخدمين", "المستخدم"},
+    "users": {"users", "مستخدم", "الاعضاء", "اعضاء", "عضو", "المستخدمين"},
+    "group": {"group", "مجموعة", "مجموعات", "المجموعة", "جروب", "الجروبات", "الجروب"},
+    "groups": {"groups", "مجموعة", "مجموعات", "المجموعة", "جروب", "الجروبات"},
+    "admin": {"admin", "مشرف", "المشرفين", "المشرف", "ادمن", "الادمن", "الادمنية"},
+    "admins": {"admins", "مشرف", "المشرفين", "المشرف", "ادمن", "الادمنية"},
+    "staff": {"staff", "طاقم", "المشرفين", "الادمنية", "الطاقم"},
+    "warning": {"warning", "تحذير", "التحذيرات", "تحذيرات", "انذار"},
+    "warnings": {"warnings", "تحذير", "التحذيرات", "تحذيرات", "انذار"},
+    "ban": {"ban", "حظر", "بان", "طرد", "منع", "الحظر"},
+    "bans": {"bans", "حظر", "الباند", "المحظورين", "الحظر"},
+    "mute": {"mute", "كتم", "ميوت", "اكتم", "كتمة"},
+    "mutes": {"mutes", "كتم", "المكتومين", "ميوت"},
+    "kick": {"kick", "طرد", "كيك", "اطرد"},
+    "filter": {"filter", "فلتر", "فلاتر", "الفلتر", "ردود", "رد", "ردود_تلقائية"},
+    "filters": {"filters", "فلتر", "فلاتر", "الفلاتر", "ردود", "رد"},
+    "rule": {"rule", "قواعد", "قاعدة", "القواعد", "القوانين", "قانون"},
+    "rules": {"rules", "قواعد", "قاعدة", "القواعد", "القوانين", "قانون"},
+    "log": {"log", "سجل", "سجلات", "السجل", "السجلات", "log", "logs"},
+    "logs": {"logs", "سجل", "سجلات", "السجل", "السجلات"},
+    "statistic": {"statistic", "احصائيات", "احصائية", "الاحصائيات", "احصاء"},
+    "statistics": {"statistics", "احصائيات", "الاحصائيات", "احصاء"},
+    "setting": {"setting", "اعداد", "اعدادات", "الاعدادات", "ضبط"},
+    "settings": {"settings", "اعداد", "اعدادات", "الاعدادات", "ضبط"},
+    "welcome": {"welcome", "ترحيب", "الترحيب", "ترحيبية"},
+    "goodbye": {"goodbye", "وداع", "توديع", "الوداع"},
+    "captcha": {"captcha", "كابتشا", "تحقق"},
+    "antilink": {"antilink", "روابط", "منع_الروابط", "الروابط"},
+    "antispam": {"antispam", "سبام", "spam", "منع_السبام"},
+    "antiflood": {"antiflood", "فلوود", "flood", "سبام"},
+    "antibot": {"antibot", "بوتات", "ال بوتات", "منع_البوتات"},
+    "blacklist": {"blacklist", "قائمة_سوداء", "القائمة_السوداء", "حظر"},
+    "whitelist": {"whitelist", "قائمة_بيضاء", "القائمة_البيضاء", "استثناء"},
+    "broadcast": {"broadcast", "اذاعة", "إذاعة", "بث"},
+    "panel": {"panel", "لوحة", "اللوحة", "التحكم"},
+    "report": {"report", "تبليغ", "بلاغ", "شكوى", "تبليغات"},
+    "language": {"language", "لغة", "اللغة"},
 }
 
 # Arabic field name -> set of arabic words that justify it (for arabic slugs)
