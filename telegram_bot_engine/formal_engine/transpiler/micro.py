@@ -461,15 +461,20 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
 
     def cmd_kind(cmd: str) -> str:
         c = cmd.lower()
-        if c in ("stats", "statistics", "dashboard") or c.endswith("_stats"):
+        if c in ("stats", "statistics", "dashboard", "charts") or c.endswith("_stats") or c.endswith("_charts"):
             return "stats"
-        if c.startswith("my_") or c in ("progress", "score", "history"):
+        if c.startswith("my_") or c in ("progress", "score", "history", "profile", "wallet", "settings"):
             return "mine"
-        if c in ("courses", "catalog") or any(x in c for x in ("list", "products", "items", "tickets", "orders")):
+        if c in ("courses", "catalog", "users", "tickets", "reports", "logs", "audit_log",
+                 "error_logs", "devices", "sessions", "permissions", "subscription",
+                 "subscriptions", "notifications", "reviews", "backup") or any(
+            x in c for x in ("list", "products", "items", "tickets", "orders", "users",
+                             "reports", "logs", "devices", "sessions", "permissions",
+                             "notifications", "reviews", "subscriptions")):
             return "list"
-        if any(x in c for x in ("ban", "delete", "remove", "cancel", "drop")):
+        if any(x in c for x in ("ban", "delete", "remove", "cancel", "drop", "block")):
             return "mutate"
-        if any(x in c for x in ("broadcast", "notify")):
+        if any(x in c for x in ("broadcast", "notify", "notification", "alert")):
             return "broadcast"
         return "generic"
 
@@ -731,8 +736,19 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
                 lines.append(f"    result = await logic.{action}(store=store, user_id=uid, payload=ruled, args=args)")
                 lines.append("    if result and result not in (\"ok\",):")
                 lines.append("        await message.reply_text(str(result))")
+            # meaningful fallback: try to show record count from store before echoing desc
             lines.append("    if not msgs:")
-            lines.append(f"        await message.reply_text({_py(cmd.description or cmd.name)})")
+            lines.append("        _shown = False")
+            lines.append("        if store is not None and hasattr(store, \"list_all\"):")
+            lines.append("            try:")
+            lines.append("                _rows = await store.list_all()")
+            lines.append("                _n = len(_rows) if _rows else 0")
+            lines.append(f"                await message.reply_text(f\"{{{_py(cmd.description or cmd.name)}}} — عدد السجلات: {{_n}}\")")
+            lines.append("                _shown = True")
+            lines.append("            except Exception:")
+            lines.append("                pass")
+            lines.append("        if not _shown:")
+            lines.append(f"            await message.reply_text({_py((cmd.description or cmd.name) + ' — جرّب إرسال بيانات بعد الأمر لمزيد من التفاصيل')})")
         if buttons:
             lines.append("    kb = main_keyboard()")
             lines.append("    if kb is not None and %s not in (\"list\", \"mine\", \"stats\"):" % _py(kind))
@@ -875,12 +891,23 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("            await _start_flow(query.message, context, target_cmd)")
     lines.append("        return")
     lines.append("    if target_cmd:")
-    lines.append("        # Non-wizard command: acknowledge + point user to slash command")
-    lines.append("        msg = f\"استخدم /{target_cmd} أو أكمل من هنا.\"")
+    lines.append("        # Non-wizard command: run its logic inline so buttons are functional")
     lines.append("        ruled = logic.apply_rules({\"choice\": data, \"text\": data, \"intent\": target_cmd, **dict(context.user_data.get(\"collected\") or {})})")
     lines.append("        context.user_data[\"collected\"] = ruled")
-    lines.append("        if ruled.get(\"_messages\"):")
-    lines.append("            msg = \" | \".join(str(m) for m in ruled[\"_messages\"][:5])")
+    lines.append("        msgs = list(ruled.get(\"_messages\") or [])")
+    lines.append("        if msgs:")
+    lines.append("            msg = \" | \".join(str(m) for m in msgs[:5])")
+    lines.append("        else:")
+    lines.append("            # try to show a count from the store for a meaningful button response")
+    lines.append("            msg = f\"\u062a\u0645 \u062a\u0641\u0639\u064a\u0644 /{target_cmd}\"")
+    lines.append("            try:")
+    lines.append("                _c = get_container()")
+    lines.append("                _s = getattr(_c, \"primary_store\", None)")
+    lines.append("                if _s is not None and hasattr(_s, \"list_all\"):")
+    lines.append("                    _rows = await _s.list_all()")
+    lines.append("                    msg = f\"/{target_cmd} \u2014 \u0639\u062f\u062f \u0627\u0644\u0633\u062c\u0644\u0627\u062a: {len(_rows) if _rows else 0}\"")
+    lines.append("            except Exception:")
+    lines.append("                pass")
     lines.append("        if query.message is not None:")
     lines.append("            await query.edit_message_text(msg)")
     lines.append("        return")

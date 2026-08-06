@@ -322,43 +322,119 @@ def _normalize_answer_to_sections(step: str, answer: str) -> str:
     return a
 
 
+# Arabic -> Latin phonetic transliteration table (readable slugs, no meaning invention).
+_AR_TRANS: dict[str, str] = {
+    "ا": "a", "أ": "a", "إ": "i", "آ": "aa", "ى": "a", "ء": "",
+    "ب": "b", "ت": "t", "ث": "th", "ج": "j", "ح": "h", "خ": "kh",
+    "د": "d", "ذ": "dh", "ر": "r", "ز": "z", "س": "s", "ش": "sh",
+    "ص": "s", "ض": "d", "ط": "t", "ظ": "z", "ع": "a", "غ": "gh",
+    "ف": "f", "ق": "q", "ك": "k", "ل": "l", "م": "m", "ن": "n",
+    "ه": "h", "ة": "h", "و": "w", "ي": "y", "ئ": "y", "ؤ": "w",
+    "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
+    "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
+}
+
+# Words that carry no command meaning -> dropped from transliterated slugs.
+_AR_STOP = {
+    "ال", "في", "من", "على", "علي", "الي", "و", "او", "أو", "ثم",
+    "هذا", "هذه", "ذلك", "التي", "الذي", "ما", "لا", "نعم", "كل",
+    "بعض", "غير", "مع", "عن", "ان", "أن", "إن",
+}
+
+
+def _transliterate_ar(label: str) -> str:
+    """Convert Arabic text to a readable latin slug (phonetic, stable).
+
+    Keeps digits, drops stop-words, collapses repeated separators.
+    Never invents meaning -- only a pronounceable id, e.g.
+    'إدارة الجلسات' -> 'idarat_aljlsat'.
+    """
+    out: list[str] = []
+    for ch in (label or ""):
+        out.append(_AR_TRANS.get(ch, ch))
+    s = "".join(out)
+    # remove leftover Arabic / non-ascii / punctuation -> separators
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", s)
+    # drop stop-ish tiny fragments and collapse underscores
+    parts = [p for p in s.split("_") if p and len(p) > 1]
+    s = "_".join(parts)
+    s = re.sub(r"_+", "_", s).strip("_").lower()
+    if not s:
+        s = "cmd"
+    return s[:40]
+
+
 def _slug_cmd(label: str) -> str:
-    """Derive ascii command id from user label (structural, not domain pack)."""
+    """Derive ascii command id from user label (structural, not domain pack).
+
+    Priority:
+      1) explicit known stems (Arabic + English synonyms) -> stable english id
+      2) latin words present in label -> snake_case of them
+      3) Arabic-only label -> phonetic transliteration (readable, stable)
+      4) final fallback -> short hash (only when nothing else works)
+    """
     raw = (label or "").strip().lower()
-    # strip leading slash
     raw = raw.lstrip("/")
-    # known grounded stems only when phrase appears in label itself
     stems = [
-        (r"تسجيل|register|signup", "register"),
-        (r"تتبع|track", "track"),
-        (r"طلب\s*جديد|new\s*order|اوردر\s*جديد", "order"),
-        (r"طلباتي|my\s*orders|اوردرات", "my_orders"),
-        (r"منيو|menu|قائمة", "menu"),
-        (r"حجز|book", "book"),
-        (r"إحصائ|stats", "stats"),
-        (r"أدمن|admin", "admin"),
-        (r"دفع|pay", "pay"),
-        (r"بحث|search", "search"),
-        (r"دعم|support", "support"),
-        (r"توصيل|delivery", "delivery"),
-        (r"ملف|profile", "profile"),
-        (r"إعداد|settings", "settings"),
-        (r"إلغاء|cancel", "cancel"),
-        (r"تأكيد|confirm", "confirm"),
+        (r"تسجيل|register|signup|إنشاء\s*حساب", "register"),
+        (r"تتبع|track|متابعة", "track"),
+        (r"طلب\s*جديد|new\s*order|اورد\s*جديد|إنشاء\s*طلب", "order"),
+        (r"طلباتي|my\s*orders|اوردرات|قائمة\s*طلبات", "my_orders"),
+        (r"منيو|menu|قائمة\s*الطعام", "menu"),
+        (r"حجز|book|reserve|reservation", "book"),
+        (r"إحصائ|stats|statistics|إحصاءات", "stats"),
+        (r"أدمن|admin|مشرف|المشرفين|المدراء", "admin"),
+        (r"دفع|pay|payment|مدفوعات|فواتير|billing", "pay"),
+        (r"بحث|search|lookup", "search"),
+        (r"دعم|support|مساعدة|help\s*desk", "support"),
+        (r"توصيل|delivery|شحن|تتبع\s*الشحنة", "delivery"),
+        (r"تقسيم\s*ملف|split|split\s*pdf|قسم\s*ملف|تقسيم", "split_file"),
+        (r"دمج\s*ملف|merge|merge\s*pdf|ضم\s*ملف", "merge_file"),
+        (r"ضغط\s*ملف|compress|compress\s*pdf|compres", "compress_file"),
+        (r"تحويل|convert|تحويل\s*صيغة|format\s*convert", "convert_file"),
+        (r"profile|حسابي|الملف\s*الشخصي", "profile"),
+        (r"إعدادات|settings|اعدادات|تفضيلات|preferences", "settings"),
+        (r"إلغاء|cancel|الغاء", "cancel"),
+        (r"تأكيد|confirm|تاكيد", "confirm"),
+        (r"جلس|session|إدارة\s*الجلسات|الجلسات", "sessions"),
+        (r"كلمة\s*المرور|password|استعادة\s*كلمة|نسيت\s*كلمة|reset\s*password", "password_reset"),
+        (r"أجهزة|devices|الأجهزة\s*المتصلة|إدارة\s*الأجهزة", "devices"),
+        (r"رسوم\s*بيان|charts|إحصائيات\s*مباشرة|grafana|dashboard\s*charts", "charts"),
+        (r"المستخدمين|users|إدارة\s*المستخدمين|الأعضاء|members", "users"),
+        (r"لوحة\s*تحكم|dashboard|panel|control\s*panel", "dashboard"),
+        (r"اشتراك|subscription|اشتراكات|الباقات|plans", "subscription"),
+        (r"محفظة|wallet|wallet|الرصيد|balance|credit", "wallet"),
+        (r"تذاكر|tickets|ticket|الدعم\s*الفني|فتح\s*تذكرة", "tickets"),
+        (r"إشعار|notifications|notifications|تنبيهات|alerts", "notifications"),
+        (r"سجل\s*التدقيق|audit|audit\s*log|تدقيق", "audit_log"),
+        (r"سجل\s*الأخطاء|error\s*log|logs|سجلات", "error_logs"),
+        (r"مراقبة\s*السيرفر|server\s*monitor|monitor|الحالة\s*السيرفر", "server_monitor"),
+        (r"صلاحيات|permissions|roles|الأدوار|roles", "permissions"),
+        (r"تصدير|export|تصدير\s*بيانات", "export"),
+        (r"استيراد|import|استيراد\s*بيانات", "import_data"),
+        (r"تقارير|reports|report|تقرير", "reports"),
+        (r"نسخة\s*احتياطية|backup|backup|النسخ\s*الاحتياطي", "backup"),
+        (r"تسجيل\s*خروج|logout|signout|خروج", "logout"),
+        (r"تسجيل\s*دخول|login|signin|دخول", "login"),
+        (r"توثيق|2fa|auth|المصادقة\s*الثنائية|twofa", "two_fa"),
+        (r"حظر|ban|block|blocklist|القائمة\s*السوداء", "ban"),
+        (r"مراجعة|review|التقييمات|ratings|تقييم", "reviews"),
     ]
     for pat, cmd in stems:
         if re.search(pat, label, re.I):
             return cmd
-    # latin words → snake
+    # latin words -> snake_case
     latin = re.findall(r"[a-zA-Z][a-zA-Z0-9]{1,20}", label)
     if latin:
         return "_".join(w.lower() for w in latin)[:32]
-    # arabic → generic sequential-safe slug from transliteration-ish
-    # use hash of label for stability without inventing meaning
+    # arabic-only -> readable transliteration (stable, pronounceable)
+    tr = _transliterate_ar(label)
+    if tr and tr != "cmd":
+        return tr
+    # final fallback -> short hash (rarely reached now)
     import hashlib
-    h = hashlib.sha1(label.encode("utf-8")).hexdigest()[:6]
+    h = hashlib.sha1((label or "x").encode("utf-8")).hexdigest()[:6]
     return f"cmd_{h}"
-
 
 def merge_answers(
     original: str,
