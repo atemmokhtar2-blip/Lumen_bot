@@ -90,7 +90,16 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
         "accept_order": ("يقبل", "قبول", "accept"),
         "admin": ("ادمن", "أدمن", "admin", "مشرف"),
         "stats": ("احصائ", "إحصائ", "stats"),
-        "add_item": ("صنف", "منتج", "add item"),
+        "add_item": ("صنف", "صنف", "منتج", "منتجات", "add item"),
+        "product": ("منتج", "منتجات", "صنف", "اصناف", "product", "products", "item", "items"),
+        "products": ("منتج", "منتجات", "صنف", "اصناف", "product", "products", "item", "items"),
+        "cart": ("سلة", "سله", "سلة الشراء", "عربة", "عربة التسوق", "cart", "basket"),
+        "checkout": ("إتمام الطلب", "اتمام الطلب", "الدفع", "checkout", "شراء", "طلب الأوردر", "طلب الاوردر"),
+        "ticket": ("تذكرة", "تذاكر", "تذاكر الدعم", "ticket", "tickets"),
+        "support": ("دعم", "خدمة العملاء", "خدمة عملاء", "support", "مساعدة"),
+        "warn": ("تحذير", "إنذار", "انذار", "warn", "warning"),
+        "ban": ("حظر", "بان", "ban"),
+        "mute": ("كتم", "mute"),
         "book": ("حجز", "book"),
     }
     for key, words in synonyms.items():

@@ -1031,6 +1031,50 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     )
 
 
+def _local_fallback_spec(original: str) -> str:
+    """Build a small grounded spec when the optional translator times out.
+
+    This is intentionally a lexical fallback, not a domain template: every
+    emitted command is enabled only by phrases present in the user's text.
+    """
+    text = original or ""
+    rules = [
+        ("products", "المنتجات", ("منتج", "منتجات", "اصناف", "أصناف", "صنف")),
+        ("cart", "سلة الشراء", ("سلة", "سله", "عربة", "عربه")),
+        ("checkout", "إتمام الطلب", ("إتمام الطلب", "اتمام الطلب", "شراء", "طلب الأوردر", "طلب الاوردر")),
+        ("tickets", "تذاكر الدعم", ("تذكرة", "تذاكر", "تذاكر الدعم")),
+        ("support", "الدعم", ("دعم", "خدمة العملاء", "خدمه العملاء")),
+        ("warn", "التحذير", ("تحذير", "إنذار", "انذار")),
+        ("ban", "الحظر", ("حظر", "بان")),
+        ("mute", "الكتم", ("كتم",)),
+        ("booking", "الحجوزات", ("حجز", "حجوز", "موعد", "مواعيد")),
+        ("delivery", "التوصيل", ("توصيل",)),
+        ("pay", "الدفع", ("دفع", "سداد",)),
+        ("search", "البحث", ("بحث",)),
+    ]
+    selected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for command, label, phrases in rules:
+        if command not in seen and any(p in text for p in phrases):
+            selected.append((command, label))
+            seen.add(command)
+    lines = ["اعمل بوت تليجرام"]
+    if selected:
+        lines.append("الأوامر:")
+        lines.extend(f"/{cmd} — {label}" for cmd, label in selected)
+        lines.append("الأزرار:")
+        lines.extend(f"- {label}" for _, label in selected)
+    if any(p in text for p in ("منتج", "منتجات", "صنف", "أصناف")):
+        lines.append("الكيانات:")
+        lines.append("Product (id, name, price)")
+    if any(p in text for p in ("طلب", "اوردر", "أوردر")):
+        if "الكيانات:" not in lines:
+            lines.append("الكيانات:")
+        lines.append("Order (id, status)")
+    lines.extend(["", "--- المصدر ---", text[:4000]])
+    return "\\n".join(lines)
+
+
 def prepare_formal_text(user_text: str) -> tuple[str, TranslatorResult]:
     original = user_text or ""
     if not _enabled():
@@ -1038,4 +1082,14 @@ def prepare_formal_text(user_text: str) -> tuple[str, TranslatorResult]:
     result = translate_spec(original)
     if result.ok and result.structured_text.strip():
         return result.structured_text, result
+    # Never pass a rich natural-language request straight to extract_dsl after
+    # a timeout: that path understands sections, not arbitrary Arabic prose.
+    fallback = _local_fallback_spec(original)
+    if fallback.count("/"):
+        result.ok = True
+        result.model_used = "local_fallback"
+        result.structured_text = fallback
+        result.error = result.error or "translator_fallback"
+        result.grounded_json = {"fallback": True}
+        return fallback, result
     return original, result

@@ -32,6 +32,46 @@ def _py(s: Any) -> str:
     return repr(s)
 
 
+def _surface_norm(value: str) -> str:
+    """Normalize Arabic/English UI labels for deterministic button routing."""
+    s = (value or "").strip().lower()
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي")):
+        s = s.replace(a, b)
+    return re.sub(r"[^a-z0-9\u0600-\u06ff]+", " ", s).strip()
+
+
+def _surface_aliases(value: str) -> set[str]:
+    s = _surface_norm(value)
+    aliases = {s, s.replace("ال", "", 1) if s.startswith("ال") else s}
+    groups = {
+        "product": {"product", "products", "منتج", "منتجات", "صنف", "اصناف"},
+        "cart": {"cart", "basket", "سله", "سلة", "سلة الشراء", "عربه", "عربة"},
+        "checkout": {"checkout", "شراء", "دفع", "اتمام الطلب", "طلب الاوردر"},
+        "ticket": {"ticket", "tickets", "تذكره", "تذاكر", "تذاكر الدعم"},
+        "support": {"support", "دعم", "خدمة العملاء", "خدمة عملاء"},
+        "warn": {"warn", "warning", "تحذير", "انذار"},
+        "ban": {"ban", "حظر"},
+        "mute": {"mute", "كتم"},
+    }
+    for canonical, words in groups.items():
+        normalized = {_surface_norm(w) for w in words}
+        if s in normalized or any(a in normalized for a in aliases):
+            aliases.update(normalized)
+            aliases.add(canonical)
+    return {a for a in aliases if a}
+
+
+def _surface_matches(label: str, command_name: str, description: str) -> bool:
+    left = _surface_aliases(label)
+    right = _surface_aliases(command_name) | _surface_aliases(description)
+    if left & right:
+        return True
+    # Match meaningful words, while avoiding one-letter/common Arabic tokens.
+    lwords = {w for x in left for w in x.split() if len(w) >= 3}
+    rwords = {w for x in right for w in x.split() if len(w) >= 3}
+    return bool(lwords & rwords)
+
+
 # ── schema ──────────────────────────────────────────────────────────────
 
 def _emit_schema_module(inf: InferenceResult) -> str:
@@ -549,6 +589,9 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
                 break
             desc = (c.description or "").strip()
             if desc and (desc == label or desc in label or label in desc):
+                btn_to_cmd[cb] = c.name
+                break
+            if _surface_matches(label, c.name, desc):
                 btn_to_cmd[cb] = c.name
                 break
             if any(tok in label for tok in (c.name, c.name.replace("_", " ")) if len(tok) > 2):

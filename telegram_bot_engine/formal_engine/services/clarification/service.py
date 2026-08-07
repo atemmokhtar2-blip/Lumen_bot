@@ -146,6 +146,18 @@ def assess_spec(user_text: str) -> ClarificationResult:
     rules = list(getattr(program, "rules", None) or [])
     ops = list(getattr(program, "operations", None) or [])
     bot_name = _extract_bot_name(text)
+    # Natural Arabic requests often describe capabilities without slash commands
+    # (e.g. "متجر فيه منتجات وسلة شراء"). Treat those capability signals as
+    # sufficient intent; requiring a bot name or explicit /commands blocks the
+    # primary one-message generation flow.
+    feature_terms = (
+        "متجر", "منتج", "منتجات", "سلة", "عربة", "طلب", "اوردر",
+        "حجز", "موعد", "تسجيل", "عملاء", "عميل", "خدمة العملاء",
+        "تذاكر", "دعم", "إدارة مجموعات", "جروب", "مجموعة", "تحذير",
+        "حظر", "كتم", "توصيل", "دفع", "فاتورة", "بحث", "اشتراك",
+        "مخزون", "مستخدمين", "موظفين", "تقارير", "إشعارات",
+    )
+    has_feature_signal = any(term in text for term in feature_terms)
 
     score = 0.0
     score += min(0.50, 0.18 * len(cmds))
@@ -162,11 +174,11 @@ def assess_spec(user_text: str) -> ClarificationResult:
 
     missing: list[str] = []
 
-    if not bot_name and len(cmds) == 0:
+    if not bot_name and len(cmds) == 0 and not has_feature_signal:
         missing.append("bot_name")
 
     # purpose gap: short text with no commands
-    if len(cmds) == 0 and len(text) < 40:
+    if len(cmds) == 0 and len(text) < 40 and not has_feature_signal:
         missing.append("purpose")
 
     if len(cmds) < _MIN_MEANINGFUL_COMMANDS:
@@ -176,16 +188,18 @@ def assess_spec(user_text: str) -> ClarificationResult:
     skip_data = any(
         k in text for k in ("مفيش بيانات", "بدون بيانات", "no data", "مفيش")
     )
-    if not ents and not skip_data and len(cmds) == 0:
+    if not ents and not skip_data and len(cmds) == 0 and not has_feature_signal:
         missing.append("entities")
 
     skip_btn = any(k in text for k in ("بدون أزرار", "بدون ازرار", "بدون", "no buttons"))
-    if not btns and not skip_btn and len(cmds) == 0:
+    if not btns and not skip_btn and len(cmds) == 0 and not has_feature_signal:
         missing.append("buttons")
 
     # Ready rules — smarter thresholds
     ready = False
-    if len(cmds) >= 2:
+    if has_feature_signal and len(text) >= 20:
+        ready = True
+    elif len(cmds) >= 2:
         ready = True
     elif len(cmds) >= 1 and (ents or btns or score >= _MIN_SCORE):
         ready = True
