@@ -449,12 +449,46 @@ def _spec_to_sectioned_text(data: dict[str, Any], original: str) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-_HF_SYSTEM = (
-    "Convert bot descriptions to JSON only (no code). "
-    "Schema: bot_name, commands[{name,description,admin_only}], buttons[{label}], "
-    "entities[{name,fields}], flows[{id,command,entity,steps[{key,prompt}]}], rules[]. "
-    "Use only evidenced features. Menu items become buttons. Multi-step orders use flows."
-)
+
+_HF_SYSTEM = """You are a Telegram bot SPEC translator (not a coder).
+Convert the user description into JSON ONLY for complex multi-step bots.
+
+Schema:
+{
+  "bot_name": "string",
+  "commands": [{"name": "latin_snake", "description": "string", "admin_only": false}],
+  "buttons": [{"label": "string"}],
+  "entities": [{"name": "PascalCase", "fields": ["field1", "field2"]}],
+  "flows": [{"id": "order", "command": "order", "entity": "Order", "steps": [{"key": "quantity", "prompt": "..."}, {"key": "confirm", "prompt": "..."}]}],
+  "rules": ["string"],
+  "relations": [{"from": "Order", "to": "Item", "via": "item_name"}]
+}
+
+STRICT rules:
+1) Extract EVERY command, button, entity, flow step evidenced in the text.
+2) Multi-step conversations (then/بعدين/ثم) become flows with ordered steps.
+3) Menu/catalog items become buttons; ordering becomes Order(item_name, quantity, status).
+4) Command names latin [a-z0-9_]. Never invent domain packs not in the text.
+5) Always include flows for register/order/booking when steps are described.
+6) JSON only. No markdown. No code.
+"""
+
+
+def _parse_spec_json(content: str) -> dict | None:
+    if not content:
+        return None
+    try:
+        data = json.loads(content)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", content)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
 
 
 def _hf_translate(text: str, timeout: int) -> TranslatorResult:
@@ -464,16 +498,20 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
         if not enabled():
             return TranslatorResult(ok=False, error="HF_TOKEN not configured", path="hf")
         content, model = chat(
-            [{"role": "system", "content": _HF_SYSTEM}, {"role": "user", "content": text[:6000]}],
-            timeout=timeout, max_tokens=2000, temperature=0.0, json_mode=True,
+            [
+                {"role": "system", "content": _HF_SYSTEM},
+                {"role": "user", "content": text[:12000]},
+            ],
+            timeout=timeout,
+            max_tokens=int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200")),
+            temperature=0.0,
+            json_mode=True,
         )
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            m = re.search(r"\{[\s\S]*\}", content or "")
-            data = json.loads(m.group(0)) if m else None
-        if not isinstance(data, dict) or not isinstance(data.get("commands"), list) or not data.get("commands"):
-            raise ValueError("invalid_or_empty_spec")
+        data = _parse_spec_json(content)
+        if not data:
+            raise ValueError("invalid_json")
+        if not isinstance(data.get("commands"), list) or not data.get("commands"):
+            raise ValueError("no_commands")
         return TranslatorResult(
             ok=True,
             structured_text=_spec_to_sectioned_text(data, text),
@@ -484,9 +522,65 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
         )
     except Exception as exc:
         return TranslatorResult(
-            ok=False, error=f"{type(exc).__name__}:{exc}"[:800],
-            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1), path="hf",
+            ok=False,
+            error=f"{type(exc).__name__}:{exc}"[:800],
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            path="hf",
         )
+
+
+def _g4f_translate(text: str, timeout: int) -> TranslatorResult:
+    """Free multi-provider fallback when HF_TOKEN is missing or HF fails."""
+    t0 = time.perf_counter()
+    if os.environ.get("G4F_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+        return TranslatorResult(ok=False, error="g4f_disabled", path="g4f")
+    try:
+        from g4f.client import Client  # type: ignore
+    except Exception as exc:
+        return TranslatorResult(ok=False, error=f"g4f_import:{exc}"[:200], path="g4f")
+    models = [
+        m.strip()
+        for m in (os.environ.get("G4F_MODELS") or "gpt-4o-mini,gemini-2.0-flash,gpt-4o").split(",")
+        if m.strip()
+    ]
+    errors: list[str] = []
+    for model in models:
+        try:
+            client = Client()
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _HF_SYSTEM},
+                    {"role": "user", "content": text[:12000]},
+                ],
+                temperature=0,
+            )
+            content = ""
+            try:
+                content = (resp.choices[0].message.content or "").strip()
+            except Exception:
+                content = str(resp)[:8000]
+            data = _parse_spec_json(content)
+            if not data or not isinstance(data.get("commands"), list) or not data.get("commands"):
+                errors.append(f"{model}:bad_json")
+                continue
+            return TranslatorResult(
+                ok=True,
+                structured_text=_spec_to_sectioned_text(data, text),
+                grounded_json=data,
+                model_used=f"g4f:{model}",
+                elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                path="g4f",
+            )
+        except Exception as exc:
+            errors.append(f"{model}:{type(exc).__name__}")
+            continue
+    return TranslatorResult(
+        ok=False,
+        error=("; ".join(errors) or "g4f_failed")[:800],
+        elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+        path="g4f",
+    )
 
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
@@ -494,22 +588,45 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     t0 = time.perf_counter()
     if not text:
         return TranslatorResult(
-            ok=False, error="empty_text", needs_clarification=True,
+            ok=False,
+            error="empty_text",
+            needs_clarification=True,
             clarification_questions=["اكتب وصف البوت والأوامر أو الأزرار المطلوبة."],
             path="passthrough",
         )
-    timeout = timeout if timeout is not None else int(os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "25"))
-    use_hf = os.environ.get("SPEC_TRANSLATOR", "1").strip() not in ("0", "false", "off")
-    hf_result = None
-    if use_hf and os.environ.get("HF_TOKEN", "").strip():
-        hf_result = _hf_translate(text, timeout=timeout)
-        if hf_result.ok and hf_result.structured_text.strip():
-            return hf_result
 
+    timeout = timeout if timeout is not None else int(os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "45"))
+    # Complex / long specs: prefer AI harder
+    complex_hint = len(text) >= 80 or any(
+        k in text for k in ("ثم", "بعدين", "تدفق", "مراحل", "كيان", "قاعدة", "flow", "steps", "entity")
+    )
+
+    ai_result: TranslatorResult | None = None
+    # 1) HuggingFace when token present
+    from .hf_provider import enabled as hf_enabled
+    if os.environ.get("SPEC_TRANSLATOR", "1").strip().lower() not in {"0", "false", "off"}:
+        if hf_enabled():
+            ai_result = _hf_translate(text, timeout=timeout)
+            if ai_result.ok and ai_result.structured_text.strip():
+                return ai_result
+        # 2) g4f fallback for complex bots even without HF_TOKEN
+        if complex_hint or not (ai_result and ai_result.ok):
+            g4 = _g4f_translate(text, timeout=min(timeout, 50))
+            if g4.ok and g4.structured_text.strip():
+                return g4
+            if ai_result is None:
+                ai_result = g4
+            elif not ai_result.ok and g4.error:
+                ai_result.error = (ai_result.error or "") + "|" + g4.error
+
+    # 3) Structural deterministic path
     spec = structural_translate(text)
     structured = _spec_to_sectioned_text(spec, text)
-    meaningful = [c for c in (spec.get("commands") or []) if isinstance(c, dict) and c.get("name") not in ("start", "help")]
-    ok = bool(meaningful or (spec.get("buttons") or []))
+    meaningful = [
+        c for c in (spec.get("commands") or [])
+        if isinstance(c, dict) and c.get("name") not in ("start", "help")
+    ]
+    ok = bool(meaningful or (spec.get("buttons") or []) or (spec.get("flows") or []))
     return TranslatorResult(
         ok=ok,
         structured_text=structured if ok else text,
@@ -517,7 +634,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         model_used="structural",
         elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         path="structural",
-        error=(hf_result.error if hf_result and not hf_result.ok else ""),
+        error=(ai_result.error if ai_result and not ai_result.ok else ""),
         needs_clarification=not ok,
         clarification_questions=(
             [] if ok else ["المستخدم هيقدر يعمل إيه؟ اكتب أوامر أو أزرار أو قائمة أصناف بشكل واضح."]

@@ -1,3 +1,4 @@
+import os
 """Live run and live deployment token handlers."""
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             project_path=project_path,
             bot_token=token,
             entry_hint=entry or None,
-            run_seconds=float(pending.get("run_seconds") or 8),
+            run_seconds=float(pending.get("run_seconds") or os.environ.get("LIVE_RUN_SECONDS", 900)),
         )
 
     try:

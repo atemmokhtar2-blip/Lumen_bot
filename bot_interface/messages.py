@@ -84,7 +84,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pending_run = {
                     "project_path": active["path"],
                     "entry_point": entry,
-                    "run_seconds": 8,
+                    "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
                 }
                 context.user_data["pending_run"] = pending_run
         if pending_run:
@@ -171,7 +171,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     context.user_data["pending_run"] = {
                         "project_path": result.path,
                         "entry_point": entry,
-                        "run_seconds": 8,
+                        "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
                     }
                     lines.append("")
                     lines.append("🚀 *للتشغيل الحقيقي:* أرسل توكن البوت من @BotFather")
@@ -277,7 +277,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         context.user_data["pending_run"] = {
                             "project_path": result.path,
                             "entry_point": entry,
-                            "run_seconds": 8,
+                            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
                         }
                         lines.append("")
                         lines.append(

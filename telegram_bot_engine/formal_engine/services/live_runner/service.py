@@ -987,7 +987,7 @@ class LiveRunnerService:
         project_path: str | Path,
         bot_token: str,
         entry_hint: str | None = None,
-        run_seconds: float = 8.0,
+        run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
         install: bool = True,
         max_heal_rounds: int = 2,
     ) -> LiveRunReport:
@@ -1330,7 +1330,7 @@ class LiveRunnerService:
                 if not errors:
                     return LiveRunReport(
                         ok=True, phase="run",
-                        message=f"البوت اشتغل {run_seconds:.0f}ث بدون خطأ ظاهر ثم أوقفناه للفحص.",
+                        message=f"البوت اشتغل {run_seconds:.0f} ثانية (~{run_seconds/60:.0f} دقيقة) بدون خطأ ظاهر ثم أوقفناه حسب نافذة التشغيل.",
                         bot_username=username, bot_id=bot_id,
                         install_log=install_log[-2000:], run_log=run_log[-3000:],
                         warnings=["process_stopped_after_probe_window"],
@@ -1390,7 +1390,7 @@ def run_bot_project(
     project_path: str | Path,
     bot_token: str,
     entry_hint: str | None = None,
-    run_seconds: float = 8.0,
+    run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
 ) -> LiveRunReport:
     return LiveRunnerService().run(
         project_path=project_path,

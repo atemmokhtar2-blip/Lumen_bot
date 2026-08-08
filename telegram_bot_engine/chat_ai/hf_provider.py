@@ -1,12 +1,10 @@
 """Hugging Face Inference Providers adapter.
 
-The token is read only from HF_TOKEN at runtime and is never persisted.
-The adapter intentionally uses the OpenAI-compatible HF router so the rest of
-chat_ai does not depend on g4f or on a provider-specific SDK.
+Token is read at runtime from HF_TOKEN (or common aliases) and never persisted.
+Uses the OpenAI-compatible HF router.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Any
@@ -17,16 +15,32 @@ logger = logging.getLogger(__name__)
 
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 DEFAULT_MODELS = (
-    "meta-llama/Llama-3.1-8B-Instruct",
     "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
 )
 
+_TOKEN_ENVS = (
+    "HF_TOKEN",
+    "HUGGINGFACE_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+)
+
+
+def get_token() -> str:
+    for key in _TOKEN_ENVS:
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
 
 def enabled() -> bool:
-    return bool((os.environ.get("HF_TOKEN") or "").strip()) and os.environ.get(
-        "HF_ENABLED", "1"
-    ).strip().lower() not in {"0", "false", "no", "off"}
+    if not get_token():
+        return False
+    return os.environ.get("HF_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def models() -> tuple[str, ...]:
@@ -52,16 +66,16 @@ def _content(response: requests.Response) -> str:
 def chat(
     messages: list[dict[str, Any]],
     *,
-    timeout: int = 45,
+    timeout: int = 60,
     model: str | None = None,
-    max_tokens: int = 1800,
+    max_tokens: int = 2400,
     temperature: float = 0.0,
     json_mode: bool = False,
 ) -> tuple[str, str]:
     """Return (content, model_used), trying configured models in order."""
     if not enabled():
         raise RuntimeError("HF_TOKEN is not configured")
-    token = os.environ["HF_TOKEN"].strip()
+    token = get_token()
     candidates = (model,) if model else models()
     payload: dict[str, Any] = {
         "model": candidates[0] if candidates else DEFAULT_MODELS[0],
@@ -92,19 +106,24 @@ def chat(
                 except Exception:
                     detail = response.text[:300]
                 errors.append(f"{candidate}:{detail}")
+                logger.warning("HF model failed %s %s", candidate, detail)
         except requests.RequestException as exc:
             errors.append(f"{candidate}:{type(exc).__name__}:{exc}")
     raise RuntimeError("; ".join(errors)[:1200] or "all_hf_models_failed")
 
 
 def healthcheck(*, timeout: int = 30) -> dict[str, Any]:
-    """Small live check used by diagnostics; never returns the token."""
-    text, model = chat(
-        [{"role": "user", "content": "Reply with exactly: HF_OK"}],
-        timeout=timeout,
-        max_tokens=12,
-    )
-    return {"ok": bool(text), "model": model, "content": text[:100]}
+    if not enabled():
+        return {"ok": False, "error": "HF_TOKEN not configured", "enabled": False}
+    try:
+        text, model = chat(
+            [{"role": "user", "content": "Reply with exactly: HF_OK"}],
+            timeout=timeout,
+            max_tokens=16,
+        )
+        return {"ok": bool(text), "model": model, "content": (text or "")[:100], "enabled": True}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"[:400], "enabled": True}
 
 
-__all__ = ["HF_CHAT_URL", "DEFAULT_MODELS", "enabled", "models", "chat", "healthcheck"]
+__all__ = ["HF_CHAT_URL", "DEFAULT_MODELS", "enabled", "models", "chat", "healthcheck", "get_token"]
