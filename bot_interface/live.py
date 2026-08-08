@@ -4,18 +4,50 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 from .config import logger
 from .helpers import escape_md, safe_edit_text
 
 
 async def handle_live_run_token(message, context, token: str, pending: dict) -> None:
-    """Real install + run via LiveRunnerService (no fake success)."""
+    """Validate + install + start bot; respond quickly (bot keeps running in background)."""
     status = await message.reply_text(
-        "🔐 جاري التحقق من التوكن ثم تثبيت التبعيات وتشغيل البوت..."
+        "🔐 1/4 التحقق من التوكن..."
     )
     project_path = pending.get("project_path")
     entry = pending.get("entry_point") or ""
+    run_seconds = float(
+        pending.get("run_seconds")
+        or os.environ.get("LIVE_RUN_SECONDS", 900)
+    )
+
+    # Heartbeat while the blocking worker runs (install can take minutes)
+    stop_hb = asyncio.Event()
+
+    async def _heartbeat() -> None:
+        phases = [
+            "🔐 1/4 التحقق من التوكن...",
+            "📦 2/4 تثبيت التبعيات (قد يستغرق دقيقة أو أكثر)...",
+            "🔧 3/4 إصلاح تلقائي إن لزم...",
+            "🚀 4/4 تشغيل البوت وفحص الإقلاع...",
+        ]
+        i = 0
+        started = time.monotonic()
+        while not stop_hb.is_set():
+            elapsed = int(time.monotonic() - started)
+            phase = phases[min(i, len(phases) - 1)]
+            try:
+                await status.edit_text(f"{phase}\n⏳ مرّ {elapsed}ث — لسه شغال، متقلقش.")
+            except Exception:
+                pass
+            i = min(i + 1, len(phases) - 1)
+            try:
+                await asyncio.wait_for(stop_hb.wait(), timeout=12)
+            except asyncio.TimeoutError:
+                continue
+
+    hb_task = asyncio.create_task(_heartbeat())
 
     def _run():
         from telegram_bot_engine.formal_engine.services.live_runner import run_bot_project
@@ -23,18 +55,28 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             project_path=project_path,
             bot_token=token,
             entry_hint=entry or None,
-            run_seconds=float(pending.get("run_seconds") or os.environ.get("LIVE_RUN_SECONDS", 900)),
+            run_seconds=run_seconds,
         )
 
     try:
         report = await asyncio.to_thread(_run)
     except Exception as e:
         logger.exception("Live run failed")
+        stop_hb.set()
+        try:
+            await hb_task
+        except Exception:
+            pass
         await status.edit_text(f"❌ فشل التشغيل الحي: {type(e).__name__}: {str(e)[:200]}")
         context.user_data.pop("pending_run", None)
         return
     finally:
         token = ""  # noqa: F841
+        stop_hb.set()
+        try:
+            await asyncio.wait_for(hb_task, timeout=2)
+        except Exception:
+            hb_task.cancel()
 
     context.user_data.pop("pending_run", None)
     text_out = report.to_user_text()
@@ -74,43 +116,11 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
     context.user_data.pop("pending_deploy", None)
 
     tv = report.token_validation
-    dep = report.deployment
-    health = report.health
-    lines = [
-        f"{'✅' if report.passed else '⚠️'} *تقرير Live Deployment*",
-        f"• الحكم: `{escape_md(report.verdict)}`",
-        f"• الجودة: {report.quality_score:.0%}",
-    ]
-    if tv:
-        lines.append(
-            f"• التوكن: {'صالح' if tv.valid else 'غير صالح'}"
-            + (f" (@{escape_md(tv.bot_username)})" if tv.bot_username else "")
-        )
-    if dep:
-        lines.append(
-            f"• التشغيل: `{escape_md(dep.status)}`"
-            + (" (dry-run)" if dep.dry_run else " — عملية حقيقية")
-        )
-        if dep.message:
-            lines.append(f"  {escape_md(dep.message[:200])}")
-    if health:
-        lines.append(
-            f"• الصحة: {'Online' if health.online else 'Offline'}"
-            f" ({health.latency_ms:.0f}ms)"
-        )
-    lines.append(
-        f"• الاختبارات: {report.tests_passed}/{report.tests_total} ناجحة"
-    )
-    for t in report.functional_tests[:5]:
-        mark = {"pass": "✅", "fail": "❌", "skip": "⏭", "error": "💥"}.get(t.status, "•")
-        lines.append(f"  {mark} {escape_md(t.name)}: {escape_md(t.message[:80])}")
-    if report.findings:
-        lines.append("• ملاحظات:")
-        for f in report.findings[:4]:
-            lines.append(f"  - {escape_md(f.message[:120])}")
-    if tv and tv.bot_username and dep and dep.status == "running":
-        lines.append(
-            f"\n🚀 البوت شغال — افتح @{escape_md(tv.bot_username)} وأرسل /start"
-        )
-
-    await safe_edit_text(status, "\n".join(lines), use_markdown=True)
+    lines = [report.message if hasattr(report, "message") else str(report)]
+    try:
+        text_out = report.to_user_text() if hasattr(report, "to_user_text") else "\n".join(lines)
+    except Exception:
+        text_out = "\n".join(str(x) for x in lines)
+    if len(text_out) > 3500:
+        text_out = text_out[:3500] + "\n…"
+    await status.edit_text(text_out)

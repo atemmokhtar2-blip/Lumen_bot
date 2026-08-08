@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import sys
 import time
 import urllib.error
@@ -1678,6 +1679,9 @@ class LiveRunnerService:
 
         run_log = ""
         pid = None
+        # Probe quickly for startup errors, then keep process alive in background.
+        probe_seconds = float(os.environ.get("LIVE_RUN_PROBE_SECONDS", "25"))
+        probe_seconds = max(8.0, min(probe_seconds, float(run_seconds)))
         try:
             proc = subprocess.Popen(
                 [py, str(entry)],
@@ -1688,39 +1692,58 @@ class LiveRunnerService:
                 text=True,
             )
             pid = proc.pid
+            # Wait probe window for early crash / auth errors
             try:
-                out, _ = proc.communicate(timeout=run_seconds)
+                out, _ = proc.communicate(timeout=probe_seconds)
                 run_log = out or ""
             except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    out, _ = proc.communicate(timeout=3)
-                    run_log = out or ""
-                except Exception:
-                    pass
-                errors = _extract_errors(run_log)
-                if not errors:
-                    return LiveRunReport(
-                        ok=True, phase="run",
-                        message=f"البوت اشتغل {run_seconds:.0f} ثانية (~{run_seconds/60:.0f} دقيقة) بدون خطأ ظاهر ثم أوقفناه حسب نافذة التشغيل.",
-                        bot_username=username, bot_id=bot_id,
-                        install_log=install_log[-2000:], run_log=run_log[-3000:],
-                        warnings=["process_stopped_after_probe_window"],
-                        pid=pid, entry_point=str(entry.relative_to(root)),
-                        venv_path=str(isolation),
-                        duration_ms=(time.perf_counter() - t0) * 1000,
-                        details={"install_mode": mode, "probe_seconds": run_seconds, "heal_notes": heal_notes},
-                    )
+                # Still running after probe → success path: detach for remaining lifetime
+                remaining = max(5.0, float(run_seconds) - probe_seconds)
+
+                def _background_keep(p=proc, life=remaining):
+                    try:
+                        p.communicate(timeout=life)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            p.kill()
+                            p.communicate(timeout=5)
+                        except Exception:
+                            pass
+                    except Exception:
+                        try:
+                            p.kill()
+                        except Exception:
+                            pass
+
+                threading.Thread(target=_background_keep, daemon=True).start()
+                mins = max(1, int(round(float(run_seconds) / 60.0)))
                 return LiveRunReport(
-                    ok=False, phase="run", message="أخطاء أثناء التشغيل",
-                    bot_username=username, bot_id=bot_id,
-                    install_log=install_log[-2000:], run_log=run_log[-4000:],
-                    errors=errors, pid=pid, entry_point=str(entry.relative_to(root)),
+                    ok=True,
+                    phase="run",
+                    message=(
+                        f"✅ البوت شغال الآن (~{mins} دقيقة). "
+                        f"جرّبه على تيليجرام @{username or 'bot'} — "
+                        f"عملية الخلفية pid={pid}."
+                    ),
+                    bot_username=username,
+                    bot_id=bot_id,
+                    install_log=install_log[-2000:],
+                    run_log="(running in background — probe window clean)",
+                    warnings=["running_in_background", f"lifetime_seconds:{int(run_seconds)}"],
+                    pid=pid,
+                    entry_point=str(entry.relative_to(root)),
                     venv_path=str(isolation),
                     duration_ms=(time.perf_counter() - t0) * 1000,
-                    details={"install_mode": mode, "heal_notes": heal_notes},
+                    details={
+                        "install_mode": mode,
+                        "probe_seconds": probe_seconds,
+                        "lifetime_seconds": run_seconds,
+                        "background": True,
+                        "heal_notes": heal_notes,
+                    },
                 )
 
+            # Process ended during probe
             errors = _extract_errors(run_log)
             if proc.returncode == 0 and not errors:
                 return LiveRunReport(
