@@ -791,7 +791,7 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
                 have.add(cname)
                 break
     # Drop junk command names (fragments from prose / markdown)
-    junk = {"ssl", "example", "information", "com", "http", "https", "www", "order", "pin", "register", "book"}
+    junk = {"ssl", "tls", "example", "information", "com", "http", "https", "www", "order", "pin", "register", "book", "records", "status", "certificate", "headers"}
     # Keep order only if catalog evidence
     n = _norm(text or "")
     catalog = any(k in n for k in ("اصناف", "الأصناف", "منتجات", "منيو", "catalog", "menu items"))

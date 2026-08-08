@@ -57,6 +57,7 @@ class InferenceResult:
     rules: list[RuleNode] = field(default_factory=list)
     wants_database: bool = False
     wants_files: bool = False
+    defensive_tools: list[str] = field(default_factory=list)
 
 
 def _col_type(name: str, hinted: str | None = None) -> str:
@@ -549,6 +550,27 @@ def infer(program: DSLProgram) -> InferenceResult:
             ]
 
     result.wizards = wizards
+    # Evidence-driven defensive tools (not a security-bot template)
+    try:
+        from ..ontology.defensive_tools import resolve_defensive_tools
+        _blob_parts = []
+        for c in result.commands:
+            _blob_parts.append(getattr(c, 'name', '') or '')
+            _blob_parts.append(getattr(c, 'description', '') or '')
+        for b in result.buttons:
+            _blob_parts.append(getattr(b, 'label', '') or '')
+        for w in wizards:
+            _blob_parts.append(str(w.get('id') or ''))
+            for st in w.get('steps') or []:
+                _blob_parts.append(str(st.get('key') or ''))
+                _blob_parts.append(str(st.get('prompt') or ''))
+        for e in result.entities:
+            _blob_parts.append(getattr(e, 'name', '') or '')
+            for f in getattr(e, 'fields', None) or []:
+                _blob_parts.append(str(f))
+        result.defensive_tools = resolve_defensive_tools(' '.join(_blob_parts))
+    except Exception:
+        result.defensive_tools = []
 
     if result.schemas or program.entities or any(w.get("entity") for w in wizards):
         result.wants_database = True

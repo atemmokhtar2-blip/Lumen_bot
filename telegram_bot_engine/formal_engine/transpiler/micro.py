@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inference.engine import InferenceResult
+from .tools_emit import emit_tools_module
 
 
 def _ident(name: str) -> str:
@@ -746,6 +747,8 @@ def _emit_logic_module(inf: InferenceResult) -> str:
 def _emit_handlers_module(inf: InferenceResult) -> str:
     """Handlers from inferred commands, buttons, steps — no domain packs."""
     commands = list(inf.commands or [])
+    _JUNK_CMD = {'ssl','tls','example','information','com','http','https','www','order','pin','records','status','certificate','headers'}
+    commands = [c for c in commands if getattr(c,'name','') not in _JUNK_CMD]
     buttons = list(inf.buttons or [])
     steps = list(inf.compute_steps or [])
     schemas = list(inf.schemas or [])
@@ -841,6 +844,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         "",
     ]
     _wiz = list(getattr(inf, "wizards", None) or [])
+    _dtools = list(getattr(inf, "defensive_tools", None) or [])
+    lines.append("DEFENSIVE_TOOL_IDS: list[str] = " + repr(_dtools))
     lines.append("FLOWS: dict[str, list[dict[str, str]]] = {")
     for w in _wiz:
         wid = str(w.get("id") or w.get("command") or "flow")
@@ -1111,6 +1116,20 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("            await message.reply_text('pong')")
         lines.append("        elif _cn == 'id':")
         lines.append("            await message.reply_text('User ID: ' + str(uid) + ' | Chat: ' + str(message.chat_id))")
+        lines.append(f"        if DEFENSIVE_TOOL_IDS and any(s in {_py(cn)} for s in ('scan', 'security', 'report', 'dns', 'tls')):")
+        lines.append("            target = ' '.join(args).strip()")
+        lines.append("            if not target:")
+        lines.append(f"                if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
+        lines.append(f"                    await _start_flow(message, context, {_py(cmd.name)})")
+        lines.append("                    return")
+        lines.append("                await message.reply_text('أرسل الهدف بعد الأمر، مثال: /domain_scan example.com')")
+        lines.append("                return")
+        lines.append("            try:")
+        lines.append("                from app.tools import run_evidenced_checks")
+        lines.append("                await message.reply_text(run_evidenced_checks(target)[:3500])")
+        lines.append("            except Exception as _te:")
+        lines.append("                await message.reply_text('خطأ فحص: ' + str(_te))")
+        lines.append("            return")
         lines.append("        else:")
         lines.append(f"            await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or cmd.name))})")
         lines.append("    except Exception as _exc:")
@@ -1197,6 +1216,15 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("        if title and str(flow_id) not in ('order',):")
     lines.append("            mine.append({'title': title, 'status': 'open', 'flow': str(flow_id)})")
     lines.append("            msgs.append('تم الحفظ: ' + title)")
+
+    lines.append("        if DEFENSIVE_TOOL_IDS:")
+    lines.append("            target = str(payload.get('domain') or payload.get('url') or payload.get('target') or title or text or '').strip()")
+    lines.append("            if target:")
+    lines.append("                try:")
+    lines.append("                    from app.tools import run_evidenced_checks")
+    lines.append("                    msgs.append(run_evidenced_checks(target))")
+    lines.append("                except Exception as _te:")
+    lines.append("                    msgs.append('tool_error:' + str(_te))")
     lines.append("        # sensible defaults for rule engine")
     lines.append("        if \"weight\" in payload and payload.get(\"weight\"):")
     lines.append("            pass")
@@ -1440,6 +1468,8 @@ def _emit_config(inf: InferenceResult) -> str:
 
 def _emit_main(inf: InferenceResult) -> str:
     commands = list(inf.commands or [])
+    _JUNK = {'ssl','tls','example','information','com','http','https','www','order','pin','records','status','certificate','headers','check'}
+    commands = [c for c in commands if getattr(c, 'name', '') not in _JUNK]
     extra = [c for c in commands if c.name not in ("start", "help")]
 
     imports = [
@@ -1506,6 +1536,9 @@ def _emit_requirements(inf: InferenceResult) -> str:
     ]
     if inf.wants_database:
         reqs += ["sqlalchemy[asyncio]>=2.0", "aiosqlite>=0.19"]
+    _dt = set(getattr(inf, "defensive_tools", None) or [])
+    if _dt & {"mx", "spf", "dmarc"}:
+        reqs.append("dnspython>=2.4.0")
     return "\n".join(reqs) + "\n"
 
 
@@ -1532,6 +1565,7 @@ def transpile(inf: InferenceResult, out_dir: str | Path) -> list[str]:
     w("app/models.py", _emit_schema_module(inf))
     w("app/store.py", _emit_store_module(inf))
     w("app/logic.py", _emit_logic_module(inf))
+    w("app/tools.py", emit_tools_module(inf))
     w("app/handlers.py", _emit_handlers_module(inf))
     w("app/container.py", _emit_container(inf))
     w("app/config.py", _emit_config(inf))
