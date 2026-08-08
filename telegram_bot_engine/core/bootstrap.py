@@ -113,6 +113,9 @@ def bootstrap(
     registry.register_validator(BlueprintValidator())
     registry.register_validator(StructureValidator())
 
-    manager = CoreEngineManager(registry=registry, config=config)
-    orchestrator = PipelineOrchestrator(registry=registry, config=config)
+    manager = CoreEngineManager(config=config)
+    for engine in registry.engines():
+        manager.register(engine, engine_id=getattr(engine, "engine_id", engine.__class__.__name__))
+    output_manager = OutputManager()
+    orchestrator = PipelineOrchestrator(registry=registry, output_manager=output_manager, config=config, manager=manager)
     return registry, orchestrator, manager
