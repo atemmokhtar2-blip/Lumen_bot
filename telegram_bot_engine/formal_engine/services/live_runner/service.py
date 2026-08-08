@@ -1298,8 +1298,34 @@ class LiveRunnerService:
         token_envs = discover_token_env_names(root)
         for key in token_envs:
             env[key] = bot_token
-        for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
+        for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN", "BOTTOKEN"):
             env[key] = bot_token
+
+        # Write project .env so dotenv-based bots use the token the user just provided.
+        try:
+            env_path = root / ".env"
+            kept: list[str] = []
+            if env_path.exists():
+                for ln in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    key = ln.split("=", 1)[0].strip() if "=" in ln else ""
+                    if key in {
+                        "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN",
+                        "API_TOKEN", "TELEGRAM_TOKEN", "BOTTOKEN",
+                        *set(token_envs),
+                    }:
+                        continue
+                    kept.append(ln)
+            keys = sorted(set(list(token_envs) + [
+                "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN",
+                "API_TOKEN", "TELEGRAM_TOKEN",
+            ]))
+            for key in keys:
+                kept.append(f"{key}={bot_token}")
+            env_path.write_text(chr(10).join(kept).strip() + chr(10), encoding="utf-8")
+        except Exception as _env_exc:
+            __import__("logging").getLogger("live_runner").warning(
+                "could not write project .env: %s", _env_exc
+            )
         if mode.startswith("target"):
             pp = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = str(isolation) + (os.pathsep + pp if pp else "")
