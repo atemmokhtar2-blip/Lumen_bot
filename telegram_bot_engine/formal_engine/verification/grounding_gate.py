@@ -101,7 +101,12 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
         "support": ("دعم", "خدمة العملاء", "خدمة عملاء", "support", "مساعدة"),
         "warn": ("تحذير", "إنذار", "انذار", "warn", "warning"),
         "ban": ("حظر", "بان", "ban"),
+        "kick": ("طرد", "kick", "ازالة"),
         "mute": ("كتم", "mute"),
+        "unban": ("فك الحظر", "unban"),
+        "unmute": ("فك الكتم", "unmute"),
+        "order": ("طلب", "اوردر", "order", "كمية"),
+        "register": ("تسجيل", "register", "signup"),
         "book": ("حجز", "book"),
     }
     for key, words in synonyms.items():

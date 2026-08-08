@@ -37,7 +37,7 @@ TELEGRAM_CAPABILITIES: tuple[TelegramCapability, ...] = (
         id="ban_chat_member",
         api_method="ban_chat_member",
         surface_forms=(
-            "ban", "حظر", "احظر", "بند", "بان", "block user", "blocked",
+            "ban", "ban_user", "حظر", "احظر", "بند", "بان", "block user", "blocked",
             "اطرد نهائي", "حظر عضو", "حظر المستخدم",
         ),
         description="Ban a user from a chat",
@@ -63,7 +63,7 @@ TELEGRAM_CAPABILITIES: tuple[TelegramCapability, ...] = (
         id="restrict_chat_member",
         api_method="restrict_chat_member",
         surface_forms=(
-            "mute", "كتم", "اكتم", "تقييد", "restrict", "silence",
+            "mute", "mute_user", "كتم", "اكتم", "تقييد", "restrict", "silence",
             "منع الكتابة", "كتم عضو", "mute user",
         ),
         description="Restrict a member (mute)",

@@ -583,6 +583,91 @@ def _g4f_translate(text: str, timeout: int) -> TranslatorResult:
     )
 
 
+
+def _normalize_cmd_name(name: str) -> str:
+    n = (name or "").strip().lstrip("/").lower().replace(" ", "_")
+    aliases = {
+        "ban_user": "ban", "ban_member": "ban", "block": "ban",
+        "kick_user": "kick", "kick_member": "kick", "remove": "kick",
+        "mute_user": "mute", "mute_member": "mute", "silence": "mute",
+        "unban_user": "unban", "unmute_user": "unmute",
+        "show_menu": "show_categories", "menu": "show_categories",
+        "categories": "show_categories", "catalog": "show_categories",
+    }
+    return aliases.get(n, n)
+
+
+def _merge_specs(primary: dict, secondary: dict) -> dict:
+    """Union AI + structural specs so HF cannot drop evidenced catalog/items/flows."""
+    out: dict = {
+        "bot_name": (primary.get("bot_name") or secondary.get("bot_name") or ""),
+        "commands": [],
+        "buttons": [],
+        "entities": [],
+        "flows": [],
+        "rules": [],
+        "relations": list(primary.get("relations") or []) + list(secondary.get("relations") or []),
+    }
+    # commands
+    seen_c: set[str] = set()
+    for src in (primary, secondary):
+        for c in src.get("commands") or []:
+            if not isinstance(c, dict):
+                continue
+            name = _normalize_cmd_name(str(c.get("name") or ""))
+            if not name or name in seen_c:
+                continue
+            seen_c.add(name)
+            cc = dict(c)
+            cc["name"] = name
+            out["commands"].append(cc)
+    # buttons by label
+    seen_b: set[str] = set()
+    for src in (primary, secondary):
+        for b in src.get("buttons") or []:
+            lab = (b.get("label") if isinstance(b, dict) else str(b) or "").strip()
+            if not lab or lab in seen_b:
+                continue
+            seen_b.add(lab)
+            out["buttons"].append({"label": lab} if not isinstance(b, dict) else {**b, "label": lab})
+    # entities by name
+    seen_e: set[str] = set()
+    for src in (primary, secondary):
+        for e in src.get("entities") or []:
+            if not isinstance(e, dict):
+                continue
+            en = str(e.get("name") or "").strip()
+            if not en or en.lower() in seen_e:
+                continue
+            seen_e.add(en.lower())
+            out["entities"].append(e)
+    # flows by id — prefer richer step lists
+    flows_by: dict[str, dict] = {}
+    for src in (primary, secondary):
+        for f in src.get("flows") or []:
+            if not isinstance(f, dict):
+                continue
+            fid = str(f.get("id") or f.get("command") or "").strip() or "flow"
+            fid = _normalize_cmd_name(fid)
+            prev = flows_by.get(fid)
+            steps = f.get("steps") or []
+            if prev is None or len(steps) > len(prev.get("steps") or []):
+                ff = dict(f)
+                ff["id"] = fid
+                ff["command"] = _normalize_cmd_name(str(f.get("command") or fid))
+                flows_by[fid] = ff
+    out["flows"] = list(flows_by.values())
+    # rules
+    seen_r: set[str] = set()
+    for src in (primary, secondary):
+        for r in src.get("rules") or []:
+            if isinstance(r, str) and r.strip() and r not in seen_r:
+                seen_r.add(r)
+                out["rules"].append(r)
+    return out
+
+
+
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
     text = (user_text or "").strip()
     t0 = time.perf_counter()
@@ -607,30 +692,57 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     if os.environ.get("SPEC_TRANSLATOR", "1").strip().lower() not in {"0", "false", "off"}:
         if hf_enabled():
             ai_result = _hf_translate(text, timeout=timeout)
-            if ai_result.ok and ai_result.structured_text.strip():
-                return ai_result
-        # 2) g4f fallback for complex bots even without HF_TOKEN
-        if complex_hint or not (ai_result and ai_result.ok):
-            g4 = _g4f_translate(text, timeout=min(timeout, 50))
-            if g4.ok and g4.structured_text.strip():
-                return g4
-            if ai_result is None:
-                ai_result = g4
-            elif not ai_result.ok and g4.error:
-                ai_result.error = (ai_result.error or "") + "|" + g4.error
+        # 2) g4f fallback when HF failed or unavailable
+        if not (ai_result and ai_result.ok):
+            if complex_hint or not hf_enabled():
+                g4 = _g4f_translate(text, timeout=min(timeout, 50))
+                if g4.ok:
+                    ai_result = g4
+                elif ai_result is None:
+                    ai_result = g4
+                elif g4.error:
+                    ai_result.error = (ai_result.error or "") + "|" + g4.error
 
-    # 3) Structural deterministic path
-    spec = structural_translate(text)
-    structured = _spec_to_sectioned_text(spec, text)
+    # Always compute structural baseline
+    structural = structural_translate(text)
+
+    # If AI succeeded, merge so it cannot drop catalog items / admin caps / flows
+    if ai_result and ai_result.ok and isinstance(ai_result.grounded_json, dict) and ai_result.grounded_json:
+        merged = _merge_specs(ai_result.grounded_json, structural)
+        # ensure capability-friendly command names
+        for c in merged.get("commands") or []:
+            if isinstance(c, dict) and c.get("name"):
+                c["name"] = _normalize_cmd_name(str(c["name"]))
+        structured = _spec_to_sectioned_text(merged, text)
+        meaningful = [
+            c for c in (merged.get("commands") or [])
+            if isinstance(c, dict) and c.get("name") not in ("start", "help")
+        ]
+        ok = bool(meaningful or merged.get("buttons") or merged.get("flows"))
+        return TranslatorResult(
+            ok=ok,
+            structured_text=structured if ok else text,
+            grounded_json=merged,
+            model_used=(ai_result.model_used or "ai") + "+structural",
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            path=(ai_result.path or "ai") + "+structural",
+            error=ai_result.error or "",
+            needs_clarification=not ok,
+            clarification_questions=(
+                [] if ok else ["المستخدم هيقدر يعمل إيه؟ اكتب أوامر أو أزرار أو قائمة أصناف بشكل واضح."]
+            ),
+        )
+
+    structured = _spec_to_sectioned_text(structural, text)
     meaningful = [
-        c for c in (spec.get("commands") or [])
+        c for c in (structural.get("commands") or [])
         if isinstance(c, dict) and c.get("name") not in ("start", "help")
     ]
-    ok = bool(meaningful or (spec.get("buttons") or []) or (spec.get("flows") or []))
+    ok = bool(meaningful or (structural.get("buttons") or []) or (structural.get("flows") or []))
     return TranslatorResult(
         ok=ok,
         structured_text=structured if ok else text,
-        grounded_json=spec,
+        grounded_json=structural,
         model_used="structural",
         elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         path="structural",
