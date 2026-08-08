@@ -94,6 +94,65 @@ def _cmd_capability_map(commands) -> dict[str, list[str]]:
     return out
 
 
+
+def _harden_handlers_source(src: str) -> str:
+    """Wrap every command handler so exceptions never leave the user with silence."""
+    if "async def _safe_reply" not in src:
+        needle = "from app.container import get_container\n"
+        inject = (
+            needle
+            + "\n"
+            + "async def _safe_reply(message, text: str) -> None:\n"
+            + "    if message is None:\n"
+            + "        return\n"
+            + "    try:\n"
+            + "        await message.reply_text(str(text)[:3500])\n"
+            + "    except Exception:\n"
+            + "        pass\n"
+            + "\n"
+        )
+        if needle in src:
+            src = src.replace(needle, inject, 1)
+    header_re = re.compile(
+        r"(async def \w+_handler\(update: Update, context: ContextTypes\.DEFAULT_TYPE\) -> None:\n)"
+    )
+    parts = header_re.split(src)
+    if len(parts) < 3:
+        return src
+    out = [parts[0]]
+    i = 1
+    while i < len(parts):
+        header = parts[i]
+        body = parts[i + 1] if i + 1 < len(parts) else ""
+        # Don't double-wrap
+        if body.lstrip().startswith("try:"):
+            out.append(header)
+            out.append(body)
+            i += 2
+            continue
+        # Indent body one level and wrap
+        indented_lines = []
+        for ln in body.splitlines(keepends=True):
+            if ln.strip() == "":
+                indented_lines.append(ln)
+            else:
+                indented_lines.append("    " + ln)
+        wrapped = (
+            "    try:\n"
+            + "".join(indented_lines).rstrip()
+            + "\n"
+            + "    except Exception as _exc:\n"
+            + "        try:\n"
+            + "            await _safe_reply(message, f\"خطأ أثناء تنفيذ الأمر: {_exc}\")\n"
+            + "        except Exception:\n"
+            + "            pass\n\n"
+        )
+        out.append(header)
+        out.append(wrapped)
+        i += 2
+    return "".join(out)
+
+
 def _emit_capability_runtime(lines: list[str], commands, *, need_permissions: bool) -> None:
     """
     Emit shared structural runtime for Telegram capabilities.
@@ -748,6 +807,14 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             return "mutate"
         if any(x in c for x in ("broadcast", "notify")):
             return "broadcast"
+        if c in (
+            "points", "rank", "daily", "wallet", "balance", "deposit", "withdraw",
+            "referral", "invite", "profile", "settings", "menu", "tasks", "missions",
+            "gift", "top", "leaderboard", "id", "info", "ping", "about", "support",
+            "contact", "language", "news", "events", "notifications", "feedback",
+            "report", "suggest", "search", "admin", "panel",
+        ):
+            return "account"
         return "generic"
 
     all_caps: list[str] = []
@@ -1075,6 +1142,44 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append(f"        await message.reply_text({_py((cmd.description or cmd.name) + ' — أرسل المعرّف كوسيط')})")
         elif kind == "broadcast":
             lines.append(f"    await message.reply_text({_py('أرسل نص الرسالة بعد الأمر: /' + cmd.name + ' النص')})")
+        elif kind == "account":
+            cn = cmd.name.lower()
+            lines.append("    app_data = context.application.bot_data")
+            lines.append("    users = app_data.setdefault('users', {})")
+            lines.append("    u = users.setdefault(str(uid), {'points': 0, 'balance': 0.0, 'daily_claim': 0})")
+            lines.append(f"    _cn = {_py(cn)}")
+            lines.append("    if _cn == 'daily':")
+            lines.append("        import time as _t")
+            lines.append("        now = int(_t.time())")
+            lines.append("        if now - int(u.get('daily_claim') or 0) < 86400:")
+            lines.append("            await message.reply_text('تم استلام النقاط اليومية مسبقاً. حاول بعد 24 ساعة.')")
+            lines.append("        else:")
+            lines.append("            u['points'] = int(u.get('points') or 0) + 10")
+            lines.append("            u['daily_claim'] = now")
+            lines.append("            await message.reply_text('تم إضافة 10 نقاط. رصيدك: ' + str(u['points']))")
+            lines.append("    elif _cn in ('points', 'rank'):")
+            lines.append("        await message.reply_text('نقاطك: ' + str(int(u.get('points') or 0)))")
+            lines.append("    elif _cn in ('wallet', 'balance'):")
+            lines.append("        await message.reply_text('رصيد المحفظة: ' + str(float(u.get('balance') or 0)))")
+            lines.append("    elif _cn == 'deposit':")
+            lines.append("        if args and str(args[0]).replace('.','',1).isdigit():")
+            lines.append("            amt = float(args[0])")
+            lines.append("            u['balance'] = float(u.get('balance') or 0) + amt")
+            lines.append("            await message.reply_text('تم إيداع ' + str(amt) + '. الرصيد: ' + str(u['balance']))")
+            lines.append("        else:")
+            lines.append("            await message.reply_text('الاستخدام: /deposit المبلغ')")
+            lines.append("    elif _cn == 'profile':")
+            lines.append("        uname = (user.username if user else '') or ''")
+            lines.append("        await message.reply_text('الملف: ID=' + str(uid) + ' @' + uname + ' نقاط=' + str(int(u.get('points') or 0)))")
+            lines.append("    elif _cn == 'ping':")
+            lines.append("        await message.reply_text('pong')")
+            lines.append("    elif _cn == 'id':")
+            lines.append("        await message.reply_text('User ID: ' + str(uid) + ' | Chat: ' + str(message.chat_id))")
+            lines.append("    elif _cn == 'menu':")
+            lines.append("        kb = main_keyboard()")
+            lines.append("        await message.reply_text('القائمة الرئيسية:', reply_markup=kb)")
+            lines.append("    else:")
+            lines.append(f"        await message.reply_text({_py((cmd.description or cmd.name) + ' — تم')})")
         else:
             # generic: rules + optional action + meaningful fallback
             lines.append("    if msgs:")
@@ -1307,7 +1412,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     else:
         lines.append("    await query.edit_message_text(data or \"تم\")")
     lines.append("")
-    return "\n".join(lines) + "\n"
+    return _harden_handlers_source("\n".join(lines) + "\n")
 
 
 def _emit_container(inf: InferenceResult) -> str:

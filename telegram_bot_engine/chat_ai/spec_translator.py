@@ -588,8 +588,28 @@ def _g4f_translate(text: str, timeout: int) -> TranslatorResult:
 
 
 
+
+_BLOCKED_CMD_NAMES = frozenset({
+    "await", "async", "def", "class", "import", "from", "return", "true", "false", "none",
+    "user", "users", "group", "groups", "channel", "history", "fully", "the", "and", "or",
+    "get", "set", "view", "open", "show", "list", "new", "old", "all", "with", "from",
+    "بالكامل", "command", "commands",
+})
+
+
+def _valid_cmd_name(name: str) -> bool:
+    n = (name or "").strip().lstrip("/").lower()
+    if not n or n in _BLOCKED_CMD_NAMES:
+        return False
+    if not re.match(r"^[a-z][a-z0-9_]{0,32}$", n):
+        return False
+    return True
+
+
 def _normalize_cmd_name(name: str) -> str:
     n = (name or "").strip().lstrip("/").lower().replace(" ", "_")
+    if not _valid_cmd_name(n) and n not in ("start", "help"):
+        return ""
     aliases = {
         "ban_user": "ban", "ban_member": "ban", "block": "ban",
         "kick_user": "kick", "kick_member": "kick", "remove": "kick",
@@ -716,6 +736,10 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         for c in merged.get("commands") or []:
             if isinstance(c, dict) and c.get("name"):
                 c["name"] = _normalize_cmd_name(str(c["name"]))
+        merged["commands"] = [
+            c for c in (merged.get("commands") or [])
+            if isinstance(c, dict) and _valid_cmd_name(str(c.get("name") or ""))
+        ]
         # When user pasted a long explicit /command list, keep only those + start/help
         slash = {m.lower() for m in re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")}
         if len(slash) >= 8:
