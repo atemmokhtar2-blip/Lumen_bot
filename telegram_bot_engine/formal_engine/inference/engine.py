@@ -58,6 +58,7 @@ class InferenceResult:
     wants_database: bool = False
     wants_files: bool = False
     defensive_tools: list[str] = field(default_factory=list)
+    dynamic_tools: list[dict] = field(default_factory=list)
 
 
 def _col_type(name: str, hinted: str | None = None) -> str:
@@ -550,43 +551,57 @@ def infer(program: DSLProgram) -> InferenceResult:
             ]
 
     result.wizards = wizards
-    # Evidence-driven defensive tools (not a security-bot template)
+
+    # Fresh tools for THIS request — rebuilt from command/button/wizard text only
     try:
         from ..ontology.defensive_tools import resolve_defensive_tools
-        _blob_parts = []
+        _blob_parts: list[str] = []
         for c in result.commands:
-            _blob_parts.append(getattr(c, 'name', '') or '')
-            _blob_parts.append(getattr(c, 'description', '') or '')
+            _blob_parts.append(getattr(c, "name", "") or "")
+            _blob_parts.append(getattr(c, "description", "") or "")
         for b in result.buttons:
-            _blob_parts.append(getattr(b, 'label', '') or '')
+            _blob_parts.append(getattr(b, "label", "") or "")
         for w in wizards:
-            _blob_parts.append(str(w.get('id') or ''))
-            for st in w.get('steps') or []:
-                _blob_parts.append(str(st.get('key') or ''))
-                _blob_parts.append(str(st.get('prompt') or ''))
+            _blob_parts.append(str(w.get("id") or ""))
+            for st in w.get("steps") or []:
+                _blob_parts.append(str(st.get("key") or ""))
+                _blob_parts.append(str(st.get("prompt") or ""))
         for e in result.entities:
-            _blob_parts.append(getattr(e, 'name', '') or '')
-            for f in getattr(e, 'fields', None) or []:
+            _blob_parts.append(getattr(e, "name", "") or "")
+            for f in getattr(e, "fields", None) or []:
                 _blob_parts.append(str(f))
-        result.defensive_tools = resolve_defensive_tools(' '.join(_blob_parts))
+        blob = " ".join(_blob_parts)
+        result.defensive_tools = resolve_defensive_tools(blob)
+        # Map evidenced phrases → tool dicts (same request only)
+        dyn: list[dict] = []
+        low = blob.lower()
+        pairs = [
+            (("dns",), "dns_lookup", "DNS", "domain"),
+            (("mx",), "mx_lookup", "MX", "domain"),
+            (("spf",), "spf_check", "SPF", "domain"),
+            (("dmarc",), "dmarc_check", "DMARC", "domain"),
+            (("tls", "ssl"), "tls_info", "TLS", "domain"),
+            (("http status", "status code"), "http_status", "HTTP status", "url"),
+            (("security header", "hsts", "csp"), "security_headers", "Headers", "url"),
+            (("robots",), "robots_check", "robots.txt", "url"),
+            (("sitemap",), "sitemap_check", "sitemap", "url"),
+            (("whois",), "whois_lookup", "WHOIS", "domain"),
+            (("password", "كلمة"), "password_strength", "Password", "text"),
+            (("ping",), "ping_check", "Ping", "domain"),
+        ]
+        seen: set[str] = set()
+        for keys, tid, title, inp in pairs:
+            if any(k in low for k in keys) and tid not in seen:
+                seen.add(tid)
+                dyn.append({"id": tid, "title": title, "input": inp})
+        # also from defensive_tools ids
+        for tid in result.defensive_tools:
+            if tid not in seen:
+                seen.add(tid)
+                dyn.append({"id": tid, "title": tid, "input": "domain"})
+        result.dynamic_tools = dyn[:24]
     except Exception:
         result.defensive_tools = []
-
-    if result.schemas or program.entities or any(w.get("entity") for w in wizards):
-        result.wants_database = True
-    if any(w.get("id") == "order" or w.get("entity") == "Order" for w in wizards):
-        if not any(s.table == "order" for s in result.schemas):
-            result.schemas.append(SchemaPlan(
-                table="order",
-                columns=[
-                    ("id", "str"), ("user_id", "int"),
-                    ("item_name", "str"), ("quantity", "int"), ("status", "str"),
-                ],
-            ))
-        if catalog_labels and not any(s.table == "item" for s in result.schemas):
-            result.schemas.append(SchemaPlan(
-                table="item",
-                columns=[("id", "str"), ("name", "str")],
-            ))
+        result.dynamic_tools = []
 
     return result

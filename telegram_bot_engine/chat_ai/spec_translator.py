@@ -273,6 +273,115 @@ def _detect_ordered_steps(text: str) -> list[dict[str, str]]:
 
 
 
+
+def _extract_dynamic_tools(text: str) -> list[dict[str, Any]]:
+    """
+    Build tool specs fresh from THIS user text only.
+    No saved product catalog — each request recomputes tools from wording.
+    """
+    tools: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    blob = text or ""
+    n = _norm(blob)
+
+    # Bullet / line items that look like checks or tools
+    line_pats = [
+        r"(?m)^[\s•\-\*\d\.\)➕📧🌐🔐📊🔍]+\s*(?P<title>[A-Za-z\u0600-\u06FF][^\n]{2,60})$",
+        r"(?i)(?:فحص|أداة|اداة|check|scan|tool|module)\s*[:=：\-]?\s*(?P<title>[^\n]{3,60})",
+    ]
+    candidates: list[str] = []
+    for pat in line_pats:
+        for m in re.finditer(pat, blob):
+            title = re.sub(r"\s+", " ", m.group("title")).strip().rstrip(":.،,")
+            if 3 <= len(title) <= 60:
+                candidates.append(title)
+
+    # Phrase evidence → tool (keywords must appear in THIS text)
+    phrase_tools = [
+        (("dns", "سجلات dns", "dns records"), "dns_lookup", "domain", "DNS records"),
+        (("mx", "mx records", "سجلات mx"), "mx_lookup", "domain", "MX records"),
+        (("spf",), "spf_check", "domain", "SPF"),
+        (("dmarc",), "dmarc_check", "domain", "DMARC"),
+        (("tls", "ssl", "شهادة", "certificate"), "tls_info", "domain", "TLS/SSL"),
+        (("http status", "status code", "حالة http"), "http_status", "url", "HTTP status"),
+        (("security headers", "هيدرز", "hsts", "csp", "رؤوس"), "security_headers", "url", "Security headers"),
+        (("whois", "ويز", "مالك الدومين"), "whois_lookup", "domain", "WHOIS"),
+        (("robots.txt", "robots"), "robots_check", "url", "robots.txt"),
+        (("openapi", "swagger"), "openapi_check", "url", "OpenAPI/Swagger"),
+        (("sitemap", "خريطة الموقع"), "sitemap_check", "url", "Sitemap"),
+        (("security.txt",), "security_txt", "url", "security.txt"),
+        (("port", "منافذ"), "port_info", "domain", "Port info"),  # will be limited to common service banners only if implemented
+        (("ping", "icmp"), "ping_check", "domain", "Ping"),
+        (("pdf", "تقرير"), "report_pdf", "project", "PDF report"),
+    ]
+    for keys, tid, inp, title in phrase_tools:
+        if any(_norm(k) in n or k.lower() in blob.lower() for k in keys):
+            if tid not in seen:
+                seen.add(tid)
+                tools.append({
+                    "id": tid,
+                    "title": title,
+                    "input": inp,
+                    "source": "phrase",
+                })
+
+    # From dashboard-style titles
+    for title in candidates:
+        tn = _norm(title)
+        tid = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:32] or "tool"
+        if tid in seen or tid in ("start", "help"):
+            continue
+        # skip pure product-looking short food words without scan verbs
+        inp = "domain"
+        if any(k in tn for k in ("web", "site", "http", "url", "موقع", "robots", "sitemap")):
+            inp = "url"
+        if any(k in tn for k in ("report", "تقرير", "pdf")):
+            inp = "project"
+        if any(k in tn for k in ("password", "كلمة السر", "hash")):
+            inp = "text"
+        seen.add(tid)
+        tools.append({"id": tid, "title": title[:60], "input": inp, "source": "line"})
+
+    return tools[:24]
+
+
+def _classify_tool_primitive(tool: dict[str, Any]) -> str:
+    """Map one user-derived tool to a safe execution primitive (compositional, not a bot pack)."""
+    blob = _norm(
+        " ".join(str(tool.get(k) or "") for k in ("id", "title", "description", "input"))
+    )
+    if any(k in blob for k in ("dmarc",)):
+        return "dns_txt_dmarc"
+    if any(k in blob for k in ("spf",)):
+        return "dns_txt_spf"
+    if any(k in blob for k in ("mx",)):
+        return "dns_mx"
+    if any(k in blob for k in ("dns",)):
+        return "dns_a"
+    if any(k in blob for k in ("tls", "ssl", "شهاده", "certificate")):
+        return "tls_cert"
+    if any(k in blob for k in ("security header", "هيدرز", "hsts", "csp", "headers")):
+        return "http_headers"
+    if any(k in blob for k in ("http status", "status code", "حاله http")):
+        return "http_status"
+    if any(k in blob for k in ("robots",)):
+        return "http_path:/robots.txt"
+    if any(k in blob for k in ("sitemap",)):
+        return "http_path:/sitemap.xml"
+    if any(k in blob for k in ("security.txt",)):
+        return "http_path:/.well-known/security.txt"
+    if any(k in blob for k in ("whois",)):
+        return "whois"
+    if any(k in blob for k in ("ping",)):
+        return "ping"
+    if any(k in blob for k in ("pdf", "report", "تقرير")):
+        return "report_text"
+    if any(k in blob for k in ("password", "hash")):
+        return "password_strength"
+    return "echo_target"
+
+
+
 def structural_translate(user_text: str) -> dict[str, Any]:
     text = (user_text or "").strip()
     spec: dict[str, Any] = {
@@ -300,6 +409,11 @@ def structural_translate(user_text: str) -> dict[str, Any]:
         stem = _command_stem_from_label(lab)
         if stem and not any(c.get("name") == stem for c in spec["commands"]):
             spec["commands"].append({"name": stem, "description": lab, "admin_only": False})
+
+    # Fresh tools from this request only
+    dyn_tools = _extract_dynamic_tools(text)
+    if dyn_tools:
+        spec["tools"] = dyn_tools
 
     # If user said the bot asks to type/write something after an add-like action → one collect step
     if any(c.get("name") == "add" for c in spec["commands"]) and re.search(
@@ -526,6 +640,7 @@ STRICT rules:
 2) Multi-step conversations (then/بعدين/ثم) become flows with ordered steps.
 3) Menu/catalog items become buttons; ordering becomes Order(item_name, quantity, status).
 4) Command names latin [a-z0-9_]. Never invent domain packs not in the text.
+5) tools: only checks/tools the user asked for [{id,title,input,description}] — rebuild every request from their words.
 5) Always include flows for register/order/booking when steps are described.
 6) JSON only. No markdown. No code.
 """
@@ -815,6 +930,15 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
             f for f in (spec.get("flows") or [])
             if not (isinstance(f, dict) and str(f.get("id") or f.get("command") or "").lower() == "order")
         ]
+    # Tools always recomputed/merged from text for this request
+    fresh = _extract_dynamic_tools(text)
+    existing = [t for t in (spec.get("tools") or []) if isinstance(t, dict)]
+    have = {str(t.get("id")) for t in existing}
+    for t in fresh:
+        if str(t.get("id")) not in have:
+            existing.append(t)
+            have.add(str(t.get("id")))
+    spec["tools"] = existing[:24]
     return spec
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:

@@ -919,25 +919,24 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
                 btn_to_cmd[cb] = c.name
                 break
             # stem names in label — never use fuzzy surface for these stems
-            if c.name in ("add", "list_mine", "complete", "remove", "view_tasks",
-                           "domain_scan", "website_scan", "email_security",
-                           "password_security", "generate_report"):
+            # Generic stem overlap: command name tokens vs label (no domain list)
+            name_toks = [x for x in c.name.replace("_", " ").split() if len(x) > 2]
+            lab_l = label.lower()
+            if name_toks and all(tok.lower() in lab_l or tok in label for tok in name_toks[:2]):
+                btn_to_cmd[cb] = c.name
+                break
+            # Arabic action stems only (linguistic, not product packs)
+            if c.name in ("add", "list_mine", "complete", "remove"):
                 stem_keys = {
-                    "add": ("إضافة مهمة", "إضافة", "اضافه"),
+                    "add": ("إضافة", "اضافه"),
                     "list_mine": ("مهامي", "قائمتي"),
-                    "view_tasks": ("مهامي", "قائمتي"),
-                    "complete": ("إنهاء مهمة", "إنهاء", "انهاء"),
-                    "remove": ("حذف مهمة", "حذف"),
-                    "domain_scan": ("Domain Scanner", "domain scan", "Domain"),
-                    "website_scan": ("Website Security", "website scan", "Website"),
-                    "email_security": ("Email Security", "email"),
-                    "password_security": ("Password Security", "password"),
-                    "generate_report": ("Security Report", "Report", "تقرير"),
+                    "complete": ("إنهاء", "انهاء"),
+                    "remove": ("حذف",),
                 }.get(c.name, ())
                 if any(k in label for k in stem_keys):
                     btn_to_cmd[cb] = c.name
                     break
-                continue  # do not fuzzy-match stems
+                continue
             if _surface_matches(label, c.name, desc):
                 btn_to_cmd[cb] = c.name
                 break
