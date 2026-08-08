@@ -486,27 +486,21 @@ def infer(program: DSLProgram) -> InferenceResult:
         })
         existing_ids.add(wid)
 
-    # Catalog buttons → order flow (quantity → confirm)
-    # Never for personal-task bots (مهمة / add_task / Task entity)
-    _cmd_names = {getattr(c, "name", "") for c in program.commands}
-    _ent_names = {getattr(e, "name", "") for e in program.entities}
-    _taskish = bool(
-        _cmd_names & {"add_task", "my_tasks", "done_task", "delete_task", "tasks"}
-        or _ent_names & {"Task", "Todo"}
-        or any("مهام" in (getattr(b, "label", "") or "") or "مهمة" in (getattr(b, "label", "") or "")
-               for b in program.buttons)
-    )
+    # Catalog buttons → order flow only for product-like labels (not action buttons)
     catalog_labels: list[str] = []
-    if not _taskish:
-        for b in program.buttons:
-            lab = (b.label or "").strip()
-            if not lab or len(lab) > 32:
-                continue
-            if any(lab == c.name or lab == (c.description or "") for c in program.commands):
-                continue
-            if any(k in lab for k in ("عرض", "قائمة", "start", "help", "تسجيل", "جميع", "مهمة", "مهام")):
-                continue
-            catalog_labels.append(lab)
+    _action_hint = ("إضافة", "اضافه", "مهامي", "إنهاء", "انهاء", "حذف", "تسجيل", "بحث", "إعداد", "start", "help", "عرض", "قائمة", "جميع")
+    for b in program.buttons:
+        lab = (b.label or "").strip()
+        if not lab or len(lab) > 32:
+            continue
+        if any(lab == c.name or lab == (c.description or "") for c in program.commands):
+            continue
+        if any(k in lab for k in _action_hint):
+            continue
+        # skip labels that are clearly actions (verb-like) not product names
+        if re.search(r"(إضافة|إنهاء|حذف|فتح|عرض|إدارة)", lab):
+            continue
+        catalog_labels.append(lab)
     if catalog_labels and "order" not in existing_ids:
         wizards.append({
             "id": "order",
