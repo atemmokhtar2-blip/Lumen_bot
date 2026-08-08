@@ -744,6 +744,57 @@ def _emit_logic_module(inf: InferenceResult) -> str:
 
 
 
+
+def _emit_services_module(inf: InferenceResult) -> str:
+    """Generic entity services from inferred schemas/entities only — no domain packs."""
+    lines = [
+        '"""Services derived from entities in this request only."""',
+        "from __future__ import annotations",
+        "from typing import Any",
+        "from app.container import get_container",
+        "",
+        "async def create_record(entity: str, user_id: int, data: dict[str, Any]) -> str:",
+        "    store = get_container().store_for(entity)",
+        "    if store is None:",
+        "        # memory fallback",
+        "        return 'mem:' + entity",
+        "    payload = dict(data)",
+        "    payload['user_id'] = user_id",
+        "    if hasattr(store, 'create'):",
+        "        return str(await store.create(**{k: v for k, v in payload.items() if not str(k).startswith('_')}))",
+        "    return 'ok'",
+        "",
+        "async def list_records(entity: str, user_id: int) -> list[dict[str, Any]]:",
+        "    store = get_container().store_for(entity)",
+        "    if store is None:",
+        "        return []",
+        "    if hasattr(store, 'list_by_user'):",
+        "        try:",
+        "            return list(await store.list_by_user(user_id))[:50]",
+        "        except Exception:",
+        "            pass",
+        "    if hasattr(store, 'list_all'):",
+        "        try:",
+        "            rows = await store.list_all()",
+        "            return [r for r in rows if not isinstance(r, dict) or int(r.get('user_id') or 0) == user_id][:50]",
+        "        except Exception:",
+        "            return []",
+        "    return []",
+        "",
+        "async def update_record(entity: str, record_id: str, **fields: Any) -> bool:",
+        "    store = get_container().store_for(entity)",
+        "    if store is None or not hasattr(store, 'update_status'):",
+        "        return False",
+        "    try:",
+        "        if 'status' in fields:",
+        "            return bool(await store.update_status(str(record_id), str(fields['status'])))",
+        "    except Exception:",
+        "        return False",
+        "    return False",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
 def _emit_handlers_module(inf: InferenceResult) -> str:
     """Handlers from inferred commands, buttons, steps — no domain packs."""
     commands = list(inf.commands or [])
@@ -1074,11 +1125,33 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append("        if _caps:")
             lines.append("            await _run_capabilities(update, context, _caps, args)")
             lines.append("            return")
-        # list_mine / complete / remove / add — driven by command name stem only
+        # Structural stems from command name only (no domain packs)
         lines.append(f"        _cn = {_py(cn)}")
         lines.append("        app_data = context.application.bot_data")
         lines.append("        bucket = app_data.setdefault('records', {})")
         lines.append("        mine = bucket.setdefault(str(uid), [])")
+        # list_* → services.list_records
+        lines.append("        if _cn.startswith('list_') or _cn in ('list_mine', 'my_tasks', 'mine', 'list'):")
+        lines.append("            try:")
+        lines.append("                from app.services import list_records")
+        lines.append("                ent = _cn[5:] if _cn.startswith('list_') else 'record'")
+        lines.append("                ent = ent[:-1] if ent.endswith('s') and len(ent)>3 else ent")
+        lines.append("                rows = await list_records(ent.capitalize(), uid)")
+        lines.append("            except Exception:")
+        lines.append("                rows = []")
+        lines.append("            if not rows:")
+        lines.append("                rows = [r for r in mine if (r.get('status') or 'open') != 'done']")
+        lines.append("            if not rows:")
+        lines.append(f"                await message.reply_text({_py((cmd.description or 'لا توجد سجلات'))})")
+        lines.append("            else:")
+        lines.append("                lines_out = []")
+        lines.append("                for i, r in enumerate(rows[:30], 1):")
+        lines.append("                    if isinstance(r, dict):")
+        lines.append("                        lines_out.append(str(i) + '. ' + ' | '.join(f'{k}={v}' for k,v in list(r.items())[:6]))")
+        lines.append("                    else:")
+        lines.append("                        lines_out.append(str(i) + '. ' + str(r))")
+        lines.append("                await message.reply_text(chr(10).join(lines_out)[:3500])")
+        lines.append("            return")
         lines.append("        if _cn in ('list_mine', 'my_tasks', 'mine', 'list'):")
         lines.append("            active = [r for r in mine if (r.get('status') or 'open') != 'done']")
         lines.append("            if not active:")
@@ -1428,6 +1501,19 @@ def _emit_container(inf: InferenceResult) -> str:
         lines.append("        self.primary_store = store_mod.RecordStore()")
     lines += [
         "",
+        "    def store_for(self, entity: str):",
+        "        key = (entity or '').strip().lower().replace(' ', '_')",
+        "        if not key:",
+        "            return getattr(self, 'primary_store', None)",
+        "        # exact / plural-insensitive attribute lookup",
+        "        for name, val in self.__dict__.items():",
+        "            if name in ('primary_store',):",
+        "                continue",
+        "            n = name.lower()",
+        "            if n == key or n.rstrip('s') == key.rstrip('s') or key in n or n in key:",
+        "                return val",
+        "        return getattr(self, 'primary_store', None)",
+        "",
         "",
         "@lru_cache(maxsize=1)",
         "def get_container() -> Container:",
@@ -1565,6 +1651,7 @@ def transpile(inf: InferenceResult, out_dir: str | Path) -> list[str]:
     w("app/store.py", _emit_store_module(inf))
     w("app/logic.py", _emit_logic_module(inf))
     w("app/tools.py", emit_tools_module(inf))
+    w("app/services.py", _emit_services_module(inf))
     w("app/handlers.py", _emit_handlers_module(inf))
     w("app/container.py", _emit_container(inf))
     w("app/config.py", _emit_config(inf))

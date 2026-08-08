@@ -266,6 +266,11 @@ def infer(program: DSLProgram) -> InferenceResult:
         "url": "أدخل رابط الموقع (https://...):",
         "target": "أدخل الهدف للفحص:",
         "project": "أدخل اسم المشروع:",
+        "author": "أرسل اسم المؤلف:",
+        "isbn": "أرسل ISBN:",
+        "due_date": "أرسل تاريخ الإرجاع:",
+        "book_id": "أرسل اسم أو رقم الكتاب:",
+        "title": "أرسل العنوان:",
     }
 
     # Arabic / English phrases in descriptions → field keys (text-grounded)
@@ -493,6 +498,8 @@ def infer(program: DSLProgram) -> InferenceResult:
         steps = list(meta.get("steps") or [])
         if not steps and op.inputs:
             steps = [{"key": k, "prompt": f"أرسل {k}"} for k in op.inputs]
+        # Drop garbage keys from weak model output
+        steps = [s for s in steps if isinstance(s, dict) and str(s.get("key") or "") not in ("n_x", "x", "field", "value")]
         if not steps:
             continue
         wizards.append({
@@ -501,9 +508,47 @@ def infer(program: DSLProgram) -> InferenceResult:
             "entity": meta.get("entity") or (op.outputs[0] if op.outputs else "record"),
             "kind": meta.get("kind") or "collect",
             "steps": steps,
-            "prefill_from_button": meta.get("prefill_from_button") or "item_name",
+            "prefill_from_button": meta.get("prefill_from_button") or "",
         })
         existing_ids.add(wid)
+
+
+    # Entity-driven wizards: add_X / create_X / new_X collect all entity fields (from THIS spec only)
+    for cmd in result.commands:
+        cn = cmd.name
+        if cn in existing_ids:
+            continue
+        desc = (getattr(cmd, "description", None) or "") + " " + cn
+        ent_name = _entity_for_command(cn, desc)
+        if not ent_name:
+            # add_book → Book
+            for ename, fields in entity_fields.items():
+                stem = ename.lower()
+                if stem in cn.replace("_", "") or cn.endswith("_" + stem) or cn.startswith(stem):
+                    ent_name = ename
+                    break
+                if cn.startswith("add_") or cn.startswith("create_") or cn.startswith("new_"):
+                    tail = cn.split("_", 1)[-1]
+                    if tail and (tail in stem or stem.startswith(tail) or tail.startswith(stem[:4])):
+                        ent_name = ename
+                        break
+        if not ent_name:
+            continue
+        fields = entity_fields.get(ent_name) or entity_fields.get(ent_name.lower()) or []
+        fields = [f for f in fields if str(f).lower() not in {"id", "user_id"}]
+        if not fields:
+            continue
+        if cn.startswith("list_") or cn.startswith("my_") or cn in ("list", "mine"):
+            continue  # list handlers, not multi-step
+        steps = [{"key": f, "prompt": _prompt_for(str(f))} for f in fields[:8]]
+        wizards.append({
+            "id": cn,
+            "command": cn,
+            "entity": ent_name,
+            "kind": "collect",
+            "steps": steps,
+        })
+        existing_ids.add(cn)
 
     # Catalog → order ONLY when product/menu evidence exists (never invent for dashboards)
     catalog_labels: list[str] = []
@@ -550,7 +595,19 @@ def infer(program: DSLProgram) -> InferenceResult:
                 CommandNode(name="order", description="طلب صنف بالكمية")
             ]
 
-    result.wizards = wizards
+    # Clean weak steps
+    cleaned_w = []
+    for w in wizards:
+        st = [s for s in (w.get('steps') or []) if str(s.get('key') or '') not in ('n_x','x','field')]
+        if st:
+            w = dict(w, steps=st)
+            cleaned_w.append(w)
+        elif w.get('kind') == 'collect':
+            continue
+        else:
+            cleaned_w.append(w)
+    result.wizards = cleaned_w
+    wizards = cleaned_w
 
     # Fresh tools for THIS request — rebuilt from command/button/wizard text only
     try:
