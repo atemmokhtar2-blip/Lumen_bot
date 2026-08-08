@@ -981,6 +981,133 @@ def _error_location_summary(log: str) -> str:
     return f"{name}:{line}"
 
 
+
+
+def _delete_telegram_webhook(token: str, timeout: float = 12.0) -> tuple[bool, str]:
+    """Clear webhook so polling can start (fixes Conflict with getUpdates)."""
+    token = (token or "").strip()
+    if not token:
+        return False, "empty_token"
+    url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("ok"):
+            return True, "webhook_deleted"
+        return False, str(data)[:200]
+    except Exception as e:
+        return False, f"{type(e).__name__}:{e}"
+
+
+def _write_project_env(root: Path, bot_token: str, token_envs: list[str] | None = None) -> str:
+    """Persist token into project .env for dotenv-based bots."""
+    token_envs = list(token_envs or [])
+    keys = sorted(set(token_envs + [
+        "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN",
+        "API_TOKEN", "TELEGRAM_TOKEN",
+    ]))
+    env_path = root / ".env"
+    kept: list[str] = []
+    if env_path.exists():
+        for ln in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            key = ln.split("=", 1)[0].strip() if "=" in ln else ""
+            if key in set(keys) or key == "BOTTOKEN":
+                continue
+            kept.append(ln)
+    for key in keys:
+        kept.append(f"{key}={bot_token}")
+    env_path.write_text(chr(10).join(kept).strip() + chr(10), encoding="utf-8")
+    return f"wrote_env:{env_path.name}:{len(keys)}_keys"
+
+
+def _patch_hardcoded_tokens(root: Path, bot_token: str) -> list[str]:
+    """Replace obvious hardcoded bot tokens in common config files with the user token."""
+    notes: list[str] = []
+    token_re = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{30,}")
+    assign_re = re.compile(
+        r"(?P<prefix>^\s*(?:API_TOKEN|BOT_TOKEN|TELEGRAM_BOT_TOKEN|TOKEN|TG_TOKEN|BOTTOKEN)"
+        r"\s*=\s*)(?P<q>['\"])(?P<val>[^'\"]{20,})(?P=q)",
+        re.M,
+    )
+    targets: list[Path] = []
+    for name in ("config.py", "settings.py", "bot.py", "main.py", "app.py", "constants.py"):
+        p = root / name
+        if p.exists():
+            targets.append(p)
+    for p in root.rglob("*.py"):
+        if any(x in p.parts for x in (".git", ".venv", ".tbe_venv", ".tbe_deps", "__pycache__")):
+            continue
+        if p in targets:
+            continue
+        if p.name in ("config.py", "settings.py", "constants.py"):
+            targets.append(p)
+        if len(targets) >= 25:
+            break
+
+    for path in targets:
+        try:
+            src = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        original = src
+
+        def _sub(m: re.Match) -> str:
+            return f"{m.group('prefix')}{m.group('q')}{bot_token}{m.group('q')}"
+
+        src2 = assign_re.sub(_sub, src)
+        try:
+            if path.stat().st_size < 80_000 and token_re.search(src2):
+                src2 = token_re.sub(bot_token, src2)
+        except Exception:
+            pass
+        if src2 != original:
+            try:
+                path.write_text(src2, encoding="utf-8")
+                notes.append(f"patched_token:{path.relative_to(root)}")
+            except Exception as e:
+                notes.append(f"patch_fail:{path.name}:{type(e).__name__}")
+    return notes
+
+
+def _smart_auto_heal(
+    root: Path,
+    bot_token: str,
+    combined_log: str,
+    action: str,
+) -> list[str]:
+    """Apply safe automatic fixes; return heal notes."""
+    notes: list[str] = []
+    log = combined_log or ""
+
+    if action in ("delete_webhook",) or "Conflict" in log or "terminated by other getUpdates" in log:
+        ok, msg = _delete_telegram_webhook(bot_token)
+        notes.append(f"delete_webhook:{'ok' if ok else 'fail'}:{msg}")
+
+    if action in ("check_token", "set_env") or "Unauthorized" in log or "InvalidToken" in log:
+        try:
+            from .source_fix import discover_token_env_names
+            notes.append(_write_project_env(root, bot_token, discover_token_env_names(root)))
+        except Exception as e:
+            notes.append(f"write_env_fail:{type(e).__name__}")
+        notes.extend(_patch_hardcoded_tokens(root, bot_token))
+        ok, _me, err = validate_telegram_token(bot_token)
+        if not ok:
+            notes.append(f"token_still_invalid:{err}")
+        else:
+            notes.append("token_revalidated_ok")
+
+    if action == "fix_syntax" or "SyntaxError" in log:
+        try:
+            from .source_fix import repair_project_sources
+            for n in (repair_project_sources(root) or [])[:8]:
+                notes.append(f"syntax_repair:{n}")
+        except Exception as e:
+            notes.append(f"syntax_repair_fail:{type(e).__name__}")
+
+    return notes
+
+
 class LiveRunnerService:
     def run(
         self,
