@@ -83,114 +83,230 @@ def _surface_matches(label: str, command_name: str, description: str) -> bool:
 
 
 
-def _emit_capability_body(lines: list[str], cmd, *, _py) -> bool:
+
+def _cmd_capability_map(commands) -> dict[str, list[str]]:
+    """command name -> capability ids (only evidenced ones)."""
+    out: dict[str, list[str]] = {}
+    for cmd in commands or []:
+        caps = [c for c in list(getattr(cmd, "capabilities", None) or []) if capability_by_id(c)]
+        if caps:
+            out[cmd.name] = caps
+    return out
+
+
+def _emit_capability_runtime(lines: list[str], commands, *, need_permissions: bool) -> None:
     """
-    Emit real Telegram Bot API calls for capabilities attached to a command.
-    Returns True if body was emitted (caller should skip generic CRUD path).
-    Structural only — no domain templates.
+    Emit shared structural runtime for Telegram capabilities.
+    Deep conversion: one dispatcher, rich target resolution, chat guards.
+    Not a domain template — only emits what inferred capabilities require.
     """
-    caps = list(getattr(cmd, "capabilities", None) or [])
-    if not caps:
-        return False
+    cap_map = _cmd_capability_map(commands)
+    # Always emit map so callbacks can reference it safely
+    lines.append("CAPABILITY_BY_CMD: dict[str, list[str]] = {")
+    for name, caps in cap_map.items():
+        lines.append(f"    {_py(name)}: [{', '.join(_py(c) for c in caps)}],")
+    lines.append("}")
+    lines.append("")
+    lines.append("")
+    if not cap_map:
+        return
 
-    known = [c for c in caps if capability_by_id(c) is not None]
-    if not known:
-        return False
+    # Deep target resolution
+    lines.append("async def _resolve_target_user(update, args):")
+    lines.append('    """Deep target resolution: reply, entities, numeric id, @username."""')
+    lines.append("    message = update.effective_message")
+    lines.append("    # 1) reply-to")
+    lines.append("    if message is not None and message.reply_to_message and message.reply_to_message.from_user:")
+    lines.append("        u = message.reply_to_message.from_user")
+    lines.append("        return int(u.id), (u.username or u.full_name or str(u.id))")
+    lines.append("    # 2) text_mention / mention entities")
+    lines.append("    if message is not None and message.entities:")
+    lines.append("        for ent in message.entities:")
+    lines.append("            if ent.type == 'text_mention' and ent.user is not None:")
+    lines.append("                u = ent.user")
+    lines.append("                return int(u.id), (u.username or u.full_name or str(u.id))")
+    lines.append("            if ent.type == 'mention' and message.text:")
+    lines.append("                uname = message.text[ent.offset: ent.offset + ent.length]")
+    lines.append("                return uname, uname")
+    lines.append("    # 3) explicit args")
+    lines.append("    if args:")
+    lines.append("        raw = str(args[0]).strip()")
+    lines.append("        if raw.isdigit():")
+    lines.append("            return int(raw), raw")
+    lines.append("        if raw.startswith('id:') and raw[3:].strip().isdigit():")
+    lines.append("            return int(raw[3:].strip()), raw[3:].strip()")
+    lines.append("        if raw.startswith('@') and len(raw) > 1:")
+    lines.append("            return raw, raw")
+    lines.append("        if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}', raw):")
+    lines.append("            return f'@{raw}', f'@{raw}'")
+    lines.append("    return None, None")
+    lines.append("")
+    lines.append("")
 
-    needs_target = any(
-        bool(capability_by_id(c) and capability_by_id(c).needs_user_target) for c in known
-    )
+    lines.append("def _parse_optional_duration(args) -> int | None:")
+    lines.append('    """Second numeric arg as duration seconds (structural, optional)."""')
+    lines.append("    if not args or len(args) < 2:")
+    lines.append("        return None")
+    lines.append("    raw = str(args[1]).strip().lower()")
+    lines.append("    if raw.isdigit():")
+    lines.append("        return max(0, int(raw))")
+    lines.append("    m = re.fullmatch(r'(\\d+)([smhd])', raw)")
+    lines.append("    if not m:")
+    lines.append("        return None")
+    lines.append("    n, unit = int(m.group(1)), m.group(2)")
+    lines.append("    mult = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400}[unit]")
+    lines.append("    return max(0, n * mult)")
+    lines.append("")
+    lines.append("")
 
+    lines.append("async def _run_capabilities(update, context, cap_ids: list[str], args: list) -> None:")
+    lines.append('    """Execute evidenced Telegram API capabilities with deep guards."""')
+    lines.append("    message = update.effective_message")
     lines.append("    chat = update.effective_chat")
-    lines.append("    if chat is None:")
-    lines.append("        await message.reply_text('no_chat')")
+    lines.append("    user = update.effective_user")
+    lines.append("    if message is None or chat is None:")
     lines.append("        return")
     lines.append("    chat_id = chat.id")
-
-    if needs_target:
-        lines.append("    target_id, target_label = await _resolve_target_user(update, args)")
-        lines.append("    if target_id is None:")
-        hint = f"حدد العضو: رد على رسالته أو أرسل /{cmd.name} <user_id>"
-        lines.append(f"        await message.reply_text({_py(hint)})")
-        lines.append("        return")
-
+    lines.append("    # Admin-style capabilities require a group/supergroup context")
+    lines.append("    needs_group = any(c in (")
+    lines.append("        'ban_chat_member', 'kick_chat_member', 'unban_chat_member',")
+    lines.append("        'restrict_chat_member', 'unrestrict_chat_member', 'promote_chat_member',")
+    lines.append("    ) for c in cap_ids)")
+    lines.append("    if needs_group and getattr(chat, 'type', '') not in ('group', 'supergroup'):")
+    lines.append("        await message.reply_text('هذا الأمر يعمل داخل المجموعات فقط')")
+    lines.append("        return")
+    lines.append("")
+    lines.append("    needs_target = any(c in (")
+    lines.append("        'ban_chat_member', 'kick_chat_member', 'unban_chat_member',")
+    lines.append("        'restrict_chat_member', 'unrestrict_chat_member', 'promote_chat_member',")
+    lines.append("    ) for c in cap_ids)")
+    lines.append("    target_id = target_label = None")
+    lines.append("    if needs_target:")
+    lines.append("        target_id, target_label = await _resolve_target_user(update, args)")
+    lines.append("        if target_id is None:")
+    lines.append("            await message.reply_text('حدد العضو: رد على رسالته، أو منشن، أو أرسل المعرّف بعد الأمر')")
+    lines.append("            return")
+    lines.append("        # Protect against acting on self/bot when numeric")
+    lines.append("        if isinstance(target_id, int):")
+    lines.append("            if user and target_id == user.id:")
+    lines.append("                await message.reply_text('لا يمكن تنفيذ الأمر على نفسك')")
+    lines.append("                return")
+    lines.append("            try:")
+    lines.append("                me = await context.bot.get_me()")
+    lines.append("                if me and target_id == me.id:")
+    lines.append("                    await message.reply_text('لا يمكن تنفيذ الأمر على البوت')")
+    lines.append("                    return")
+    lines.append("            except Exception:")
+    lines.append("                pass")
+    lines.append("")
+    lines.append("    duration = _parse_optional_duration(args)")
+    lines.append("    until_date = None")
+    lines.append("    if duration:")
+    lines.append("        until_date = int(time.time()) + int(duration)")
+    lines.append("")
+    lines.append("    async def _as_user_id(tid):")
+    lines.append("        if isinstance(tid, int):")
+    lines.append("            return tid")
+    lines.append("        # username string — resolve via get_chat when possible")
+    lines.append("        try:")
+    lines.append("            ch = await context.bot.get_chat(tid)")
+    lines.append("            return int(ch.id)")
+    lines.append("        except Exception:")
+    lines.append("            return tid")
+    lines.append("")
     lines.append("    try:")
-    emitted_api = False
-    for cid in known:
-        c = capability_by_id(cid)
-        if not c:
-            continue
-        emitted_api = True
-        if cid == "ban_chat_member":
-            lines.append("        await context.bot.ban_chat_member(chat_id=chat_id, user_id=int(target_id))")
-            lines.append("        await message.reply_text(f'تم الحظر: {target_label}')")
-        elif cid == "kick_chat_member":
-            lines.append("        await context.bot.ban_chat_member(chat_id=chat_id, user_id=int(target_id))")
-            lines.append("        await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(target_id))")
-            lines.append("        await message.reply_text(f'تم الطرد: {target_label}')")
-        elif cid == "unban_chat_member":
-            lines.append("        await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(target_id))")
-            lines.append("        await message.reply_text(f'تم فك الحظر: {target_label}')")
-        elif cid == "restrict_chat_member":
-            lines.append("        perms = ChatPermissions(can_send_messages=False)")
-            lines.append(
-                "        await context.bot.restrict_chat_member("
-                "chat_id=chat_id, user_id=int(target_id), permissions=perms)"
-            )
-            lines.append("        await message.reply_text(f'تم الكتم: {target_label}')")
-        elif cid == "unrestrict_chat_member":
-            lines.append("        perms = ChatPermissions(")
-            lines.append("            can_send_messages=True, can_send_media_messages=True,")
-            lines.append("            can_send_other_messages=True, can_add_web_page_previews=True,")
-            lines.append("        )")
-            lines.append(
-                "        await context.bot.restrict_chat_member("
-                "chat_id=chat_id, user_id=int(target_id), permissions=perms)"
-            )
-            lines.append("        await message.reply_text(f'تم فك الكتم: {target_label}')")
-        elif cid == "promote_chat_member":
-            lines.append("        await context.bot.promote_chat_member(")
-            lines.append("            chat_id=chat_id, user_id=int(target_id),")
-            lines.append("            can_manage_chat=True, can_delete_messages=True,")
-            lines.append("            can_restrict_members=True, can_invite_users=True,")
-            lines.append("        )")
-            lines.append("        await message.reply_text(f'تمت الترقية: {target_label}')")
-        elif cid == "delete_message":
-            lines.append("        if message.reply_to_message:")
-            lines.append(
-                "            await context.bot.delete_message("
-                "chat_id=chat_id, message_id=message.reply_to_message.message_id)"
-            )
-            lines.append("            await message.reply_text('تم حذف الرسالة')")
-            lines.append("        else:")
-            lines.append("            await message.reply_text('رد على الرسالة لحذفها')")
-        elif cid == "pin_chat_message":
-            lines.append("        if message.reply_to_message:")
-            lines.append(
-                "            await context.bot.pin_chat_message("
-                "chat_id=chat_id, message_id=message.reply_to_message.message_id)"
-            )
-            lines.append("            await message.reply_text('تم تثبيت الرسالة')")
-            lines.append("        else:")
-            lines.append("            await message.reply_text('رد على الرسالة لتثبيتها')")
-        elif cid == "unpin_chat_message":
-            lines.append("        mid = message.reply_to_message.message_id if message.reply_to_message else None")
-            lines.append("        await context.bot.unpin_chat_message(chat_id=chat_id, message_id=mid)")
-            lines.append("        await message.reply_text('تم إلغاء التثبيت')")
-        else:
-            lines.append(f"        await message.reply_text({_py('capability:' + cid)})")
-
-    if not emitted_api:
-        return False
-
+    lines.append("        for cid in cap_ids:")
+    lines.append("            if cid == 'ban_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                kwargs = {'chat_id': chat_id, 'user_id': int(uid)}")
+    lines.append("                if until_date:")
+    lines.append("                    kwargs['until_date'] = until_date")
+    lines.append("                await context.bot.ban_chat_member(**kwargs)")
+    lines.append("                await message.reply_text(f'تم الحظر: {target_label}')")
+    lines.append("            elif cid == 'kick_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                await context.bot.ban_chat_member(chat_id=chat_id, user_id=int(uid))")
+    lines.append("                await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(uid))")
+    lines.append("                await message.reply_text(f'تم الطرد: {target_label}')")
+    lines.append("            elif cid == 'unban_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(uid))")
+    lines.append("                await message.reply_text(f'تم فك الحظر: {target_label}')")
+    lines.append("            elif cid == 'restrict_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                perms = ChatPermissions(can_send_messages=False)")
+    lines.append("                kwargs = {'chat_id': chat_id, 'user_id': int(uid), 'permissions': perms}")
+    lines.append("                if until_date:")
+    lines.append("                    kwargs['until_date'] = until_date")
+    lines.append("                await context.bot.restrict_chat_member(**kwargs)")
+    lines.append("                extra = f' لمدة {duration}ث' if duration else ''")
+    lines.append("                await message.reply_text(f'تم الكتم: {target_label}{extra}')")
+    lines.append("            elif cid == 'unrestrict_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                perms = ChatPermissions(")
+    lines.append("                    can_send_messages=True,")
+    lines.append("                    can_send_media_messages=True,")
+    lines.append("                    can_send_other_messages=True,")
+    lines.append("                    can_add_web_page_previews=True,")
+    lines.append("                )")
+    lines.append("                await context.bot.restrict_chat_member(")
+    lines.append("                    chat_id=chat_id, user_id=int(uid), permissions=perms)")
+    lines.append("                await message.reply_text(f'تم فك الكتم: {target_label}')")
+    lines.append("            elif cid == 'promote_chat_member':")
+    lines.append("                uid = await _as_user_id(target_id)")
+    lines.append("                await context.bot.promote_chat_member(")
+    lines.append("                    chat_id=chat_id, user_id=int(uid),")
+    lines.append("                    can_manage_chat=True, can_delete_messages=True,")
+    lines.append("                    can_restrict_members=True, can_invite_users=True,")
+    lines.append("                )")
+    lines.append("                await message.reply_text(f'تمت الترقية: {target_label}')")
+    lines.append("            elif cid == 'delete_message':")
+    lines.append("                if message.reply_to_message:")
+    lines.append("                    await context.bot.delete_message(")
+    lines.append("                        chat_id=chat_id,")
+    lines.append("                        message_id=message.reply_to_message.message_id,")
+    lines.append("                    )")
+    lines.append("                    await message.reply_text('تم حذف الرسالة')")
+    lines.append("                else:")
+    lines.append("                    await message.reply_text('رد على الرسالة لحذفها')")
+    lines.append("            elif cid == 'pin_chat_message':")
+    lines.append("                if message.reply_to_message:")
+    lines.append("                    await context.bot.pin_chat_message(")
+    lines.append("                        chat_id=chat_id,")
+    lines.append("                        message_id=message.reply_to_message.message_id,")
+    lines.append("                    )")
+    lines.append("                    await message.reply_text('تم تثبيت الرسالة')")
+    lines.append("                else:")
+    lines.append("                    await message.reply_text('رد على الرسالة لتثبيتها')")
+    lines.append("            elif cid == 'unpin_chat_message':")
+    lines.append("                mid = message.reply_to_message.message_id if message.reply_to_message else None")
+    lines.append("                await context.bot.unpin_chat_message(chat_id=chat_id, message_id=mid)")
+    lines.append("                await message.reply_text('تم إلغاء التثبيت')")
+    lines.append("            else:")
+    lines.append("                await message.reply_text(f'capability:{cid}')")
     lines.append("    except Exception as exc:")
-    lines.append("        err = str(exc)")
-    lines.append("        if 'not enough rights' in err.lower() or 'chat_admin' in err.lower():")
-    lines.append("            await message.reply_text('البوت يحتاج صلاحيات مشرف لتنفيذ هذا الأمر')")
-    lines.append("        elif 'user_not_found' in err.lower() or 'user not found' in err.lower():")
+    lines.append("        err = str(exc).lower()")
+    lines.append("        if 'not enough rights' in err or 'chat_admin' in err or 'not an admin' in err:")
+    lines.append("            await message.reply_text('البوت يحتاج صلاحيات مشرف كافية')")
+    lines.append("        elif 'user_not_found' in err or 'user not found' in err:")
     lines.append("            await message.reply_text('المستخدم غير موجود في هذه المحادثة')")
+    lines.append("        elif 'can\\'t parse' in err or 'invalid' in err and 'user' in err:")
+    lines.append("            await message.reply_text('تعذر التعرف على العضو — استخدم ردًا أو معرّفًا رقميًا')")
     lines.append("        else:")
     lines.append("            await message.reply_text(f'فشل التنفيذ: {exc}')")
+    lines.append("")
+    lines.append("")
+
+
+def _emit_capability_body(lines: list[str], cmd, *, _py) -> bool:
+    """
+    Thin per-handler bridge into shared _run_capabilities.
+    Returns True when command has evidenced Telegram capabilities.
+    """
+    caps = [c for c in list(getattr(cmd, "capabilities", None) or []) if capability_by_id(c)]
+    if not caps:
+        return False
+    lines.append(f"    await _run_capabilities(update, context, CAPABILITY_BY_CMD.get({_py(cmd.name)}, []), args)")
     return True
 
 
@@ -648,6 +764,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines: list[str] = [
         '"""Handlers from inferred commands/buttons/steps only."""',
         "from __future__ import annotations",
+        "import re",
+        "import time",
         f"from telegram import {tg_imports}",
         "from telegram.ext import ContextTypes",
         "from app import logic",
@@ -755,24 +873,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("")
 
 
-    if need_target_helper:
-        lines.append("async def _resolve_target_user(update, args):")
-        lines.append('    """Resolve target user from reply, numeric id, or @username."""')
-        lines.append("    message = update.effective_message")
-        lines.append("    if message is not None and message.reply_to_message and message.reply_to_message.from_user:")
-        lines.append("        u = message.reply_to_message.from_user")
-        lines.append("        return u.id, (u.username or u.full_name or str(u.id))")
-        lines.append("    if args:")
-        lines.append("        raw = str(args[0]).strip()")
-        lines.append("        if raw.isdigit():")
-        lines.append("            return int(raw), raw")
-        lines.append("        if raw.startswith('@') and len(raw) > 1:")
-        lines.append("            return raw, raw")
-        lines.append("        if raw.startswith('id:') and raw[3:].isdigit():")
-        lines.append("            return int(raw[3:]), raw[3:]")
-        lines.append("    return None, None")
-        lines.append("")
-        lines.append("")
+    # Shared deep capability runtime (only if any command evidenced Telegram API caps)
+    _emit_capability_runtime(lines, commands, need_permissions=need_permissions)
 
     # start — welcome + short command map
     start_bits = ["مرحباً بك 👋"]
@@ -1079,7 +1181,11 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("            await _start_flow(query.message, context, target_cmd)")
     lines.append("        return")
     lines.append("    if target_cmd:")
-    lines.append("        # Non-wizard command: acknowledge + point user to slash command")
+    lines.append("        # Deep route: capability commands execute API path; else soft acknowledge")
+    lines.append("        caps = list(CAPABILITY_BY_CMD.get(target_cmd) or [])")
+    lines.append("        if caps:")
+    lines.append("            await _run_capabilities(update, context, caps, [])")
+    lines.append("            return")
     lines.append("        msg = f\"استخدم /{target_cmd} أو أكمل من هنا.\"")
     lines.append("        ruled = logic.apply_rules({\"choice\": data, \"text\": data, \"intent\": target_cmd, **dict(context.user_data.get(\"collected\") or {})})")
     lines.append("        context.user_data[\"collected\"] = ruled")
