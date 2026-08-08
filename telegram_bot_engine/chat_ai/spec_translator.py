@@ -287,7 +287,7 @@ def structural_translate(user_text: str) -> dict[str, Any]:
 
     seen: set[str] = set()
     for m in re.finditer(
-        r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,80})", text
+        r"(?m)(?:^|\s)/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b\s*[-–—:：]?\s*(?P<desc>[^\n/]{0,80})", text
     ):
         name = m.group("cmd").lower()
         if name in seen:
@@ -321,7 +321,7 @@ def structural_translate(user_text: str) -> dict[str, Any]:
             spec["commands"].append({"name": cmd, "description": lab[:100]})
 
     # Long explicit command lists (docs-style specs) must not invent catalog/order noise
-    slash_cmds = re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")
+    slash_cmds = re.findall(r"(?m)(?:^|\\s)/([A-Za-z][A-Za-z0-9_]{1,32})\\b", text or "")
     dense_command_spec = len(slash_cmds) >= 8
     # Catalog items only when user evidenced a product/menu list — not action buttons
     _catalog_evidence = any(
@@ -748,6 +748,75 @@ def _merge_specs(primary: dict, secondary: dict) -> dict:
 
 
 
+
+def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
+    """Ensure every flow.command and dashboard button becomes a real command. Drop junk."""
+    if not isinstance(spec, dict):
+        return spec
+    cmds = list(spec.get("commands") or [])
+    have = {str(c.get("name") or "").lower() for c in cmds if isinstance(c, dict)}
+    # Promote flow commands
+    for f in spec.get("flows") or []:
+        if not isinstance(f, dict):
+            continue
+        fname = str(f.get("command") or f.get("id") or "").strip().lower()
+        fname = re.sub(r"[^a-z0-9_]", "_", fname).strip("_")
+        if not fname or fname in have:
+            continue
+        if not _valid_cmd_name(fname) and fname not in ("start", "help"):
+            continue
+        cmds.append({
+            "name": fname,
+            "description": fname.replace("_", " "),
+            "admin_only": False,
+        })
+        have.add(fname)
+        f["command"] = fname
+        f["id"] = f.get("id") or fname
+    # Buttons → stems already; also map English dashboard labels
+    label_map = (
+        (r"domain\s*scan", "domain_scan"),
+        (r"email\s*security", "email_security"),
+        (r"website\s*security", "website_scan"),
+        (r"password\s*security", "password_security"),
+        (r"security\s*report", "generate_report"),
+        (r"report", "generate_report"),
+    )
+    for b in spec.get("buttons") or []:
+        lab = (b.get("label") if isinstance(b, dict) else str(b)) or ""
+        lab_l = lab.lower()
+        for pat, cname in label_map:
+            if re.search(pat, lab_l) and cname not in have and _valid_cmd_name(cname):
+                cmds.append({"name": cname, "description": lab.strip()[:80], "admin_only": False})
+                have.add(cname)
+                break
+    # Drop junk command names (fragments from prose / markdown)
+    junk = {"ssl", "example", "information", "com", "http", "https", "www", "order", "pin", "register", "book"}
+    # Keep order only if catalog evidence
+    n = _norm(text or "")
+    catalog = any(k in n for k in ("اصناف", "الأصناف", "منتجات", "منيو", "catalog", "menu items"))
+    cleaned = []
+    for c in cmds:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").lower()
+        if name in junk and not (name == "order" and catalog):
+            # allow if explicit /name in user text
+            if not re.search(rf"/{re.escape(name)}\b", text or "", re.I):
+                continue
+        if name == "order" and not catalog:
+            if not re.search(r"/order\b", text or "", re.I):
+                continue
+        cleaned.append(c)
+    spec["commands"] = cleaned
+    # Drop order flows without catalog
+    if not catalog:
+        spec["flows"] = [
+            f for f in (spec.get("flows") or [])
+            if not (isinstance(f, dict) and str(f.get("id") or f.get("command") or "").lower() == "order")
+        ]
+    return spec
+
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
     text = (user_text or "").strip()
     t0 = time.perf_counter()
@@ -793,13 +862,14 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         for c in merged.get("commands") or []:
             if isinstance(c, dict) and c.get("name"):
                 c["name"] = _normalize_cmd_name(str(c["name"]))
+        merged = _promote_flows_and_buttons(merged, text)
 
         merged["commands"] = [
             c for c in (merged.get("commands") or [])
             if isinstance(c, dict) and _valid_cmd_name(str(c.get("name") or ""))
         ]
         # When user pasted a long explicit /command list, keep only those + start/help
-        slash = {m.lower() for m in re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")}
+        slash = {m.lower() for m in re.findall(r"(?m)(?:^|\\s)/([A-Za-z][A-Za-z0-9_]{1,32})\\b", text or "")}
         if len(slash) >= 8:
             kept = []
             for c in merged.get("commands") or []:
@@ -848,6 +918,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
             ),
         )
 
+    structural = _promote_flows_and_buttons(structural, text)
     structured = _spec_to_sectioned_text(structural, text)
     meaningful = [
         c for c in (structural.get("commands") or [])

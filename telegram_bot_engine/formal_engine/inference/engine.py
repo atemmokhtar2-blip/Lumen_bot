@@ -260,6 +260,10 @@ def infer(program: DSLProgram) -> InferenceResult:
         "quantity": "أرسل الكمية",
         "title": "أرسل العنوان/الاسم",
         "id": "أرسل رقم / معرّف التتبع",
+        "domain": "أدخل الدومين (example.com):",
+        "url": "أدخل رابط الموقع (https://...):",
+        "target": "أدخل الهدف للفحص:",
+        "project": "أدخل اسم المشروع:",
     }
 
     # Arabic / English phrases in descriptions → field keys (text-grounded)
@@ -316,6 +320,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         "open", "signup", "sign_up", "join", "apply", "insert", "post",
         "delivery", "shipping", "invoice", "support", "ticket", "appointment",
         "reserve", "request", "form", "subscribe", "invite", "rate",
+        "scan", "inspect", "analyze", "audit",
     )
     _LOOKUP_CMDS = {
         "track", "search", "status", "info", "find", "lookup", "check", "query",
@@ -331,7 +336,7 @@ def infer(program: DSLProgram) -> InferenceResult:
     _SKIP_CMDS = {
         "cancel", "admin", "broadcast", "ban", "help", "start",
         "show", "view", "get", "delete", "remove", "drop", "reject", "accept",
-        "deliver", "arrive", "optimize", "report", "pay", "quiz",
+        "deliver", "arrive", "optimize", "pay", "quiz",
         "available_orders", "remind", "confirm", "notifications",
     }
     _SKIP_STEMS = (
@@ -451,6 +456,18 @@ def infer(program: DSLProgram) -> InferenceResult:
                 fields = _pick_wizard_fields(ent_name, desc, kind)
         if not fields and kind == "lookup":
             fields = ["id"]
+        # Structural: *scan* / *security* commands need a target input
+        if not fields and any(s in cn for s in ("scan", "security", "inspect", "audit")):
+            if "domain" in cn or "dns" in cn or "email" in cn:
+                fields = ["domain"]
+            elif "web" in cn or "site" in cn or "url" in cn:
+                fields = ["url"]
+            else:
+                fields = ["target"]
+            kind = "collect"
+        if not fields and "report" in cn:
+            fields = ["project"]
+            kind = "collect"
         if not fields:
             continue
         steps = [{"key": f, "prompt": _prompt_for(f)} for f in fields]
@@ -486,21 +503,31 @@ def infer(program: DSLProgram) -> InferenceResult:
         })
         existing_ids.add(wid)
 
-    # Catalog buttons → order flow only for product-like labels (not action buttons)
+    # Catalog → order ONLY when product/menu evidence exists (never invent for dashboards)
     catalog_labels: list[str] = []
-    _action_hint = ("إضافة", "اضافه", "مهامي", "إنهاء", "انهاء", "حذف", "تسجيل", "بحث", "إعداد", "start", "help", "عرض", "قائمة", "جميع")
-    for b in program.buttons:
-        lab = (b.label or "").strip()
-        if not lab or len(lab) > 32:
-            continue
-        if any(lab == c.name or lab == (c.description or "") for c in program.commands):
-            continue
-        if any(k in lab for k in _action_hint):
-            continue
-        # skip labels that are clearly actions (verb-like) not product names
-        if re.search(r"(إضافة|إنهاء|حذف|فتح|عرض|إدارة)", lab):
-            continue
-        catalog_labels.append(lab)
+    _blob = " ".join(
+        [(getattr(c, "name", "") or "") + " " + (getattr(c, "description", "") or "") for c in program.commands]
+        + [(getattr(b, "label", "") or "") for b in program.buttons]
+    ).lower()
+    _product_evidence = any(
+        k in _blob for k in (
+            "اصناف", "الأصناف", "منتجات", "منيو", "catalog", "menu item",
+            "كمية", "quantity", "مطعم", "طلب صنف", "order item",
+        )
+    )
+    if _product_evidence:
+        _action_hint = ("إضافة", "اضافه", "مهامي", "إنهاء", "انهاء", "حذف", "تسجيل", "بحث", "إعداد", "start", "help", "عرض", "قائمة", "جميع", "scanner", "security", "report", "domain", "website", "email", "password")
+        for b in program.buttons:
+            lab = (b.label or "").strip()
+            if not lab or len(lab) > 32:
+                continue
+            if any(lab == c.name or lab == (c.description or "") for c in program.commands):
+                continue
+            if any(k.lower() in lab.lower() for k in _action_hint):
+                continue
+            if re.search(r"(إضافة|إنهاء|حذف|فتح|عرض|إدارة|Scanner|Security|Report)", lab, re.I):
+                continue
+            catalog_labels.append(lab)
     if catalog_labels and "order" not in existing_ids:
         wizards.append({
             "id": "order",
