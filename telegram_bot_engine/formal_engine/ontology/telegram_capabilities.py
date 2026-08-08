@@ -9,6 +9,8 @@ when the user's command text evidences that capability.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 
@@ -142,7 +144,18 @@ def resolve_capabilities(*texts: str) -> list[str]:
             nf = _norm(form)
             if not nf:
                 continue
-            if nf in blob or nf in tokens or any(nf == t or nf in t for t in tokens):
+            # Exact token match always OK
+            if nf in tokens:
+                hit = True
+            elif len(nf) <= 3:
+                # Short forms (بان، كتم…) must be whole tokens — never substring of بانهاء/يطلب
+                hit = bool(re.search(rf"(?<!\w){re.escape(nf)}(?!\w)", blob))
+            elif " " in nf:
+                hit = nf in blob
+            else:
+                # Longer single tokens: word-boundary style
+                hit = bool(re.search(rf"(?<!\w){re.escape(nf)}(?!\w)", blob))
+            if hit:
                 if cap.id not in seen:
                     seen.add(cap.id)
                     found.append(cap.id)

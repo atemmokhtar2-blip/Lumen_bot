@@ -242,6 +242,31 @@ def _detect_ordered_steps(text: str) -> list[dict[str, str]]:
     return steps[:8]
 
 
+
+def _is_task_bot(text: str) -> bool:
+    n = _norm(text or "")
+    raw = text or ""
+    keys = ("مهام", "مهمه", "مهمة", "task", "todo", "to-do", "to_do")
+    return any(k in n or k in raw for k in keys)
+
+
+def _task_buttons(text: str) -> list[str]:
+    labels: list[str] = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if re.search(r"(إضافة مهمة|اضافه مهمه|مهامي|إنهاء مهمة|انهاء مهمه|حذف مهمة|حذف مهمه)", s):
+            if len(s) <= 40:
+                labels.append(s)
+    out, seen = [], set()
+    for lab in labels:
+        if lab not in seen:
+            seen.add(lab)
+            out.append(lab)
+    return out[:12]
+
+
 def structural_translate(user_text: str) -> dict[str, Any]:
     text = (user_text or "").strip()
     spec: dict[str, Any] = {
@@ -274,8 +299,43 @@ def structural_translate(user_text: str) -> dict[str, Any]:
     # Long explicit command lists (docs-style specs) must not invent catalog/order noise
     slash_cmds = re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")
     dense_command_spec = len(slash_cmds) >= 8
+    task_mode = _is_task_bot(user_text) and not dense_command_spec
 
-    items = [] if dense_command_spec else _extract_item_list(text)
+    items = [] if dense_command_spec or task_mode else _extract_item_list(user_text)
+    if task_mode:
+        # Personal task bot — never invent shop/order/catalog
+        task_btns = _task_buttons(user_text)
+        for lab in task_btns:
+            if not any(b.get("label") == lab for b in spec["buttons"]):
+                spec["buttons"].append({"label": lab})
+        # Ensure commands
+        for name, desc in (
+            ("add_task", "إضافة مهمة"),
+            ("my_tasks", "مهامي"),
+            ("done_task", "إنهاء مهمة"),
+        ):
+            if not any(c.get("name") == name for c in spec["commands"]):
+                spec["commands"].append({"name": name, "description": desc, "admin_only": False})
+        if not any(e.get("name") == "Task" for e in spec["entities"]):
+            spec["entities"].append({"name": "Task", "fields": ["user_id", "title", "status"]})
+        # add_task flow: collect title
+        if not any(f.get("id") == "add_task" for f in spec["flows"]):
+            spec["flows"].append({
+                "id": "add_task",
+                "command": "add_task",
+                "entity": "Task",
+                "kind": "collect",
+                "steps": [{"key": "title", "prompt": "اكتب نص المهمة:"}],
+                "prefill_from_button": "",
+            })
+        # Strip accidental order/shop commands
+        spec["commands"] = [
+            c for c in spec["commands"]
+            if c.get("name") not in ("order", "show_categories", "show_menu", "ban", "kick", "mute")
+        ]
+        # Drop order flows
+        spec["flows"] = [f for f in spec["flows"] if f.get("id") not in ("order", "show_categories")]
+        items = []  # prevent catalog path below
     if items:
         spec["entities"].append({"name": "Item", "fields": ["name"]})
         spec["entities"].append({"name": "Order", "fields": ["item_name", "quantity", "status"]})
@@ -325,7 +385,7 @@ def structural_translate(user_text: str) -> dict[str, Any]:
         keys = [s["key"] for s in ordered]
         if "quantity" in keys or any(k in _norm(text) for k in ("طلب", "صنف", "منيو", "اوردر")):
             ent, fid, desc = "Order", "order", "طلب متعدد الخطوات"
-            if "item_name" not in keys and any(k in _norm(text) for k in ("صنف", "منيو", "اصناف")):
+            if "item_name" not in keys and any(k in _norm(text) for k in ("صنف", "منيو", "اصناف", "مطعم", "منتجات")):
                 # item chosen via button; flow starts at quantity
                 ordered = [s for s in ordered if s["key"] != "name"]
             fields = list(dict.fromkeys(["item_name"] + keys + ["status"]))
@@ -736,6 +796,48 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         for c in merged.get("commands") or []:
             if isinstance(c, dict) and c.get("name"):
                 c["name"] = _normalize_cmd_name(str(c["name"]))
+
+        if _is_task_bot(text):
+            allow = {
+                "start", "help", "add_task", "my_tasks", "done_task", "delete_task",
+                "tasks", "task", "menu",
+            }
+            # also allow explicit slash commands from user
+            slash = {m.lower() for m in re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")}
+            allow |= slash
+            merged["commands"] = [
+                c for c in (merged.get("commands") or [])
+                if isinstance(c, dict) and str(c.get("name") or "").lower() in allow
+            ]
+            # ensure core task commands exist
+            have = {str(c.get("name") or "").lower() for c in merged["commands"]}
+            for name, desc in (
+                ("add_task", "إضافة مهمة"),
+                ("my_tasks", "مهامي"),
+                ("done_task", "إنهاء مهمة"),
+            ):
+                if name not in have:
+                    merged["commands"].append({"name": name, "description": desc, "admin_only": False})
+            merged["flows"] = [
+                f for f in (merged.get("flows") or [])
+                if isinstance(f, dict) and str(f.get("id") or f.get("command") or "").lower()
+                not in ("order", "show_categories")
+            ]
+            if not any(str(f.get("id")) == "add_task" for f in merged.get("flows") or []):
+                merged["flows"].append({
+                    "id": "add_task",
+                    "command": "add_task",
+                    "entity": "Task",
+                    "kind": "collect",
+                    "steps": [{"key": "title", "prompt": "اكتب نص المهمة:"}],
+                })
+            # task buttons only
+            tb = _task_buttons(text)
+            if tb:
+                merged["buttons"] = [{"label": lab} for lab in tb]
+            merged["entities"] = [e for e in (merged.get("entities") or []) if str(e.get("name")) in ("Task", "User")]
+            if not any(str(e.get("name")) == "Task" for e in merged.get("entities") or []):
+                merged["entities"].append({"name": "Task", "fields": ["user_id", "title", "status"]})
         merged["commands"] = [
             c for c in (merged.get("commands") or [])
             if isinstance(c, dict) and _valid_cmd_name(str(c.get("name") or ""))

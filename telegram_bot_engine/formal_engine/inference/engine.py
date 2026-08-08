@@ -487,16 +487,26 @@ def infer(program: DSLProgram) -> InferenceResult:
         existing_ids.add(wid)
 
     # Catalog buttons → order flow (quantity → confirm)
+    # Never for personal-task bots (مهمة / add_task / Task entity)
+    _cmd_names = {getattr(c, "name", "") for c in program.commands}
+    _ent_names = {getattr(e, "name", "") for e in program.entities}
+    _taskish = bool(
+        _cmd_names & {"add_task", "my_tasks", "done_task", "delete_task", "tasks"}
+        or _ent_names & {"Task", "Todo"}
+        or any("مهام" in (getattr(b, "label", "") or "") or "مهمة" in (getattr(b, "label", "") or "")
+               for b in program.buttons)
+    )
     catalog_labels: list[str] = []
-    for b in program.buttons:
-        lab = (b.label or "").strip()
-        if not lab or len(lab) > 32:
-            continue
-        if any(lab == c.name or lab == (c.description or "") for c in program.commands):
-            continue
-        if any(k in lab for k in ("عرض", "قائمة", "start", "help", "تسجيل", "جميع")):
-            continue
-        catalog_labels.append(lab)
+    if not _taskish:
+        for b in program.buttons:
+            lab = (b.label or "").strip()
+            if not lab or len(lab) > 32:
+                continue
+            if any(lab == c.name or lab == (c.description or "") for c in program.commands):
+                continue
+            if any(k in lab for k in ("عرض", "قائمة", "start", "help", "تسجيل", "جميع", "مهمة", "مهام")):
+                continue
+            catalog_labels.append(lab)
     if catalog_labels and "order" not in existing_ids:
         wizards.append({
             "id": "order",

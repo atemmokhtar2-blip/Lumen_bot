@@ -892,10 +892,27 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
 
     # button callback_id → command name (for routing)
     btn_to_cmd: dict[str, str] = {}
+    _label_cmd_hints = (
+        (("إضافة مهمة", "اضافه مهمه", "add_task", "add task"), "add_task"),
+        (("مهامي", "my_tasks", "مهامى"), "my_tasks"),
+        (("إنهاء مهمة", "انهاء مهمه", "done_task"), "done_task"),
+        (("حذف مهمة", "delete_task"), "delete_task"),
+    )
+    cmd_name_set = {c.name for c in commands}
     for label, cb in kb_items:
         # direct cmd:name
         if cb.startswith("cmd:"):
             btn_to_cmd[cb] = cb[4:]
+            continue
+        # semantic Arabic/English hints
+        lab_n = label.replace("➕", "").replace("📋", "").replace("✅", "").replace("❌", "").strip()
+        for keys, target in _label_cmd_hints:
+            if target not in cmd_name_set:
+                continue
+            if any(k == lab_n or k in lab_n or k in label for k in keys):
+                btn_to_cmd[cb] = target
+                break
+        if cb in btn_to_cmd:
             continue
         # match label/cb to a command name or description
         for c in commands:
@@ -1051,7 +1068,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         elif cn == "ping":
             lines.append("        await message.reply_text('pong ✅')")
         elif cn == "id":
-            lines.append("        await message.reply_text(f'User ID: {uid}\\nChat ID: {message.chat_id}')")
+            lines.append("        await message.reply_text('User ID: ' + str(uid) + chr(10) + 'Chat ID: ' + str(message.chat_id))")
         elif cn == "info":
             lines.append("        un = (user.username if user else '') or ''")
             lines.append("        fn_ = (user.full_name if user else '') or ''")
@@ -1161,6 +1178,43 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append("            await message.reply_text('🛠️ لوحة الإدارة\\n/ban /kick /mute /broadcast /stats /logs')")
             lines.append("        else:")
             lines.append(f"            await message.reply_text({_py((cmd.description or cmd.name) + ' — تم')})")
+        elif cn in ("add_task", "my_tasks", "done_task", "delete_task", "tasks"):
+            lines.append("        app_data = context.application.bot_data")
+            lines.append("        all_tasks = app_data.setdefault('tasks', {})")
+            lines.append("        mine = all_tasks.setdefault(str(uid), [])")
+            lines.append(f"        if {_py(cn)} in ('add_task',):")
+            lines.append("            await _start_flow(message, context, 'add_task') if 'add_task' in FLOWS and FLOWS.get('add_task') else None")
+            lines.append("            if not (FLOWS.get('add_task')):")
+            lines.append("                context.user_data['flow'] = 'add_task'")
+            lines.append("                context.user_data['step'] = 0")
+            lines.append("                context.user_data['data'] = {}")
+            lines.append("                await message.reply_text('اكتب نص المهمة:')")
+            lines.append(f"        elif {_py(cn)} in ('my_tasks', 'tasks'):")
+            lines.append("            active = [t for t in mine if (t.get('status') or 'open') != 'done']")
+            lines.append("            if not active:")
+            lines.append("                await message.reply_text('لا توجد مهام حالية. اضغط إضافة مهمة.')")
+            lines.append("            else:")
+            lines.append("                lines_out = []")
+            lines.append("                rows = []")
+            lines.append("                for i, t in enumerate(active[:20], 1):")
+            lines.append("                    title = str(t.get('title') or t.get('task_name') or '')")
+            lines.append("                    lines_out.append(f'{i}. {title}')")
+            lines.append("                    rows.append([InlineKeyboardButton('✅ إنهاء', callback_data=f'done:{i-1}'), InlineKeyboardButton('🗑 حذف', callback_data=f'del:{i-1}')])")
+            lines.append("                kb = InlineKeyboardMarkup(rows)")
+            lines.append("                await message.reply_text('مهامك:' + chr(10) + chr(10).join(lines_out), reply_markup=kb)")
+            lines.append(f"        elif {_py(cn)} == 'done_task':")
+            lines.append("            if args and str(args[0]).isdigit():")
+            lines.append("                idx = int(args[0]) - 1")
+            lines.append("                active = [t for t in mine if (t.get('status') or 'open') != 'done']")
+            lines.append("                if 0 <= idx < len(active):")
+            lines.append("                    active[idx]['status'] = 'done'")
+            lines.append("                    await message.reply_text('تم إنهاء المهمة ✅')")
+            lines.append("                else:")
+            lines.append("                    await message.reply_text('رقم مهمة غير صالح')")
+            lines.append("            else:")
+            lines.append("                await message.reply_text('استخدم /my_tasks ثم اضغط إنهاء، أو: /done_task رقم')")
+            lines.append("        else:")
+            lines.append("            await message.reply_text('استخدم /my_tasks لإدارة مهامك')")
         else:
             # Always reply — never silent
             lines.append(f"        await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or 'تم تنفيذ الأمر'))})")
@@ -1239,7 +1293,16 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("        payload[\"user_id\"] = uid")
     lines.append("        payload[\"intent\"] = str(flow_id)")
     lines.append("        if 'status' not in payload:")
-    lines.append("            payload['status'] = 'confirmed'")
+    lines.append("            payload['status'] = 'open' if str(flow_id) in ('add_task',) else 'confirmed'")
+    lines.append("        # Personal tasks: also keep an in-memory per-user list for my_tasks")
+    lines.append("        if str(flow_id) in ('add_task', 'task') or FLOW_ENTITY.get(str(flow_id)) == 'Task':")
+    lines.append("            app_data = context.application.bot_data")
+    lines.append("            all_tasks = app_data.setdefault('tasks', {})")
+    lines.append("            mine = all_tasks.setdefault(str(uid), [])")
+    lines.append("            title = str(payload.get('title') or payload.get('task_name') or payload.get('task_description') or text or '').strip()")
+    lines.append("            if title:")
+    lines.append("                mine.append({'title': title, 'status': 'open'})")
+    lines.append("                msgs.append('تمت إضافة المهمة: ' + title)")
     lines.append("        # sensible defaults for rule engine")
     lines.append("        if \"weight\" in payload and payload.get(\"weight\"):")
     lines.append("            pass")
@@ -1324,6 +1387,36 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("    await query.answer()")
     lines.append("    data = query.data or \"\"")
     lines.append("    context.user_data[\"choice\"] = data")
+
+    lines.append("    # Task quick actions from my_tasks keyboard")
+    lines.append("    if data.startswith('done:') or data.startswith('del:'):")
+    lines.append("        app_data = context.application.bot_data")
+    lines.append("        all_tasks = app_data.setdefault('tasks', {})")
+    lines.append("        uid = str(update.effective_user.id if update.effective_user else 0)")
+    lines.append("        mine = all_tasks.setdefault(uid, [])")
+    lines.append("        active = [t for t in mine if (t.get('status') or 'open') != 'done']")
+    lines.append("        try:")
+    lines.append("            idx = int(data.split(':', 1)[1])")
+    lines.append("        except Exception:")
+    lines.append("            idx = -1")
+    lines.append("        if 0 <= idx < len(active):")
+    lines.append("            if data.startswith('done:'):")
+    lines.append("                active[idx]['status'] = 'done'")
+    lines.append("                if query.message is not None:")
+    lines.append("                    await query.edit_message_text('تم إنهاء المهمة ✅')")
+    lines.append("            else:")
+    lines.append("                # hard delete from mine")
+    lines.append("                victim = active[idx]")
+    lines.append("                try:")
+    lines.append("                    mine.remove(victim)")
+    lines.append("                except ValueError:")
+    lines.append("                    victim['status'] = 'deleted'")
+    lines.append("                if query.message is not None:")
+    lines.append("                    await query.edit_message_text('تم حذف المهمة 🗑')")
+    lines.append("        else:")
+    lines.append("            if query.message is not None:")
+    lines.append("                await query.edit_message_text('المهمة غير موجودة')")
+    lines.append("        return")
     lines.append("    # Route button → command/flow (structural mapping, no domain packs)")
     lines.append("    target_cmd = BUTTON_TO_CMD.get(data) or \"\"")
     lines.append("    if not target_cmd and data.startswith(\"cmd:\"):")
