@@ -271,7 +271,11 @@ def structural_translate(user_text: str) -> dict[str, Any]:
             seen.add(cmd)
             spec["commands"].append({"name": cmd, "description": lab[:100]})
 
-    items = _extract_item_list(text)
+    # Long explicit command lists (docs-style specs) must not invent catalog/order noise
+    slash_cmds = re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")
+    dense_command_spec = len(slash_cmds) >= 8
+
+    items = [] if dense_command_spec else _extract_item_list(text)
     if items:
         spec["entities"].append({"name": "Item", "fields": ["name"]})
         spec["entities"].append({"name": "Order", "fields": ["item_name", "quantity", "status"]})
@@ -591,8 +595,7 @@ def _normalize_cmd_name(name: str) -> str:
         "kick_user": "kick", "kick_member": "kick", "remove": "kick",
         "mute_user": "mute", "mute_member": "mute", "silence": "mute",
         "unban_user": "unban", "unmute_user": "unmute",
-        "show_menu": "show_categories", "menu": "show_categories",
-        "categories": "show_categories", "catalog": "show_categories",
+        "show_menu": "menu", "categories": "show_categories", "catalog": "show_categories",
     }
     return aliases.get(n, n)
 
@@ -713,6 +716,36 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         for c in merged.get("commands") or []:
             if isinstance(c, dict) and c.get("name"):
                 c["name"] = _normalize_cmd_name(str(c["name"]))
+        # When user pasted a long explicit /command list, keep only those + start/help
+        slash = {m.lower() for m in re.findall(r"/([A-Za-z][A-Za-z0-9_]{1,32})", text or "")}
+        if len(slash) >= 8:
+            kept = []
+            for c in merged.get("commands") or []:
+                if not isinstance(c, dict):
+                    continue
+                n = str(c.get("name") or "").lower()
+                if n in slash or n in ("start", "help"):
+                    kept.append(c)
+            # restore any slash command missing from kept
+            have = {str(c.get("name") or "").lower() for c in kept}
+            for name in slash:
+                if name not in have:
+                    kept.append({"name": name, "description": name, "admin_only": name in {
+                        "admin","ban","unban","mute","unmute","kick","warn","unwarn","promote","demote",
+                        "broadcast","broadcast_groups","broadcast_users","panel","purge","clear","logs",
+                        "backup","restore","maintenance","shutdown","restart","reload","config","database",
+                        "blacklist","whitelist","export","import","statistics",
+                    }})
+            merged["commands"] = kept
+            # drop invented catalog buttons when dense command list
+            merged["buttons"] = []
+            merged["flows"] = [
+                f for f in (merged.get("flows") or [])
+                if isinstance(f, dict) and (
+                    str(f.get("command") or f.get("id") or "").lower() in have
+                    or str(f.get("command") or "").lower() in slash
+                )
+            ]
         structured = _spec_to_sectioned_text(merged, text)
         meaningful = [
             c for c in (merged.get("commands") or [])

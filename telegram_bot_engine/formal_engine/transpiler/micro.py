@@ -882,10 +882,24 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     _emit_capability_runtime(lines, commands, need_permissions=need_permissions)
 
     # start — welcome + short command map
-    start_bits = ["مرحباً بك 👋"]
-    for c in commands[:12]:
-        start_bits.append(f"/{c.name} — {c.description or c.name}")
+    # start — welcome + FULL command map (never silently truncate)
+    start_bits = ["مرحباً بك 👋", ""]
+    admin_names = {c.name for c in commands if getattr(c, "admin_only", False)}
+    user_cmds = [c for c in commands if c.name not in admin_names]
+    admin_cmds = [c for c in commands if c.name in admin_names]
+    if user_cmds:
+        start_bits.append("أوامر المستخدم:")
+        for c in user_cmds:
+            start_bits.append(f"/{c.name} — {c.description or c.name}")
+    if admin_cmds:
+        start_bits.append("")
+        start_bits.append("أوامر الإدارة:")
+        for c in admin_cmds:
+            start_bits.append(f"/{c.name} — {c.description or c.name}")
     start_msg = "\n".join(start_bits)
+    # Telegram hard limit ~4096; keep a safe head for the first message
+    if len(start_msg) > 3500:
+        start_msg = "\n".join(start_bits[:80]) + "\n…\nاستخدم /help لعرض باقي الأوامر."
     lines.append("async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    message = update.effective_message")
     lines.append("    if message is None:")
@@ -908,7 +922,21 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("        return")
     help_lines = [f"/{c.name} — {c.description}" for c in commands]
     help_text = "\n".join(help_lines) if help_lines else "help"
-    lines.append(f"    await message.reply_text({_py(help_text)})")
+    # Emit chunked help for large command surfaces
+    lines.append(f"    _help = {_py(help_text)}")
+    lines.append("    if len(_help) <= 3500:")
+    lines.append("        await message.reply_text(_help)")
+    lines.append("    else:")
+    lines.append("        chunk: list[str] = []")
+    lines.append("        size = 0")
+    lines.append("        for line in _help.splitlines():")
+    lines.append("            if size + len(line) + 1 > 3400 and chunk:")
+    lines.append("                await message.reply_text(chr(10).join(chunk))")
+    lines.append("                chunk, size = [], 0")
+    lines.append("            chunk.append(line)")
+    lines.append("            size += len(line) + 1")
+    lines.append("        if chunk:")
+    lines.append("            await message.reply_text(chr(10).join(chunk))")
     lines.append("")
     lines.append("")
 

@@ -61,6 +61,9 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
         return False
     if n in _STRUCTURAL_CMDS:
         return True
+    # Explicit slash command in the user's request is always grounded
+    if re.search(rf"/{re.escape(n)}\b", raw, re.I):
+        return True
     if re.search(rf"/{re.escape(n)}\b", raw, re.I):
         return True
     if re.search(rf"/{re.escape(n)}\b", text_n):
