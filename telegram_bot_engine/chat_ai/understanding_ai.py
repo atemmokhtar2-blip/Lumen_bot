@@ -87,11 +87,9 @@ class UnderstandingAIResult:
 
 
 def _enabled() -> bool:
-    # HARD DISABLED — generation path is formal-only (zero LLM).
-    # UNDERSTANDING_AI_FORCE=1 only for offline experiments.
-    if (os.environ.get("UNDERSTANDING_AI_FORCE") or "").strip() not in ("1", "true", "yes"):
-        return False
-    v = (os.environ.get("UNDERSTANDING_AI") or "0").strip().lower()
+    # HF is the supported provider for this optional enrichment layer.
+    # It can still be disabled explicitly for a formal-only deployment.
+    v = (os.environ.get("UNDERSTANDING_AI") or ("1" if os.environ.get("HF_TOKEN") else "0")).strip().lower()
     return v not in ("0", "false", "no", "off")
 
 
@@ -226,14 +224,6 @@ def enrich_spec(
         candidates = (forced,) + tuple(c for c in candidates if c != forced)
 
     t0 = time.perf_counter()
-    last_err = ""
-    try:
-        from g4f.client import Client
-
-        client = Client()
-    except Exception as e:
-        return UnderstandingAIResult(ok=False, error=f"g4f_import:{e}")
-
     messages = [
         {"role": "system", "content": _SYSTEM},
         {
@@ -244,52 +234,45 @@ def enrich_spec(
             ),
         },
     ]
+    try:
+        from .hf_provider import chat
 
-    for model in candidates:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                web_search=False,
-            )
-            content = ""
-            if response and response.choices:
-                content = (response.choices[0].message.content or "").strip()
-            data = _parse_json(content)
-            if not data:
-                last_err = f"bad_json:{model}"
-                continue
-            cmds = data.get("commands")
-            if not isinstance(cmds, list) or not cmds:
-                last_err = f"no_commands:{model}"
-                continue
-            structured = _spec_to_text(data, text)
-            elapsed = (time.perf_counter() - t0) * 1000
-            logger.info(
-                "understanding_ai ok model=%s cmds=%s ents=%s ms=%.0f",
-                model,
-                len(cmds),
-                len(data.get("entities") or []),
-                elapsed,
-            )
-            return UnderstandingAIResult(
-                ok=True,
-                structured_text=structured,
-                model_used=model,
-                elapsed_ms=round(elapsed, 1),
-                raw_json=data,
-            )
-        except Exception as e:
-            last_err = f"{model}:{type(e).__name__}:{e}"
-            logger.warning("understanding_ai model failed %s", last_err)
-            continue
-
-    elapsed = (time.perf_counter() - t0) * 1000
-    return UnderstandingAIResult(
-        ok=False,
-        error=last_err or "all_models_failed",
-        elapsed_ms=round(elapsed, 1),
-    )
+        requested_model = forced or (models[0] if models else None)
+        content, model = chat(
+            messages,
+            timeout=timeout,
+            model=requested_model,
+            max_tokens=1800,
+            temperature=0,
+            json_mode=True,
+        )
+        data = _parse_json(content)
+        if not data:
+            raise ValueError("hf_invalid_json")
+        cmds = data.get("commands")
+        if not isinstance(cmds, list) or not cmds:
+            raise ValueError("hf_no_commands")
+        structured = _spec_to_text(data, text)
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "understanding_ai provider=huggingface model=%s cmds=%s ents=%s ms=%.0f",
+            model,
+            len(cmds),
+            len(data.get("entities") or []),
+            elapsed,
+        )
+        return UnderstandingAIResult(
+            ok=True,
+            structured_text=structured,
+            model_used=f"huggingface:{model}",
+            elapsed_ms=round(elapsed, 1),
+            raw_json=data,
+        )
+    except Exception as e:
+        elapsed = (time.perf_counter() - t0) * 1000
+        error = f"huggingface:{type(e).__name__}:{e}"[:1200]
+        logger.warning("understanding_ai failed %s", error)
+        return UnderstandingAIResult(ok=False, error=error, elapsed_ms=round(elapsed, 1))
 
 
 def prepare_generation_text(user_text: str) -> tuple[str, UnderstandingAIResult]:

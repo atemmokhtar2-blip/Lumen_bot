@@ -892,6 +892,88 @@ def _request_json(
     return normalized, content
 
 
+def _translate_with_hf(text: str, timeout: int) -> TranslatorResult:
+    """Translate using HF Inference Providers; return a normal TranslatorResult."""
+    from .hf_provider import chat, enabled
+
+    if not enabled():
+        return TranslatorResult(ok=False, error="hf_disabled")
+    t0 = time.perf_counter()
+    messages = [
+        {"role": "system", "content": _SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                "Translate the following user text into the required JSON schema. "
+                "Return ONLY the JSON object.\n\n" + text[:7000]
+            ),
+        },
+    ]
+    try:
+        content, model = chat(
+            messages,
+            timeout=timeout,
+            max_tokens=2200,
+            temperature=0,
+            json_mode=True,
+        )
+        data = _parse_json(content)
+        if data is None:
+            return TranslatorResult(
+                ok=False,
+                model_used=model,
+                error="hf_invalid_json",
+                elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            )
+        ok, issues, normalized = validate_spec_schema(data)
+        if not ok:
+            return TranslatorResult(
+                ok=False,
+                model_used=model,
+                error="hf_schema_invalid",
+                schema_issues=[f"{i.path}: {i.message}" for i in issues],
+                elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            )
+        data = apply_defaults(normalized, text)
+        grounded, dropped = ground_spec(data, text)
+        # A model may return clarification questions while omitting commands.
+        # Do not let that create a formally valid but empty bot when the user
+        # already named concrete capabilities; use the lexical fallback below.
+        if not (grounded.get("commands") or []) and len(text) >= 20:
+            fallback = _local_fallback_spec(text)
+            if fallback.count("/"):
+                return TranslatorResult(
+                    ok=True,
+                    structured_text=fallback,
+                    model_used=f"huggingface:{model}+local_fallback",
+                    elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+                    raw_json=data,
+                    grounded_json=grounded,
+                    dropped=dropped,
+                    schema_ok=True,
+                )
+        structured = spec_to_text(grounded, text)
+        return TranslatorResult(
+            ok=True,
+            structured_text=structured,
+            model_used=f"huggingface:{model}",
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            raw_json=data,
+            grounded_json=grounded,
+            dropped=dropped,
+            needs_clarification=bool(grounded.get("needs_clarification")),
+            clarification_questions=list(grounded.get("clarification_questions") or []),
+            schema_ok=True,
+            schema_issues=[f"{i.path}: {i.message}" for i in issues],
+        )
+    except Exception as exc:
+        return TranslatorResult(
+            ok=False,
+            error=f"hf:{type(exc).__name__}:{exc}"[:1200],
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+
+
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
     text = (user_text or "").strip()
     if not text:
@@ -902,6 +984,22 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     timeout = timeout if timeout is not None else int(
         os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "25")
     )
+
+    # Hugging Face is the primary provider when HF_TOKEN is configured. This
+    # avoids the unstable g4f dependency while retaining backward compatibility
+    # for installations that have not configured HF yet.
+    if (os.environ.get("HF_TOKEN") or "").strip() and os.environ.get(
+        "HF_PRIMARY", "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}:
+        hf_result = _translate_with_hf(text, timeout)
+        if hf_result.ok:
+            return hf_result
+        logger.warning("Hugging Face spec translation failed: %s", hf_result.error)
+        # Do not silently switch back to the unstable legacy provider. The
+        # caller will use the deterministic local fallback instead.
+        if not os.environ.get("LEGACY_G4F", "").strip():
+            return hf_result
+
     forced = (os.environ.get("SPEC_TRANSLATOR_MODEL") or "").strip()
     candidates = (forced,) if forced else _MODEL_CANDIDATES
     retries_max = _max_retries()

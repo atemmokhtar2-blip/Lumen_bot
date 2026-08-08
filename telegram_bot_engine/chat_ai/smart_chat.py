@@ -142,9 +142,8 @@ def smart_chat_reply(
     timeout: int = 45,
 ) -> SmartChatResult:
     """
-    Call g4f and return a structured SmartChatResult.
+    Call Hugging Face Inference Providers and return a structured result.
 
-    This is the ONLY function that talks to g4f.
     On any failure it returns a safe Arabic reply (never raises to the caller).
     """
     user_text = (user_text or "").strip()
@@ -162,18 +161,17 @@ def smart_chat_reply(
     messages.append({"role": "user", "content": user_text})
 
     try:
-        from g4f.client import Client
+        from .hf_provider import chat
 
-        client = Client()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            web_search=False,
+        content, model = chat(
+            messages,
+            timeout=timeout,
+            max_tokens=900,
+            temperature=0.1,
+            json_mode=True,
         )
-        content = ""
-        if response and response.choices:
-            content = (response.choices[0].message.content or "").strip()
         result = _parse_response(content)
+        logger.info("smart_chat provider=huggingface model=%s", model)
         logger.info(
             "smart_chat type=%s cap=%s conf=%.2f",
             result.type,
@@ -182,7 +180,7 @@ def smart_chat_reply(
         )
         return result
     except Exception as e:
-        logger.exception("g4f smart_chat failed: %s", e)
+        logger.exception("Hugging Face smart_chat failed: %s", e)
         return SmartChatResult(
             type="error",
             text=(
