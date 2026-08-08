@@ -51,9 +51,12 @@ _RULES: list[tuple[str, str, str, str, list[str]]] = [
      ["SyntaxError", "IndentationError", "TabError"]),
     ("config", "high", "إعداد / متغير بيئة", "set_env",
      ["KeyError: 'TELEGRAM", "KeyError: 'BOT_TOKEN", "Missing token", "BOT_TOKEN", "API key"]),
-    ("telegram_api", "critical", "مشكلة Telegram API", "check_token",
-     ["Unauthorized", "InvalidToken", "Conflict: terminated by other getUpdates",
-      "TimedOut", "RetryAfter", "Bad Request", "chat not found"]),
+    ("telegram_conflict", "high", "تعارض getUpdates (بوت شغّال في مكان آخر)", "delete_webhook",
+     ["Conflict: terminated by other getUpdates", "terminated by other getUpdates", "Conflict"]),
+    ("telegram_api", "critical", "توكن غير صالح / مرفوض", "check_token",
+     ["Unauthorized", "InvalidToken", "TelegramUnauthorizedError"]),
+    ("telegram_api", "high", "مشكلة Telegram API", "retry",
+     ["TimedOut", "RetryAfter", "Bad Request", "chat not found"]),
     ("network", "medium", "مشكلة شبكة", "check_network",
      ["ConnectionError", "ConnectionRefusedError", "NameResolutionError",
       "Temporary failure in name resolution", "Max retries exceeded", "SSLError"]),
@@ -319,10 +322,14 @@ def analyze_logs(
         unique = unique_sorted
 
     heal_packages = []
+    auto_actions: list[str] = []
     for d in unique:
         if d.suggested_action == "install_package" and d.suggested_package:
             if d.suggested_package not in heal_packages:
                 heal_packages.append(d.suggested_package)
+        if d.suggested_action in ("delete_webhook", "check_token", "set_env", "fix_syntax", "retry"):
+            if d.suggested_action not in auto_actions:
+                auto_actions.append(d.suggested_action)
 
     ok = not unique
     if exit_code not in (None, 0) and not unique:
@@ -344,8 +351,9 @@ def analyze_logs(
         events=events,
         errors=unique,
         primary=primary,
-        healable=bool(heal_packages),
+        healable=bool(heal_packages or auto_actions),
         heal_packages=heal_packages,
+        auto_actions=list(auto_actions),
         raw_install_log_tail=(install_log or "")[-2000:],
         raw_run_log_tail=(run_log or "")[-3000:],
     )

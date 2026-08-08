@@ -16,6 +16,7 @@ ErrorCategory = Literal[
     "syntax",
     "config",
     "telegram_api",
+    "telegram_conflict",
     "runtime",
     "network",
     "permission",
@@ -32,6 +33,7 @@ SuggestedAction = Literal[
     "fix_code",
     "retry",
     "check_token",
+    "delete_webhook",
     "check_network",
     "escalate",
     "none",
@@ -107,6 +109,7 @@ class ErrorContract(StrictModel):
     primary: DiagnosedError | None = None
     healable: bool = False
     heal_packages: list[str] = Field(default_factory=list)
+    auto_actions: list[str] = Field(default_factory=list)
 
     raw_install_log_tail: str = ""
     raw_run_log_tail: str = ""
@@ -135,7 +138,9 @@ class ErrorContract(StrictModel):
         if len(self.errors) > 1:
             lines.append(f"• أخطاء إضافية: {len(self.errors) - 1}")
         if self.healable and self.heal_packages:
-            lines.append(f"• قابل للإصلاح التلقائي: {', '.join(self.heal_packages)}")
+            lines.append(f"• قابل للإصلاح التلقائي (حزم): {', '.join(self.heal_packages)}")
+        if self.auto_actions:
+            lines.append(f"• إجراءات ذاتية: {', '.join(self.auto_actions)}")
         return "\n".join(lines) if lines else "❌ أخطاء غير مصنّفة في اللوج."
 
 

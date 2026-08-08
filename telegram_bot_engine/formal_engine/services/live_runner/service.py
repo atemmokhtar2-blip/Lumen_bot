@@ -1025,6 +1025,19 @@ class LiveRunnerService:
         # Auto-repair common source syntax issues (e.g. \\' written literally)
         from .source_fix import repair_project_sources, discover_token_env_names, syntax_check_entry
         repair_notes = repair_project_sources(root)
+        # Proactive: clear webhook + inject token so polling bots start cleanly
+        try:
+            ok_wh, wh_msg = _delete_telegram_webhook(bot_token)
+            repair_notes.append(f"preflight_webhook:{'ok' if ok_wh else 'fail'}:{wh_msg}")
+        except Exception as e:
+            repair_notes.append(f"preflight_webhook_err:{type(e).__name__}")
+        try:
+            from .source_fix import discover_token_env_names as _disc
+            repair_notes.append(_write_project_env(root, bot_token, _disc(root)))
+            repair_notes.extend(_patch_hardcoded_tokens(root, bot_token)[:8])
+        except Exception as e:
+            repair_notes.append(f"preflight_token_inject:{type(e).__name__}")
+
         ok_syn, syn_err = syntax_check_entry(entry)
         if not ok_syn:
             return LiveRunReport(
@@ -1145,15 +1158,28 @@ class LiveRunnerService:
                 ):
                     packages = [contract.primary.suggested_package]
                 elif action not in ("install_package", "fix_requirements", "none", ""):
-                    # Error Intelligence: do not pip-heal (token/syntax/network/...)
+                    # Smart self-heal for token/webhook/syntax before giving up
+                    auto_notes = _smart_auto_heal(root, bot_token, combined_log, action)
+                    heal_notes.extend(auto_notes)
+                    report.warnings = list(report.warnings or []) + [
+                        f"error_intel_action:{action}",
+                        f"category:{(contract.primary.category if contract.primary else 'unknown')}",
+                    ] + [f"auto_heal:{n}" for n in auto_notes[:6]]
+                    # If token is fundamentally invalid, stop (user must provide new token)
+                    if any(n.startswith("token_still_invalid:") for n in auto_notes):
+                        report.install_log = all_install_log[-4000:]
+                        report.message = (
+                            "التوكن مرفوض من تليجرام. أرسل توكن جديد من @BotFather لهذا البوت."
+                        )
+                        return report
+                    # If we applied a safe fix, retry the run in the next heal round
+                    if auto_notes and heal_round < max_heal_rounds:
+                        heal_notes.append(f"retry_after_auto_heal:{action}")
+                        continue
                     report.install_log = all_install_log[-4000:]
                     loc = contract.primary.location if contract.primary else ""
                     if loc and report.message:
                         report.message = f"{report.message} | الموقع: `{loc}`"
-                    report.warnings = list(report.warnings or []) + [
-                        f"error_intel_action:{action}",
-                        f"category:{(contract.primary.category if contract.primary else 'unknown')}",
-                    ]
                     return report
 
             if not packages:
