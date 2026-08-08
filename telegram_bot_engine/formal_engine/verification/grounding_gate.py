@@ -86,6 +86,8 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
         "new_order": ("طلب جديد", "اوردر", "order", "طلب"),
         "my_orders": ("طلباتي", "اوردرات", "my orders"),
         "menu": ("منيو", "menu", "قائمه الطعام", "قائمة الطعام"),
+        "show_categories": ("اصناف", "الأصناف", "الاصناف", "عرض جميع", "عرض الاصناف", "categories"),
+        "show_products": ("منتجات", "المنتجات", "products"),
         "track": ("تتبع", "track"),
         "accept_order": ("يقبل", "قبول", "accept"),
         "admin": ("ادمن", "أدمن", "admin", "مشرف"),

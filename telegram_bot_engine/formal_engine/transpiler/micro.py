@@ -853,6 +853,11 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append(f"    {_py(cb)}: {_py(cn)},")
     lines.append("}")
     lines.append("")
+    lines.append("CALLBACK_LABELS: dict[str, str] = {")
+    for label, cb in kb_items:
+        lines.append(f"    {_py(cb)}: {_py(label)},")
+    lines.append("}")
+    lines.append("")
     lines.append("")
 
     lines.append("def main_keyboard() -> InlineKeyboardMarkup | None:")
@@ -941,6 +946,19 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("    args = []")
         lines.append("    if message.text and \" \" in message.text:")
         lines.append("        args = message.text.split()[1:]")
+        # Catalog/menu show commands → present keyboard of extracted buttons
+        _show_cmds = {"show_categories", "show_products", "menu", "list", "catalog"}
+        if cmd.name in _show_cmds or any(
+            k in (cmd.description or "") for k in ("عرض", "اصناف", "منتجات", "قائمة")
+        ):
+            lines.append("    kb = main_keyboard()")
+            lines.append(
+                f"    await message.reply_text({_py((cmd.description or cmd.name) + ':')}, reply_markup=kb)"
+            )
+            lines.append("    return")
+            lines.append("")
+            lines.append("")
+            continue
         # Real Telegram API path when command has evidenced capabilities
         if _emit_capability_body(lines, cmd, _py=_py):
             if buttons:
@@ -1186,6 +1204,11 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("        if caps:")
     lines.append("            await _run_capabilities(update, context, caps, [])")
     lines.append("            return")
+    lines.append("        if target_cmd in (\"show_categories\", \"show_products\", \"menu\", \"list\", \"catalog\"):")
+    lines.append("            if query.message is not None:")
+    lines.append("                kb = main_keyboard()")
+    lines.append("                await query.message.reply_text(CALLBACK_LABELS.get(data) or target_cmd, reply_markup=kb)")
+    lines.append("            return")
     lines.append("        msg = f\"استخدم /{target_cmd} أو أكمل من هنا.\"")
     lines.append("        ruled = logic.apply_rules({\"choice\": data, \"text\": data, \"intent\": target_cmd, **dict(context.user_data.get(\"collected\") or {})})")
     lines.append("        context.user_data[\"collected\"] = ruled")
@@ -1193,6 +1216,12 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("            msg = \" | \".join(str(m) for m in ruled[\"_messages\"][:5])")
     lines.append("        if query.message is not None:")
     lines.append("            await query.edit_message_text(msg)")
+    lines.append("        return")
+    lines.append("    # Item / unlabeled buttons → echo selected label (structural)")
+    lines.append("    label = CALLBACK_LABELS.get(data) or data")
+    lines.append("    if label and not target_cmd:")
+    lines.append("        if query.message is not None:")
+    lines.append("            await query.edit_message_text(f\"تم اختيار: {label}\")")
     lines.append("        return")
     lines.append("    ruled = logic.apply_rules({\"choice\": data, \"text\": data, **dict(context.user_data.get(\"collected\") or {})})")
     lines.append("    context.user_data[\"collected\"] = ruled")
