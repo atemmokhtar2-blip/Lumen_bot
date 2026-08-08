@@ -105,10 +105,18 @@ def build_core_taxonomy() -> ConceptRegistry:
            surface_forms=["زر", "إنشاء pdf جديد"], tags=["ui"]),
         _c("payment_gateway", ConceptKind.TECHNICAL_COMPONENT, "Payment integration.",
            surface_forms=["دفع إلكتروني", "بوابة دفع", "payment", "stripe", "myfatoorah"], tags=["finance"]),
+        _c("stripe_payment_gateway", ConceptKind.TECHNICAL_COMPONENT, "Stripe payment gateway integration.",
+           surface_forms=["stripe", "بوابة سترايب", "دفع بالبطاقة"], tags=["finance"]),
+        _c("myfatoorah_gateway", ConceptKind.TECHNICAL_COMPONENT, "MyFatoorah payment gateway.",
+           surface_forms=["myfatoorah", "ماي فاتورة", "بوابة ماي فاتورة"], tags=["finance"]),
         _c("external_api_integration", ConceptKind.TECHNICAL_COMPONENT, "External API connection.",
            surface_forms=["ربط خارجي", "api", "integration", "تكامل"], tags=["integration"]),
+        _c("webhook_support", ConceptKind.TECHNICAL_COMPONENT, "Incoming webhook handling.",
+           surface_forms=["webhook", "ويب هوك", "إشعارات خارجية"], tags=["integration"]),
         _c("role_based_access", ConceptKind.BOT_CAPABILITY, "RBAC support.",
            surface_forms=["صلاحيات", "أدوار", "admin only", "مدير"], tags=["security"]),
+        _c("admin_rbac_panel", ConceptKind.BOT_CAPABILITY, "Role-based access control administration panel.",
+           surface_forms=["لوحة تحكم المدير", "صلاحيات الأدوار", "rbac", "admin panel"], tags=["security"]),
         _c("relational_data_model", ConceptKind.TECHNICAL_COMPONENT, "One-to-many / Many-to-many support.",
            surface_forms=["علاقات بيانات", "مرتبط بـ", "relation"], tags=["database"]),
     ]
@@ -141,15 +149,3 @@ def build_core_taxonomy() -> ConceptRegistry:
 
 
 CORE_TAXONOMY = build_core_taxonomy()
-
-    # ── Advanced Enterprise / Integration Extensions ─────────────────────────
-    concepts += [
-        _c("stripe_payment_gateway", ConceptKind.TECHNICAL_COMPONENT, "Stripe payment gateway integration.",
-           surface_forms=["stripe", "بوابة سترايب", "دفع بالبطاقة"], tags=["finance"]),
-        _c("myfatoorah_gateway", ConceptKind.TECHNICAL_COMPONENT, "MyFatoorah payment gateway.",
-           surface_forms=["myfatoorah", "ماي فاتورة", "بوابة ماي فاتورة"], tags=["finance"]),
-        _c("webhook_support", ConceptKind.TECHNICAL_COMPONENT, "Incoming webhook handling.",
-           surface_forms=["webhook", "ويب هوك", "إشعارات خارجية"], tags=["integration"]),
-        _c("admin_rbac_panel", ConceptKind.BOT_CAPABILITY, "Role-based access control administration panel.",
-           surface_forms=["لوحة تحكم المدير", "صلاحيات الأدوار", "rbac", "admin panel"], tags=["security"]),
-    ]
