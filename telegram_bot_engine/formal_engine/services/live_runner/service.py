@@ -42,7 +42,19 @@ class LiveRunReport:
 
     def to_user_text(self) -> str:
         icon = "✅" if self.ok else "❌"
-        lines = [f"{icon} *تشغيل حي — {self.phase}*", f"• {self.message}", "• build: `live-fix-v3`"]
+        lines = [f"{icon} *تشغيل حي — {self.phase}*", f"• {self.message}", "• build: `live-fix-v4`"]
+        # Surface auto-heal hints clearly for the user
+        hints = []
+        for w in (self.warnings or []):
+            if isinstance(w, str) and w.startswith("auto_heal:"):
+                hints.append(w.replace("auto_heal:", "", 1)[:80])
+        for h in (self.details or {}).get("auto_healed_packages") or []:
+            if isinstance(h, str) and h.startswith("user_hint:"):
+                hints.append(h.replace("user_hint:", "", 1))
+        if hints:
+            lines.append("• إصلاح تلقائي:")
+            for h in hints[:6]:
+                lines.append(f"  ✓ {h}")
         if self.bot_username:
             lines.append(f"• البوت: @{self.bot_username}")
         if self.entry_point:
@@ -547,6 +559,24 @@ _MODULE_TO_PACKAGE: dict[str, str] = {
     "aiogram": "aiogram",
     "telebot": "pyTelegramBotAPI",
     "pyrogram": "pyrogram",
+    "telethon": "telethon",
+    "redis": "redis",
+    "sqlalchemy": "SQLAlchemy",
+    "PIL": "Pillow",
+    "cv2": "opencv-python-headless",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "yaml": "PyYAML",
+    "dateutil": "python-dateutil",
+    "motor": "motor",
+    "pymongo": "pymongo",
+    "asyncpg": "asyncpg",
+    "aiosqlite": "aiosqlite",
+    "openpyxl": "openpyxl",
+    "jinja2": "Jinja2",
+    "croniter": "croniter",
+    "apscheduler": "APScheduler",
+
     "dotenv": "python-dotenv",
     "pydantic": "pydantic",
     "pydantic_settings": "pydantic-settings",
@@ -1076,34 +1106,82 @@ def _smart_auto_heal(
     combined_log: str,
     action: str,
 ) -> list[str]:
-    """Apply safe automatic fixes; return heal notes."""
+    """Apply safe automatic fixes; return heal notes (user is not bothered for fixable issues)."""
     notes: list[str] = []
     log = combined_log or ""
+    log_l = log.lower()
 
-    if action in ("delete_webhook",) or "Conflict" in log or "terminated by other getUpdates" in log:
+    # 1) Webhook / getUpdates conflict → always clear webhook
+    if (
+        action in ("delete_webhook",)
+        or "Conflict" in log
+        or "terminated by other getUpdates" in log
+        or "can't use getupdates" in log_l
+    ):
         ok, msg = _delete_telegram_webhook(bot_token)
         notes.append(f"delete_webhook:{'ok' if ok else 'fail'}:{msg}")
 
-    if action in ("check_token", "set_env") or "Unauthorized" in log or "InvalidToken" in log:
+    # 2) Token / Unauthorized → inject env + patch hardcoded + revalidate
+    if (
+        action in ("check_token", "set_env")
+        or "Unauthorized" in log
+        or "InvalidToken" in log
+        or "TelegramUnauthorizedError" in log
+    ):
         try:
             from .source_fix import discover_token_env_names
             notes.append(_write_project_env(root, bot_token, discover_token_env_names(root)))
         except Exception as e:
             notes.append(f"write_env_fail:{type(e).__name__}")
-        notes.extend(_patch_hardcoded_tokens(root, bot_token))
+        notes.extend(_patch_hardcoded_tokens(root, bot_token)[:12])
+        # Clear webhook too — stale webhook can look like auth noise on some stacks
+        ok_wh, msg_wh = _delete_telegram_webhook(bot_token)
+        notes.append(f"delete_webhook_after_token:{'ok' if ok_wh else 'fail'}:{msg_wh}")
         ok, _me, err = validate_telegram_token(bot_token)
         if not ok:
             notes.append(f"token_still_invalid:{err}")
         else:
             notes.append("token_revalidated_ok")
 
-    if action == "fix_syntax" or "SyntaxError" in log:
+    # 3) Syntax
+    if action == "fix_syntax" or "SyntaxError" in log or "IndentationError" in log:
         try:
             from .source_fix import repair_project_sources
-            for n in (repair_project_sources(root) or [])[:8]:
+            for n in (repair_project_sources(root) or [])[:10]:
                 notes.append(f"syntax_repair:{n}")
         except Exception as e:
             notes.append(f"syntax_repair_fail:{type(e).__name__}")
+
+    # 4) Missing requirements.txt + telegram framework detected in sources
+    req = root / "requirements.txt"
+    if not req.exists() or req.stat().st_size < 3:
+        blobs = []
+        for name in ("main.py", "bot.py", "app.py"):
+            p = root / name
+            if p.exists():
+                try:
+                    blobs.append(p.read_text(encoding="utf-8", errors="ignore")[:8000])
+                except Exception:
+                    pass
+        blob = chr(10).join(blobs)
+        pkgs: list[str] = ["python-dotenv"]
+        if "aiogram" in blob:
+            pkgs.append("aiogram")
+        if "telegram" in blob or "python-telegram-bot" in blob:
+            pkgs.append("python-telegram-bot")
+        if "telebot" in blob or "pyTelegramBotAPI" in blob:
+            pkgs.append("pyTelegramBotAPI")
+        if "pyrogram" in blob:
+            pkgs.append("pyrogram")
+        try:
+            req.write_text(chr(10).join(pkgs) + chr(10), encoding="utf-8")
+            notes.append(f"created_requirements:{','.join(pkgs)}")
+        except Exception as e:
+            notes.append(f"create_requirements_fail:{type(e).__name__}")
+
+    # 5) Network / DNS soft retry signal
+    if action == "check_network" or any(k in log for k in ("ConnectionError", "NameResolutionError", "SSLError")):
+        notes.append("network_soft_retry")
 
     return notes
 
@@ -1116,7 +1194,7 @@ class LiveRunnerService:
         entry_hint: str | None = None,
         run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
         install: bool = True,
-        max_heal_rounds: int = 2,
+        max_heal_rounds: int = 4,
     ) -> LiveRunReport:
         """
         Real install + run with Auto-Heal for missing dependencies.
@@ -1302,6 +1380,13 @@ class LiveRunnerService:
                     # If we applied a safe fix, retry the run in the next heal round
                     if auto_notes and heal_round < max_heal_rounds:
                         heal_notes.append(f"retry_after_auto_heal:{action}")
+                        # Tell next report path what we fixed (user-facing on success)
+                        if any("token_revalidated_ok" in n for n in auto_notes):
+                            heal_notes.append("user_hint:تم حقن التوكن وتصحيح الإعدادات القديمة — إعادة التشغيل")
+                        if any(n.startswith("delete_webhook:ok") or n.startswith("delete_webhook_after_token:ok") for n in auto_notes):
+                            heal_notes.append("user_hint:تم إلغاء الـ webhook المتعارض")
+                        if any(n.startswith("syntax_repair:") for n in auto_notes):
+                            heal_notes.append("user_hint:تم إصلاح أخطاء صياغة تلقائياً")
                         continue
                     report.install_log = all_install_log[-4000:]
                     loc = contract.primary.location if contract.primary else ""

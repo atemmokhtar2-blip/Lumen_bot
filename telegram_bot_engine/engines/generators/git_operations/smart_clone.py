@@ -113,7 +113,25 @@ def looks_like_clone_request(text: str) -> bool:
     return has_trigger and has_url
 
 
+def _diagnose_clone_error(stderr: str, returncode: int, has_token: bool) -> str:
+    s = (stderr or "").lower()
+    if any(x in s for x in ("could not resolve host", "name resolution", "network is unreachable")):
+        return "مشكلة شبكة/DNS — تحقق من اتصال السيرفر بالإنترنت ثم أعد المحاولة"
+    if any(x in s for x in ("repository not found", "not found")):
+        if has_token:
+            return "المستودع غير موجود أو التوكن لا يملك صلاحية عليه (تأكد من الرابط وصلاحية repo)"
+        return "المستودع غير موجود أو خاص — أرسل رابط صحيح أو توكن GitHub إن كان خاصاً"
+    if _is_auth_failure(stderr, returncode):
+        if has_token:
+            return "فشل المصادقة بتوكن GitHub — أنشئ PAT جديد بصلاحية repo"
+        return "المستودع خاص — أرسل توكن GitHub (PAT) للمتابعة"
+    if "timeout" in s or returncode == -9:
+        return "انتهت مهلة السحب — المستودع كبير أو الشبكة بطيئة؛ أعد المحاولة"
+    return f"فشل السحب (code={returncode}). التفاصيل: {(stderr or '')[:200]}"
+
+
 def _is_auth_failure(stderr: str, returncode: int) -> bool:
+
     s = (stderr or "").lower()
     if returncode == 0:
         return False
@@ -205,13 +223,36 @@ def smart_clone(
             err = err.replace(tok, "***")
 
     if proc.returncode != 0:
+        # Auto-retry once without filter / with full history on ambiguous failures
+        if target.exists() is False and "Could not resolve host" not in err:
+            cmd_retry = ["git", "clone", "--single-branch", "--depth", "1", auth_url, str(target)]
+            try:
+                proc2 = subprocess.run(
+                    cmd_retry, capture_output=True, text=True, timeout=180, check=False, env=env
+                )
+                err2 = proc2.stderr or proc2.stdout or ""
+                if tok:
+                    err2 = err2.replace(tok, "***")
+                if proc2.returncode == 0:
+                    return CloneResult(
+                        ok=True, path=str(target), url=url,
+                        message=f"تم السحب بعد إعادة محاولة ذكية: {target}",
+                    )
+                err = err2 or err
+                proc = proc2
+            except Exception:
+                pass
+
         needs = _is_auth_failure(err, proc.returncode) and not tok
-        # also needs auth if private and no token
         if needs:
             return CloneResult(
                 ok=False,
                 url=url,
-                message="المستودع خاص أو يحتاج صلاحية — أرسل توكن GitHub (PAT) للمتابعة",
+                message=(
+                    "المستودع خاص أو يحتاج صلاحية.\n"
+                    "أرسل توكن GitHub (PAT) بصلاحية repo في رسالة لوحده للمتابعة.\n"
+                    "من: GitHub → Settings → Developer settings → Personal access tokens"
+                ),
                 stderr=err[:500],
                 needs_auth=True,
             )
@@ -223,6 +264,6 @@ def smart_clone(
                 stderr=err[:500],
                 needs_auth=True,
             )
-        return CloneResult(ok=False, url=url, message="فشل git clone", stderr=err[:500])
+        return CloneResult(ok=False, url=url, message=_diagnose_clone_error(err, proc.returncode, bool(tok)), stderr=err[:500])
 
     return CloneResult(ok=True, path=str(target), url=url, message=f"تم سحب المستودع إلى {target}")
