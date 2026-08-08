@@ -25,6 +25,7 @@ from .ast import (
 )
 from ..ontology.telegram_capabilities import (
     any_admin_typical,
+    commands_from_capability_evidence,
     resolve_capabilities,
 )
 
@@ -389,6 +390,29 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             m = re.match(r"^/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\s*$", body)
             if m:
                 add(m.group("cmd"), m.group("cmd"))
+
+    # Promote evidenced Telegram capabilities from prose → commands.
+    # Example: "حظر وطرد وكتم" → ban / kick / mute (not a domain pack).
+    for cmd_name, caps, desc in commands_from_capability_evidence(text):
+        if cmd_name in seen:
+            # merge capabilities into existing node
+            for c in found:
+                if c.name == cmd_name:
+                    merged = list(dict.fromkeys(list(c.capabilities or []) + list(caps)))
+                    c.capabilities = merged
+                    if any_admin_typical(merged):
+                        c.admin_only = True
+                    break
+            continue
+        seen.add(cmd_name)
+        found.append(
+            CommandNode(
+                name=cmd_name,
+                description=(desc or cmd_name)[:100],
+                admin_only=any_admin_typical(caps),
+                capabilities=list(caps),
+            )
+        )
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))

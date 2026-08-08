@@ -90,8 +90,9 @@ TELEGRAM_CAPABILITIES: tuple[TelegramCapability, ...] = (
         id="delete_message",
         api_method="delete_message",
         surface_forms=(
-            "delete message", "حذف رسالة", "امسح الرسالة", "احذف الرسالة",
-            "delmsg", "purge message",
+            "delete message", "حذف رسالة", "حذف رسائل", "حذف الرسائل",
+            "امسح الرسالة", "احذف الرسالة", "امسح الرسائل", "احذف الرسائل",
+            "delmsg", "purge message", "delete",
         ),
         needs_user_target=False,
         description="Delete a message (reply target)",
@@ -170,3 +171,51 @@ def any_admin_typical(cap_ids: list[str]) -> bool:
         if c and c.admin_typical:
             return True
     return False
+
+
+# Canonical command id emitted when a capability is evidenced in prose (Latin Telegram ids).
+CAPABILITY_DEFAULT_COMMAND: dict[str, str] = {
+    "ban_chat_member": "ban",
+    "unban_chat_member": "unban",
+    "kick_chat_member": "kick",
+    "restrict_chat_member": "mute",
+    "unrestrict_chat_member": "unmute",
+    "promote_chat_member": "promote",
+    "delete_message": "delete",
+    "pin_chat_message": "pin",
+    "unpin_chat_message": "unpin",
+}
+
+
+def commands_from_capability_evidence(text: str) -> list[tuple[str, list[str], str]]:
+    """
+    From free-text evidence only, return (command_name, capability_ids, description).
+    Does not invent domain packs — only promotes evidenced Telegram API capabilities
+    into slash-command identifiers required by Telegram.
+    """
+    caps = resolve_capabilities(text or "")
+    if not caps:
+        return []
+    # Group by default command name
+    by_cmd: dict[str, list[str]] = {}
+    for cid in caps:
+        cmd = CAPABILITY_DEFAULT_COMMAND.get(cid)
+        if not cmd:
+            continue
+        by_cmd.setdefault(cmd, []).append(cid)
+    out: list[tuple[str, list[str], str]] = []
+    for cmd, cids in by_cmd.items():
+        # description = first matching surface form found in text for readability
+        desc = cmd
+        blob = _norm(text or "")
+        for cid in cids:
+            cap = capability_by_id(cid)
+            if not cap:
+                continue
+            for form in cap.surface_forms:
+                if _norm(form) and _norm(form) in blob:
+                    desc = form
+                    break
+            break
+        out.append((cmd, cids, desc[:100]))
+    return out

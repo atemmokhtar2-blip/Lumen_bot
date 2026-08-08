@@ -153,8 +153,8 @@ def assess_spec(user_text: str) -> ClarificationResult:
     feature_terms = (
         "متجر", "منتج", "منتجات", "سلة", "عربة", "طلب", "اوردر",
         "حجز", "موعد", "تسجيل", "عملاء", "عميل", "خدمة العملاء",
-        "تذاكر", "دعم", "إدارة مجموعات", "جروب", "مجموعة", "تحذير",
-        "حظر", "كتم", "توصيل", "دفع", "فاتورة", "بحث", "اشتراك",
+        "تذاكر", "دعم", "إدارة مجموعات", "ادارة مجموعات", "جروب", "مجموعة", "تحذير",
+        "حظر", "طرد", "كتم", "تثبيت", "حذف رسالة", "توصيل", "دفع", "فاتورة", "بحث", "اشتراك",
         "مخزون", "مستخدمين", "موظفين", "تقارير", "إشعارات",
     )
     has_feature_signal = any(term in text for term in feature_terms)
@@ -197,9 +197,9 @@ def assess_spec(user_text: str) -> ClarificationResult:
 
     # Ready rules — smarter thresholds
     ready = False
-    if has_feature_signal and len(text) >= 20:
-        ready = True
-    elif len(cmds) >= 2:
+    # Feature prose alone is NOT enough — need at least one actionable command
+    # (slash or capability-evidenced). Otherwise we generate hollow start/help bots.
+    if len(cmds) >= 2:
         ready = True
     elif len(cmds) >= 1 and (ents or btns or score >= _MIN_SCORE):
         ready = True
