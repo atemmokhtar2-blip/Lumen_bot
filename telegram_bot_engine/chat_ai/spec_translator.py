@@ -160,18 +160,86 @@ def _extract_item_list(text: str) -> list[str]:
                 break
             continue
         n = _norm(ln)
-        if any(h in n for h in _ITEM_HINTS) or "يظهر له" in n:
+        if any(h in n for h in _ITEM_HINTS) or "يظهر له" in n or "الاصناف" in n or "الأصناف" in n or "منيو" in n:
             capture = True
+            # inline list after colon on same line: الأصناف: بيتزا، برجر
+            if ":" in ln or "：" in ln:
+                tail = re.split(r"[:：]", ln, 1)[-1].strip()
+                if tail and ("," in tail or "،" in tail):
+                    for p in re.split(r"[,،]+", tail):
+                        p = p.strip()
+                        if 1 < len(p) <= 32:
+                            items.append(p)
             continue
         if capture:
             if ln.endswith(":") or ln.startswith("/") or re.match(r"^(الأوامر|الازرار|الأزرار|الكيانات)", ln):
                 break
             body = re.sub(r"^[\-•*\d\)\.\s]+", "", ln).strip()
-            if 1 < len(body) <= 32 and not re.search(r"(اعمل|بوت|يدوس|زر)", body):
+            if 1 < len(body) <= 32 and not re.search(r"(اعمل|بوت|يدوس|زر|المستخدم|يختار|يدخل)", body):
                 items.append(body)
             elif items and len(body) > 40:
                 break
+    # inline patterns anywhere: الأصناف: a، b، c
+    if not items:
+        for m in re.finditer(
+            r"(?:الأصناف|الاصناف|المنتجات|المنيو|menu|items)\s*[:：]\s*([^\n]+)",
+            text or "",
+            re.I,
+        ):
+            for p in re.split(r"[,،]+", m.group(1)):
+                p = p.strip()
+                if 1 < len(p) <= 32 and p not in items:
+                    items.append(p)
     return items[:30]
+
+
+def _detect_ordered_steps(text: str) -> list[dict[str, str]]:
+    """Detect multi-step conversation from sequencing phrases in user text."""
+    t = text or ""
+    n = _norm(t)
+    steps: list[dict[str, str]] = []
+
+    # Explicit: الاسم ثم الهاتف ثم العنوان
+    m = re.search(
+        r"(?:الاسم|name)\s*(?:ثم|بعدين|ثمّ|ثم\s+بعدين|,|،)\s*(?:الهاتف|الجوال|phone|رقم)?"
+        r".{0,20}?(?:ثم|بعدين|,|،)\s*(?:العنوان|address)?",
+        t,
+        re.I,
+    )
+    # Field sequence with ثم / بعدين
+    parts = re.split(r"\s*(?:ثم|بعدين|وبعدين|ثمّ)\s*", t)
+    if len(parts) >= 2:
+        field_map = [
+            (r"اسم|name", "name", "أرسل الاسم"),
+            (r"هاتف|جوال|phone|رقم", "phone", "أرسل رقم الهاتف"),
+            (r"عنوان|address", "address", "أرسل العنوان"),
+            (r"كمي|quantity|عدد", "quantity", "أرسل الكمية المطلوبة (رقم)"),
+            (r"تأكيد|confirm|يؤكد", "confirm", "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"),
+            (r"بريد|ايميل|email", "email", "أرسل البريد الإلكتروني"),
+            (r"ملاحظ|notes", "notes", "أرسل الملاحظات"),
+            (r"تاريخ|date", "date", "أرسل التاريخ"),
+            (r"وقت|time", "time", "أرسل الوقت"),
+        ]
+        for part in parts:
+            pn = _norm(part)
+            for pat, key, prompt in field_map:
+                if re.search(pat, pn) and not any(s["key"] == key for s in steps):
+                    steps.append({"key": key, "prompt": prompt})
+                    break
+
+    # Phrase: يختار صنف ... يدخل الكمية ... يؤكد
+    if re.search(r"يختار\s*صنف|اختيار\s*صنف|من\s*المنيو", n):
+        if not any(s["key"] == "quantity" for s in steps) and re.search(r"كمي", n):
+            steps.append({"key": "quantity", "prompt": "أرسل الكمية المطلوبة (رقم)"})
+        if not any(s["key"] == "confirm" for s in steps) and re.search(r"يؤكد|تأكيد|confirm", n):
+            steps.append({"key": "confirm", "prompt": "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"})
+
+    # Ensure quantity→confirm order for order-like
+    if any(s["key"] == "quantity" for s in steps) and not any(s["key"] == "confirm" for s in steps):
+        if re.search(r"تأكيد|يؤكد|confirm", n):
+            steps.append({"key": "confirm", "prompt": "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"})
+
+    return steps[:8]
 
 
 def structural_translate(user_text: str) -> dict[str, Any]:
@@ -245,6 +313,51 @@ def structural_translate(user_text: str) -> dict[str, Any]:
                 spec["commands"].append({"name": cmd, "description": desc, "admin_only": True})
     except Exception:
         pass
+
+    # Multi-step sequences from prose (تسجيل: اسم ثم هاتف ثم عنوان / طلب: كمية ثم تأكيد)
+    ordered = _detect_ordered_steps(text)
+    if ordered and not spec.get("flows"):
+        # classify entity
+        keys = [s["key"] for s in ordered]
+        if "quantity" in keys or any(k in _norm(text) for k in ("طلب", "صنف", "منيو", "اوردر")):
+            ent, fid, desc = "Order", "order", "طلب متعدد الخطوات"
+            if "item_name" not in keys and any(k in _norm(text) for k in ("صنف", "منيو", "اصناف")):
+                # item chosen via button; flow starts at quantity
+                ordered = [s for s in ordered if s["key"] != "name"]
+            fields = list(dict.fromkeys(["item_name"] + keys + ["status"]))
+            if not any(e.get("name") == "Order" for e in spec["entities"]):
+                spec["entities"].append({"name": "Order", "fields": fields})
+            if not any(e.get("name") == "Item" for e in spec["entities"]) and any(
+                k in _norm(text) for k in ("صنف", "منيو", "اصناف", "منتج")
+            ):
+                spec["entities"].append({"name": "Item", "fields": ["name"]})
+        else:
+            ent, fid, desc = "Customer", "register", "تسجيل متعدد الخطوات"
+            fields = list(dict.fromkeys(keys))
+            if not any(e.get("name") == "Customer" for e in spec["entities"]):
+                spec["entities"].append({"name": "Customer", "fields": fields})
+        if fid not in seen:
+            seen.add(fid)
+            spec["commands"].append({"name": fid, "description": desc})
+        spec["flows"].append({
+            "id": fid,
+            "command": fid,
+            "entity": ent,
+            "kind": "collect",
+            "steps": ordered,
+            "prefill_from_button": "item_name" if ent == "Order" else "",
+        })
+        # items from inline list without show-hint lines
+        more_items = _extract_item_list(text)
+        if more_items and ent == "Order":
+            for it in more_items:
+                if not any(b.get("label") == it for b in spec["buttons"]):
+                    spec["buttons"].append({"label": it})
+            if "show_categories" not in seen:
+                seen.add("show_categories")
+                spec["commands"].append({"name": "show_categories", "description": "عرض الأصناف"})
+                if not any("اصناف" in _norm(b.get("label", "")) or "منيو" in _norm(b.get("label", "")) for b in spec["buttons"]):
+                    spec["buttons"].insert(0, {"label": "عرض الأصناف"})
 
     if "start" not in seen:
         spec["commands"].insert(0, {"name": "start", "description": "تشغيل البوت"})

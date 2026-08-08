@@ -1225,6 +1225,14 @@ def extract_dsl(text: str) -> DSLProgram:
     commands = _commands_from_text(full)
     buttons = _buttons_from_text(full)
     relations = _relations_from_text(full, entities)
+    if any(e.name.lower() == "order" for e in entities) and any(e.name.lower() == "item" for e in entities):
+        relations.append(RelationNode(
+            entity="Order",
+            requires=RequiresNode(operands=["item_name", "quantity"]),
+            action=ActionNode(name="PlaceOrder"),
+            raw="Order requires item_name + quantity",
+        ))
+
     operations = _operations_from_text(full, buttons)
     rules = _rules_from_text(full, entities, buttons)
     t = full.lower()
