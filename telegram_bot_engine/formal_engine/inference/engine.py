@@ -462,10 +462,78 @@ def infer(program: DSLProgram) -> InferenceResult:
             "steps": steps,
         })
 
+    # Wizards from DSL operations (kind=wizard)
+    existing_ids = {str(w.get("id") or w.get("command")) for w in wizards}
+    for op in program.operations:
+        if getattr(op, "kind", None) != "wizard":
+            continue
+        wid = op.name or (op.meta or {}).get("command") or "flow"
+        if wid in existing_ids:
+            continue
+        meta = op.meta or {}
+        steps = list(meta.get("steps") or [])
+        if not steps and op.inputs:
+            steps = [{"key": k, "prompt": f"أرسل {k}"} for k in op.inputs]
+        if not steps:
+            continue
+        wizards.append({
+            "id": wid,
+            "command": meta.get("command") or wid,
+            "entity": meta.get("entity") or (op.outputs[0] if op.outputs else "record"),
+            "kind": meta.get("kind") or "collect",
+            "steps": steps,
+            "prefill_from_button": meta.get("prefill_from_button") or "item_name",
+        })
+        existing_ids.add(wid)
+
+    # Catalog buttons → order flow (quantity → confirm)
+    catalog_labels: list[str] = []
+    for b in program.buttons:
+        lab = (b.label or "").strip()
+        if not lab or len(lab) > 32:
+            continue
+        if any(lab == c.name or lab == (c.description or "") for c in program.commands):
+            continue
+        if any(k in lab for k in ("عرض", "قائمة", "start", "help", "تسجيل", "جميع")):
+            continue
+        catalog_labels.append(lab)
+    if catalog_labels and "order" not in existing_ids:
+        wizards.append({
+            "id": "order",
+            "command": "order",
+            "entity": "Order",
+            "kind": "collect",
+            "steps": [
+                {"key": "quantity", "prompt": "أرسل الكمية المطلوبة (رقم)"},
+                {"key": "confirm", "prompt": "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"},
+            ],
+            "prefill_from_button": "item_name",
+            "catalog_labels": catalog_labels[:30],
+        })
+        existing_ids.add("order")
+        if not any(c.name == "order" for c in result.commands):
+            from ..dsl.ast import CommandNode
+            result.commands = list(result.commands) + [
+                CommandNode(name="order", description="طلب صنف بالكمية")
+            ]
+
     result.wizards = wizards
 
-    # Ensure database flag when we have schemas/entities
-    if result.schemas or program.entities:
+    if result.schemas or program.entities or any(w.get("entity") for w in wizards):
         result.wants_database = True
+    if any(w.get("id") == "order" or w.get("entity") == "Order" for w in wizards):
+        if not any(s.table == "order" for s in result.schemas):
+            result.schemas.append(SchemaPlan(
+                table="order",
+                columns=[
+                    ("id", "str"), ("user_id", "int"),
+                    ("item_name", "str"), ("quantity", "int"), ("status", "str"),
+                ],
+            ))
+        if catalog_labels and not any(s.table == "item" for s in result.schemas):
+            result.schemas.append(SchemaPlan(
+                table="item",
+                columns=[("id", "str"), ("name", "str")],
+            ))
 
     return result

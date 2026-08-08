@@ -1146,6 +1146,77 @@ def _rules_from_text(text: str, entities: list[EntityNode], buttons: list[Button
     return _merge_rules(rules)
 
 
+def _flows_from_text(text: str) -> list[OperationNode]:
+    """Parse التدفقات section into wizard operations."""
+    ops: list[OperationNode] = []
+    lines = _section_lines(text, "التدفقات", "التدفق", "flows", "wizards")
+    if not lines:
+        return ops
+    current: dict | None = None
+    steps: list[dict] = []
+
+    def flush() -> None:
+        nonlocal current, steps
+        if not current:
+            return
+        ops.append(OperationNode(
+            kind="wizard",
+            name=str(current.get("id") or "flow"),
+            inputs=list(current.get("fields") or []),
+            outputs=[str(current.get("entity") or "record")],
+            meta={
+                "command": current.get("id"),
+                "entity": current.get("entity") or "record",
+                "steps": list(steps),
+                "kind": "collect",
+                "prefill_from_button": "item_name",
+            },
+        ))
+        current, steps = None, []
+
+    for line in lines:
+        body = _strip_bullet(line)
+        if not body:
+            continue
+        m = re.match(
+            r"^(?P<id>[A-Za-z][A-Za-z0-9_]{1,32})(?:\s*@(?P<ent>[A-Za-z][A-Za-z0-9_]{0,32}))?\s*:?\s*(?P<fields>.*)$",
+            body,
+        )
+        if m and not body.lstrip().startswith("•") and ":" in body.replace("：", ":"):
+            # only treat as flow header when has id-like start
+            if re.match(r"^[A-Za-z]", body):
+                flush()
+                fields = [x.strip() for x in re.split(r"[,،]", m.group("fields") or "") if x.strip() and " " not in x.strip()[:20]]
+                # fields may include prompts after — keep only tokens
+                fields = [f for f in fields if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", f)]
+                current = {
+                    "id": m.group("id"),
+                    "entity": m.group("ent") or "record",
+                    "fields": fields,
+                }
+                steps = [{"key": f, "prompt": f"أرسل {f}"} for f in fields]
+                continue
+        m2 = re.match(
+            r"^[•\-]?\s*(?P<key>[A-Za-z_][A-Za-z0-9_]{0,32})\s*:\s*(?P<prompt>.+)$",
+            body,
+        )
+        if m2 and current is not None:
+            key, prompt = m2.group("key"), m2.group("prompt").strip()
+            found = False
+            for st in steps:
+                if st.get("key") == key:
+                    st["prompt"] = prompt
+                    found = True
+                    break
+            if not found:
+                steps.append({"key": key, "prompt": prompt})
+            if key not in (current.get("fields") or []):
+                current.setdefault("fields", []).append(key)
+    flush()
+    return ops
+
+
+
 def extract_dsl(text: str) -> DSLProgram:
     full = (text or "").strip()
     if len(full) > 200_000:

@@ -1,11 +1,14 @@
 """
-Formal Verification of generated projects.
+Formal Verification of generated projects — deeper than py_compile.
 
-Uses:
-  - Python AST parse (syntax soundness)
-  - Import / name consistency checks
-  - Structural invariants derived from inference
-Optional Z3 path is attempted when z3 is installed; otherwise static-only.
+Checks:
+  - Python AST parse (syntax)
+  - Handler wiring (main ↔ handlers)
+  - Command coverage (every command has a handler)
+  - Flow integrity (FLOWS steps non-empty, confirm/quantity patterns)
+  - Callback maps consistency
+  - Persistence surface when Order/Item schemas exist
+  - No invented cmd_hash command names
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ class VerificationReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     files_checked: int = 0
+    fidelity_score: float = 0.0
+    checks: dict[str, bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,14 +35,15 @@ class VerificationReport:
             "errors": list(self.errors),
             "warnings": list(self.warnings),
             "files_checked": self.files_checked,
+            "fidelity_score": self.fidelity_score,
+            "checks": dict(self.checks),
         }
 
 
 def _check_syntax(path: Path) -> list[str]:
     errs: list[str] = []
     try:
-        src = path.read_text(encoding="utf-8")
-        ast.parse(src, filename=str(path))
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except SyntaxError as e:
         errs.append(f"syntax:{path.name}:{e.lineno}: {e.msg}")
     except Exception as e:
@@ -45,105 +51,180 @@ def _check_syntax(path: Path) -> list[str]:
     return errs
 
 
-def _check_handlers_exist(root: Path) -> list[str]:
-    errs: list[str] = []
+def _check_handlers_exist(root: Path) -> tuple[list[str], list[str]]:
+    errs, warns = [], []
     main = root / "main.py"
-    if not main.exists():
-        errs.append("missing:main.py")
-        return errs
-    src = main.read_text(encoding="utf-8")
-    for name in ("start_handler", "help_handler", "message_handler", "callback_handler"):
-        if name not in src:
-            errs.append(f"main_missing_handler_ref:{name}")
     handlers = root / "app" / "handlers.py"
+    if not main.exists():
+        return ["missing:main.py"], warns
     if not handlers.exists():
-        errs.append("missing:app/handlers.py")
-    else:
-        hsrc = handlers.read_text(encoding="utf-8")
-        for name in ("async def start_handler", "async def message_handler"):
-            if name not in hsrc:
-                errs.append(f"handlers_missing:{name}")
-    return errs
+        return ["missing:app/handlers.py"], warns
+    msrc = main.read_text(encoding="utf-8")
+    hsrc = handlers.read_text(encoding="utf-8")
+    for name in ("start_handler", "help_handler", "message_handler", "callback_handler"):
+        if name not in msrc and name not in hsrc:
+            errs.append(f"missing_handler_ref:{name}")
+    for name in ("async def start_handler", "async def message_handler", "async def callback_handler"):
+        if name not in hsrc:
+            errs.append(f"handlers_missing:{name}")
+    # Every CommandHandler("x" must have async def x_handler or imported
+    for m in re.finditer(r'CommandHandler\(\s*[\'"](\w+)[\'"]\s*,\s*(\w+)', msrc):
+        cmd, handler = m.group(1), m.group(2)
+        if f"async def {handler}" not in hsrc and f"def {handler}" not in hsrc and handler not in hsrc:
+            # may be imported from handlers import X
+            if handler not in msrc.split("from app.handlers import")[-1][:500] and f"{handler}" not in hsrc:
+                errs.append(f"command_handler_unresolved:{cmd}->{handler}")
+        if cmd.startswith("cmd_") and len(cmd) > 4:
+            errs.append(f"invented_cmd_hash:{cmd}")
+    return errs, warns
 
 
 def _check_logic_callable(root: Path) -> list[str]:
-    errs: list[str] = []
     logic = root / "app" / "logic.py"
     if not logic.exists():
-        errs.append("missing:app/logic.py")
-        return errs
+        return ["missing:app/logic.py"]
     try:
         tree = ast.parse(logic.read_text(encoding="utf-8"))
     except SyntaxError as e:
-        errs.append(f"logic_syntax:{e.lineno}: {e.msg}")
-        return errs
-    defs = {
-        n.name
-        for n in tree.body
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+        return [f"logic_syntax:{e.lineno}: {e.msg}"]
+    defs = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     if not defs:
-        errs.append("logic_empty:no_functions")
-    return errs
+        return ["logic_empty:no_functions"]
+    return []
 
 
-def _try_z3_invariants(root: Path) -> list[str]:
-    """
-    Optional formal checks with Z3 when available.
-    Invariant: every schema class field count >= 1 (id present).
-    """
-    warnings: list[str] = []
-    try:
-        import z3  # type: ignore
-    except Exception:
-        warnings.append("z3_not_installed:static_only")
-        return warnings
+def _check_flows_and_callbacks(root: Path) -> tuple[list[str], list[str], dict[str, bool]]:
+    errs, warns = [], []
+    checks: dict[str, bool] = {}
+    h = root / "app" / "handlers.py"
+    if not h.exists():
+        return ["missing:app/handlers.py"], warns, checks
+    src = h.read_text(encoding="utf-8")
 
+    checks["has_callback_labels"] = "CALLBACK_LABELS" in src
+    checks["has_button_to_cmd"] = "BUTTON_TO_CMD" in src
+    checks["has_flows"] = "FLOWS:" in src or "FLOWS =" in src
+
+    # FLOWS entries should not be empty lists if order exists
+    if re.search(r"['\"]order['\"]\s*:\s*\[\s*\]", src):
+        errs.append("flow_order_empty_steps")
+    if "order" in src and "quantity" in src:
+        checks["order_quantity_step"] = True
+    else:
+        checks["order_quantity_step"] = False
+    if "confirm" in src and ("نعم" in src or "confirm" in src):
+        checks["order_confirm_step"] = "confirm" in src
+    else:
+        checks["order_confirm_step"] = False
+
+    if "show_categories" in src or "show_products" in src:
+        checks["catalog_show"] = "main_keyboard" in src
+        if "reply_markup=kb" not in src and "reply_markup = kb" not in src:
+            warns.append("catalog_show_without_keyboard_markup")
+    else:
+        checks["catalog_show"] = False
+
+    # Item selection should start flow when FLOWS has order
+    if re.search(r"['\"]order['\"]", src) and "FLOWS" in src:
+        if "item_name" in src and ("ud['flow']" in src or 'ud["flow"]' in src or "ud['flow']" in src):
+            checks["item_starts_order_flow"] = True
+        else:
+            checks["item_starts_order_flow"] = False
+            warns.append("catalog_items_may_not_start_order_flow")
+    else:
+        checks["item_starts_order_flow"] = False
+
+    return errs, warns, checks
+
+
+def _check_persistence(root: Path) -> tuple[list[str], list[str], dict[str, bool]]:
+    errs, warns = [], []
+    checks: dict[str, bool] = {}
     models = root / "app" / "models.py"
-    if not models.exists():
-        return warnings
-    src = models.read_text(encoding="utf-8")
-    # count dataclass fields roughly
-    classes = re.findall(r"class\s+(\w+)\s*:", src)
-    for cname in classes:
-        # simple invariant: id field must appear near class
-        if "id:" not in src:
-            warnings.append(f"z3_invariant:possible_missing_id_near_{cname}")
-    # trivial satisfiability probe
-    x = z3.Int("x")
-    s = z3.Solver()
-    s.add(x >= 0)
-    if s.check() != z3.sat:
-        warnings.append("z3_solver_unexpected_unsat")
-    return warnings
+    store = root / "app" / "store.py"
+    checks["has_models"] = models.exists()
+    checks["has_store"] = store.exists()
+    if models.exists():
+        src = models.read_text(encoding="utf-8")
+        checks["model_order"] = "class Order" in src or "Order" in src
+        checks["model_item"] = "class Item" in src or "Item" in src
+        if "quantity" in src:
+            checks["order_has_quantity"] = True
+        if "item_name" in src:
+            checks["order_has_item_name"] = True
+    if store.exists():
+        ssrc = store.read_text(encoding="utf-8")
+        checks["store_create"] = "async def create" in ssrc or "def create" in ssrc
+    return errs, warns, checks
+
+
+def _fidelity_score(checks: dict[str, bool], errors: list[str]) -> float:
+    if errors:
+        base = 0.35
+    else:
+        base = 0.55
+    weights = {
+        "has_flows": 0.08,
+        "order_quantity_step": 0.1,
+        "order_confirm_step": 0.1,
+        "catalog_show": 0.07,
+        "item_starts_order_flow": 0.1,
+        "has_models": 0.05,
+        "has_store": 0.05,
+        "model_order": 0.05,
+        "order_has_quantity": 0.05,
+        "order_has_item_name": 0.05,
+        "store_create": 0.05,
+    }
+    score = base
+    for k, w in weights.items():
+        if checks.get(k):
+            score += w
+    return round(min(1.0, score), 3)
 
 
 def verify_project(out_dir: str | Path) -> VerificationReport:
     root = Path(out_dir)
     errors: list[str] = []
     warnings: list[str] = []
+    checks: dict[str, bool] = {}
     files_checked = 0
 
     if not root.exists():
         return VerificationReport(ok=False, errors=["missing_project_root"], files_checked=0)
 
-    py_files = list(root.rglob("*.py"))
-    for p in py_files:
+    for p in root.rglob("*.py"):
         files_checked += 1
         errors.extend(_check_syntax(p))
 
-    errors.extend(_check_handlers_exist(root))
+    e1, w1 = _check_handlers_exist(root)
+    errors.extend(e1)
+    warnings.extend(w1)
     errors.extend(_check_logic_callable(root))
-    warnings.extend(_try_z3_invariants(root))
 
-    # required files
+    e2, w2, c2 = _check_flows_and_callbacks(root)
+    errors.extend(e2)
+    warnings.extend(w2)
+    checks.update(c2)
+
+    e3, w3, c3 = _check_persistence(root)
+    errors.extend(e3)
+    warnings.extend(w3)
+    checks.update(c3)
+
     for rel in ("main.py", "requirements.txt", "app/config.py"):
         if not (root / rel).exists():
             errors.append(f"missing:{rel}")
+
+    score = _fidelity_score(checks, errors)
+    if score < 0.5 and not errors:
+        warnings.append(f"low_fidelity_score:{score}")
 
     return VerificationReport(
         ok=len(errors) == 0,
         errors=errors,
         warnings=warnings,
         files_checked=files_checked,
+        fidelity_score=score,
+        checks=checks,
     )
