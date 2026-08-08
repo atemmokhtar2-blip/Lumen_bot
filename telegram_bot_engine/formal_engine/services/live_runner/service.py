@@ -1051,6 +1051,107 @@ def _write_project_env(root: Path, bot_token: str, token_envs: list[str] | None 
     return f"wrote_env:{env_path.name}:{len(keys)}_keys"
 
 
+
+def _inject_entry_bootstrap(entry: Path, bot_token: str) -> str:
+    """Force token into os.environ at the top of the entry script."""
+    try:
+        src = entry.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        return f"bootstrap_read_fail:{type(e).__name__}"
+
+    mark_start = "# === TBE_LIVE_BOOTSTRAP"
+    mark_end = "# === END TBE_LIVE_BOOTSTRAP ==="
+    nl = chr(10)
+    block_lines = [
+        f"{mark_start} (auto-injected by LiveRunner) ===",
+        "import os as _tbe_os",
+        f"_tbe_tok = {bot_token!r}",
+        "for _tbe_k in ("
+        '"TELEGRAM_BOT_TOKEN","BOT_TOKEN","TOKEN","TG_TOKEN",'
+        '"API_TOKEN","TELEGRAM_TOKEN","BOTTOKEN"):',
+        "    _tbe_os.environ[_tbe_k] = _tbe_tok",
+        mark_end,
+        "",
+    ]
+    block = nl.join(block_lines)
+
+    # Remove previous bootstrap if present
+    if "TBE_LIVE_BOOTSTRAP" in src:
+        src = re.sub(
+            r"# === TBE_LIVE_BOOTSTRAP[\s\S]*?# === END TBE_LIVE_BOOTSTRAP ===\n?",
+            "",
+            src,
+            count=1,
+        )
+
+    # Keep encoding / future imports first
+    lines = src.splitlines(keepends=True)
+    insert_at = 0
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if i == 0 and stripped.startswith("#!"):
+            insert_at = i + 1
+            i += 1
+            continue
+        if stripped.startswith("coding:") or stripped.startswith("#") and "coding" in stripped:
+            insert_at = i + 1
+            i += 1
+            continue
+        if stripped.startswith("from __future__"):
+            insert_at = i + 1
+            i += 1
+            continue
+        if stripped == "" or stripped.startswith("#"):
+            # skip leading comments/blank after future
+            if insert_at > 0:
+                i += 1
+                continue
+        break
+        i += 1
+
+    new_src = "".join(lines[:insert_at]) + block + "".join(lines[insert_at:])
+    try:
+        # syntax check bootstrap injection
+        compile(new_src, str(entry), "exec")
+        entry.write_text(new_src, encoding="utf-8")
+        return f"bootstrap_injected:{entry.name}"
+    except SyntaxError as e:
+        return f"bootstrap_syntax_fail:{e.lineno}"
+    except Exception as e:
+        return f"bootstrap_write_fail:{type(e).__name__}"
+
+
+def _patch_getenv_token_defaults(root: Path, bot_token: str) -> list[str]:
+    """Replace os.getenv/environ.get default token strings with the live token."""
+    notes: list[str] = []
+    # os.getenv("TOKEN", "123:AA...") or os.environ.get('BOT_TOKEN', '...')
+    pat = re.compile(
+        r"""(?P<prefix>(?:os\.getenv|os\.environ\.get|getenv)\s*\(\s*"""
+        r"""(?P<q1>['"])(?:TELEGRAM_BOT_TOKEN|BOT_TOKEN|TOKEN|TG_TOKEN|API_TOKEN|TELEGRAM_TOKEN|BOTTOKEN)(?P=q1)"""
+        r"""\s*,\s*)(?P<q2>['"])(?P<val>\d{6,12}:[A-Za-z0-9_-]{20,})(?P=q2)""",
+        re.M,
+    )
+    for path in root.rglob("*.py"):
+        if any(x in path.parts for x in (".git", ".venv", ".tbe_venv", ".tbe_deps", "__pycache__")):
+            continue
+        try:
+            src = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if not pat.search(src):
+            continue
+        src2 = pat.sub(lambda m: f"{m.group('prefix')}{m.group('q2')}{bot_token}{m.group('q2')}", src)
+        if src2 != src:
+            try:
+                path.write_text(src2, encoding="utf-8")
+                notes.append(f"patched_getenv_default:{path.relative_to(root)}")
+            except Exception:
+                pass
+    return notes
+
+
+
 def _patch_hardcoded_tokens(root: Path, bot_token: str) -> list[str]:
     """Replace obvious hardcoded bot tokens in common config files with the user token."""
     notes: list[str] = []
@@ -1097,6 +1198,7 @@ def _patch_hardcoded_tokens(root: Path, bot_token: str) -> list[str]:
                 notes.append(f"patched_token:{path.relative_to(root)}")
             except Exception as e:
                 notes.append(f"patch_fail:{path.name}:{type(e).__name__}")
+    notes.extend(_patch_getenv_token_defaults(root, bot_token)[:8])
     return notes
 
 
@@ -1134,14 +1236,19 @@ def _smart_auto_heal(
         except Exception as e:
             notes.append(f"write_env_fail:{type(e).__name__}")
         notes.extend(_patch_hardcoded_tokens(root, bot_token)[:12])
-        # Clear webhook too — stale webhook can look like auth noise on some stacks
+        # Inject bootstrap into entry so config imports cannot override token
+        entry = _find_entry(root)
+        if entry is not None:
+            notes.append(_inject_entry_bootstrap(entry, bot_token))
         ok_wh, msg_wh = _delete_telegram_webhook(bot_token)
         notes.append(f"delete_webhook_after_token:{'ok' if ok_wh else 'fail'}:{msg_wh}")
         ok, _me, err = validate_telegram_token(bot_token)
         if not ok:
             notes.append(f"token_still_invalid:{err}")
+            notes.append("user_action_required:new_token_from_BotFather")
         else:
             notes.append("token_revalidated_ok")
+            notes.append("will_retry_with_injected_token")
 
     # 3) Syntax
     if action == "fix_syntax" or "SyntaxError" in log or "IndentationError" in log:
@@ -1194,7 +1301,7 @@ class LiveRunnerService:
         entry_hint: str | None = None,
         run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
         install: bool = True,
-        max_heal_rounds: int = 4,
+        max_heal_rounds: int = 5,
     ) -> LiveRunReport:
         """
         Real install + run with Auto-Heal for missing dependencies.
@@ -1240,6 +1347,7 @@ class LiveRunnerService:
             from .source_fix import discover_token_env_names as _disc
             repair_notes.append(_write_project_env(root, bot_token, _disc(root)))
             repair_notes.extend(_patch_hardcoded_tokens(root, bot_token)[:8])
+            repair_notes.append(_inject_entry_bootstrap(entry, bot_token))
         except Exception as e:
             repair_notes.append(f"preflight_token_inject:{type(e).__name__}")
 
