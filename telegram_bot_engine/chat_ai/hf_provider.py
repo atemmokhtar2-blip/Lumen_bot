@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 DEFAULT_MODELS = (
-    "Qwen/Qwen3-4B-Instruct-2507",
-    "openai/gpt-oss-120b",
     "meta-llama/Llama-3.1-8B-Instruct",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
 )
 
 
