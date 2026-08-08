@@ -23,6 +23,10 @@ from .ast import (
     RequiresNode,
     RuleNode,
 )
+from ..ontology.telegram_capabilities import (
+    any_admin_typical,
+    resolve_capabilities,
+)
 
 _GHOST = {
     "start", "help", "bot", "telegram", "user_text", "validateavailability",
@@ -30,7 +34,7 @@ _GHOST = {
     "true", "false", "none", "null", "http", "https",
 }
 
-_ADMIN_CMDS = {"admin", "ban", "mute", "broadcast", "stats", "panel"}
+_ADMIN_CMDS = {"admin", "ban", "mute", "kick", "unban", "unmute", "promote", "broadcast", "stats", "panel"}
 
 # Matching aids only — effects always keep user wording
 _SYN_GROUPS: list[tuple[str, tuple[str, ...]]] = [
@@ -327,10 +331,21 @@ def _commands_from_text(text: str) -> list[CommandNode]:
         if not cmd or len(cmd) < 2 or cmd in seen or cmd in ("http", "https", "www", "telegram", "python"):
             return
         seen.add(cmd)
-        admin = cmd in _ADMIN_CMDS or any(
-            k in (desc or "") for k in ("أدمن", "ادمن", "admin", "مشرف", "إدارة", "للأدمن")
+        # Capabilities from command name + description only (no domain packs)
+        caps = resolve_capabilities(cmd, desc or "")
+        admin = (
+            cmd in _ADMIN_CMDS
+            or any(k in (desc or "") for k in ("أدمن", "ادمن", "admin", "مشرف", "إدارة", "للأدمن"))
+            or any_admin_typical(caps)
         )
-        found.append(CommandNode(name=cmd, description=(desc or cmd)[:100], admin_only=admin))
+        found.append(
+            CommandNode(
+                name=cmd,
+                description=(desc or cmd)[:100],
+                admin_only=admin,
+                capabilities=caps,
+            )
+        )
 
     section = _section_lines(text, "الأوامر", "الاوامر", "commands", "الأوامر المطلوبة")
     scan_text = "\n".join(section) if section else text

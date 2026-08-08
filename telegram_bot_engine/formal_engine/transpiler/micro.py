@@ -6,6 +6,11 @@ Emits Python syntax that expresses inferred relations, operations, UI surface.
 
 from __future__ import annotations
 
+from ..ontology.telegram_capabilities import (
+    any_needs_user_target,
+    capability_by_id,
+)
+
 import re
 from pathlib import Path
 from typing import Any
@@ -73,6 +78,122 @@ def _surface_matches(label: str, command_name: str, description: str) -> bool:
 
 
 # ── schema ──────────────────────────────────────────────────────────────
+
+
+
+
+
+def _emit_capability_body(lines: list[str], cmd, *, _py) -> bool:
+    """
+    Emit real Telegram Bot API calls for capabilities attached to a command.
+    Returns True if body was emitted (caller should skip generic CRUD path).
+    Structural only — no domain templates.
+    """
+    caps = list(getattr(cmd, "capabilities", None) or [])
+    if not caps:
+        return False
+
+    known = [c for c in caps if capability_by_id(c) is not None]
+    if not known:
+        return False
+
+    needs_target = any(
+        bool(capability_by_id(c) and capability_by_id(c).needs_user_target) for c in known
+    )
+
+    lines.append("    chat = update.effective_chat")
+    lines.append("    if chat is None:")
+    lines.append("        await message.reply_text('no_chat')")
+    lines.append("        return")
+    lines.append("    chat_id = chat.id")
+
+    if needs_target:
+        lines.append("    target_id, target_label = await _resolve_target_user(update, args)")
+        lines.append("    if target_id is None:")
+        hint = f"حدد العضو: رد على رسالته أو أرسل /{cmd.name} <user_id>"
+        lines.append(f"        await message.reply_text({_py(hint)})")
+        lines.append("        return")
+
+    lines.append("    try:")
+    emitted_api = False
+    for cid in known:
+        c = capability_by_id(cid)
+        if not c:
+            continue
+        emitted_api = True
+        if cid == "ban_chat_member":
+            lines.append("        await context.bot.ban_chat_member(chat_id=chat_id, user_id=int(target_id))")
+            lines.append("        await message.reply_text(f'تم الحظر: {target_label}')")
+        elif cid == "kick_chat_member":
+            lines.append("        await context.bot.ban_chat_member(chat_id=chat_id, user_id=int(target_id))")
+            lines.append("        await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(target_id))")
+            lines.append("        await message.reply_text(f'تم الطرد: {target_label}')")
+        elif cid == "unban_chat_member":
+            lines.append("        await context.bot.unban_chat_member(chat_id=chat_id, user_id=int(target_id))")
+            lines.append("        await message.reply_text(f'تم فك الحظر: {target_label}')")
+        elif cid == "restrict_chat_member":
+            lines.append("        perms = ChatPermissions(can_send_messages=False)")
+            lines.append(
+                "        await context.bot.restrict_chat_member("
+                "chat_id=chat_id, user_id=int(target_id), permissions=perms)"
+            )
+            lines.append("        await message.reply_text(f'تم الكتم: {target_label}')")
+        elif cid == "unrestrict_chat_member":
+            lines.append("        perms = ChatPermissions(")
+            lines.append("            can_send_messages=True, can_send_media_messages=True,")
+            lines.append("            can_send_other_messages=True, can_add_web_page_previews=True,")
+            lines.append("        )")
+            lines.append(
+                "        await context.bot.restrict_chat_member("
+                "chat_id=chat_id, user_id=int(target_id), permissions=perms)"
+            )
+            lines.append("        await message.reply_text(f'تم فك الكتم: {target_label}')")
+        elif cid == "promote_chat_member":
+            lines.append("        await context.bot.promote_chat_member(")
+            lines.append("            chat_id=chat_id, user_id=int(target_id),")
+            lines.append("            can_manage_chat=True, can_delete_messages=True,")
+            lines.append("            can_restrict_members=True, can_invite_users=True,")
+            lines.append("        )")
+            lines.append("        await message.reply_text(f'تمت الترقية: {target_label}')")
+        elif cid == "delete_message":
+            lines.append("        if message.reply_to_message:")
+            lines.append(
+                "            await context.bot.delete_message("
+                "chat_id=chat_id, message_id=message.reply_to_message.message_id)"
+            )
+            lines.append("            await message.reply_text('تم حذف الرسالة')")
+            lines.append("        else:")
+            lines.append("            await message.reply_text('رد على الرسالة لحذفها')")
+        elif cid == "pin_chat_message":
+            lines.append("        if message.reply_to_message:")
+            lines.append(
+                "            await context.bot.pin_chat_message("
+                "chat_id=chat_id, message_id=message.reply_to_message.message_id)"
+            )
+            lines.append("            await message.reply_text('تم تثبيت الرسالة')")
+            lines.append("        else:")
+            lines.append("            await message.reply_text('رد على الرسالة لتثبيتها')")
+        elif cid == "unpin_chat_message":
+            lines.append("        mid = message.reply_to_message.message_id if message.reply_to_message else None")
+            lines.append("        await context.bot.unpin_chat_message(chat_id=chat_id, message_id=mid)")
+            lines.append("        await message.reply_text('تم إلغاء التثبيت')")
+        else:
+            lines.append(f"        await message.reply_text({_py('capability:' + cid)})")
+
+    if not emitted_api:
+        return False
+
+    lines.append("    except Exception as exc:")
+    lines.append("        err = str(exc)")
+    lines.append("        if 'not enough rights' in err.lower() or 'chat_admin' in err.lower():")
+    lines.append("            await message.reply_text('البوت يحتاج صلاحيات مشرف لتنفيذ هذا الأمر')")
+    lines.append("        elif 'user_not_found' in err.lower() or 'user not found' in err.lower():")
+    lines.append("            await message.reply_text('المستخدم غير موجود في هذه المحادثة')")
+    lines.append("        else:")
+    lines.append("            await message.reply_text(f'فشل التنفيذ: {exc}')")
+    return True
+
+
 
 def _emit_schema_module(inf: InferenceResult) -> str:
     lines = [
@@ -513,10 +634,21 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             return "broadcast"
         return "generic"
 
+    all_caps: list[str] = []
+    for _c in commands:
+        all_caps.extend(list(getattr(_c, "capabilities", None) or []))
+    need_target_helper = any_needs_user_target(all_caps)
+    need_permissions = any(
+        c in ("restrict_chat_member", "unrestrict_chat_member") for c in all_caps
+    )
+    tg_imports = "Update, InlineKeyboardButton, InlineKeyboardMarkup"
+    if need_permissions:
+        tg_imports += ", ChatPermissions"
+
     lines: list[str] = [
         '"""Handlers from inferred commands/buttons/steps only."""',
         "from __future__ import annotations",
-        "from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup",
+        f"from telegram import {tg_imports}",
         "from telegram.ext import ContextTypes",
         "from app import logic",
         "from app.container import get_container",
@@ -622,6 +754,26 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("")
     lines.append("")
 
+
+    if need_target_helper:
+        lines.append("async def _resolve_target_user(update, args):")
+        lines.append('    """Resolve target user from reply, numeric id, or @username."""')
+        lines.append("    message = update.effective_message")
+        lines.append("    if message is not None and message.reply_to_message and message.reply_to_message.from_user:")
+        lines.append("        u = message.reply_to_message.from_user")
+        lines.append("        return u.id, (u.username or u.full_name or str(u.id))")
+        lines.append("    if args:")
+        lines.append("        raw = str(args[0]).strip()")
+        lines.append("        if raw.isdigit():")
+        lines.append("            return int(raw), raw")
+        lines.append("        if raw.startswith('@') and len(raw) > 1:")
+        lines.append("            return raw, raw")
+        lines.append("        if raw.startswith('id:') and raw[3:].isdigit():")
+        lines.append("            return int(raw[3:]), raw[3:]")
+        lines.append("    return None, None")
+        lines.append("")
+        lines.append("")
+
     # start — welcome + short command map
     start_bits = ["مرحباً بك 👋"]
     for c in commands[:12]:
@@ -687,6 +839,15 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("    args = []")
         lines.append("    if message.text and \" \" in message.text:")
         lines.append("        args = message.text.split()[1:]")
+        # Real Telegram API path when command has evidenced capabilities
+        if _emit_capability_body(lines, cmd, _py=_py):
+            if buttons:
+                lines.append("    kb = main_keyboard()")
+                lines.append("    if kb is not None:")
+                lines.append(f"        await message.reply_text({_py('—')}, reply_markup=kb)")
+            lines.append("")
+            lines.append("")
+            continue
         lines.append("    container = get_container()")
         if store:
             lines.append(f"    store = getattr(container, {_py(store)}, None)")

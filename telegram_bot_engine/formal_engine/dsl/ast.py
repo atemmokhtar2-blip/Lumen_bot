@@ -40,6 +40,8 @@ class CommandNode:
     name: str
     description: str = ""
     admin_only: bool = False
+    # Telegram Bot API capability ids evidenced by user text (ontology, not templates)
+    capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass
