@@ -67,6 +67,7 @@ class CommandUnit(StrictModel):
     name: str = Field(..., min_length=1, max_length=32)
     description: str = ""
     admin_only: bool = False
+    roles: list[str] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -95,9 +96,14 @@ class FieldUnit(StrictModel):
     field_type: FieldType = FieldType.STR
 
 
+class EntityRelation(StrictModel):
+    target: str
+    type: str = "one_to_many"  # one_to_many | many_to_one | one_to_one
+
 class EntityUnit(StrictModel):
     name: str
     fields: list[FieldUnit] = Field(default_factory=list)
+    relations: list[EntityRelation] = Field(default_factory=list)
 
 
 class ServiceUnit(StrictModel):

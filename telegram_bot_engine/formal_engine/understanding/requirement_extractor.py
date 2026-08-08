@@ -101,7 +101,7 @@ def _extract_commands_from_text(text: str) -> list[dict]:
     found: list[dict] = []
     seen: set[str] = set()
 
-    def _add(cmd: str, desc: str = "", admin: bool | None = None) -> None:
+    def _add(cmd: str, desc: str = "", admin: bool | None = None, roles: list[str] | None = None) -> None:
         cmd = (cmd or "").strip().lower().lstrip("/")
         cmd = re.sub(r"[^a-z0-9_]", "", cmd)
         if not cmd or len(cmd) < 2 or cmd in seen:
@@ -115,11 +115,24 @@ def _extract_commands_from_text(text: str) -> list[dict]:
             return
         seen.add(cmd)
         d = (desc or cmd).strip()[:100]
+        # Extract roles from desc if present [roles: user, admin]
+        extracted_roles = list(roles or [])
+        rm = re.search(r"\[roles:\s*([^\]]+)\]", d)
+        if rm:
+            extracted_roles.extend([r.strip() for r in rm.group(1).split(",")])
+            d = re.sub(r"\[roles:\s*[^\]]+\]", "", d).strip()
+        
         is_admin = admin if admin is not None else (
             cmd in ("admin", "panel", "stats", "ban", "mute", "broadcast")
             or any(k in d for k in ("أدمن", "admin", "إدارة", "مشرف"))
+            or "admin" in extracted_roles
         )
-        found.append({"command": cmd, "description": d or cmd, "admin_only": bool(is_admin)})
+        found.append({
+            "command": cmd, 
+            "description": d or cmd, 
+            "admin_only": bool(is_admin),
+            "roles": list(set(extracted_roles))
+        })
 
     # 1) slash tokens anywhere
     for m in re.finditer(r"/(?P<cmd>[a-zA-Z][a-zA-Z0-9_]{1,32})\b", text):
@@ -646,18 +659,39 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
         if _ename.lower() in _seen_ent:
             continue
         _seen_ent.add(_ename.lower())
+        _line_rest = _line[_m.end():].strip()
         _fields_raw = _m.group(2) or "id"
-        _fnames = [
-            re.sub(r"[^a-zA-Z0-9_]", "", p.strip()).lower()
-            for p in re.split(r"[,،/;|]+", _fields_raw)
-            if re.sub(r"[^a-zA-Z0-9_]", "", p.strip())
-        ]
+        _relations = []
+        if "العلاقات:" in _line_rest:
+            _rel_part = _line_rest.split("العلاقات:")[1].strip()
+            for _r in re.split(r"[,،;]+", _rel_part):
+                _rm = re.search(r"(\w+)\s+with\s+(\w+)", _r)
+                if _rm:
+                    _relations.append({"type": _rm.group(1), "target": _rm.group(2)})
+        
+        _fnames = []
+        _typed = []
+        for p in re.split(r"[,،/;|]+", _fields_raw):
+            p = p.strip()
+            if not p: continue
+            if ":" in p:
+                fn, ft = p.split(":", 1)
+                fn = re.sub(r"[^a-zA-Z0-9_]", "", fn).lower()
+                _fnames.append(fn)
+                _typed.append({"name": fn, "type": ft.strip()})
+            else:
+                fn = re.sub(r"[^a-zA-Z0-9_]", "", p).lower()
+                _fnames.append(fn)
+                _typed.append({"name": fn, "type": "str"})
+
         if not _fnames:
             _fnames = ["id"]
+            _typed = [{"name": "id", "type": "str"}]
         _explicit_models.append({
             "name": _ename[:1].upper() + _ename[1:],
             "field_names": _fnames,
-            "fields": [{"name": f, "type": "str"} for f in _fnames],
+            "fields": _typed,
+            "relations": _relations,
         })
     for _m in re.finditer(
         r"\b([A-Z][A-Za-z0-9_]{1,40})\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*){0,12})\s*\)",
@@ -704,6 +738,7 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
     # Rebuild models after rules may have added model names
     final_model_names = ctx["model_names"]
     data_models: list[DataModelSpec] = []
+    from ..schemas.formal_spec import DataModelRelation
     for name in final_model_names:
         # Prefer text-grounded resolve_data_models — never dump full ENTITY_LIBRARY packs
         hit = next((m for m in resolved_models if m["name"] == name), None)
@@ -715,6 +750,7 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
                     typed_fields=[
                         FieldSpec(name=f["name"], type_hint=f["type"]) for f in hit["fields"]
                     ],
+                    relations=[DataModelRelation(target=r["target"], type=r["type"]) for r in hit.get("relations", [])],
                 )
             )
             continue
@@ -786,6 +822,7 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
             command=c["command"],
             description=c.get("description") or c["command"],
             admin_only=bool(c.get("admin_only")),
+            roles=list(c.get("roles") or []),
         )
         for c in ctx["commands"]
     ]
@@ -838,7 +875,7 @@ def extract_formal_spec(text: str) -> FormalBotSpec:
         architecture=arch,
         requires_notifications=qflags["requires_notifications"],
         requires_logging=qflags["requires_logging"],
-        requires_rbac=qflags["requires_rbac"],
+        requires_rbac=qflags["requires_rbac"] or bool(roles),
         requires_docker=qflags["requires_docker"],
         flow_steps=flow_steps,
         source_sections={s.title: s.content[:500] for s in structure.sections},

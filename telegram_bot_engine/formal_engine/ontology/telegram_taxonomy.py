@@ -103,6 +103,14 @@ def build_core_taxonomy() -> ConceptRegistry:
            surface_forms=["ترحيب احترافي", "ترحيب"], tags=["ui"]),
         _c("primary_action_button", ConceptKind.UI_ELEMENT, "Main button.",
            surface_forms=["زر", "إنشاء pdf جديد"], tags=["ui"]),
+        _c("payment_gateway", ConceptKind.TECHNICAL_COMPONENT, "Payment integration.",
+           surface_forms=["دفع إلكتروني", "بوابة دفع", "payment", "stripe", "myfatoorah"], tags=["finance"]),
+        _c("external_api_integration", ConceptKind.TECHNICAL_COMPONENT, "External API connection.",
+           surface_forms=["ربط خارجي", "api", "integration", "تكامل"], tags=["integration"]),
+        _c("role_based_access", ConceptKind.BOT_CAPABILITY, "RBAC support.",
+           surface_forms=["صلاحيات", "أدوار", "admin only", "مدير"], tags=["security"]),
+        _c("relational_data_model", ConceptKind.TECHNICAL_COMPONENT, "One-to-many / Many-to-many support.",
+           surface_forms=["علاقات بيانات", "مرتبط بـ", "relation"], tags=["database"]),
     ]
 
     registry = ConceptRegistry(concepts={c.canonical_name: c for c in concepts})

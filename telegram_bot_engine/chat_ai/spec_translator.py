@@ -58,6 +58,7 @@ SCHEMA (all keys required; use empty arrays/strings/false when unknown):
       "name": "register",
       "description": "تسجيل",
       "admin_only": false,
+      "roles": ["user", "admin"],
       "evidence": "تسجيل"
     }
   ],
@@ -67,12 +68,13 @@ SCHEMA (all keys required; use empty arrays/strings/false when unknown):
   "entities": [
     {
       "name": "Customer",
-      "fields": ["name", "phone"],
+      "fields": [{"name": "phone", "type": "string", "required": true}],
+      "relations": [{"target": "Order", "type": "one_to_many"}],
       "evidence": "عملاء"
     }
   ],
   "rules": [
-    {"text": "لو تم الطلب يحفظ", "evidence": "يحفظ"}
+    {"text": "لو تم الطلب يحفظ", "condition": "total > 0", "evidence": "يحفظ"}
   ],
   "flows": [
     {
@@ -80,6 +82,9 @@ SCHEMA (all keys required; use empty arrays/strings/false when unknown):
       "steps": ["name", "phone"],
       "evidence": "تسجيل"
     }
+  ],
+  "integrations": [
+    {"service": "stripe", "purpose": "payments", "evidence": "دفع"}
   ],
   "needs_clarification": false,
   "clarification_questions": [],
@@ -370,6 +375,7 @@ def validate_spec_schema(data: Any) -> tuple[bool, list[SchemaIssue], dict[str, 
         "entities": [],
         "rules": [],
         "flows": [],
+        "integrations": [],
         "needs_clarification": False,
         "clarification_questions": [],
         "fidelity_notes": "",
@@ -658,6 +664,7 @@ def ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], di
                 "name": n[:32],
                 "description": desc or n,
                 "admin_only": bool(c.get("admin_only")),
+                "roles": list(c.get("roles") or []),
                 "evidence": evidence,
             })
         else:
@@ -724,16 +731,18 @@ def ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], di
             fields_out.insert(0, "id")
         out["entities"].append({
             "name": en[:1].upper() + en[1:],
-            "fields": fields_out[:8],
+            "fields": e.get("fields") or fields_out[:8],
+            "relations": list(e.get("relations") or []),
             "evidence": evidence,
         })
 
     for r in data.get("rules") or []:
         if isinstance(r, str):
-            rs, ev = r.strip(), r[:80]
+            rs, ev, cond = r.strip(), r[:80], ""
         elif isinstance(r, dict):
             rs = str(r.get("text") or "").strip()
             ev = str(r.get("evidence") or rs[:80])
+            cond = str(r.get("condition") or "")
         else:
             continue
         if not rs or len(rs) > 240:
@@ -741,9 +750,18 @@ def ground_spec(data: dict[str, Any], original: str) -> tuple[dict[str, Any], di
         toks = [t for t in re.split(r"\s+", rs) if len(t) >= 3][:8]
         hit = sum(1 for t in toks if _norm(t) in text_n or t in raw)
         if (ev and _phrase_in_text(ev, raw, text_n)) or (toks and hit >= max(1, len(toks) // 2)):
-            out["rules"].append(rs)
+            out["rules"].append({"text": rs, "condition": cond, "evidence": ev})
         else:
             dropped["rules"].append(rs[:40])
+
+    for i in data.get("integrations") or []:
+        if not isinstance(i, dict): continue
+        srv = str(i.get("service") or "").lower()
+        ev = str(i.get("evidence") or srv)
+        if _grounded_token(srv, raw, text_n, ev):
+            out["integrations"].append(i)
+        else:
+            dropped["integrations"].append(srv)
 
     kept = {c["name"] for c in out["commands"]}
     for fl in data.get("flows") or []:
@@ -787,15 +805,30 @@ def spec_to_text(data: dict[str, Any], original: str) -> str:
             n = c.get("name") or ""
             d = c.get("description") or n
             admin = " (أدمن)" if c.get("admin_only") else ""
-            lines.append(f"/{n} — {d}{admin}")
+            roles = f" [roles: {', '.join(c.get('roles', []))}]" if c.get("roles") else ""
+            lines.append(f"/{n} — {d}{admin}{roles}")
 
     ents = data.get("entities") or []
     if ents:
         lines.append("الكيانات:")
         for e in ents:
             en = e.get("name") or ""
-            fields = [f for f in (e.get("fields") or []) if f]
-            lines.append(f"{en} ({', '.join(str(f) for f in fields)})" if fields else str(en))
+            fields = []
+            for f in (e.get("fields") or []):
+                if isinstance(f, dict):
+                    fields.append(f"{f.get('name')}:{f.get('type', 'str')}")
+                else:
+                    fields.append(str(f))
+            rel_str = ""
+            if e.get("relations"):
+                rel_str = " | العلاقات: " + ", ".join([f"{r.get('type')} with {r.get('target')}" for r in e["relations"]])
+            lines.append(f"{en} ({', '.join(fields)}){rel_str}")
+
+    ints = data.get("integrations") or []
+    if ints:
+        lines.append("التكاملات:")
+        for i in ints:
+            lines.append(f"- {i.get('service')}: {i.get('purpose')}")
 
     buttons = data.get("buttons") or []
     if buttons:
@@ -807,7 +840,11 @@ def spec_to_text(data: dict[str, Any], original: str) -> str:
     if rules:
         lines.append("القواعد:")
         for r in rules:
-            lines.append(str(r))
+            if isinstance(r, dict):
+                cond = f" [إذا {r.get('condition')}]" if r.get("condition") else ""
+                lines.append(f"{r.get('text')}{cond}")
+            else:
+                lines.append(str(r))
 
     flows = data.get("flows") or []
     if flows:
@@ -817,7 +854,7 @@ def spec_to_text(data: dict[str, Any], original: str) -> str:
 
     lines.append("")
     lines.append("--- المصدر ---")
-    lines.append((original or "")[:4000])
+    lines.append((original or "")[:8000]) # Increased for long text
     return "\n".join(lines)
 
 
@@ -854,6 +891,10 @@ def _request_json(
     retry_errors: str | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Returns (normalized_spec_or_None, raw_content)."""
+    # If text is very long, use chunking strategy
+    if not retry_errors and len(user_text) > 10000:
+        return _request_json_long(client, model, user_text)
+
     if retry_errors:
         messages = [
             {"role": "system", "content": _RETRY_SYSTEM},
@@ -863,7 +904,7 @@ def _request_json(
                     "Fix the JSON. Validation problems:\n"
                     f"{retry_errors}\n\n"
                     "Original user text:\n"
-                    f"{user_text[:5000]}\n\n"
+                    f"{user_text[:8000]}\n\n"
                     "Return ONLY the corrected JSON object."
                 ),
             },
@@ -876,7 +917,7 @@ def _request_json(
                 "content": (
                     "Translate the following user text into the required JSON schema.\n"
                     "JSON only. No markdown. No prose.\n\n"
-                    f"{user_text[:7000]}"
+                    f"{user_text[:12000]}"
                 ),
             },
         ]
@@ -887,9 +928,43 @@ def _request_json(
     ok, issues, normalized = validate_spec_schema(data)
     if not ok:
         return None, content
-    # Even with soft issues we use normalized
     normalized = apply_defaults(normalized, user_text)
     return normalized, content
+
+def _request_json_long(client: Any, model: str, user_text: str) -> tuple[dict[str, Any] | None, str]:
+    """Strategy for extremely long texts: Extract Map -> Translate Chunks -> Merge."""
+    logger.info(f"Using long-text strategy for {len(user_text)} chars")
+    
+    # 1. Extract Mental Map
+    map_messages = [
+        {"role": "system", "content": "You are a requirements analyzer. Extract a list of ALL commands, entities, and integrations mentioned in the text. Output ONLY a simple JSON list of names."},
+        {"role": "user", "content": f"Text: {user_text[:20000]}"}
+    ]
+    map_content = _call_model(client, model, map_messages)
+    
+    # 2. Chunking (simple split for now, could be smarter)
+    chunks = [user_text[i:i+8000] for i in range(0, len(user_text), 8000)]
+    all_specs = []
+    
+    for chunk in chunks[:5]: # Limit to 5 chunks for safety
+        spec, _ = _request_json(client, model, chunk)
+        if spec:
+            all_specs.append(spec)
+            
+    if not all_specs:
+        return None, "long_text_failed"
+        
+    # 3. Merge Specs
+    merged = all_specs[0]
+    for other in all_specs[1:]:
+        for key in ["commands", "entities", "buttons", "rules", "flows", "integrations"]:
+            merged[key].extend(other.get(key, []))
+            
+    # De-duplicate
+    merged["commands"] = list({c["name"]: c for c in merged["commands"] if "name" in c}.values())
+    merged["entities"] = list({e["name"]: e for e in merged["entities"] if "name" in e}.values())
+    
+    return merged, "merged_from_chunks"
 
 
 def _translate_with_hf(text: str, timeout: int) -> TranslatorResult:

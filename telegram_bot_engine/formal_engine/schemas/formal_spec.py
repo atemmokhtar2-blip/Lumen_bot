@@ -55,6 +55,7 @@ class CommandSpec(StrictModel):
     command: str
     description: str
     admin_only: bool = False
+    roles: list[str] = Field(default_factory=list)
 
 
 class ButtonSpec(StrictModel):
@@ -75,10 +76,15 @@ class FieldSpec(StrictModel):
     type_hint: str = "str"
 
 
+class DataModelRelation(StrictModel):
+    target: str
+    type: str = "one_to_many"
+
 class DataModelSpec(StrictModel):
     name: str
     fields: list[str] = Field(default_factory=list)
     typed_fields: list[FieldSpec] = Field(default_factory=list)
+    relations: list[DataModelRelation] = Field(default_factory=list)
 
 
 
