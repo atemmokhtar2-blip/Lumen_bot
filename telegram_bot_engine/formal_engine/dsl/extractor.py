@@ -414,6 +414,32 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             )
         )
 
+    # Grounded free-verb stems (only when phrase appears in user text)
+    _VERB_STEMS = [
+        (r"تسجيل|register|signup", "register", "تسجيل"),
+        (r"تتبع|track", "track", "تتبع"),
+        (r"طلب\s*جديد|new\s*order", "order", "طلب جديد"),
+        (r"طلباتي|my\s*orders", "my_orders", "طلباتي"),
+        (r"قائمة|\blist\b|عرض", "list", "قائمة"),
+        (r"بحث|search", "search", "بحث"),
+        (r"دعم|support", "support", "دعم"),
+        (r"حجز|book", "book", "حجز"),
+    ]
+    for pat, cmd_name, desc in _VERB_STEMS:
+        if cmd_name in seen:
+            continue
+        if re.search(pat, text, re.I):
+            seen.add(cmd_name)
+            caps = resolve_capabilities(cmd_name, desc)
+            found.append(
+                CommandNode(
+                    name=cmd_name,
+                    description=desc[:100],
+                    admin_only=any_admin_typical(caps),
+                    capabilities=list(caps),
+                )
+            )
+
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
         seen.add("start")

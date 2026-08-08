@@ -317,9 +317,15 @@ def _normalize_answer_to_sections(step: str, answer: str) -> str:
             # keep as free text; extractor freeform + structural will pick verbs
             lines.append(part)
         if lines:
-            return "فيه:\n" + "\n".join(lines) + "\nالأوامر:\n" + "\n".join(
-                f"/{_slug_cmd(p)} — {p}" for p in lines
-            )
+            cmd_lines = []
+            for part in lines:
+                slug = _slug_cmd(part)
+                if slug:
+                    cmd_lines.append(f"/{slug} — {part}")
+            body = "فيه:\n" + "\n".join(lines)
+            if cmd_lines:
+                body += "\nالأوامر:\n" + "\n".join(cmd_lines)
+            return body
         return a
 
     if step == "entities":
@@ -336,18 +342,36 @@ def _normalize_answer_to_sections(step: str, answer: str) -> str:
     return a
 
 
-def _slug_cmd(label: str) -> str:
-    """Derive ascii command id from user label (structural, not domain pack)."""
-    raw = (label or "").strip().lower()
-    # strip leading slash
-    raw = raw.lstrip("/")
-    # known grounded stems only when phrase appears in label itself
+def _slug_cmd(label: str) -> str | None:
+    """
+    Derive ascii Telegram command id from a user label.
+    Returns None when no grounded stem/capability is evidenced (never invent cmd_hash).
+    """
+    raw = (label or "").strip().lower().lstrip("/")
+    if not raw:
+        return None
+    try:
+        from ...ontology.telegram_capabilities import commands_from_capability_evidence
+        evidenced = commands_from_capability_evidence(label)
+        if evidenced:
+            return evidenced[0][0]
+    except Exception:
+        pass
     stems = [
+        (r"حظر|ban", "ban"),
+        (r"طرد|kick", "kick"),
+        (r"كتم|mute", "mute"),
+        (r"فك.?الحظر|unban", "unban"),
+        (r"فك.?الكتم|unmute", "unmute"),
+        (r"ترقية|promote", "promote"),
+        (r"تثبيت|\bpin\b", "pin"),
+        (r"حذف|delete", "delete"),
         (r"تسجيل|register|signup", "register"),
         (r"تتبع|track", "track"),
         (r"طلب\s*جديد|new\s*order|اوردر\s*جديد", "order"),
         (r"طلباتي|my\s*orders|اوردرات", "my_orders"),
-        (r"منيو|menu|قائمة", "menu"),
+        (r"قائمة|list|عرض", "list"),
+        (r"منيو|menu", "menu"),
         (r"حجز|book", "book"),
         (r"إحصائ|stats", "stats"),
         (r"أدمن|admin", "admin"),
@@ -363,15 +387,10 @@ def _slug_cmd(label: str) -> str:
     for pat, cmd in stems:
         if re.search(pat, label, re.I):
             return cmd
-    # latin words → snake
-    latin = re.findall(r"[a-zA-Z][a-zA-Z0-9]{1,20}", label)
+    latin = re.findall(r"[a-zA-Z][a-zA-Z0-9_]{1,20}", label)
     if latin:
         return "_".join(w.lower() for w in latin)[:32]
-    # arabic → generic sequential-safe slug from transliteration-ish
-    # use hash of label for stability without inventing meaning
-    import hashlib
-    h = hashlib.sha1(label.encode("utf-8")).hexdigest()[:6]
-    return f"cmd_{h}"
+    return None
 
 
 def merge_answers(
