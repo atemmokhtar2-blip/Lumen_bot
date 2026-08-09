@@ -1103,13 +1103,63 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
 
 
 
-    # one handler per inferred command — structural only (no domain packs)
+
+    # Derive status transitions from user rules / command wording only (no domain packs)
+    status_on_complete: dict[str, str] = {}
+    for cmd in commands:
+        blob = f"{cmd.name} {getattr(cmd, 'description', '') or ''}".lower()
+        raw_blob = f"{cmd.name} {getattr(cmd, 'description', '') or ''}"
+        if any(x in raw_blob for x in ("إلغاء", "الغاء", "ملغي", "cancel", "cancelled")):
+            status_on_complete[cmd.name] = "cancelled"
+        elif any(x in blob for x in ("complete", "done", "إنهاء", "انهاء", "إكمال")):
+            status_on_complete[cmd.name] = "done"
+        elif any(x in blob for x in ("delete", "حذف", "remove")):
+            status_on_complete[cmd.name] = "deleted"
+    for r in list(getattr(inf, "rules", None) or []):
+        rt = str(getattr(r, "raw", None) or getattr(r, "text", None) or r or "")
+        rtl = rt.lower()
+        for cmd in commands:
+            cn = cmd.name
+            if cn in rt or cn in rtl or f"/{cn}" in rtl:
+                if any(x in rt for x in ("ملغي", "cancelled", "إلغاء", "الغاء")):
+                    status_on_complete[cn] = "cancelled"
+                elif any(x in rtl for x in ("done", "مكتمل", "complete")):
+                    status_on_complete[cn] = "done"
+
+    lines.append("STATUS_ON_COMPLETE: dict[str, str] = " + repr(status_on_complete))
+    lines.append("")
+
+    # one handler per inferred command — kind-based emission (dynamic from inference only)
     for cmd in commands:
         if cmd.name in ("start", "help"):
             continue
         fn = _ident(cmd.name) + "_handler"
         caps = list(getattr(cmd, "capabilities", None) or [])
         cn = cmd.name.lower()
+        w = wizard_by_cmd.get(cmd.name) or wizard_by_cmd.get(cn) or {}
+        kind = str(w.get("kind") or "").lower()
+        if not kind:
+            # derive from name shape only when wizard missing
+            if cn.startswith("my_") or cn in ("mine",):
+                kind = "mine"
+            elif cn.startswith("list_") or cn in ("list", "catalog", "menu"):
+                kind = "list"
+            elif cn in status_on_complete or any(x in cn for x in ("cancel", "delete", "remove")):
+                kind = "lookup"
+            elif w.get("steps"):
+                kind = "collect"
+            else:
+                kind = "action"
+        if w.get("steps") and kind in ("", "action", "lookup") and kind != "lookup":
+            kind = "collect"
+        if w.get("steps") and kind == "lookup" and len(w.get("steps") or []) > 1:
+            kind = "collect"
+        admin = bool(getattr(cmd, "admin_only", False))
+        # also admin if description/rules mark مشرف for this command
+        desc = getattr(cmd, "description", "") or ""
+        if not admin and any(x in desc for x in ("مشرف", "أدمن", "ادمن", "admin only", "للمشرف")):
+            admin = True
+
         lines.append(f"async def {fn}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
         lines.append("    message = update.effective_message")
         lines.append("    if message is None:")
@@ -1120,7 +1170,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("    if message.text and ' ' in message.text:")
         lines.append("        args = message.text.split()[1:]")
         lines.append("    try:")
-        lines.append(f"        _admin_only = {str(bool(cmd.admin_only))}")
+        lines.append(f"        _admin_only = {str(admin)}")
         lines.append("        if _admin_only:")
         lines.append("            from app.config import get_settings as _gs")
         lines.append("            _settings = _gs()")
@@ -1132,127 +1182,96 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("            if _admins and uid not in _admins:")
         lines.append("                await message.reply_text('هذا الأمر للمشرفين فقط.')")
         lines.append("                return")
-        # Only enforce admin when command marked admin_only
-        # Wizard/flow
         lines.append("        target = ' '.join(args).strip()")
-        lines.append("        from app.tools import TOOL_IDS, run_tool")
-        lines.append(f"        _has_tool = {_py(cn)} in TOOL_IDS")
-        lines.append(f"        _has_flow = {_py(cmd.name)} in FLOWS and bool(FLOWS.get({_py(cmd.name)}))")
-        # args present + tool → execute tool immediately
-        lines.append("        if _has_tool and target:")
-        lines.append(f"            await message.reply_text(run_tool({_py(cn)}, target)[:3500])")
-        lines.append("            return")
-        # no args: prefer multi-step flow if defined, else prompt for tool input
-        lines.append("        if _has_flow and not target:")
-        lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
-        lines.append("            return")
-        lines.append("        if _has_tool and not target:")
-        lines.append(f"            context.user_data['await_tool'] = {_py(cn)}")
-        lines.append("            await message.reply_text('أرسل القيمة المطلوبة:')")
-        lines.append("            return")
-        # Telegram capabilities
-        if caps:
+        lines.append(f"        _kind = {_py(kind)}")
+        lines.append(f"        _cmd = {_py(cmd.name)}")
+
+        # --- kind: collect ---
+        if kind == "collect":
+            lines.append(f"        if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
+            lines.append(f"            if target and len(FLOWS.get({_py(cmd.name)}) or []) == 1:")
+            lines.append("                # single-field flow can accept inline arg")
+            lines.append(f"                key = (FLOWS[{_py(cmd.name)}][0] or {{}}).get('key') or 'value'")
+            lines.append("                context.user_data.clear()")
+            lines.append(f"                context.user_data['flow'] = {_py(cmd.name)}")
+            lines.append("                context.user_data['step'] = 1")
+            lines.append("                context.user_data['data'] = {key: target}")
+            lines.append("                from app.services import create_record")
+            lines.append(f"                ent = str(FLOW_ENTITY.get({_py(cmd.name)}) or 'record')")
+            lines.append("                payload = dict(context.user_data.get('data') or {})")
+            lines.append("                payload['user_id'] = uid")
+            lines.append(f"                st = STATUS_ON_COMPLETE.get({_py(cmd.name)})")
+            lines.append("                if st:")
+            lines.append("                    payload['status'] = st")
+            lines.append("                rid = await create_record(ent, uid, payload)")
+            lines.append("                await message.reply_text(f'تم الحفظ ✅ رقم: {rid}')")
+            lines.append("                return")
+            lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
+            lines.append("            return")
+            lines.append(f"        await message.reply_text({_py((cmd.description or cmd.name)[:120])})")
+
+        # --- kind: list / mine ---
+        elif kind in ("list", "mine"):
+            lines.append("        try:")
+            lines.append("            from app.services import list_records")
+            lines.append(f"            ent = str(FLOW_ENTITY.get({_py(cmd.name)}) or FLOW_ENTITY.get({_py(cn)}) or '')")
+            lines.append("            if not ent:")
+            lines.append(f"                ent = {_py(cn[3:] if cn.startswith('my_') else (cn[5:] if cn.startswith('list_') else 'record'))}")
+            lines.append("            rows = await list_records(ent, uid)")
+            lines.append("        except Exception:")
+            lines.append("            rows = []")
+            if kind == "mine":
+                lines.append("            rows = [r for r in rows if str((r or {}).get('user_id') or '') in ('', str(uid)) or True]")
+            lines.append("        if not rows:")
+            lines.append(f"            await message.reply_text({_py((cmd.description or 'لا توجد سجلات')[:120])})")
+            lines.append("            return")
+            lines.append("        lines_out = []")
+            lines.append("        for i, r in enumerate(rows[:30], 1):")
+            lines.append("            if isinstance(r, dict):")
+            lines.append("                lines_out.append(str(i) + '. ' + ' | '.join(f'{k}={v}' for k, v in list(r.items())[:6]))")
+            lines.append("            else:")
+            lines.append("                lines_out.append(str(i) + '. ' + str(r))")
+            lines.append("        await message.reply_text(chr(10).join(lines_out)[:3500])")
+
+        # --- kind: lookup (cancel/delete by id) ---
+        elif kind == "lookup":
+            lines.append(f"        if not target and {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
+            lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
+            lines.append("            return")
+            lines.append("        if not target:")
+            lines.append("            await message.reply_text('أرسل المعرّف بعد الأمر')")
+            lines.append("            return")
+            lines.append("        try:")
+            lines.append("            from app.services import update_record")
+            lines.append(f"            ent = str(FLOW_ENTITY.get({_py(cmd.name)}) or 'record')")
+            lines.append(f"            st = STATUS_ON_COMPLETE.get({_py(cmd.name)}) or 'cancelled'")
+            lines.append("            ok = await update_record(ent, target, {'status': st})")
+            lines.append("            if ok:")
+            lines.append("                await message.reply_text(f'تم التحديث ✅ الحالة: {st}')")
+            lines.append("            else:")
+            lines.append("                await message.reply_text('تعذر التحديث — تحقق من الرقم')")
+            lines.append("        except Exception as _ue:")
+            lines.append("            await message.reply_text('خطأ التحديث: ' + str(_ue))")
+
+        # --- capabilities (telegram API) when present on this command ---
+        elif caps:
             lines.append(f"        _caps = CAPABILITY_BY_CMD.get({_py(cmd.name)}, [])")
             lines.append("        if _caps:")
             lines.append("            await _run_capabilities(update, context, _caps, args)")
             lines.append("            return")
-        # Structural stems from command name only (no domain packs)
-        lines.append(f"        _cn = {_py(cn)}")
-        lines.append("        app_data = context.application.bot_data")
-        lines.append("        bucket = app_data.setdefault('records', {})")
-        lines.append("        mine = bucket.setdefault(str(uid), [])")
-        # Structural stems from command-name shape only (no domain rename packs).
-        lines.append("        _is_listish = (")
-        lines.append("            _cn.startswith('list_') or _cn.startswith('my_') or")
-        lines.append("            _cn in ('mine', 'list', 'catalog', 'cart', 'orders', 'products', 'basket') or")
-        lines.append("            str(FLOW_KIND.get(_cn) or '') in ('list', 'mine')")
-        lines.append("        )")
-        lines.append("        if _is_listish:")
-        lines.append("            try:")
-        lines.append("                from app.services import list_records")
-        lines.append("                ent = str(FLOW_ENTITY.get(_cn) or '')")
-        lines.append("                if not ent:")
-        lines.append("                    if _cn.startswith('list_'):")
-        lines.append("                        ent = _cn[5:]")
-        lines.append("                    elif _cn.startswith('my_'):")
-        lines.append("                        ent = _cn[3:]")
-        lines.append("                    elif _cn.startswith('all_'):")
-        lines.append("                        ent = _cn[4:]")
-        lines.append("                    else:")
-        lines.append("                        ent = 'record'")
-        lines.append("                if ent and ent.endswith('s') and len(ent) > 3 and ent[:1].islower():")
-        lines.append("                    ent = ent[:-1]")
-        lines.append("                rows = await list_records(ent, uid)")
-        lines.append("            except Exception:")
-        lines.append("                rows = []")
-        lines.append("            if not rows:")
-        lines.append("                rows = [r for r in mine if (r.get('status') or 'open') != 'done']")
-        lines.append("            if not rows:")
-        lines.append(f"                await message.reply_text({_py((cmd.description or 'لا توجد سجلات'))})")
-        lines.append("            else:")
-        lines.append("                lines_out = []")
-        lines.append("                for i, r in enumerate(rows[:30], 1):")
-        lines.append("                    if isinstance(r, dict):")
-        lines.append("                        lines_out.append(str(i) + '. ' + ' | '.join(f'{k}={v}' for k,v in list(r.items())[:6]))")
-        lines.append("                    else:")
-        lines.append("                        lines_out.append(str(i) + '. ' + str(r))")
-        lines.append("                await message.reply_text(chr(10).join(lines_out)[:3500])")
-        lines.append("            return")
-        lines.append("        if _cn in ('mine', 'list') or _cn.startswith('my_') or _cn.startswith('list_'):")
-        lines.append("            active = [r for r in mine if (r.get('status') or 'open') != 'done']")
-        lines.append("            if not active:")
-        lines.append(f"                await message.reply_text({_py((cmd.description or 'لا عناصر') )})")
-        lines.append("            else:")
-        lines.append("                lines_out = [f'{i}. {r.get(\"title\") or r}' for i,r in enumerate(active[:30],1)]")
-        lines.append("                rows = []")
-        lines.append("                for i,_r in enumerate(active[:30]):")
-        lines.append("                    rows.append([")
-        lines.append("                        InlineKeyboardButton('OK', callback_data=f'done:{i}'),")
-        lines.append("                        InlineKeyboardButton('X', callback_data=f'del:{i}'),")
-        lines.append("                    ])")
-        lines.append("                await message.reply_text(chr(10).join(lines_out), reply_markup=InlineKeyboardMarkup(rows))")
-        lines.append("        elif (_cn.startswith('new_') or _cn.startswith('add_') or _cn.startswith('create_')")
-        lines.append("                or _cn in ('add', 'create', 'new')):")
-        lines.append("            context.user_data['flow'] = _cn")
-        lines.append("            context.user_data['step'] = 0")
-        lines.append("            context.user_data['data'] = {}")
-        lines.append("            if FLOWS.get(_cn):")
-        lines.append("                await _start_flow(message, context, _cn)")
-        lines.append("            else:")
-        lines.append("                await message.reply_text('أرسل النص للحفظ:')")
-        lines.append("                context.user_data['flow'] = 'collect_title'")
-        lines.append("                context.user_data['step'] = 0")
-        lines.append("                context.user_data['data'] = {}")
-        lines.append("                await message.reply_text('لا يوجد تدفق معرف لهذا الأمر.')")
-        lines.append("        elif (_cn in ('complete', 'done')")
-        lines.append("                or _cn.startswith('complete_') or _cn.startswith('done_')):")
-        lines.append("            await message.reply_text('اختر عنصراً من القائمة أو أرسل رقمه.')")
-        lines.append("        elif (_cn in ('remove', 'delete')")
-        lines.append("                or _cn.startswith('delete_') or _cn.startswith('remove_')):")
-        lines.append("            await message.reply_text('اختر عنصراً من القائمة للحذف.')")
-        lines.append("        elif _cn == 'menu' or _cn.startswith('show_'):")
-        lines.append("            kb = main_keyboard()")
-        lines.append("            await message.reply_text('القائمة:', reply_markup=kb)")
-        lines.append("        elif _cn == 'ping':")
-        lines.append("            await message.reply_text('pong')")
-        lines.append("        elif _cn == 'id':")
-        lines.append("            await message.reply_text('User ID: ' + str(uid) + ' | Chat: ' + str(message.chat_id))")
-        lines.append("        if False:  # defensive pack removed")
-        lines.append("            target = ' '.join(args).strip()")
-        lines.append("            if not target:")
-        lines.append(f"                if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
-        lines.append(f"                    await _start_flow(message, context, {_py(cmd.name)})")
-        lines.append("                    return")
-        lines.append("                await message.reply_text('أرسل الهدف بعد الأمر، مثال: /domain_scan example.com')")
-        lines.append("                return")
-        lines.append("            try:")
-        lines.append("                from app.tools import run_evidenced_checks")
-        lines.append("                await message.reply_text(run_evidenced_checks(target)[:3500])")
-        lines.append("            except Exception as _te:")
-        lines.append("                await message.reply_text('خطأ فحص: ' + str(_te))")
-        lines.append("            return")
-        lines.append("        else:")
-        lines.append(f"            await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or cmd.name))})")
+            lines.append(f"        await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or cmd.name))})")
+
+        # --- default action ---
+        else:
+            lines.append("        from app.tools import TOOL_IDS, run_tool")
+            lines.append(f"        if {_py(cn)} in TOOL_IDS and target:")
+            lines.append(f"            await message.reply_text(run_tool({_py(cn)}, target)[:3500])")
+            lines.append("            return")
+            lines.append(f"        if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
+            lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
+            lines.append("            return")
+            lines.append(f"        await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or cmd.name))})")
+
         lines.append("    except Exception as _exc:")
         lines.append("        try:")
         lines.append("            await message.reply_text('خطأ: ' + str(_exc))")
@@ -1375,6 +1394,20 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("                else:")
     lines.append("                    summary = str(row)[:200]")
     lines.append("                msgs.append(summary)")
+    lines.append("                st = STATUS_ON_COMPLETE.get(str(flow_id) or '')")
+    lines.append("                if st and store is not None and qid and hasattr(store, 'update_status'):")
+    lines.append("                    try:")
+    lines.append("                        await store.update_status(qid, st)")
+    lines.append("                        msgs.append(f'status:{st}')")
+    lines.append("                    except Exception as _se:")
+    lines.append("                        msgs.append(f'status_error:{_se}')")
+    lines.append("                elif st:")
+    lines.append("                    try:")
+    lines.append("                        from app.services import update_record")
+    lines.append("                        await update_record(str(entity or 'record'), qid, status=st)")
+    lines.append("                        msgs.append(f'status:{st}')")
+    lines.append("                    except Exception as _se:")
+    lines.append("                        msgs.append(f'status_error:{_se}')")
     lines.append("            elif not msgs:")
     lines.append("                msgs.append(f\"لم يتم العثور على {entity or 'سجل'}: {qid}\")")
     lines.append("        elif store is not None and hasattr(store, \"create\"):")
