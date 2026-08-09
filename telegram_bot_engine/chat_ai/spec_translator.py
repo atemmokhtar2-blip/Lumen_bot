@@ -3,7 +3,7 @@ SpecTranslator — human speech → structured specification ONLY.
 
 Hard constraints:
   - TRANSLATE only. Never write code. Never invent features or domains.
-  - AI path: Groq ONLY primary (GROQ_API_KEY). Hugging Face is last-resort fallback if Groq fails.
+  - AI path: Hugging Face primary (HF_TOKEN). Groq is fallback if HF fails/unavailable.
   - Structural extraction is NOT used on the generation path.
   - Every field is grounded against the original user text.
   - Formal engine is the ONLY code generator.
@@ -998,7 +998,7 @@ def _parse_spec_json(content: str) -> dict | None:
 
 
 def _hf_translate(text: str, timeout: int) -> TranslatorResult:
-    """AI translate: Groq primary, Hugging Face only if Groq fails/unavailable."""
+    """AI translate: Hugging Face primary, Groq only if HF fails/unavailable."""
     from . import groq_provider as groq
     from . import hf_provider as hf
 
@@ -1071,20 +1071,16 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
     max_tokens = int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200"))
     errors: list[str] = []
 
-    # Provider order is strict: Groq first. HF only if Groq unavailable or fails.
+    # Provider order is strict: Hugging Face first. Groq only if HF unavailable or fails.
     providers: list[tuple[str, Any]] = []
+    if hf.enabled():
+        providers.append(("hf", hf))
     if groq.enabled():
         providers.append(("groq", groq))
-    # HF is optional fallback only — never preferred over Groq
-    if hf.enabled() and not groq.enabled():
-        providers.append(("hf", hf))
-    elif hf.enabled() and groq.enabled():
-        # keep HF as secondary after Groq in the same loop
-        providers.append(("hf", hf))
     if not providers:
         return TranslatorResult(
             ok=False,
-            error="No AI provider configured (set GROQ_API_KEY — Groq is the primary translator)",
+            error="No AI provider configured (set HF_TOKEN — Hugging Face is the primary translator; GROQ_API_KEY is optional fallback)",
             path="ai_missing",
         )
 
@@ -1102,7 +1098,7 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
             )
             path_used = name
             if content:
-                # Stop at first successful provider (Groq wins when configured)
+                # Stop at first successful provider (HF wins when configured)
                 break
         except Exception as exc:
             errors.append(f"{name}:{type(exc).__name__}:{exc}"[:300])
@@ -1394,7 +1390,7 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
 
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
-    """AI ONLY (Groq primary, HF secondary). No structural fallback."""
+    """AI ONLY (Hugging Face primary, Groq secondary). No structural fallback."""
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -1427,7 +1423,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     if not (_groq.enabled() or _hf.enabled()):
         return TranslatorResult(
             ok=False,
-            error="GROQ_API_KEY or HF_TOKEN required — SpecTranslator is AI-only (structural path disabled)",
+            error="HF_TOKEN or GROQ_API_KEY required — SpecTranslator is AI-only (HF primary; structural path disabled)",
             path="ai_missing",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
