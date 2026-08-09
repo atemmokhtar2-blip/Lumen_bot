@@ -116,11 +116,9 @@ class LocalProcessDriver(DeploymentProvider):
                 message=f"SyntaxError in {entry.name}: {syn_err}. repair={repair_notes[:3]}",
             )
 
-        child_env = os.environ.copy()
-        child_env["PYTHONUNBUFFERED"] = "1"
+        from telegram_bot_engine.formal_engine.services.user_sandbox import clean_child_env
+        child_env = clean_child_env(bot_token)
         for key in discover_token_env_names(path):
-            child_env[key] = bot_token
-        for key in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
             child_env[key] = bot_token
         child_env.pop("PORT", None)
         if mode.startswith("target"):
@@ -388,11 +386,9 @@ class LocalProcessDriver(DeploymentProvider):
                 last_msg = f"heal pip failed for {packages}"
                 continue
 
-            child_env = os.environ.copy()
-            child_env["PYTHONUNBUFFERED"] = "1"
+            from telegram_bot_engine.formal_engine.services.user_sandbox import clean_child_env
+            child_env = clean_child_env(bot_token)
             for key in discover_token_env_names(path):
-                child_env[key] = bot_token
-            for key in ("BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN"):
                 child_env[key] = bot_token
             child_env.pop("PORT", None)
             if mode.startswith("target"):

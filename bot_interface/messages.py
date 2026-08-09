@@ -507,7 +507,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
-    work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
+    # Isolated per-user workspace (never share host bot dir/token space)
+    try:
+        from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+        uid = int(user.id) if user else 0
+        work_dir = get_user_sandbox(uid, OUTPUT_DIR).new_project_dir(label="gen")
+    except Exception:
+        work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
 
     try:
         result = await asyncio.to_thread(run_generation, request, work_dir)
@@ -585,6 +591,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["pending_deploy"] = {
                     "project_path": str(project_path),
                     "owner_user_id": user.id if user else None,
+                    "sandbox": True,
                 }
                 context.user_data["pending_live_run"] = {
                     "project_path": str(project_path),
