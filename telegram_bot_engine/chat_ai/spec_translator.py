@@ -1460,8 +1460,60 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
 
 
 
+def _enrich_structured_with_original(structured: str, original: str) -> str:
+    """Restore richer /command descriptions from the human text when AI shortened them.
+
+    Dynamic only: copies user-written command lines; never invents domain packs.
+    """
+    import re as _re
+    orig = original or ""
+    struct = structured or ""
+    if not struct.strip():
+        return orig.strip()
+
+    # Map command name → full description line from original
+    orig_desc: dict[str, str] = {}
+    for m in _re.finditer(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*[-–—:]\s*([^\n]{1,160})",
+        orig,
+    ):
+        name = m.group(1).lower()
+        desc = m.group(2).strip()
+        if desc:
+            orig_desc[name] = desc
+
+    if not orig_desc:
+        return struct
+
+    def _repl_cmd_line(match: _re.Match) -> str:
+        name = match.group(1).lower()
+        ai_desc = (match.group(2) or "").strip()
+        human = orig_desc.get(name)
+        if not human:
+            return match.group(0)
+        # Prefer human description when it is richer (parentheses / collect verbs / longer)
+        richer = (
+            len(human) > len(ai_desc) + 3
+            or any(x in human for x in ("(", "يجمع", "اجمع", "يطلب", "وال", "،"))
+        )
+        if richer:
+            return f"/{match.group(1)} - {human}"
+        return match.group(0)
+
+    out = _re.sub(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*[-–—:]\s*([^\n]*)",
+        _repl_cmd_line,
+        struct,
+    )
+
+    # If AI omitted a flow that original parentheticals imply, append nothing extra —
+    # inference will recover from restored descriptions + entity fields + التدفقات section.
+    return out
+
+
 def prepare_formal_text(user_text: str) -> tuple[str, TranslatorResult]:
     tr = translate_spec(user_text)
     if tr.ok and tr.structured_text.strip():
-        return tr.structured_text, tr
+        enriched = _enrich_structured_with_original(tr.structured_text, user_text or "")
+        return enriched, tr
     return (user_text or "").strip(), tr

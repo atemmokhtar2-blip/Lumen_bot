@@ -435,20 +435,29 @@ def infer(program: DSLProgram) -> InferenceResult:
                 _push(keys)
                 explicit = True
 
-        # 3) Fallback scan only when no explicit list
+        # 3) Fallback scan only when no explicit list.
+        # Ignore single title-word hits (e.g. "حجز موعد" → slot) — those are labels, not field lists.
         if not explicit:
-            hits: list[tuple[int, str]] = []
+            hits: list[tuple[int, str, str]] = []  # idx, key, phrase
             for phrase, key in _DESC_FIELD_MAP:
                 if key in seen:
                     continue
+                # Skip ultra-short cues that often appear in command titles
+                if phrase in {"موعد", "حجز", "طلب", "order", "book", "slot"} and len(d) <= 40:
+                    # only accept if surrounding text signals a list (و / ,)
+                    if not any(sep in d for sep in (" و", "،", ",", " و ")):
+                        continue
                 idx = d.lower().find(phrase.lower()) if phrase.isascii() else d.find(phrase)
                 if idx >= 0:
-                    hits.append((idx, key))
+                    hits.append((idx, key, phrase))
                     seen.add(key)
             hits.sort(key=lambda x: x[0])
-            for _, key in hits:
+            for _, key, _ph in hits:
                 if key not in found:
                     found.append(key)
+            # A single weak title-derived field is not an explicit list
+            if len(found) == 1 and found[0] in {"slot", "title", "status"}:
+                found.clear()
 
         noise = {
             "new", "id", "user_id", "and", "or", "the", "a",

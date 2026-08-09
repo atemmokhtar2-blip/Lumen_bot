@@ -1110,41 +1110,63 @@ def _flows_from_text(text: str) -> list[OperationNode]:
         current, steps = None, []
 
     for line in lines:
-        body = _strip_bullet(line)
+        raw_line = line or ""
+        body = _strip_bullet(raw_line)
         if not body:
             continue
-        m = re.match(
-            r"^(?P<id>[A-Za-z][A-Za-z0-9_]{1,32})(?:\s*@(?P<ent>[A-Za-z][A-Za-z0-9_]{0,32}))?\s*:?\s*(?P<fields>.*)$",
-            body,
-        )
-        if m and not body.lstrip().startswith("•") and ":" in body.replace("：", ":"):
-            # only treat as flow header when has id-like start
-            if re.match(r"^[A-Za-z]", body):
-                flush()
-                fields = [x.strip() for x in re.split(r"[,،]", m.group("fields") or "") if x.strip() and " " not in x.strip()[:20]]
-                # fields may include prompts after — keep only tokens
-                fields = [f for f in fields if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", f)]
-                current = {
-                    "id": m.group("id"),
-                    "entity": m.group("ent") or "record",
-                    "fields": fields,
-                }
-                steps = [{"key": f, "prompt": f"أرسل {f}"} for f in fields]
-                continue
+        # Step lines first: "name: الاسم" or "• name: الاسم" (never start a new flow)
         m2 = re.match(
-            r"^[•\-]?\s*(?P<key>[A-Za-z_][A-Za-z0-9_]{0,32})\s*:\s*(?P<prompt>.+)$",
+            r"^(?P<key>[A-Za-z_][A-Za-z0-9_]{0,32})\s*:\s*(?P<prompt>.+)$",
             body,
         )
+        # Flow header: "book : name, date, time" or "book @Appointment : name, date"
+        m = re.match(
+            r"^(?P<id>[A-Za-z][A-Za-z0-9_]{1,32})(?:\s*@(?P<ent>[A-Za-z][A-Za-z0-9_]{0,32}))?\s*:\s*(?P<fields>.*)$",
+            body,
+        )
+        is_header = False
+        if m:
+            fields_raw = (m.group("fields") or "").strip()
+            field_tokens = [
+                x.strip() for x in re.split(r"[,،]", fields_raw)
+                if x.strip() and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", x.strip())
+            ]
+            # Header if @entity present OR multiple field tokens OR fields list after colon
+            if m.group("ent") or len(field_tokens) >= 1 and (
+                "," in fields_raw or "،" in fields_raw or len(field_tokens) >= 2 or bool(m.group("ent"))
+            ):
+                is_header = True
+            elif len(field_tokens) >= 1 and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", fields_raw):
+                # single token after colon could be a step (name: الاسم) — Arabic prompt ⇒ step
+                if not re.search(r"[\u0600-\u06ff\s]", fields_raw):
+                    is_header = True
+        if is_header and m:
+            flush()
+            fields = [
+                x.strip() for x in re.split(r"[,،]", m.group("fields") or "")
+                if x.strip() and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", x.strip())
+            ]
+            current = {
+                "id": m.group("id"),
+                "entity": m.group("ent") or "record",
+                "fields": fields,
+            }
+            steps = [{"key": f, "prompt": f"أرسل {f}"} for f in fields]
+            continue
         if m2 and current is not None:
             key, prompt = m2.group("key"), m2.group("prompt").strip()
+            # Prefer Arabic-friendly prompt if present
+            if prompt and not prompt.startswith("أرسل"):
+                # keep model/user prompt; inference may re-prompt later
+                pass
             found = False
             for st in steps:
                 if st.get("key") == key:
-                    st["prompt"] = prompt
+                    st["prompt"] = prompt if prompt else st.get("prompt")
                     found = True
                     break
             if not found:
-                steps.append({"key": key, "prompt": prompt})
+                steps.append({"key": key, "prompt": prompt or f"أرسل {key}"})
             if key not in (current.get("fields") or []):
                 current.setdefault("fields", []).append(key)
     flush()
@@ -1163,6 +1185,10 @@ def extract_dsl(text: str) -> DSLProgram:
     # No domain-specific Order/Item relation templates.
 
     operations = _operations_from_text(full, buttons)
+    # AI / user "التدفقات" section → wizard operations (dynamic, no domain packs)
+    flow_ops = _flows_from_text(full)
+    if flow_ops:
+        operations = list(operations) + list(flow_ops)
     rules = _rules_from_text(full, entities, buttons)
     t = full.lower()
     wants_db = any(k in full or k in t for k in ("قاعدة بيانات", "database", "يحفظ", "تخزين", "sqlite", "postgres"))
