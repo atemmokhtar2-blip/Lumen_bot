@@ -46,6 +46,10 @@ _NOTES_KEYS = (
     "ملاحظات",
     "notes",
 )
+_SECURITY_KEYS = (
+    "امن", "أمن", "سيبراني", "security", "cyber", "phishing", "تصيد", "تصيّد",
+    "بلاغ", "incident", "soc", "توعية",
+)
 
 _GROUP_CAPS = (
     "start",
@@ -80,6 +84,10 @@ _SUPPORT_CAPS = (
     "ticket_status",
 )
 _NOTES_CAPS = ("start", "help", "note_add", "note_list", "note_delete")
+_SECURITY_CAPS = (
+    "start", "help", "sec_report_phish", "sec_report_incident",
+    "sec_checklist", "sec_list_reports", "sec_close_report", "rules", "my_id",
+)
 
 
 def _norm(text: str) -> str:
@@ -105,6 +113,8 @@ def detect_preset(request: str) -> str | None:
         return "tasks"
     if _has_any(request, _NOTES_KEYS):
         return "notes"
+    if _has_any(request, _SECURITY_KEYS):
+        return "security_ops"
     return None
 
 
@@ -163,6 +173,11 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
         s.set_name(bot_name or "notes_bot")
         s.set_description("بوت ملاحظات")
         for k in _NOTES_CAPS:
+            s.selected.add(k)
+    elif preset == "security_ops":
+        s.set_name(bot_name or "security_ops_bot")
+        s.set_description("بوت عمليات أمنية دفاعية: بلاغات وتوعية")
+        for k in _SECURITY_CAPS:
             s.selected.add(k)
     else:
         s.set_name(bot_name or "custom_bot")

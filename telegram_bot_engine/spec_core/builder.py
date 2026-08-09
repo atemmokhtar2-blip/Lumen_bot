@@ -55,6 +55,13 @@ DEFAULT_COMMANDS: dict[str, str] = {
     "ticket_my": "mytickets",
     "ticket_reply": "replyticket",
     "ticket_status": "ticketstatus",
+    "sec_report_phish": "phish",
+    "sec_report_incident": "incident",
+    "sec_checklist": "seccheck",
+    "sec_list_reports": "secreports",
+    "sec_close_report": "closereport",
+    "faq_show": "faq",
+    "broadcast_admin": "broadcast",
 }
 
 DEFAULT_SUCCESS_AR: dict[str, str] = {
@@ -116,7 +123,7 @@ class BuilderSession:
     def needs_sqlite(self) -> bool:
         for key in self.selected:
             cap = get_capability(key)
-            if cap and cap.service in {"tasks", "notes", "welcome", "tickets"}:
+            if cap and cap.service in {"tasks", "notes", "welcome", "tickets", "security"}:
                 return True
         return False
 

@@ -254,6 +254,53 @@ CAPABILITIES: dict[str, Capability] = {
         description_en="Show ticket status by id",
         category="tickets",
     ),
+    # ── security (defensive / SOC-lite ops — not offensive tools) ─
+    "sec_report_phish": Capability(
+        key="sec_report_phish", service="security", method="report_phish",
+        description_ar="إبلاغ عن رسالة/رابط مشبوه (تصيّد)",
+        description_en="Report suspicious phishing message/link",
+        category="security",
+    ),
+    "sec_report_incident": Capability(
+        key="sec_report_incident", service="security", method="report_incident",
+        description_ar="فتح بلاغ أمني للفريق",
+        description_en="Open a security incident report",
+        category="security",
+    ),
+    "sec_checklist": Capability(
+        key="sec_checklist", service="security", method="checklist",
+        description_ar="عرض قائمة توعية أمنية أساسية",
+        description_en="Show basic security awareness checklist",
+        category="security",
+    ),
+    "sec_list_reports": Capability(
+        key="sec_list_reports", service="security", method="list_reports",
+        description_ar="عرض البلاغات الأمنية (للمشرف)",
+        description_en="List security reports (staff)",
+        default_actor="admin",
+        category="security",
+    ),
+    "sec_close_report": Capability(
+        key="sec_close_report", service="security", method="close_report",
+        description_ar="إغلاق بلاغ أمني",
+        description_en="Close a security report",
+        default_actor="admin",
+        category="security",
+    ),
+    # ── FAQ / broadcast lite ─────────────────────────────────────
+    "faq_show": Capability(
+        key="faq_show", service="content", method="faq",
+        description_ar="عرض الأسئلة الشائعة",
+        description_en="Show FAQ",
+        category="content",
+    ),
+    "broadcast_admin": Capability(
+        key="broadcast_admin", service="content", method="announce",
+        description_ar="رسالة إذاعة من المشرف",
+        description_en="Admin broadcast message",
+        default_actor="admin",
+        category="content",
+    ),
 }
 
 

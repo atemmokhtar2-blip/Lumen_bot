@@ -45,7 +45,7 @@ def get_settings() -> Settings:
 
 def _emit_db(spec: BotSpec) -> str:
     need = spec.storage.type == "sqlite" or any(
-        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets"})  # type: ignore[union-attr]
+        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security"})  # type: ignore[union-attr]
         for f in spec.features
     )
     if not need:
@@ -118,6 +118,18 @@ def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 is_staff INTEGER NOT NULL DEFAULT 0,
                 body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS security_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -315,23 +327,27 @@ def delete_note(user_id: int, note_id: int) -> bool:
 '''
 
 
+
 def _emit_content(spec: BotSpec) -> str:
     rules = "التزم بالاحترام. ممنوع السبام والإعلانات." if (spec.bot.language or "ar").startswith("ar") else "Be respectful. No spam."
     about = spec.bot.description or spec.bot.name
-    return f'''"""Static content helpers."""
-from __future__ import annotations
-
-RULES_TEXT = {rules!r}
-ABOUT_TEXT = {about!r}
-
-
-def rules() -> str:
-    return RULES_TEXT
-
-
-def about() -> str:
-    return ABOUT_TEXT
-'''
+    return (
+        '"""Static content helpers."""\n'
+        "from __future__ import annotations\n\n"
+        f"RULES_TEXT = {rules!r}\n"
+        f"ABOUT_TEXT = {about!r}\n\n"
+        "def rules() -> str:\n"
+        "    return RULES_TEXT\n\n"
+        "def about() -> str:\n"
+        "    return ABOUT_TEXT\n\n"
+        "def faq() -> str:\n"
+        "    return (\n"
+        '        "الأسئلة الشائعة:\\n"\n'
+        '        "- /start للبداية\\n"\n'
+        '        "- /help للأوامر\\n"\n'
+        '        "- للمساعدة تواصل مع المشرف"\n'
+        "    )\n"
+    )
 
 
 
@@ -481,6 +497,52 @@ def _emit_tickets() -> str:
     )
 
 
+
+def _emit_security() -> str:
+    return (
+        '"""Defensive security ops — reports & awareness (not offensive tooling)."""\n'
+        "from __future__ import annotations\n\n"
+        "from app.db import connect, init_db\n\n"
+        "CHECKLIST = (\n"
+        '    "1) لا تشارك كلمات المرور أو رموز التحقق\\n"\n'
+        '    "2) راجع الروابط قبل الفتح\\n"\n'
+        '    "3) فعّل التحقق بخطوتين\\n"\n'
+        '    "4) بلّغ فورًا عن أي رسالة مشبوهة\\n"\n'
+        '    "5) حدّث التطبيقات باستمرار"\n'
+        ")\n\n"
+        "def ensure() -> None:\n"
+        "    init_db()\n\n"
+        "def report(user_id: int, kind: str, body: str) -> int:\n"
+        "    ensure()\n"
+        '    kind = (kind or "incident").strip()[:40]\n'
+        '    body = (body or "").strip() or "—"\n'
+        "    with connect() as conn:\n"
+        "        cur = conn.execute(\n"
+        '            "INSERT INTO security_reports (user_id, kind, body, status) VALUES (?, ?, ?, \'open\')",\n'
+        "            (user_id, kind, body[:2000]),\n"
+        "        )\n"
+        "        conn.commit()\n"
+        "        return int(cur.lastrowid)\n\n"
+        "def list_reports(only_open: bool = True, limit: int = 20) -> list[dict]:\n"
+        "    ensure()\n"
+        '    q = "SELECT id, user_id, kind, body, status, created_at FROM security_reports"\n'
+        "    if only_open:\n"
+        "        q += \" WHERE status = 'open'\"\n"
+        "    q += \" ORDER BY id DESC LIMIT ?\"\n"
+        "    with connect() as conn:\n"
+        "        rows = conn.execute(q, (limit,)).fetchall()\n"
+        "    return [dict(r) for r in rows]\n\n"
+        "def close_report(report_id: int) -> bool:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        '        cur = conn.execute("UPDATE security_reports SET status = \'closed\' WHERE id = ?", (report_id,))\n'
+        "        conn.commit()\n"
+        "        return cur.rowcount > 0\n\n"
+        "def checklist() -> str:\n"
+        "    return CHECKLIST\n"
+    )
+
+
 def _emit_keyboards(spec: BotSpec) -> str:
     rows = []
     for b in spec.start_buttons:
@@ -534,6 +596,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_content = any(_svc(f) == "content" for f in spec.features)
     need_welcome = any(_svc(f) == "welcome" for f in spec.features)
     need_tickets = any(_svc(f) == "tickets" for f in spec.features)
+    need_security = any(_svc(f) == "security" for f in spec.features)
 
     imports = [
         "from __future__ import annotations",
@@ -554,6 +617,8 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import welcome as welcome_svc")
     if need_tickets:
         imports.append("from app.services import tickets as tickets_svc")
+    if need_security:
+        imports.append("from app.services import security as security_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -727,6 +792,8 @@ def _emit_handlers(spec: BotSpec) -> str:
         elif cap.service == "content":
             if cap.method == "rules":
                 lines.append("    await message.reply_text(content_svc.rules())")
+            elif cap.method == "faq":
+                lines.append("    await message.reply_text(content_svc.faq() if hasattr(content_svc, 'faq') else content_svc.rules())")
             elif cap.method == "announce":
                 lines.append("    body = ' '.join(context.args) if context.args else ''")
                 lines.append("    if not body:")
@@ -846,6 +913,42 @@ def _emit_handlers(spec: BotSpec) -> str:
             else:
                 lines.append(f"    await message.reply_text({ok!r})")
 
+
+        elif cap.service == "security":
+            if cap.method == "checklist":
+                lines.append("    await message.reply_text(security_svc.checklist())")
+            elif cap.method in {"report_phish", "report_incident"}:
+                kind = "phish" if cap.method == "report_phish" else "incident"
+                lines.append("    if context.args:")
+                lines.append(f"        rid = security_svc.report(user.id, {kind!r}, ' '.join(context.args))")
+                lines.append(f"        await message.reply_text({ok!r} + f' #{{rid}}')")
+                lines.append("        return")
+                lines.append(f"    context.user_data['awaiting'] = 'sec_{kind}'")
+                lines.append("    await message.reply_text('صف البلاغ بإيجاز (رابط/وصف)')")
+            elif cap.method == "list_reports":
+                lines.append("    items = security_svc.list_reports(only_open=True)")
+                lines.append("    if not items:")
+                lines.append("        await message.reply_text('لا بلاغات مفتوحة')")
+                lines.append("        return")
+                lines.append('    text = "\\n".join(f"#{i[\'id\']} [{i[\'kind\']}] {i[\'body\'][:60]}" for i in items)')
+                lines.append("    await message.reply_text(text)")
+            elif cap.method == "close_report":
+                lines.append("    if not context.args:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        rid = int(context.args[0])")
+                lines.append("    except ValueError:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    if security_svc.close_report(rid):")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    else:")
+                lines.append(f"        await message.reply_text({fail!r})")
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
+
         else:
             lines.append(f"    await message.reply_text({ok!r})")
         lines.append("")
@@ -853,7 +956,7 @@ def _emit_handlers(spec: BotSpec) -> str:
 
 
     # text router for multi-step captures
-    if need_tasks or need_notes or need_welcome or need_tickets:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
@@ -881,6 +984,16 @@ def _emit_handlers(spec: BotSpec) -> str:
             "        tid = tickets_svc.open_ticket(user.id, message.text.strip(), chat.id if chat else 0)",
             "        context.user_data.pop('awaiting', None)",
             "        await message.reply_text(f'تم فتح التذكرة #{tid}')",
+            "        return",
+            "    if awaiting == 'sec_phish':",
+            "        rid = security_svc.report(user.id, 'phish', message.text.strip())",
+            "        context.user_data.pop('awaiting', None)",
+            "        await message.reply_text(f'تم تسجيل بلاغ التصيد #{rid}')",
+            "        return",
+            "    if awaiting == 'sec_incident':",
+            "        rid = security_svc.report(user.id, 'incident', message.text.strip())",
+            "        context.user_data.pop('awaiting', None)",
+            "        await message.reply_text(f'تم تسجيل البلاغ الأمني #{rid}')",
             "        return",
             "",
             "",
@@ -973,6 +1086,10 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service == "tickets")  # type: ignore
         for f in spec.features
     )
+    need_security = any(
+        (get_capability(f.feature) and get_capability(f.feature).service == "security")  # type: ignore
+        for f in spec.features
+    )
     imports_handlers = "start_handler, help_handler, callback_router"
     extra_imports = []
     for feat in spec.features:
@@ -981,7 +1098,7 @@ def _emit_main(spec: BotSpec) -> str:
         extra_imports.append(f"handle_{feat.id}".replace("-", "_"))
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
-    if need_tasks or need_notes or need_welcome or need_tickets:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
         imports_handlers += ", text_router"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
@@ -991,7 +1108,7 @@ def _emit_main(spec: BotSpec) -> str:
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks or need_notes or need_welcome or need_tickets:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
         text_handler = "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
     if need_welcome:
         text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
@@ -1109,6 +1226,8 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/welcome.py"] = _emit_welcome()
     if "tickets" in services:
         files["app/services/tickets.py"] = _emit_tickets()
+    if "security" in services:
+        files["app/services/security.py"] = _emit_security()
     return files
 
 

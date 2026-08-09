@@ -141,7 +141,7 @@ def _maybe_run_git_stage(
 
 
 def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *, force: bool = False):
-    """Deterministic Spec → code path (no LLM). Guarantees delivery when force or preset matches."""
+    """Deterministic Spec → code only. No LLM providers."""
     from pathlib import Path as _Path
     import tempfile as _tempfile
     import time as _time
@@ -157,7 +157,10 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
     preset = detect_preset(request)
     if preset is None and not force and not is_bot_request(request):
-        return None
+        # Still deliver market default for any non-empty product-like request
+        if not (request or "").strip():
+            return None
+        force = True
 
     if work_dir is None:
         work_dir = _Path(_tempfile.mkdtemp(prefix="spec_bot_"))
@@ -171,7 +174,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         tag = preset
     else:
         spec = default_spec_from_request(request, user_id=user_id)
-        tag = "market_default"
+        tag = detect_preset(request) or "market_default"
 
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
@@ -180,7 +183,8 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         "preset": tag,
         "elapsed_ms": round(elapsed * 1000, 1),
         "zero_ai": True,
-        "quality": "market_pack_v1",
+        "ai_disabled": True,
+        "quality": "market_pack_v2",
     }
     if result.ok:
         meta.update(
@@ -212,18 +216,13 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
 
 def generate_bot(request: str, work_dir=None):
-    """Generate a runnable Telegram bot project.
+    """Generate a runnable Telegram bot using zero-AI engines only.
 
-    Delivery order:
-      1) Zero-AI presets / market pack (always works offline)
-      2) Optional AI plan+codegen if providers have credit
-      3) Forced zero-AI market pack if AI fails
+    AI plan/codegen path is disabled permanently. All generation goes through
+    spec_core presets + deterministic coding engines.
     """
-    from pathlib import Path
-    import tempfile
     import time
-
-    from .core.result import GenerationResult, StageResult
+    from .core.result import GenerationResult
 
     t0 = time.perf_counter()
     original_request = (request or "").strip()
@@ -234,167 +233,20 @@ def generate_bot(request: str, work_dir=None):
             stages=[],
             validation_reports=[],
             errors=["Empty request"],
-            metadata={},
+            metadata={"ai_disabled": True},
         )
 
-    # 1) Deterministic path first
-    try:
-        zero = _generate_bot_zero_ai(original_request, work_dir, t0)
-        if zero is not None and zero.success:
-            return zero
-        if zero is not None and not zero.success:
-            # fall through; may still try AI then force
-            pass
-    except Exception:
-        pass
-
-    work_dir = (
-        Path(tempfile.mkdtemp(prefix="ai_bot_"))
-        if work_dir is None
-        else Path(work_dir)
+    result = _generate_bot_zero_ai(original_request, work_dir, t0, force=True)
+    if result is not None:
+        return result
+    return GenerationResult(
+        success=False,
+        project_path=None,
+        stages=[],
+        validation_reports=[],
+        errors=["zero_ai_generation_failed"],
+        metadata={"engine": "spec_core", "ai_disabled": True},
     )
-    work_dir.mkdir(parents=True, exist_ok=True)
-    project_dir = work_dir / "generated_bot"
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    stages: list = []
-    execution_plan_meta = None
-
-    def _force_zero():
-        return _generate_bot_zero_ai(original_request, work_dir, t0, force=True)
-
-    try:
-        from .chat_ai.execution_planner import plan_from_text
-        from .chat_ai.plan_codegen import generate_project_from_plan
-        from .chat_ai import multi_provider as mp
-
-        if not mp.any_enabled():
-            forced = _force_zero()
-            if forced is not None:
-                return forced
-            elapsed = time.perf_counter() - t0
-            return GenerationResult(
-                success=False,
-                project_path=None,
-                stages=[StageResult.failed("ai_provider", errors=["no_provider"])],
-                validation_reports=[],
-                errors=["no_ai_provider"],
-                metadata={"engine": "none", "elapsed_ms": round(elapsed * 1000, 1)},
-            )
-
-        execution = plan_from_text(original_request)
-        if not execution.ok:
-            # AI plan failed (credits, timeout, etc.) → guaranteed pack
-            forced = _force_zero()
-            if forced is not None and forced.success:
-                forced.metadata = dict(forced.metadata or {})
-                forced.metadata["ai_fallback"] = execution.error or "plan_failed"
-                return forced
-            elapsed = time.perf_counter() - t0
-            stages.append(
-                StageResult.failed(
-                    "execution_planner",
-                    errors=[execution.error or "execution_plan_failed"],
-                )
-            )
-            return GenerationResult(
-                success=False,
-                project_path=str(project_dir),
-                stages=stages,
-                validation_reports=[],
-                errors=[execution.error or "execution_plan_failed"],
-                metadata={
-                    "engine": "ai_plan_codegen",
-                    "elapsed_ms": round(elapsed * 1000, 1),
-                },
-            )
-
-        (project_dir / "execution_plan.json").write_text(
-            __import__("json").dumps(execution.plan, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        execution_plan_meta = {
-            "bot_name": (execution.plan or {}).get("bot_name"),
-            "commands": len((execution.plan or {}).get("commands") or []),
-        }
-        stages.append(
-            StageResult.ok(
-                "execution_planner",
-                outputs={"plan_keys": list((execution.plan or {}).keys())},
-                warnings=list(execution.warnings or []),
-            )
-        )
-
-        generated = generate_project_from_plan(execution.plan, project_dir)
-        if generated.get("ok"):
-            stages.append(StageResult.ok("plan_codegen", outputs=generated))
-            elapsed = time.perf_counter() - t0
-            return GenerationResult(
-                success=True,
-                project_path=str(project_dir),
-                stages=stages,
-                validation_reports=[],
-                errors=[],
-                metadata={
-                    "engine": "ai_plan_codegen",
-                    "execution_plan": execution_plan_meta,
-                    "files_created": generated.get("files") or [],
-                    "model": generated.get("model"),
-                    "notes": generated.get("notes") or [],
-                    "elapsed_ms": round(elapsed * 1000, 1),
-                    "ready_for_token": True,
-                },
-            )
-
-        # AI codegen failed → market pack
-        forced = _force_zero()
-        if forced is not None and forced.success:
-            forced.metadata = dict(forced.metadata or {})
-            forced.metadata["ai_fallback"] = "codegen_failed"
-            return forced
-
-        stages.append(
-            StageResult.failed(
-                "plan_codegen",
-                errors=list(generated.get("errors") or ["plan_codegen_failed"]),
-            )
-        )
-        elapsed = time.perf_counter() - t0
-        return GenerationResult(
-            success=False,
-            project_path=str(project_dir),
-            stages=stages,
-            validation_reports=[],
-            errors=list(generated.get("errors") or ["plan_codegen_failed"]),
-            metadata={
-                "engine": "ai_plan_codegen",
-                "elapsed_ms": round(elapsed * 1000, 1),
-            },
-        )
-    except Exception as exc:
-        forced = _force_zero()
-        if forced is not None and forced.success:
-            forced.metadata = dict(forced.metadata or {})
-            forced.metadata["ai_fallback"] = f"{type(exc).__name__}"
-            return forced
-        elapsed = time.perf_counter() - t0
-        stages.append(
-            StageResult.failed(
-                "ai_plan_codegen",
-                errors=[f"{type(exc).__name__}:{exc}"[:500]],
-            )
-        )
-        return GenerationResult(
-            success=False,
-            project_path=str(project_dir),
-            stages=stages,
-            validation_reports=[],
-            errors=[f"{type(exc).__name__}:{exc}"[:500]],
-            metadata={
-                "engine": "ai_plan_codegen",
-                "elapsed_ms": round(elapsed * 1000, 1),
-            },
-        )
 
 
 
