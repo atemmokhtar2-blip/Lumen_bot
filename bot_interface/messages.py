@@ -674,6 +674,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             from telegram_bot_engine.chat_ai import smart_chat_reply
             mem_ctx = _mem.context_for_ai() if _mem else ""
+            # Deep project awareness: active generated/cloned project structure
+            try:
+                _ar = (context.user_data or {}).get("active_repo") or {}
+                if _ar.get("digest", {}).get("ai_context"):
+                    mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _ar["digest"]["ai_context"]
+                elif _ar.get("path") and Path(_ar["path"]).exists():
+                    from telegram_bot_engine.formal_engine.services.project_digest import (
+                        build_project_digest,
+                    )
+                    _dg = build_project_digest(_ar["path"])
+                    context.user_data.setdefault("active_repo", {})["digest"] = _dg
+                    if _dg.get("ai_context"):
+                        mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _dg["ai_context"]
+            except Exception:
+                logger.exception("active project digest for chat failed")
             if _ctx_res is not None:
                 extra = []
                 if _ctx_res.refers_to_prior and _ctx_res.target_path:
@@ -912,19 +927,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.exception("register_project failed")
             try:
                 from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+                from telegram_bot_engine.formal_engine.services.project_digest import (
+                    build_project_digest,
+                )
                 mem = get_user_memory(uid, OUTPUT_DIR)
+                digest = build_project_digest(project_path, source_request=request)
+                # Bind session into the generated project so chat can work inside it
+                context.user_data["active_repo"] = {
+                    "path": str(project_path),
+                    "url": "",
+                    "contract": {},
+                    "kind": "generated",
+                    "label": Path(project_path).name,
+                    "digest": digest,
+                    "from_generation": True,
+                }
+                try:
+                    from telegram_bot_engine.formal_engine.services.repo_understanding import (
+                        understand_repo,
+                    )
+                    contract = await asyncio.to_thread(understand_repo, project_path, "")
+                    context.user_data["active_repo"]["contract"] = contract.model_dump(
+                        mode="json"
+                    )
+                except Exception:
+                    logger.exception("understand generated project failed")
+
                 mem.set_last(
                     intent=request[:200],
                     project_path=str(project_path),
                     capability="generate_bot",
                 )
-                cmds = list((meta or {}).get("commands") or [])[:20]
+                cmds = list(digest.get("commands") or (meta or {}).get("commands") or [])[:20]
                 note = f"generated project at {project_path}"
                 if cmds:
                     note += " commands=" + ",".join(cmds)
-                mem.add_turn("note", note, meta={"capability": "generate_bot", "success": bool(success)})
+                mem.add_turn(
+                    "note",
+                    note,
+                    meta={"capability": "generate_bot", "success": bool(success)},
+                )
+                if digest.get("ai_context"):
+                    mem.add_fact("project_digest: " + digest["ai_context"][:400])
             except Exception:
-                logger.exception("user_memory update after generate failed")
+                logger.exception("user_memory/digest update after generate failed")
 
         # Try to send zip if project exists
         if project_path and Path(project_path).exists():

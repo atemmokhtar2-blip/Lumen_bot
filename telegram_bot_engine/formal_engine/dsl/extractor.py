@@ -205,7 +205,12 @@ def _looks_like_rule(s: str) -> bool:
 
 def _parse_attrs(raw: str) -> list[str]:
     attrs: list[str] = []
-    for p in re.split(r"[,،/;|&]+", raw or ""):
+    # Support comma-separated and space-separated field lists from user text
+    chunks = re.split(r"[,،/;|&]+", raw or "")
+    parts: list[str] = []
+    for ch in chunks:
+        parts.extend(re.split(r"\s+", (ch or "").strip()))
+    for p in parts:
         a = _ascii_ident(p).lower()
         if a and a not in _GHOST and len(a) >= 1:
             attrs.append(a)
@@ -284,7 +289,17 @@ def _entities_from_text(text: str) -> list[EntityNode]:
     ):
         add(m.group(1), _parse_attrs(m.group(2)))
 
-    # 4) NO free-form domain noun packs.
+    # 4) Bare Latin entity lines anywhere: Appointment: name date time
+    for line in (text or "").splitlines():
+        body = _strip_bullet(line)
+        m = re.match(
+            r"^([A-Z][A-Za-z0-9_]{1,40})\s*[:：]\s*([a-zA-Z_][a-zA-Z0-9_,\s]{1,120})$",
+            body,
+        )
+        if m:
+            add(m.group(1), _parse_attrs(m.group(2)))
+
+    # 5) NO free-form domain noun packs.
     # Entities come only from explicit user declarations (sections / CapWord(fields)).
     return found
 
