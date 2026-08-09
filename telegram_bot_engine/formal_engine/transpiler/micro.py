@@ -1142,7 +1142,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("        mine = bucket.setdefault(str(uid), [])")
         # Structural stems from command-name shape only (no domain rename packs).
         lines.append("        if (_cn.startswith('list_') or _cn.startswith('my_') or")
-        lines.append("                _cn in ('list_mine', 'my_tasks', 'mine', 'list', 'all_tasks', 'my_clients')):")
+        lines.append("                _cn in ('mine', 'list')):")
         lines.append("            try:")
         lines.append("                from app.services import list_records")
         lines.append("                if _cn.startswith('list_'):")
@@ -1170,7 +1170,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("                        lines_out.append(str(i) + '. ' + str(r))")
         lines.append("                await message.reply_text(chr(10).join(lines_out)[:3500])")
         lines.append("            return")
-        lines.append("        if _cn in ('list_mine', 'my_tasks', 'mine', 'list'):")
+        lines.append("        if _cn in ('mine', 'list') or _cn.startswith('my_') or _cn.startswith('list_'):")
         lines.append("            active = [r for r in mine if (r.get('status') or 'open') != 'done']")
         lines.append("            if not active:")
         lines.append(f"                await message.reply_text({_py((cmd.description or 'لا عناصر') )})")
