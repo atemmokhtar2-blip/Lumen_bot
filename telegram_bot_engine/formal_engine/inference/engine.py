@@ -501,14 +501,14 @@ def infer(program: DSLProgram) -> InferenceResult:
         "catalog", "cart", "orders", "products", "basket",
     }
     _SKIP_CMDS = {
-        "cancel", "admin", "broadcast", "ban", "help", "start",
-        "show", "view", "get", "delete", "remove", "drop", "reject", "accept",
+        "admin", "broadcast", "ban", "help", "start",
+        "show", "view", "get", "reject", "accept",
         "deliver", "arrive", "optimize", "pay", "quiz",
         "remind", "confirm", "notifications",
     }
+    # cancel/delete/remove are NOT auto-skip when description asks for input
     _SKIP_STEMS = (
-        "cancel", "delete", "remove", "drop", "stats", "admin",
-        "broadcast", "ban", "available", "show", "view",
+        "stats", "admin", "broadcast", "ban", "available", "show", "view",
     )
     _DESC_INPUT_HINTS = (
         "يجمع", "اجمع", "يطلب", "اطلب", "يسجل", "تسجيل", "يحتاج", "ادخل",
@@ -541,6 +541,11 @@ def infer(program: DSLProgram) -> InferenceResult:
             return "list"
         if any(h in d for h in _DESC_INPUT_HINTS):
             return "collect"
+        # cancel/delete with explicit id collection
+        if any(x in c for x in ("cancel", "delete", "remove")) and any(
+            x in d for x in ("رقم", "id", "معرّف", "معرف", "يجمع", "يطلب")
+        ):
+            return "lookup"
         return "action"
 
     def _entity_for_command(cmd_name: str, cmd_desc: str) -> str | None:
