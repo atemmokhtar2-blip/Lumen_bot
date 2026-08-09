@@ -8,12 +8,9 @@ from .errors import (
     ValidationError, PipelineError, ConfigurationError,
 )
 
-# Lazy import to avoid circular dependency with registry / engines
-def __getattr__(name: str):
-    if name in ("bootstrap", "build_configuration"):
-        from .bootstrap import bootstrap, build_configuration
-        return {"bootstrap": bootstrap, "build_configuration": build_configuration}[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+# Import these public APIs after the core contracts to keep package-level
+# imports stable even when the submodule is imported first elsewhere.
+from .bootstrap import bootstrap, build_configuration
 
 __all__ = [
     "GenerationContext", "GenerationResult", "StageResult", "Severity",

@@ -1136,7 +1136,7 @@ def test_bootstrap_registers_structure_generator():
 
 
 def test_bootstrap_structure_generator_priority():
-    """Structure generator is registered at priority 60."""
+    """Structure generator is registered at priority 90."""
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("structure_generator")
     assert entry is not None
@@ -1145,11 +1145,11 @@ def test_bootstrap_structure_generator_priority():
 
 
 def test_bootstrap_structure_generator_dependencies():
-    """Structure generator depends on blueprint_validator."""
+    """Structure generator depends on project_structure_planning."""
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("structure_generator")
     assert entry is not None
-    assert "dependency_resolver" in entry.dependencies
+    assert "project_structure_planning" in entry.dependencies
     print("  [PASS] test_bootstrap_structure_generator_dependencies")
 
 

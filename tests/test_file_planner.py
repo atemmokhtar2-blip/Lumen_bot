@@ -1899,20 +1899,20 @@ def test_bootstrap_registers_file_planner():
 
 
 def test_bootstrap_file_planner_priority():
-    """File planner is registered at priority 80."""
+    """File planner is registered at priority 95."""
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("file_planner")
     assert entry is not None
-    assert entry.priority == 70
+    assert entry.priority == 95
     print("  [PASS] test_bootstrap_file_planner_priority")
 
 
 def test_bootstrap_file_planner_dependencies():
-    """File planner depends on component_detector."""
+    """File planner depends on structure_generator."""
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("file_planner")
     assert entry is not None
-    assert "code_generation_planning" in entry.dependencies
+    assert "structure_generator" in entry.dependencies
     print("  [PASS] test_bootstrap_file_planner_dependencies")
 
 

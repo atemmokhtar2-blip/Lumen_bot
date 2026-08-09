@@ -2187,7 +2187,7 @@ def test_bootstrap_dependency_resolver_priority():
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("dependency_resolver")
     assert entry is not None
-    assert entry.priority == 80
+    assert entry.priority == 100
     print("  [PASS] test_bootstrap_dependency_resolver_priority")
 
 
@@ -2196,7 +2196,7 @@ def test_bootstrap_dependency_resolver_dependencies():
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("dependency_resolver")
     assert entry is not None
-    assert "execution_planning" in entry.dependencies
+    assert "file_planner" in entry.dependencies
     print("  [PASS] test_bootstrap_dependency_resolver_dependencies")
 
 

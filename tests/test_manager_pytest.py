@@ -177,17 +177,19 @@ def test_queue_order_respects_priority():
     assert order == ["early", "mid", "late"]
 
 
-def test_bootstrap_registers_30_real_engines():
+def test_bootstrap_registers_all_real_engines():
     registry, orchestrator, manager = bootstrap()
-    assert manager.count() == 30
-    assert len(list(registry.engines())) == 30
-    assert len(ENGINE_CLASSES) == 30
+    expected_count = len(ENGINE_CLASSES)
+    assert expected_count == 13
+    assert manager.count() == expected_count
+    assert len(list(registry.engines())) == expected_count
+    assert len(ENGINE_CLASSES) == expected_count
 
     for eng in registry.engines():
         assert type(eng).__name__ != "GenericEngine"
 
     queue = manager.queue_order()
-    assert len(queue) == 30
+    assert len(queue) == expected_count
     for item in queue:
         assert item.engine_id in ENGINE_META
         expected_prio, expected_deps = ENGINE_META[item.engine_id]

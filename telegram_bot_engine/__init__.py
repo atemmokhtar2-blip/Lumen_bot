@@ -21,6 +21,8 @@ HARD RULES (STRICT — non-negotiable):
 
 from __future__ import annotations
 
+import os
+
 __all__ = [
     "bootstrap", "build_configuration", "generate_bot",
     "PipelineOrchestrator", "EngineRegistry",
@@ -189,63 +191,103 @@ def generate_bot(request: str, work_dir=None):
     stages: list = []
     errors: list = []
     translator_meta = None
+    execution_plan_meta = None
     formal_text = request
     grounding_src = original_request
 
     try:
-        # ── SpecTranslator: AI translates only (never generates code) ──
+        # ── HF Execution Planner: one complete implementation contract ──
+        # It is the primary path. The older narrow translator is retained only
+        # as a compatibility fallback when HF is unavailable or returns invalid JSON.
+        planner_ok = False
         try:
-            from .chat_ai.spec_translator import prepare_formal_text
-            formal_text, tr = prepare_formal_text(original_request)
-            translator_meta = tr.to_dict()
-            if tr.ok:
+            from .chat_ai.execution_planner import plan_from_text, plan_to_formal_text
+            execution = plan_from_text(original_request)
+            execution_plan_meta = execution.to_dict()
+            if execution.ok:
+                planner_ok = True
+                formal_text = plan_to_formal_text(execution.plan)
+                grounding_src = original_request
+                (project_dir / "execution_plan.json").write_text(
+                    __import__("json").dumps(execution.plan, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
                 stages.append(
                     StageResult.ok(
-                        "spec_translator",
-                        outputs=tr.to_dict(),
-                        warnings=[
-                            f"dropped:{k}:{v}"
-                            for k, v in (tr.dropped or {}).items()
-                            if v
-                        ][:8],
+                        "execution_planner",
+                        outputs={
+                            "model_used": execution.model_used,
+                            "plan": execution.plan,
+                            "warnings": execution.warnings,
+                        },
+                        warnings=list(execution.warnings),
                     )
                 )
-                # Never block on needs_clarification — AI + formal path always attempt generation.
-                # Use grounded sectioned text for formal path; ground against original words
-                if tr.structured_text.strip():
-                    formal_text = tr.structured_text
-                    grounding_src = original_request  # NEVER ground against AI output (self-justifies hallucinations)
+                # Direct plan-driven generation is the production path when HF
+                # is available. It never falls back to structural templates.
+                direct_enabled = os.environ.get("HF_DIRECT_CODEGEN", "1").strip().lower() not in {"0", "false", "no", "off"}
+                if direct_enabled:
+                    from .chat_ai.plan_codegen import generate_project_from_plan
+                    generated = generate_project_from_plan(execution.plan, project_dir)
+                    if generated.get("ok"):
+                        stages.append(StageResult.ok("plan_codegen", outputs=generated))
+                        elapsed = time.perf_counter() - t0
+                        return GenerationResult(
+                            success=True,
+                            project_path=str(project_dir),
+                            stages=stages,
+                            validation_reports=[],
+                            errors=[],
+                            metadata={
+                                "engine": "hf_execution_plan",
+                                "execution_plan": execution_plan_meta,
+                                "files_created": generated.get("files") or [],
+                                "model": generated.get("model"),
+                                "elapsed_ms": round(elapsed * 1000, 1),
+                                "ready_for_token": True,
+                            },
+                        )
+                    stages.append(StageResult.failed("plan_codegen", errors=list(generated.get("errors") or ["plan_codegen_failed"])))
+                    elapsed = time.perf_counter() - t0
+                    return GenerationResult(
+                        success=False,
+                        project_path=str(project_dir),
+                        stages=stages,
+                        validation_reports=[],
+                        errors=list(generated.get("errors") or ["plan_codegen_failed"]),
+                        metadata={"engine": "hf_execution_plan", "execution_plan": execution_plan_meta, "elapsed_ms": round(elapsed * 1000, 1)},
+                    )
             else:
-                # AI failed/weak — still continue with the original user text through formal DSL.
-                # This is NOT a domain template path: formal engine only reads what the user wrote.
-                stages.append(
-                    StageResult.failed(
-                        "spec_translator",
-                        errors=[tr.error or "spec_translator_failed"],
-                    )
+                stages.append(StageResult.failed("execution_planner", errors=[execution.error or "execution_plan_failed"]))
+        except Exception as plan_exc:
+            stages.append(StageResult.failed("execution_planner", errors=[f"{type(plan_exc).__name__}:{plan_exc}"[:500]]))
+
+        # ── Compatibility translator: used only when the complete plan failed ──
+        if not planner_ok:
+            try:
+                from .chat_ai.spec_translator import prepare_formal_text
+                formal_text, tr = prepare_formal_text(original_request)
+                translator_meta = tr.to_dict()
+                if tr.ok:
+                    stages.append(StageResult.ok("spec_translator", outputs=tr.to_dict()))
+                    if tr.structured_text.strip():
+                        formal_text = tr.structured_text
+                        grounding_src = original_request
+                else:
+                    stages.append(StageResult.failed("spec_translator", errors=[tr.error or "spec_translator_failed"]))
+                    formal_text = original_request
+                    grounding_src = original_request
+            except Exception as tr_exc:
+                stages.append(StageResult.failed("spec_translator", errors=[f"{type(tr_exc).__name__}:{tr_exc}"]))
+                elapsed = time.perf_counter() - t0
+                return GenerationResult(
+                    success=False,
+                    project_path=None,
+                    stages=stages,
+                    validation_reports=[],
+                    errors=[f"spec_translator_exception:{type(tr_exc).__name__}:{tr_exc}"],
+                    metadata={"engine": "spec_translator", "elapsed_ms": round(elapsed * 1000, 1)},
                 )
-                formal_text = (original_request or "").strip()
-                grounding_src = original_request
-                translator_meta = {
-                    **translator_meta,
-                    "continued_with_user_text": True,
-                }
-        except Exception as tr_exc:
-            stages.append(
-                StageResult.failed(
-                    "spec_translator",
-                    errors=[f"{type(tr_exc).__name__}:{tr_exc}"],
-                )
-            )
-            elapsed = time.perf_counter() - t0
-            return GenerationResult(
-                success=False,
-                project_path=None,
-                stages=stages,
-                validation_reports=[],
-                errors=[f"spec_translator_exception:{type(tr_exc).__name__}:{tr_exc}"],
-                metadata={"engine": "spec_translator", "elapsed_ms": round(elapsed * 1000, 1)},
-            )
 
         from .formal_engine.pipeline_formal import build_from_text
         from .formal_engine.dsl.extractor import extract_dsl
@@ -529,6 +571,8 @@ def generate_bot(request: str, work_dir=None):
                 else None
             ),
             "spec_translator": translator_meta,
+            "execution_plan": execution_plan_meta,
+            "execution_plan_used": bool(execution_plan_meta and execution_plan_meta.get("ok")),
         }
         if git_meta is not None:
             meta["git_operations"] = git_meta
