@@ -115,6 +115,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     )
         except Exception:
             logger.exception("continuity plan failed")
+        # Phase 6: advanced partner brief
+        try:
+            from telegram_bot_engine.formal_engine.services.advanced_partner import (
+                build_advanced_brief,
+            )
+            _act = (context.user_data or {}).get("active_repo") or {}
+            _brief = build_advanced_brief(
+                uid,
+                request,
+                base_dir=OUTPUT_DIR,
+                active_path=str(_act.get("path") or ""),
+            )
+            context.user_data["advanced_brief"] = _brief.to_dict()
+            context.user_data["advanced_brief_ai"] = _brief.to_ai_context()
+        except Exception:
+            logger.exception("advanced_partner brief failed")
     except Exception:
         logger.exception("context_engine failed")
 
@@ -573,6 +589,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 logger.exception("memory update after continuity failed")
 
+            if dev.ok and dev.changed_files and active.get("path"):
+                try:
+                    from telegram_bot_engine.formal_engine.services.advanced_partner import (
+                        maybe_snapshot_version,
+                    )
+                    maybe_snapshot_version(
+                        uid,
+                        active["path"],
+                        label=str(getattr(dev, "action", "") or "edit"),
+                        reason=(request or "")[:200],
+                        base_dir=OUTPUT_DIR,
+                    )
+                except Exception:
+                    logger.exception("version snapshot failed")
+
             # If file changed, offer zip of repo
             if dev.ok and dev.changed_files and Path(active["path"]).exists():
                 try:
@@ -634,7 +665,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _weak_spec = _is_bot_spec and (
         len(request) < 60 or len(_slash_cmds) < 2
     )
-    _need_dev_chat = (not _is_bot_spec and not _is_hard) or _weak_spec
+    _adv_flag = bool((context.user_data or {}).get("advanced_brief", {}).get("intent_advanced"))
+    _need_dev_chat = (not _is_bot_spec and not _is_hard) or _weak_spec or _adv_flag
 
     if _need_dev_chat:
         try:
@@ -661,6 +693,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "note: user message looks like a bot request but may lack "
                     "actionable commands or detail; act as senior dev — ask one "
                     "precise gap question or route generate_bot if enough."
+                )
+            _adv_ai = (context.user_data or {}).get("advanced_brief_ai") or ""
+            if _adv_ai:
+                mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _adv_ai
+            if (context.user_data or {}).get("advanced_brief", {}).get("intent_advanced"):
+                mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + (
+                    "note: user seeks planning/architecture/version guidance; "
+                    "answer as senior partner using only dynamic project evidence."
                 )
             sc = await asyncio.to_thread(
                 smart_chat_reply,
