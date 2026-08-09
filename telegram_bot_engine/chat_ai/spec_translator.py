@@ -1389,6 +1389,245 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
 
 
 
+
+def _recover_spec_from_user_text(user_text: str, base: dict | None = None) -> dict:
+    """Fill gaps from the human text only — linguistic extraction, no domain packs.
+
+    Used when AI omits flows/commands/entities that the user literally wrote.
+    """
+    import re as _re
+    text = user_text or ""
+    out = {
+        "bot_name": "",
+        "commands": [],
+        "buttons": [],
+        "entities": [],
+        "flows": [],
+        "rules": [],
+        "relations": [],
+        "tools": [],
+    }
+    if isinstance(base, dict):
+        for k in out:
+            if k in base and base[k]:
+                out[k] = list(base[k]) if isinstance(base[k], list) else base[k]
+
+    # --- commands from /name lines ---
+    seen_c = {
+        str(c.get("name") or "").lower()
+        for c in (out.get("commands") or [])
+        if isinstance(c, dict)
+    }
+    for m in _re.finditer(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*(?:[-–—:]\s*|\s+)([^\n]{0,160})",
+        text,
+    ):
+        name = _normalize_cmd_name(m.group(1))
+        if not name or (not _valid_cmd_name(name) and name not in ("start", "help")):
+            continue
+        desc = (m.group(2) or "").strip()
+        if name in seen_c:
+            # upgrade description if richer
+            for c in out["commands"]:
+                if isinstance(c, dict) and str(c.get("name") or "").lower() == name:
+                    old = str(c.get("description") or "")
+                    if len(desc) > len(old) + 2:
+                        c["description"] = desc[:160]
+                    break
+            continue
+        seen_c.add(name)
+        out["commands"].append({
+            "name": name,
+            "description": (desc or name)[:160],
+            "admin_only": False,
+        })
+    # bare /tokens
+    for m in _re.finditer(r"/([a-zA-Z][a-zA-Z0-9_]{0,32})\b", text):
+        name = _normalize_cmd_name(m.group(1))
+        if not name or name in seen_c:
+            continue
+        if not _valid_cmd_name(name) and name not in ("start", "help"):
+            continue
+        seen_c.add(name)
+        out["commands"].append({"name": name, "description": name, "admin_only": False})
+
+    # --- entities: Name (f1, f2, ...) ---
+    seen_e = {
+        str(e.get("name") or "").lower()
+        for e in (out.get("entities") or [])
+        if isinstance(e, dict)
+    }
+    for m in _re.finditer(
+        r"(?m)^\s*([A-Za-z][A-Za-z0-9_]{1,40})\s*\(([^)]{1,240})\)\s*$",
+        text,
+    ):
+        en = m.group(1).strip()
+        if en.lower() in seen_e:
+            continue
+        fields = []
+        for f in _re.split(r"[,،]", m.group(2)):
+            f = _re.sub(r"[^a-zA-Z0-9_]", "", f.strip())
+            if f:
+                fields.append(f)
+        if not fields:
+            continue
+        seen_e.add(en.lower())
+        out["entities"].append({"name": en, "fields": fields[:16]})
+
+    # --- buttons from section / explicit patterns ---
+    if not out.get("buttons"):
+        labs = list(_extract_button_labels(text))
+        # same-line: الأزرار: a | b   or الأزرار: a - b
+        for m in _re.finditer(
+            r"(?i)(?:الأزرار|الازرار|buttons)\s*:\s*([^\n]{2,200})",
+            text,
+        ):
+            chunk = m.group(1)
+            for part in _re.split(r"[|｜/\-–—،,]+", chunk):
+                lab = part.strip().strip("-•*")
+                if 2 <= len(lab) <= 48 and lab not in labs:
+                    labs.append(lab)
+        out["buttons"] = [{"label": lab[:48]} for lab in labs]
+
+    # --- flows from command descriptions (parentheses / يجمع lists) ---
+    # Linguistic label → key map (language only, not a bot product template)
+    phrase_map = [
+        ("اسم المنتج", "product_name"), ("اسم المريض", "patient_name"),
+        ("رقم الهاتف", "phone"), ("رقم الجوال", "phone"), ("البريد الإلكتروني", "email"),
+        ("البريد", "email"), ("email", "email"),
+        ("العنوان", "address"), ("address", "address"),
+        ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
+        ("العنوان/الاسم", "title"), ("العنوان", "title"),  # title when ticket-like list has العنوان والوصف
+        ("الوصف", "description"), ("description", "description"),
+        ("الأولوية", "priority"), ("اولوية", "priority"), ("priority", "priority"),
+        ("التاريخ", "date"), ("تاريخ", "date"), ("date", "date"),
+        ("الوقت", "time"), ("وقت", "time"), ("time", "time"),
+        ("الهاتف", "phone"), ("الجوال", "phone"), ("phone", "phone"),
+        ("الكمية", "quantity"), ("quantity", "quantity"),
+        ("السعر", "price"), ("price", "price"),
+        ("الملاحظات", "notes"), ("notes", "notes"),
+        ("المرحلة", "grade"), ("الصف", "grade"),
+        ("الإيميل", "email"), ("ايميل", "email"),
+        ("course_id", "course_id"), ("student_id", "student_id"),
+    ]
+
+    def fields_from_desc(desc: str) -> list[str]:
+        d = desc or ""
+        if not d:
+            return []
+        chunks: list[str] = []
+        for pm in _re.finditer(r"[\(\[«]([^\)\]»]{2,120})[\)\]»]", d):
+            chunks.append(pm.group(1))
+        for vm in _re.finditer(
+            r"(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع)\s+([^\n\.]{2,120})",
+            d,
+        ):
+            chunks.append(vm.group(1))
+        # "بالاسم والإيميل والهاتف" style
+        if any(v in d for v in ("بالاسم", "بالـ", "والإيميل", "والهاتف", "collect")) and not chunks:
+            chunks.append(d)
+        if not chunks:
+            return []
+
+        ticket_like = any(x in d for x in ("وصف", "أولوية", "اولوية", "تذكر", "ticket"))
+        ordered = sorted(phrase_map, key=lambda x: -len(x[0]))
+        hits: list[tuple[int, str]] = []  # position in desc, key
+        seen: set[str] = set()
+
+        for chunk in chunks:
+            ch = _re.sub(r"^(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع)\s+", "", chunk.strip())
+            ch = _re.sub(r"\s+و\s+", ",", ch)
+            ch = _re.sub(r"\s+وال", ",ال", ch)
+            ch = _re.sub(r"^(?:وال)", "ال", ch)
+            # Scan original chunk positions for stable ordering
+            for phrase, key in ordered:
+                if phrase == "العنوان":
+                    key = "title" if ticket_like else "address"
+                pos = 0
+                while True:
+                    idx = ch.find(phrase, pos)
+                    if idx < 0:
+                        break
+                    if key not in seen:
+                        seen.add(key)
+                        # map idx roughly onto d
+                        hits.append((d.find(phrase) if phrase in d else idx, key))
+                    pos = idx + max(len(phrase), 1)
+            for part in _re.split(r"[,،]+", ch):
+                part = part.strip()
+                if len(part) < 2:
+                    continue
+                mapped = None
+                for phrase, key in ordered:
+                    if part == phrase or phrase in part:
+                        mapped = "title" if (phrase == "العنوان" and ticket_like) else key
+                        break
+                if mapped is None and _re.match(r"^[a-zA-Z][a-zA-Z0-9_]*$", part):
+                    mapped = part.lower()
+                if mapped and mapped not in seen:
+                    seen.add(mapped)
+                    hits.append((len(d), mapped))
+
+        hits.sort(key=lambda x: x[0])
+        keys = [k for _, k in hits]
+        return keys[:8]
+
+    existing_flows = {
+        str(f.get("command") or f.get("id") or "").lower(): f
+        for f in (out.get("flows") or [])
+        if isinstance(f, dict)
+    }
+    new_flows = []
+    for c in out.get("commands") or []:
+        if not isinstance(c, dict):
+            continue
+        cname = str(c.get("name") or "").lower()
+        if not cname or cname in ("start", "help"):
+            continue
+        desc = str(c.get("description") or "")
+        keys = fields_from_desc(desc)
+        prev = existing_flows.get(cname)
+        prev_steps = list((prev or {}).get("steps") or [])
+        if len(prev_steps) >= len(keys) and prev_steps:
+            new_flows.append(prev)
+            continue
+        if keys:
+            steps = []
+            for k in keys:
+                prompt = f"أرسل {k}"
+                for phrase, key in phrase_map:
+                    if key == k and any("\u0600" <= ch <= "\u06ff" for ch in phrase):
+                        prompt = f"أرسل {phrase}"
+                        break
+                steps.append({"key": k, "prompt": prompt})
+            # bind entity if only one non-user entity or name overlap
+            ent = str((prev or {}).get("entity") or "")
+            ents = [e for e in (out.get("entities") or []) if isinstance(e, dict)]
+            if not ent and len(ents) == 1:
+                ent = str(ents[0].get("name") or "")
+            elif not ent:
+                for e in ents:
+                    en = str(e.get("name") or "").lower()
+                    if en and (en in cname or cname in en or any(p and p in en for p in cname.split("_"))):
+                        ent = str(e.get("name") or "")
+                        break
+            new_flows.append({
+                "id": cname,
+                "command": cname,
+                "entity": ent,
+                "kind": "collect",
+                "steps": steps,
+            })
+        elif prev:
+            new_flows.append(prev)
+    # keep any AI flows for commands we did not rebuild
+    for fid, f in existing_flows.items():
+        if fid not in {str(x.get("command") or "").lower() for x in new_flows}:
+            new_flows.append(f)
+    out["flows"] = new_flows
+    return out
+
+
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
     """AI ONLY (Hugging Face primary, Groq secondary). No structural fallback."""
     try:
@@ -1477,8 +1716,13 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         grounded["entities"] = _extract_entities_from_user_text(text)
 
     grounded = _promote_flows_and_buttons(grounded, text)
+    # Always recover missing commands/entities/flows from the human text (no templates)
+    grounded = _recover_spec_from_user_text(text, grounded)
 
     structured = _spec_to_sectioned_text(grounded, text)
+    # Prefer enriched structured text that keeps original rich descriptions
+    structured = _enrich_structured_with_original(structured, text)
+
     meaningful = [
         c for c in (grounded.get("commands") or [])
         if isinstance(c, dict) and c.get("name") not in ("start", "help")
@@ -1489,16 +1733,15 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         or grounded.get("flows")
         or grounded.get("tools")
         or grounded.get("entities")
+        or (text or "").strip()
     )
-
-    # Last resort: user wrote a free-form description — pass original text through
-    # so formal DSL extractor can still work. Still no invented domain packs.
-    if not ok and (text or "").strip():
-        structured = text.strip()
-        ok = True
+    if not meaningful and (text or "").strip():
+        # free-form user text still usable by formal DSL
+        if not structured.strip():
+            structured = text.strip()
         path_fallback = (ai_result.path or "ai") + "+user_text"
     else:
-        path_fallback = ai_result.path or "ai"
+        path_fallback = (ai_result.path or "ai") + ("+recover" if grounded.get("flows") else "")
 
     return TranslatorResult(
         ok=ok,
@@ -1610,8 +1853,10 @@ def _enrich_structured_with_original(structured: str, original: str) -> str:
         ]
         for chunk in chunks:
             ch = _re.sub(r"^(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع)\s+", "", chunk.strip())
-            ch = _re.sub(r"\s*و\s*", ",", ch)
-            ch = _re.sub(r"وال", ",ال", ch)
+            # Join lists on conjunction و without breaking letters inside words (العنوان)
+            ch = _re.sub(r"\s+و\s+", ",", ch)
+            ch = _re.sub(r"\s+وال", ",ال", ch)
+            ch = _re.sub(r"^(?:وال)", "ال", ch)
             # longest-phrase first scan on full chunk then parts
             ordered = sorted(phrase_map, key=lambda x: -len(x[0]))
             remaining = ch

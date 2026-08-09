@@ -362,8 +362,8 @@ def infer(program: DSLProgram) -> InferenceResult:
         if keys:
             return keys[:8]
         # Fallback: tokenize on commas / و
-        chunk2 = _re.sub(r"\s*و\s*", ",", chunk)
-        chunk2 = _re.sub(r"وال", ",ال", chunk2)
+        chunk2 = _re.sub(r"\s+و\s+", ",", chunk)
+        chunk2 = _re.sub(r"\s+وال", ",ال", chunk2)
         chunk2 = _re.sub(r"\s+and\s+", ",", chunk2, flags=_re.I)
         parts = _re.split(r"[\s,،/|+\-]+", chunk2)
         for p in parts:
