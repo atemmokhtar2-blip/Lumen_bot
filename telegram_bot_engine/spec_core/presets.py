@@ -92,7 +92,11 @@ def _has_any(text: str, keys: Iterable[str]) -> bool:
 
 
 def detect_preset(request: str) -> str | None:
-    """Return preset id or None."""
+    """Return preset id or None.
+
+    Order: most specific packs first. Generic "bot" requests fall through
+    to caller (use default_spec_from_request for guaranteed delivery).
+    """
     if _has_any(request, _GROUP_KEYS):
         return "group_management"
     if _has_any(request, _SUPPORT_KEYS):
@@ -102,6 +106,40 @@ def detect_preset(request: str) -> str | None:
     if _has_any(request, _NOTES_KEYS):
         return "notes"
     return None
+
+
+def is_bot_request(request: str) -> bool:
+    t = _norm(request)
+    keys = (
+        "بوت", "bot", "telegram", "تيليجرام", "تليجرام", "tg ",
+        "اعمل", "أنشئ", "انشئ", "سوي", "أبغى", "ابي", "أريد", "عايز", "عاوز",
+        "create", "make", "build",
+    )
+    return any(k in t for k in keys)
+
+
+# Full marketplace-grade default pack: group admin + welcome + tickets + basics
+_DEFAULT_CAPS = tuple(dict.fromkeys(
+    list(_GROUP_CAPS) + list(_SUPPORT_CAPS) + ["ping", "about"]
+))
+
+
+def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
+    """Always-on high-quality pack when the user asks for a bot.
+
+    Guarantees delivery without AI. Biased toward group operations because
+    that is the highest-demand product surface.
+    """
+    preset = detect_preset(request) or "group_management"
+    # If pure generic bot request with no domain, still use group_management
+    # as the market default (admins + welcome + tools).
+    if preset == "group_management" and _has_any(request, _SUPPORT_KEYS):
+        preset = "support_tickets"
+    s = session_for_preset(preset, user_id=user_id)
+    # Enrich default name from request snippet
+    if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot"}:
+        s.set_name("market_bot")
+    return s.to_spec()
 
 
 def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> BuilderSession:
@@ -139,4 +177,4 @@ def spec_from_request(request: str, *, user_id: int = 0) -> BotSpec | None:
     return session_for_preset(preset, user_id=user_id).to_spec()
 
 
-__all__ = ["detect_preset", "session_for_preset", "spec_from_request"]
+__all__ = ["detect_preset", "session_for_preset", "spec_from_request", "is_bot_request", "default_spec_from_request"]
