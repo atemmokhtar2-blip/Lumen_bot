@@ -3,6 +3,7 @@
 from .pipeline import BuildResult, build_from_spec
 from .registry import CAPABILITIES, by_category, get_capability, list_capabilities
 from .schema import BotSpec
+from .builder import BuilderSession, get_session, reset_session
 
 __all__ = [
     "BotSpec",
@@ -12,4 +13,7 @@ __all__ = [
     "get_capability",
     "list_capabilities",
     "by_category",
+    "BuilderSession",
+    "get_session",
+    "reset_session",
 ]
