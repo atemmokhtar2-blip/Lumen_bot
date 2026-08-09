@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import tempfile
 from pathlib import Path
 
@@ -465,8 +466,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
     # ChatRouter: help / list capabilities (route only)
+    # Skip help when the message is clearly a bot specification (contains /commands etc.)
     _rt_help = chat_route(request)
-    if _rt_help and getattr(_rt_help, "ok", False) and _rt_help.capability_id == "help":
+    _is_bot_spec = False
+    try:
+        from telegram_bot_engine.formal_engine.services.chat_router.service import _looks_like_bot_spec
+        _is_bot_spec = _looks_like_bot_spec(request)
+    except Exception:
+        _is_bot_spec = bool(
+            re.search(r"اعمل\s*بوت|أن?شئ\s*بوت|عايز\s*بوت", request, re.I)
+            or len(re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)) >= 2
+        )
+    if (
+        (not _is_bot_spec)
+        and _rt_help
+        and getattr(_rt_help, "ok", False)
+        and _rt_help.capability_id == "help"
+    ):
         try:
             from telegram_bot_engine.formal_engine.services.chat_router import get_router
             await message.reply_text(get_router().help_text())

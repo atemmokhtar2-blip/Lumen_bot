@@ -137,9 +137,15 @@ _BUILTIN: list[Capability] = [
         phrases=(
             "اعمل بوت", "أنشئ بوت", "انشئ بوت", "ولّد بوت", "ولد بوت",
             "عايز بوت", "أريد بوت", "اريد بوت", "create bot", "generate bot",
+            "بوت حجز", "بوت متجر", "بوت دعم",
         ),
-        patterns=(r"اعمل\s*بوت", r"أن?شئ\s*بوت", r"عايز\s*بوت", r"generate\s*bot"),
-        priority=60,
+        patterns=(
+            r"اعمل\s*بوت", r"أن?شئ\s*بوت", r"عايز\s*بوت",
+            r"generate\s*bot", r"create\s*bot",
+            r"/[a-zA-Z][a-zA-Z0-9_]{1,32}\s*[-–—:]",
+        ),
+        boost_words=("أوامر", "اوامر", "كيان", "كيانات", "أزرار", "/start", "/help", "/book"),
+        priority=95,
     ),
     Capability(
         id="static_analysis",
@@ -214,11 +220,42 @@ _BUILTIN: list[Capability] = [
         id="help",
         title_ar="مساعدة",
         description_ar="شرح قدرات البوت",
-        phrases=("مساعدة", "help", "ماذا تستطيع", "ايه اللي تقدر", "القدرات"),
-        patterns=(r"^help$", r"مساعد", r"قدرات"),
-        priority=40,
+        # ONLY pure help asks — never match "/help - مساعدة" inside a bot spec
+        phrases=(
+            "ماذا تستطيع", "ايه اللي تقدر", "ايه قدراتك", "ما هي قدراتك",
+            "explain capabilities", "what can you do",
+        ),
+        patterns=(
+            r"^help$",
+            r"^مساعدة$",
+            r"^المساعدة$",
+            r"^القدرات$",
+            r"^\s*help\s*$",
+            r"^\s*مساعدة\s*$",
+        ),
+        priority=30,
+        block_words=("اعمل بوت", "أنشئ بوت", "انشئ بوت", "عايز بوت", "/start", "/book", "كيان", "أوامر"),
     ),
 ]
+
+
+def _looks_like_bot_spec(text: str) -> bool:
+    """True when the user is describing a bot to generate — not asking for system help."""
+    t = text or ""
+    if re.search(
+        r"اعمل\s*بوت|أن?شئ\s*بوت|ول[ّ]?د\s*بوت|عايز\s*بوت|أريد\s*بوت|اريد\s*بوت|"
+        r"generate\s*bot|create\s*bot|bot\s*spec",
+        t,
+        re.I,
+    ):
+        return True
+    # Two or more explicit slash-commands → generation payload
+    if len(re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", t)) >= 2:
+        return True
+    if re.search(r"(?m)^\s*[A-Za-z][A-Za-z0-9_]+\s*\([^\)]+\)\s*$", t):
+        return True
+    return False
+
 
 
 def _normalize(text: str) -> str:
@@ -307,6 +344,16 @@ class ChatRouter:
         # normalize confidence roughly
         conf = min(1.0, best_s / 2.5)
         alts = [c.title_ar for _, c in scored[1:4]]
+
+        # Never hijack a bot-spec message into "help" because it contains /help - مساعدة
+        if best.id == "help" and _looks_like_bot_spec(raw):
+            for s, c in scored:
+                if c.id == "generate_bot":
+                    best_s, best = s, c
+                    conf = min(1.0, max(best_s / 2.5, 0.9))
+                    break
+            else:
+                return ChatRoute("", 0.0, "", raw_text=raw)
 
         params: dict[str, Any] = {}
         if best.id == "clone_repo":
