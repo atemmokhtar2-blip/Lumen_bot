@@ -900,9 +900,12 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("TOOL_IDS: list[str] = " + repr(_tool_ids))
     lines.append("FLOWS: dict[str, list[dict[str, str]]] = {")
     for w in _wiz:
+        steps = [st for st in (w.get("steps") or []) if isinstance(st, dict) and st.get("key")]
+        if not steps:
+            continue
         wid = str(w.get("id") or w.get("command") or "flow")
         lines.append(f"    {_py(wid)}: [")
-        for st in (w.get("steps") or []):
+        for st in steps:
             lines.append(
                 "        {\"key\": %s, \"prompt\": %s}," % (_py(st.get("key")), _py(st.get("prompt")))
             )
@@ -1156,20 +1159,27 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("        bucket = app_data.setdefault('records', {})")
         lines.append("        mine = bucket.setdefault(str(uid), [])")
         # Structural stems from command-name shape only (no domain rename packs).
-        lines.append("        if (_cn.startswith('list_') or _cn.startswith('my_') or")
-        lines.append("                _cn in ('mine', 'list')):")
+        lines.append("        _is_listish = (")
+        lines.append("            _cn.startswith('list_') or _cn.startswith('my_') or")
+        lines.append("            _cn in ('mine', 'list', 'catalog', 'cart', 'orders', 'products', 'basket') or")
+        lines.append("            str(FLOW_KIND.get(_cn) or '') in ('list', 'mine')")
+        lines.append("        )")
+        lines.append("        if _is_listish:")
         lines.append("            try:")
         lines.append("                from app.services import list_records")
-        lines.append("                if _cn.startswith('list_'):")
-        lines.append("                    ent = _cn[5:]")
-        lines.append("                elif _cn.startswith('my_'):")
-        lines.append("                    ent = _cn[3:]")
-        lines.append("                elif _cn.startswith('all_'):")
-        lines.append("                    ent = _cn[4:]")
-        lines.append("                else:")
-        lines.append("                    ent = 'record'")
-        lines.append("                ent = ent[:-1] if ent.endswith('s') and len(ent) > 3 else ent")
-        lines.append("                rows = await list_records(ent.capitalize(), uid)")
+        lines.append("                ent = str(FLOW_ENTITY.get(_cn) or '')")
+        lines.append("                if not ent:")
+        lines.append("                    if _cn.startswith('list_'):")
+        lines.append("                        ent = _cn[5:]")
+        lines.append("                    elif _cn.startswith('my_'):")
+        lines.append("                        ent = _cn[3:]")
+        lines.append("                    elif _cn.startswith('all_'):")
+        lines.append("                        ent = _cn[4:]")
+        lines.append("                    else:")
+        lines.append("                        ent = 'record'")
+        lines.append("                if ent and ent.endswith('s') and len(ent) > 3 and ent[:1].islower():")
+        lines.append("                    ent = ent[:-1]")
+        lines.append("                rows = await list_records(ent, uid)")
         lines.append("            except Exception:")
         lines.append("                rows = []")
         lines.append("            if not rows:")
