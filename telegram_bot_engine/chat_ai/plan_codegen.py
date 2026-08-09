@@ -201,8 +201,50 @@ def generate_project_from_plan(plan: dict[str, Any], out_dir: str | Path, *, tim
     returned = {f["path"] for f in files}
     missing = [p for p in required if p not in returned]
     errors.extend(f"missing_required_file:{p}" for p in missing)
+
+    # One automatic repair pass on syntax / legacy-API failures so the user is not dropped.
+    needs_repair = any(
+        e.startswith("syntax:") or e.startswith("legacy_ptb") or e.startswith("missing_application")
+        for e in errors
+    )
+    if errors and needs_repair:
+        repair_prompt = (
+            prompt
+            + "\n\nPREVIOUS OUTPUT FAILED VALIDATION:\n"
+            + json.dumps(errors[:12], ensure_ascii=False)
+            + "\n\nReturn a FIXED complete JSON files payload. "
+              "Fix indentation/syntax, use only python-telegram-bot v21+ Application async API, "
+              "no Updater/Filters/CallbackContext, no empty files."
+        )
+        try:
+            content2, model2 = mp.chat(
+                [{"role": "system", "content": _CODE_SYSTEM}, {"role": "user", "content": repair_prompt[:90000]}],
+                timeout=timeout,
+                max_tokens=int(
+                    os.environ.get(
+                        "CODEGEN_MAX_TOKENS",
+                        os.environ.get("HF_CODEGEN_MAX_TOKENS", "16000"),
+                    )
+                ),
+                temperature=0.0,
+                json_mode=True,
+            )
+            model = model2 or model
+            payload2 = _extract_json(content2)
+            if payload2 is not None:
+                files2, errors2 = _validate_files(payload2.get("files"))
+                returned2 = {f["path"] for f in files2}
+                missing2 = [p for p in required if p not in returned2]
+                errors2.extend(f"missing_required_file:{p}" for p in missing2)
+                if not errors2:
+                    files, errors, payload = files2, errors2, payload2
+                else:
+                    files, errors, payload = files2, errors2, payload2
+        except Exception as repair_exc:
+            errors.append(f"repair_failed:{type(repair_exc).__name__}:{repair_exc}"[:300])
+
     if errors:
-        return {"ok": False, "errors": list(dict.fromkeys(errors)), "files": files, "model": model, "notes": payload.get("notes") or []}
+        return {"ok": False, "errors": list(dict.fromkeys(errors)), "files": files, "model": model, "notes": (payload or {}).get("notes") or []}
     root = Path(out_dir)
     root.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
