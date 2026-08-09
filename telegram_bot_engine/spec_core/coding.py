@@ -868,7 +868,24 @@ def _emit_keyboards(spec: BotSpec) -> str:
         rows.append(
             f"        [InlineKeyboardButton({b.label!r}, callback_data={b.callback_id!r})],"
         )
-    # auto buttons from callback features if no start_buttons
+    # Fill from primary command features so the UI is not empty/incomplete
+    if len(rows) < 6:
+        seen = {b.callback_id for b in spec.start_buttons}
+        for feat in spec.features:
+            if feat.trigger.type != "command":
+                continue
+            if feat.trigger.id in {"start", "help"}:
+                continue
+            cb = f"cmd:{feat.trigger.id}"
+            if cb in seen:
+                continue
+            label = (feat.messages.success or feat.feature or feat.trigger.id)[:32]
+            rows.append(
+                f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
+            )
+            seen.add(cb)
+            if len(rows) >= 10:
+                break
     if not rows:
         for feat in spec.features:
             if feat.trigger.type == "callback":
@@ -1161,8 +1178,21 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
 
 def _emit_handlers(spec: BotSpec) -> str:
     lang = (spec.bot.language or "ar").lower()
-    welcome = "مرحباً بك 👋" if lang.startswith("ar") else "Welcome 👋"
+    n_cmds = len([f for f in spec.features if f.trigger.type == "command"])
+    if lang.startswith("ar"):
+        welcome = (
+            f"مرحباً بك 👋\\nبوت جاهز — {n_cmds} أمر.\\n"
+            "اكتب /help لكل الأوامر.\\nTELEGRAM_BOT_TOKEN في .env ثم python main.py"
+        )
+    else:
+        welcome = (
+            f"Welcome 👋\\nRunnable bot — {n_cmds} commands.\\n"
+            "Type /help for all commands.\\nSet TELEGRAM_BOT_TOKEN then python main.py"
+        )
     help_lines = []
+    help_lines.append(
+        f"قائمة الأوامر ({n_cmds}):" if lang.startswith("ar") else f"Commands ({n_cmds}):"
+    )
     for feat in spec.features:
         if feat.trigger.type == "command":
             desc = feat.messages.prompt or feat.feature
@@ -1652,6 +1682,11 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("        return")
     lines.append("    await query.answer()")
     lines.append("    data = query.data or ''")
+    lines.append("    if data.startswith('cmd:'):")
+    lines.append("        message = update.effective_message")
+    lines.append("        if message is not None:")
+    lines.append("            await message.reply_text('Use /' + data[4:] + ' to run this command.')")
+    lines.append("        return")
     if cb_map:
         for cid, handler in cb_map:
             lines.append(f"    if data == {cid!r}:")

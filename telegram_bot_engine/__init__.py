@@ -149,6 +149,8 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     from .core.result import GenerationResult, StageResult
     from .spec_core.presets import (
         detect_preset,
+        detect_preset_stack,
+        compose_session,
         session_for_preset,
         is_bot_request,
         default_spec_from_request,
@@ -157,7 +159,6 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
     preset = detect_preset(request)
     if preset is None and not force and not is_bot_request(request):
-        # Still deliver market default for any non-empty product-like request
         if not (request or "").strip():
             return None
         force = True
@@ -169,7 +170,13 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     project_dir = work_dir / "generated_bot"
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    if preset:
+    # Always prefer multi-intent composition so bots are not single-thin packs
+    stack = detect_preset_stack(request, limit=5)
+    if stack:
+        session = compose_session(stack, user_id=user_id, request=request)
+        spec = session.to_spec()
+        tag = "+".join(stack)
+    elif preset:
         spec = session_for_preset(preset, user_id=user_id).to_spec()
         tag = preset
     else:
