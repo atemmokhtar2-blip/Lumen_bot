@@ -931,6 +931,8 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         need_args(1)
         L.append("    pid = market_svc.add_item(user.id, ' '.join(context.args))")
         L.append(f"    await message.reply_text({ok!r} + f' #{{pid}}')")
+    elif method == "checkout" and svc == "cart":
+        L.append("    await message.reply_text(market_svc.cart_checkout(user.id))")
     elif method in {"place_order", "send_invoice", "checkout", "buy"}:
         L += [
             "    arg = ' '.join(context.args) if context.args else '1'",
@@ -980,7 +982,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             f"        await message.reply_text({fail!r})",
             "        return",
             "    ok_c = market_svc.cancel_order(user.id, oid)",
-            f"    await message.reply_text({ok!r} if ok_c else {fail!r})",
+            f"    await message.reply_text({ok!r} if ok_c else 'Cannot cancel — not found or not pending')",
         ]
     elif method in {"track_order"}:
         need_args(1)
@@ -1020,7 +1022,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             f"        await message.reply_text({fail!r} + ' — Usage: /cartadd <product_id> [qty]')",
             "        return",
             "    ok_c = market_svc.cart_add(user.id, pid, qty)",
-            f"    await message.reply_text({ok!r} if ok_c else {fail!r})",
+            "    await message.reply_text(f'Added product #{pid} x{qty} to cart' if ok_c else 'Product not found — try /shop')",
         ]
     elif method in {"view", "view_cart"} and svc in {"cart", "shop"}:
         L.append("    await message.reply_text(market_svc.cart_view(user.id))")
@@ -1065,7 +1067,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             f"        await message.reply_text({fail!r})",
             "        return",
             "    ok_d = market_svc.points_debit(uid, amt, 'redeem')",
-            f"    await message.reply_text({ok!r} if ok_d else {fail!r})",
+            "    await message.reply_text(f'Redeemed {amt} points' if ok_d else 'Insufficient points')",
         ]
     elif method == "transfer" and svc == "wallet":
         need_args(2)
@@ -1077,7 +1079,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "        return",
             "    # simple wallet move: add to target, subtract from sender if balance allows",
             "    if market_svc.wallet_balance(user.id) < amt:",
-            f"        await message.reply_text({fail!r})",
+            "        await message.reply_text('Insufficient wallet balance — /topup <amount> first')",
             "        return",
             "    market_svc.wallet_add(user.id, -amt)",
             "    bal = market_svc.wallet_add(to_uid, amt)",
@@ -1113,28 +1115,30 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         if method == "start_trial":
             L.append("    await message.reply_text(market_svc.start_trial(user.id))")
         else:
-            need_args(1)
-            L += [
-                "    try:",
-                "        plan_id = int(context.args[0])",
-                "        target = int(context.args[1]) if len(context.args) > 1 else user.id",
-                "    except ValueError:",
-                f"        await message.reply_text({fail!r})",
-                "        return",
-                "    ok_g = market_svc.grant_sub(target, plan_id)",
-                f"    await message.reply_text({ok!r} if ok_g else {fail!r})",
-            ]
+            L.append("    if not context.args:")
+            L.append("        plans = market_svc.list_plans()")
+            L.append("        text = chr(10).join('#' + str(p['id']) + ' ' + str(p['name']) for p in plans)")
+            L.append("        await message.reply_text('Usage: /subscribe <plan_id>' + chr(10) + text)")
+            L.append("        return")
+            L.append("    try:")
+            L.append("        plan_id = int(context.args[0])")
+            L.append("        target = int(context.args[1]) if len(context.args) > 1 else user.id")
+            L.append("    except ValueError:")
+            L.append("        await message.reply_text('plan_id must be a number — try /plans')")
+            L.append("        return")
+            L.append("    ok_g = market_svc.grant_sub(target, plan_id)")
+            L.append(f"    await message.reply_text(({ok!r} + f' plan={{plan_id}}') if ok_g else {fail!r})")
     elif method == "revoke" and svc == "subscriptions":
         need_args(1)
         L += [
             "    try:",
             "        target = int(context.args[0])",
             "    except ValueError:",
-            f"        await message.reply_text({fail!r})",
+            "        await message.reply_text('Usage: /revokesub <user_id>')",
             "        return",
-            "    # soft revoke: record event",
             "    from app.services import generic as generic_svc",
-            "    await message.reply_text(generic_svc.act('subscriptions', 'revoke', target, str(target)))",
+            "    generic_svc.act('subscriptions', 'revoke', target, str(target))",
+            "    await message.reply_text(f'Subscription revoke recorded for user {target}')",
         ]
     # ── contests ──────────────────────────────────────────────────────
     elif method in {"list_open", "rules", "share"}:
@@ -1183,7 +1187,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method in {"claim", "claim_reward"} and svc == "growth":
         need_args(1)
         L.append("    ok_c = market_svc.claim_referral(user.id, context.args[0])")
-        L.append(f"    await message.reply_text({ok!r} if ok_c else {fail!r})")
+        L.append(f"    await message.reply_text({ok!r} if ok_c else 'Invalid or already-used referral code')")
     elif method == "daily_checkin":
         L.append("    await message.reply_text(market_svc.daily_checkin(user.id))")
     # ── wallet ────────────────────────────────────────────────────────
@@ -1232,17 +1236,44 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("        'Terms: Digital goods are delivered after successful Telegram Payment. '")
         L.append("        'Abuse, fraud, or chargebacks may result in account restriction.'")
         L.append("    )")
-    elif method in {
-        "wishlist_add", "wishlist_view", "review_add", "review_list",
-        "shipping_set", "refund_request", "refund_approve", "digital_deliver",
-        "pre_checkout", "successful_payment",
-    }:
-        L.append("    from app.services import generic as generic_svc")
-        L.append(
-            f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
-            "' '.join(context.args) if context.args else '')"
-        )
-        L.append(f"    await message.reply_text(result if result else {ok!r})")
+    elif method == "wishlist_add":
+        need_args(1)
+        L += [
+            "    try:",
+            "        pid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.wishlist_add(user.id, pid))",
+        ]
+    elif method == "wishlist_view":
+        L.append("    await message.reply_text(market_svc.wishlist_view(user.id))")
+    elif method == "review_add":
+        L.append("    await message.reply_text(market_svc.review_add(user.id, ' '.join(context.args) if context.args else ''))")
+    elif method == "shipping_set":
+        L.append("    await message.reply_text(market_svc.shipping_set(user.id, ' '.join(context.args) if context.args else ''))")
+    elif method in {"refund_request", "refund_approve"}:
+        need_args(1)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.refund_request(user.id, oid))",
+        ]
+    elif method == "digital_deliver":
+        need_args(1)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.digital_deliver(user.id, oid))",
+        ]
+    elif method in {"pre_checkout", "successful_payment"}:
+        L.append("    await message.reply_text('Payment events are handled automatically after invoice pay — no manual command needed.')")
     else:
         if svc in {"analytics", "admin", "notify"}:
             L += [

@@ -359,6 +359,9 @@ def detect_preset_stack(request: str, *, limit: int = 4) -> list[str]:
     """Top matching presets for intelligent composition."""
     ranked = score_presets(request)
     if not ranked:
+        t = _norm(request)
+        if any(k in t for k in ("بوت", "bot", "telegram", "اعمل", "أنشئ", "انشئ", "create", "make")):
+            return ["group_management"]
         return []
     top = ranked[0][1]
     # Keep primary + strong secondary intents (25% of top or absolute score >= 1.2)

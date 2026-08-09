@@ -50,6 +50,7 @@ def add_item(admin_id: int, text: str) -> int:
 
 def place_order(user_id: int, text: str) -> int:
     ensure()
+    seed_demo_catalog()
     try:
         pid = int((text or "").split()[0])
     except Exception:
@@ -634,6 +635,7 @@ def payment_receipt(user_id: int, payment_id: int) -> str:
 
 def cart_add(user_id: int, product_id: int, qty: int = 1) -> bool:
     ensure()
+    seed_demo_catalog()
     qty = max(1, int(qty))
     prod = get_product(product_id)
     if not prod:
@@ -677,3 +679,107 @@ def cart_clear(user_id: int) -> int:
         cur = conn.execute("DELETE FROM cart_items WHERE user_id=?", (user_id,))
         conn.commit()
         return int(cur.rowcount)
+
+
+def cart_checkout(user_id: int) -> str:
+    """Create pending orders for every cart line; clear cart on success."""
+    ensure()
+    seed_demo_catalog()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT product_id, qty FROM cart_items WHERE user_id=?",
+            (user_id,),
+        ).fetchall()
+    if not rows:
+        return "Cart empty — add items with /cartadd <product_id>"
+    order_ids = []
+    for r in rows:
+        pid = int(r["product_id"])
+        qty = int(r["qty"] or 1)
+        for _ in range(max(1, qty)):
+            oid = place_order(user_id, str(pid))
+            if oid:
+                order_ids.append(oid)
+    cart_clear(user_id)
+    if not order_ids:
+        return "Checkout failed — no valid products"
+    return f"Checkout OK — orders: {', '.join(f'#{i}' for i in order_ids)}"
+
+
+def wishlist_add(user_id: int, product_id: int) -> str:
+    ensure()
+    seed_demo_catalog()
+    prod = get_product(product_id)
+    if not prod:
+        return f"Product #{product_id} not found. /shop to list."
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (user_id, "wishlist", f"{product_id}:{prod['title']}"),
+        )
+        conn.commit()
+    return f"Wishlist + {prod['title']}"
+
+
+def wishlist_view(user_id: int) -> str:
+    ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, body FROM extras_kv WHERE user_id=? AND kind='wishlist' AND status='open' ORDER BY id DESC LIMIT 30",
+            (user_id,),
+        ).fetchall()
+    if not rows:
+        return "Wishlist empty"
+    return "\n".join(f"#{r['id']} {r['body']}" for r in rows)
+
+
+def refund_request(user_id: int, order_id: int) -> str:
+    ensure()
+    order = get_order(order_id)
+    if not order or int(order["user_id"]) != int(user_id):
+        return "Order not found"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (user_id, "refund", f"order:{order_id}"),
+        )
+        conn.commit()
+    return f"Refund requested for order #{order_id} (pending staff review)"
+
+
+def digital_deliver(user_id: int, order_id: int) -> str:
+    ensure()
+    order = get_order(order_id)
+    if not order:
+        return "Order not found"
+    if order["status"] != "paid":
+        return f"Order #{order_id} status={order['status']} — pay first"
+    return f"Digital delivery for order #{order_id}: unlock code DL-{order_id}-{user_id % 10000:04d}"
+
+
+def shipping_set(user_id: int, address: str) -> str:
+    ensure()
+    address = (address or "").strip()
+    if len(address) < 5:
+        return "Usage: send address text after the command"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (user_id, "shipping", address[:500]),
+        )
+        conn.commit()
+    return "Shipping address saved"
+
+
+def review_add(user_id: int, text: str) -> str:
+    ensure()
+    text = (text or "").strip()
+    if len(text) < 2:
+        return "Usage: /reviewadd <product_id> <text>"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (user_id, "review", text[:1000]),
+        )
+        conn.commit()
+    return "Review saved — thank you"
