@@ -6,12 +6,16 @@ Active path:
     → [SpecTranslator AI: translate only → JSON]
     → [Grounding against original text]
     → Formal DSL → Inference → Flow Composer → Transpile → Verify
+    → [optional] GitOperations (push/pull/commit) when user text requests it
 
-HARD RULES:
+HARD RULES (STRICT — non-negotiable):
   - AI may ONLY translate speech → structured spec (no code generation).
   - Grounding drops anything not evidenced in the user text.
   - Formal engine is the ONLY code generator.
-  - No domain templates / canned packs.
+  - IMPOSSIBLE to create any saved artefact, ready-made bot template,
+    default command packs, or pre-baked structures.
+  - Everything is generated dynamically and exclusively from the user's
+    natural-language text. Zero domain templates / canned packs.
   - Structural minima only: /start and /help.
 """
 
@@ -38,12 +42,121 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+
+def _maybe_run_git_stage(
+    *,
+    original_request: str,
+    project_path: str,
+    stages: list,
+) -> dict | None:
+    """
+    Optionally run GitOperationsEngine after successful formal generation.
+
+    Triggered only when the user text explicitly mentions git-related actions
+    (push / pull / commit / clone / git / بوش / اسحب / اعمل كوميت ...).
+
+    STRICT RULE (non-negotiable):
+      - No saved templates or ready-made bot packs.
+      - Every operation is derived dynamically from the user's text
+        and the just-generated project path. Nothing is pre-baked.
+    """
+    from pathlib import Path as _Path
+    from .core.context import GenerationContext
+    from .core.result import StageResult
+    from .configuration import Configuration
+    from .configuration.defaults import build_default_schema
+
+    text = (original_request or "").lower()
+    git_keywords = (
+        "git ", "git\n", "push", "pull", "commit", "clone", "fetch",
+        "بوش", "اسحب", "اسحبوا", "كوميت", "اعمل كوميت", "ادفع", "جيب من الجيت",
+        "repository", "repo ", "github",
+    )
+    if not any(k in text for k in git_keywords):
+        return None
+
+    try:
+        from .engines.generators.git_operations import GitOperationsEngine
+
+        # Detect intended operation from user text (purely dynamic)
+        op = "commit"
+        if any(k in text for k in ("push", "بوش", "ادفع")):
+            op = "push"
+        elif any(k in text for k in ("pull", "اسحب", "اسحبوا", "جيب")):
+            op = "pull"
+        elif any(k in text for k in ("clone", "كلون")):
+            op = "clone"
+        elif any(k in text for k in ("commit", "كوميت", "اعمل كوميت")):
+            op = "commit"
+
+        cfg = Configuration(schema=build_default_schema(), sources=[])
+        ctx = GenerationContext(
+            request=original_request,
+            config=cfg,
+            work_dir=_Path(project_path),
+        )
+        # Pass real-execution hints so GitExecutor can act on the generated project
+        ctx.artefacts["repo_path"] = project_path
+        ctx.artefacts["git_operation"] = op
+        ctx.artefacts["operation"] = op
+        ctx.artefacts["execute_real"] = True
+        ctx.artefacts["add_all"] = True
+        ctx.artefacts["message"] = "chore: generated bot from user request"
+        # Shape expected by UserRequestReader / GitExecutor
+        ctx.artefacts["user_request"] = {
+            "operation": op,
+            "git_operation": op,
+            "repo_path": project_path,
+            "path": project_path,
+            "work_dir": project_path,
+            "execute_real": True,
+            "add_all": True,
+            "message": "chore: generated bot from user request",
+            "operations": [op],
+        }
+
+        engine = GitOperationsEngine()
+        result = engine.execute(ctx)
+
+        ok = bool(getattr(result, "success", None) or getattr(result, "ok", False))
+        stage_payload = {
+            "ok": ok,
+            "operation": op,
+            "project_path": project_path,
+            "outputs": getattr(result, "outputs", None) or {},
+            "errors": list(getattr(result, "errors", None) or [])[:8],
+        }
+
+        if ok:
+            stages.append(StageResult.ok("git_operations", outputs=stage_payload))
+        else:
+            stages.append(
+                StageResult.failed(
+                    "git_operations",
+                    errors=stage_payload["errors"] or ["git_operations_failed"],
+                )
+            )
+        return stage_payload
+    except Exception as exc:
+        stages.append(
+            StageResult.failed("git_operations", errors=[f"{type(exc).__name__}:{exc}"])
+        )
+        return {"ok": False, "error": str(exc)[:200]}
+
+
+
 def generate_bot(request: str, work_dir=None):
     """
     Entry point used by the Telegram interface.
 
     AI SpecTranslator (optional): speech → structured spec only.
     Formal engine: only code generator. No domain templates.
+
+    STRICT RULE (project-wide, non-negotiable until tomorrow and beyond):
+      Impossible to create any saved artefact, ready-made bot template,
+      default command packs, or pre-baked structures. Everything is
+      generated dynamically and exclusively from the user's natural-language
+      text via SpecTranslator → formal/DSL path.
     """
     from pathlib import Path
     import tempfile
@@ -314,37 +427,52 @@ def generate_bot(request: str, work_dir=None):
             and len(files) > 0
         )
 
+        # ── Optional Git stage: FormalGeneration → GitOperations link ──
+        # Runs only when user text explicitly requests git/push/pull/commit.
+        # STRICT RULE: no templates; ops derived solely from user text + generated path.
+        git_meta = None
+        if ok and path_str:
+            git_meta = _maybe_run_git_stage(
+                original_request=original_request,
+                project_path=path_str,
+                stages=stages,
+            )
+
         elapsed = time.perf_counter() - t0
+        meta = {
+            "engine": "dsl_formal",
+            "files_created": files,
+            "elapsed_ms": round(elapsed * 1000, 1),
+            "compile_ok": compile_ok,
+            "ready_for_token": bool(ok),
+            "dsl_relations": build.dsl_relations,
+            "dsl_operations": build.dsl_operations,
+            "dsl_rules": build.dsl_rules,
+            "structure_plan": getattr(build, "structure_plan", None) or {},
+            "structure_gate": getattr(build, "structure_gate", None) or {},
+            "structure_files": list(getattr(build, "structure_files", None) or []),
+            "structure_only": bool(getattr(build, "structure_only", False)),
+            "code_engine": getattr(build, "code_engine", None) or {},
+            "quality": getattr(build, "quality", None) or {},
+            "verify_ok": verify_ok,
+            "commands": cmd_names,
+            "grounding": (
+                build.grounding.to_dict()
+                if getattr(build, "grounding", None) is not None
+                else None
+            ),
+            "spec_translator": translator_meta,
+        }
+        if git_meta is not None:
+            meta["git_operations"] = git_meta
+
         return GenerationResult(
             success=ok,
             project_path=path_str,
             stages=stages,
             validation_reports=[],
             errors=errors,
-            metadata={
-                "engine": "dsl_formal",
-                "files_created": files,
-                "elapsed_ms": round(elapsed * 1000, 1),
-                "compile_ok": compile_ok,
-                "ready_for_token": bool(ok),
-                "dsl_relations": build.dsl_relations,
-                "dsl_operations": build.dsl_operations,
-                "dsl_rules": build.dsl_rules,
-                "structure_plan": getattr(build, "structure_plan", None) or {},
-                "structure_gate": getattr(build, "structure_gate", None) or {},
-                "structure_files": list(getattr(build, "structure_files", None) or []),
-                "structure_only": bool(getattr(build, "structure_only", False)),
-                "code_engine": getattr(build, "code_engine", None) or {},
-                "quality": getattr(build, "quality", None) or {},
-                "verify_ok": verify_ok,
-                "commands": cmd_names,
-                "grounding": (
-                    build.grounding.to_dict()
-                    if getattr(build, "grounding", None) is not None
-                    else None
-                ),
-                "spec_translator": translator_meta,
-            },
+            metadata=meta,
         )
 
     except Exception as exc:

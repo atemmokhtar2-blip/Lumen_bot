@@ -55,7 +55,9 @@ class FormalGenerationEngine(BaseEngine):
             "dsl_operations": result.dsl_operations,
             "engine_path": "dsl_formal",
         }
+        # Expose path so downstream GitOperationsEngine can act on the generated project
         context.artefacts["generated_project_path"] = str(path)
+        context.artefacts["repo_path"] = str(path)
         context.artefacts["formal_generation_report"] = outputs
         context.artefacts["dsl_inference"] = result.inference
         return self.ok(outputs=outputs, metadata={"engine": "formal_generation", "path": "dsl_formal"})

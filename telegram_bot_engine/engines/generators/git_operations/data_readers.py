@@ -69,6 +69,18 @@ class UserRequestReader(_BaseReader):
             a = ctx.get(self.ARTEFACT_KEY)
             if a is None:
                 a = ctx.get("git_request") or ctx.get("repository_request")
+            if a is None and (ctx.get("git_operation") or ctx.get("operation") or ctx.get("repo_path")):
+                # Dynamic fallback from artefacts set by formal → git link
+                a = {
+                    "operation": ctx.get("git_operation") or ctx.get("operation"),
+                    "git_operation": ctx.get("git_operation") or ctx.get("operation"),
+                    "repo_path": ctx.get("repo_path") or str(ctx.work_dir or ""),
+                    "execute_real": ctx.get("execute_real", False),
+                    "message": ctx.get("message") or "",
+                    "operations": [ctx.get("git_operation") or ctx.get("operation")] if (ctx.get("git_operation") or ctx.get("operation")) else [],
+                }
+            if a is None and getattr(ctx, "request", None):
+                a = {"text": ctx.request, "operation": "commit"}
             if a is None:
                 d.error = "missing user_request"
                 return d

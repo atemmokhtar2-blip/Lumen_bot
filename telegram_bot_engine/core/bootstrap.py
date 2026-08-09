@@ -44,7 +44,7 @@ ENGINE_META: Dict[str, Tuple[int, List[str]]] = {
     "workspace_management": (130, ["file_system"]),
     "blueprint_validator": (140, ["workspace_management"]),
     "component_detector": (150, ["blueprint_validator"]),
-    "git_operations": (180, ["component_detector"]),
+    "git_operations": (180, ["formal_generation", "component_detector"]),
     "repository_management": (190, ["git_operations"]),
 }
 
