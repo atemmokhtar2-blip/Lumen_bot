@@ -470,6 +470,13 @@ def infer(program: DSLProgram) -> InferenceResult:
             and k.lower() not in noise
             and not set(k) <= {"_"}
         ]
+        # Context: ticket-like descriptions use العنوان as title not address
+        ticket_like = any(x in d for x in ("وصف", "أولوية", "اولوية", "تذكر", "ticket", "description", "priority"))
+        if ticket_like and "address" in found and "title" not in found:
+            found = ["title" if k == "address" else k for k in found]
+        elif ticket_like and "address" in found and "title" in found:
+            found = [k for k in found if k != "address"]
+        # Preserve order of first occurrence in description for Arabic labels
         return found[:8]
 
 
@@ -711,10 +718,23 @@ def infer(program: DSLProgram) -> InferenceResult:
         if getattr(op, "kind", None) != "wizard":
             continue
         wid = op.name or (op.meta or {}).get("command") or "flow"
-        if wid in existing_ids:
-            continue
         meta = op.meta or {}
         steps = list(meta.get("steps") or [])
+        if wid in existing_ids:
+            # Replace weaker command-inferred wizard when flow section has more steps
+            for i, w in enumerate(wizards):
+                if str(w.get("id") or w.get("command")) == wid:
+                    if len(steps) > len(w.get("steps") or []):
+                        wizards[i] = {
+                            "id": wid,
+                            "command": meta.get("command") or wid,
+                            "entity": meta.get("entity") or w.get("entity") or "record",
+                            "kind": meta.get("kind") or "collect",
+                            "steps": steps,
+                            "prefill_from_button": meta.get("prefill_from_button") or "",
+                        }
+                    break
+            continue
         if not steps and op.inputs:
             steps = [{"key": k, "prompt": f"أرسل {k}"} for k in op.inputs]
         # Drop garbage keys from weak model output
