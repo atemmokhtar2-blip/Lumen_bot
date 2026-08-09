@@ -258,6 +258,8 @@ def generate_bot(request: str, work_dir=None):
                 "dsl_relations": build.dsl_relations,
                 "dsl_operations": build.dsl_operations,
                 "dsl_rules": build.dsl_rules,
+                "structure_plan": getattr(build, "structure_plan", None) or {},
+                "structure_gate": getattr(build, "structure_gate", None) or {},
                 "verify_ok": verify_ok,
                 "commands": cmd_names,
                 "grounding": (
