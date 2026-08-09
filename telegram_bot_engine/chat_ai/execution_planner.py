@@ -22,9 +22,10 @@ The JSON object MUST have this shape:
 {
   "bot_name": "string",
   "summary": "string",
+  "language": "ar|en|mixed",
   "commands": [{"name":"snake_case","description":"string","admin_only":false,"roles":["user"]}],
   "buttons": [{"label":"string","callback_id":"snake_case"}],
-  "entities": [{"name":"string","fields":[{"name":"string","type":"str|int|bool|float|list|dict|str | None|int | None"}],"relations":[{"target":"string","type":"one_to_many|many_to_one|one_to_one"}]}],
+  "entities": [{"name":"string","fields":[{"name":"string","type":"str|int|bool|float|list|dict"}],"relations":[{"target":"string","type":"one_to_many|many_to_one|one_to_one"}]}],
   "flows": [{"name":"string","trigger":"command or callback","steps":[{"id":"string","action":"string","label":"string","next_id":"string|null","collects_field":"string|null","branches":[]}]}],
   "permissions": [{"role":"user|admin|owner|custom","allows":["command or callback"]}],
   "conversation_states": [{"name":"string","prompt":"string","next_state":"string|null","collects_field":"string|null"}],
@@ -32,7 +33,7 @@ The JSON object MUST have this shape:
   "integrations": ["telegram"],
   "tech":{"database":"sqlite|postgres|none","payments":false,"admin_panel":false,"async_queue":false,"file_handling":false,"state_management":true},
   "quality":{"high_performance":true,"full_error_handling":true,"concurrent_users":false,"modular_code":true},
-  "architecture":{"style":"string","framework":"python-telegram-bot|aiogram","layers":["string"],"dependency_injection":false},
+  "architecture":{"style":"string","framework":"python-telegram-bot","ptb_version":"21+","layers":["string"],"dependency_injection":false},
   "files":[{"path":"relative/path","purpose":"string","dependencies":["relative/path"],"required":true}],
   "acceptance_tests":[{"name":"string","steps":["string"],"expected":"string"}],
   "hard_constraints":["string"],
@@ -40,14 +41,17 @@ The JSON object MUST have this shape:
 }
 
 Rules:
-- Create a flow for every non-trivial command. A flow must have ordered steps.
-- Preserve every explicit entity field, rule, permission, integration, and file requirement.
-- Do not add commands merely because an entity exists. /start and /help may be added only as runtime essentials.
-- Do not emit a Tool for every command. Tools are only external operations explicitly requested.
-- Files must be derived from the architecture and requirements, not a fixed list.
+- framework MUST be python-telegram-bot with ptb_version 21+ (never legacy Updater API).
+- Create a dedicated flow for every non-trivial command; steps must be ordered and unique ids.
+- Do not share conversation state names across unrelated flows.
+- Every button callback_id must map to a real command or flow trigger.
+- Preserve every explicit entity field, rule, permission, and integration from the user text.
+- Always include these required files in "files": main.py, requirements.txt, .env.example, README.md
+  plus modular modules justified by the architecture (e.g. handlers/, services/, models/, db/).
+- language must reflect the user text (ar if Arabic dominates).
+- Do not add commands merely because an entity exists. /start and /help may be added as runtime essentials only.
 - Never claim a feature is implemented; this is a plan for a later code-generation stage.
 """
-
 
 @dataclass
 class ExecutionPlanResult:
