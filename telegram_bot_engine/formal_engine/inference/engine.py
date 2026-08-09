@@ -273,57 +273,156 @@ def infer(program: DSLProgram) -> InferenceResult:
         "title": "أرسل العنوان:",
     }
 
-    # Arabic / English phrases in descriptions → field keys (text-grounded)
+
+    # Linguistic field cues extracted from user wording only (not bot templates).
+    # Maps surface words that appear in the user's text → stable field keys.
     _DESC_FIELD_MAP: list[tuple[str, str]] = [
-        ("البريد", "email"), ("ايميل", "email"), ("email", "email"),
+        ("البريد الإلكتروني", "email"), ("البريد", "email"), ("ايميل", "email"), ("email", "email"),
+        ("اسم المريض", "patient_name"), ("patient_name", "patient_name"), ("patient name", "patient_name"),
         ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
-        ("الصف", "grade"), ("المستوى", "grade"), ("grade", "grade"),
-        ("الهاتف", "phone"), ("الجوال", "phone"), ("رقم الهاتف", "phone"), ("phone", "phone"),
-        ("العنوان", "address"), ("address", "address"), ("title", "title"),
+        ("رقم الهاتف", "phone"), ("الهاتف", "phone"), ("الجوال", "phone"), ("phone", "phone"),
+        ("العنوان", "address"), ("address", "address"),
         ("الوصف", "description"), ("description", "description"),
+        ("العنوان/الاسم", "title"), ("title", "title"),
+        ("التاريخ", "date"), ("تاريخ", "date"), ("date", "date"),
+        ("الوقت", "time"), ("وقت", "time"), ("time", "time"),
+        ("الموعد", "slot"), ("موعد", "slot"), ("slot", "slot"),
+        ("الحالة", "status"), ("status", "status"),
+        ("الملاحظات", "notes"), ("ملاحظات", "notes"), ("notes", "notes"),
         ("السعر", "price"), ("price", "price"),
-        ("الكورس", "course_id"), ("رقم الكورس", "course_id"), ("كود الكورس", "course_id"),
-        ("course", "course_id"), ("المادة", "course_id"),
-        ("الطالب", "student_id"), ("student", "student_id"),
+        ("الكمية", "quantity"), ("كمية", "quantity"), ("quantity", "quantity"),
         ("المدينة", "city"), ("city", "city"),
         ("الدرجة", "score"), ("score", "score"),
         ("التقدم", "progress"), ("progress", "progress"),
-        ("الملاحظات", "notes"), ("notes", "notes"),
-        ("الكمية", "stock"), ("quantity", "stock"),
+        ("الصف", "grade"), ("المستوى", "grade"), ("grade", "grade"),
+        ("الكورس", "course_id"), ("رقم الكورس", "course_id"), ("course", "course_id"),
+        ("الطالب", "student_id"), ("student", "student_id"),
     ]
 
     def _prompt_for(field: str) -> str:
-        f = field.lower()
-        if f in _PROMPT:
-            return _PROMPT[f]
-        return f"أرسل {field}"
+        f = (field or "").strip()
+        fl = f.lower()
+        # Prefer Arabic cue that the user actually used in nearby text when available
+        for phrase, key in _DESC_FIELD_MAP:
+            if key == fl or key == f:
+                # Use the first Arabic phrase for this key if any
+                if any("\u0600" <= ch <= "\u06FF" for ch in phrase):
+                    return f"أرسل {phrase}"
+        if fl in _PROMPT:
+            return _PROMPT[fl]
+        # Dynamic: humanize snake_case from user-derived key only
+        label = f.replace("_", " ").strip()
+        return f"أرسل {label}"
+
+    def _split_field_chunk(chunk: str) -> list[str]:
+        """Split a user-written list of fields into ordered keys."""
+        import re as _re
+        chunk = (chunk or "").strip()
+        if not chunk:
+            return []
+        # normalize conjunctions
+        chunk = _re.sub(r"\s+و\s+", ",", chunk)
+        chunk = _re.sub(r"\s+and\s+", ",", chunk, flags=_re.I)
+        parts = _re.split(r"[\s,،/|+\-]+", chunk)
+        keys: list[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            p = p.strip().strip("()[]«»\"'")
+            if len(p) < 2:
+                continue
+            # map known linguistic cue
+            mapped = None
+            for phrase, key in _DESC_FIELD_MAP:
+                if p == phrase or p.lower() == phrase.lower() or phrase in p:
+                    mapped = key
+                    break
+            if mapped is None:
+                # ascii identifier from user token
+                ident = _re.sub(r"[^a-zA-Z0-9_]", "_", p)
+                if ident and ident[0].isdigit():
+                    ident = "f_" + ident
+                if not ident or len(ident) < 2:
+                    continue
+                # skip pure stop words
+                if ident.lower() in {
+                    "the", "a", "an", "id", "user_id", "and", "or",
+                    "new", "جديد", "فقط", "only", "for", "to", "from",
+                }:
+                    continue
+                # Drop pure underscore / non-alnum noise
+                if not any(ch.isalnum() for ch in ident):
+                    continue
+                mapped = ident.lower()
+            if mapped not in seen:
+                seen.add(mapped)
+                keys.append(mapped)
+        return keys[:8]
 
     def _fields_from_description(desc: str) -> list[str]:
-        """Pull ordered field keys mentioned in the command description."""
+        """Pull ordered field keys evidenced in the command description text only."""
+        import re as _re
         d = desc or ""
         if not d:
             return []
         found: list[str] = []
         seen: set[str] = set()
-        # preserve order of appearance
-        hits: list[tuple[int, str]] = []
-        for phrase, key in _DESC_FIELD_MAP:
-            idx = d.lower().find(phrase.lower()) if phrase.isascii() else d.find(phrase)
-            if idx < 0:
-                # try normalized arabic
-                idx = d.find(phrase)
-            if idx >= 0 and key not in seen:
-                hits.append((idx, key))
-                seen.add(key)
-        hits.sort(key=lambda x: x[0])
-        for _, key in hits:
-            found.append(key)
-        return found[:6]
 
-    # ── Flow Composer: classify commands → collect / lookup / mine / list ──
-    # No domain packs. Classification is structural from command name + desc + entities.
+        def _push(keys: list[str]) -> None:
+            for k in keys:
+                if k and k not in seen:
+                    seen.add(k)
+                    found.append(k)
+
+        explicit = False
+        # 1) Parenthetical / bracket lists: (الاسم والتاريخ والوقت)
+        for m in _re.finditer(r"[\(\[«]([^\)\]»]{2,100})[\)\]»]", d):
+            keys = _split_field_chunk(m.group(1))
+            if keys:
+                _push(keys)
+                explicit = True
+
+        # 2) After collect verbs
+        for m in _re.finditer(
+            r"(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع|collect(?:s)?|gather(?:s)?|ask(?:s)?\s+for)\s+([^\n\.]{3,100})",
+            d,
+            _re.I,
+        ):
+            keys = _split_field_chunk(m.group(1))
+            if keys:
+                _push(keys)
+                explicit = True
+
+        # 3) Fallback scan only when no explicit list
+        if not explicit:
+            hits: list[tuple[int, str]] = []
+            for phrase, key in _DESC_FIELD_MAP:
+                if key in seen:
+                    continue
+                idx = d.lower().find(phrase.lower()) if phrase.isascii() else d.find(phrase)
+                if idx >= 0:
+                    hits.append((idx, key))
+                    seen.add(key)
+            hits.sort(key=lambda x: x[0])
+            for _, key in hits:
+                if key not in found:
+                    found.append(key)
+
+        noise = {
+            "new", "id", "user_id", "and", "or", "the", "a",
+            "____", "__", "_", "status", "registered_at", "created_at", "updated_at",
+            "is_admin", "banned", "active", "enabled",
+        }
+        found = [
+            k for k in found
+            if k and any(ch.isalnum() for ch in k)
+            and k.lower() not in noise
+            and not set(k) <= {"_"}
+        ]
+        return found[:8]
+
+
     _INPUT_VERBS = (
-        "create", "add", "register", "submit", "new",
+        "create", "add", "register", "submit", "new", "book", "order",
         "open", "signup", "sign_up", "join", "apply", "insert", "post",
         "request", "form", "subscribe", "invite",
         "scan", "inspect", "analyze", "audit",
@@ -336,8 +435,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         "progress", "score", "history", "balance", "profile", "settings",
     }
     _LIST_CMDS = {
-        "list", "menu", "items",
-        "stats", "statistics", "dashboard",
+        "list", "menu", "items", "stats", "statistics", "dashboard",
     }
     _SKIP_CMDS = {
         "cancel", "admin", "broadcast", "ban", "help", "start",
@@ -352,17 +450,16 @@ def infer(program: DSLProgram) -> InferenceResult:
     _DESC_INPUT_HINTS = (
         "يجمع", "اجمع", "يطلب", "اطلب", "يسجل", "تسجيل", "يحتاج", "ادخل",
         "أدخل", "enter", "collect", "gather", "ask for", "requires", "اسم",
-        "بريد", "هاتف", "صف", "collects", "حجز", "طلب",
+        "بريد", "هاتف", "صف", "collects", "حجز", "طلب", "موعد", "تاريخ", "وقت",
     )
-
-    # Entity binding uses ONLY entities present in the grounded program.
 
     def _cmd_kind(cname: str, desc: str = "") -> str:
         c = cname.lower()
         if c in _SKIP_CMDS:
             return "skip"
         parts = [p for p in c.replace("-", "_").split("_") if p]
-        if any(s in parts for s in _SKIP_STEMS) and c not in _LOOKUP_CMDS:
+        # Multi-part commands like cancel_appointment are not pure skip stems
+        if len(parts) == 1 and any(s in parts for s in _SKIP_STEMS) and c not in _LOOKUP_CMDS:
             return "skip"
         if c in _LOOKUP_CMDS or any(x in parts for x in ("track", "search", "find", "lookup")):
             return "lookup"
@@ -381,48 +478,95 @@ def infer(program: DSLProgram) -> InferenceResult:
 
     def _entity_for_command(cmd_name: str, cmd_desc: str) -> str | None:
         """Bind command to an entity that already exists in the user contract only."""
-        cn = (cmd_name or "").lower()
-        cd = (cmd_desc or "").lower()
+        cn = (cmd_name or "").lower().replace("-", "_")
+        cd = (cmd_desc or "")
+        cd_l = cd.lower()
+        desc_fields = set(_fields_from_description(cd))
         best, best_score = None, 0
+        non_user = [e for e in entity_fields if e.lower() not in {"user", "admin", "users"}]
+
         for ename, fields in entity_fields.items():
             el = ename.lower()
+            fl_set = {str(f).lower() for f in (fields or [])}
             score = 0
             if el in cn or cn.endswith("_" + el) or cn.startswith(el + "_"):
                 score += 10
-            if el in cd:
-                score += 4
-            # token overlap with entity name parts
+            if el in cd_l:
+                score += 6
             for part in el.replace("-", "_").split("_"):
-                if len(part) >= 3 and part in cn.replace("-", "_").split("_"):
+                if len(part) >= 3 and part in cn.split("_"):
                     score += 6
             cn_only = cn.replace("_", "")
             if cn_only and (cn_only in el or el in cn_only):
                 score += 3
+            # Field overlap between description cues and entity attributes (text-grounded)
+            overlap = len(desc_fields & fl_set)
+            score += overlap * 5
+            # Arabic soft cues that appear in BOTH description and entity name fragments
+            if any(w in cd for w in ("موعد", "حجز", "appointment", "booking")) and any(
+                w in el for w in ("appoint", "booking", "reservation", "slot")
+            ):
+                score += 8
+            if any(w in cd for w in ("طلب", "order")) and any(w in el for w in ("order", "request")):
+                score += 6
             if score > best_score:
                 best_score = score
                 best = ename
+
+        # Collect commands with no name match: prefer the single non-User entity in the contract
+        if best_score == 0 and len(non_user) == 1:
+            return non_user[0]
+        # Prefer non-User when scores tie-ish and description mentions collect verbs
+        if best and best.lower() in {"user", "users"} and non_user and desc_fields:
+            alt_scores = []
+            for ename in non_user:
+                fl_set = {str(f).lower() for f in (entity_fields.get(ename) or [])}
+                alt_scores.append((len(desc_fields & fl_set), ename))
+            alt_scores.sort(reverse=True)
+            if alt_scores and alt_scores[0][0] > 0:
+                return alt_scores[0][1]
         return best if best_score > 0 else None
 
     def _pick_wizard_fields(ent_name: str | None, desc: str, kind: str) -> list[str]:
         from_desc = _fields_from_description(desc)
         if from_desc:
-            return from_desc
-        if kind == "lookup":
-            return ["id"]
-        if not ent_name:
+            # Merge with entity attributes when available (entity fields first for known attrs)
+            if ent_name and ent_name in entity_fields:
+                ent_attrs = [str(f).lower() for f in (entity_fields.get(ent_name) or [])]
+                skip = {"id", "user_id", "banned", "paid", "active", "enabled", "passed", "verified", "locked"}
+                ordered: list[str] = []
+                seen: set[str] = set()
+                # Description order is authoritative (user intent)
+                for f in from_desc:
+                    if f.lower() not in skip and f not in seen:
+                        ordered.append(f)
+                        seen.add(f)
+                # Then remaining entity attrs that look like user inputs
+                for f in ent_attrs:
+                    if f not in skip and f not in seen and f not in {"status"}:
+                        # only add if related soft match to description or short list
+                        ordered.append(f)
+                        seen.add(f)
+                return ordered[:8]
+            return from_desc[:8]
+
+        if not ent_name or ent_name not in entity_fields:
             return []
-        fields = entity_fields.get(ent_name) or entity_fields.get(ent_name.lower()) or []
+        fields = [str(f) for f in (entity_fields.get(ent_name) or [])]
         skip = {
             "id", "user_id", "banned", "paid", "active", "enabled",
             "passed", "verified", "locked", "status",
         }
-        # prefer human-input fields first
-        prefer = ["name", "phone", "address", "email", "title", "date", "time", "city", "notes", "description", "quantity", "price"]
+        prefer = ["name", "patient_name", "phone", "address", "email", "title", "date", "time", "slot", "city", "notes", "description", "quantity", "price"]
         ordered = [f for f in prefer if f in fields or f.lower() in {x.lower() for x in fields}]
+        # normalize case to actual field names
+        lower_map = {x.lower(): x for x in fields}
+        ordered = [lower_map.get(f.lower(), f) for f in ordered]
         for f in fields:
-            if f.lower() not in skip and f not in ordered:
+            if f.lower() not in skip and f not in ordered and f.lower() not in {x.lower() for x in ordered}:
                 ordered.append(f)
-        return ordered[:6]
+        return ordered[:8]
+
 
     for cmd in program.commands:
         cn = cmd.name

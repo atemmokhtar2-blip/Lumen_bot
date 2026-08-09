@@ -146,12 +146,22 @@ def _stub_readme(plan: StructurePlan) -> str:
     name = plan.bot_name or "generated_bot"
     cmds = ", ".join(f"/{c}" for c in (plan.command_names or [])[:20]) or "(none)"
     ents = ", ".join(plan.entity_names or []) or "(none)"
-    return (
-        f"# {name}\n\n"
-        "Generated structure (Phase 1). Logic filled by Code Engine.\n\n"
-        f"- Commands: {cmds}\n"
-        f"- Entities: {ents}\n"
-    )
+    lines = [
+        f"# {name}",
+        "",
+        "Generated from your description (deterministic formal engine).",
+        "",
+        f"- Commands: {cmds}",
+        f"- Entities: {ents}",
+        "",
+        "## Run",
+        "",
+        "1. Copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN`",
+        "2. `pip install -r requirements.txt`",
+        "3. `python main.py`",
+        "",
+    ]
+    return chr(10).join(lines)
 
 
 def _stub_other(plan: StructurePlan, path: str) -> str:

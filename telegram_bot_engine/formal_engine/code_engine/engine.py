@@ -47,7 +47,9 @@ def _allowed_entities(inf: InferenceResult, plan: StructurePlan | None) -> list[
 
 def _emit_for_rel(rel: str, inf: InferenceResult) -> str | None:
     """Map relative path → emitter. Returns None if not a known code file."""
-    rel = rel.replace("\\", "/").lstrip("./")
+    rel = rel.replace("\\", "/").replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
     mapping = {
         "app/__init__.py": lambda: '"""app package"""\n',
         "app/models.py": lambda: _micro._emit_schema_module(inf),
@@ -64,6 +66,12 @@ def _emit_for_rel(rel: str, inf: InferenceResult) -> str | None:
         "config.py": lambda: _micro._emit_config(inf),
     }
     fn = mapping.get(rel)
+    if fn is None:
+        base = rel.rsplit("/", 1)[-1]
+        if base == ".env.example":
+            fn = mapping.get(".env.example")
+        elif base == "requirements.txt":
+            fn = mapping.get("requirements.txt")
     if fn is None:
         return None
     return fn()
@@ -82,7 +90,9 @@ def fill_file(
     inf: InferenceResult,
 ) -> CodeFillResult:
     """Fill a single planned file from formal IR; audit against contract."""
-    rel = request.target.path.replace("\\", "/").lstrip("./")
+    rel = request.target.path.replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
     if rel.startswith("./"):
         rel = rel[2:]
 
