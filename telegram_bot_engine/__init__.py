@@ -431,6 +431,34 @@ def generate_bot(request: str, work_dir=None):
             errors.append(f"py_compile failed: {exc}")
             stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
 
+        # Structural runtime-safety verification of generated handlers (no domain packs)
+        gen_verify_meta = {}
+        try:
+            from .formal_engine.services.gen_verify import verify_generated_project
+            gv = verify_generated_project(project_dir)
+            gen_verify_meta = gv.to_dict()
+            if gv.ok:
+                stages.append(
+                    StageResult.ok("gen_verify", outputs=gen_verify_meta)
+                )
+            else:
+                stages.append(
+                    StageResult.failed("gen_verify", errors=list(gv.errors)[:10])
+                )
+                errors.extend(list(gv.errors)[:5])
+                compile_ok = False  # treat as not ready for token
+            for w in list(gv.warnings)[:8]:
+                # stubs are warnings; many stubs degrade success below
+                if str(w).startswith("stub_handler:"):
+                    pass
+        except Exception as gv_exc:
+            stages.append(
+                StageResult.failed(
+                    "gen_verify",
+                    errors=[f"{type(gv_exc).__name__}:{gv_exc}"],
+                )
+            )
+
         quality = getattr(build, "quality", None) or {}
         if quality:
             if quality.get("ok", True):
@@ -493,6 +521,7 @@ def generate_bot(request: str, work_dir=None):
             "code_engine": getattr(build, "code_engine", None) or {},
             "quality": getattr(build, "quality", None) or {},
             "verify_ok": verify_ok,
+            "gen_verify": gen_verify_meta,
             "commands": cmd_names,
             "grounding": (
                 build.grounding.to_dict()

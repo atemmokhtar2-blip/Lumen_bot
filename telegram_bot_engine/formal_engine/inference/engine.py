@@ -200,208 +200,55 @@ def infer(program: DSLProgram) -> InferenceResult:
             entity_fields[e.name] = fields
             entity_fields[e.name.lower()] = fields
 
-    # Arabic prompt labels for common fields
-    _PROMPT = {
-        "origin": "أرسل المنشأ / نقطة الانطلاق",
-        "destination": "أرسل الوجهة",
-        "weight": "أرسل الوزن (رقم)",
-        "amount": "أرسل المبلغ (رقم)",
-        "name": "أرسل الاسم",
-        "email": "أرسل البريد الإلكتروني",
-        "grade": "أرسل الصف / المستوى",
-        "phone": "أرسل رقم الهاتف",
-        "city": "أرسل المدينة",
-        "license": "أرسل رقم الرخصة",
-        "plate": "أرسل رقم اللوحة",
-        "type": "أرسل النوع",
-        "title": "أرسل العنوان",
-        "description": "أرسل الوصف",
-        "code": "أرسل الكود",
-        "topic": "أرسل موضوع الشكوى",
-        "body": "أكتب نص الشكوى",
-        "comment": "أكتب تعليقك",
-        "rating": "أرسل التقييم من 1 إلى 5",
-        "score": "أرسل الدرجة",
-        "status": "أرسل الحالة",
-        "check_in": "أرسل تاريخ الوصول",
-        "check_out": "أرسل تاريخ المغادرة",
-        "slot": "أرسل الموعد/الوقت",
-        "notes": "أرسل ملاحظاتك",
-        "items": "أرسل عناصر الطلب",
-        "sku": "أرسل رمز الصنف",
-        "stock": "أرسل الكمية",
-        "issue": "صف المشكلة",
-        "severity": "أرسل مستوى الخطورة (رقم)",
-        "faculty": "أرسل الكلية",
-        "year": "أرسل السنة",
-        "student_id": "أرسل معرّف الطالب",
-        "course_id": "أرسل رقم / كود الكورس",
-        "nationality": "أرسل الجنسية",
-        "company": "أرسل اسم الشركة",
-        "capacity_kg": "أرسل السعة بالكيلو",
-        "mileage": "أرسل قراءة العداد",
-        "liters": "أرسل عدد اللترات",
-        "cost": "أرسل التكلفة",
-        "stops": "أرسل نقاط التوقف",
-        "distance_km": "أرسل المسافة",
-        "driver_id": "أرسل معرّف السائق",
-        "room_id": "أرسل رقم الغرفة",
-        "hotel_id": "أرسل الفندق",
-        "progress": "أرسل نسبة التقدم",
-        "price": "أرسل السعر",
-        "name": "أرسل الاسم",
-        "phone": "أرسل رقم الهاتف",
-        "address": "أرسل العنوان",
-        "email": "أرسل البريد الإلكتروني",
-        "status": "أرسل الحالة",
-        "date": "أرسل التاريخ",
-        "time": "أرسل الوقت",
-        "city": "أرسل المدينة",
-        "notes": "أرسل الملاحظات",
-        "description": "أرسل الوصف",
-        "quantity": "أرسل الكمية",
-        "title": "أرسل العنوان/الاسم",
-        "id": "أرسل رقم / معرّف التتبع",
-        "domain": "أدخل الدومين (example.com):",
-        "url": "أدخل رابط الموقع (https://...):",
-        "target": "أدخل الهدف للفحص:",
-        "project": "أدخل اسم المشروع:",
-        "author": "أرسل اسم المؤلف:",
-        "isbn": "أرسل ISBN:",
-        "due_date": "أرسل تاريخ الإرجاع:",
-        "book_id": "أرسل اسم أو رقم الكتاب:",
-        "title": "أرسل العنوان:",
-    }
+    # Prompts are dynamic from field keys only — no fixed domain label packs.
+    _PROMPT: dict[str, str] = {}
 
 
-    # Linguistic field cues extracted from user wording only (not bot templates).
-    # Maps surface words that appear in the user's text → stable field keys.
-    _DESC_FIELD_MAP: list[tuple[str, str]] = [
-        # Longer / compound phrases first — purely linguistic cues from user wording
-        ("اسم المنتج", "product_name"), ("اسم_المنتج", "product_name"), ("product name", "product_name"), ("product_name", "product_name"),
-        ("رقم الهاتف", "phone"), ("رقم الجوال", "phone"),
-        ("البريد الإلكتروني", "email"), ("البريد", "email"), ("ايميل", "email"), ("email", "email"),
-        ("اسم المريض", "patient_name"), ("patient_name", "patient_name"),
-        ("اسم المستخدم", "name"),
-        ("العمر", "age"), ("عمر", "age"), ("age", "age"),
-        ("نوع الكشف", "visit_type"), ("نوع الزيارة", "visit_type"), ("visit_type", "visit_type"),
-        ("رقم الموعد", "id"), ("رقم الحجز", "id"),
-        ("الكمية", "quantity"), ("كمية", "quantity"), ("quantity", "quantity"), ("qty", "quantity"),
-        ("العنوان", "address"), ("address", "address"),
-        ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
-        ("الهاتف", "phone"), ("الجوال", "phone"), ("phone", "phone"),
-        ("الوصف", "description"), ("description", "description"),
-        ("العنوان/الاسم", "title"), ("title", "title"),
-        ("التاريخ", "date"), ("تاريخ", "date"), ("date", "date"),
-        ("الوقت", "time"), ("وقت", "time"), ("time", "time"),
-        ("الموعد", "slot"), ("موعد", "slot"), ("slot", "slot"),
-        ("الحالة", "status"), ("status", "status"),
-        ("الملاحظات", "notes"), ("ملاحظات", "notes"), ("notes", "notes"),
-        ("السعر", "price"), ("price", "price"),
-        ("المدينة", "city"), ("city", "city"),
-        ("الدرجة", "score"), ("score", "score"),
-        ("التقدم", "progress"), ("progress", "progress"),
-        ("الصف", "grade"), ("المستوى", "grade"), ("grade", "grade"),
-        ("الكورس", "course_id"), ("رقم الكورس", "course_id"), ("course", "course_id"),
-        ("الطالب", "student_id"), ("student", "student_id"),
-    ]
+    # No fixed field lexicon — keys come from tokens in the user description.
+    _DESC_FIELD_MAP: list[tuple[str, str]] = []
 
     def _prompt_for(field: str) -> str:
-        f = (field or "").strip()
-        fl = f.lower()
-        candidates: list[str] = []
-        for phrase, key in _DESC_FIELD_MAP:
-            if key == fl or key == f:
-                if any("؀" <= ch <= "ۿ" for ch in phrase):
-                    candidates.append(phrase)
-        if candidates:
-            candidates.sort(key=lambda p: (0 if p.startswith("ال") else 1, len(p)))
-            return f"أرسل {candidates[0]}"
-        if fl in _PROMPT:
-            return _PROMPT[fl]
-        label = f.replace("_", " ").strip()
-        return f"أرسل {label}"
+        fl = (field or "").strip()
+        if not fl:
+            return "أرسل القيمة"
+        # Dynamic only: field key as human prompt (no domain phrase library)
+        return f"أرسل {fl}"
+
 
 
     def _split_field_chunk(chunk: str) -> list[str]:
-        """Split a user-written list of fields into ordered keys."""
+        """Split a user-written list of fields into ordered keys (dynamic tokens only)."""
         import re as _re
         chunk = (chunk or "").strip()
         if not chunk:
             return []
-        # Strip leading collect verbs inside parentheses: (يجمع الاسم والكمية)
         chunk = _re.sub(
             r"^(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع|collect(?:s)?|gather(?:s)?)\s+",
             "",
             chunk,
             flags=_re.I,
         )
-        keys: list[str] = []
-        seen: set[str] = set()
-        # First: pull compound phrases by length (اسم المنتج, رقم الهاتف, ...)
-        ordered_phrases = sorted(_DESC_FIELD_MAP, key=lambda x: -len(x[0]))
-        hits: list[tuple[int, str, str]] = []
-        for phrase, key in ordered_phrases:
-            start = 0
-            while True:
-                idx = chunk.find(phrase, start)
-                if idx < 0:
-                    idx = chunk.lower().find(phrase.lower(), start) if phrase.isascii() else -1
-                if idx < 0:
-                    break
-                hits.append((idx, phrase, key))
-                start = idx + max(len(phrase), 1)
-        hits.sort(key=lambda x: x[0])
-        # Greedy non-overlapping left-to-right with longest phrase preference
-        occupied: list[tuple[int, int]] = []
-        for idx, phrase, key in sorted(hits, key=lambda x: (x[0], -len(x[1]))):
-            end = idx + len(phrase)
-            if any(not (end <= a or idx >= b) for a, b in occupied):
-                continue
-            occupied.append((idx, end))
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-        if keys:
-            return keys[:8]
-        # Fallback: tokenize on commas / و
         chunk2 = _re.sub(r"\s+و\s+", ",", chunk)
         chunk2 = _re.sub(r"\s+وال", ",ال", chunk2)
         chunk2 = _re.sub(r"\s+and\s+", ",", chunk2, flags=_re.I)
-        parts = _re.split(r"[\s,،/|+\-]+", chunk2)
+        parts = _re.split(r"[\s,،/|+]+", chunk2)
+        keys: list[str] = []
+        seen: set[str] = set()
         for p in parts:
-            p = p.strip().strip("()[]«»\"'")
+            p = p.strip().strip("()[]«»\"\'")
             if len(p) < 2:
                 continue
-            if p in {"يجمع", "اجمع", "يطلب", "اطلب", "يحتاج", "جمع"}:
+            if p in {"يجمع", "اجمع", "يطلب", "اطلب", "يحتاج", "جمع", "collect", "gather"}:
                 continue
-            mapped = None
-            best_len = -1
-            for phrase, key in ordered_phrases:
-                pl = phrase.lower()
-                cand = p.lower()
-                hit = (p == phrase or cand == pl or pl in cand or phrase in p)
-                if hit and len(phrase) > best_len:
-                    mapped = key
-                    best_len = len(phrase)
-            if mapped is None:
-                ident = _re.sub(r"[^a-zA-Z0-9_]", "_", p)
-                if ident and ident[0].isdigit():
-                    ident = "f_" + ident
-                if not ident or len(ident) < 2:
-                    continue
-                if ident.lower() in {
-                    "the", "a", "an", "id", "user_id", "and", "or",
-                    "new", "only", "for", "to", "from",
-                }:
-                    continue
-                if not any(ch.isalnum() for ch in ident):
-                    continue
-                mapped = ident.lower()
-            if mapped not in seen:
-                seen.add(mapped)
-                keys.append(mapped)
-        return keys[:8]
+            if _re.match(r"^[A-Za-z][A-Za-z0-9_]*$", p):
+                key = p.lower()
+            else:
+                # keep user token as key (unicode-safe string key)
+                key = p[:48]
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+        return keys[:12]
 
 
     def _fields_from_description(desc: str) -> list[str]:

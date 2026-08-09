@@ -26,6 +26,7 @@ class ContractAssessment:
     flow_hints: int = 0
     gaps: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
+    complexity_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +40,7 @@ class ContractAssessment:
             "flow_hints": self.flow_hints,
             "gaps": list(self.gaps),
             "evidence": dict(self.evidence),
+            "complexity_score": self.complexity_score,
         }
 
     def to_ai_context(self) -> str:
@@ -155,6 +157,16 @@ def assess_generation_contract(text: str) -> ContractAssessment:
         "rules": len(rules),
         "text_len": len(raw),
     }
+    # Complexity signal (not a template): how much structure the user evidenced
+    a.complexity_score = min(
+        1.0,
+        0.15 * len(a.meaningful_commands)
+        + 0.12 * len(a.entity_names)
+        + 0.08 * sum(len(v) for v in a.entity_fields.values())
+        + 0.1 * a.flow_hints
+        + 0.05 * len(a.button_labels)
+        + (0.1 if len(raw) > 200 else 0.0),
+    )
     return a
 
 
