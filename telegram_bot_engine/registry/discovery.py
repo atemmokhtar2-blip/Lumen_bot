@@ -1,14 +1,7 @@
 """
 Auto-discovery of real generation engines.
 
-Only working engines are kept (formal core + git/push-pull chain + required supports).
-
-STRICT RULE (enforced project-wide, non-negotiable):
-  No pre-baked bot templates, saved tool packs, static command sets,
-  or any ready-made bot structures. Every artefact is generated
-  dynamically and exclusively from the user's natural-language text
-  via SpecTranslator → formal/DSL path only. Nothing is stored as a
-  reusable "bot template".
+Formal understanding / formal generation removed permanently.
 """
 
 from __future__ import annotations
@@ -18,8 +11,6 @@ from typing import List, Type
 from .registry import EngineRegistry
 from ..core.contracts import Engine
 from ..engines.generators import (
-    FormalUnderstandingEngine,
-    FormalGenerationEngine,
     ProjectPlanningEngine,
     ProjectStructurePlanningEngine,
     WorkspaceManagementEngine,
@@ -35,13 +26,11 @@ from ..engines.generators import (
 
 
 ENGINE_CLASSES: List[Type[Engine]] = [
-    FormalUnderstandingEngine,
     ProjectPlanningEngine,
     ProjectStructurePlanningEngine,
     StructureGenerationEngine,
     FileGenerationPlanningEngine,
     DependencyResolutionEngine,
-    FormalGenerationEngine,
     FileSystemEngine,
     WorkspaceManagementEngine,
     BlueprintValidatorEngine,

@@ -42,7 +42,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
     try:
-        from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+        from telegram_bot_engine.services.user_memory import get_user_memory
         _mem = get_user_memory(uid, OUTPUT_DIR)
         _mem.add_turn("user", request)
     except Exception:
@@ -51,7 +51,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     _ctx_res = None
     try:
-        from telegram_bot_engine.formal_engine.services.context_engine import resolve_context
+        from telegram_bot_engine.services.context_engine import resolve_context
         _active = (context.user_data or {}).get("active_repo") or {}
         _ctx_res = resolve_context(
             uid,
@@ -82,7 +82,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
         # Phase 5: continuity plan (modify / continue prior project)
         try:
-            from telegram_bot_engine.formal_engine.services.continuity import plan_continuity
+            from telegram_bot_engine.services.continuity import plan_continuity
             _active = (context.user_data or {}).get("active_repo") or {}
             _cont = plan_continuity(
                 uid,
@@ -117,7 +117,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("continuity plan failed")
         # Phase 6: advanced partner brief
         try:
-            from telegram_bot_engine.formal_engine.services.advanced_partner import (
+            from telegram_bot_engine.services.advanced_partner import (
                 build_advanced_brief,
             )
             _act = (context.user_data or {}).get("active_repo") or {}
@@ -142,7 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         def _do_host():
-            from telegram_bot_engine.formal_engine.services.hosting import get_hosting_service
+            from telegram_bot_engine.services.hosting import get_hosting_service
             svc = get_hosting_service(OUTPUT_DIR)
             return svc.start(
                 user_id=message.from_user.id if message.from_user else 0,
@@ -200,7 +200,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
             uid = int(user.id) if user else 0
             try:
-                from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                from telegram_bot_engine.services.user_sandbox import get_user_sandbox
                 dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="reclone")
             except Exception:
                 dest = Path(OUTPUT_DIR) / "clones"
@@ -242,7 +242,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ]
             try:
                 await status.edit_text("\n".join(lines + ["", "🔍 جاري فهم المستودع..."]))
-                from telegram_bot_engine.formal_engine.services.repo_understanding import understand_repo
+                from telegram_bot_engine.services.repo_understanding import understand_repo
 
                 def _do_u():
                     return understand_repo(result.path, remote_url=result.url or "")
@@ -254,7 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "contract": repo_contract.model_dump(mode="json"),
                 }
                 try:
-                    from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                    from telegram_bot_engine.services.user_sandbox import get_user_sandbox
                     uid = int(user.id) if user else 0
                     get_user_sandbox(uid, OUTPUT_DIR).register_clone(
                         result.path, url=result.url or "", label=Path(result.path).name
@@ -307,7 +307,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ChatRouter: natural "اسحب المستودع..." → clone path only
     try:
-        from telegram_bot_engine.formal_engine.services.chat_router import route_message as _route_msg
+        from telegram_bot_engine.services.chat_router import route_message as _route_msg
         _cr = _route_msg(request)
         _clone_via_router = (
             _cr.ok
@@ -322,7 +322,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
         uid = int(user.id) if user else 0
         try:
-            from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+            from telegram_bot_engine.services.user_sandbox import get_user_sandbox
             dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="clone")
         except Exception:
             dest = Path(OUTPUT_DIR) / "clones"
@@ -349,7 +349,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if result.path and Path(result.path).exists():
                 try:
                     await status.edit_text("\n".join(lines + ["", "🔍 جاري فهم المستودع..."]))
-                    from telegram_bot_engine.formal_engine.services.repo_understanding import (
+                    from telegram_bot_engine.services.repo_understanding import (
                         understand_repo,
                     )
 
@@ -364,7 +364,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "contract": repo_contract.model_dump(mode="json"),
                     }
                     try:
-                        from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                        from telegram_bot_engine.services.user_sandbox import get_user_sandbox
                         uid = int(user.id) if user else 0
                         get_user_sandbox(uid, OUTPUT_DIR).register_clone(
                             result.path, url=result.url or "", label=Path(result.path).name
@@ -446,7 +446,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # --- Hosting (owner-only foundation; no billing yet) ---
     host_action = detect_host_intent(request)
     if host_action != "none":
-        from telegram_bot_engine.formal_engine.services.hosting import get_hosting_service
+        from telegram_bot_engine.services.hosting import get_hosting_service
         svc = get_hosting_service(OUTPUT_DIR)
         uid = message.from_user.id if message.from_user else 0
         active = (context.user_data or {}).get("active_repo") or {}
@@ -505,7 +505,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # --- Active repo development (must run before generate_bot) ---
     active = (context.user_data or {}).get("active_repo")
     if active and active.get("path") and Path(active["path"]).exists():
-        from telegram_bot_engine.formal_engine.services.repo_dev import (
+        from telegram_bot_engine.services.repo_dev import (
             handle_repo_request,
             detect_repo_intent,
         )
@@ -575,7 +575,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 text_out += "\n• ملفات تغيّرت: " + ", ".join(f"`{f}`" for f in dev.changed_files)
             await status.edit_text(text_out)
             try:
-                from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+                from telegram_bot_engine.services.user_memory import get_user_memory
                 mem = get_user_memory(uid, OUTPUT_DIR)
                 mem.set_last(
                     intent=request[:200],
@@ -591,7 +591,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             if dev.ok and dev.changed_files and active.get("path"):
                 try:
-                    from telegram_bot_engine.formal_engine.services.advanced_partner import (
+                    from telegram_bot_engine.services.advanced_partner import (
                         maybe_snapshot_version,
                     )
                     maybe_snapshot_version(
@@ -625,7 +625,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _rt_help = chat_route(request)
     _is_bot_spec = False
     try:
-        from telegram_bot_engine.formal_engine.services.chat_router.service import _looks_like_bot_spec
+        from telegram_bot_engine.services.chat_router.service import _looks_like_bot_spec
         _is_bot_spec = _looks_like_bot_spec(request)
     except Exception:
         _is_bot_spec = bool(
@@ -639,7 +639,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         and _rt_help.capability_id == "help"
     ):
         try:
-            from telegram_bot_engine.formal_engine.services.chat_router import get_router
+            from telegram_bot_engine.services.chat_router import get_router
             await message.reply_text(get_router().help_text())
         except Exception:
             await message.reply_text("مساعدة: اسحب مستودع | ولّد بوت | استضافة | تحليل استاتيكي")
@@ -680,7 +680,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if _ar.get("digest", {}).get("ai_context"):
                     mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _ar["digest"]["ai_context"]
                 elif _ar.get("path") and Path(_ar["path"]).exists():
-                    from telegram_bot_engine.formal_engine.services.project_digest import (
+                    from telegram_bot_engine.services.project_digest import (
                         build_project_digest,
                     )
                     _dg = build_project_digest(_ar["path"])
@@ -745,7 +745,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
                             smart_clone,
                         )
-                        from telegram_bot_engine.formal_engine.services.user_sandbox import (
+                        from telegram_bot_engine.services.user_sandbox import (
                             get_user_sandbox,
                         )
                         status = await message.reply_text(sc_text or "…")
@@ -776,7 +776,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                                 "contract": {},
                             }
                             try:
-                                from telegram_bot_engine.formal_engine.services.user_sandbox import (
+                                from telegram_bot_engine.services.user_sandbox import (
                                     get_user_sandbox,
                                 )
                                 get_user_sandbox(uid, OUTPUT_DIR).register_clone(
@@ -792,7 +792,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     active = (context.user_data or {}).get("active_repo") or {}
                     if active.get("path") and Path(active["path"]).exists():
                         try:
-                            from telegram_bot_engine.formal_engine.services.repo_dev import (
+                            from telegram_bot_engine.services.repo_dev import (
                                 handle_repo_request,
                             )
                             status = await message.reply_text(sc_text or "…")
@@ -863,7 +863,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Isolated per-user workspace (never share host bot dir/token space)
     try:
-        from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+        from telegram_bot_engine.services.user_sandbox import get_user_sandbox
         uid = int(user.id) if user else 0
         work_dir = get_user_sandbox(uid, OUTPUT_DIR).new_project_dir(label="gen")
     except Exception:
@@ -948,7 +948,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Register into this user's private workspace index (dynamic, no templates)
         if project_path and Path(project_path).exists():
             try:
-                from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                from telegram_bot_engine.services.user_sandbox import get_user_sandbox
                 uid = int(user.id) if user else 0
                 get_user_sandbox(uid, OUTPUT_DIR).register_project(
                     project_path,
@@ -963,8 +963,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 logger.exception("register_project failed")
             try:
-                from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
-                from telegram_bot_engine.formal_engine.services.project_digest import (
+                from telegram_bot_engine.services.user_memory import get_user_memory
+                from telegram_bot_engine.services.project_digest import (
                     build_project_digest,
                 )
                 mem = get_user_memory(uid, OUTPUT_DIR)
@@ -980,7 +980,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "from_generation": True,
                 }
                 try:
-                    from telegram_bot_engine.formal_engine.services.repo_understanding import (
+                    from telegram_bot_engine.services.repo_understanding import (
                         understand_repo,
                     )
                     contract = await asyncio.to_thread(understand_repo, project_path, "")

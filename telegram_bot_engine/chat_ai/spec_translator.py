@@ -567,16 +567,7 @@ def structural_translate(user_text: str) -> dict[str, Any]:
             if not any(b.get("label") == it for b in spec["buttons"]):
                 spec["buttons"].append({"label": it})
 
-    try:
-        from telegram_bot_engine.formal_engine.ontology.telegram_capabilities import (
-            commands_from_capability_evidence,
-        )
-        for cmd, _caps, desc in commands_from_capability_evidence(text):
-            if cmd not in seen and _valid_cmd_name(cmd):
-                seen.add(cmd)
-                spec["commands"].append({"name": cmd, "description": desc, "admin_only": True})
-    except Exception:
-        pass
+    # formal_engine removed — no capability catalog constants
 
     if "start" not in seen:
         spec["commands"].insert(0, {"name": "start", "description": "تشغيل البوت"})
@@ -1878,11 +1869,8 @@ def _enrich_structured_with_original(structured: str, original: str) -> str:
 
     # Build flows from (possibly restored) command descriptions using linguistic cues only
     try:
-        from telegram_bot_engine.formal_engine.inference.engine import infer as _infer
-        from telegram_bot_engine.formal_engine.dsl.extractor import extract_dsl as _extract
-        # Prefer field lists evidenced on the merged text via formal inference wizards
-        prog = _extract(out if len(out) >= len(orig) else (out + "\n" + orig))
-        # Fallback: parse fields from each command description with a tiny local splitter
+        # formal_engine removed — local description field parsing only
+        prog = None
     except Exception:
         prog = None
 

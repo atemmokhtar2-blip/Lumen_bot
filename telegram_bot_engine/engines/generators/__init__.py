@@ -1,29 +1,10 @@
 """
 Generators package — working engines only.
 
-Kept:
-  Formal core:
-    - FormalUnderstandingEngine
-    - FormalGenerationEngine
-    - ProjectPlanningEngine
-    - ProjectStructurePlanningEngine
-
-  Git / Push-Pull / Workspace chain (as requested):
-    - WorkspaceManagementEngine
-    - FileSystemEngine
-    - DependencyResolutionEngine
-    - RepositoryManagementEngine
-    - GitOperationsEngine
-
-  Supporting engines required by the above:
-    - BlueprintValidatorEngine
-    - ComponentDetectionEngine
-    - FileGenerationPlanningEngine
-    - StructureGenerationEngine
+Formal understanding / formal generation engines removed permanently.
+Generation is AI plan + codegen via generate_bot.
 """
 
-from .formal_understanding import FormalUnderstandingEngine
-from .formal_generation import FormalGenerationEngine
 from .project_planner import ProjectPlanningEngine
 from .project_structure_planning import ProjectStructurePlanningEngine
 
@@ -39,8 +20,6 @@ from .file_planner import FileGenerationPlanningEngine
 from .structure_generator import StructureGenerationEngine
 
 __all__ = [
-    "FormalUnderstandingEngine",
-    "FormalGenerationEngine",
     "ProjectPlanningEngine",
     "ProjectStructurePlanningEngine",
     "WorkspaceManagementEngine",

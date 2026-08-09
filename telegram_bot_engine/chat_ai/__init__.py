@@ -5,7 +5,7 @@ Roles:
   - SpecTranslator: speech → structured specification JSON (translate only, no code)
   - SmartChat: optional guidance (must not write code)
 
-Never import this package from formal_engine internals.
+Never import this package from legacy formal path (removed) internals.
 Formal engine remains the only code generator.
 No g4f or third-party free AI clients.
 """

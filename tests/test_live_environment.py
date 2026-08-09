@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from telegram_bot_engine.formal_engine.services.live_runner.service import (
+from telegram_bot_engine.services.live_runner.service import (
     LiveRunReport,
     _conflict_packages_from_log,
     _deps_dir,
@@ -385,7 +385,7 @@ def test_report_duration_field():
 
 # --- source repair & env discovery ---
 def test_repair_escaped_quotes(tmp_path):
-    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+    from telegram_bot_engine.services.live_runner.source_fix import (
         repair_project_sources, syntax_check_entry, discover_token_env_names,
     )
     p = tmp_path / "bot.py"
@@ -398,7 +398,7 @@ def test_repair_escaped_quotes(tmp_path):
 
 
 def test_discover_custom_token_env(tmp_path):
-    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import discover_token_env_names
+    from telegram_bot_engine.services.live_runner.source_fix import discover_token_env_names
     (tmp_path / "bot.py").write_text(
         'import os\nT=os.getenv("MY_CUSTOM_BOT_TOKEN")\nU=os.environ.get("TELEGRAM_TOKEN")\n',
         encoding="utf-8",
@@ -409,7 +409,7 @@ def test_discover_custom_token_env(tmp_path):
 
 
 def test_repair_logging_format_line(tmp_path):
-    from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+    from telegram_bot_engine.services.live_runner.source_fix import (
         repair_python_file, syntax_check_entry,
     )
     p = tmp_path / "bot.py"

@@ -70,7 +70,7 @@ _FW = {
 }
 
 _LAYER_ROLES = {
-    "formal_engine": "formal understanding + codegen",
+    "services": "runtime services",
     "engines": "generation engines",
     "generators": "concrete generators",
     "pipeline": "pipeline orchestration",

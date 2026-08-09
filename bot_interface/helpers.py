@@ -21,7 +21,7 @@ def is_allowed(user_id: int | None) -> bool:
 def chat_route(text: str):
     """Single entry: natural language → capability (chat never writes code)."""
     try:
-        from telegram_bot_engine.formal_engine.services.chat_router import route_message
+        from telegram_bot_engine.services.chat_router import route_message
         return route_message(text or "")
     except Exception:
         return None

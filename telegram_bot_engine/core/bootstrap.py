@@ -33,18 +33,17 @@ from ..validators import BlueprintValidator, StructureValidator
 # Only engines that actually import and work are kept.
 # ---------------------------------------------------------------------------
 ENGINE_META: Dict[str, Tuple[int, List[str]]] = {
-    "formal_understanding": (10, []),
-    "project_planner": (30, ["formal_understanding"]),
+    # formal_understanding / formal_generation removed permanently
+    "project_planner": (30, []),
     "project_structure_planning": (50, ["project_planner"]),
     "structure_generator": (90, ["project_structure_planning"]),
     "file_planner": (95, ["structure_generator"]),
     "dependency_resolver": (100, ["file_planner"]),
-    "formal_generation": (110, ["dependency_resolver"]),
-    "file_system": (120, ["formal_generation"]),
+    "file_system": (120, ["dependency_resolver"]),
     "workspace_management": (130, ["file_system"]),
     "blueprint_validator": (140, ["workspace_management"]),
     "component_detector": (150, ["blueprint_validator"]),
-    "git_operations": (180, ["formal_generation", "component_detector"]),
+    "git_operations": (180, ["component_detector"]),
     "repository_management": (190, ["git_operations"]),
 }
 

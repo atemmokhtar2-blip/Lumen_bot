@@ -101,7 +101,7 @@ class LocalProcessDriver(DeploymentProvider):
                 ),
             )
 
-        from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+        from telegram_bot_engine.services.live_runner.source_fix import (
             repair_project_sources,
             discover_token_env_names,
             syntax_check_entry,
@@ -116,7 +116,7 @@ class LocalProcessDriver(DeploymentProvider):
                 message=f"SyntaxError in {entry.name}: {syn_err}. repair={repair_notes[:3]}",
             )
 
-        from telegram_bot_engine.formal_engine.services.user_sandbox import clean_child_env
+        from telegram_bot_engine.services.user_sandbox import clean_child_env
         child_env = clean_child_env(bot_token)
         for key in discover_token_env_names(path):
             child_env[key] = bot_token
@@ -262,7 +262,7 @@ class LocalProcessDriver(DeploymentProvider):
 
     def _ensure_runtime_and_deps(self, project_path: Path, install_log: Path) -> tuple[str, str, Path]:
         """Reuse LiveRunner robust installer."""
-        from telegram_bot_engine.formal_engine.services.live_runner.service import (
+        from telegram_bot_engine.services.live_runner.service import (
             _ensure_runtime,
             _find_requirements,
             _pip_install,
@@ -278,7 +278,7 @@ class LocalProcessDriver(DeploymentProvider):
         # Package Reality pre-host check (warn only; never blocks install)
         pkg_notes: list = []
         try:
-            from telegram_bot_engine.formal_engine.services.package_reality import (
+            from telegram_bot_engine.services.package_reality import (
                 assess_repo_packages,
                 recommend_upgrades,
             )
@@ -324,15 +324,15 @@ class LocalProcessDriver(DeploymentProvider):
         max_rounds: int = 2,
     ) -> DeploymentStatus:
         """Error Intelligence decides packages → pip install → restart process."""
-        from telegram_bot_engine.formal_engine.services.error_intelligence import analyze_logs
-        from telegram_bot_engine.formal_engine.services.live_runner.service import (
+        from telegram_bot_engine.services.error_intelligence import analyze_logs
+        from telegram_bot_engine.services.live_runner.service import (
             _ensure_runtime,
             _ensure_packages_in_requirements,
             _pip_install_packages_direct,
             _resolve_missing_via_source,
             _module_to_package,
         )
-        from telegram_bot_engine.formal_engine.services.live_runner.source_fix import (
+        from telegram_bot_engine.services.live_runner.source_fix import (
             discover_token_env_names,
         )
 
@@ -386,7 +386,7 @@ class LocalProcessDriver(DeploymentProvider):
                 last_msg = f"heal pip failed for {packages}"
                 continue
 
-            from telegram_bot_engine.formal_engine.services.user_sandbox import clean_child_env
+            from telegram_bot_engine.services.user_sandbox import clean_child_env
             child_env = clean_child_env(bot_token)
             for key in discover_token_env_names(path):
                 child_env[key] = bot_token

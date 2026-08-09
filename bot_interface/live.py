@@ -50,7 +50,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
     hb_task = asyncio.create_task(_heartbeat())
 
     def _run():
-        from telegram_bot_engine.formal_engine.services.live_runner import run_bot_project
+        from telegram_bot_engine.services.live_runner import run_bot_project
         return run_bot_project(
             project_path=project_path,
             bot_token=token,
@@ -106,7 +106,7 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
         )
 
     def _run_runner():
-        from telegram_bot_engine.formal_engine.services.live_runner import run_bot_project
+        from telegram_bot_engine.services.live_runner import run_bot_project
         return run_bot_project(
             project_path=project_path,
             bot_token=token,

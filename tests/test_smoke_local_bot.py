@@ -336,14 +336,16 @@ def test_smoke_generate_and_handlers() -> None:
 
 
 def test_smoke_grounding_rejects_injection() -> None:
-    """If extractor were polluted, gate must strip foreign surface before codegen."""
-    from telegram_bot_engine.formal_engine.dsl.ast import (
+    """formal_engine removed — grounding gate test retired."""
+    import pytest
+    pytest.skip("formal_engine removed")
+    from telegram_bot_engine._removed import (  # type: ignore
         ButtonNode,
         CommandNode,
         EntityNode,
     )
-    from telegram_bot_engine.formal_engine.dsl.extractor import extract_dsl
-    from telegram_bot_engine.formal_engine.verification.grounding_gate import (
+    from telegram_bot_engine._removed import extract_dsl  # type: ignore
+    from telegram_bot_engine._removed import (  # type: ignore
         apply_grounding_gate,
     )
 

@@ -1640,7 +1640,7 @@ class LiveRunnerService:
 
         from .source_fix import discover_token_env_names
 
-        from telegram_bot_engine.formal_engine.services.user_sandbox import clean_child_env
+        from telegram_bot_engine.services.user_sandbox import clean_child_env
         env = clean_child_env(bot_token if "bot_token" in locals() else "")
         env["PYTHONUNBUFFERED"] = "1"
         token_envs = discover_token_env_names(root)

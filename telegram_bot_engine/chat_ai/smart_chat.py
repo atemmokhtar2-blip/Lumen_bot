@@ -5,9 +5,9 @@ Responsibilities:
   - Understand user intent from minimal wording (Arabic / English).
   - Ask clarifying questions when needed.
   - Recommend the correct system capability (or return a helpful reply).
-  - NEVER generate code, NEVER touch formal_engine, NEVER invent success.
+  - NEVER generate code, NEVER touch legacy formal path (removed), NEVER invent success.
 
-Uses Hugging Face Inference Providers only. Never inside formal_engine.
+Uses Hugging Face Inference Providers only. Never inside legacy formal path (removed).
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ Allowed:
 
 Forbidden:
   - Generating Python code
-  - Touching formal_engine internals
+  - Touching legacy formal path (removed) internals
   - Inventing domain packs (shop/ticket/edu skeletons)
 
 Pipeline position:
