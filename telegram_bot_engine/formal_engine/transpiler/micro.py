@@ -1280,6 +1280,17 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("")
         lines.append("")
 
+
+    # Registry so callbacks can invoke the same handlers as /commands
+    lines.append("_CMD_HANDLERS: dict[str, object] = {")
+    for cmd in commands:
+        if cmd.name in ("start", "help"):
+            continue
+        fn = _ident(cmd.name) + "_handler"
+        lines.append(f"    {_py(cmd.name)}: {fn},")
+    lines.append("}")
+    lines.append("")
+
     # message handler — fixed state machine using same step ids
         # Multi-screen message handler — wizard steps then rules
     lines.append("async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
@@ -1503,12 +1514,17 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("    target_cmd = BUTTON_TO_CMD.get(data) or \"\"")
     lines.append("    if not target_cmd and data.startswith(\"cmd:\"):")
     lines.append("        target_cmd = data[4:]")
-    lines.append("    if target_cmd and target_cmd in FLOWS and FLOWS[target_cmd]:")
-    lines.append("        if query.message is not None:")
-    lines.append("            await _start_flow(query.message, context, target_cmd)")
-    lines.append("        return")
     lines.append("    if target_cmd:")
-    lines.append("        # Deep route: capability commands execute API path; else soft acknowledge")
+    lines.append("        # 1) multi-step collect flow")
+    lines.append("        if target_cmd in FLOWS and FLOWS.get(target_cmd):")
+    lines.append("            if query.message is not None:")
+    lines.append("                await _start_flow(query.message, context, target_cmd)")
+    lines.append("            return")
+    lines.append("        # 2) same handler as /command (list/mine/lookup/action)")
+    lines.append("        _h = _CMD_HANDLERS.get(target_cmd)")
+    lines.append("        if _h is not None:")
+    lines.append("            await _h(update, context)")
+    lines.append("            return")
     lines.append("        caps = list(CAPABILITY_BY_CMD.get(target_cmd) or [])")
     lines.append("        if caps:")
     lines.append("            await _run_capabilities(update, context, caps, [])")
