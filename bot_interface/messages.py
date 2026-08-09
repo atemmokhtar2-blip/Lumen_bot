@@ -80,6 +80,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     project_path=_ctx_res.target_path,
                     capability="context_prior",
                 )
+        # Phase 5: continuity plan (modify / continue prior project)
+        try:
+            from telegram_bot_engine.formal_engine.services.continuity import plan_continuity
+            _active = (context.user_data or {}).get("active_repo") or {}
+            _cont = plan_continuity(
+                uid,
+                request,
+                base_dir=OUTPUT_DIR,
+                active_path=str(_active.get("path") or ""),
+                ctx=_ctx_res,
+            )
+            if (
+                _cont.active
+                and _cont.target_path
+                and Path(_cont.target_path).exists()
+            ):
+                context.user_data["active_repo"] = {
+                    "path": _cont.target_path,
+                    "url": (_active.get("url") or ""),
+                    "contract": (_active.get("contract") or {}),
+                    "from_context_engine": True,
+                    "from_continuity": True,
+                    "label": getattr(_ctx_res, "target_label", "") or Path(_cont.target_path).name,
+                    "kind": _cont.target_kind,
+                    "continuity_mode": _cont.mode,
+                }
+                context.user_data["continuity_plan"] = _cont.to_dict()
+                if _mem:
+                    _mem.set_last(
+                        intent=request[:200],
+                        project_path=_cont.target_path,
+                        capability="continuity_" + (_cont.mode or "dev"),
+                    )
+        except Exception:
+            logger.exception("continuity plan failed")
     except Exception:
         logger.exception("context_engine failed")
 
@@ -471,10 +506,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "امسح", "أعد", "طور", "طوّر", "هيكل", "command", "add", "explain",
             "stats", "fix", "modify", "ساعد", "تقدر",
             "خطة تطوير", "فجوات", "أين أعد", "تطوير المستودع", "سد فجوات",
+            "كمّل", "كمل", "السابق", "اللي فات", "اللي قبل", "نفس البوت",
+            "نفس المشروع", "حسّن", "حسن", "أصلح", "اصلح", "extend", "continue",
+            "update", "improve", "refactor",
         )
+        _cont_flag = bool((context.user_data or {}).get("continuity_plan", {}).get("active"))
         if (
             _cap in _repo_caps
             or action != "unknown"
+            or _cont_flag
             or any(h in request.lower() for h in develop_hints)
             or any(h in request for h in develop_hints)
         ):
@@ -518,6 +558,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if dev.changed_files:
                 text_out += "\n• ملفات تغيّرت: " + ", ".join(f"`{f}`" for f in dev.changed_files)
             await status.edit_text(text_out)
+            try:
+                from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+                mem = get_user_memory(uid, OUTPUT_DIR)
+                mem.set_last(
+                    intent=request[:200],
+                    project_path=str(active.get("path") or ""),
+                    capability="continuity_dev",
+                )
+                note = f"continuity action={getattr(dev, 'action', '')} path={active.get('path')}"
+                if dev.changed_files:
+                    note += " changed=" + ",".join(dev.changed_files[:8])
+                mem.add_turn("note", note, meta={"capability": "continuity_dev", "ok": bool(dev.ok)})
+            except Exception:
+                logger.exception("memory update after continuity failed")
 
             # If file changed, offer zip of repo
             if dev.ok and dev.changed_files and Path(active["path"]).exists():
