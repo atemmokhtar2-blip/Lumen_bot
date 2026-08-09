@@ -23,9 +23,10 @@ class ArchRule:
 
 # Declarative rules (evaluated in order)
 RULES: list[ArchRule] = [
+    # Structural minima only — NO domain packs (shop/ticket/edu/ecommerce).
     ArchRule(
         id="R01_START_HELP",
-        description="Every bot must expose /start and /help",
+        description="Every bot may expose /start and /help as infrastructure",
         when="always",
         effects=("ensure_command:start", "ensure_command:help"),
     ),
@@ -36,103 +37,39 @@ RULES: list[ArchRule] = [
         effects=("ensure_callback_handlers_for_buttons",),
     ),
     ArchRule(
-        id="R03_PAYMENTS_NEED_ORDERS_DB",
-        description="Payments require order management and a database",
-        when="requires_payments",
-        effects=(
-            "ensure_feature:order_management",
-            "ensure_service:orders",
-            "ensure_service:payments",
-            "ensure_model:Order",
-            "ensure_model:Payment",
-            "ensure_database",
-        ),
-    ),
-    ArchRule(
-        id="R04_ADMIN_NEEDS_GUARD",
-        description="Admin panel requires /admin and admin_ids config",
+        id="R03_ADMIN_GUARD",
+        description="If user requested admin panel, ensure /admin exists only when evidenced",
         when="requires_admin_panel",
-        effects=("ensure_command:admin", "ensure_handler:admin", "ensure_config:admin_user_ids"),
+        effects=("ensure_command:admin", "ensure_config:admin_user_ids"),
     ),
     ArchRule(
-        id="R05_CONCURRENCY_QUEUE",
-        description="High concurrency prefers async queue + redis",
-        when="requires_async_queue",
-        effects=("ensure_integration:redis", "ensure_service:task_queue"),
-    ),
-    ArchRule(
-        id="R06_ECOMMERCE_CORE",
-        description="Ecommerce requires product, cart, order stack",
-        when="type:ecommerce",
-        effects=(
-            "ensure_model:Product",
-            "ensure_model:CartItem",
-            "ensure_model:Order",
-            "ensure_service:catalog",
-            "ensure_service:cart",
-            "ensure_service:orders",
-            "ensure_command:products",
-            "ensure_command:cart",
-            "ensure_command:orders",
-        ),
-    ),
-    ArchRule(
-        id="R07_TICKETING_CORE",
-        description="Ticketing requires Ticket model and conversation flow",
-        when="type:ticketing",
-        effects=(
-            "ensure_model:Ticket",
-            "ensure_model:TicketMessage",
-            "ensure_service:tickets",
-            "ensure_state_management",
-        ),
-    ),
-    ArchRule(
-        id="R08_FILES_NEED_STORAGE",
+        id="R04_FILES_NEED_STORAGE",
         description="File handling implies storage service",
         when="requires_file_handling",
         effects=("ensure_service:storage",),
     ),
     ArchRule(
-        id="R09_POSTGRES_SIGNAL",
+        id="R05_POSTGRES_SIGNAL",
         description="Explicit postgres request forces postgres database",
         when="mentions_postgres",
         effects=("set_database:postgres", "ensure_integration:postgres"),
     ),
     ArchRule(
-        id="R10_NOTIFICATIONS",
-        description="Notifications feature needs notification service",
-        when="feature:notifications",
-        effects=("ensure_service:notifications", "ensure_model:Notification"),
-    ),
-    ArchRule(
-        id="R11_CLEAN_LAYERS",
+        id="R06_CLEAN_LAYERS",
         description="Code must separate handlers / services / models / config",
         when="always",
         effects=("enforce_layering",),
         severity="soft",
     ),
     ArchRule(
-        id="R12_TYPED_CONFIG",
+        id="R07_TYPED_CONFIG",
         description="Configuration must be typed and env-driven",
         when="always",
         effects=("enforce_typed_config",),
         severity="soft",
     ),
-    ArchRule(
-        id="R13_NO_EMPTY_HANDLERS",
-        description="Every registered command must have a handler module",
-        when="always",
-        effects=("ensure_handlers_for_all_commands",),
-    ),
-    ArchRule(
-        id="R14_ARABIC_RTL",
-        description="Arabic support marks RTL language",
-        when="feature:arabic_rtl",
-        effects=("ensure_language:ar_rtl",),
-        severity="soft",
-    ),
 ]
+
 
 
 def rule_applies(rule: ArchRule, ctx: dict[str, Any]) -> bool:

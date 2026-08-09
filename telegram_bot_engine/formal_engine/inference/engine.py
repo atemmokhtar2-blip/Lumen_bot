@@ -549,50 +549,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         })
         existing_ids.add(cn)
 
-    # Catalog → order ONLY when product/menu evidence exists (never invent for dashboards)
-    catalog_labels: list[str] = []
-    _blob = " ".join(
-        [(getattr(c, "name", "") or "") + " " + (getattr(c, "description", "") or "") for c in program.commands]
-        + [(getattr(b, "label", "") or "") for b in program.buttons]
-    ).lower()
-    _product_evidence = any(
-        k in _blob for k in (
-            "اصناف", "الأصناف", "منتجات", "منيو", "catalog", "menu item",
-            "كمية", "quantity", "مطعم", "طلب صنف", "order item",
-        )
-    )
-    if _product_evidence:
-        _action_hint = ("إضافة", "اضافه", "مهامي", "إنهاء", "انهاء", "حذف", "تسجيل", "بحث", "إعداد", "start", "help", "عرض", "قائمة", "جميع", "scanner", "security", "report", "domain", "website", "email", "password")
-        for b in program.buttons:
-            lab = (b.label or "").strip()
-            if not lab or len(lab) > 32:
-                continue
-            if any(lab == c.name or lab == (c.description or "") for c in program.commands):
-                continue
-            if any(k.lower() in lab.lower() for k in _action_hint):
-                continue
-            if re.search(r"(إضافة|إنهاء|حذف|فتح|عرض|إدارة|Scanner|Security|Report)", lab, re.I):
-                continue
-            catalog_labels.append(lab)
-    if catalog_labels and "order" not in existing_ids:
-        wizards.append({
-            "id": "order",
-            "command": "order",
-            "entity": "Order",
-            "kind": "collect",
-            "steps": [
-                {"key": "quantity", "prompt": "أرسل الكمية المطلوبة (رقم)"},
-                {"key": "confirm", "prompt": "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"},
-            ],
-            "prefill_from_button": "item_name",
-            "catalog_labels": catalog_labels[:30],
-        })
-        existing_ids.add("order")
-        if not any(c.name == "order" for c in result.commands):
-            from ..dsl.ast import CommandNode
-            result.commands = list(result.commands) + [
-                CommandNode(name="order", description="طلب صنف بالكمية")
-            ]
+    # No catalog→order template. Flows/commands only from user text / DSL.
 
     # Clean weak steps
     cleaned_w = []

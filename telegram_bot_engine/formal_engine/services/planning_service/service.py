@@ -102,30 +102,14 @@ def _ensure_tech_hooks(c: ProgramContract, services: list, cmds: list, decisions
 
 
 def _ensure_user_entity(c: ProgramContract, entities: list, decisions: list[str]):
-    """Minimal User entity only if any other entity references user_id and User missing."""
-    names = {e.name for e in entities}
-    needs_user = any(
-        any(f.name in ("user_id", "telegram_id") for f in e.fields) for e in entities
-    )
-    if needs_user and "User" not in names:
-        entities.append(
-            EntityUnit(
-                name="User",
-                fields=[
-                    FieldUnit(name="id", field_type=FieldType.INT),
-                    FieldUnit(name="telegram_id", field_type=FieldType.INT),
-                    FieldUnit(name="full_name", field_type=FieldType.STR),
-                ],
-            )
-        )
-        decisions.append("entity_structural:User")
+    """Do not invent User entity. Entities come from user text only."""
     return entities
 
 
 def _assess_risks(c: ProgramContract) -> list[str]:
     risks: list[str] = []
-    if c.tech.payments and "Order" not in _enames(c):
-        risks.append("payments_without_order_entity")
+    if c.tech.payments and not any(n.lower() in ("order", "payment", "invoice") for n in _enames(c)):
+        risks.append("payments_without_payment_entity")
     if c.tech.admin_panel and "admin" not in _cnames(c):
         risks.append("admin_panel_without_admin_command")
     if len(c.commands) < 2:

@@ -233,8 +233,8 @@ def validate_contract(contract: ProgramContract) -> ContractValidation:
         seen_cb.add(b.callback_id)
         if len(b.callback_id.encode("utf-8")) > 64:
             errors.append(f"callback_id too long: {b.callback_id}")
-    if contract.tech.payments and "Order" not in [e.name for e in contract.entities]:
-        warnings.append("payments enabled but no Order entity")
+    if contract.tech.payments and not any(e.name.lower() in ("order", "payment", "invoice") for e in contract.entities):
+        warnings.append("payments enabled but no payment-related entity in user spec")
     if contract.tech.admin_panel and "admin" not in names:
         warnings.append("admin_panel without /admin command")
     if contract.flows and not contract.conversation_states:
@@ -243,6 +243,6 @@ def validate_contract(contract: ProgramContract) -> ContractValidation:
     for e in contract.entities:
         if not e.fields:
             warnings.append(f"entity {e.name} has no fields")
-    if contract.tech.payments and "Payment" not in entity_names:
-        warnings.append("payments without Payment entity")
+    if contract.tech.payments and "Payment" not in entity_names and "Order" not in entity_names:
+        warnings.append("payments without payment-related entity from user text")
     return ContractValidation(ok=len(errors) == 0, errors=errors, warnings=warnings)
