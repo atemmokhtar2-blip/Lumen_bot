@@ -137,7 +137,7 @@ def smart_chat_reply(
     timeout: int = 45,
 ) -> SmartChatResult:
     """
-    Call Hugging Face Inference Providers and return a structured result.
+    Call chat LLM (Hugging Face primary, Groq fallback) and return a structured result.
 
     memory_context: dynamic per-user history/projects (from UserMemory) —
     not a template; only real prior interaction with this user.
@@ -165,29 +165,68 @@ def smart_chat_reply(
         })
     messages.append({"role": "user", "content": user_text})
 
-    try:
-        from .hf_provider import chat
+    # Provider order: Hugging Face first, then Groq (same idea as SpecTranslator).
+    errors: list[str] = []
+    content = ""
+    model_used = ""
+    provider_used = ""
 
-        content, model = chat(
-            messages,
-            timeout=timeout,
-            max_tokens=900,
-            temperature=0.1,
-            json_mode=True,
-        )
-        result = _parse_response(content)
-        logger.info("smart_chat provider=huggingface model=%s", model)
-        logger.info(
-            "smart_chat type=%s cap=%s conf=%.2f",
-            result.type,
-            result.capability_id,
-            result.confidence,
-        )
-        return result
+    try:
+        from . import hf_provider as hf
+        if hf.enabled():
+            try:
+                content, model_used = hf.chat(
+                    messages,
+                    timeout=timeout,
+                    max_tokens=900,
+                    temperature=0.2,
+                    json_mode=True,
+                )
+                provider_used = "huggingface"
+            except Exception as e:
+                errors.append(f"hf:{type(e).__name__}:{e}")
+                logger.warning("smart_chat HF failed: %s", e)
+        else:
+            errors.append("hf:disabled_or_no_token")
     except Exception as e:
-        logger.exception("Hugging Face smart_chat failed: %s", e)
+        errors.append(f"hf_import:{type(e).__name__}:{e}")
+
+    if not content:
+        try:
+            from . import groq_provider as groq
+            if getattr(groq, "enabled", lambda: False)():
+                try:
+                    content, model_used = groq.chat(
+                        messages,
+                        timeout=timeout,
+                        max_tokens=900,
+                        temperature=0.2,
+                        json_mode=True,
+                    )
+                    provider_used = "groq"
+                except Exception as e:
+                    errors.append(f"groq:{type(e).__name__}:{e}")
+                    logger.warning("smart_chat Groq failed: %s", e)
+            else:
+                errors.append("groq:disabled_or_no_key")
+        except Exception as e:
+            errors.append(f"groq_import:{type(e).__name__}:{e}")
+
+    if not content:
+        logger.error("smart_chat all providers failed: %s", "; ".join(errors)[:500])
         return SmartChatResult(
             type="error",
             text="",
-            raw=str(e)[:200],
+            raw="; ".join(errors)[:300],
         )
+
+    result = _parse_response(content)
+    logger.info(
+        "smart_chat provider=%s model=%s type=%s cap=%s conf=%.2f",
+        provider_used,
+        model_used,
+        result.type,
+        result.capability_id,
+        result.confidence,
+    )
+    return result
