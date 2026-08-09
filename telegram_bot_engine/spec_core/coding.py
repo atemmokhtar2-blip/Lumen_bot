@@ -44,10 +44,11 @@ def get_settings() -> Settings:
 
 
 def _emit_db(spec: BotSpec) -> str:
-    if spec.storage.type != "sqlite" and not any(
-        get_capability(f.feature) and get_capability(f.feature).service == "tasks"  # type: ignore[union-attr]
+    need = spec.storage.type == "sqlite" or any(
+        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes"})  # type: ignore[union-attr]
         for f in spec.features
-    ):
+    )
+    if not need:
         return ""
     return '''"""SQLite helpers."""
 from __future__ import annotations
@@ -79,12 +80,21 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 '''
 
 
 def _emit_moderation() -> str:
-    return '''"""Moderation service — Telegram Chat Permissions / ban API."""
+    return '''"""Moderation service — Telegram admin APIs."""
 from __future__ import annotations
 
 from telegram import ChatPermissions
@@ -104,9 +114,61 @@ async def mute_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: i
     await context.bot.restrict_chat_member(chat_id=chat_id, user_id=user_id, permissions=perms)
 
 
+async def unmute_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> None:
+    perms = ChatPermissions(
+        can_send_messages=True,
+        can_send_media_messages=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
+    await context.bot.restrict_chat_member(chat_id=chat_id, user_id=user_id, permissions=perms)
+
+
+async def kick_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> None:
+    await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+    await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+
+
 async def warn_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> str:
-    # Lightweight warn: no persistence beyond message; extend later if needed.
     return f"warned:{user_id}"
+
+
+async def promote_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> None:
+    await context.bot.promote_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_restrict_members=True,
+        can_invite_users=True,
+        can_pin_messages=True,
+        can_promote_members=False,
+        can_change_info=False,
+        can_manage_video_chats=False,
+    )
+
+
+async def demote_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> None:
+    await context.bot.promote_chat_member(
+        chat_id=chat_id,
+        user_id=user_id,
+        can_manage_chat=False,
+        can_delete_messages=False,
+        can_restrict_members=False,
+        can_invite_users=False,
+        can_pin_messages=False,
+        can_promote_members=False,
+        can_change_info=False,
+        can_manage_video_chats=False,
+    )
+
+
+async def pin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
+    await context.bot.pin_chat_message(chat_id=chat_id, message_id=message_id)
+
+
+async def delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
+    await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
 '''
 
 
@@ -164,6 +226,78 @@ def delete_task(user_id: int, task_id: int) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def clear_tasks(user_id: int) -> int:
+    ensure()
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM tasks WHERE user_id = ? AND done = 1", (user_id,))
+        conn.commit()
+        return int(cur.rowcount)
+'''
+
+
+
+def _emit_notes() -> str:
+    return '''"""Notes service — personal notes in sqlite."""
+from __future__ import annotations
+
+from app.db import connect, init_db
+
+
+def ensure() -> None:
+    init_db()
+
+
+def add_note(user_id: int, body: str) -> int:
+    ensure()
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO notes (user_id, body) VALUES (?, ?)",
+            (user_id, body),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def list_notes(user_id: int) -> list[dict]:
+    ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, body FROM notes WHERE user_id = ? ORDER BY id DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_note(user_id: int, note_id: int) -> bool:
+    ensure()
+    with connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM notes WHERE id = ? AND user_id = ?",
+            (note_id, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+'''
+
+
+def _emit_content(spec: BotSpec) -> str:
+    rules = "التزم بالاحترام. ممنوع السبام والإعلانات." if (spec.bot.language or "ar").startswith("ar") else "Be respectful. No spam."
+    about = spec.bot.description or spec.bot.name
+    return f'''"""Static content helpers."""
+from __future__ import annotations
+
+RULES_TEXT = {rules!r}
+ABOUT_TEXT = {about!r}
+
+
+def rules() -> str:
+    return RULES_TEXT
+
+
+def about() -> str:
+    return ABOUT_TEXT
 '''
 
 
@@ -210,14 +344,14 @@ def _emit_handlers(spec: BotSpec) -> str:
     help_text = "\\n".join(help_lines) if help_lines else "/start"
 
     # collect needs
-    need_mod = any(
-        (get_capability(f.feature) or None) and get_capability(f.feature).service == "moderation"  # type: ignore
-        for f in spec.features
-    )
-    need_tasks = any(
-        (get_capability(f.feature) or None) and get_capability(f.feature).service == "tasks"  # type: ignore
-        for f in spec.features
-    )
+    def _svc(f):
+        c = get_capability(f.feature)
+        return c.service if c else ""
+
+    need_mod = any(_svc(f) == "moderation" for f in spec.features)
+    need_tasks = any(_svc(f) == "tasks" for f in spec.features)
+    need_notes = any(_svc(f) == "notes" for f in spec.features)
+    need_content = any(_svc(f) == "content" for f in spec.features)
 
     imports = [
         "from __future__ import annotations",
@@ -230,6 +364,10 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import moderation as moderation_svc")
     if need_tasks:
         imports.append("from app.services import tasks as tasks_svc")
+    if need_notes:
+        imports.append("from app.services import notes as notes_svc")
+    if need_content:
+        imports.append("from app.services import content as content_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -275,29 +413,47 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("        return")
 
         if cap.service == "moderation":
-            lines.append("    target_id = None")
-            lines.append("    if message.reply_to_message and message.reply_to_message.from_user:")
-            lines.append("        target_id = message.reply_to_message.from_user.id")
-            lines.append("    elif context.args:")
-            lines.append("        try:")
-            lines.append("            target_id = int(context.args[0])")
-            lines.append("        except ValueError:")
-            lines.append("            target_id = None")
-            lines.append("    if target_id is None or chat is None:")
-            lines.append(f"        await message.reply_text({fail!r})")
-            lines.append("        return")
-            lines.append("    try:")
-            if cap.method == "ban_user":
-                lines.append("        await moderation_svc.ban_user(context, chat.id, target_id)")
-            elif cap.method == "unban_user":
-                lines.append("        await moderation_svc.unban_user(context, chat.id, target_id)")
-            elif cap.method == "mute_user":
-                lines.append("        await moderation_svc.mute_user(context, chat.id, target_id)")
+            if cap.method in {"pin_message", "delete_message"}:
+                lines.append("    if chat is None or message.reply_to_message is None:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        mid = message.reply_to_message.message_id")
+                if cap.method == "pin_message":
+                    lines.append("        await moderation_svc.pin_message(context, chat.id, mid)")
+                else:
+                    lines.append("        await moderation_svc.delete_message(context, chat.id, mid)")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    except Exception:")
+                lines.append(f"        await message.reply_text({fail!r})")
             else:
-                lines.append("        await moderation_svc.warn_user(context, chat.id, target_id)")
-            lines.append(f"        await message.reply_text({ok!r})")
-            lines.append("    except Exception:")
-            lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("    target_id = None")
+                lines.append("    if message.reply_to_message and message.reply_to_message.from_user:")
+                lines.append("        target_id = message.reply_to_message.from_user.id")
+                lines.append("    elif context.args:")
+                lines.append("        try:")
+                lines.append("            target_id = int(context.args[0])")
+                lines.append("        except ValueError:")
+                lines.append("            target_id = None")
+                lines.append("    if target_id is None or chat is None:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                method_map = {
+                    "ban_user": "ban_user",
+                    "unban_user": "unban_user",
+                    "mute_user": "mute_user",
+                    "unmute_user": "unmute_user",
+                    "kick_user": "kick_user",
+                    "promote_user": "promote_user",
+                    "demote_user": "demote_user",
+                    "warn_user": "warn_user",
+                }
+                m = method_map.get(cap.method, "warn_user")
+                lines.append(f"        await moderation_svc.{m}(context, chat.id, target_id)")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    except Exception:")
+                lines.append(f"        await message.reply_text({fail!r})")
 
         elif cap.service == "tasks":
             if cap.method == "add_task":
@@ -315,9 +471,7 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append("    if not items:")
                 lines.append(f"        await message.reply_text({empty!r})")
                 lines.append("        return")
-                lines.append(
-                    "    text = '\\n'.join(f\"#{i['id']} {i['title']} [{i['priority']}]\" for i in items)"
-                )
+                lines.append("    text = \"\\n\".join(f\"#{i['id']} {i['title']} [{i['priority']}]\" for i in items)")
                 lines.append("    await message.reply_text(text)")
             elif cap.method == "done_task":
                 lines.append("    if not context.args:")
@@ -345,25 +499,93 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append(f"        await message.reply_text({ok!r})")
                 lines.append("    else:")
                 lines.append(f"        await message.reply_text({fail!r})")
+            elif cap.method == "clear_tasks":
+                lines.append("    n = tasks_svc.clear_tasks(user.id)")
+                lines.append(f"    await message.reply_text({ok!r} + f' ({{n}})')")
             else:
                 lines.append(f"    await message.reply_text({ok!r})")
+
+        elif cap.service == "notes":
+            if cap.method == "add_note":
+                prompt = _msg(feat, "prompt", "أرسل نص الملاحظة" if lang.startswith("ar") else "Send note text")
+                lines.append("    if context.args:")
+                lines.append("        notes_svc.add_note(user.id, ' '.join(context.args))")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("        return")
+                lines.append("    context.user_data['awaiting'] = 'note_body'")
+                lines.append(f"    await message.reply_text({prompt!r})")
+            elif cap.method == "list_notes":
+                empty = "لا توجد ملاحظات" if lang.startswith("ar") else "No notes"
+                lines.append("    items = notes_svc.list_notes(user.id)")
+                lines.append("    if not items:")
+                lines.append(f"        await message.reply_text({empty!r})")
+                lines.append("        return")
+                lines.append("    text = \"\\n\".join(f\"#{i['id']} {i['body']}\" for i in items)")
+                lines.append("    await message.reply_text(text)")
+            elif cap.method == "delete_note":
+                lines.append("    if not context.args:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        nid = int(context.args[0])")
+                lines.append("    except ValueError:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    if notes_svc.delete_note(user.id, nid):")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    else:")
+                lines.append(f"        await message.reply_text({fail!r})")
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
+        elif cap.service == "content":
+            if cap.method == "rules":
+                lines.append("    await message.reply_text(content_svc.rules())")
+            elif cap.method == "announce":
+                lines.append("    body = ' '.join(context.args) if context.args else ''")
+                lines.append("    if not body:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append(f"    await message.reply_text({ok!r} + \"\\n\" + body)")
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
+        elif cap.service == "core":
+            if cap.method == "about":
+                about = spec.bot.description or spec.bot.name
+                lines.append(f"    await message.reply_text({about!r})")
+            elif cap.method == "ping":
+                lines.append("    await message.reply_text('pong')")
+            elif cap.method == "my_id":
+                lines.append("    chat_id = chat.id if chat else 0")
+                lines.append("    await message.reply_text(f'user_id={user.id}\\nchat_id={chat_id}')")
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
         else:
             lines.append(f"    await message.reply_text({ok!r})")
         lines.append("")
         lines.append("")
 
-    # text router for simple task title capture
-    if need_tasks:
+    # text router for task/note capture
+    if need_tasks or need_notes:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
             "    user = update.effective_user",
             "    if message is None or user is None or not message.text:",
             "        return",
-            "    if context.user_data.get('awaiting') == 'task_title':",
+            "    awaiting = context.user_data.get('awaiting')",
+            "    if awaiting == 'task_title':",
             "        tasks_svc.add_task(user.id, message.text.strip())",
             "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text('تمت إضافة المهمة' if True else 'Task added')",
+            "        await message.reply_text('تمت إضافة المهمة')",
+            "        return",
+            "    if awaiting == 'note_body':",
+            "        notes_svc.add_note(user.id, message.text.strip())",
+            "        context.user_data.pop('awaiting', None)",
+            "        await message.reply_text('تمت إضافة الملاحظة')",
+            "        return",
             "",
             "",
         ]
@@ -422,6 +644,10 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service == "tasks")  # type: ignore
         for f in spec.features
     )
+    need_notes = any(
+        (get_capability(f.feature) and get_capability(f.feature).service == "notes")  # type: ignore
+        for f in spec.features
+    )
     imports_handlers = "start_handler, help_handler, callback_router"
     extra_imports = []
     for feat in spec.features:
@@ -430,7 +656,7 @@ def _emit_main(spec: BotSpec) -> str:
         extra_imports.append(f"handle_{feat.id}".replace("-", "_"))
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
-    if need_tasks:
+    if need_tasks or need_notes:
         imports_handlers += ", text_router"
 
     bot_cmds = ",\n        ".join(
@@ -438,7 +664,7 @@ def _emit_main(spec: BotSpec) -> str:
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks:
+    if need_tasks or need_notes:
         text_handler = "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
 
     return f'''"""Application entry — python-telegram-bot v21."""
@@ -539,9 +765,14 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     }
     if "moderation" in services:
         files["app/services/moderation.py"] = _emit_moderation()
-    if "tasks" in services or spec.storage.type == "sqlite":
+    if "tasks" in services or "notes" in services or spec.storage.type == "sqlite":
         files["app/db.py"] = _emit_db(spec)
+    if "tasks" in services:
         files["app/services/tasks.py"] = _emit_tasks()
+    if "notes" in services:
+        files["app/services/notes.py"] = _emit_notes()
+    if "content" in services:
+        files["app/services/content.py"] = _emit_content(spec)
     return files
 
 
