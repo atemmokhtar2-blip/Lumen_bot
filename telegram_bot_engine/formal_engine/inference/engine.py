@@ -553,8 +553,7 @@ def infer(program: DSLProgram) -> InferenceResult:
     result.wizards = cleaned_w
     wizards = cleaned_w
 
-    # Tools = commands in this contract (+ optional defensive ids only if resolved).
-    # No fixed domain phrase→tool packs.
+    # Tools ONLY from this request's commands (and wizard input keys). Nothing saved.
     dyn: list[dict] = []
     seen_t: set[str] = set()
     for c in result.commands:
@@ -562,7 +561,6 @@ def infer(program: DSLProgram) -> InferenceResult:
         if not name or name in ("start", "help") or name in seen_t:
             continue
         seen_t.add(name)
-        # input key from matching wizard/flow if any
         inp = "value"
         for w in wizards:
             wid = str(w.get("id") or w.get("command") or "").lower()
@@ -577,22 +575,7 @@ def infer(program: DSLProgram) -> InferenceResult:
             "input": inp,
             "source": "command",
         })
-    try:
-        from ..ontology.defensive_tools import resolve_defensive_tools
-        blob = " ".join(
-            [
-                *(getattr(c, "name", "") or "" for c in result.commands),
-                *(getattr(c, "description", "") or "" for c in result.commands),
-                *(getattr(b, "label", "") or "" for b in result.buttons),
-            ]
-        )
-        result.defensive_tools = resolve_defensive_tools(blob)
-        for tid in result.defensive_tools:
-            if tid not in seen_t:
-                seen_t.add(tid)
-                dyn.append({"id": tid, "title": tid, "input": "domain", "source": "defensive"})
-    except Exception:
-        result.defensive_tools = []
+    result.defensive_tools = []
     result.dynamic_tools = dyn[:32]
 
     return result

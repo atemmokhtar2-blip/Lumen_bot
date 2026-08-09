@@ -895,10 +895,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         "",
     ]
     _wiz = list(getattr(inf, "wizards", None) or [])
-    _dtools = list(getattr(inf, "defensive_tools", None) or [])
     _dyn = [str(t.get("id") or "") for t in (getattr(inf, "dynamic_tools", None) or []) if isinstance(t, dict)]
-    _tool_ids = sorted({x for x in (_dtools + _dyn + [c.name for c in commands if c.name not in ("start", "help")]) if x})
-    lines.append("DEFENSIVE_TOOL_IDS: list[str] = " + repr(_dtools))
+    _tool_ids = sorted({x for x in (_dyn + [c.name for c in commands if c.name not in ("start", "help")]) if x})
     lines.append("TOOL_IDS: list[str] = " + repr(_tool_ids))
     lines.append("FLOWS: dict[str, list[dict[str, str]]] = {")
     for w in _wiz:
@@ -1226,7 +1224,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("            await message.reply_text('pong')")
         lines.append("        elif _cn == 'id':")
         lines.append("            await message.reply_text('User ID: ' + str(uid) + ' | Chat: ' + str(message.chat_id))")
-        lines.append(f"        if DEFENSIVE_TOOL_IDS and any(s in {_py(cn)} for s in ('scan', 'security', 'report', 'dns', 'tls')):")
+        lines.append("        if False:  # defensive pack removed")
         lines.append("            target = ' '.join(args).strip()")
         lines.append("            if not target:")
         lines.append(f"                if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
@@ -1333,7 +1331,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("            mine.append({'title': title, 'status': 'open', 'flow': str(flow_id)})")
     lines.append("            msgs.append('تم الحفظ: ' + title)")
 
-    lines.append("        if DEFENSIVE_TOOL_IDS:")
+    lines.append("        if False:  # defensive pack removed")
     lines.append("            target = str(payload.get('domain') or payload.get('url') or payload.get('target') or title or text or '').strip()")
     lines.append("            if target:")
     lines.append("                try:")
