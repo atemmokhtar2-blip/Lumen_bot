@@ -139,20 +139,31 @@ def smart_chat_reply(
     user_text: str,
     *,
     conversation_hint: str = "",
+    memory_context: str = "",
     timeout: int = 45,
 ) -> SmartChatResult:
     """
     Call Hugging Face Inference Providers and return a structured result.
 
-    On any failure it returns a safe Arabic reply (never raises to the caller).
+    memory_context: dynamic per-user history/projects (from UserMemory) —
+    not a template; only real prior interaction with this user.
     """
     user_text = (user_text or "").strip()
     if len(user_text) < 1:
-        return SmartChatResult(type="reply", text="اكتب رسالتك وسأساعدك.")
+        return SmartChatResult(type="reply", text="")
 
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
     ]
+    # Dynamic user memory first (projects, recent turns, last intent)
+    if memory_context and memory_context.strip():
+        messages.append({
+            "role": "system",
+            "content": (
+                "سياق هذا المستخدم فقط (ديناميكي من تفاعله السابق، ليست قوالب):\n"
+                + memory_context.strip()[:3500]
+            ),
+        })
     if conversation_hint:
         messages.append({
             "role": "system",

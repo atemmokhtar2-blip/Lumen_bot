@@ -39,6 +39,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request or request.startswith("/"):
         return
 
+    # Phase 2: per-user memory (dynamic context only — no fixed reply templates)
+    uid = int(user.id) if user else 0
+    try:
+        from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+        _mem = get_user_memory(uid, OUTPUT_DIR)
+        _mem.add_turn("user", request)
+    except Exception:
+        _mem = None
+        logger.exception("user_memory load failed")
+
     # Spec 065 — if user is sending a bot token after successful generation
     pending_host = (context.user_data or {}).get("pending_host")
     if pending_host and looks_like_bot_token(request):
@@ -517,7 +527,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ------------------------------------------------------------------
-    # Generate directly via SpecTranslator (Hugging Face primary) + Formal Engine.
+    # Conversational AI layer (SmartChat + UserMemory) when the message is not
+    # clearly a bot specification. AI understands and routes; no fixed scripts.
+    # ------------------------------------------------------------------
+    if not _is_bot_spec:
+        _rt = chat_route(request)
+        _hard_caps = {
+            "clone_repo", "host_start", "host_stop", "host_status", "host_diagnose",
+            "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
+            "repo_develop", "live_run", "generate_bot",
+        }
+        _is_hard = (
+            _rt is not None
+            and getattr(_rt, "ok", False)
+            and getattr(_rt, "capability_id", "") in _hard_caps
+            and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
+        )
+        if not _is_hard:
+            try:
+                from telegram_bot_engine.chat_ai import smart_chat_reply
+                mem_ctx = _mem.context_for_ai() if _mem else ""
+                sc = await asyncio.to_thread(
+                    smart_chat_reply,
+                    request,
+                    memory_context=mem_ctx,
+                )
+                sc_type = getattr(sc, "type", "") or ""
+                sc_text = (getattr(sc, "text", None) or "").strip()
+                sc_cap = getattr(sc, "capability_id", None) or ""
+                sc_conf = float(getattr(sc, "confidence", 0) or 0)
+
+                # AI recommends generation with clear intent → fall through to formal
+                if sc_type == "recommend" and sc_cap == "generate_bot" and sc_conf >= 0.55:
+                    pass  # continue to formal generation below
+                elif sc_type == "recommend" and sc_cap in _hard_caps and sc_conf >= 0.55:
+                    # Let existing handlers above deal with hard caps on next patterns;
+                    # if we reached here, reply with AI text so user can refine.
+                    if sc_text:
+                        if _mem:
+                            _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
+                            _mem.set_last(intent=request[:200], capability=sc_cap)
+                        await message.reply_text(sc_text)
+                        return
+                elif sc_text:
+                    if _mem:
+                        _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap or "chat"})
+                        if sc_cap:
+                            _mem.set_last(intent=request[:200], capability=sc_cap)
+                    await message.reply_text(sc_text)
+                    return
+            except Exception:
+                logger.exception("smart_chat path failed")
+                # fall through to generation attempt rather than fixed error scripts
+
+    # ------------------------------------------------------------------
+    # Generate via SpecTranslator (Hugging Face) + Formal Engine.
     # No progressive clarification questionnaires — AI handles understanding.
     # ------------------------------------------------------------------
     if len(request) < 2:
@@ -597,6 +661,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             except Exception:
                 logger.exception("register_project failed")
+            try:
+                from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
+                mem = get_user_memory(uid, OUTPUT_DIR)
+                mem.set_last(
+                    intent=request[:200],
+                    project_path=str(project_path),
+                    capability="generate_bot",
+                )
+                cmds = list((meta or {}).get("commands") or [])[:20]
+                note = f"generated project at {project_path}"
+                if cmds:
+                    note += " commands=" + ",".join(cmds)
+                mem.add_turn("note", note, meta={"capability": "generate_bot", "success": bool(success)})
+            except Exception:
+                logger.exception("user_memory update after generate failed")
 
         # Try to send zip if project exists
         if project_path and Path(project_path).exists():
