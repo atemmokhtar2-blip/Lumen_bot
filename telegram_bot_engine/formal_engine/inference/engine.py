@@ -553,56 +553,46 @@ def infer(program: DSLProgram) -> InferenceResult:
     result.wizards = cleaned_w
     wizards = cleaned_w
 
-    # Fresh tools for THIS request — rebuilt from command/button/wizard text only
+    # Tools = commands in this contract (+ optional defensive ids only if resolved).
+    # No fixed domain phrase→tool packs.
+    dyn: list[dict] = []
+    seen_t: set[str] = set()
+    for c in result.commands:
+        name = (getattr(c, "name", "") or "").strip().lower()
+        if not name or name in ("start", "help") or name in seen_t:
+            continue
+        seen_t.add(name)
+        # input key from matching wizard/flow if any
+        inp = "value"
+        for w in wizards:
+            wid = str(w.get("id") or w.get("command") or "").lower()
+            if wid == name:
+                steps = w.get("steps") or []
+                if steps and isinstance(steps[0], dict) and steps[0].get("key"):
+                    inp = str(steps[0]["key"])
+                break
+        dyn.append({
+            "id": name,
+            "title": (getattr(c, "description", None) or name),
+            "input": inp,
+            "source": "command",
+        })
     try:
         from ..ontology.defensive_tools import resolve_defensive_tools
-        _blob_parts: list[str] = []
-        for c in result.commands:
-            _blob_parts.append(getattr(c, "name", "") or "")
-            _blob_parts.append(getattr(c, "description", "") or "")
-        for b in result.buttons:
-            _blob_parts.append(getattr(b, "label", "") or "")
-        for w in wizards:
-            _blob_parts.append(str(w.get("id") or ""))
-            for st in w.get("steps") or []:
-                _blob_parts.append(str(st.get("key") or ""))
-                _blob_parts.append(str(st.get("prompt") or ""))
-        for e in result.entities:
-            _blob_parts.append(getattr(e, "name", "") or "")
-            for f in getattr(e, "fields", None) or []:
-                _blob_parts.append(str(f))
-        blob = " ".join(_blob_parts)
+        blob = " ".join(
+            [
+                *(getattr(c, "name", "") or "" for c in result.commands),
+                *(getattr(c, "description", "") or "" for c in result.commands),
+                *(getattr(b, "label", "") or "" for b in result.buttons),
+            ]
+        )
         result.defensive_tools = resolve_defensive_tools(blob)
-        # Map evidenced phrases → tool dicts (same request only)
-        dyn: list[dict] = []
-        low = blob.lower()
-        pairs = [
-            (("dns",), "dns_lookup", "DNS", "domain"),
-            (("mx",), "mx_lookup", "MX", "domain"),
-            (("spf",), "spf_check", "SPF", "domain"),
-            (("dmarc",), "dmarc_check", "DMARC", "domain"),
-            (("tls", "ssl"), "tls_info", "TLS", "domain"),
-            (("http status", "status code"), "http_status", "HTTP status", "url"),
-            (("security header", "hsts", "csp"), "security_headers", "Headers", "url"),
-            (("robots",), "robots_check", "robots.txt", "url"),
-            (("sitemap",), "sitemap_check", "sitemap", "url"),
-            (("whois",), "whois_lookup", "WHOIS", "domain"),
-            (("password", "كلمة"), "password_strength", "Password", "text"),
-            (("ping",), "ping_check", "Ping", "domain"),
-        ]
-        seen: set[str] = set()
-        for keys, tid, title, inp in pairs:
-            if any(k in low for k in keys) and tid not in seen:
-                seen.add(tid)
-                dyn.append({"id": tid, "title": title, "input": inp})
-        # also from defensive_tools ids
         for tid in result.defensive_tools:
-            if tid not in seen:
-                seen.add(tid)
-                dyn.append({"id": tid, "title": tid, "input": "domain"})
-        result.dynamic_tools = dyn[:24]
+            if tid not in seen_t:
+                seen_t.add(tid)
+                dyn.append({"id": tid, "title": tid, "input": "domain", "source": "defensive"})
     except Exception:
         result.defensive_tools = []
-        result.dynamic_tools = []
+    result.dynamic_tools = dyn[:32]
 
     return result

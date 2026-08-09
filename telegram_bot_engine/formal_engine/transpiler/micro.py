@@ -896,7 +896,10 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     ]
     _wiz = list(getattr(inf, "wizards", None) or [])
     _dtools = list(getattr(inf, "defensive_tools", None) or [])
+    _dyn = [str(t.get("id") or "") for t in (getattr(inf, "dynamic_tools", None) or []) if isinstance(t, dict)]
+    _tool_ids = sorted({x for x in (_dtools + _dyn + [c.name for c in commands if c.name not in ("start", "help")]) if x})
     lines.append("DEFENSIVE_TOOL_IDS: list[str] = " + repr(_dtools))
+    lines.append("TOOL_IDS: list[str] = " + repr(_tool_ids))
     lines.append("FLOWS: dict[str, list[dict[str, str]]] = {")
     for w in _wiz:
         wid = str(w.get("id") or w.get("command") or "flow")
@@ -1113,21 +1116,35 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("    if message.text and ' ' in message.text:")
         lines.append("        args = message.text.split()[1:]")
         lines.append("    try:")
-        lines.append("        from app.config import get_settings as _gs")
-        lines.append("        _settings = _gs()")
-        lines.append("        _admins: set[int] = set()")
-        lines.append("        for _part in str(getattr(_settings, 'admin_user_ids', '') or '').split(','):")
-        lines.append("            _part = _part.strip()")
-        lines.append("            if _part.isdigit():")
-        lines.append("                _admins.add(int(_part))")
-        # Only enforce admin when command marked admin_only
         lines.append(f"        _admin_only = {str(bool(cmd.admin_only))}")
-        lines.append("        if _admin_only and _admins and uid not in _admins:")
-        lines.append("            await message.reply_text('هذا الأمر للمشرفين فقط.')")
-        lines.append("            return")
+        lines.append("        if _admin_only:")
+        lines.append("            from app.config import get_settings as _gs")
+        lines.append("            _settings = _gs()")
+        lines.append("            _admins: set[int] = set()")
+        lines.append("            for _part in str(getattr(_settings, 'admin_user_ids', '') or '').split(','):")
+        lines.append("                _part = _part.strip()")
+        lines.append("                if _part.isdigit():")
+        lines.append("                    _admins.add(int(_part))")
+        lines.append("            if _admins and uid not in _admins:")
+        lines.append("                await message.reply_text('هذا الأمر للمشرفين فقط.')")
+        lines.append("                return")
+        # Only enforce admin when command marked admin_only
         # Wizard/flow
-        lines.append(f"        if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
+        lines.append("        target = ' '.join(args).strip()")
+        lines.append("        from app.tools import TOOL_IDS, run_tool")
+        lines.append(f"        _has_tool = {_py(cn)} in TOOL_IDS")
+        lines.append(f"        _has_flow = {_py(cmd.name)} in FLOWS and bool(FLOWS.get({_py(cmd.name)}))")
+        # args present + tool → execute tool immediately
+        lines.append("        if _has_tool and target:")
+        lines.append(f"            await message.reply_text(run_tool({_py(cn)}, target)[:3500])")
+        lines.append("            return")
+        # no args: prefer multi-step flow if defined, else prompt for tool input
+        lines.append("        if _has_flow and not target:")
         lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
+        lines.append("            return")
+        lines.append("        if _has_tool and not target:")
+        lines.append(f"            context.user_data['await_tool'] = {_py(cn)}")
+        lines.append("            await message.reply_text('أرسل القيمة المطلوبة:')")
         lines.append("            return")
         # Telegram capabilities
         if caps:
@@ -1241,6 +1258,12 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     lines.append("        return")
     lines.append("    ud = context.user_data")
     lines.append("    text = (message.text or \"\").strip()")
+    lines.append("    _await = ud.get('await_tool')")
+    lines.append("    if _await and text and not text.startswith('/'):")
+    lines.append("        from app.tools import run_tool")
+    lines.append("        ud.pop('await_tool', None)")
+    lines.append("        await message.reply_text(run_tool(str(_await), text)[:3500])")
+    lines.append("        return")
     lines.append("    if message.photo:")
     lines.append("        text = message.photo[-1].file_id")
     lines.append("    elif message.document:")
@@ -1543,7 +1566,7 @@ def _emit_config(inf: InferenceResult) -> str:
         "",
         "class Settings(BaseSettings):",
         "    model_config = SettingsConfigDict(env_file=\".env\", env_file_encoding=\"utf-8\", extra=\"ignore\")",
-        "    telegram_bot_token: str = Field(..., min_length=20)",
+        "    telegram_bot_token: str = Field(default=\"\", description=\"Required only to run the bot process\")",
         "    admin_user_ids: str = \"\"",
         "    log_level: str = \"INFO\"",
     ]
@@ -1610,7 +1633,7 @@ def _emit_main(inf: InferenceResult) -> str:
         + bot_block + "\n"
         "    ])\n\n\n"
         "def build_application() -> Application:\n"
-        "    settings = get_settings()\n"
+        "    settings = get_settings()\n""    if not (settings.telegram_bot_token or \"\").strip():\n""        raise SystemExit(\"Set TELEGRAM_BOT_TOKEN in .env to run the bot\")\n"
         "    app = Application.builder().token(settings.telegram_bot_token).post_init(_post_init).build()\n"
         + "\n".join(regs) + "\n"
         "    return app\n\n\n"
