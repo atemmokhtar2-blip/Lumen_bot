@@ -1,12 +1,14 @@
 """
-SpecTranslator — speech → structured specification (translate only, never code).
+SpecTranslator — human speech → structured specification ONLY.
 
-Paths:
-  1) Optional HuggingFace JSON translation when HF_TOKEN is set
-  2) Deterministic structural translation (always available)
+Hard constraints:
+  - TRANSLATE only. Never write code. Never invent features or domains.
+  - Hugging Face is the only AI path (when HF_TOKEN is set).
+  - Deterministic structural extraction is the non-AI fallback.
+  - Every field is grounded against the original user text.
+  - Formal engine is the ONLY code generator.
 
-Supports multi-step flows, entities/relations, catalog→order conversation.
-Formal engine remains the only code generator.
+No domain templates. No g4f. No command renaming.
 """
 
 from __future__ import annotations
@@ -667,29 +669,257 @@ def _spec_to_sectioned_text(data: dict[str, Any], original: str) -> str:
 
 
 
-_HF_SYSTEM = """You are a Telegram bot SPEC translator (not a coder).
-Convert the user description into JSON ONLY.
+_HF_SYSTEM = """You are a SPEC TRANSLATOR only. You are NOT a coder and NOT a bot builder.
 
-Schema:
+MISSION: Translate the user's natural-language description into a structured JSON specification.
+You NEVER write code, never invent features, never complete missing domains.
+
+OUTPUT: JSON object only. No markdown fences. No prose. No Python/JS/code.
+
+Schema (use only keys that have evidence in the user text):
 {
-  "bot_name": "string",
-  "commands": [{"name": "exact_user_name", "description": "string", "admin_only": false}],
-  "buttons": [{"label": "string"}],
-  "entities": [{"name": "PascalCase", "fields": ["field1", "field2"]}],
-  "flows": [{"id": "same_as_command", "command": "exact_user_command", "entity": "EntityFromText", "steps": [{"key": "field", "prompt": "..."}]}],
-  "rules": ["string"],
-  "relations": [{"from": "EntityA", "to": "EntityB", "via": "field"}]
+  "bot_name": "string from user or empty",
+  "commands": [{"name": "exact_token", "description": "from user words", "admin_only": false}],
+  "buttons": [{"label": "exact label from user"}],
+  "entities": [{"name": "NameFromUser", "fields": ["field_from_user"]}],
+  "flows": [{"id": "cmd", "command": "cmd", "entity": "EntityFromUser", "steps": [{"key": "field", "prompt": "short prompt from user intent"}]}],
+  "rules": ["rule sentence from user"],
+  "relations": [{"from": "A", "to": "B", "via": "field"}],
+  "tools": [{"id": "id", "title": "title", "input": "input", "description": "desc"}]
 }
 
-STRICT rules:
-1) Extract ONLY what the user wrote. Never invent domains (shop/delivery/tickets/games).
-2) Command names MUST stay exactly as the user wrote them (e.g. /new_task stays new_task — never rename to add).
-3) Entities and fields ONLY from the user text. Do not invent Order/Customer/Item.
-4) Flows attach to the user's command names; steps from the described sequence only.
-5) Buttons are labels only; do not invent commands like show_categories unless the user wrote them.
-6) tools: only what the user asked for. Rebuild every request from their words.
-7) JSON only. No markdown. No code.
+ABSOLUTE CONSTRAINTS (violating any = invalid output):
+1) TRANSLATE ONLY. Map human speech → structured fields. Do not design, expand, or improve the bot.
+2) ZERO CODE. Never output def, class, import, async, handler, Application, or any programming syntax.
+3) ZERO INVENTION. Every command name, button label, entity name, field, flow step, rule, and tool MUST be directly evidenced in the user text (literal token or clear paraphrase of the same phrase).
+4) COMMAND NAMES: keep the user's exact latin ids when they wrote /new_task, /my_tasks, etc. Never rename (new_task must NOT become add).
+5) If the user did not mention a command/entity/button, omit it. Empty lists are correct. Do not fill with start/help/order/catalog defaults.
+6) admin_only=true only if the user said admin/أدمن/مشرف for that command.
+7) Flows only when the user described a multi-step sequence; steps keys must match fields they mentioned.
+8) No domain packs: no shop, delivery, tickets, school, hospital, or generic CRUD scaffolds.
+9) If the text is too vague to extract actions, return {"bot_name":"","commands":[],"buttons":[],"entities":[],"flows":[],"rules":[],"relations":[],"tools":[]}.
+10) JSON only.
 """
+
+
+
+_CODE_MARKERS = (
+    "def ", "class ", "import ", "from ", "async def", "await ",
+    "Application.", "CommandHandler", "CallbackQueryHandler",
+    "```python", "```js", "```javascript", "#!/usr", "module.exports",
+)
+
+
+def _looks_like_code(content: str) -> bool:
+    """True if model response looks like source code instead of JSON spec."""
+    s = content or ""
+    if not s.strip():
+        return False
+    hits = sum(1 for m in _CODE_MARKERS if m in s)
+    if hits >= 2:
+        return True
+    if re.search(r"^\s*(def|class|async def|import)\s+\w+", s, re.M):
+        return True
+    return False
+
+
+def _token_evidenced(token: str, text_n: str, raw: str) -> bool:
+    t = (token or "").strip()
+    if not t:
+        return False
+    if re.search(rf"/{re.escape(t)}\b", raw, re.I):
+        return True
+    if re.search(rf"(?:^|[\s,|/]){re.escape(t)}(?:\s*[-–—:]|\s|$)", raw, re.I | re.M):
+        return True
+    tl = t.lower()
+    if tl in text_n:
+        return True
+    parts = [p for p in tl.replace("-", "_").split("_") if len(p) >= 3]
+    if len(parts) >= 2 and all(p in text_n for p in parts):
+        return True
+    return False
+
+
+def _phrase_evidenced(phrase: str, text_n: str, raw: str) -> bool:
+    p = (phrase or "").strip()
+    if not p or len(p) < 2:
+        return False
+    if p in raw or _norm(p) in text_n:
+        return True
+    # allow short token overlap for multi-word labels
+    toks = [t for t in re.split(r"\s+", _norm(p)) if len(t) >= 2]
+    if len(toks) >= 2 and sum(1 for t in toks if t in text_n) >= max(1, len(toks) - 1):
+        return True
+    if len(toks) == 1 and toks[0] in text_n:
+        return True
+    return False
+
+
+def _ground_spec_to_user_text(data: dict, user_text: str) -> dict:
+    """Drop every AI field not evidenced in the original user text. Never invent.
+
+    SpecTranslator may only keep what the human wrote. Formal engine builds code later.
+    """
+    if not isinstance(data, dict):
+        return {
+            "bot_name": "", "commands": [], "buttons": [], "entities": [],
+            "flows": [], "rules": [], "relations": [], "tools": [],
+        }
+    raw = user_text or ""
+    text_n = _norm(raw)
+    out: dict = {
+        "bot_name": "",
+        "commands": [],
+        "buttons": [],
+        "entities": [],
+        "flows": [],
+        "rules": [],
+        "relations": [],
+        "tools": [],
+    }
+
+    bn = str(data.get("bot_name") or "").strip()
+    if bn and _phrase_evidenced(bn, text_n, raw):
+        out["bot_name"] = bn[:48]
+
+    seen_c: set[str] = set()
+    for c in data.get("commands") or []:
+        if not isinstance(c, dict):
+            continue
+        name = _normalize_cmd_name(str(c.get("name") or ""))
+        if not name or name in seen_c:
+            continue
+        desc = str(c.get("description") or "").strip()
+        # Must be evidenced by /name, name token, or description phrase in user text
+        if not (
+            _token_evidenced(name, text_n, raw)
+            or (desc and _phrase_evidenced(desc, text_n, raw))
+        ):
+            continue
+        if not _valid_cmd_name(name) and name not in ("start", "help"):
+            continue
+        admin = bool(c.get("admin_only"))
+        if admin and not any(k in text_n or k in raw for k in ("admin", "ادمن", "أدمن", "مشرف", "إدارة")):
+            admin = False
+        seen_c.add(name)
+        out["commands"].append({
+            "name": name,
+            "description": (desc or name)[:100],
+            "admin_only": admin,
+        })
+
+    seen_b: set[str] = set()
+    for b in data.get("buttons") or []:
+        lab = str(b.get("label") if isinstance(b, dict) else b or "").strip()
+        if not lab or lab in seen_b:
+            continue
+        if not _phrase_evidenced(lab, text_n, raw):
+            continue
+        seen_b.add(lab)
+        out["buttons"].append({"label": lab[:48]})
+
+    seen_e: set[str] = set()
+    for e in data.get("entities") or []:
+        if not isinstance(e, dict):
+            continue
+        en = str(e.get("name") or "").strip()
+        if not en or en.lower() in seen_e:
+            continue
+        if not _token_evidenced(en, text_n, raw) and not _phrase_evidenced(en, text_n, raw):
+            continue
+        fields_in = e.get("fields") or e.get("attributes") or []
+        fields: list[str] = []
+        if isinstance(fields_in, list):
+            for f in fields_in:
+                fs = str(f).strip()
+                if not fs:
+                    continue
+                # field must appear in text or be structural id
+                if fs.lower() in ("id",) or _token_evidenced(fs, text_n, raw) or _phrase_evidenced(fs, text_n, raw):
+                    fields.append(re.sub(r"[^a-zA-Z0-9_]", "", fs)[:32])
+        seen_e.add(en.lower())
+        out["entities"].append({
+            "name": en[:1].upper() + en[1:] if en else en,
+            "fields": [f for f in fields if f][:16],
+        })
+
+    seen_f: set[str] = set()
+    cmd_names = {c["name"] for c in out["commands"]}
+    for f in data.get("flows") or []:
+        if not isinstance(f, dict):
+            continue
+        cmd = _normalize_cmd_name(str(f.get("command") or f.get("id") or ""))
+        if not cmd or cmd in seen_f:
+            continue
+        # Flow must attach to an evidenced command (or the command name itself in text)
+        if cmd not in cmd_names and not _token_evidenced(cmd, text_n, raw):
+            continue
+        steps_in = f.get("steps") or []
+        steps: list[dict] = []
+        if isinstance(steps_in, list):
+            for st in steps_in:
+                if not isinstance(st, dict):
+                    continue
+                key = re.sub(r"[^a-zA-Z0-9_]", "", str(st.get("key") or "").lower())[:32]
+                if not key or key in ("n_x", "x", "field", "value"):
+                    continue
+                # keep step if key or prompt evidenced, or key is common collect field already in entity fields
+                prompt = str(st.get("prompt") or "").strip()[:120]
+                if not (
+                    _token_evidenced(key, text_n, raw)
+                    or (prompt and _phrase_evidenced(prompt, text_n, raw))
+                    or any(key in (e.get("fields") or []) for e in out["entities"])
+                ):
+                    continue
+                steps.append({"key": key, "prompt": prompt or f"أرسل {key}"})
+        if not steps:
+            continue
+        ent = str(f.get("entity") or "").strip()
+        if ent and not any(e["name"].lower() == ent.lower() for e in out["entities"]):
+            if not _token_evidenced(ent, text_n, raw):
+                ent = ""
+        seen_f.add(cmd)
+        out["flows"].append({
+            "id": cmd,
+            "command": cmd,
+            "entity": ent,
+            "kind": "collect",
+            "steps": steps[:12],
+        })
+
+    for r in data.get("rules") or []:
+        rs = str(r).strip()
+        if rs and _phrase_evidenced(rs, text_n, raw):
+            out["rules"].append(rs[:200])
+
+    for rel in data.get("relations") or []:
+        if not isinstance(rel, dict):
+            continue
+        fr = str(rel.get("from") or "").strip()
+        to = str(rel.get("to") or "").strip()
+        via = str(rel.get("via") or "").strip()
+        if fr and to and (
+            _token_evidenced(fr, text_n, raw) or any(e["name"].lower() == fr.lower() for e in out["entities"])
+        ) and (
+            _token_evidenced(to, text_n, raw) or any(e["name"].lower() == to.lower() for e in out["entities"])
+        ):
+            out["relations"].append({"from": fr, "to": to, "via": via[:40]})
+
+    for t in data.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("id") or "").strip()
+        title = str(t.get("title") or "").strip()
+        blob = f"{tid} {title} {t.get('description') or ''}"
+        if tid and (_phrase_evidenced(title or tid, text_n, raw) or _token_evidenced(tid, text_n, raw)):
+            out["tools"].append({
+                "id": re.sub(r"[^a-z0-9_]", "_", tid.lower())[:40],
+                "title": title[:80] or tid,
+                "input": str(t.get("input") or "")[:40],
+                "description": str(t.get("description") or "")[:120],
+            })
+
+    return out
 
 
 def _parse_spec_json(content: str) -> dict | None:
@@ -710,26 +940,43 @@ def _parse_spec_json(content: str) -> dict | None:
 
 
 def _hf_translate(text: str, timeout: int) -> TranslatorResult:
+    """Hugging Face only: speech → JSON spec. Never code. Grounded to user text."""
     t0 = time.perf_counter()
     try:
         from .hf_provider import chat, enabled
         if not enabled():
             return TranslatorResult(ok=False, error="HF_TOKEN not configured", path="hf")
+        user_payload = (
+            "Translate the following USER DESCRIPTION into the JSON specification schema.\n"
+            "Rules: translate only; no code; no invention; keep exact command names.\n\n"
+            f"USER DESCRIPTION:\n{text[:12000]}"
+        )
         content, model = chat(
             [
                 {"role": "system", "content": _HF_SYSTEM},
-                {"role": "user", "content": text[:12000]},
+                {"role": "user", "content": user_payload},
             ],
             timeout=timeout,
             max_tokens=int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200")),
             temperature=0.0,
             json_mode=True,
         )
+        if _looks_like_code(content):
+            raise ValueError("model_returned_code_rejected")
         data = _parse_spec_json(content)
         if not data:
             raise ValueError("invalid_json")
-        if not isinstance(data.get("commands"), list) or not data.get("commands"):
-            raise ValueError("no_commands")
+        # Hard ground: drop anything not evidenced in the original human text
+        data = _ground_spec_to_user_text(data, text)
+        has_signal = bool(
+            data.get("commands")
+            or data.get("buttons")
+            or data.get("entities")
+            or data.get("flows")
+            or data.get("tools")
+        )
+        if not has_signal:
+            raise ValueError("no_grounded_signal")
         return TranslatorResult(
             ok=True,
             structured_text=_spec_to_sectioned_text(data, text),
@@ -877,48 +1124,31 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
         have.add(fname)
         f["command"] = fname
         f["id"] = f.get("id") or fname
-    # Buttons → stems already; also map English dashboard labels
-    label_map = (
-        (r"domain\s*scan", "domain_scan"),
-        (r"email\s*security", "email_security"),
-        (r"website\s*security", "website_scan"),
-        (r"password\s*security", "password_security"),
-        (r"security\s*report", "generate_report"),
-        (r"report", "generate_report"),
-    )
-    for b in spec.get("buttons") or []:
-        lab = (b.get("label") if isinstance(b, dict) else str(b)) or ""
-        lab_l = lab.lower()
-        for pat, cname in label_map:
-            if re.search(pat, lab_l) and cname not in have and _valid_cmd_name(cname):
-                cmds.append({"name": cname, "description": lab.strip()[:80], "admin_only": False})
-                have.add(cname)
-                break
-    # Drop junk command names (fragments from prose / markdown)
-    junk = {"ssl", "tls", "example", "information", "com", "http", "https", "www", "order", "pin", "register", "book", "records", "status", "certificate", "headers"}
-    # Keep order only if catalog evidence
-    n = _norm(text or "")
-    catalog = any(k in n for k in ("اصناف", "الأصناف", "منتجات", "منيو", "catalog", "menu items"))
+    # Buttons stay as labels only — never invent commands from dashboard/security packs.
+    # Drop junk command names not evidenced as /name in user text.
+    junk = {
+        "ssl", "tls", "example", "information", "com", "http", "https", "www",
+        "pin", "records", "certificate", "headers",
+    }
     cleaned = []
     for c in cmds:
         if not isinstance(c, dict):
             continue
         name = str(c.get("name") or "").lower()
-        if name in junk and not (name == "order" and catalog):
-            # allow if explicit /name in user text
+        if name in junk:
             if not re.search(rf"/{re.escape(name)}\b", text or "", re.I):
-                continue
-        if name == "order" and not catalog:
-            if not re.search(r"/order\b", text or "", re.I):
                 continue
         cleaned.append(c)
     spec["commands"] = cleaned
-    # Drop order flows without catalog
-    if not catalog:
-        spec["flows"] = [
-            f for f in (spec.get("flows") or [])
-            if not (isinstance(f, dict) and str(f.get("id") or f.get("command") or "").lower() == "order")
-        ]
+    # Keep only flows whose command is evidenced in user text (no domain order pack)
+    evid_cmds = {str(c.get("name") or "").lower() for c in cleaned if isinstance(c, dict)}
+    for m in re.finditer(r"(?m)(?:^|\s)/([A-Za-z][A-Za-z0-9_]{1,32})\b", text or ""):
+        evid_cmds.add(m.group(1).lower())
+    spec["flows"] = [
+        f for f in (spec.get("flows") or [])
+        if isinstance(f, dict)
+        and str(f.get("command") or f.get("id") or "").lower() in evid_cmds
+    ]
     # Tools always recomputed/merged from text for this request
     fresh = _extract_dynamic_tools(text)
     existing = [t for t in (spec.get("tools") or []) if isinstance(t, dict)]
@@ -963,6 +1193,8 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     # If AI succeeded, merge so it cannot drop catalog items / admin caps / flows
     if ai_result and ai_result.ok and isinstance(ai_result.grounded_json, dict) and ai_result.grounded_json:
         merged = _merge_specs(ai_result.grounded_json, structural)
+        # Final ground pass: AI may never introduce un-evidenced fields
+        merged = _ground_spec_to_user_text(merged, text)
         # ensure capability-friendly command names
         for c in merged.get("commands") or []:
             if isinstance(c, dict) and c.get("name"):
