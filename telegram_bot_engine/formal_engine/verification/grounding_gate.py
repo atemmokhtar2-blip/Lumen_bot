@@ -83,43 +83,28 @@ def _text_has_cmd(text_n: str, raw: str, name: str, desc: str = "") -> bool:
     for part in n.split("_"):
         if len(part) >= 4 and re.search(rf"\b{re.escape(part)}\b", text_n):
             return True
-    # Common AR/EN intent synonyms (must still appear in user text)
-    synonyms = {
-        "register": ("تسجيل", "يسجل", "register", "signup"),
-        "new_order": ("طلب جديد", "اوردر", "order", "طلب"),
-        "my_orders": ("طلباتي", "اوردرات", "my orders"),
-        "menu": ("منيو", "menu", "قائمه الطعام", "قائمة الطعام"),
-        "show_categories": ("اصناف", "الأصناف", "الاصناف", "عرض جميع", "عرض الاصناف", "categories"),
-        "show_products": ("منتجات", "المنتجات", "products"),
-        "track": ("تتبع", "track"),
-        "accept_order": ("يقبل", "قبول", "accept"),
-        "admin": ("ادمن", "أدمن", "admin", "مشرف"),
-        "stats": ("احصائ", "إحصائ", "stats"),
-        "add_item": ("صنف", "صنف", "منتج", "منتجات", "add item"),
-        "product": ("منتج", "منتجات", "صنف", "اصناف", "product", "products", "item", "items"),
-        "products": ("منتج", "منتجات", "صنف", "اصناف", "product", "products", "item", "items"),
-        "cart": ("سلة", "سله", "سلة الشراء", "عربة", "عربة التسوق", "cart", "basket"),
-        "checkout": ("إتمام الطلب", "اتمام الطلب", "الدفع", "checkout", "شراء", "طلب الأوردر", "طلب الاوردر"),
-        "ticket": ("تذكرة", "تذاكر", "تذاكر الدعم", "ticket", "tickets"),
-        "support": ("دعم", "خدمة العملاء", "خدمة عملاء", "support", "مساعدة"),
-        "warn": ("تحذير", "إنذار", "انذار", "warn", "warning"),
+    # Platform moderation capabilities only (Telegram-level, not domain packs).
+    # Domain commands must be grounded by literal /name or description tokens above.
+    platform_synonyms = {
         "ban": ("حظر", "بان", "ban"),
-        "kick": ("طرد", "kick", "ازالة"),
+        "kick": ("طرد", "kick"),
         "mute": ("كتم", "mute"),
         "unban": ("فك الحظر", "unban"),
         "unmute": ("فك الكتم", "unmute"),
-        "order": ("طلب", "اوردر", "order", "كمية"),
-        "register": ("تسجيل", "register", "signup"),
-        "book": ("حجز", "book"),
+        "warn": ("تحذير", "إنذار", "انذار", "warn"),
+        "admin": ("ادمن", "أدمن", "admin", "مشرف"),
+        "stats": ("احصائ", "إحصائ", "stats"),
     }
-    for key, words in synonyms.items():
-        if key == n or key in n:
+    for key, words in platform_synonyms.items():
+        if key == n or key in n.split("_"):
             if any(w in raw for w in words) or any(_norm(w) in text_n for w in words):
                 return True
     return False
 
 
+
 def _text_has_entity(text_n: str, raw: str, name: str) -> bool:
+    """Entity grounded only if its name appears in the user text (no domain noun packs)."""
     n = (name or "").strip()
     if not n:
         return False
@@ -127,23 +112,6 @@ def _text_has_entity(text_n: str, raw: str, name: str) -> bool:
         return True
     if n.lower() in text_n:
         return True
-    # Arabic free-form nouns → English entity names
-    ar_map = {
-        "customer": ("عميل", "عملاء", "customer"),
-        "driver": ("سائق", "سواق", "driver"),
-        "order": ("طلب", "اوردر", "order"),
-        "task": ("مهمة", "مهام", "task"),
-        "product": ("صنف", "منتج", "product", "item"),
-        "patient": ("مريض", "patient"),
-        "doctor": ("طبيب", "doctor"),
-        "appointment": ("موعد", "appointment"),
-        "user": ("مستخدم", "user"),
-    }
-    key = n.lower()
-    for stem, words in ar_map.items():
-        if stem in key:
-            if any(w in raw for w in words) or any(_norm(w) in text_n for w in words):
-                return True
     return False
 
 

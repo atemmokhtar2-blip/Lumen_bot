@@ -747,60 +747,6 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
         )
 
 
-def _g4f_translate(text: str, timeout: int) -> TranslatorResult:
-    """Free multi-provider fallback when HF_TOKEN is missing or HF fails."""
-    t0 = time.perf_counter()
-    if os.environ.get("G4F_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        return TranslatorResult(ok=False, error="g4f_disabled", path="g4f")
-    try:
-        from g4f.client import Client  # type: ignore
-    except Exception as exc:
-        return TranslatorResult(ok=False, error=f"g4f_import:{exc}"[:200], path="g4f")
-    models = [
-        m.strip()
-        for m in (os.environ.get("G4F_MODELS") or "gpt-4o-mini,gemini-2.0-flash,gpt-4o").split(",")
-        if m.strip()
-    ]
-    errors: list[str] = []
-    for model in models:
-        try:
-            client = Client()
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": _HF_SYSTEM},
-                    {"role": "user", "content": text[:12000]},
-                ],
-                temperature=0,
-            )
-            content = ""
-            try:
-                content = (resp.choices[0].message.content or "").strip()
-            except Exception:
-                content = str(resp)[:8000]
-            data = _parse_spec_json(content)
-            if not data or not isinstance(data.get("commands"), list) or not data.get("commands"):
-                errors.append(f"{model}:bad_json")
-                continue
-            return TranslatorResult(
-                ok=True,
-                structured_text=_spec_to_sectioned_text(data, text),
-                grounded_json=data,
-                model_used=f"g4f:{model}",
-                elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-                path="g4f",
-            )
-        except Exception as exc:
-            errors.append(f"{model}:{type(exc).__name__}")
-            continue
-    return TranslatorResult(
-        ok=False,
-        error=("; ".join(errors) or "g4f_failed")[:800],
-        elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-        path="g4f",
-    )
-
-
 
 
 _BLOCKED_CMD_NAMES = frozenset({
@@ -1008,17 +954,8 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     if os.environ.get("SPEC_TRANSLATOR", "1").strip().lower() not in {"0", "false", "off"}:
         if hf_enabled():
             ai_result = _hf_translate(text, timeout=timeout)
-        # 2) g4f fallback when HF failed or unavailable
-        g4f_on = os.environ.get("G4F_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
-        if g4f_on and not (ai_result and ai_result.ok):
-            if complex_hint or not hf_enabled():
-                g4 = _g4f_translate(text, timeout=min(timeout, 50))
-                if g4.ok:
-                    ai_result = g4
-                elif ai_result is None:
-                    ai_result = g4
-                elif g4.error:
-                    ai_result.error = (ai_result.error or "") + "|" + g4.error
+        # AI path is Hugging Face only. No g4f / third-party free clients.
+        # If HF is unavailable, structural_translate is the deterministic fallback.
 
     # Always compute structural baseline
     structural = structural_translate(text)

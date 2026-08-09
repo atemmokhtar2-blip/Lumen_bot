@@ -1,5 +1,5 @@
 """
-Understanding-AI — g4f layer for SPEC enrichment only.
+Understanding-AI — Hugging Face layer for SPEC enrichment only.
 
 Allowed:
   - Rewrite messy natural language into a structured specification text
@@ -14,8 +14,8 @@ Pipeline position:
   user text → [optional Understanding-AI] → extract_dsl → grounding_gate → infer → transpile
 
 Latency note:
-  Local formal path is ~1–3s. Adding g4f typically adds several seconds
-  (often 3–20s depending on provider). Free models are not guaranteed <2s.
+  Local formal path is ~1–3s. Hugging Face adds network latency depending
+  on the selected model. Prefer small/fast instruct models when possible.
 """
 
 from __future__ import annotations
@@ -29,14 +29,12 @@ from typing import Any
 
 logger = logging.getLogger("ai_agent_7h_bot.understanding_ai")
 
-# Prefer models that handle structured extraction well (g4f routes by name).
+# Prefer models that handle structured extraction well (HF model ids).
 _MODEL_CANDIDATES = (
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "claude-3.5-sonnet",
-    "claude-3-haiku",
-    "gpt-4o-mini",
-    "gpt-4o",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
 )
 
 _SYSTEM = """أنت محرك فهم مواصفات بوتات تليجرام فقط (Understanding).
@@ -203,7 +201,7 @@ def enrich_spec(
     models: tuple[str, ...] | None = None,
 ) -> UnderstandingAIResult:
     """
-    Call g4f to produce a structured specification text.
+    Call Hugging Face to produce a structured specification text.
     On any failure → ok=False and empty structured_text (caller falls back to raw text).
     """
     import time

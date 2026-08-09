@@ -1,5 +1,5 @@
 """
-Chat AI layer — g4f ONLY lives here.
+Chat AI layer — Hugging Face only.
 
 Roles:
   - SpecTranslator: speech → structured specification JSON (translate only, no code)
@@ -7,6 +7,7 @@ Roles:
 
 Never import this package from formal_engine internals.
 Formal engine remains the only code generator.
+No g4f or third-party free AI clients.
 """
 
 from .smart_chat import SmartChatResult, smart_chat_reply

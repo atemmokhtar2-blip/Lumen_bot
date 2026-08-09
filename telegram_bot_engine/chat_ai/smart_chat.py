@@ -1,5 +1,5 @@
 """
-SmartChat — g4f-powered guidance layer (chat only).
+SmartChat — Hugging Face guidance layer (chat only).
 
 Responsibilities:
   - Understand user intent from minimal wording (Arabic / English).
@@ -7,7 +7,7 @@ Responsibilities:
   - Recommend the correct system capability (or return a helpful reply).
   - NEVER generate code, NEVER touch formal_engine, NEVER invent success.
 
-g4f is allowed only in chat_ai (SmartChat + Understanding-AI). Never inside formal_engine.
+Uses Hugging Face Inference Providers only. Never inside formal_engine.
 """
 
 from __future__ import annotations
