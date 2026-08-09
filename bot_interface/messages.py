@@ -39,7 +39,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not request or request.startswith("/"):
         return
 
-    # Phase 2: per-user memory (dynamic context only — no fixed reply templates)
+    # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
     try:
         from telegram_bot_engine.formal_engine.services.user_memory import get_user_memory
@@ -48,6 +48,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         _mem = None
         logger.exception("user_memory load failed")
+
+    _ctx_res = None
+    try:
+        from telegram_bot_engine.formal_engine.services.context_engine import resolve_context
+        _active = (context.user_data or {}).get("active_repo") or {}
+        _ctx_res = resolve_context(
+            uid,
+            request,
+            base_dir=OUTPUT_DIR,
+            active_path=str(_active.get("path") or ""),
+        )
+        # If user refers to prior work with enough confidence, bind session to that path
+        if (
+            _ctx_res.refers_to_prior
+            and _ctx_res.confidence >= 0.5
+            and _ctx_res.target_path
+            and Path(_ctx_res.target_path).exists()
+        ):
+            context.user_data["active_repo"] = {
+                "path": _ctx_res.target_path,
+                "url": "",
+                "contract": {},
+                "from_context_engine": True,
+                "label": _ctx_res.target_label,
+                "kind": _ctx_res.target_kind,
+            }
+            if _mem:
+                _mem.set_last(
+                    intent=request[:200],
+                    project_path=_ctx_res.target_path,
+                    capability="context_prior",
+                )
+    except Exception:
+        logger.exception("context_engine failed")
 
     # Spec 065 — if user is sending a bot token after successful generation
     pending_host = (context.user_data or {}).get("pending_host")
@@ -547,6 +581,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             try:
                 from telegram_bot_engine.chat_ai import smart_chat_reply
                 mem_ctx = _mem.context_for_ai() if _mem else ""
+                if _ctx_res is not None:
+                    extra = []
+                    if _ctx_res.refers_to_prior and _ctx_res.target_path:
+                        extra.append(
+                            f"resolved_prior_project path={_ctx_res.target_path} "
+                            f"kind={_ctx_res.target_kind} label={_ctx_res.target_label} "
+                            f"confidence={_ctx_res.confidence:.2f}"
+                        )
+                    if _ctx_res.source_request_preview:
+                        extra.append(
+                            "prior_source_preview=" + _ctx_res.source_request_preview[:160]
+                        )
+                    if extra:
+                        mem_ctx = (mem_ctx + "\n\n" + "\n".join(extra)).strip()
                 sc = await asyncio.to_thread(
                     smart_chat_reply,
                     request,
