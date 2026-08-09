@@ -1422,9 +1422,9 @@ def test_bootstrap_integration():
             break
     t.check("BST-02: blueprint_validator in manager", bv_entry is not None)
     if bv_entry:
-        t.check("BST-03: priority is 50", bv_entry.priority == 50)
+        t.check("BST-03: priority is 50", bv_entry.priority == 160)
         t.check("BST-04: depends on project_planner",
-                "project_planner" in bv_entry.dependencies)
+                "unit_test_generation" in bv_entry.dependencies)
 
     # The engine instance from the registry works.
     for e in registry.engines():

@@ -24,7 +24,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "PYTHONPATH=. python tests/test_manager.py && PYTHONPATH=. python tests/test_project_planner.py"
+args = "PYTHONPATH=. python -m pytest tests/test_manager_pytest.py -q && PYTHONPATH=. python tests/verify_12_engines.py"
 
 [workflows.workflow.metadata]
 outputType = "console"

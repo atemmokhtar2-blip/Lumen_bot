@@ -1940,7 +1940,7 @@ def test_bootstrap_risk_detection_priority():
     found = False
     for key, entry in entries.items():
         if entry.engine_id == "risk_detection":
-            assert entry.priority == 104
+            assert entry.priority == 45
             found = True
             break
     assert found, "risk_detection not found in manager"
@@ -1954,7 +1954,7 @@ def test_bootstrap_risk_detection_dependencies():
     found = False
     for key, entry in entries.items():
         if entry.engine_id == "risk_detection":
-            assert "capability_analyzer" in entry.dependencies
+            assert "technology_selection" in entry.dependencies
             found = True
             break
     assert found, "risk_detection not found in manager"

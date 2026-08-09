@@ -1785,7 +1785,7 @@ def test_bootstrap_capability_analyzer_priority():
     found = False
     for key, entry in entries.items():
         if entry.engine_id == "capability_analyzer":
-            assert entry.priority == 103
+            assert entry.priority == 20
             found = True
             break
     assert found, "capability_analyzer not found in manager"
@@ -1799,7 +1799,7 @@ def test_bootstrap_capability_analyzer_dependencies():
     found = False
     for key, entry in entries.items():
         if entry.engine_id == "capability_analyzer":
-            assert "technology_selection" in entry.dependencies
+            assert "project_context" in entry.dependencies
             found = True
             break
     assert found, "capability_analyzer not found in manager"

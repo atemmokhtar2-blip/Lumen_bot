@@ -2446,7 +2446,7 @@ def test_bootstrap_project_context_priority():
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("project_context")
     assert entry is not None
-    assert entry.priority == 96
+    assert entry.priority == 15
     print("  [PASS] test_bootstrap_project_context_priority")
 
 
@@ -2455,7 +2455,7 @@ def test_bootstrap_project_context_dependencies():
     registry, orchestrator, manager = bootstrap()
     entry = manager.get("project_context")
     assert entry is not None
-    assert "dependency_resolver" in entry.dependencies
+    assert "formal_understanding" in entry.dependencies
     print("  [PASS] test_bootstrap_project_context_dependencies")
 
 

@@ -1,4 +1,4 @@
-"""Core package — contracts and lazy bootstrap."""
+"""Core package — contracts and bootstrap."""
 
 from .context import GenerationContext
 from .result import GenerationResult, StageResult, Severity, ValidationReport
@@ -7,6 +7,7 @@ from .errors import (
     EngineError, EngineExecutionError, BuilderError,
     ValidationError, PipelineError, ConfigurationError,
 )
+from .bootstrap import bootstrap, build_configuration
 
 __all__ = [
     "GenerationContext", "GenerationResult", "StageResult", "Severity",
@@ -15,10 +16,3 @@ __all__ = [
     "ValidationError", "PipelineError", "ConfigurationError",
     "bootstrap", "build_configuration",
 ]
-
-
-def __getattr__(name: str):
-    if name in ("bootstrap", "build_configuration"):
-        from .bootstrap import bootstrap, build_configuration
-        return {"bootstrap": bootstrap, "build_configuration": build_configuration}[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

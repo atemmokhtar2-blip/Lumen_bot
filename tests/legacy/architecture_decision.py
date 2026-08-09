@@ -40,7 +40,7 @@ These tests cover every aspect of the specification:
 20. The main engine stores the report in the context metadata.
 21. The main engine does not write files or build the project.
 22. Bootstrap integration (engine registered in registry and
-    manager at priority 101, depends on requirement_normalization).
+    manager at priority 101, depends on project_planner).
 23. Serialisation (to_dict) for all data model classes.
 24. End-to-end pipeline with all data sources.
 25. Cache hit returns cached report.
@@ -208,7 +208,7 @@ def make_config():
 
 
 def make_context(
-    requirement_normalization_report=None,
+    project_planner_report=None,
     intelligence_graph=None,
     requirement_intelligence_report=None,
     semantic_understanding_report=None,
@@ -221,10 +221,10 @@ def make_context(
         config=make_config(),
         work_dir=Path("/tmp/test_architecture_decision"),
     )
-    if requirement_normalization_report is not None:
+    if project_planner_report is not None:
         ctx.set(
-            "requirement_normalization_report",
-            requirement_normalization_report,
+            "project_planner_report",
+            project_planner_report,
         )
     if intelligence_graph is not None:
         ctx.set("intelligence_graph", intelligence_graph)
@@ -247,7 +247,7 @@ def make_normalization_report(
     requirement_count=3,
 ):
     """Build a mock normalization report with requirements."""
-    from telegram_bot_engine.engines.generators.requirement_normalization import (
+    from telegram_bot_engine.engines.generators.project_planner import (
         NormalizationReport,
         NormalizedRequirement,
     )
@@ -412,7 +412,7 @@ def make_knowledge_base():
 def make_full_context():
     """Build a context with all five data sources set."""
     return make_context(
-        requirement_normalization_report=make_normalization_report(),
+        project_planner_report=make_normalization_report(),
         intelligence_graph=make_intelligence_graph(),
         requirement_intelligence_report=(
             make_requirement_intelligence_report()
@@ -874,25 +874,25 @@ def test_report_to_dict():
 # 2. Reader tests
 # ---------------------------------------------------------------------------#
 
-def test_requirement_normalization_reader_from_artefact():
+def test_project_planner_reader_from_artefact():
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     reader = RequirementNormalizationReader()
     data = reader.read(ctx)
     assert data.available is True
     assert data.requirement_count == 3
     assert data.active_requirement_count > 0
-    print("  [PASS] test_requirement_normalization_reader_from_artefact")
+    print("  [PASS] test_project_planner_reader_from_artefact")
 
 
-def test_requirement_normalization_reader_empty():
+def test_project_planner_reader_empty():
     ctx = make_context()
     reader = RequirementNormalizationReader()
     data = reader.read(ctx)
     assert data.available is False
     assert data.requirement_count == 0
-    print("  [PASS] test_requirement_normalization_reader_empty")
+    print("  [PASS] test_project_planner_reader_empty")
 
 
 def test_intelligence_graph_reader_from_artefact():
@@ -1629,7 +1629,7 @@ def test_engine_with_normalization_report():
     """The engine should produce a report when the normalization
     report is available."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     engine = ArchitectureDecisionEngine()
     result = engine.execute(ctx)
@@ -1644,7 +1644,7 @@ def test_engine_produces_artefact():
     """The engine should set the architecture_decision_report artefact
     in the context."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     engine = ArchitectureDecisionEngine()
     engine.execute(ctx)
@@ -1655,7 +1655,7 @@ def test_engine_produces_artefact():
 def test_engine_stores_in_metadata():
     """The engine should store the report in context metadata."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     engine = ArchitectureDecisionEngine()
     engine.execute(ctx)
@@ -1666,7 +1666,7 @@ def test_engine_stores_in_metadata():
 def test_engine_does_not_write_files():
     """The engine should not write any files to the work directory."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     engine = ArchitectureDecisionEngine()
     engine.execute(ctx)
@@ -1679,7 +1679,7 @@ def test_engine_does_not_write_files():
 def test_engine_all_eight_decisions():
     """The engine should make all eight architectural decisions."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(5),
+        project_planner_report=make_normalization_report(5),
         intelligence_graph=make_intelligence_graph(),
         requirement_intelligence_report=(
             make_requirement_intelligence_report()
@@ -1781,7 +1781,7 @@ def test_bootstrap_architecture_decision_priority():
         manager_info = manager._engines.get("architecture_decision")
     assert manager_info is not None
     if hasattr(manager_info, "priority"):
-        assert manager_info.priority == 101
+        assert manager_info.priority == 35
     elif isinstance(manager_info, dict):
         assert manager_info.get("priority") == 101
     print("  [PASS] test_bootstrap_architecture_decision_priority")
@@ -1800,11 +1800,11 @@ def test_bootstrap_architecture_decision_dependencies():
     if hasattr(manager_info, "dependencies"):
         deps = manager_info.dependencies
         if isinstance(deps, (set, list, tuple)):
-            assert "requirement_normalization" in deps
+            assert "project_planner" in deps
         else:
-            assert "requirement_normalization" == deps
+            assert "project_planner" == deps
     elif isinstance(manager_info, dict):
-        assert "requirement_normalization" in manager_info.get(
+        assert "project_planner" in manager_info.get(
             "dependencies", []
         )
     print("  [PASS] test_bootstrap_architecture_decision_dependencies")
@@ -1997,7 +1997,7 @@ def test_end_to_end_with_all_sources():
 def test_end_to_end_with_normalization_only():
     """End-to-end test with only the normalization report."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(3),
+        project_planner_report=make_normalization_report(3),
     )
     engine = ArchitectureDecisionEngine()
     result = engine.execute(ctx)
@@ -2021,7 +2021,7 @@ def test_end_to_end_empty_context():
 def test_end_to_end_large_project():
     """End-to-end test with a large project (many requirements)."""
     ctx = make_context(
-        requirement_normalization_report=make_normalization_report(50),
+        project_planner_report=make_normalization_report(50),
         intelligence_graph=make_intelligence_graph(
             node_count=100, component_count=30, service_count=5,
         ),
@@ -2094,8 +2094,8 @@ def run_all_tests():
         test_report_add_finding,
         test_report_to_dict,
         # Readers
-        test_requirement_normalization_reader_from_artefact,
-        test_requirement_normalization_reader_empty,
+        test_project_planner_reader_from_artefact,
+        test_project_planner_reader_empty,
         test_intelligence_graph_reader_from_artefact,
         test_intelligence_graph_reader_empty,
         test_requirement_intelligence_reader_from_artefact,

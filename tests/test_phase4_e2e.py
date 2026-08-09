@@ -10,6 +10,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import os
+pytestmark = pytest.mark.skipif(
+    not (os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")),
+    reason="SpecTranslator requires GROQ_API_KEY or HF_TOKEN",
+)
+
 from telegram_bot_engine import generate_bot
 from telegram_bot_engine.formal_engine.verification.quality import measure_quality
 

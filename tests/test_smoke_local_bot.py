@@ -20,6 +20,14 @@ Run:
 
 from __future__ import annotations
 
+import os
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not (os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")),
+    reason="SpecTranslator requires GROQ_API_KEY or HF_TOKEN",
+)
+
 import ast
 import asyncio
 import py_compile
