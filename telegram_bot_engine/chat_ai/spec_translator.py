@@ -1100,65 +1100,146 @@ def _merge_specs(primary: dict, secondary: dict) -> dict:
 
 
 
+def _label_to_command_name(label: str) -> str:
+    """Derive a command slug from a user button label (emoji stripped). No domain packs."""
+    raw = (label or "").strip()
+    if not raw:
+        return ""
+    # Drop symbols/emoji; keep letters, digits, spaces, underscores, hyphens
+    cleaned = re.sub(r"[^\w\s\-]", " ", raw, flags=re.UNICODE)
+    cleaned = cleaned.strip().lower().replace("-", "_").replace(" ", "_")
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    # Prefer ASCII token sequence if mixed script left empty ascii
+    ascii_only = re.sub(r"[^a-z0-9_]", "", cleaned)
+    if ascii_only and len(ascii_only) >= 2:
+        return _normalize_cmd_name(ascii_only)
+    return _normalize_cmd_name(cleaned)
+
+
 def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
-    """Ensure every flow.command and dashboard button becomes a real command. Drop junk."""
+    """
+    Universal surface promotion (all bots):
+      - every grounded button label → command slug
+      - every grounded tool id → command (if valid)
+      - every flow.command → command
+    No domain templates. Only surfaces already present in the grounded spec / user text.
+    """
     if not isinstance(spec, dict):
         return spec
-    cmds = list(spec.get("commands") or [])
-    have = {str(c.get("name") or "").lower() for c in cmds if isinstance(c, dict)}
-    # Promote flow commands
+
+    cmds = [c for c in (spec.get("commands") or []) if isinstance(c, dict)]
+    have = {str(c.get("name") or "").lower() for c in cmds}
+
+    def _add_cmd(name: str, description: str) -> None:
+        nonlocal cmds, have
+        name = _normalize_cmd_name(name)
+        if not name or name in have:
+            return
+        if not _valid_cmd_name(name) and name not in ("start", "help"):
+            return
+        cmds.append({
+            "name": name,
+            "description": (description or name.replace("_", " "))[:100],
+            "admin_only": False,
+        })
+        have.add(name)
+
+    # 1) flows
     for f in spec.get("flows") or []:
         if not isinstance(f, dict):
             continue
         fname = str(f.get("command") or f.get("id") or "").strip().lower()
         fname = re.sub(r"[^a-z0-9_]", "_", fname).strip("_")
-        if not fname or fname in have:
+        if fname:
+            _add_cmd(fname, fname.replace("_", " "))
+            f["command"] = fname
+            f["id"] = f.get("id") or fname
+
+    # 2) buttons → commands (label evidenced already by grounding)
+    new_buttons: list[dict] = []
+    for b in spec.get("buttons") or []:
+        lab = str(b.get("label") if isinstance(b, dict) else b or "").strip()
+        if not lab:
             continue
-        if not _valid_cmd_name(fname) and fname not in ("start", "help"):
+        slug = _label_to_command_name(lab)
+        if slug:
+            _add_cmd(slug, lab)
+            entry = {"label": lab[:48], "command": slug}
+            if isinstance(b, dict) and b.get("callback"):
+                entry["callback"] = str(b.get("callback"))[:64]
+            else:
+                entry["callback"] = f"cmd:{slug}"
+            new_buttons.append(entry)
+        else:
+            new_buttons.append({"label": lab[:48]} if not isinstance(b, dict) else {**b, "label": lab[:48]})
+    if new_buttons:
+        spec["buttons"] = new_buttons
+
+    # 3) tools → commands (id must look like a command; title used as description)
+    for t in spec.get("tools") or []:
+        if not isinstance(t, dict):
             continue
-        cmds.append({
-            "name": fname,
-            "description": fname.replace("_", " "),
-            "admin_only": False,
-        })
-        have.add(fname)
-        f["command"] = fname
-        f["id"] = f.get("id") or fname
-    # Buttons stay as labels only — never invent commands from dashboard/security packs.
-    # Drop junk command names not evidenced as /name in user text.
+        tid = str(t.get("id") or "").strip().lower()
+        tid = re.sub(r"[^a-z0-9_]", "_", tid).strip("_")
+        if not tid or tid in {"tool", "logs", "pdf", "sqlite", "ner", "gitignore", "env_example", "python_aiogram"}:
+            # skip meta/infra noise ids — not user-facing bot actions
+            continue
+        title = str(t.get("title") or t.get("description") or tid).strip()
+        _add_cmd(tid, title[:100])
+        # Ensure a minimal collect flow when tool declares input
+        inp = str(t.get("input") or "").strip().lower()
+        if inp and inp not in {"none", "n/a", "-"}:
+            flows = list(spec.get("flows") or [])
+            existing_ids = {
+                str(f.get("command") or f.get("id") or "").lower()
+                for f in flows if isinstance(f, dict)
+            }
+            if tid not in existing_ids:
+                key = re.sub(r"[^a-z0-9_]", "", inp)[:24] or "value"
+                flows.append({
+                    "id": tid,
+                    "command": tid,
+                    "kind": "collect",
+                    "steps": [{"key": key, "prompt": f"أرسل {key}:"}],
+                })
+                spec["flows"] = flows
+
+    # Drop fragment noise only when not explicitly /named in user text
     junk = {
         "ssl", "tls", "example", "information", "com", "http", "https", "www",
-        "pin", "records", "certificate", "headers",
+        "pin", "records", "certificate", "headers", "status",
     }
     cleaned = []
     for c in cmds:
-        if not isinstance(c, dict):
-            continue
         name = str(c.get("name") or "").lower()
-        if name in junk:
-            if not re.search(rf"/{re.escape(name)}\b", text or "", re.I):
-                continue
+        if name in junk and not re.search(rf"/{re.escape(name)}\b", text or "", re.I):
+            continue
         cleaned.append(c)
+    # Always keep start/help if present or add structural minimum later downstream
     spec["commands"] = cleaned
-    # Keep only flows whose command is evidenced in user text (no domain order pack)
-    evid_cmds = {str(c.get("name") or "").lower() for c in cleaned if isinstance(c, dict)}
+
+    evid_cmds = {str(c.get("name") or "").lower() for c in cleaned}
     for m in re.finditer(r"(?m)(?:^|\s)/([A-Za-z][A-Za-z0-9_]{1,32})\b", text or ""):
         evid_cmds.add(m.group(1).lower())
+    # Keep flows bound to promoted commands
     spec["flows"] = [
         f for f in (spec.get("flows") or [])
         if isinstance(f, dict)
         and str(f.get("command") or f.get("id") or "").lower() in evid_cmds
     ]
-    # Tools always recomputed/merged from text for this request
+
+    # Tools: keep grounded list; refresh from text without domain packs
     fresh = _extract_dynamic_tools(text)
     existing = [t for t in (spec.get("tools") or []) if isinstance(t, dict)]
-    have = {str(t.get("id")) for t in existing}
+    have_t = {str(t.get("id")) for t in existing}
     for t in fresh:
-        if str(t.get("id")) not in have:
+        if str(t.get("id")) not in have_t:
             existing.append(t)
-            have.add(str(t.get("id")))
+            have_t.add(str(t.get("id")))
     spec["tools"] = existing[:24]
     return spec
+
+
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
     """Hugging Face ONLY. No structural fallback (avoids false ssl/information commands)."""
