@@ -41,6 +41,7 @@ class FormalBuildResult:
     structure_files: list[str] = field(default_factory=list)
     structure_only: bool = False
     code_engine: dict[str, Any] = field(default_factory=dict)
+    quality: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +57,7 @@ class FormalBuildResult:
             "structure_plan": dict(self.structure_plan or {}),
             "structure_gate": dict(self.structure_gate or {}),
             "code_engine": dict(self.code_engine or {}),
+            "quality": dict(self.quality or {}),
         }
 
 
@@ -228,6 +230,25 @@ def build_from_text(
     gate2 = validate_structure_gate(plan2, out_dir=root, require_materialized=False)
     report = verify_project(root)
 
+    from .verification.quality import measure_quality
+    import py_compile
+    compile_ok = True
+    for py in root.rglob("*.py"):
+        try:
+            py_compile.compile(str(py), doraise=True)
+        except Exception:
+            compile_ok = False
+            break
+    q = measure_quality(
+        root,
+        expected_commands=list(plan2.command_names or []),
+        expected_entities=list(plan2.entity_names or []),
+        structure_gate_ok=bool(gate2.ok),
+        code_engine_ok=bool(code_meta.get("ok", True)),
+        verify_ok=bool(report.ok),
+        compile_ok=compile_ok,
+    )
+
     return FormalBuildResult(
         out_dir=str(root),
         files=written,
@@ -242,4 +263,5 @@ def build_from_text(
         structure_plan=plan2.to_dict(),
         structure_gate=gate2.to_dict(),
         code_engine=code_meta,
+        quality=q.to_dict(),
     )

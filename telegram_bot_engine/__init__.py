@@ -158,6 +158,50 @@ def generate_bot(request: str, work_dir=None):
             )
 
         files = list(build.files or [])
+
+        # Phase 1/2/3 stage reporting
+        sg = getattr(build, "structure_gate", None) or {}
+        if isinstance(sg, dict) and sg.get("ok", True):
+            stages.append(
+                StageResult.ok(
+                    "structure_engine",
+                    outputs={
+                        "structure_files": list(getattr(build, "structure_files", None) or []),
+                        "structure_gate": sg,
+                        "structure_only": bool(getattr(build, "structure_only", False)),
+                    },
+                    warnings=list(sg.get("warnings") or [])[:8],
+                )
+            )
+        else:
+            stages.append(
+                StageResult.failed(
+                    "structure_engine",
+                    errors=list((sg or {}).get("errors") or ["structure_gate_failed"])[:10],
+                )
+            )
+
+        ce = getattr(build, "code_engine", None) or {}
+        if ce.get("ok", True) and not getattr(build, "structure_only", False):
+            stages.append(
+                StageResult.ok(
+                    "code_engine",
+                    outputs=ce,
+                )
+            )
+        elif getattr(build, "structure_only", False):
+            stages.append(
+                StageResult.ok("code_engine", outputs={"skipped": True, "reason": "structure_only"})
+            )
+        else:
+            stages.append(
+                StageResult.failed(
+                    "code_engine",
+                    errors=list(ce.get("errors") or ["code_engine_failed"])[:10],
+                )
+            )
+            errors.extend(list(ce.get("errors") or [])[:5])
+
         stages.append(
             StageResult.ok(
                 "codegen_service",
@@ -165,6 +209,7 @@ def generate_bot(request: str, work_dir=None):
                     "project_path": str(project_dir),
                     "files_created": files,
                     "file_count": len(files),
+                    "path": (ce.get("path") if isinstance(ce, dict) else None) or "formal",
                 },
             )
         )
@@ -224,6 +269,22 @@ def generate_bot(request: str, work_dir=None):
             errors.append(f"py_compile failed: {exc}")
             stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
 
+        quality = getattr(build, "quality", None) or {}
+        if quality:
+            if quality.get("ok", True):
+                stages.append(StageResult.ok("quality", outputs=quality))
+            else:
+                stages.append(
+                    StageResult.failed(
+                        "quality",
+                        errors=list(quality.get("errors") or [])[:10],
+                    )
+                )
+                # quality errors are soft unless invented_* 
+                for e in list(quality.get("errors") or [])[:5]:
+                    if str(e).startswith("invented_"):
+                        errors.append(str(e))
+
         # Surface extracted commands for reporting
         cmd_names: list[str] = []
         try:
@@ -263,6 +324,7 @@ def generate_bot(request: str, work_dir=None):
                 "structure_files": list(getattr(build, "structure_files", None) or []),
                 "structure_only": bool(getattr(build, "structure_only", False)),
                 "code_engine": getattr(build, "code_engine", None) or {},
+                "quality": getattr(build, "quality", None) or {},
                 "verify_ok": verify_ok,
                 "commands": cmd_names,
                 "grounding": (

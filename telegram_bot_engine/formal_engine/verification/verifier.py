@@ -7,7 +7,7 @@ Checks:
   - Command coverage (every command has a handler)
   - Flow integrity (FLOWS steps non-empty, confirm/quantity patterns)
   - Callback maps consistency
-  - Persistence surface when Order/Item schemas exist
+  - Persistence surface when entity schemas exist (from user contract)
   - No invented cmd_hash command names
 """
 
