@@ -108,7 +108,7 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
         report = await asyncio.to_thread(_run)
     except Exception as e:
         logger.exception("Live deployment failed")
-        await status.edit_text(f"❌ فشل Live Deployment: {type(e).__name__}")
+        await status.edit_text(f"❌ فشل Live Deployment: {type(e).__name__}: {str(e)[:250]}")
         return
     finally:
         token = ""  # noqa: F841
