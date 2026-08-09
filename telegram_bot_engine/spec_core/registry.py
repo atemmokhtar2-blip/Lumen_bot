@@ -187,6 +187,73 @@ CAPABILITIES: dict[str, Capability] = {
         description_en="Delete a note",
         category="notes",
     ),
+    # ── welcome ─────────────────────────────────────────────────────
+    "welcome_set": Capability(
+        key="welcome_set", service="welcome", method="set_message",
+        description_ar="تعيين رسالة الترحيب (ترحب بالأعضاء الجدد تلقائياً)",
+        description_en="Set auto-welcome message for new members",
+        default_actor="admin",
+        category="welcome",
+    ),
+    "welcome_toggle": Capability(
+        key="welcome_toggle", service="welcome", method="toggle",
+        description_ar="تفعيل/إيقاف الترحيب التلقائي",
+        description_en="Enable or disable auto-welcome",
+        default_actor="admin",
+        category="welcome",
+    ),
+    "welcome_show": Capability(
+        key="welcome_show", service="welcome", method="show",
+        description_ar="عرض إعدادات الترحيب الحالية",
+        description_en="Show current welcome settings",
+        default_actor="admin",
+        category="welcome",
+    ),
+    "welcome_test": Capability(
+        key="welcome_test", service="welcome", method="test",
+        description_ar="تجربة رسالة الترحيب",
+        description_en="Preview welcome message",
+        default_actor="admin",
+        category="welcome",
+    ),
+    # ── support tickets ─────────────────────────────────────────────
+    "ticket_open": Capability(
+        key="ticket_open", service="tickets", method="open_ticket",
+        description_ar="فتح تذكرة دعم جديدة",
+        description_en="Open a support ticket",
+        category="tickets",
+    ),
+    "ticket_close": Capability(
+        key="ticket_close", service="tickets", method="close_ticket",
+        description_ar="إغلاق تذكرة دعم",
+        description_en="Close a support ticket",
+        category="tickets",
+    ),
+    "ticket_list": Capability(
+        key="ticket_list", service="tickets", method="list_tickets",
+        description_ar="عرض تذاكر الدعم (للمشرف: الكل / للمستخدم: تذاكره)",
+        description_en="List support tickets",
+        category="tickets",
+    ),
+    "ticket_my": Capability(
+        key="ticket_my", service="tickets", method="my_tickets",
+        description_ar="عرض تذاكري المفتوحة",
+        description_en="List my open tickets",
+        category="tickets",
+    ),
+    "ticket_reply": Capability(
+        key="ticket_reply", service="tickets", method="reply_ticket",
+        description_ar="الرد على تذكرة دعم",
+        description_en="Reply to a support ticket",
+        default_actor="admin",
+        category="tickets",
+    ),
+    "ticket_status": Capability(
+        key="ticket_status", service="tickets", method="ticket_status",
+        description_ar="حالة تذكرة برقمها",
+        description_en="Show ticket status by id",
+        category="tickets",
+    ),
 }
 
 

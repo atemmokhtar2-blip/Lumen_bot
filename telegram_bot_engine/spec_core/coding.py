@@ -45,7 +45,7 @@ def get_settings() -> Settings:
 
 def _emit_db(spec: BotSpec) -> str:
     need = spec.storage.type == "sqlite" or any(
-        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes"})  # type: ignore[union-attr]
+        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets"})  # type: ignore[union-attr]
         for f in spec.features
     )
     if not need:
@@ -86,6 +86,39 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 body TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS welcome_settings (
+                chat_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                message TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL DEFAULT 0,
+                subject TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ticket_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                is_staff INTEGER NOT NULL DEFAULT 0,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -301,6 +334,153 @@ def about() -> str:
 '''
 
 
+
+def _emit_welcome() -> str:
+    return (
+        '"""Welcome service — per-chat auto-welcome for new members."""\n'
+        "from __future__ import annotations\n\n"
+        "from app.db import connect, init_db\n\n"
+        'DEFAULT_MESSAGE = "أهلاً {name} 👋 نورت المجموعة!"\n\n'
+        "def ensure() -> None:\n"
+        "    init_db()\n\n"
+        "def set_message(chat_id: int, message: str) -> None:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        conn.execute(\n"
+        '            """\n'
+        "            INSERT INTO welcome_settings (chat_id, enabled, message) VALUES (?, 1, ?)\n"
+        "            ON CONFLICT(chat_id) DO UPDATE SET message = excluded.message, enabled = 1\n"
+        '            """,\n'
+        "            (chat_id, message),\n"
+        "        )\n"
+        "        conn.commit()\n\n"
+        "def toggle(chat_id: int) -> bool:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        row = conn.execute(\n"
+        '            "SELECT enabled FROM welcome_settings WHERE chat_id = ?", (chat_id,)\n'
+        "        ).fetchone()\n"
+        "        if row is None:\n"
+        "            conn.execute(\n"
+        '                "INSERT INTO welcome_settings (chat_id, enabled, message) VALUES (?, 1, ?)",\n'
+        "                (chat_id, DEFAULT_MESSAGE),\n"
+        "            )\n"
+        "            conn.commit()\n"
+        "            return True\n"
+        "        new_val = 0 if int(row['enabled']) else 1\n"
+        "        conn.execute(\n"
+        '            "UPDATE welcome_settings SET enabled = ? WHERE chat_id = ?",\n'
+        "            (new_val, chat_id),\n"
+        "        )\n"
+        "        conn.commit()\n"
+        "        return bool(new_val)\n\n"
+        "def get_settings(chat_id: int) -> dict:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        row = conn.execute(\n"
+        '            "SELECT enabled, message FROM welcome_settings WHERE chat_id = ?",\n'
+        "            (chat_id,),\n"
+        "        ).fetchone()\n"
+        "    if row is None:\n"
+        '        return {"enabled": True, "message": DEFAULT_MESSAGE}\n'
+        "    return {\n"
+        "        'enabled': bool(int(row['enabled'])),\n"
+        "        'message': row['message'] or DEFAULT_MESSAGE,\n"
+        "    }\n\n"
+        "def format_welcome(chat_id: int, name: str) -> str | None:\n"
+        "    cfg = get_settings(chat_id)\n"
+        "    if not cfg['enabled']:\n"
+        "        return None\n"
+        "    msg = cfg['message'] or DEFAULT_MESSAGE\n"
+        "    return msg.replace('{name}', name).replace('{NAME}', name)\n"
+    )
+
+
+def _emit_tickets() -> str:
+    return (
+        '"""Support tickets service — open/close/list/reply with sqlite."""\n'
+        "from __future__ import annotations\n\n"
+        "from app.db import connect, init_db\n\n"
+        "def ensure() -> None:\n"
+        "    init_db()\n\n"
+        "def open_ticket(user_id: int, subject: str, chat_id: int = 0) -> int:\n"
+        "    ensure()\n"
+        '    subject = (subject or "").strip() or "بدون عنوان"\n'
+        "    with connect() as conn:\n"
+        "        cur = conn.execute(\n"
+        '            "INSERT INTO tickets (user_id, chat_id, subject, status) VALUES (?, ?, ?, \'open\')",\n'
+        "            (user_id, chat_id, subject[:200]),\n"
+        "        )\n"
+        "        tid = int(cur.lastrowid)\n"
+        "        conn.execute(\n"
+        '            "INSERT INTO ticket_messages (ticket_id, user_id, is_staff, body) VALUES (?, ?, 0, ?)",\n'
+        "            (tid, user_id, subject),\n"
+        "        )\n"
+        "        conn.commit()\n"
+        "        return tid\n\n"
+        "def close_ticket(ticket_id: int, user_id: int | None = None, staff: bool = False) -> bool:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        '        row = conn.execute("SELECT user_id, status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()\n'
+        "        if row is None:\n"
+        "            return False\n"
+        "        if not staff and user_id is not None and int(row['user_id']) != int(user_id):\n"
+        "            return False\n"
+        "        if row['status'] == 'closed':\n"
+        "            return True\n"
+        '        conn.execute("UPDATE tickets SET status = \'closed\' WHERE id = ?", (ticket_id,))\n'
+        "        conn.commit()\n"
+        "        return True\n\n"
+        "def list_tickets(user_id: int | None = None, only_open: bool = True, limit: int = 20) -> list[dict]:\n"
+        "    ensure()\n"
+        '    q = "SELECT id, user_id, subject, status, created_at FROM tickets WHERE 1=1"\n'
+        "    params: list = []\n"
+        "    if user_id is not None:\n"
+        '        q += " AND user_id = ?"\n'
+        "        params.append(user_id)\n"
+        "    if only_open:\n"
+        '        q += " AND status = \'open\'"\n'
+        '    q += " ORDER BY id DESC LIMIT ?"\n'
+        "    params.append(limit)\n"
+        "    with connect() as conn:\n"
+        "        rows = conn.execute(q, params).fetchall()\n"
+        "    return [dict(r) for r in rows]\n\n"
+        "def my_tickets(user_id: int) -> list[dict]:\n"
+        "    return list_tickets(user_id=user_id, only_open=True)\n\n"
+        "def reply_ticket(ticket_id: int, user_id: int, body: str, staff: bool = False) -> bool:\n"
+        "    ensure()\n"
+        '    body = (body or "").strip()\n'
+        "    if not body:\n"
+        "        return False\n"
+        "    with connect() as conn:\n"
+        '        row = conn.execute("SELECT id, status FROM tickets WHERE id = ?", (ticket_id,)).fetchone()\n'
+        "        if row is None or row['status'] == 'closed':\n"
+        "            return False\n"
+        "        conn.execute(\n"
+        '            "INSERT INTO ticket_messages (ticket_id, user_id, is_staff, body) VALUES (?, ?, ?, ?)",\n'
+        "            (ticket_id, user_id, 1 if staff else 0, body),\n"
+        "        )\n"
+        "        conn.commit()\n"
+        "        return True\n\n"
+        "def ticket_status(ticket_id: int) -> dict | None:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        row = conn.execute(\n"
+        '            "SELECT id, user_id, subject, status, created_at FROM tickets WHERE id = ?",\n'
+        "            (ticket_id,),\n"
+        "        ).fetchone()\n"
+        "        if row is None:\n"
+        "            return None\n"
+        "        msgs = conn.execute(\n"
+        '            "SELECT user_id, is_staff, body, created_at FROM ticket_messages WHERE ticket_id = ? ORDER BY id ASC LIMIT 10",\n'
+        "            (ticket_id,),\n"
+        "        ).fetchall()\n"
+        "    data = dict(row)\n"
+        "    data['messages'] = [dict(m) for m in msgs]\n"
+        "    return data\n"
+    )
+
+
 def _emit_keyboards(spec: BotSpec) -> str:
     rows = []
     for b in spec.start_buttons:
@@ -352,6 +532,8 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_tasks = any(_svc(f) == "tasks" for f in spec.features)
     need_notes = any(_svc(f) == "notes" for f in spec.features)
     need_content = any(_svc(f) == "content" for f in spec.features)
+    need_welcome = any(_svc(f) == "welcome" for f in spec.features)
+    need_tickets = any(_svc(f) == "tickets" for f in spec.features)
 
     imports = [
         "from __future__ import annotations",
@@ -368,6 +550,10 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import notes as notes_svc")
     if need_content:
         imports.append("from app.services import content as content_svc")
+    if need_welcome:
+        imports.append("from app.services import welcome as welcome_svc")
+    if need_tickets:
+        imports.append("from app.services import tickets as tickets_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -562,17 +748,117 @@ def _emit_handlers(spec: BotSpec) -> str:
             else:
                 lines.append(f"    await message.reply_text({ok!r})")
 
+        elif cap.service == "welcome":
+            lines.append("    if chat is None:")
+            lines.append(f"        await message.reply_text({fail!r})")
+            lines.append("        return")
+            if cap.method == "set_message":
+                lines.append("    if context.args:")
+                lines.append("        welcome_svc.set_message(chat.id, ' '.join(context.args))")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("        return")
+                lines.append("    context.user_data['awaiting'] = 'welcome_message'")
+                lines.append("    await message.reply_text('أرسل نص الترحيب. استخدم {name} لاسم العضو')")
+            elif cap.method == "toggle":
+                lines.append("    enabled = welcome_svc.toggle(chat.id)")
+                lines.append("    await message.reply_text('الترحيب مفعّل' if enabled else 'الترحيب متوقف')")
+            elif cap.method == "show":
+                lines.append("    cfg = welcome_svc.get_settings(chat.id)")
+                lines.append("    state = 'مفعّل' if cfg['enabled'] else 'متوقف'")
+                lines.append('    await message.reply_text(f"الحالة: {state}\\nالرسالة:\\n{cfg[\'message\']}")')
+            elif cap.method == "test":
+                lines.append("    name = user.full_name if user else 'عضو'")
+                lines.append("    text = welcome_svc.format_welcome(chat.id, name) or 'الترحيب متوقف'")
+                lines.append("    await message.reply_text(text)")
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
+        elif cap.service == "tickets":
+            if cap.method == "open_ticket":
+                lines.append("    if context.args:")
+                lines.append("        subject = ' '.join(context.args)")
+                lines.append("        tid = tickets_svc.open_ticket(user.id, subject, chat.id if chat else 0)")
+                lines.append(f"        await message.reply_text({ok!r} + f' #{{tid}}')")
+                lines.append("        return")
+                lines.append("    context.user_data['awaiting'] = 'ticket_subject'")
+                lines.append("    await message.reply_text('اكتب موضوع تذكرة الدعم')")
+            elif cap.method == "close_ticket":
+                lines.append("    if not context.args:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        tid = int(context.args[0])")
+                lines.append("    except ValueError:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    ok_close = tickets_svc.close_ticket(tid, user_id=user.id, staff=False)")
+                lines.append("    if not ok_close:")
+                lines.append("        ok_close = tickets_svc.close_ticket(tid, staff=True)")
+                lines.append(f"    await message.reply_text({ok!r} if ok_close else {fail!r})")
+            elif cap.method == "my_tickets":
+                lines.append("    items = tickets_svc.my_tickets(user.id)")
+                lines.append("    if not items:")
+                lines.append("        await message.reply_text('لا توجد تذاكر مفتوحة')")
+                lines.append("        return")
+                lines.append('    text = "\\n".join(f"#{i[\'id\']} [{i[\'status\']}] {i[\'subject\']}" for i in items)')
+                lines.append("    await message.reply_text(text)")
+            elif cap.method == "list_tickets":
+                lines.append("    items = tickets_svc.list_tickets(only_open=True)")
+                lines.append("    if not items:")
+                lines.append("        await message.reply_text('لا توجد تذاكر مفتوحة')")
+                lines.append("        return")
+                lines.append('    text = "\\n".join(f"#{i[\'id\']} u={i[\'user_id\']} [{i[\'status\']}] {i[\'subject\']}" for i in items)')
+                lines.append("    await message.reply_text(text)")
+            elif cap.method == "reply_ticket":
+                lines.append("    if len(context.args or []) < 2:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        tid = int(context.args[0])")
+                lines.append("    except ValueError:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    body = ' '.join(context.args[1:])")
+                lines.append("    if tickets_svc.reply_ticket(tid, user.id, body, staff=True):")
+                lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    else:")
+                lines.append(f"        await message.reply_text({fail!r})")
+            elif cap.method == "ticket_status":
+                lines.append("    if not context.args:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                lines.append("        tid = int(context.args[0])")
+                lines.append("    except ValueError:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    data = tickets_svc.ticket_status(tid)")
+                lines.append("    if not data:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    msgs = data.get('messages') or []")
+                lines.append("    parts = []")
+                lines.append("    for m in msgs[-5:]:")
+                lines.append("        role = 'staff' if m['is_staff'] else 'user'")
+                lines.append("        parts.append(f'- {role}: {m[\'body\']}')")
+                lines.append('    tail = "\\n".join(parts)')
+                lines.append('    await message.reply_text(f"#{data[\'id\']} [{data[\'status\']}] {data[\'subject\']}\\n{tail}")')
+            else:
+                lines.append(f"    await message.reply_text({ok!r})")
+
         else:
             lines.append(f"    await message.reply_text({ok!r})")
         lines.append("")
         lines.append("")
 
-    # text router for task/note capture
-    if need_tasks or need_notes:
+
+    # text router for multi-step captures
+    if need_tasks or need_notes or need_welcome or need_tickets:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
             "    user = update.effective_user",
+            "    chat = update.effective_chat",
             "    if message is None or user is None or not message.text:",
             "        return",
             "    awaiting = context.user_data.get('awaiting')",
@@ -586,6 +872,37 @@ def _emit_handlers(spec: BotSpec) -> str:
             "        context.user_data.pop('awaiting', None)",
             "        await message.reply_text('تمت إضافة الملاحظة')",
             "        return",
+            "    if awaiting == 'welcome_message' and chat is not None:",
+            "        welcome_svc.set_message(chat.id, message.text.strip())",
+            "        context.user_data.pop('awaiting', None)",
+            "        await message.reply_text('تم حفظ رسالة الترحيب')",
+            "        return",
+            "    if awaiting == 'ticket_subject':",
+            "        tid = tickets_svc.open_ticket(user.id, message.text.strip(), chat.id if chat else 0)",
+            "        context.user_data.pop('awaiting', None)",
+            "        await message.reply_text(f'تم فتح التذكرة #{tid}')",
+            "        return",
+            "",
+            "",
+        ]
+
+    if need_welcome:
+        lines += [
+            "async def chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    result = update.chat_member or update.my_chat_member",
+            "    if result is None:",
+            "        return",
+            "    old = result.old_chat_member.status if result.old_chat_member else ''",
+            "    new = result.new_chat_member.status if result.new_chat_member else ''",
+            "    if new not in {'member', 'restricted'} or old in {'member', 'restricted', 'administrator', 'creator'}:",
+            "        return",
+            "    user = result.new_chat_member.user if result.new_chat_member else None",
+            "    chat = result.chat",
+            "    if user is None or user.is_bot:",
+            "        return",
+            "    text = welcome_svc.format_welcome(chat.id, user.full_name or user.first_name or 'عضو')",
+            "    if text:",
+            "        await context.bot.send_message(chat_id=chat.id, text=text)",
             "",
             "",
         ]
@@ -648,6 +965,14 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service == "notes")  # type: ignore
         for f in spec.features
     )
+    need_welcome = any(
+        (get_capability(f.feature) and get_capability(f.feature).service == "welcome")  # type: ignore
+        for f in spec.features
+    )
+    need_tickets = any(
+        (get_capability(f.feature) and get_capability(f.feature).service == "tickets")  # type: ignore
+        for f in spec.features
+    )
     imports_handlers = "start_handler, help_handler, callback_router"
     extra_imports = []
     for feat in spec.features:
@@ -656,16 +981,20 @@ def _emit_main(spec: BotSpec) -> str:
         extra_imports.append(f"handle_{feat.id}".replace("-", "_"))
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
-    if need_tasks or need_notes:
+    if need_tasks or need_notes or need_welcome or need_tickets:
         imports_handlers += ", text_router"
+    if need_welcome:
+        imports_handlers += ", chat_member_handler"
 
     bot_cmds = ",\n        ".join(
         f"BotCommand({c!r}, {d!r})" for c, d in dict.fromkeys(commands)
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks or need_notes:
+    if need_tasks or need_notes or need_welcome or need_tickets:
         text_handler = "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
+    if need_welcome:
+        text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
 
     return f'''"""Application entry — python-telegram-bot v21."""
 from __future__ import annotations
@@ -674,7 +1003,7 @@ import logging
 import sys
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
 
 from app.config import get_settings
 from app.handlers import {imports_handlers}
@@ -773,6 +1102,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/notes.py"] = _emit_notes()
     if "content" in services:
         files["app/services/content.py"] = _emit_content(spec)
+    if "welcome" in services:
+        files["app/services/welcome.py"] = _emit_welcome()
+    if "tickets" in services:
+        files["app/services/tickets.py"] = _emit_tickets()
     return files
 
 
