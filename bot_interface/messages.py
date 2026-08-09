@@ -103,8 +103,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if git_tok:
             status = await message.reply_text("🔑 جاري إعادة سحب المستودع بالتوكن...")
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
-            dest = Path(OUTPUT_DIR) / "clones"
-            dest.mkdir(parents=True, exist_ok=True)
+            uid = int(user.id) if user else 0
+            try:
+                from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="reclone")
+            except Exception:
+                dest = Path(OUTPUT_DIR) / "clones"
+                dest.mkdir(parents=True, exist_ok=True)
             url = pending_clone.get("url") or ""
 
             def _reclone():
@@ -153,6 +158,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "url": result.url,
                     "contract": repo_contract.model_dump(mode="json"),
                 }
+                try:
+                    from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                    uid = int(user.id) if user else 0
+                    get_user_sandbox(uid, OUTPUT_DIR).register_clone(
+                        result.path, url=result.url or "", label=Path(result.path).name
+                    )
+                except Exception:
+                    logger.exception("register_clone failed")
                 lines.append("")
                 lines.append(repo_contract.to_user_summary())
                 _tg_fws = ("python-telegram-bot", "aiogram", "pyTelegramBotAPI", "pyrogram")
@@ -212,8 +225,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if (looks_like_clone_request and looks_like_clone_request(request)) or _clone_via_router:
         status = await message.reply_text("📥 جاري سحب المستودع...")
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
-        dest = Path(OUTPUT_DIR) / "clones"
-        dest.mkdir(parents=True, exist_ok=True)
+        uid = int(user.id) if user else 0
+        try:
+            from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+            dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="clone")
+        except Exception:
+            dest = Path(OUTPUT_DIR) / "clones"
+            dest.mkdir(parents=True, exist_ok=True)
 
         def _do_clone():
             return smart_clone(request, dest_dir=dest)
@@ -250,6 +268,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "url": result.url,
                         "contract": repo_contract.model_dump(mode="json"),
                     }
+                    try:
+                        from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                        uid = int(user.id) if user else 0
+                        get_user_sandbox(uid, OUTPUT_DIR).register_clone(
+                            result.path, url=result.url or "", label=Path(result.path).name
+                        )
+                    except Exception:
+                        logger.exception("register_clone failed")
                     lines.append("")
                     lines.append(repo_contract.to_user_summary())
                     lines.append("")
@@ -553,6 +579,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Keep summary short — no engine marketing blurb after generation
 
         await safe_edit_text(status_msg, "\n".join(summary_lines), use_markdown=True)
+
+        # Register into this user's private workspace index (dynamic, no templates)
+        if project_path and Path(project_path).exists():
+            try:
+                from telegram_bot_engine.formal_engine.services.user_sandbox import get_user_sandbox
+                uid = int(user.id) if user else 0
+                get_user_sandbox(uid, OUTPUT_DIR).register_project(
+                    project_path,
+                    label=Path(project_path).name,
+                    source_request=request,
+                    kind="generated",
+                    extra={
+                        "success": bool(success),
+                        "commands": list((meta or {}).get("commands") or [])[:30],
+                    },
+                )
+            except Exception:
+                logger.exception("register_project failed")
 
         # Try to send zip if project exists
         if project_path and Path(project_path).exists():

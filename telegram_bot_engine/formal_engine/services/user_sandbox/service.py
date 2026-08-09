@@ -1,24 +1,26 @@
-
-"""Per-user isolated workspace for generate → test → host.
+"""Per-user isolated workspace for generate → test → host → memory.
 
 Layout (under OUTPUT_DIR):
   users/<telegram_user_id>/
     projects/<project_id>/     # generated bot source
-    venvs/<project_id>/       # optional shared pointer (actual venv lives in project .tbe_venv)
-    runtime/                  # logs, pid markers
+    clones/<clone_id>/         # user-specific git clones
+    runtime/                   # logs, pid markers
+    index.json                 # lightweight registry of this user's artefacts
 
 Rules:
   - Never reuse the host bot token / process.
   - Child processes get a clean env (not os.environ.copy of the generator bot).
   - Paths are scoped by telegram user id only.
+  - No fixed templates or canned bot packs — only what the user produced.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +40,23 @@ class UserSandbox:
         return self.root / "projects"
 
     @property
+    def clones_dir(self) -> Path:
+        return self.root / "clones"
+
+    @property
     def runtime_dir(self) -> Path:
         return self.root / "runtime"
 
+    @property
+    def index_path(self) -> Path:
+        return self.root / "index.json"
+
     def ensure(self) -> "UserSandbox":
         self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.clones_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        if not self.index_path.exists():
+            self._write_index({"user_id": self.user_id, "projects": [], "clones": [], "updated_at": ""})
         return self
 
     def new_project_dir(self, label: str = "bot") -> Path:
@@ -51,6 +64,14 @@ class UserSandbox:
         stamp = time.strftime("%Y%m%d_%H%M%S")
         name = f"{_safe_segment(label, 'bot')}_{stamp}"
         path = self.projects_dir / name
+        path.mkdir(parents=True, exist_ok=False)
+        return path
+
+    def new_clone_dir(self, label: str = "clone") -> Path:
+        self.ensure()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        name = f"{_safe_segment(label, 'clone')}_{stamp}"
+        path = self.clones_dir / name
         path.mkdir(parents=True, exist_ok=False)
         return path
 
@@ -63,6 +84,92 @@ class UserSandbox:
             return True
         except Exception:
             return False
+
+    # ── Lightweight per-user registry (no templates) ──────────────────────
+
+    def _read_index(self) -> dict[str, Any]:
+        try:
+            if self.index_path.exists():
+                return json.loads(self.index_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {"user_id": self.user_id, "projects": [], "clones": [], "updated_at": ""}
+
+    def _write_index(self, data: dict[str, Any]) -> None:
+        data = dict(data)
+        data["user_id"] = self.user_id
+        data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.index_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def register_project(
+        self,
+        path: str | Path,
+        *,
+        label: str = "",
+        source_request: str = "",
+        kind: str = "generated",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record a project that belongs to this user. Dynamic only — no templates."""
+        self.ensure()
+        p = Path(path).resolve()
+        entry: dict[str, Any] = {
+            "id": p.name,
+            "path": str(p),
+            "label": (label or p.name)[:80],
+            "kind": kind,
+            "source_request_preview": (source_request or "")[:200],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if extra:
+            for k, v in extra.items():
+                if k not in entry and v is not None:
+                    entry[k] = v
+
+        idx = self._read_index()
+        projects = [x for x in (idx.get("projects") or []) if x.get("path") != entry["path"]]
+        projects.insert(0, entry)
+        idx["projects"] = projects[:100]  # keep last 100
+        self._write_index(idx)
+        return entry
+
+    def register_clone(
+        self,
+        path: str | Path,
+        *,
+        url: str = "",
+        label: str = "",
+    ) -> dict[str, Any]:
+        self.ensure()
+        p = Path(path).resolve()
+        entry = {
+            "id": p.name,
+            "path": str(p),
+            "url": (url or "")[:300],
+            "label": (label or p.name)[:80],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        idx = self._read_index()
+        clones = [x for x in (idx.get("clones") or []) if x.get("path") != entry["path"]]
+        clones.insert(0, entry)
+        idx["clones"] = clones[:50]
+        self._write_index(idx)
+        return entry
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        self.ensure()
+        return list(self._read_index().get("projects") or [])
+
+    def list_clones(self) -> list[dict[str, Any]]:
+        self.ensure()
+        return list(self._read_index().get("clones") or [])
+
+    def get_index(self) -> dict[str, Any]:
+        self.ensure()
+        return self._read_index()
 
 
 def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSandbox:
@@ -91,7 +198,6 @@ def clean_child_env(bot_token: str, extra: dict[str, str] | None = None) -> dict
             env[k] = v
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    # Mark isolation boundary
     env["TBE_SANDBOX"] = "1"
     env["TBE_ISOLATED"] = "1"
     if token:
