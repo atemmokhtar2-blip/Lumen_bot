@@ -260,6 +260,8 @@ def generate_bot(request: str, work_dir=None):
                 "dsl_rules": build.dsl_rules,
                 "structure_plan": getattr(build, "structure_plan", None) or {},
                 "structure_gate": getattr(build, "structure_gate", None) or {},
+                "structure_files": list(getattr(build, "structure_files", None) or []),
+                "structure_only": bool(getattr(build, "structure_only", False)),
                 "verify_ok": verify_ok,
                 "commands": cmd_names,
                 "grounding": (

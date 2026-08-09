@@ -1,13 +1,17 @@
 """
-Structure package — Phase 0.
+Structure package — Phase 1.
 
-derive_structure_plan() builds a StructurePlan from an already-grounded
-formal inference result. It does not write files and does not invent domains.
+derive_structure_plan → materialize_structure → validate_structure_gate
 """
 
 from .derive import derive_structure_plan, validate_structure_plan_basic
+from .gate import validate_structure_gate
+from .materialize import materialize_structure, render_stub
 
 __all__ = [
     "derive_structure_plan",
     "validate_structure_plan_basic",
+    "validate_structure_gate",
+    "materialize_structure",
+    "render_stub",
 ]

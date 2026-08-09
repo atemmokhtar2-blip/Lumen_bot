@@ -1,13 +1,13 @@
 """
-Derive StructurePlan from formal IR — observation only in Phase 0.
+Derive StructurePlan from formal IR — Phase 1 plan derivation (signature stubs).
 
 Rules:
   - Command / entity / button / flow names come ONLY from the inference result
     (already grounded upstream). Never inject shop/ticket packs.
   - File paths are structural project layout (entry, config, models, …),
     not domain feature packs.
-  - Phase 0 marks stub_kind=WIRED because the monolithic transpiler still
-    writes full files; later phases switch to EMPTY/SIGNATURES.
+  - Phase 1 marks stub_kind=SIGNATURES. Code Engine (Phase 2) fills bodies.
+    Monolithic transpile may still overwrite when full build is requested.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def derive_structure_plan(
         PlannedFile(
             path="main.py",
             role=FileRole.ENTRY,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Application entry and handler registration",
             binds_commands=list(commands),
             binds_buttons=list(buttons),
@@ -116,14 +116,14 @@ def derive_structure_plan(
         PlannedFile(
             path="config.py",
             role=FileRole.CONFIG,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Typed configuration from environment",
             required=True,
         ),
         PlannedFile(
             path="app/models.py",
             role=FileRole.MODELS,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Data models from user entities only",
             binds_entities=list(entities),
             required=bool(entities),
@@ -131,7 +131,7 @@ def derive_structure_plan(
         PlannedFile(
             path="app/handlers.py",
             role=FileRole.HANDLERS,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Command and callback handlers bound to user commands",
             binds_commands=list(commands),
             binds_flows=list(flows),
@@ -141,21 +141,21 @@ def derive_structure_plan(
         PlannedFile(
             path="requirements.txt",
             role=FileRole.REQUIREMENTS,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Runtime dependencies",
             required=True,
         ),
         PlannedFile(
             path=".env.example",
             role=FileRole.ENV_EXAMPLE,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Environment variable template (no secrets)",
             required=False,
         ),
         PlannedFile(
             path="README.md",
             role=FileRole.README,
-            stub_kind=FileStubKind.WIRED,
+            stub_kind=FileStubKind.SIGNATURES,
             description="Project readme derived from contract names",
             required=False,
         ),
@@ -181,7 +181,7 @@ def derive_structure_plan(
             PlannedFile(
                 path=rel,
                 role=role,
-                stub_kind=FileStubKind.WIRED,
+                stub_kind=FileStubKind.SIGNATURES,
                 description="Emitted by current monolithic transpile",
                 required=False,
             )
@@ -191,7 +191,7 @@ def derive_structure_plan(
     notes = [
         "phase0_observation_only",
         "no_domain_templates",
-        "stub_kind_wired_until_structure_engine_splits",
+        "stub_kind_signatures_phase1",
     ]
     return StructurePlan(
         bot_name=(bot_name or "")[:64],
