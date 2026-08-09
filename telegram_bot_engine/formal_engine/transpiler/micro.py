@@ -856,7 +856,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         c = cmd.lower()
         if c in ("stats", "statistics", "dashboard") or c.endswith("_stats"):
             return "stats"
-        if c.startswith("my_") or c in ("progress", "score", "history"):
+        # /my and my_* → list user's records (was broken: only my_ prefix matched)
+        if c.startswith("my_") or c in ("my", "mine", "progress", "score", "history", "bookings"):
             return "mine"
         if c in ("courses", "catalog") or any(x in c for x in ("list", "products", "items", "tickets", "orders")):
             return "list"
@@ -1138,18 +1139,30 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         cn = cmd.name.lower()
         w = wizard_by_cmd.get(cmd.name) or wizard_by_cmd.get(cn) or {}
         kind = str(w.get("kind") or "").lower()
+        desc_l = (getattr(cmd, "description", None) or "").lower()
         if not kind:
-            # derive from name shape only when wizard missing
-            if cn.startswith("my_") or cn in ("mine",):
+            # derive from name / description — no domain packs
+            if cn.startswith("my_") or cn in ("my", "mine", "bookings"):
                 kind = "mine"
             elif cn.startswith("list_") or cn in ("list", "catalog", "menu"):
                 kind = "list"
+            elif any(
+                k in desc_l
+                for k in (
+                    "حجوزاتي", "طلباتي", "سجلاتي", "عرض", "قائمة",
+                    "my ", "list my", "show my", "عرض حجوز",
+                )
+            ):
+                kind = "mine"
             elif cn in status_on_complete or any(x in cn for x in ("cancel", "delete", "remove")):
                 kind = "lookup"
             elif w.get("steps"):
                 kind = "collect"
             else:
-                kind = "action"
+                # fallback: structural cmd_kind helper
+                kind = cmd_kind(cn)
+                if kind == "generic":
+                    kind = "action"
         if w.get("steps") and kind in ("", "action", "lookup") and kind != "lookup":
             kind = "collect"
         if w.get("steps") and kind == "lookup" and len(w.get("steps") or []) > 1:
@@ -1270,6 +1283,26 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             lines.append(f"        if {_py(cmd.name)} in FLOWS and FLOWS.get({_py(cmd.name)}):")
             lines.append(f"            await _start_flow(message, context, {_py(cmd.name)})")
             lines.append("            return")
+            # Prefer listing stored records over a dead acknowledgment when possible
+            lines.append("        try:")
+            lines.append("            from app.services import list_records")
+            lines.append(f"            ent = str(FLOW_ENTITY.get({_py(cmd.name)}) or 'record')")
+            lines.append("            rows = await list_records(ent, uid)")
+            lines.append("            if rows:")
+            lines.append("                lines_out = []")
+            lines.append("                for i, row in enumerate(rows[:20], 1):")
+            lines.append("                    if isinstance(row, dict):")
+            lines.append(
+                "                        lines_out.append("
+                "f'{i}. ' + ', '.join(f'{k}={v}' for k, v in list(row.items())[:6])"
+                ")"
+            )
+            lines.append("                    else:")
+            lines.append("                        lines_out.append(f'{i}. {row}')")
+            lines.append("                await message.reply_text(chr(10).join(lines_out)[:3500])")
+            lines.append("                return")
+            lines.append("        except Exception:")
+            lines.append("            pass")
             lines.append(f"        await message.reply_text({_py('✅ /' + cmd.name + ' — ' + (cmd.description or cmd.name))})")
 
         lines.append("    except Exception as _exc:")
