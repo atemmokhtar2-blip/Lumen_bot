@@ -283,6 +283,9 @@ def infer(program: DSLProgram) -> InferenceResult:
         ("البريد الإلكتروني", "email"), ("البريد", "email"), ("ايميل", "email"), ("email", "email"),
         ("اسم المريض", "patient_name"), ("patient_name", "patient_name"),
         ("اسم المستخدم", "name"),
+        ("العمر", "age"), ("عمر", "age"), ("age", "age"),
+        ("نوع الكشف", "visit_type"), ("نوع الزيارة", "visit_type"), ("visit_type", "visit_type"),
+        ("رقم الموعد", "id"), ("رقم الحجز", "id"),
         ("الكمية", "quantity"), ("كمية", "quantity"), ("quantity", "quantity"), ("qty", "quantity"),
         ("العنوان", "address"), ("address", "address"),
         ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
@@ -614,6 +617,13 @@ def infer(program: DSLProgram) -> InferenceResult:
     def _pick_wizard_fields(ent_name: str | None, desc: str, kind: str) -> list[str]:
         """Fields for multi-step collect. Explicit user lists win; never invent extras."""
         from_desc = _fields_from_description(desc)
+        # cancel / delete by id: user asked for appointment number only
+        dlow = (desc or "")
+        if kind in ("lookup", "mutate") or any(x in dlow for x in ("إلغاء", "الغاء", "cancel", "حذف", "delete")):
+            if any(x in dlow for x in ("رقم الموعد", "رقم الحجز", "id", "معرّف", "معرف")):
+                return ["id"]
+            if from_desc and set(from_desc) <= {"id"}:
+                return ["id"]
         # Computed / system fields never collected from user
         system_skip = {
             "id", "user_id", "banned", "paid", "active", "enabled",
@@ -682,6 +692,12 @@ def infer(program: DSLProgram) -> InferenceResult:
             if not ent_name:
                 ent_name = caps[0]
         fields = _pick_wizard_fields(ent_name, desc, kind)
+        # cancel/delete by appointment number → single id step (from user wording only)
+        if any(x in (desc or "") for x in ("إلغاء", "الغاء", "cancel", "حذف")) and any(
+            x in (desc or "") for x in ("رقم الموعد", "رقم الحجز", "رقم الطلب", "id")
+        ):
+            fields = ["id"]
+            kind = "lookup"
         if not fields and kind == "collect":
             # Only fields evidenced in command description or entity attrs — never invent "name"
             fields = _fields_from_description(desc)

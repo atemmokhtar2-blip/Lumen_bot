@@ -810,6 +810,9 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
     first_step = step_ids[0] if step_ids else None
     wizards = list(getattr(inf, "wizards", None) or [])
     wizard_by_cmd = {str(w.get("command") or w.get("id")): w for w in wizards}
+    cmd_names_l = [str(getattr(c, 'name', '') or '').lower() for c in commands]
+    needs_scan_branches = any(any(s in n for s in ('scan', 'security', 'dns', 'ssl', 'audit')) for n in cmd_names_l)
+
 
     # map command → store name by stem overlap with schemas
     schema_names = [_ident(s.table) for s in schemas]
@@ -1220,7 +1223,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("                context.user_data['flow'] = 'collect_title'")
         lines.append("                context.user_data['step'] = 0")
         lines.append("                context.user_data['data'] = {}")
-        lines.append("                FLOWS.setdefault('collect_title', [{'key': 'title', 'prompt': 'أرسل النص للحفظ:'}])")
+        lines.append("                await message.reply_text('لا يوجد تدفق معرف لهذا الأمر.')")
         lines.append("        elif (_cn in ('complete', 'done')")
         lines.append("                or _cn.startswith('complete_') or _cn.startswith('done_')):")
         lines.append("            await message.reply_text('اختر عنصراً من القائمة أو أرسل رقمه.')")
