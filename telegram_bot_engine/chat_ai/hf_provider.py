@@ -15,10 +15,13 @@ logger = logging.getLogger(__name__)
 
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 DEFAULT_MODELS = (
-    "Qwen/Qwen2.5-72B-Instruct",
+    # Prefer non-Qwen models first (Qwen often hits provider timeouts/quota).
     "meta-llama/Llama-3.3-70B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct",
     "meta-llama/Llama-3.1-8B-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "google/gemma-2-9b-it",
+    "microsoft/Phi-3.5-mini-instruct",
 )
 
 _TOKEN_ENVS = (
