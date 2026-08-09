@@ -62,6 +62,33 @@ DEFAULT_COMMANDS: dict[str, str] = {
     "sec_close_report": "closereport",
     "faq_show": "faq",
     "broadcast_admin": "broadcast",
+    "shop_catalog": "shop",
+    "shop_add_item": "addproduct",
+    "shop_order": "order",
+    "shop_buy": "buy",
+    "shop_orders": "orders",
+    "shop_my_orders": "myorders",
+    "plans": "plans",
+    "subscribe": "subscribe",
+    "my_sub": "mysub",
+    "grant_sub": "grantsub",
+    "revoke_sub": "revokesub",
+    "sub_status": "substatus",
+    "balance": "balance",
+    "leaderboard": "leaderboard",
+    "grant_points": "grantpoints",
+    "debit_points": "debitpoints",
+    "points_history": "pointshistory",
+    "redeem_points": "redeem",
+    "contests": "contests",
+    "join_contest": "join",
+    "my_entries": "myentries",
+    "new_contest": "newcontest",
+    "end_contest": "endcontest",
+    "draw_winner": "draw",
+    "contest_info": "contest",
+    "lang": "lang",
+    "language": "lang",
 }
 
 # Fill missing command aliases from capability keys
@@ -83,6 +110,29 @@ DEFAULT_SUCCESS_AR: dict[str, str] = {
     "ticket_reply": "تم إرسال الرد",
     "welcome_set": "تم حفظ رسالة الترحيب",
     "note_add": "تمت إضافة الملاحظة",
+    "shop_buy": "تم إرسال فاتورة الدفع",
+    "shop_add_item": "تم إضافة المنتج",
+    "subscribe": "تم تفعيل الاشتراك",
+    "grant_sub": "تم منح الاشتراك",
+    "revoke_sub": "تم إلغاء الاشتراك",
+    "grant_points": "تم منح النقاط",
+    "join_contest": "تم تسجيل مشاركتك",
+    "draw_winner": "تم سحب الفائز",
+    "lang": "تم تغيير اللغة",
+}
+
+DEFAULT_SUCCESS_EN: dict[str, str] = {
+    "shop_buy": "Payment invoice sent",
+    "shop_add_item": "Product added",
+    "subscribe": "Subscription activated",
+    "grant_sub": "Subscription granted",
+    "revoke_sub": "Subscription revoked",
+    "grant_points": "Points granted",
+    "join_contest": "Entry recorded",
+    "draw_winner": "Winner drawn",
+    "lang": "Language updated",
+    "balance": "Your balance",
+    "leaderboard": "Leaderboard",
 }
 
 
@@ -127,7 +177,17 @@ class BuilderSession:
     def needs_sqlite(self) -> bool:
         for key in self.selected:
             cap = get_capability(key)
-            if cap and cap.service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"}:
+            if cap and cap.service in {
+                "tasks", "notes", "welcome", "tickets", "security", "shop",
+                "booking", "crm", "reminders", "community", "edu", "hr",
+                "utils", "gate", "payments", "subscriptions", "points", "contests",
+                "cart", "growth", "wallet", "forms", "events", "notify",
+                "support", "jobs", "marketplace", "restaurant", "services",
+                "analytics", "admin", "compliance", "integrations",
+                "creator", "waitlist", "gamification", "pricing", "onboarding",
+                "agency", "safety", "fitness", "realestate", "clinic",
+                "auction", "delivery", "retention",
+            }:
                 return True
         return False
 
@@ -232,6 +292,100 @@ class BuilderSession:
             )
             start_buttons.append(StartButton(label="ملاحظة", callback_id="note.add"))
 
+        # Commerce / engagement start buttons (end-user product packs)
+        if "shop_catalog" in selected:
+            start_buttons.append(StartButton(label="🛒 Shop", callback_id="shop.catalog"))
+            features.append(
+                Feature(
+                    id="shop_catalog_cb",
+                    feature="shop_catalog",
+                    trigger=Trigger(type="callback", id="shop.catalog"),
+                    action=Action(service="shop", method="catalog"),
+                )
+            )
+        if "shop_buy" in selected:
+            start_buttons.append(StartButton(label="💳 Buy", callback_id="shop.buy"))
+        if "plans" in selected:
+            start_buttons.append(StartButton(label="⭐ Plans", callback_id="sub.plans"))
+            features.append(
+                Feature(
+                    id="plans_cb",
+                    feature="plans",
+                    trigger=Trigger(type="callback", id="sub.plans"),
+                    action=Action(service="subscriptions", method="list_plans"),
+                )
+            )
+        if "balance" in selected:
+            start_buttons.append(StartButton(label="💎 Points", callback_id="points.balance"))
+            features.append(
+                Feature(
+                    id="balance_cb",
+                    feature="balance",
+                    trigger=Trigger(type="callback", id="points.balance"),
+                    action=Action(service="points", method="balance"),
+                )
+            )
+        if "contests" in selected:
+            start_buttons.append(StartButton(label="🏆 Contests", callback_id="contest.list"))
+            features.append(
+                Feature(
+                    id="contests_cb",
+                    feature="contests",
+                    trigger=Trigger(type="callback", id="contest.list"),
+                    action=Action(service="contests", method="list_open"),
+                )
+            )
+        if "lang" in selected or "language" in selected:
+            start_buttons.append(StartButton(label="🌐 Language", callback_id="i18n.lang"))
+
+        entity_names: list[str] = []
+        if any(k.startswith("shop_") or k.startswith("cart_") or k.startswith("product_") for k in selected):
+            entity_names.extend(["Product", "Order", "Payment", "Coupon", "CartItem"])
+        if any(k in selected for k in ("plans", "subscribe", "my_sub", "grant_sub", "revoke_sub", "sub_status")):
+            entity_names.extend(["Plan", "Subscription"])
+        if any(k in selected for k in ("balance", "leaderboard", "grant_points", "debit_points", "points_history", "redeem_points")):
+            entity_names.extend(["PointLedger", "UserBalance"])
+        if any(k in selected for k in ("contests", "join_contest", "my_entries", "new_contest", "end_contest", "draw_winner")):
+            entity_names.extend(["Contest", "Entry"])
+        if any(k.startswith("referral_") or k in selected and k in ("daily_checkin", "streak_status", "achievement_list") for k in selected):
+            entity_names.extend(["Referral", "Checkin"])
+        if any(k.startswith("wallet_") for k in selected):
+            entity_names.extend(["Wallet", "WalletTxn"])
+        if any(k.startswith("content_") or k in ("tip_creator", "membership_gate") for k in selected):
+            entity_names.extend(["ContentItem", "Unlock", "Tip"])
+        if any(k.startswith("lead_") or k.startswith("deal_") or k == "pipeline_board" for k in selected):
+            entity_names.extend(["Lead", "Deal"])
+        if any(k.startswith("ticket_") or k.startswith("kb_") for k in selected):
+            entity_names.extend(["Ticket", "KbArticle"])
+        if any(k.startswith("event_") for k in selected):
+            entity_names.extend(["Event", "Rsvp"])
+        if any(k.startswith("listing_") for k in selected):
+            entity_names.extend(["Listing"])
+        if any(k.startswith("job_") for k in selected):
+            entity_names.extend(["Job", "Application"])
+        if any(k.startswith("menu_") or k in ("order_status", "table_book") for k in selected):
+            entity_names.extend(["MenuItem", "FoodOrder", "TableBooking"])
+        if any(k.startswith("gym_") for k in selected):
+            entity_names.extend(["GymSession", "GymMembership"])
+        if any(k.startswith("property_") for k in selected):
+            entity_names.extend(["Property", "PropertyInquiry"])
+        if any(k.startswith("clinic_") for k in selected):
+            entity_names.extend(["ClinicSlot", "Appointment"])
+        if any(k.startswith("auction_") for k in selected):
+            entity_names.extend(["Auction", "Bid"])
+        if any(k.startswith("delivery_") for k in selected):
+            entity_names.extend(["Shipment"])
+
+        if any(k.startswith("waitlist_") for k in selected):
+            entity_names.extend(["WaitlistEntry"])
+        # dedupe preserve order
+        seen: set[str] = set()
+        entities_out: list[str] = []
+        for n in entity_names:
+            if n not in seen:
+                seen.add(n)
+                entities_out.append(n)
+
         return BotSpec(
             version="1.0",
             bot=BotMeta(
@@ -243,7 +397,7 @@ class BuilderSession:
             features=features,
             storage=StorageSpec(
                 type="sqlite" if self.needs_sqlite() else "none",
-                entities=[],
+                entities=entities_out,
             ),
             start_buttons=start_buttons,
             hard_constraints=["zero-ai", "spec-builder"],

@@ -30,6 +30,15 @@ GROQ_API_KEY=            # اختياري
 AI_PROVIDER_ORDER=openai,hf,groq
 HF_DIRECT_CODEGEN=1
 TELEGRAM_BOT_TOKEN=
+ALLOWED_USER_IDS=        # معرفات تيليجرام المسموح بها (مفصولة بفاصلة)
+# ALLOW_ALL_USERS=1      # غير آمن — يقبل أي مستخدم
+# RATE_LIMIT_PER_MINUTE=12
+
+# عزل Docker لكل مستخدم (يُفعَّل تلقائياً عند توفر Docker)
+# TBE_PREFER_DOCKER=1
+# TBE_DOCKER_IMAGE=python:3.11-slim
+# TBE_DOCKER_MEMORY=256m
+# TBE_DOCKER_CPUS=0.5
 ```
 
 ## التشغيل

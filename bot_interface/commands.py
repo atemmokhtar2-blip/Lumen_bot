@@ -1,4 +1,4 @@
-"""Telegram command handlers (/start, /help, /status)."""
+"""Telegram command handlers (/start, /help, /status, /lang)."""
 
 from __future__ import annotations
 
@@ -8,29 +8,25 @@ from telegram.ext import ContextTypes
 
 from .config import OUTPUT_DIR
 from .helpers import is_allowed
+from .i18n import get_lang, set_lang, t, SUPPORTED
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not is_allowed(user.id if user else None):
-        await update.message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
+        lang = get_lang(user, context)
+        await update.message.reply_text(t("not_authorized", lang))
         return
 
-    text = (
-        "👋 *مرحباً بك في AI Agent 7h Bot*\n\n"
-        "أنا محرك توليد بوتات تليجرام.\n"
-        "أرسل لي وصفاً باللغة العربية أو الإنجليزية لما تريده، وسأولّد مشروعاً جاهزاً.\n\n"
-        "*أمثلة:*\n"
-        "• اعمل بوت متجر إلكتروني\n"
-        "• بوت إدارة مجموعات مع نظام نقاط\n"
-        "• Telegram bot for customer support with tickets\n\n"
-        "الأوامر:\n"
-        "/start — هذه الرسالة\n"
-        "/status — حالة النظام\n"
-        "/help — مساعدة\n\n"
-        "✅ المحرك الرسمي (Formal Engine) يعمل — فهم حتمي + توليد كود نظيف."
+    lang = get_lang(user, context)
+    # First interaction: store detected language so later messages stay consistent
+    if context.user_data is not None and "lang" not in context.user_data:
+        set_lang(context, lang)
+
+    await update.message.reply_text(
+        t("start_welcome", lang),
+        parse_mode=ParseMode.MARKDOWN,
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -39,25 +35,56 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    lang = get_lang(user, context)
     if not is_allowed(user.id if user else None):
-        await update.message.reply_text("⛔ غير مصرح.")
+        await update.message.reply_text(t("not_authorized_short", lang))
         return
 
     try:
         from telegram_bot_engine import bootstrap
         registry, orchestrator, manager = bootstrap()
-        engine_count = len(getattr(registry, "_engines", {}) or getattr(registry, "engines", {}) or {})
+        engine_count = len(
+            getattr(registry, "_engines", {}) or getattr(registry, "engines", {}) or {}
+        )
         if not engine_count:
             try:
                 engine_count = len(manager._engines) if hasattr(manager, "_engines") else "?"
             except Exception:
                 engine_count = "?"
-        msg = (
-            f"✅ النظام يعمل\n"
-            f"• المحركات المسجّلة: {engine_count}\n"
-            f"• مجلد الإخراج: `{OUTPUT_DIR}`\n"
-            f"• المحرك النشط: Formal Engine (فهم + توليد)."
+        msg = t(
+            "status_ok",
+            lang,
+            engine_count=engine_count,
+            output_dir=str(OUTPUT_DIR),
         )
     except Exception as e:
-        msg = f"⚠️ خطأ أثناء فحص الحالة:\n`{e}`"
+        msg = t("status_error", lang, error=str(e))
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+
+async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Change interface language: /lang en | /lang ar"""
+    user = update.effective_user
+    lang = get_lang(user, context)
+    if not is_allowed(user.id if user else None):
+        await update.message.reply_text(t("not_authorized_short", lang))
+        return
+
+    args = (context.args or []) if context else []
+    if not args:
+        await update.message.reply_text(
+            t("lang_usage", lang, lang=lang),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    requested = (args[0] or "").strip().lower()
+    if requested not in SUPPORTED:
+        await update.message.reply_text(t("lang_unsupported", lang))
+        return
+
+    new_lang = set_lang(context, requested)
+    await update.message.reply_text(
+        t("lang_changed", new_lang, lang=new_lang),
+        parse_mode=ParseMode.MARKDOWN,
+    )

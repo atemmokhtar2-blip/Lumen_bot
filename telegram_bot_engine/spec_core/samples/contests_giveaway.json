@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "contest_giveaway_bot",
+    "language": "mixed",
+    "description": "Contests and giveaways for end-users: join, entries, admin create/end/draw"
+  },
+  "actors": ["user", "admin"],
+  "storage": {
+    "type": "sqlite",
+    "entities": ["Contest", "Entry"]
+  },
+  "start_buttons": [
+    {"label": "🏆 Contests", "callback_id": "contest.list"},
+    {"label": "🎫 My entries", "callback_id": "contest.mine"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {
+      "id": "start",
+      "feature": "start",
+      "trigger": {"type": "command", "id": "start"},
+      "action": {"service": "core", "method": "start"},
+      "messages": {"success": "Join open contests. Admins can create and draw winners."}
+    },
+    {
+      "id": "help",
+      "feature": "help",
+      "trigger": {"type": "command", "id": "help"},
+      "action": {"service": "core", "method": "help"}
+    },
+    {
+      "id": "contests",
+      "feature": "contests",
+      "trigger": {"type": "command", "id": "contests"},
+      "action": {"service": "contests", "method": "list_open"}
+    },
+    {
+      "id": "contests_cb",
+      "feature": "contests",
+      "trigger": {"type": "callback", "id": "contest.list"},
+      "action": {"service": "contests", "method": "list_open"}
+    },
+    {
+      "id": "join_contest",
+      "feature": "join_contest",
+      "trigger": {"type": "command", "id": "join"},
+      "action": {"service": "contests", "method": "join"},
+      "messages": {
+        "prompt": "Send contest id",
+        "success": "You are in!",
+        "failure": "Already joined or contest closed"
+      }
+    },
+    {
+      "id": "my_entries",
+      "feature": "my_entries",
+      "trigger": {"type": "command", "id": "myentries"},
+      "action": {"service": "contests", "method": "my_entries"}
+    },
+    {
+      "id": "my_entries_cb",
+      "feature": "my_entries",
+      "trigger": {"type": "callback", "id": "contest.mine"},
+      "action": {"service": "contests", "method": "my_entries"}
+    },
+    {
+      "id": "contest_info",
+      "feature": "contest_info",
+      "trigger": {"type": "command", "id": "contest"},
+      "action": {"service": "contests", "method": "info"}
+    },
+    {
+      "id": "new_contest",
+      "feature": "new_contest",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "newcontest"},
+      "action": {"service": "contests", "method": "create"}
+    },
+    {
+      "id": "end_contest",
+      "feature": "end_contest",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "endcontest"},
+      "action": {"service": "contests", "method": "close"}
+    },
+    {
+      "id": "draw_winner",
+      "feature": "draw_winner",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "draw"},
+      "action": {"service": "contests", "method": "draw_winner"},
+      "messages": {"success": "Winner selected from entries"}
+    },
+    {
+      "id": "lang",
+      "feature": "lang",
+      "trigger": {"type": "command", "id": "lang"},
+      "action": {"service": "i18n", "method": "set_language"}
+    }
+  ],
+  "tech": {
+    "database": "sqlite",
+    "contests": true,
+    "i18n": true
+  },
+  "hard_constraints": [
+    "One entry per user per contest unless multi_entry is set",
+    "draw_winner only after contest is closed",
+    "Document winner selection method in README"
+  ]
+}

@@ -12,6 +12,7 @@ runs functional tests, and produces a full report.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,7 @@ from .functional_tester import FunctionalTester
 from .health_checker import HealthChecker
 from .quality_gate import QualityGate
 from .local_process_driver import LocalProcessDriver
+from .docker_process_driver import DockerProcessDriver, docker_available
 from .railway_driver import RailwayDriver
 from .report_data import (
     LiveDeploymentReport,
@@ -39,29 +41,40 @@ from .token_validator import TokenValidator
 _log = logging.getLogger("engine.live_deployment")
 
 
+def _select_primary_provider():
+    """Prefer Docker isolation when the daemon is available; else local process."""
+    prefer = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower()
+    if prefer not in {"0", "false", "no", "off"} and docker_available():
+        _log.info("Live deployment primary provider: Docker (per-user isolation)")
+        return DockerProcessDriver()
+    _log.info("Live deployment primary provider: LocalProcessDriver")
+    return LocalProcessDriver()
+
+
 class LiveDeploymentEngine(BaseEngine):
     """Specification 065 — Live Deployment & Smart Testing Engine."""
 
     def __init__(self) -> None:
         super().__init__(
             name="live_deployment",
-            version="1.0.0",
+            version="1.1.0",
             description=(
-                "Installs dependencies, runs the generated bot as a real "
-                "process, validates the Telegram token, health-checks, "
-                "runs functional tests. Railway remains an optional provider."
+                "Installs dependencies, runs the generated bot in an isolated "
+                "Docker container (preferred) or local process, validates the "
+                "Telegram token, health-checks, runs functional tests. "
+                "Railway remains an optional provider."
             ),
             tags=[
-                "deployment", "local-process", "railway", "token", "health",
-                "testing", "secrets", "live", "maximum-critical",
+                "deployment", "docker", "local-process", "railway", "token",
+                "health", "testing", "secrets", "live", "maximum-critical",
             ],
             metadata={"specification": "065", "priority": "MAXIMUM CRITICAL"},
         )
         self._token_validator = TokenValidator()
         self._secrets = get_secrets_manager()
         self._env_gen = EnvironmentGenerator()
-        # Primary: real local process (pip install + run main.py)
-        self._provider = LocalProcessDriver()
+        # Prefer Docker for strong per-user isolation; fall back to local process
+        self._provider = _select_primary_provider()
         self._railway = RailwayDriver()
         self._health = HealthChecker()
         self._functional = FunctionalTester()

@@ -1788,6 +1788,65 @@ def run_bot_project(
     entry_hint: str | None = None,
     run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
 ) -> LiveRunReport:
+    """Prefer Docker isolation when available; fall back to local process runner."""
+    prefer = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower()
+    if prefer not in {"0", "false", "no", "off"}:
+        try:
+            from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                DockerProcessDriver,
+                docker_available,
+            )
+            if docker_available():
+                driver = DockerProcessDriver()
+                st = driver.deploy(
+                    str(project_path),
+                    env_vars={"BOT_TOKEN": bot_token},
+                    service_name="live-run",
+                )
+                if st.status == "running":
+                    # Keep container alive for run_seconds then stop
+                    dep_id = st.deployment_id
+                    lifetime = max(30.0, float(run_seconds))
+
+                    def _auto_stop():
+                        try:
+                            time.sleep(lifetime)
+                            driver.stop(dep_id)
+                        except Exception:
+                            pass
+
+                    threading.Thread(target=_auto_stop, daemon=True).start()
+                    mins = max(1, int(round(lifetime / 60.0)))
+                    logs = driver.logs(dep_id, limit=20)
+                    return LiveRunReport(
+                        ok=True,
+                        phase="run",
+                        message=(
+                            f"✅ البوت شغال داخل حاوية Docker معزولة (~{mins} دقيقة).\n"
+                            f"• {st.message}"
+                        ),
+                        install_log="(docker image + pip inside container)",
+                        run_log="\n".join(logs[-15:]) if logs else "(container started)",
+                        warnings=["docker_isolated", f"lifetime_seconds:{int(lifetime)}"],
+                        entry_point=entry_hint or "",
+                        duration_ms=0.0,
+                        details={
+                            "provider": "docker",
+                            "deployment_id": dep_id,
+                            "service_id": st.service_id,
+                        },
+                    )
+                # Docker tried but failed → fall through to local runner with a note
+                __import__("logging").getLogger("live_runner").warning(
+                    "Docker deploy failed (%s), falling back to local process",
+                    st.message[:200],
+                )
+        except Exception as docker_exc:
+            __import__("logging").getLogger("live_runner").warning(
+                "Docker path unavailable: %s — using local process",
+                docker_exc,
+            )
+
     return LiveRunnerService().run(
         project_path=project_path,
         bot_token=bot_token,

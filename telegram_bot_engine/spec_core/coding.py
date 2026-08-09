@@ -22,20 +22,40 @@ def _emit_config() -> str:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
+def _parse_ids(raw: str) -> frozenset[int]:
+    out: set[int] = set()
+    for part in (raw or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.add(int(part))
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str = ""
+    payment_provider_token: str = ""
+    admin_user_ids: frozenset[int] = field(default_factory=frozenset)
+    default_currency: str = "USD"
 
     @classmethod
     def load(cls) -> "Settings":
-        return cls(telegram_bot_token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip())
+        return cls(
+            telegram_bot_token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip(),
+            payment_provider_token=(os.getenv("PAYMENT_PROVIDER_TOKEN") or "").strip(),
+            admin_user_ids=_parse_ids(os.getenv("ADMIN_USER_IDS") or ""),
+            default_currency=(os.getenv("DEFAULT_CURRENCY") or "USD").strip().upper() or "USD",
+        )
+
+    def is_admin(self, user_id: int) -> bool:
+        return int(user_id) in self.admin_user_ids
 
 
 def get_settings() -> Settings:
@@ -45,7 +65,7 @@ def get_settings() -> Settings:
 
 def _emit_db(spec: BotSpec) -> str:
     need = spec.storage.type == "sqlite" or any(
-        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"})  # type: ignore[union-attr]
+        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate", "payments", "subscriptions", "points", "contests", "cart", "growth", "wallet", "creator", "i18n", "analytics", "compliance", "forms", "events", "jobs", "marketplace", "restaurant", "support", "admin", "notify"})  # type: ignore[union-attr]
         for f in spec.features
     )
     if not need:
@@ -143,6 +163,139 @@ def init_db() -> None:
                 body TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'open',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                price_cents INTEGER NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                stock INTEGER NOT NULL DEFAULT 100,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL DEFAULT 0,
+                amount_cents INTEGER NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                status TEXT NOT NULL DEFAULT 'pending',
+                payload TEXT NOT NULL DEFAULT '',
+                charge_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                price_cents INTEGER NOT NULL DEFAULT 0,
+                duration_days INTEGER NOT NULL DEFAULT 30,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                plan_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                starts_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ends_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS point_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                delta INTEGER NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                winner_user_id INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS contest_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contest_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                UNIQUE(contest_id, user_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallets (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                invited_by INTEGER NOT NULL DEFAULT 0,
+                rewards INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_lang (
+                user_id INTEGER PRIMARY KEY,
+                lang TEXT NOT NULL DEFAULT 'en'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                order_id INTEGER NOT NULL DEFAULT 0,
+                amount_cents INTEGER NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                provider_charge_id TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cart_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                qty INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(user_id, product_id)
             )
             """
         )
@@ -741,6 +894,271 @@ def main_keyboard() -> InlineKeyboardMarkup | None:
 '''
 
 
+
+def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
+    """Clean, deterministic handler body for market services."""
+    svc = cap.service
+    method = cap.method
+    L: list[str] = ["    from app.services import market as market_svc"]
+
+    def need_args(min_n: int = 1) -> None:
+        L.append(f"    if not context.args or len(context.args) < {min_n}:")
+        L.append(f"        await message.reply_text({fail!r})")
+        L.append("        return")
+
+    # shop
+    if method in {"catalog", "list_content", "flash_list"}:
+        L.append("    await message.reply_text(market_svc.catalog())")
+    elif method == "recommend":
+        L.append("    await message.reply_text(market_svc.recommend_products(user.id))")
+    elif method in {"add_item", "upload", "create_gift"}:
+        need_args(1)
+        L.append("    pid = market_svc.add_item(user.id, ' '.join(context.args))")
+        L.append(f"    await message.reply_text({ok!r} + f' #{{pid}}')")
+    elif method in {"place_order", "send_invoice", "checkout"}:
+        need_args(1)
+        L.append("    oid = market_svc.place_order(user.id, ' '.join(context.args))")
+        L.append("    if not oid:")
+        L.append(f"        await message.reply_text({fail!r})")
+        L.append("        return")
+        L.append("    order = market_svc.get_order(oid)")
+        L.append("    from app.config import get_settings")
+        L.append("    settings = get_settings()")
+        L.append("    if not settings.payment_provider_token or not order:")
+        L.append(f"        await message.reply_text({ok!r} + f' order #{{oid}} (set PAYMENT_PROVIDER_TOKEN to invoice)')")
+        L.append("        return")
+        L.append("    prod = market_svc.get_product(int(order['product_id']))")
+        L.append("    title = (prod or {}).get('title') or f'Order #{oid}'")
+        L.append("    from telegram import LabeledPrice")
+        L.append("    await context.bot.send_invoice(")
+        L.append("        chat_id=message.chat_id,")
+        L.append("        title=str(title)[:32],")
+        L.append("        description=f'Order #{oid}'[:255],")
+        L.append("        payload=market_svc.invoice_payload_for_order(oid),")
+        L.append("        provider_token=settings.payment_provider_token,")
+        L.append("        currency=str(order.get('currency') or settings.default_currency),")
+        L.append("        prices=[LabeledPrice(str(title)[:32], int(order['amount_cents']))],")
+        L.append("    )")
+    elif method == "list_orders":
+        L += [
+            "    items = market_svc.list_orders()",
+            "    if not items:",
+            "        await message.reply_text('No orders')",
+            "        return",
+            "    text = chr(10).join(",
+            "        f\"#{i['id']} user={i['user_id']} {i['status']} {i['amount_cents']}\"",
+            "        for i in items",
+            "    )",
+            "    await message.reply_text(text)",
+        ]
+    elif method == "my_orders":
+        L += [
+            "    items = market_svc.my_orders(user.id)",
+            "    text = chr(10).join(f\"#{i['id']} {i['status']}\" for i in items) if items else 'No orders'",
+            "    await message.reply_text(text)",
+        ]
+    # points / wallet balance
+    elif method == "balance" and svc == "wallet":
+        L.append("    await message.reply_text(f'Wallet: {market_svc.wallet_balance(user.id)}')")
+    elif method == "balance":
+        L.append("    await message.reply_text(f'Points: {market_svc.points_balance(user.id)}')")
+    elif method == "leaderboard":
+        L += [
+            "    rows = market_svc.leaderboard()",
+            "    text = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'Empty'",
+            "    await message.reply_text(text)",
+        ]
+    elif method == "grant" and svc == "points":
+        need_args(2)
+        L += [
+            "    try:",
+            "        uid, amt = int(context.args[0]), int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    market_svc.points_credit(uid, amt, 'admin_grant')",
+            f"    await message.reply_text({ok!r})",
+        ]
+    elif method == "debit":
+        need_args(2)
+        L += [
+            "    try:",
+            "        uid, amt = int(context.args[0]), int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    ok_d = market_svc.points_debit(uid, amt, 'admin_debit')",
+            f"    await message.reply_text({ok!r} if ok_d else {fail!r})",
+        ]
+    elif method == "transfer" and svc == "points":
+        need_args(2)
+        L += [
+            "    try:",
+            "        to_uid, amt = int(context.args[0]), int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    if not market_svc.points_debit(user.id, amt, f'transfer_to_{to_uid}'):",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    market_svc.points_credit(to_uid, amt, f'transfer_from_{user.id}')",
+            f"    await message.reply_text({ok!r})",
+        ]
+    # subscriptions
+    elif method == "list_plans":
+        L += [
+            "    plans = market_svc.list_plans()",
+            "    text = chr(10).join(",
+            "        f\"#{p['id']} {p['name']} {p['price_cents']/100:.2f}\"",
+            "        for p in plans",
+            "    )",
+            "    await message.reply_text(text)",
+        ]
+    elif method == "my_subscription":
+        L.append("    await message.reply_text(market_svc.my_subscription(user.id))")
+    elif method in {"subscribe", "grant"} and svc == "subscriptions":
+        need_args(1)
+        L += [
+            "    try:",
+            "        plan_id = int(context.args[0])",
+            "        target = int(context.args[1]) if len(context.args) > 1 else user.id",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    ok_g = market_svc.grant_sub(target, plan_id)",
+            f"    await message.reply_text({ok!r} if ok_g else {fail!r})",
+        ]
+    # contests
+    elif method == "list_open":
+        L += [
+            "    items = market_svc.list_contests()",
+            "    text = chr(10).join(f\"#{c['id']} {c['title']}\" for c in items) if items else 'No open contests'",
+            "    await message.reply_text(text)",
+        ]
+    elif method == "create":
+        L.append("    title = ' '.join(context.args) if context.args else 'Contest'")
+        L.append("    cid = market_svc.create_contest(title)")
+        L.append(f"    await message.reply_text({ok!r} + f' #{{cid}}')")
+    elif method == "join":
+        need_args(1)
+        L += [
+            "    try:",
+            "        cid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    joined = market_svc.join_contest(user.id, cid)",
+            f"    await message.reply_text({ok!r} if joined else {fail!r})",
+        ]
+    elif method == "draw_winner":
+        need_args(1)
+        L += [
+            "    try:",
+            "        cid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    w = market_svc.draw_winner(cid)",
+            "    await message.reply_text(f'Winner user_id={w}' if w else 'No entries')",
+        ]
+    # growth / i18n
+    elif method in {"my_code", "invite_link"}:
+        L.append("    code = market_svc.referral_code(user.id)")
+        L.append("    await message.reply_text(f'Your code: {code}')")
+    elif method in {"claim", "claim_reward"} and svc == "growth":
+        need_args(1)
+        L.append("    ok_c = market_svc.claim_referral(user.id, context.args[0])")
+        L.append(f"    await message.reply_text({ok!r} if ok_c else {fail!r})")
+    elif method == "cancel_order":
+        need_args(1)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    ok_c = market_svc.cancel_order(user.id, oid)",
+            f"    await message.reply_text({ok!r} if ok_c else {fail!r})",
+        ]
+    elif method == "track_order":
+        need_args(1)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.track_order(user.id, oid))",
+        ]
+    elif method == "daily_checkin":
+        L.append("    await message.reply_text(market_svc.daily_checkin(user.id))")
+    elif method in {"coupon_apply", "redeem_gift"}:
+        need_args(1)
+        L.append("    pct = market_svc.apply_coupon(context.args[0])")
+        L.append("    await message.reply_text(f'Discount: {pct}%' if pct else 'Invalid coupon')")
+    elif method in {"create_coupon", "create_gift"}:
+        need_args(2)
+        L.append("    try:")
+        L.append("        code, pct = context.args[0], int(context.args[1])")
+        L.append("    except ValueError:")
+        L.append(f"        await message.reply_text({fail!r})")
+        L.append("        return")
+        L.append("    made = market_svc.create_coupon(code, pct)")
+        L.append(f"    await message.reply_text(({ok!r} + ' ' + made) if made else {fail!r})")
+    elif method in {"history"} and svc == "payments":
+        L.append("    await message.reply_text(market_svc.payment_history(user.id))")
+    elif method == "receipt":
+        need_args(1)
+        L += [
+            "    try:",
+            "        pid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.payment_receipt(user.id, pid))",
+        ]
+    elif method == "add" and svc == "cart":
+        need_args(1)
+        L += [
+            "    try:",
+            "        pid = int(context.args[0])",
+            "        qty = int(context.args[1]) if len(context.args) > 1 else 1",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    ok_c = market_svc.cart_add(user.id, pid, qty)",
+            f"    await message.reply_text({ok!r} if ok_c else {fail!r})",
+        ]
+    elif method == "view" and svc == "cart":
+        L.append("    await message.reply_text(market_svc.cart_view(user.id))")
+    elif method == "clear" and svc == "cart":
+        L.append("    n = market_svc.cart_clear(user.id)")
+        L.append("    await message.reply_text(f'Cleared {n} items')")
+    elif method == "start_trial":
+        L.append("    msg = market_svc.start_trial(user.id)")
+        L.append("    await message.reply_text(msg)")
+    elif method == "level":
+        L.append("    await message.reply_text(market_svc.levels_for(user.id))")
+    elif method == "set_language":
+        L.append("    lang = context.args[0] if context.args else 'en'")
+        L.append("    new_lang = market_svc.set_lang(user.id, lang)")
+        L.append("    await message.reply_text(f'Language: {new_lang}')")
+    elif method == "topup":
+        need_args(1)
+        L += [
+            "    try:",
+            "        amount = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    bal = market_svc.wallet_add(user.id, amount)",
+            "    await message.reply_text(f'Wallet: {bal}')",
+        ]
+    else:
+        L.append(f"    await message.reply_text({ok!r})")
+    return L
+
+
 def _emit_handlers(spec: BotSpec) -> str:
     lang = (spec.bot.language or "ar").lower()
     welcome = "مرحباً بك 👋" if lang.startswith("ar") else "Welcome 👋"
@@ -796,9 +1214,21 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines += [
         "async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
         "    message = update.effective_message",
+        "    user = update.effective_user",
         "    if message is None:",
         "        return",
         f"    text = {welcome!r}",
+        "    # Deep-link: /start ref_CODE or /start CODE → claim referral once",
+        "    if user is not None and context.args:",
+        "        raw = (context.args[0] or '').strip()",
+        "        code = raw[4:] if raw.lower().startswith('ref_') else raw",
+        "        if code:",
+        "            try:",
+        "                from app.services import market as market_svc",
+        "                if market_svc.claim_referral(user.id, code):",
+        "                    text = text + '\\nReferral applied.'",
+        "            except Exception:",
+        "                pass",
         "    kb = main_keyboard()",
         "    await message.reply_text(text, reply_markup=kb)",
         "",
@@ -1129,11 +1559,21 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append(f"    await message.reply_text({ok!r})")
 
 
+        elif cap.service in {
+            "shop", "payments", "subscriptions", "points", "contests",
+            "cart", "growth", "wallet", "i18n", "creator",
+        }:
+            lines.extend(_market_handler_lines(cap, ok, fail))
         else:
-            lines.append(f"    await message.reply_text({ok!r})")
+            # Durable generic executor — no empty success stubs
+            lines.append("    from app.services import generic as generic_svc")
+            lines.append(
+                f"    result = generic_svc.act({cap.service!r}, {cap.method!r}, user.id, "
+                "' '.join(context.args) if context.args else '')"
+            )
+            lines.append("    await message.reply_text(result)")
         lines.append("")
         lines.append("")
-
 
     # text router for multi-step captures
     if need_tasks or need_notes or need_welcome or need_tickets or need_security:
@@ -1222,6 +1662,45 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("        await message.reply_text(data)")
     lines.append("")
 
+
+    # Telegram Payments: pre-checkout + successful_payment (never fake-paid)
+    need_pay = any(
+        (get_capability(f.feature) and get_capability(f.feature).service in {"shop", "payments", "cart", "subscriptions"})  # type: ignore
+        for f in spec.features
+    )
+    if need_pay:
+        lines += [
+            "async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    query = update.pre_checkout_query",
+            "    if query is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    oid = market_svc.parse_order_payload(query.invoice_payload or '')",
+            "    order = market_svc.get_order(oid) if oid else None",
+            "    if not order or order.get('status') != 'pending':",
+            "        await query.answer(ok=False, error_message='Order unavailable')",
+            "        return",
+            "    if int(order['amount_cents']) != int(query.total_amount):",
+            "        await query.answer(ok=False, error_message='Amount mismatch')",
+            "        return",
+            "    await query.answer(ok=True)",
+            "",
+            "",
+            "async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None or message.successful_payment is None:",
+            "        return",
+            "    sp = message.successful_payment",
+            "    from app.services import market as market_svc",
+            "    text = market_svc.fulfill_successful_payment(",
+            "        user.id, sp.invoice_payload or '', sp.telegram_payment_charge_id or '',",
+            "    )",
+            "    await message.reply_text(text)",
+            "",
+            "",
+        ]
+
     return "\n".join(lines) + "\n"
 
 
@@ -1270,6 +1749,10 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service == "security")  # type: ignore
         for f in spec.features
     )
+    need_pay = any(
+        (get_capability(f.feature) and get_capability(f.feature).service in {"shop", "payments", "cart", "subscriptions"})  # type: ignore
+        for f in spec.features
+    )
     imports_handlers = "start_handler, help_handler, callback_router"
     extra_imports = []
     for feat in spec.features:
@@ -1282,6 +1765,8 @@ def _emit_main(spec: BotSpec) -> str:
         imports_handlers += ", text_router"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
+    if need_pay:
+        imports_handlers += ", pre_checkout_handler, successful_payment_handler"
 
     bot_cmds = ",\n        ".join(
         f"BotCommand({c!r}, {d!r})" for c, d in dict.fromkeys(commands)
@@ -1293,6 +1778,13 @@ def _emit_main(spec: BotSpec) -> str:
     if need_welcome:
         text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
 
+    pay_handler = ""
+    if need_pay:
+        pay_handler = (
+            "\n    app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))"
+            "\n    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))"
+        )
+
     return f'''"""Application entry — python-telegram-bot v21."""
 from __future__ import annotations
 
@@ -1300,7 +1792,15 @@ import logging
 import sys
 
 from telegram import BotCommand, Update
-from telegram.ext import Application, CallbackQueryHandler, ChatMemberHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    CommandHandler,
+    MessageHandler,
+    PreCheckoutQueryHandler,
+    filters,
+)
 
 from app.config import get_settings
 from app.handlers import {imports_handlers}
@@ -1330,7 +1830,7 @@ def build_application() -> Application:
         .build()
     )
 {reg_text}
-    app.add_handler(CallbackQueryHandler(callback_router)){text_handler}
+    app.add_handler(CallbackQueryHandler(callback_router)){text_handler}{pay_handler}
     return app
 
 
@@ -1352,7 +1852,13 @@ def _emit_requirements() -> str:
 
 
 def _emit_env() -> str:
-    return "TELEGRAM_BOT_TOKEN=\n"
+    return (
+        "TELEGRAM_BOT_TOKEN=\n"
+        "PAYMENT_PROVIDER_TOKEN=\n"
+        "ADMIN_USER_IDS=\n"
+        "DEFAULT_CURRENCY=USD\n"
+    )
+
 
 
 def _emit_readme(spec: BotSpec) -> str:
@@ -1376,6 +1882,19 @@ python main.py
 {chr(10).join(f"- `{f.feature}` via {f.trigger.type}:{f.trigger.id}" for f in spec.features)}
 """
 
+
+
+def _emit_market() -> str:
+    """Copy hardened market services template into generated projects."""
+    path = Path(__file__).resolve().parent / "templates_market.py"
+    body = path.read_text(encoding="utf-8")
+    # Strip module docstring noise is fine; keep full file for generated bot.
+    return body
+
+
+def _emit_generic_runtime() -> str:
+    path = Path(__file__).resolve().parent / "templates_generic.py"
+    return path.read_text(encoding="utf-8")
 
 def generate_files(spec: BotSpec) -> dict[str, str]:
     """Return path → file content for a full project."""
@@ -1408,8 +1927,27 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/tickets.py"] = _emit_tickets()
     if "security" in services:
         files["app/services/security.py"] = _emit_security()
+    market_svcs = {
+        "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate",
+        "payments", "subscriptions", "points", "contests", "cart", "growth", "wallet",
+        "creator", "i18n", "analytics", "forms", "events", "jobs", "marketplace",
+        "restaurant", "support", "admin", "notify", "compliance",
+    }
+    if market_svcs & set(services) or spec.storage.type == "sqlite":
+        files["app/db.py"] = _emit_db(spec)
     if {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"} & set(services):
         files["app/services/extras.py"] = _emit_extras()
+    if {
+        "shop", "payments", "subscriptions", "points", "contests", "cart",
+        "growth", "wallet", "i18n", "creator",
+    } & set(services):
+        files["app/services/market.py"] = _emit_market()
+    # Universal durable executor for remaining capabilities
+    if spec.storage.type == "sqlite" or len(spec.features) > 2:
+        if "app/db.py" not in files or not files.get("app/db.py"):
+            files["app/db.py"] = _emit_db(spec)
+        if files.get("app/db.py"):
+            files["app/services/generic.py"] = _emit_generic_runtime()
     return files
 
 

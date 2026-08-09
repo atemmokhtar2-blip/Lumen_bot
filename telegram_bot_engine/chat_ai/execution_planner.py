@@ -31,7 +31,18 @@ The JSON object MUST have this shape:
   "conversation_states": [{"name":"string","prompt":"string","next_state":"string|null","collects_field":"string|null"}],
   "services": [{"name":"string","responsibility":"string"}],
   "integrations": ["telegram"],
-  "tech":{"database":"sqlite|postgres|none","payments":false,"admin_panel":false,"async_queue":false,"file_handling":false,"state_management":true},
+  "tech":{
+    "database":"sqlite|postgres|none",
+    "payments":false,
+    "subscriptions":false,
+    "points":false,
+    "contests":false,
+    "i18n":false,
+    "admin_panel":false,
+    "async_queue":false,
+    "file_handling":false,
+    "state_management":true
+  },
   "quality":{"high_performance":true,"full_error_handling":true,"concurrent_users":false,"modular_code":true},
   "architecture":{"style":"string","framework":"python-telegram-bot","ptb_version":"21+","layers":["string"],"dependency_injection":false},
   "files":[{"path":"relative/path","purpose":"string","dependencies":["relative/path"],"required":true}],
@@ -39,6 +50,97 @@ The JSON object MUST have this shape:
   "hard_constraints":["string"],
   "unresolved_questions":["string"]
 }
+
+## Global product capabilities (ONLY when the user asked for them)
+These are features of the GENERATED bot for ITS end-users — not for the generator.
+
+### Payments (Telegram Payments / formal checkout)
+When user mentions: payment, pay, مدفوعات, دفع, invoice, checkout, شراء, شراء منتج, stars, telegram stars:
+- tech.payments=true; integrations include "telegram_payments"
+- entities: Product/Order/Payment with amount, currency, status, provider_charge_id, user_id
+- flows: catalog → select item → send invoice (LabeledPrice) → successful_payment handler → fulfill
+- commands: shop / buy / orders / (admin) add_product
+- hard_constraints: use Bot API sendInvoice + PreCheckoutQueryHandler + MessageHandler(filters.SUCCESSFUL_PAYMENT); never fake success; store provider_payment_charge_id
+
+### Subscriptions
+When user mentions: subscription, subscribe, اشتراك, اشتراكات, عضوية, plan, monthly, VIP:
+- tech.subscriptions=true; usually also payments=true unless free tiers only
+- entities: Plan (name, price, duration_days, benefits), Subscription (user_id, plan_id, starts_at, ends_at, status)
+- flows: list plans → subscribe → payment if paid → activate → expire check on sensitive commands
+- commands: plans / subscribe / my_sub / (admin) grant_sub / revoke_sub
+- services: subscription_service (is_active, grant, revoke, expire)
+
+### Points / loyalty
+When user mentions: points, نقاط, رصيد, coins, XP, لوحة متصدرين, leaderboard:
+- tech.points=true; database required
+- entities: PointLedger (user_id, delta, reason, created_at), UserBalance
+- commands: balance / leaderboard / (admin) grant_points / (optional) redeem
+- services: points_service (credit, debit with non-negative guard, rank)
+- never allow negative balance without explicit user request
+
+### Contests / competitions
+When user mentions: contest, مسابقة, مسابقات, giveaway, سحب, raffle, tournament:
+- tech.contests=true
+- entities: Contest (title, rules, ends_at, status), Entry (user_id, contest_id, payload, score)
+- flows: create (admin) → join → submit → close → pick winner(s)
+- commands: contests / join_contest / my_entries / (admin) new_contest / end_contest / draw_winner
+
+### Interface translation / i18n (GLOBAL bots)
+When user wants multi-language UI, global audience, ترجمة واجهة, i18n, bilingual, multi-language:
+- tech.i18n=true; language may be "mixed"
+- plan files must include locales/en.json + locales/ar.json (or i18n.py with dicts)
+- all user-facing strings resolved via t(key, lang); detect from user.language_code; /lang command
+- default language: en for global, ar only if the user text is clearly Arabic-only and no global request
+
+
+### Market vertical packs (when user names a vertical)
+Map user intent to coherent command+entity sets (end-user product, not the generator):
+- commerce_pro / full shop: Product, Cart, Coupon, Order, Payment + shop/cart/checkout/invoice + analytics
+- creator: ContentItem, Unlock, Tip + content_list/unlock + optional subscriptions
+- saas: Plan, Subscription + analytics + webhook + compliance (privacy/terms/export/delete)
+- growth: Referral, Checkin + invite link + daily_checkin + streaks
+- crm: Lead, Deal + pipeline + follow-ups
+- restaurant: Menu, Order + table_book
+- jobs: Job, Application
+- marketplace: Listing
+- education: Course, Lesson, Progress, Certificate
+- community: Profile, Post, ModQueue
+- wallet: Wallet, WalletTxn + topup via payments when paid
+- events: Event, Rsvp
+- fitness / gym: GymSession, membership + optional subscriptions
+- realestate: Property, inquiry
+- clinic: Appointment slots
+- auction: Auction, Bid
+- delivery: Shipment tracking
+Prefer language=en or mixed and tech.i18n=true when the user says global / عالمي / international.
+
+### Intent intelligence
+- Detect multiple domains in one request (shop+points+referral) and plan a single coherent bot, not three separate bots.
+- Prefer one SQLite schema with related entities over duplicated parallel stores.
+- If the user mixes Arabic and English, set language=mixed and tech.i18n=true.
+- Monetization stack order: catalog → cart/checkout → invoice → successful_payment → unlock/fulfill.
+- Growth stack order: referral code on /start deep-link → reward on first successful action → leaderboard.
+- Never invent payment success; gate paid content on verified payment or admin grant only.
+- When the request is vague ("بوت قوي" / "powerful bot"), plan a commerce_pro-like core with i18n rather than an empty shell.
+
+### Combining features
+Shop + subscriptions + points is valid. Payments without real Telegram invoice flow is FORBIDDEN.
+If the user asks for a "global" bot, prefer language=en or mixed and tech.i18n=true.
+
+### Market verticals (expand into a complete product surface when requested)
+- Ecommerce: catalog, search, cart, checkout, coupons, reviews, wishlist, stock, digital delivery, refunds, shipping + payments
+- SaaS/membership: plans, subscribe, owner analytics, roles, webhooks, privacy/terms, export/delete my data
+- Growth: referral codes, invite links, daily check-in, streaks, achievements (optionally + points)
+- CRM: lead capture, pipeline, deals, follow-ups, customer profile
+- Support pro: tickets + priority/assign + knowledge base + CSAT
+- Education: courses, lessons, progress, quiz, homework, certificate
+- Restaurant: menu, order, status, table booking
+- Jobs: list/apply/post
+- Marketplace: listings create/search/contact
+- Community: profiles, feed, posts, likes, mod queue
+- Events: list, RSVP, create, attendees
+- Wallet: balance, top-up via payments, transfer, history
+Commercial/global bots should include /lang, privacy_policy, terms_of_service when business-facing.
 
 Rules:
 - framework MUST be python-telegram-bot with ptb_version 21+ (never legacy Updater API).
@@ -48,9 +150,10 @@ Rules:
 - Preserve every explicit entity field, rule, permission, and integration from the user text.
 - Always include these required files in "files": main.py, requirements.txt, .env.example, README.md
   plus modular modules justified by the architecture (e.g. handlers/, services/, models/, db/).
-- language must reflect the user text (ar if Arabic dominates).
+- language must reflect the user text (ar if Arabic dominates; en/mixed when global/i18n requested).
 - Do not add commands merely because an entity exists. /start and /help may be added as runtime essentials only.
 - Never claim a feature is implemented; this is a plan for a later code-generation stage.
+- When payments/subscriptions/points/contests/i18n or a market vertical is requested, set matching tech flags and include concrete entities, flows, services, and files.
 """
 
 @dataclass
@@ -171,7 +274,15 @@ def plan_to_formal_text(plan: dict[str, Any]) -> str:
     if tech.get("database") and tech.get("database") != "none":
         lines.append(f"قاعدة بيانات {tech.get('database')}")
     if tech.get("payments"):
-        lines.append("تكامل دفع")
+        lines.append("تكامل مدفوعات تيليجرام (لمستخدمي البوت المولَّد)")
+    if tech.get("subscriptions"):
+        lines.append("اشتراكات / خطط عضوية")
+    if tech.get("points"):
+        lines.append("نظام نقاط ولوحة متصدرين")
+    if tech.get("contests"):
+        lines.append("مسابقات / سحوبات")
+    if tech.get("i18n"):
+        lines.append("ترجمة واجهة متعددة اللغات (عالمي)")
     if tech.get("file_handling"):
         lines.append("رفع ملفات")
     return "\n".join(x for x in lines if x.strip())

@@ -89,6 +89,14 @@ class StorageSpec:
 
 
 @dataclass
+class AcceptanceTest:
+    """Manual/automated checklist item for a generated bot vertical."""
+    name: str
+    steps: list[str] = field(default_factory=list)
+    expected: str = ""
+
+
+@dataclass
 class BotSpec:
     """Root specification document — SPEC_SCHEMA_V1."""
     version: str = "1.0"
@@ -99,6 +107,9 @@ class BotSpec:
     storage: StorageSpec = field(default_factory=StorageSpec)
     start_buttons: list[StartButton] = field(default_factory=list)
     hard_constraints: list[str] = field(default_factory=list)
+    # Market-ready extras: QA checklist + demo rows so /start is not empty
+    acceptance_tests: list[AcceptanceTest] = field(default_factory=list)
+    seed_data: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -178,6 +189,24 @@ class BotSpec:
             type=str(st.get("type") or "none"),  # type: ignore[arg-type]
             entities=[str(x) for x in (st.get("entities") or [])],
         )
+        acceptance: list[AcceptanceTest] = []
+        for at in data.get("acceptance_tests") or []:
+            if not isinstance(at, dict) or not at.get("name"):
+                continue
+            acceptance.append(
+                AcceptanceTest(
+                    name=str(at["name"]),
+                    steps=[str(x) for x in (at.get("steps") or [])],
+                    expected=str(at.get("expected") or ""),
+                )
+            )
+        seed_raw = data.get("seed_data") or {}
+        seed: dict[str, list[dict[str, Any]]] = {}
+        if isinstance(seed_raw, dict):
+            for k, rows in seed_raw.items():
+                if isinstance(rows, list):
+                    seed[str(k)] = [dict(r) for r in rows if isinstance(r, dict)]
+
         return BotSpec(
             version=str(data.get("version") or "1.0"),
             bot=bot,
@@ -187,6 +216,8 @@ class BotSpec:
             storage=storage,
             start_buttons=buttons,
             hard_constraints=[str(x) for x in (data.get("hard_constraints") or [])],
+            acceptance_tests=acceptance,
+            seed_data=seed,
         )
 
 
@@ -202,4 +233,5 @@ __all__ = [
     "EntityField",
     "StartButton",
     "StorageSpec",
+    "AcceptanceTest",
 ]

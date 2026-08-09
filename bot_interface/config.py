@@ -25,10 +25,21 @@ ALLOWED_USER_IDS = {
     for x in os.getenv("ALLOWED_USER_IDS", "").split(",")
     if x.strip().isdigit()
 }
-if not ALLOWED_USER_IDS:
+# Safer default: empty ALLOWED_USER_IDS means DENY everyone unless explicitly
+# ALLOW_ALL_USERS=1 (or true/yes/on). Prevents accidental open bots.
+_ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
+ALLOW_ALL_USERS = _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}
+
+if not ALLOWED_USER_IDS and not ALLOW_ALL_USERS:
+    logger.critical(
+        "ALLOWED_USER_IDS is empty and ALLOW_ALL_USERS is not enabled. "
+        "No users will be able to use the bot. "
+        "Set ALLOWED_USER_IDS=123,456 or ALLOW_ALL_USERS=1 (insecure)."
+    )
+elif not ALLOWED_USER_IDS and ALLOW_ALL_USERS:
     logger.warning(
-        "ALLOWED_USER_IDS is empty — the bot will accept messages from ANY Telegram user. "
-        "Set ALLOWED_USER_IDS in production for security."
+        "ALLOW_ALL_USERS=1 — the bot accepts messages from ANY Telegram user. "
+        "This is insecure for production. Prefer ALLOWED_USER_IDS."
     )
 
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))

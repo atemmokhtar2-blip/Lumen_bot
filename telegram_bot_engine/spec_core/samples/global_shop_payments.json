@@ -1,0 +1,104 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "global_shop_bot",
+    "language": "mixed",
+    "description": "Global shop with Telegram Payments invoices and bilingual UI for end-users"
+  },
+  "actors": ["user", "admin"],
+  "storage": {
+    "type": "sqlite",
+    "entities": ["Product", "Order", "Payment"]
+  },
+  "start_buttons": [
+    {"label": "🛒 Shop", "callback_id": "shop.catalog"},
+    {"label": "📦 My orders", "callback_id": "shop.my_orders"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {
+      "id": "start",
+      "feature": "start",
+      "trigger": {"type": "command", "id": "start"},
+      "action": {"service": "core", "method": "start"},
+      "messages": {"success": "Welcome — browse the shop and pay securely via Telegram."}
+    },
+    {
+      "id": "help",
+      "feature": "help",
+      "trigger": {"type": "command", "id": "help"},
+      "action": {"service": "core", "method": "help"}
+    },
+    {
+      "id": "shop_catalog",
+      "feature": "shop_catalog",
+      "trigger": {"type": "command", "id": "shop"},
+      "action": {"service": "shop", "method": "catalog"}
+    },
+    {
+      "id": "shop_catalog_cb",
+      "feature": "shop_catalog",
+      "trigger": {"type": "callback", "id": "shop.catalog"},
+      "action": {"service": "shop", "method": "catalog"}
+    },
+    {
+      "id": "shop_buy",
+      "feature": "shop_buy",
+      "trigger": {"type": "command", "id": "buy"},
+      "action": {"service": "shop", "method": "send_invoice"},
+      "messages": {
+        "prompt": "Send product id to buy",
+        "success": "Invoice sent — complete payment in Telegram",
+        "failure": "Could not create invoice"
+      }
+    },
+    {
+      "id": "shop_my_orders",
+      "feature": "shop_my_orders",
+      "trigger": {"type": "command", "id": "myorders"},
+      "action": {"service": "shop", "method": "my_orders"}
+    },
+    {
+      "id": "shop_add_item",
+      "feature": "shop_add_item",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "addproduct"},
+      "action": {"service": "shop", "method": "add_item"}
+    },
+    {
+      "id": "shop_orders",
+      "feature": "shop_orders",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "orders"},
+      "action": {"service": "shop", "method": "list_orders"}
+    },
+    {
+      "id": "payment_precheckout",
+      "feature": "payment_precheckout",
+      "trigger": {"type": "message", "id": "pre_checkout"},
+      "action": {"service": "payments", "method": "pre_checkout"}
+    },
+    {
+      "id": "payment_success",
+      "feature": "payment_success",
+      "trigger": {"type": "message", "id": "successful_payment"},
+      "action": {"service": "payments", "method": "successful_payment"}
+    },
+    {
+      "id": "lang",
+      "feature": "lang",
+      "trigger": {"type": "command", "id": "lang"},
+      "action": {"service": "i18n", "method": "set_language"}
+    }
+  ],
+  "tech": {
+    "database": "sqlite",
+    "payments": true,
+    "i18n": true
+  },
+  "hard_constraints": [
+    "Use Telegram sendInvoice + PreCheckoutQuery + successful_payment only",
+    "Never mark order paid without successful_payment",
+    "PAYMENT_PROVIDER_TOKEN from env"
+  ]
+}

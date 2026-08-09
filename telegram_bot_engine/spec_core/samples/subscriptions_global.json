@@ -1,0 +1,111 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "subscription_bot",
+    "language": "mixed",
+    "description": "End-user subscription plans (free/paid), status checks, admin grant/revoke, bilingual UI"
+  },
+  "actors": ["user", "admin"],
+  "storage": {
+    "type": "sqlite",
+    "entities": ["Plan", "Subscription", "Payment"]
+  },
+  "start_buttons": [
+    {"label": "⭐ Plans", "callback_id": "sub.plans"},
+    {"label": "📋 My plan", "callback_id": "sub.mine"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {
+      "id": "start",
+      "feature": "start",
+      "trigger": {"type": "command", "id": "start"},
+      "action": {"service": "core", "method": "start"},
+      "messages": {"success": "Choose a plan to unlock features."}
+    },
+    {
+      "id": "help",
+      "feature": "help",
+      "trigger": {"type": "command", "id": "help"},
+      "action": {"service": "core", "method": "help"}
+    },
+    {
+      "id": "plans",
+      "feature": "plans",
+      "trigger": {"type": "command", "id": "plans"},
+      "action": {"service": "subscriptions", "method": "list_plans"}
+    },
+    {
+      "id": "plans_cb",
+      "feature": "plans",
+      "trigger": {"type": "callback", "id": "sub.plans"},
+      "action": {"service": "subscriptions", "method": "list_plans"}
+    },
+    {
+      "id": "subscribe",
+      "feature": "subscribe",
+      "trigger": {"type": "command", "id": "subscribe"},
+      "action": {"service": "subscriptions", "method": "subscribe"},
+      "messages": {
+        "prompt": "Send plan id",
+        "success": "Subscription activated",
+        "failure": "Could not subscribe"
+      }
+    },
+    {
+      "id": "my_sub",
+      "feature": "my_sub",
+      "trigger": {"type": "command", "id": "mysub"},
+      "action": {"service": "subscriptions", "method": "my_subscription"}
+    },
+    {
+      "id": "my_sub_cb",
+      "feature": "my_sub",
+      "trigger": {"type": "callback", "id": "sub.mine"},
+      "action": {"service": "subscriptions", "method": "my_subscription"}
+    },
+    {
+      "id": "grant_sub",
+      "feature": "grant_sub",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "grantsub"},
+      "action": {"service": "subscriptions", "method": "grant"}
+    },
+    {
+      "id": "revoke_sub",
+      "feature": "revoke_sub",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "revokesub"},
+      "action": {"service": "subscriptions", "method": "revoke"}
+    },
+    {
+      "id": "payment_precheckout",
+      "feature": "payment_precheckout",
+      "trigger": {"type": "message", "id": "pre_checkout"},
+      "action": {"service": "payments", "method": "pre_checkout"}
+    },
+    {
+      "id": "payment_success",
+      "feature": "payment_success",
+      "trigger": {"type": "message", "id": "successful_payment"},
+      "action": {"service": "payments", "method": "successful_payment"}
+    },
+    {
+      "id": "lang",
+      "feature": "lang",
+      "trigger": {"type": "command", "id": "lang"},
+      "action": {"service": "i18n", "method": "set_language"}
+    }
+  ],
+  "tech": {
+    "database": "sqlite",
+    "payments": true,
+    "subscriptions": true,
+    "i18n": true
+  },
+  "hard_constraints": [
+    "Gate premium commands with is_active(user_id)",
+    "Paid plans require successful_payment before activation",
+    "Expire subscriptions by ends_at"
+  ]
+}

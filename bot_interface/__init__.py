@@ -3,6 +3,7 @@
 from .config import (
     TELEGRAM_BOT_TOKEN,
     ALLOWED_USER_IDS,
+    ALLOW_ALL_USERS,
     OUTPUT_DIR,
     PORT,
     logger,
@@ -18,14 +19,16 @@ from .helpers import (
     run_generation,
 )
 from .live import handle_live_run_token, handle_live_deploy_token
-from .commands import start_cmd, help_cmd, status_cmd
+from .commands import start_cmd, help_cmd, status_cmd, lang_cmd
 from .messages import handle_message
 from .health import start_health_server
 from .errors import error_handler
+from .i18n import t, get_lang, set_lang
 
 __all__ = [
     "TELEGRAM_BOT_TOKEN",
     "ALLOWED_USER_IDS",
+    "ALLOW_ALL_USERS",
     "OUTPUT_DIR",
     "PORT",
     "logger",
@@ -42,7 +45,11 @@ __all__ = [
     "start_cmd",
     "help_cmd",
     "status_cmd",
+    "lang_cmd",
     "handle_message",
     "start_health_server",
     "error_handler",
+    "t",
+    "get_lang",
+    "set_lang",
 ]

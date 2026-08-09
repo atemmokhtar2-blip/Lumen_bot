@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import tempfile
+import time
+from collections import defaultdict
 from pathlib import Path
 
 from telegram import Update
@@ -24,6 +27,23 @@ from .helpers import (
 )
 from .live import handle_live_run_token, handle_live_deploy_token
 
+# Simple in-memory rate limit: max N messages per user per window (seconds).
+# Prevents cost abuse of AI providers. Single-process only.
+_RATE_WINDOW = 60.0
+_RATE_MAX = int(os.environ.get("RATE_LIMIT_PER_MINUTE") or "12")
+_user_hits: dict[int, list[float]] = defaultdict(list)
+
+
+def _rate_limit_ok(user_id: int) -> bool:
+    now = time.monotonic()
+    hits = _user_hits[user_id]
+    while hits and now - hits[0] > _RATE_WINDOW:
+        hits.pop(0)
+    if len(hits) >= _RATE_MAX:
+        return False
+    hits.append(now)
+    return True
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -33,6 +53,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not is_allowed(user.id if user else None):
         await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
+        return
+
+    uid_check = int(user.id) if user else 0
+    if not _rate_limit_ok(uid_check):
+        await message.reply_text(
+            "⏳ تجاوزت الحد المسموح من الطلبات. انتظر دقيقة ثم حاول مرة أخرى."
+        )
         return
 
     request = message.text.strip()
@@ -857,7 +884,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop("pending_spec", None)
 
     status_msg = await message.reply_text(
-        "⏳ جاري ترجمة الوصف وتوليد المشروع (Hugging Face + Formal Engine)..."
+        "⏳ جاري ترجمة الوصف وتوليد المشروع (Execution Planner + Codegen)..."
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 

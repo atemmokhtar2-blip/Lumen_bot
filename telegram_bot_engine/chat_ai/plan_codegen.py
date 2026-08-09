@@ -30,7 +30,11 @@ The execution plan is the ONLY source of truth. Return ONE JSON object only:
    - requirements.txt with python-telegram-bot>=21.0,<22 and python-dotenv>=1.0.0 (no stdlib packages like sqlite3)
    - .env.example containing TELEGRAM_BOT_TOKEN=
    - README.md with install + run steps
-3) Language: all user-facing strings MUST match the plan language (Arabic if commands/summary/buttons are Arabic).
+3) Language / i18n:
+   - If tech.i18n is true OR language is mixed: ship locales (locales/en.json + locales/ar.json)
+     or an i18n.py helper with t(key, lang); detect lang from user.language_code; add /lang.
+   - Otherwise all user-facing strings MUST match the plan language (Arabic if ar dominates).
+   - Global bots default user-facing copy to English unless the plan language is ar-only.
 4) No placeholders: forbid TODO, FIXME, NotImplementedError, ellipsis-only bodies, "not implemented", "coming soon", "Feature not implemented", fake success.
 5) Callbacks: every InlineKeyboardButton must be handled by CallbackQueryHandler.
    Always use update.effective_message and update.effective_user (message may be None on callbacks).
@@ -40,7 +44,37 @@ The execution plan is the ONLY source of truth. Return ONE JSON object only:
    Validate enums (e.g. priority high/medium/low) before save.
 8) Architecture: follow planned modules (handlers/services/models/repositories). Imports must match paths.
 9) Every required path from the plan must be present with complete content. Every .py file must parse.
-10) Secrets only from environment variables.
+10) Secrets only from environment variables (.env.example must list every required key).
+
+## Product features for the GENERATED bot's end-users (when plan.tech flags are set)
+
+### Payments (tech.payments)
+- Use Telegram Payments: context.bot.send_invoice with LabeledPrice, currency, payload.
+- Register PreCheckoutQueryHandler that answers pre_checkout_query (validate amount/payload).
+- Handle successful_payment (filters.SUCCESSFUL_PAYMENT): mark order paid, store
+  telegram_payment_charge_id / provider_payment_charge_id, fulfill (deliver digital goods / activate sub).
+- NEVER mark paid without successful_payment. NEVER hardcode card numbers.
+- .env.example may include PAYMENT_PROVIDER_TOKEN= (BotFather payments provider token).
+
+### Subscriptions (tech.subscriptions)
+- Table/model for plans + user subscriptions with starts_at/ends_at/status.
+- is_active(user_id) checked before gated commands; clear expired message.
+- Paid plans go through the payments flow; free plans activate immediately.
+- Admin commands to grant/revoke.
+
+### Points (tech.points)
+- Ledger table (user_id, delta, reason, created_at) + balance query.
+- credit/debit helpers; debit refuses if balance would go negative.
+- /balance and /leaderboard (top N). Admin grant_points.
+
+### Contests (tech.contests)
+- Contest + Entry models; join once per user unless plan allows multi-entry.
+- Admin: create, close, draw_winner (deterministic from entries; document method).
+- User: list open contests, join, my entries.
+
+### i18n (tech.i18n)
+- Central t() for every reply_text/edit_text string shown to users.
+- /lang en|ar persists preference in context.user_data or DB.
 
 Implement every command, button, flow, entity field, and service from the plan completely.
 """

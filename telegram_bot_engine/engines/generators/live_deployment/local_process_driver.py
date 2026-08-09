@@ -29,6 +29,34 @@ _log = logging.getLogger("engine.live_deployment.local_process")
 _RUNNING: Dict[str, dict] = {}
 
 
+def _apply_resource_limits() -> None:
+    """Apply conservative resource limits to the child process (best-effort).
+
+    This is NOT a full sandbox (no seccomp/network isolation), but reduces
+    damage from runaway or malicious generated code: CPU time, memory,
+    open files, and process count.
+    """
+    try:
+        import resource
+        # Soft/hard limits
+        # CPU: 10 minutes
+        resource.setrlimit(resource.RLIMIT_CPU, (600, 600))
+        # Address space ~512 MiB (may be ignored on some platforms)
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+        except (ValueError, OSError):
+            pass
+        # Open files
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        # Max processes / threads
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+        except (ValueError, OSError):
+            pass
+    except Exception as exc:
+        _log.debug("resource limits not applied: %s", exc)
+
+
 def _find_entry_point(project_path: Path) -> Optional[Path]:
     for name in ("main.py", "bot.py", "app.py", "run.py"):
         p = project_path / name
@@ -136,6 +164,7 @@ class LocalProcessDriver(DeploymentProvider):
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                preexec_fn=_apply_resource_limits,
             )
         except Exception as e:
             return DeploymentStatus(
@@ -405,6 +434,7 @@ class LocalProcessDriver(DeploymentProvider):
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                preexec_fn=_apply_resource_limits,
             )
             time.sleep(2.5)
             rc = proc.poll()

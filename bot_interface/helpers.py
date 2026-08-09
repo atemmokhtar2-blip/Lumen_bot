@@ -9,13 +9,19 @@ from pathlib import Path
 
 from telegram.constants import ParseMode
 
-from .config import ALLOWED_USER_IDS, logger
+from .config import ALLOWED_USER_IDS, ALLOW_ALL_USERS, logger
 
 
 def is_allowed(user_id: int | None) -> bool:
-    if not ALLOWED_USER_IDS:
-        return True
-    return user_id is not None and user_id in ALLOWED_USER_IDS
+    """Return True only if the user is permitted.
+
+    - If ALLOWED_USER_IDS is non-empty → only those IDs.
+    - If empty and ALLOW_ALL_USERS=1 → everyone (insecure, explicit opt-in).
+    - If empty and ALLOW_ALL_USERS not set → nobody (safe default).
+    """
+    if ALLOWED_USER_IDS:
+        return user_id is not None and user_id in ALLOWED_USER_IDS
+    return bool(ALLOW_ALL_USERS)
 
 
 def chat_route(text: str):
