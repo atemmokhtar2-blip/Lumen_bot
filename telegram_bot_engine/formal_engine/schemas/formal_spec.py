@@ -18,15 +18,7 @@ class StrictModel(BaseModel):
 
 
 class BotType(str, Enum):
-    UTILITY = "utility"
-    ECOMMERCE = "ecommerce"
-    ADMIN = "admin"
-    COMMUNITY = "community"
-    TICKETING = "ticketing"
-    GAME = "game"
-    ASSISTANT = "assistant"
-    DOCUMENT = "document"
-    NOTIFICATION = "notification"
+    """Single runtime type — no domain taxonomy / packs."""
     CUSTOM = "custom"
 
 

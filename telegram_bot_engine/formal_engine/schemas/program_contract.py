@@ -32,19 +32,8 @@ class StrictModel(BaseModel):
 
 
 class BotKind(str, Enum):
-    """Legacy labels retained for schema compat. Runtime must use CUSTOM only — no domain packs."""
+    """Single runtime kind — no domain taxonomy / packs."""
     CUSTOM = "custom"
-    UTILITY = "utility"
-    ADMIN = "admin"
-    COMMUNITY = "community"
-    ASSISTANT = "assistant"
-    DOCUMENT = "document"
-    NOTIFICATION = "notification"
-    # Deprecated aliases (do not select as domain templates):
-    ECOMMERCE = "ecommerce"
-    TICKETING = "ticketing"
-    GAME = "game"
-    BOOKING = "booking"
 
 
 class HandlerKind(str, Enum):

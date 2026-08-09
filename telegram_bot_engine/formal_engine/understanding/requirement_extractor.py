@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 from ..ontology.architecture_rules import apply_architecture_rules
-from ..ontology.data_models_kb import ENTITY_LIBRARY, resolve_data_models
+from ..ontology.data_models_kb import resolve_data_models
 from ..ontology.knowledge_base import (
     extract_feature_tags,
 )
@@ -277,15 +277,9 @@ def _extract_buttons_from_text(text: str) -> list[dict]:
 
 
 def _map_type(archetype: str) -> BotType:
-    return {
-        "ecommerce": BotType.ECOMMERCE,
-        "ticketing": BotType.TICKETING,
-        "admin": BotType.ADMIN,
-        "assistant": BotType.ASSISTANT,
-        "document": BotType.DOCUMENT,
-        "notification": BotType.NOTIFICATION,
-        "game": BotType.GAME,
-    }.get(archetype, BotType.CUSTOM)
+    """Always CUSTOM — domain archetypes removed."""
+    _ = archetype
+    return BotType.CUSTOM
 
 
 
