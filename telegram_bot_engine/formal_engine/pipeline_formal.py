@@ -103,6 +103,7 @@ def build_structure_only(
     program = extract_dsl(text)
     program, grounding = apply_grounding_gate(program, gate_src)
     inf = infer(program)
+    inf.source_text = text
     plan = derive_structure_plan(inf, bot_name=getattr(program, "bot_name", "") or "")
     structure_files = materialize_structure(plan, out_dir, overwrite=True)
     gate = validate_structure_gate(plan, out_dir=out_dir, require_materialized=True)
@@ -144,6 +145,7 @@ def build_from_text(
     program = extract_dsl(text)
     program, grounding = apply_grounding_gate(program, gate_src)
     inf = infer(program)
+    inf.source_text = text
 
     plan = derive_structure_plan(inf, bot_name=getattr(program, "bot_name", "") or "")
     root = Path(out_dir)

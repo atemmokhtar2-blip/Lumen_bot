@@ -59,6 +59,7 @@ class InferenceResult:
     wants_files: bool = False
     defensive_tools: list[str] = field(default_factory=list)
     dynamic_tools: list[dict] = field(default_factory=list)
+    source_text: str = ""
 
 
 def _col_type(name: str, hinted: str | None = None) -> str:
