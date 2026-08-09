@@ -755,6 +755,64 @@ def _phrase_evidenced(phrase: str, text_n: str, raw: str) -> bool:
     return False
 
 
+
+def _extract_commands_from_user_text(user_text: str) -> list[dict]:
+    """Pull /command lines from the human text only — no invented domain packs."""
+    found: list[dict] = []
+    seen: set[str] = set()
+    raw = user_text or ""
+    # /name - description   OR   /name: description   OR   /name description
+    for m in re.finditer(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*(?:[-–—:]\s*|\s+)([^\n]{0,120})",
+        raw,
+    ):
+        name = _normalize_cmd_name(m.group(1))
+        if not name or name in seen:
+            continue
+        if not _valid_cmd_name(name) and name not in ("start", "help"):
+            continue
+        desc = (m.group(2) or "").strip().strip("-–—:")
+        seen.add(name)
+        found.append({"name": name, "description": desc[:100] or name, "admin_only": False})
+    # bare /name tokens anywhere
+    for m in re.finditer(r"/([a-zA-Z][a-zA-Z0-9_]{0,32})\b", raw):
+        name = _normalize_cmd_name(m.group(1))
+        if not name or name in seen:
+            continue
+        if not _valid_cmd_name(name) and name not in ("start", "help"):
+            continue
+        seen.add(name)
+        found.append({"name": name, "description": name, "admin_only": False})
+    return found
+
+
+def _extract_buttons_from_user_text(user_text: str) -> list[dict]:
+    """Button labels only from explicit user sections / patterns."""
+    labels = _extract_button_labels(user_text or "")
+    return [{"label": lab[:48]} for lab in labels]
+
+
+def _extract_entities_from_user_text(user_text: str) -> list[dict]:
+    """Entity lines like: Name (field1, field2) from user text only."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in re.finditer(
+        r"(?m)^\s*([A-Za-z][A-Za-z0-9_]{1,40})\s*\(([^\)]{1,200})\)\s*$",
+        user_text or "",
+    ):
+        en = m.group(1).strip()
+        if en.lower() in seen:
+            continue
+        fields = [f.strip() for f in re.split(r"[,،]", m.group(2)) if f.strip()]
+        fields = [re.sub(r"[^a-zA-Z0-9_]", "", f) for f in fields]
+        fields = [f for f in fields if f]
+        if not fields:
+            continue
+        seen.add(en.lower())
+        out.append({"name": en, "fields": fields[:16]})
+    return out
+
+
 def _ground_spec_to_user_text(data: dict, user_text: str) -> dict:
     """Drop every AI field not evidenced in the original user text. Never invent.
 
@@ -1038,11 +1096,11 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
 
 
 _BLOCKED_CMD_NAMES = frozenset({
+    # Noise / protocol / non-command tokens only — never block real bot verbs
     "ssl", "tls", "example", "information", "com", "http", "https", "www",
-    "order", "pin", "records", "status", "certificate", "headers",
+    "certificate", "headers", "pin", "records",
     "await", "async", "def", "class", "import", "from", "return", "true", "false", "none",
-    "user", "users", "group", "groups", "channel", "history", "fully", "the", "and", "or",
-    "get", "set", "view", "open", "show", "list", "new", "old", "all", "with",
+    "the", "and", "or", "with", "fully",
     "بالكامل", "command", "commands",
 })
 
@@ -1347,6 +1405,23 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
             or str(c.get("name") or "") in ("start", "help")
         )
     ]
+
+    # Recovery from user text itself (not templates): if AI grounding wiped signals,
+    # rehydrate commands/buttons/entities that the human literally wrote.
+    if not grounded.get("commands"):
+        grounded["commands"] = _extract_commands_from_user_text(text)
+    else:
+        seen = {str(c.get("name") or "") for c in grounded["commands"] if isinstance(c, dict)}
+        for c in _extract_commands_from_user_text(text):
+            n = str(c.get("name") or "")
+            if n and n not in seen:
+                grounded["commands"].append(c)
+                seen.add(n)
+    if not grounded.get("buttons"):
+        grounded["buttons"] = _extract_buttons_from_user_text(text)
+    if not grounded.get("entities"):
+        grounded["entities"] = _extract_entities_from_user_text(text)
+
     grounded = _promote_flows_and_buttons(grounded, text)
 
     structured = _spec_to_sectioned_text(grounded, text)
@@ -1354,7 +1429,22 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         c for c in (grounded.get("commands") or [])
         if isinstance(c, dict) and c.get("name") not in ("start", "help")
     ]
-    ok = bool(meaningful or grounded.get("buttons") or grounded.get("flows") or grounded.get("tools"))
+    ok = bool(
+        meaningful
+        or grounded.get("buttons")
+        or grounded.get("flows")
+        or grounded.get("tools")
+        or grounded.get("entities")
+    )
+
+    # Last resort: user wrote a free-form description — pass original text through
+    # so formal DSL extractor can still work. Still no invented domain packs.
+    if not ok and (text or "").strip():
+        structured = text.strip()
+        ok = True
+        path_fallback = (ai_result.path or "ai") + "+user_text"
+    else:
+        path_fallback = ai_result.path or "ai"
 
     return TranslatorResult(
         ok=ok,
@@ -1362,7 +1452,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         grounded_json=grounded,
         model_used=ai_result.model_used or "ai",
         elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-        path=ai_result.path or "ai",
+        path=path_fallback,
         error="" if ok else "ai_no_grounded_signal",
         needs_clarification=False,
         clarification_questions=[],
