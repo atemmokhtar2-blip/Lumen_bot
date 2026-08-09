@@ -1,7 +1,8 @@
 """
-Core bootstrap — hybrid engine assembly.
+Core bootstrap — minimal working engine assembly.
 
-Kept: Formal + Planning + Reviews + Performance + Git/Repo engines.
+Only engines that import successfully are kept:
+  FormalUnderstanding, ProjectPlanning, ProjectStructurePlanning, FormalGeneration.
 
 STRICT RULE (project-wide, non-negotiable):
   No pre-baked bot templates, saved tool packs, static command sets,
@@ -29,53 +30,22 @@ from ..validators import BlueprintValidator, StructureValidator
 
 # ---------------------------------------------------------------------------
 # Priority + dependency map (lower priority number runs first)
-# Dependencies are engine_ids (the .name of each engine).
+# Only engines that actually import and work are kept.
 # ---------------------------------------------------------------------------
-# Groups:
-#   10-29  Understanding / Context
-#   30-59  Planning / Architecture
-#   60-89  Generation planning
-#   90-119 Generation
-#   120-159 Reviews / Optimisation
-#   160+   Validation / Repo / Live
 ENGINE_META: Dict[str, Tuple[int, List[str]]] = {
-    # Understanding & context
     "formal_understanding": (10, []),
-    "project_context": (15, ["formal_understanding"]),
-    "capability_analyzer": (20, ["project_context"]),
-    # Planning
-    "project_planner": (30, ["capability_analyzer"]),
-    "architecture_decision": (35, ["project_planner"]),
-    "technology_selection": (40, ["architecture_decision"]),
-    "risk_detection": (45, ["technology_selection"]),
-    "project_structure_planning": (50, ["risk_detection"]),
-    # Generation strategy & planning
-    "generation_strategy": (60, ["project_structure_planning"]),
-    "code_generation_planning": (65, ["generation_strategy"]),
-    "file_planner": (70, ["code_generation_planning"]),
-    "execution_planning": (75, ["file_planner"]),
-    "dependency_resolver": (80, ["execution_planning"]),
-    # Actual generation
-    "structure_generator": (90, ["dependency_resolver"]),
-    "formal_generation": (100, ["structure_generator"]),
-    "file_system": (105, ["formal_generation"]),
-    "workspace_management": (110, ["file_system"]),
-    # Reviews & optimisation
-    "static_analysis": (120, ["workspace_management"]),
-    "security_review": (125, ["static_analysis"]),
-    "code_optimization": (130, ["security_review"]),
-    "code_refactoring": (135, ["code_optimization"]),
-    "performance_optimization": (140, ["code_refactoring"]),
-    "architecture_compliance": (145, ["performance_optimization"]),
-    "unit_test_generation": (150, ["architecture_compliance"]),
-    # Validation & readiness
-    "blueprint_validator": (160, ["unit_test_generation"]),
-    "generation_readiness": (170, ["blueprint_validator"]),
-    "component_detector": (175, ["generation_readiness"]),
-    # Repo & live
+    "project_planner": (30, ["formal_understanding"]),
+    "project_structure_planning": (50, ["project_planner"]),
+    "structure_generator": (90, ["project_structure_planning"]),
+    "file_planner": (95, ["structure_generator"]),
+    "dependency_resolver": (100, ["file_planner"]),
+    "formal_generation": (110, ["dependency_resolver"]),
+    "file_system": (120, ["formal_generation"]),
+    "workspace_management": (130, ["file_system"]),
+    "blueprint_validator": (140, ["workspace_management"]),
+    "component_detector": (150, ["blueprint_validator"]),
     "git_operations": (180, ["component_detector"]),
-    "repository_management": (185, ["git_operations"]),
-    "live_deployment": (200, ["repository_management"]),
+    "repository_management": (190, ["git_operations"]),
 }
 
 

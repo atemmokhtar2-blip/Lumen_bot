@@ -7,7 +7,13 @@ from .errors import (
     EngineError, EngineExecutionError, BuilderError,
     ValidationError, PipelineError, ConfigurationError,
 )
-from .bootstrap import bootstrap, build_configuration
+
+# Lazy import to avoid circular dependency with registry / engines
+def __getattr__(name: str):
+    if name in ("bootstrap", "build_configuration"):
+        from .bootstrap import bootstrap, build_configuration
+        return {"bootstrap": bootstrap, "build_configuration": build_configuration}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "GenerationContext", "GenerationResult", "StageResult", "Severity",

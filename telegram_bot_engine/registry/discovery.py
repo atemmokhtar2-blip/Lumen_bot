@@ -1,9 +1,7 @@
 """
 Auto-discovery of real generation engines.
 
-Registers the concrete engine implementations (not stubs).
-Priority and dependency metadata are applied later by the manager
-in bootstrap (or by the caller of register).
+Only working engines are kept (formal core + git/push-pull chain + required supports).
 
 STRICT RULE (enforced project-wide, non-negotiable):
   No pre-baked bot templates, saved tool packs, static command sets,
@@ -20,73 +18,36 @@ from typing import List, Type
 from .registry import EngineRegistry
 from ..core.contracts import Engine
 from ..engines.generators import (
-    ArchitectureComplianceEngine,
-    ArchitectureDecisionEngine,
-    BlueprintValidatorEngine,
-    CodeGenerationPlanningEngine,
-    CodeOptimizationEngine,
-    CodeRefactoringEngine,
-    ComponentDetectionEngine,
-    DependencyResolutionEngine,
-    ExecutionPlanningEngine,
-    FileGenerationPlanningEngine,
-    FileSystemEngine,
-    FormalGenerationEngine,
     FormalUnderstandingEngine,
-    GenerationReadinessEngine,
-    GenerationStrategyEngine,
-    GitOperationsEngine,
-    LiveDeploymentEngine,
-    PerformanceOptimizationEngine,
-    ProjectCapabilityAnalyzerEngine,
-    ProjectContextEngine,
+    FormalGenerationEngine,
     ProjectPlanningEngine,
     ProjectStructurePlanningEngine,
-    RepositoryManagementEngine,
-    RiskDetectionEngine,
-    SecurityReviewEngine,
-    StaticAnalysisEngine,
-    StructureGenerationEngine,
-    TechnologySelectionEngine,
-    UnitTestGenerationEngine,
     WorkspaceManagementEngine,
+    FileSystemEngine,
+    DependencyResolutionEngine,
+    RepositoryManagementEngine,
+    GitOperationsEngine,
+    BlueprintValidatorEngine,
+    ComponentDetectionEngine,
+    FileGenerationPlanningEngine,
+    StructureGenerationEngine,
 )
 
 
-# Canonical ordered list of real engine classes.
-# Order here is documentation only; actual execution order is controlled
-# by priority + dependencies passed to CoreEngineManager.register().
 ENGINE_CLASSES: List[Type[Engine]] = [
     FormalUnderstandingEngine,
-    ProjectContextEngine,
-    ProjectCapabilityAnalyzerEngine,
     ProjectPlanningEngine,
-    ArchitectureDecisionEngine,
-    TechnologySelectionEngine,
-    RiskDetectionEngine,
     ProjectStructurePlanningEngine,
-    GenerationStrategyEngine,
-    CodeGenerationPlanningEngine,
-    FileGenerationPlanningEngine,
-    ExecutionPlanningEngine,
-    DependencyResolutionEngine,
     StructureGenerationEngine,
+    FileGenerationPlanningEngine,
+    DependencyResolutionEngine,
     FormalGenerationEngine,
     FileSystemEngine,
     WorkspaceManagementEngine,
-    StaticAnalysisEngine,
-    SecurityReviewEngine,
-    CodeOptimizationEngine,
-    CodeRefactoringEngine,
-    PerformanceOptimizationEngine,
-    ArchitectureComplianceEngine,
-    UnitTestGenerationEngine,
     BlueprintValidatorEngine,
-    GenerationReadinessEngine,
     ComponentDetectionEngine,
     GitOperationsEngine,
     RepositoryManagementEngine,
-    LiveDeploymentEngine,
 ]
 
 
