@@ -184,6 +184,7 @@ def is_sub_active(user_id: int) -> bool:
 
 def grant_sub(user_id: int, plan_id: int) -> bool:
     ensure()
+    list_plans()  # ensure default Free/Pro plans exist
     with connect() as conn:
         plan = conn.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
         if not plan:

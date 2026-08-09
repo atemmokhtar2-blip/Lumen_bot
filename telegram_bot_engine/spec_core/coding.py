@@ -928,9 +928,13 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     if method in {"catalog", "list_content", "flash_list", "search", "product_info", "recommend"}:
         L.append("    await message.reply_text(market_svc.catalog())")
     elif method in {"add_item", "upload", "stock_set"}:
-        need_args(1)
-        L.append("    pid = market_svc.add_item(user.id, ' '.join(context.args))")
-        L.append(f"    await message.reply_text({ok!r} + f' #{{pid}}')")
+        L += [
+            "    if not context.args:",
+            "        await message.reply_text('Usage: /addproduct Title|price_cents  e.g. Book|999')",
+            "        return",
+            "    pid = market_svc.add_item(user.id, ' '.join(context.args))",
+            "    await message.reply_text(f'Product added #{pid}')",
+        ]
     elif method == "checkout" and svc == "cart":
         L.append("    await message.reply_text(market_svc.cart_checkout(user.id))")
     elif method in {"place_order", "send_invoice", "checkout", "buy"}:
@@ -974,15 +978,17 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    )",
         ]
     elif method in {"cancel_order"}:
-        need_args(1)
         L += [
+            "    if not context.args:",
+            "        await message.reply_text('Usage: /ordercancel <order_id>')",
+            "        return",
             "    try:",
             "        oid = int(context.args[0])",
             "    except ValueError:",
-            f"        await message.reply_text({fail!r})",
+            "        await message.reply_text('order_id must be a number')",
             "        return",
             "    ok_c = market_svc.cancel_order(user.id, oid)",
-            f"    await message.reply_text({ok!r} if ok_c else 'Cannot cancel — not found or not pending')",
+            "    await message.reply_text(f'Order #{oid} cancelled' if ok_c else f'Cannot cancel #{oid} — not found or not pending')",
         ]
     elif method in {"track_order"}:
         need_args(1)
@@ -1127,7 +1133,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             L.append("        await message.reply_text('plan_id must be a number — try /plans')")
             L.append("        return")
             L.append("    ok_g = market_svc.grant_sub(target, plan_id)")
-            L.append(f"    await message.reply_text(({ok!r} + f' plan={{plan_id}}') if ok_g else {fail!r})")
+            L.append("    await message.reply_text((f'Subscription granted plan={plan_id}') if ok_g else 'Plan not found — try /plans')")
     elif method == "revoke" and svc == "subscriptions":
         need_args(1)
         L += [
