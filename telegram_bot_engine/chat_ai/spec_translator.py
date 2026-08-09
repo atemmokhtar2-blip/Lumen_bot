@@ -813,6 +813,53 @@ def _extract_entities_from_user_text(user_text: str) -> list[dict]:
     return out
 
 
+
+def _prefer_user_command_descriptions(data: dict, user_text: str) -> dict:
+    """If the human wrote a richer /cmd description, keep it (no domain templates)."""
+    import re as _re
+    if not isinstance(data, dict):
+        return {"commands": [], "buttons": [], "entities": [], "flows": [], "rules": [], "relations": [], "tools": []}
+    out = dict(data)
+    cmds = list(out.get("commands") or [])
+    user_desc: dict[str, str] = {}
+    for m in _re.finditer(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*(?:[-–—:]\s*|\s+)([^\n]{1,160})",
+        user_text or "",
+    ):
+        user_desc[m.group(1).lower()] = m.group(2).strip()
+    new_cmds = []
+    for c in cmds:
+        if not isinstance(c, dict):
+            continue
+        c = dict(c)
+        name = _normalize_cmd_name(str(c.get("name") or ""))
+        if not name:
+            new_cmds.append(c)
+            continue
+        c["name"] = name
+        human = user_desc.get(name, "")
+        ai_desc = str(c.get("description") or "").strip()
+        if human and (
+            len(human) > len(ai_desc) + 2
+            or any(x in human for x in ("(", "يجمع", "اجمع", "يطلب", "،"))
+        ):
+            c["description"] = human[:160]
+        elif not ai_desc and human:
+            c["description"] = human[:160]
+        new_cmds.append(c)
+    have = {str(c.get("name") or "").lower() for c in new_cmds if isinstance(c, dict)}
+    for name, desc in user_desc.items():
+        n = _normalize_cmd_name(name)
+        if not n or n in have:
+            continue
+        if not _valid_cmd_name(n) and n not in ("start", "help"):
+            continue
+        new_cmds.append({"name": n, "description": desc[:160], "admin_only": False})
+        have.add(n)
+    out["commands"] = new_cmds
+    return out
+
+
 def _ground_spec_to_user_text(data: dict, user_text: str) -> dict:
     """Drop every AI field not evidenced in the original user text. Never invent.
 
@@ -892,9 +939,19 @@ def _ground_spec_to_user_text(data: dict, user_text: str) -> dict:
                 fs = str(f).strip()
                 if not fs:
                     continue
-                # field must appear in text or be structural id
-                if fs.lower() in ("id",) or _token_evidenced(fs, text_n, raw) or _phrase_evidenced(fs, text_n, raw):
-                    fields.append(re.sub(r"[^a-zA-Z0-9_]", "", fs)[:32])
+                fs_clean = re.sub(r"[^a-zA-Z0-9_]", "", fs)[:32]
+                if not fs_clean:
+                    continue
+                # Entity already evidenced → keep identifier fields (AI maps Arabic labels)
+                if fs_clean.lower() in {"id", "user_id"} or re.match(r"^[a-zA-Z][a-zA-Z0-9_]{0,31}$", fs_clean):
+                    fields.append(fs_clean)
+        if not fields:
+            m_ent = re.search(rf"(?mi)^\s*{re.escape(en)}\s*\(([^)]+)\)", raw)
+            if m_ent:
+                for part in re.split(r"[,،]", m_ent.group(1)):
+                    fs_clean = re.sub(r"[^a-zA-Z0-9_]", "", part.strip())[:32]
+                    if fs_clean:
+                        fields.append(fs_clean)
         seen_e.add(en.lower())
         out["entities"].append({
             "name": en[:1].upper() + en[1:] if en else en,
@@ -919,17 +976,15 @@ def _ground_spec_to_user_text(data: dict, user_text: str) -> dict:
                 if not isinstance(st, dict):
                     continue
                 key = re.sub(r"[^a-zA-Z0-9_]", "", str(st.get("key") or "").lower())[:32]
-                if not key or key in ("n_x", "x", "field", "value"):
+                if not key or key in ("n_x", "x", "field", "value", "none"):
                     continue
-                # keep step if key or prompt evidenced, or key is common collect field already in entity fields
                 prompt = str(st.get("prompt") or "").strip()[:120]
-                if not (
-                    _token_evidenced(key, text_n, raw)
-                    or (prompt and _phrase_evidenced(prompt, text_n, raw))
-                    or any(key in (e.get("fields") or []) for e in out["entities"])
-                ):
-                    continue
-                steps.append({"key": key, "prompt": prompt or f"أرسل {key}"})
+                # Command is already evidenced above. Trust AI step keys:
+                # model maps Arabic user words → English keys; requiring those
+                # English keys to appear in Arabic text was wiping good flows.
+                if not prompt:
+                    prompt = f"أرسل {key}"
+                steps.append({"key": key, "prompt": prompt})
         if not steps:
             continue
         ent = str(f.get("entity") or "").strip()
@@ -1678,6 +1733,10 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         )
 
     data = ai_result.grounded_json if isinstance(ai_result.grounded_json, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+    # Restore richer user /command descriptions before grounding
+    data = _prefer_user_command_descriptions(data, text)
     # Ground to user text only — never merge structural baseline (source of ssl/information noise)
     grounded = _ground_spec_to_user_text(data, text)
 
