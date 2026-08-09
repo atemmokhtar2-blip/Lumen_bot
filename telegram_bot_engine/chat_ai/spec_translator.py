@@ -1003,22 +1003,67 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
     from . import hf_provider as hf
 
     system = (
-        "You are a strict specification translator for Telegram bots. "
-        "Translate the user description into JSON only. "
-        "Never invent domain packs. Only extract what the user described. "
-        "Output a single JSON object with keys: "
-        "bot_name, commands, buttons, entities, flows, rules, relations, tools. "
-        "commands: [{name, description, admin_only}]. "
-        "buttons: [{label}]. "
-        "entities: [{name, fields}]. "
-        "flows: [{command, steps:[{key,prompt}]}]. "
-        "tools: [{id, title, input}]. "
-        "Command names: lowercase snake_case ASCII. "
-        "If the user lists a menu/board of labeled actions, put each as a button "
-        "and also as a command (slug from the English/ASCII words in the label). "
-        "Do not invent SSL/information commands from prose about certificates."
+        "You are a strict specification translator for Telegram bots.\n"
+        "Task: extract a structured JSON contract from the USER text only.\n"
+        "HARD RULES:\n"
+        "1) Never invent features, commands, buttons, entities, or flows the user did not mention.\n"
+        "2) Never use domain templates (no pre-made shop/booking/support packs).\n"
+        "3) Never drop details the user wrote. Prefer copying over summarizing.\n"
+        "4) Output ONE JSON object only (no markdown, no prose).\n"
+        "\n"
+        "JSON shape:\n"
+        "{"
+        "\"bot_name\": string, "
+        "\"commands\": [{\"name\": string, \"description\": string, \"admin_only\": bool}], "
+        "\"buttons\": [{\"label\": string}], "
+        "\"entities\": [{\"name\": string, \"fields\": [string]}], "
+        "\"flows\": [{\"command\": string, \"entity\": string, \"kind\": \"collect\"|\"list\"|\"mine\", "
+        "\"steps\": [{\"key\": string, \"prompt\": string}]}], "
+        "\"rules\": [string], "
+        "\"relations\": [{\"from\": string, \"to\": string, \"via\": string}], "
+        "\"tools\": [{\"id\": string, \"title\": string, \"input\": string}]"
+        "}\n"
+        "\n"
+        "Extraction rules:\n"
+        "- commands.name: lowercase snake_case ASCII (from /cmd or clear English slug).\n"
+        "- commands.description: copy the FULL user phrase for that command "
+        "(keep parentheses and collect lists like يجمع/يطلب and every field name).\n"
+        "- Do NOT shorten descriptions. If user wrote "
+        "\"/book - حجز موعد (يجمع الاسم والتاريخ والوقت)\" keep that entire description.\n"
+        "- flows: for every command that collects multiple fields, emit steps in the same order.\n"
+        "  keys = field identifiers (name, date, time, phone, ...). "
+        "prompt = short ask in the user's language (e.g. أرسل الاسم).\n"
+        "- entities: only names/fields the user listed (e.g. Appointment (id, name, date)).\n"
+        "- buttons: only labels the user listed as buttons/menu items.\n"
+        "- If user lists labeled menu actions, each label → button and a command slug when possible.\n"
+        "- admin_only=true only if user marked admin/مشرف/أدمن for that command.\n"
+        "- Ignore unrelated prose noise (certificates/ssl examples) unless user named them as commands.\n"
     )
-    user_msg = f"USER DESCRIPTION:\n{text[:12000]}"
+    # Lightweight shape example (structure only — not a domain bot template)
+    shape_example = (
+        "Example of JSON SHAPE (illustrative keys only, not a product template):\n"
+        "{"
+        "\"bot_name\": \"demo\", "
+        "\"commands\": ["
+        "{\"name\": \"start\", \"description\": \"ترحيب\", \"admin_only\": false}, "
+        "{\"name\": \"cmd_a\", \"description\": \"full user text with (field1 and field2)\", \"admin_only\": false}"
+        "], "
+        "\"buttons\": [{\"label\": \"label from user\"}], "
+        "\"entities\": [{\"name\": \"EntityA\", \"fields\": [\"id\", \"field1\", \"field2\"]}], "
+        "\"flows\": [{"
+        "\"command\": \"cmd_a\", \"entity\": \"EntityA\", \"kind\": \"collect\", "
+        "\"steps\": ["
+        "{\"key\": \"field1\", \"prompt\": \"أرسل field1\"}, "
+        "{\"key\": \"field2\", \"prompt\": \"أرسل field2\"}"
+        "]"
+        "}], "
+        "\"rules\": [], \"relations\": [], \"tools\": []"
+        "}"
+    )
+    user_msg = (
+        f"{shape_example}\n\n"
+        f"USER DESCRIPTION (source of truth — extract only from this):\n{text[:12000]}"
+    )
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user_msg},
@@ -1404,6 +1449,13 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     for c in grounded.get("commands") or []:
         if isinstance(c, dict) and c.get("name"):
             c["name"] = _normalize_cmd_name(str(c["name"]))
+            # AI sometimes puts "/book - ..." inside description — keep the human phrase only
+            desc = str(c.get("description") or "").strip()
+            name = str(c.get("name") or "")
+            if desc:
+                desc = re.sub(rf"^/?{re.escape(name)}\s*[-–—:]\s*", "", desc, flags=re.I).strip()
+                desc = re.sub(r"^/\s*", "", desc).strip()
+                c["description"] = desc[:160]
     grounded["commands"] = [
         c for c in (grounded.get("commands") or [])
         if isinstance(c, dict) and (
@@ -1467,9 +1519,10 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
 
 
 def _enrich_structured_with_original(structured: str, original: str) -> str:
-    """Restore richer /command descriptions from the human text when AI shortened them.
+    """Restore richer /command descriptions and flows from the human text.
 
-    Dynamic only: copies user-written command lines; never invents domain packs.
+    Dynamic only: uses the user's own command lines and field lists.
+    No domain bot templates.
     """
     import re as _re
     orig = original or ""
@@ -1477,7 +1530,7 @@ def _enrich_structured_with_original(structured: str, original: str) -> str:
     if not struct.strip():
         return orig.strip()
 
-    # Map command name → full description line from original
+    # command name → full description from original
     orig_desc: dict[str, str] = {}
     for m in _re.finditer(
         r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*[-–—:]\s*([^\n]{1,160})",
@@ -1488,16 +1541,12 @@ def _enrich_structured_with_original(structured: str, original: str) -> str:
         if desc:
             orig_desc[name] = desc
 
-    if not orig_desc:
-        return struct
-
     def _repl_cmd_line(match: _re.Match) -> str:
         name = match.group(1).lower()
         ai_desc = (match.group(2) or "").strip()
         human = orig_desc.get(name)
         if not human:
             return match.group(0)
-        # Prefer human description when it is richer (parentheses / collect verbs / longer)
         richer = (
             len(human) > len(ai_desc) + 3
             or any(x in human for x in ("(", "يجمع", "اجمع", "يطلب", "وال", "،"))
@@ -1512,9 +1561,115 @@ def _enrich_structured_with_original(structured: str, original: str) -> str:
         struct,
     )
 
-    # If AI omitted a flow that original parentheticals imply, append nothing extra —
-    # inference will recover from restored descriptions + entity fields + التدفقات section.
+    # Also ensure commands that exist only in original appear in structured text
+    for name, desc in orig_desc.items():
+        if not _re.search(rf"(?m)^\s*/{ _re.escape(name) }\b", out):
+            # insert under الأوامر section if present
+            if _re.search(r"(?m)^\s*الأوامر\s*:", out):
+                out = _re.sub(
+                    r"(?m)(^\s*الأوامر\s*:\s*\n)",
+                    r"\1" + f"/{name} - {desc}\n",
+                    out,
+                    count=1,
+                )
+            else:
+                out = out.rstrip() + f"\n\nالأوامر:\n/{name} - {desc}\n"
+
+    # Build flows from (possibly restored) command descriptions using linguistic cues only
+    try:
+        from telegram_bot_engine.formal_engine.inference.engine import infer as _infer
+        from telegram_bot_engine.formal_engine.dsl.extractor import extract_dsl as _extract
+        # Prefer field lists evidenced on the merged text via formal inference wizards
+        prog = _extract(out if len(out) >= len(orig) else (out + "\n" + orig))
+        # Fallback: parse fields from each command description with a tiny local splitter
+    except Exception:
+        prog = None
+
+    flow_lines: list[str] = []
+    # Local dynamic field pull from description (parentheses / يجمع) — no domain packs
+    def _fields_from_desc(desc: str) -> list[str]:
+        d = desc or ""
+        keys: list[str] = []
+        seen: set[str] = set()
+        chunks: list[str] = []
+        for pm in _re.finditer(r"[\(\[«]([^\)\]»]{2,120})[\)\]»]", d):
+            chunks.append(pm.group(1))
+        for vm in _re.finditer(
+            r"(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع)\s+([^\n\.]{2,120})",
+            d,
+        ):
+            chunks.append(vm.group(1))
+        # phrase map is linguistic (Arabic/English labels → keys), not a bot template
+        phrase_map = [
+            ("اسم المنتج", "product_name"), ("رقم الهاتف", "phone"), ("رقم الجوال", "phone"),
+            ("البريد", "email"), ("email", "email"),
+            ("الاسم", "name"), ("اسم", "name"), ("name", "name"),
+            ("التاريخ", "date"), ("تاريخ", "date"), ("date", "date"),
+            ("الوقت", "time"), ("وقت", "time"), ("time", "time"),
+            ("العنوان", "address"), ("address", "address"),
+            ("الهاتف", "phone"), ("الجوال", "phone"), ("phone", "phone"),
+            ("الكمية", "quantity"), ("quantity", "quantity"),
+            ("السعر", "price"), ("price", "price"),
+            ("الوصف", "description"), ("الملاحظات", "notes"), ("notes", "notes"),
+        ]
+        for chunk in chunks:
+            ch = _re.sub(r"^(?:يجمع|اجمع|يطلب|اطلب|يحتاج|جمع)\s+", "", chunk.strip())
+            ch = _re.sub(r"\s*و\s*", ",", ch)
+            ch = _re.sub(r"وال", ",ال", ch)
+            # longest-phrase first scan on full chunk then parts
+            ordered = sorted(phrase_map, key=lambda x: -len(x[0]))
+            remaining = ch
+            for phrase, key in ordered:
+                if phrase in remaining and key not in seen:
+                    seen.add(key)
+                    keys.append(key)
+                    remaining = remaining.replace(phrase, ",", 1)
+            for part in _re.split(r"[,،]+", remaining):
+                part = part.strip()
+                if len(part) < 2:
+                    continue
+                mapped = None
+                for phrase, key in ordered:
+                    if phrase in part or part == phrase:
+                        mapped = key
+                        break
+                if mapped is None and _re.match(r"^[a-zA-Z][a-zA-Z0-9_]*$", part):
+                    mapped = part.lower()
+                if mapped and mapped not in seen:
+                    seen.add(mapped)
+                    keys.append(mapped)
+        return keys[:8]
+
+    # Collect from restored command lines in `out`
+    for m in _re.finditer(
+        r"(?m)^\s*/([a-zA-Z][a-zA-Z0-9_]{0,32})\s*[-–—:]\s*([^\n]{1,160})",
+        out,
+    ):
+        cname = m.group(1).lower()
+        cdesc = m.group(2).strip()
+        keys = _fields_from_desc(cdesc)
+        if keys:
+            flow_lines.append(f"- {cname} : " + ", ".join(keys))
+            for k in keys:
+                # prompt in Arabic when key is known label-like; else generic
+                flow_lines.append(f"  • {k}: أرسل {k}")
+
+    if flow_lines:
+        if _re.search(r"(?m)^\s*التدفقات\s*:?\s*$", out) or _re.search(
+            r"(?m)^\s*flows\s*:?\s*$", out, _re.I
+        ):
+            out = _re.sub(
+                r"(?is)((?:التدفقات|flows)\s*:?\s*\n)(.*?)(?=\n(?:الأوامر|الأزرار|الكيانات|القواعد|commands|buttons|entities|rules)\s*:|\Z)",
+                r"\1" + "\n".join(flow_lines) + "\n",
+                out,
+                count=1,
+            )
+        else:
+            out = out.rstrip() + "\n\nالتدفقات:\n" + "\n".join(flow_lines) + "\n"
+
     return out
+
+
 
 
 def prepare_formal_text(user_text: str) -> tuple[str, TranslatorResult]:
