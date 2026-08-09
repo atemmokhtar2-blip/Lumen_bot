@@ -34,90 +34,7 @@ class TelegramCapability:
 
 
 # Structural catalog derived from Telegram Bot API — not product templates.
-TELEGRAM_CAPABILITIES: tuple[TelegramCapability, ...] = (
-    TelegramCapability(
-        id="ban_chat_member",
-        api_method="ban_chat_member",
-        surface_forms=(
-            "ban", "ban_user", "حظر", "احظر", "بند", "بان", "block user", "blocked",
-            "اطرد نهائي", "حظر عضو", "حظر المستخدم",
-        ),
-        description="Ban a user from a chat",
-    ),
-    TelegramCapability(
-        id="unban_chat_member",
-        api_method="unban_chat_member",
-        surface_forms=(
-            "unban", "فك الحظر", "الغاء الحظر", "إلغاء الحظر", "رفع الحظر",
-            "unban user", "unblock",
-        ),
-        description="Unban a user in a chat",
-    ),
-    TelegramCapability(
-        id="kick_chat_member",
-        api_method="ban_chat_member",  # kick = ban then unban
-        surface_forms=(
-            "kick", "طرد", "اطرد", " extrinsic", "remove member", "kick user",
-        ),
-        description="Remove a user from a chat (ban + unban)",
-    ),
-    TelegramCapability(
-        id="restrict_chat_member",
-        api_method="restrict_chat_member",
-        surface_forms=(
-            "mute", "mute_user", "كتم", "اكتم", "تقييد", "restrict", "silence",
-            "منع الكتابة", "كتم عضو", "mute user",
-        ),
-        description="Restrict a member (mute)",
-    ),
-    TelegramCapability(
-        id="unrestrict_chat_member",
-        api_method="restrict_chat_member",  # with all permissions True
-        surface_forms=(
-            "unmute", "فك الكتم", "الغاء الكتم", "إلغاء الكتم", "رفع التقييد",
-            "unrestrict", "unmute user",
-        ),
-        description="Remove restrictions from a member",
-    ),
-    TelegramCapability(
-        id="promote_chat_member",
-        api_method="promote_chat_member",
-        surface_forms=(
-            "promote", "ترقية", "رقّي", "رقي", "اجعله مشرف", "تعيين مشرف",
-            "make admin", "promote admin",
-        ),
-        description="Promote a member to admin",
-    ),
-    TelegramCapability(
-        id="delete_message",
-        api_method="delete_message",
-        surface_forms=(
-            "delete message", "حذف رسالة", "حذف رسائل", "حذف الرسائل",
-            "امسح الرسالة", "احذف الرسالة", "امسح الرسائل", "احذف الرسائل",
-            "delmsg", "purge message", "delete",
-        ),
-        needs_user_target=False,
-        description="Delete a message (reply target)",
-    ),
-    TelegramCapability(
-        id="pin_chat_message",
-        api_method="pin_chat_message",
-        surface_forms=(
-            "pin", "تثبيت", "ثبت", "ثبت الرسالة", "pin message",
-        ),
-        needs_user_target=False,
-        description="Pin a message",
-    ),
-    TelegramCapability(
-        id="unpin_chat_message",
-        api_method="unpin_chat_message",
-        surface_forms=(
-            "unpin", "الغاء التثبيت", "إلغاء التثبيت", "فك التثبيت",
-        ),
-        needs_user_target=False,
-        description="Unpin a message",
-    ),
-)
+TELEGRAM_CAPABILITIES: tuple[TelegramCapability, ...] = ()
 
 
 def _norm(s: str) -> str:
@@ -187,17 +104,7 @@ def any_admin_typical(cap_ids: list[str]) -> bool:
 
 
 # Canonical command id emitted when a capability is evidenced in prose (Latin Telegram ids).
-CAPABILITY_DEFAULT_COMMAND: dict[str, str] = {
-    "ban_chat_member": "ban",
-    "unban_chat_member": "unban",
-    "kick_chat_member": "kick",
-    "restrict_chat_member": "mute",
-    "unrestrict_chat_member": "unmute",
-    "promote_chat_member": "promote",
-    "delete_message": "delete",
-    "pin_chat_message": "pin",
-    "unpin_chat_message": "unpin",
-}
+CAPABILITY_DEFAULT_COMMAND: dict[str, str] = {}
 
 
 def commands_from_capability_evidence(text: str) -> list[tuple[str, list[str], str]]:

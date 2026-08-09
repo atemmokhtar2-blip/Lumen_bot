@@ -119,9 +119,8 @@ def apply_architecture_rules(ctx: dict[str, Any]) -> tuple[dict[str, Any], list[
             if effect.startswith("ensure_command:"):
                 cmd = effect.split(":", 1)[1]
                 # structural only — never inject domain command packs
-                if cmd in ("start", "help", "admin") and cmd not in commands:
-                    admin = cmd == "admin"
-                    commands[cmd] = (cmd, admin)
+                # No fixed command injection (start/help/admin packs removed)
+                pass
             elif effect.startswith("ensure_service:"):
                 svc = effect.split(":", 1)[1]
                 # tech hooks only
@@ -137,8 +136,8 @@ def apply_architecture_rules(ctx: dict[str, Any]) -> tuple[dict[str, Any], list[
             elif effect.startswith("ensure_feature:"):
                 feature_tags.add(effect.split(":", 1)[1])
             elif effect == "ensure_database":
-                if ctx.get("database") in (None, "none"):
-                    ctx["database"] = "sqlite"
+                # no default database technology injection
+                pass
             elif effect.startswith("set_database:"):
                 ctx["database"] = effect.split(":", 1)[1]
             elif effect == "ensure_state_management":

@@ -35,7 +35,7 @@ _GHOST = {
     "true", "false", "none", "null", "http", "https",
 }
 
-_ADMIN_CMDS = {"admin", "ban", "mute", "kick", "unban", "unmute", "promote", "broadcast", "stats", "panel"}
+_ADMIN_CMDS: set[str] = set()  # no fixed admin command names
 
 # Matching aids only — effects always keep user wording
 _SYN_GROUPS: list[tuple[str, tuple[str, ...]]] = [
@@ -404,11 +404,7 @@ def _commands_from_text(text: str) -> list[CommandNode]:
 
     # No free-verb domain stems. Commands only from user text.
 
-    if "start" not in seen:
-        found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
-        seen.add("start")
-    if "help" not in seen:
-        found.append(CommandNode(name="help", description="المساعدة"))
+    # no fixed start/help injection — only user-evidenced commands
     return found
 
 

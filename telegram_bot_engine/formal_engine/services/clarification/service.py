@@ -127,14 +127,8 @@ def _assess_spec_legacy(user_text: str) -> ClarificationResult:
     # (e.g. "متجر فيه منتجات وسلة شراء"). Treat those capability signals as
     # sufficient intent; requiring a bot name or explicit /commands blocks the
     # primary one-message generation flow.
-    feature_terms = (
-        "متجر", "منتج", "منتجات", "سلة", "عربة", "طلب", "اوردر",
-        "حجز", "موعد", "تسجيل", "عملاء", "عميل", "خدمة العملاء",
-        "تذاكر", "دعم", "إدارة مجموعات", "ادارة مجموعات", "جروب", "مجموعة", "تحذير",
-        "حظر", "طرد", "كتم", "تثبيت", "حذف رسالة", "توصيل", "دفع", "فاتورة", "بحث", "اشتراك",
-        "مخزون", "مستخدمين", "موظفين", "تقارير", "إشعارات",
-    )
-    has_feature_signal = any(term in text for term in feature_terms)
+    feature_terms: tuple = ()
+    has_feature_signal = False  # no fixed domain feature lexicon
 
     score = 0.0
     score += min(0.50, 0.18 * len(cmds))

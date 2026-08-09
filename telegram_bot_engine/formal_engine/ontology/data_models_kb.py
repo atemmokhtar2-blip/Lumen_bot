@@ -1,16 +1,9 @@
-"""
-data_models_kb — entity library packs permanently removed.
-Models come from user text only.
-"""
-
+"""data_models_kb — no entity library packs. Models from user text only."""
 from __future__ import annotations
-
 import re
 from typing import Any
 
-
 def resolve_data_models(archetype: str, text: str) -> list[dict[str, Any]]:
-    """Text-grounded models only. archetype ignored."""
     _ = archetype
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -26,14 +19,13 @@ def resolve_data_models(archetype: str, text: str) -> list[dict[str, Any]]:
         seen.add(key)
         out.append({
             "name": name,
-            "fields": [{"name": "id", "type": "str"}],
-            "field_names": ["id"],
+            "fields": [],
+            "field_names": [],
             "relations": [],
             "source": "text",
         })
     return out
 
-
 def lookup_entity(name: str) -> list[tuple[str, str]]:
     _ = name
-    return [("id", "str")]
+    return []
