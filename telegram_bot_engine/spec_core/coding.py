@@ -932,9 +932,9 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("    pid = market_svc.add_item(user.id, ' '.join(context.args))")
         L.append(f"    await message.reply_text({ok!r} + f' #{{pid}}')")
     elif method in {"place_order", "send_invoice", "checkout", "buy"}:
-        need_args(1)
         L += [
-            "    oid = market_svc.place_order(user.id, ' '.join(context.args))",
+            "    arg = ' '.join(context.args) if context.args else '1'",
+            "    oid = market_svc.place_order(user.id, arg)",
             "    if not oid:",
             f"        await message.reply_text({fail!r})",
             "        return",
@@ -1009,13 +1009,15 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     # ── cart ──────────────────────────────────────────────────────────
     elif method in {"add", "cart_add"} and svc in {"cart", "shop"}:
-        need_args(1)
         L += [
+            "    if not context.args:",
+            "        await message.reply_text('Usage: /cartadd <product_id> [qty]' + chr(10) + market_svc.catalog())",
+            "        return",
             "    try:",
             "        pid = int(context.args[0])",
             "        qty = int(context.args[1]) if len(context.args) > 1 else 1",
             "    except ValueError:",
-            f"        await message.reply_text({fail!r})",
+            f"        await message.reply_text({fail!r} + ' — Usage: /cartadd <product_id> [qty]')",
             "        return",
             "    ok_c = market_svc.cart_add(user.id, pid, qty)",
             f"    await message.reply_text({ok!r} if ok_c else {fail!r})",
@@ -1220,6 +1222,16 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method == "level":
         L.append("    await message.reply_text(market_svc.levels_for(user.id))")
     # ── wishlist / reviews / shipping / refunds → durable generic ─────
+    elif method in {"privacy", "privacy_policy"} or (svc == "compliance" and method == "privacy"):
+        L.append("    await message.reply_text(")
+        L.append("        'Privacy: We store Telegram user id, orders, and points locally in SQLite. '")
+        L.append("        'No data is sold. Use /deleteme style flows if enabled to request deletion.'")
+        L.append("    )")
+    elif method in {"terms", "terms_of_service"} or (svc == "compliance" and method == "terms"):
+        L.append("    await message.reply_text(")
+        L.append("        'Terms: Digital goods are delivered after successful Telegram Payment. '")
+        L.append("        'Abuse, fraud, or chargebacks may result in account restriction.'")
+        L.append("    )")
     elif method in {
         "wishlist_add", "wishlist_view", "review_add", "review_list",
         "shipping_set", "refund_request", "refund_approve", "digital_deliver",
@@ -1230,15 +1242,28 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
             "' '.join(context.args) if context.args else '')"
         )
-        L.append("    await message.reply_text(result)")
+        L.append(f"    await message.reply_text(result if result else {ok!r})")
     else:
-        # last resort: still durable, never silent fake-only success without record
-        L.append("    from app.services import generic as generic_svc")
-        L.append(
-            f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
-            "' '.join(context.args) if context.args else '')"
-        )
-        L.append("    await message.reply_text(result)")
+        if svc in {"analytics", "admin", "notify"}:
+            L += [
+                "    from app.db import connect, init_db",
+                "    init_db()",
+                "    with connect() as conn:",
+                "        products = conn.execute('SELECT COUNT(*) c FROM products').fetchone()['c']",
+                "        orders = conn.execute('SELECT COUNT(*) c FROM orders').fetchone()['c']",
+                "        paid = conn.execute(\"SELECT COUNT(*) c FROM orders WHERE status='paid'\").fetchone()['c']",
+                "        users = conn.execute('SELECT COUNT(DISTINCT user_id) c FROM point_ledger').fetchone()['c']",
+                "    await message.reply_text(",
+                "        f'Stats\\nProducts={products} Orders={orders} Paid={paid} PointUsers={users}'",
+                "    )",
+            ]
+        else:
+            L.append("    from app.services import generic as generic_svc")
+            L.append(
+                f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
+                "' '.join(context.args) if context.args else '')"
+            )
+            L.append("    await message.reply_text(result)")
     return L
 
 
@@ -1659,6 +1684,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         elif cap.service in {
             "shop", "payments", "subscriptions", "points", "contests",
             "cart", "growth", "wallet", "i18n", "creator",
+            "compliance", "analytics", "admin", "notify",
         }:
             lines.extend(_market_handler_lines(cap, ok, fail))
         else:
@@ -1833,6 +1859,45 @@ def _emit_main(spec: BotSpec) -> str:
         reg_text = '    app.add_handler(CommandHandler("start", start_handler))\n' + reg_text
     if 'CommandHandler("help"' not in reg_text:
         reg_text += '\n    app.add_handler(CommandHandler("help", help_handler))'
+
+    # Friendly aliases so /cart works even if trigger is cartview, etc.
+    _alias_map = {
+        "shop": "handle_shop_catalog",
+        "catalog": "handle_shop_catalog",
+        "cart": "handle_cart_view",
+        "orders": "handle_shop_orders",
+        "points": "handle_balance",
+        "sub": "handle_plans",
+        "subs": "handle_plans",
+        "invite": "handle_referral_invite",
+        "checkin": "handle_daily_checkin",
+        "wallet": "handle_wallet_balance",
+    }
+    # Only add alias if target handler function exists in imports later — filter by features
+    feat_names = {f.feature for f in spec.features}
+    feat_to_handler = {
+        f.feature: f"handle_{f.id}".replace("-", "_") for f in spec.features if f.feature not in ("start", "help")
+    }
+    # map alias to feature
+    alias_feature = {
+        "shop": "shop_catalog",
+        "catalog": "shop_catalog",
+        "cart": "cart_view",
+        "orders": "shop_orders",
+        "points": "balance",
+        "sub": "plans",
+        "subs": "plans",
+        "invite": "referral_invite",
+        "checkin": "daily_checkin",
+        "wallet": "wallet_balance",
+    }
+    for alias, feat in alias_feature.items():
+        if feat in feat_to_handler:
+            h = feat_to_handler[feat]
+            # avoid duplicate if alias already the trigger id
+            if f"CommandHandler('{alias}'" in reg_text or f'CommandHandler("{alias}"' in reg_text:
+                continue
+            reg_text += f"\n    app.add_handler(CommandHandler({alias!r}, {h}))"
 
     need_tasks = any(
         (get_capability(f.feature) and get_capability(f.feature).service == "tasks")  # type: ignore
