@@ -737,10 +737,11 @@ def infer(program: DSLProgram) -> InferenceResult:
         meta = op.meta or {}
         steps = list(meta.get("steps") or [])
         if wid in existing_ids:
-            # Replace weaker command-inferred wizard when flow section has more steps
+            # Only fill empty wizards from flow ops — never inflate explicit short user lists
             for i, w in enumerate(wizards):
                 if str(w.get("id") or w.get("command")) == wid:
-                    if len(steps) > len(w.get("steps") or []):
+                    existing_steps = list(w.get("steps") or [])
+                    if not existing_steps and steps:
                         wizards[i] = {
                             "id": wid,
                             "command": meta.get("command") or wid,
