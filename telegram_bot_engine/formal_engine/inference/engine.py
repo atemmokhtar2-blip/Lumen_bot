@@ -89,8 +89,7 @@ def _schema_from_entity(e: EntityNode, rels: list[RelationNode]) -> SchemaPlan:
                 if op and op not in seen:
                     seen.add(op)
                     cols.append((op, _col_type(op)))
-    if e.name.lower() not in ("user", "student") and "user_id" not in seen:
-        cols.append(("user_id", "int"))
+    # Keep schema strictly from declared attributes — no forced user_id template
     return SchemaPlan(table=e.name.lower(), columns=cols, primary_key="id")
 
 

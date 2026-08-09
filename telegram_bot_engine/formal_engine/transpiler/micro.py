@@ -976,18 +976,28 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
             if name_toks and all(tok.lower() in lab_l or tok in label for tok in name_toks[:2]):
                 btn_to_cmd[cb] = c.name
                 break
-            # Arabic action stems only (linguistic, not product packs)
-            if c.name in ("add", "list_mine", "complete", "remove"):
-                stem_keys = {
-                    "add": ("إضافة", "اضافه"),
-                    "list_mine": ("مهامي", "قائمتي"),
-                    "complete": ("إنهاء", "انهاء"),
-                    "remove": ("حذف",),
-                }.get(c.name, ())
-                if any(k in label for k in stem_keys):
+            # Linguistic Arabic action words vs command-name shape (no fixed domain pack).
+            _ar_action = {
+                "new": ("إضافة", "اضافه", "اضف", "جديد", "مهمة جديدة"),
+                "add": ("إضافة", "اضافه", "اضف", "جديد"),
+                "create": ("إنشاء", "انشاء", "اضافه"),
+                "my": ("مهامي", "قائمتي", "عملائي", "طلباتي"),
+                "list": ("قائمة", "قائمه", "عرض"),
+                "all": ("كل", "جميع"),
+                "complete": ("إنهاء", "انهاء", "اكمال", "إكمال", "تم"),
+                "done": ("إنهاء", "تم", "اكتمل"),
+                "delete": ("حذف", "ازالة", "إزالة"),
+                "remove": ("حذف", "ازالة"),
+            }
+            cn_parts = set(c.name.lower().replace("-", "_").split("_"))
+            matched = False
+            for key, words in _ar_action.items():
+                if key in cn_parts and any(w in label for w in words):
                     btn_to_cmd[cb] = c.name
+                    matched = True
                     break
-                continue
+            if matched:
+                break
             if _surface_matches(label, c.name, desc):
                 btn_to_cmd[cb] = c.name
                 break
@@ -1130,12 +1140,20 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("        app_data = context.application.bot_data")
         lines.append("        bucket = app_data.setdefault('records', {})")
         lines.append("        mine = bucket.setdefault(str(uid), [])")
-        # list_* → services.list_records
-        lines.append("        if _cn.startswith('list_') or _cn in ('list_mine', 'my_tasks', 'mine', 'list'):")
+        # Structural stems from command-name shape only (no domain rename packs).
+        lines.append("        if (_cn.startswith('list_') or _cn.startswith('my_') or")
+        lines.append("                _cn in ('list_mine', 'my_tasks', 'mine', 'list', 'all_tasks', 'my_clients')):")
         lines.append("            try:")
         lines.append("                from app.services import list_records")
-        lines.append("                ent = _cn[5:] if _cn.startswith('list_') else 'record'")
-        lines.append("                ent = ent[:-1] if ent.endswith('s') and len(ent)>3 else ent")
+        lines.append("                if _cn.startswith('list_'):")
+        lines.append("                    ent = _cn[5:]")
+        lines.append("                elif _cn.startswith('my_'):")
+        lines.append("                    ent = _cn[3:]")
+        lines.append("                elif _cn.startswith('all_'):")
+        lines.append("                    ent = _cn[4:]")
+        lines.append("                else:")
+        lines.append("                    ent = 'record'")
+        lines.append("                ent = ent[:-1] if ent.endswith('s') and len(ent) > 3 else ent")
         lines.append("                rows = await list_records(ent.capitalize(), uid)")
         lines.append("            except Exception:")
         lines.append("                rows = []")
@@ -1165,7 +1183,8 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("                        InlineKeyboardButton('X', callback_data=f'del:{i}'),")
         lines.append("                    ])")
         lines.append("                await message.reply_text(chr(10).join(lines_out), reply_markup=InlineKeyboardMarkup(rows))")
-        lines.append("        elif _cn in ('add', 'add_task', 'create', 'new'):")
+        lines.append("        elif (_cn in ('add', 'add_task', 'create', 'new', 'new_task', 'create_task')")
+        lines.append("                or _cn.startswith('new_') or _cn.startswith('add_') or _cn.startswith('create_')):")
         lines.append("            context.user_data['flow'] = _cn")
         lines.append("            context.user_data['step'] = 0")
         lines.append("            context.user_data['data'] = {}")
@@ -1177,9 +1196,11 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         lines.append("                context.user_data['step'] = 0")
         lines.append("                context.user_data['data'] = {}")
         lines.append("                FLOWS.setdefault('collect_title', [{'key': 'title', 'prompt': 'أرسل النص للحفظ:'}])")
-        lines.append("        elif _cn in ('complete', 'done_task', 'done'):")
+        lines.append("        elif (_cn in ('complete', 'done_task', 'done', 'complete_task', 'finish_task')")
+        lines.append("                or _cn.startswith('complete_') or _cn.startswith('done_')):")
         lines.append("            await message.reply_text('اختر عنصراً من القائمة أو أرسل رقمه.')")
-        lines.append("        elif _cn in ('remove', 'delete_task', 'delete'):")
+        lines.append("        elif (_cn in ('remove', 'delete_task', 'delete')")
+        lines.append("                or _cn.startswith('delete_') or _cn.startswith('remove_')):")
         lines.append("            await message.reply_text('اختر عنصراً من القائمة للحذف.')")
         lines.append("        elif _cn in ('menu', 'show_categories', 'show_menu'):")
         lines.append("            kb = main_keyboard()")

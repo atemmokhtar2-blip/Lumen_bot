@@ -151,6 +151,7 @@ _SECTION_STOP = (
     "الأزرار", "الازرار", "ازرار", "buttons", "القائمة الرئيسية", "القائمة",
     "القواعد", "قواعد", "rules", "الشروط",
     "الكيانات", "كيانات", "entities", "النماذج", "نماذج البيانات", "data models",
+    "التدفقات", "تدفقات", "flows", "wizards",
     "الخدمات", "خدمات", "services",
     "الميزات", "ميزات", "features",
     "المتطلبات", "طريقة", "الإطار", "قاعدة البيانات", "database",
@@ -243,21 +244,27 @@ def _entities_from_text(text: str) -> list[EntityNode]:
         body = _strip_bullet(line)
         if not body or _looks_like_rule(body):
             continue
-        # Student (id, name, email)  |  Student: id, name
+        # Skip flow headers: register @User : title
+        if "@" in body:
+            continue
+        # Student (id, name, email)  |  Student: id, name — require explicit fields
         m = re.match(
             r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*"
             r"(?:[\(:：]\s*([^\)\n]{1,120})[\)]?)?",
             body,
         )
-        if m:
+        if m and (m.group(2) is not None or "(" in body):
             add(m.group(1), _parse_attrs(m.group(2) or ""))
             continue
         m = re.match(
             r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*[-–—:：]\s*(.+)$",
             body,
         )
-        if m:
-            add(m.group(1), _parse_attrs(m.group(2)))
+        if m and m.group(2) and not m.group(2).strip().startswith("@"):
+            fields_raw = m.group(2)
+            if re.search(r"[ا-ي]", fields_raw) and not re.search(r"[a-zA-Z_]", fields_raw):
+                continue
+            add(m.group(1), _parse_attrs(fields_raw))
 
     # 2) Inline patterns: كيان Student يحتاج ... / entity Student (a, b)
     for m in re.finditer(
@@ -277,42 +284,8 @@ def _entities_from_text(text: str) -> list[EntityNode]:
     ):
         add(m.group(1), _parse_attrs(m.group(2)))
 
-    # 4) Free-form Arabic nouns → entity only if the word appears in text
-    if not found:
-        # Minimal entity shells only — attributes ONLY if those words appear in text.
-        noun_map: list[tuple[str, str, list[str]]] = [
-            (r"عميل|عملاء|customer|clients?", "Customer", ["name", "phone"]),
-            (r"سائق|drivers?", "Driver", ["name", "phone", "license"]),
-            (r"طلب|اوردر|orders?", "Order", ["status", "address", "phone"]),
-            (r"مهمة|tasks?", "Task", ["title", "status"]),
-            (r"صنف|منتج|products?|items?", "Product", ["title", "price"]),
-            (r"موعد|مواعيد|appointments?", "Appointment", ["date", "time", "status"]),
-        ]
-        # field token must appear as a word-ish span in text (not substring of باسم etc.)
-        _field_word = {
-            "name": r"(?<![ا-ي])(?:الاسم|name)(?![ا-يa-z])",
-            "phone": r"هاتف|موبايل|تليفون|جوال|phone|mobile",
-            "address": r"عنوان|address",
-            "status": r"حالة|status",
-            "title": r"عنوان|title|اسم\s*الصنف|اسم\s*المنتج",
-            "price": r"سعر|price",
-            "license": r"رخصة|license",
-            "date": r"تاريخ|date",
-            "time": r"(?<![ا-ي])وقت(?![ا-ي])|\btime\b",
-        }
-        for pat, ename, candidate_attrs in noun_map:
-            if not re.search(pat, text, re.I):
-                continue
-            attrs = ["id"]
-            for a in candidate_attrs:
-                wp = _field_word.get(a)
-                if wp and re.search(wp, text, re.I):
-                    attrs.append(a)
-            add(ename, attrs)
-
-    # NO global field pollution.
-    # Attributes come only from explicit entity declarations in the user text
-    # (parentheses / section lines). Never spray phone/price/name onto every entity.
+    # 4) NO free-form domain noun packs.
+    # Entities come only from explicit user declarations (sections / CapWord(fields)).
     return found
 
 
@@ -414,32 +387,7 @@ def _commands_from_text(text: str) -> list[CommandNode]:
             )
         )
 
-    # Grounded free-verb stems (only when phrase appears in user text)
-    _VERB_STEMS = [
-        (r"تسجيل|register|signup", "register", "تسجيل"),
-        (r"تتبع|track", "track", "تتبع"),
-        (r"طلب\s*جديد|new\s*order", "order", "طلب جديد"),
-        (r"طلباتي|my\s*orders", "my_orders", "طلباتي"),
-        (r"قائمة\s*الطعام|\blist\b", "list", "قائمة"),
-        (r"عرض\s+جميع\s+الاصناف|عرض\s+الاصناف|جميع\s+الاصناف|show_categories", "show_categories", "عرض الأصناف"),
-        (r"بحث|search", "search", "بحث"),
-        (r"دعم|support", "support", "دعم"),
-        (r"حجز|book", "book", "حجز"),
-    ]
-    for pat, cmd_name, desc in _VERB_STEMS:
-        if cmd_name in seen:
-            continue
-        if re.search(pat, text, re.I):
-            seen.add(cmd_name)
-            caps = resolve_capabilities(cmd_name, desc)
-            found.append(
-                CommandNode(
-                    name=cmd_name,
-                    description=desc[:100],
-                    admin_only=any_admin_typical(caps),
-                    capabilities=list(caps),
-                )
-            )
+    # No free-verb domain stems. Commands only from user text.
 
     if "start" not in seen:
         found.insert(0, CommandNode(name="start", description="تشغيل البوت"))
@@ -792,20 +740,7 @@ def _resolve_create_target(eff_raw: str, entities: list[EntityNode]) -> str:
     for n in names:
         if n in eff_raw or n.lower() in _norm_text(eff_raw):
             return n
-    # 2) known domain names longest first
-    known = [
-        "ServiceOrder", "FoodOrder", "SpaBooking", "BorrowRecord", "EmergencyReport",
-        "Enrollment", "Appointment", "Prescription", "Submission", "Complaint",
-        "Booking", "Invoice", "Payment", "LabTest", "Medicine", "Patient", "Doctor",
-        "Insurance", "Certificate", "Homework", "Student", "Course", "Feedback",
-        "Transfer", "Review", "Order", "Fee", "Book", "Room", "Guest", "Hotel",
-    ]
-    known = sorted(known, key=len, reverse=True)
-    low = _norm_text(eff_raw)
-    for n in known:
-        if n in eff_raw or n.lower() in low:
-            return n
-    # 3) any CapWords in text — longest
+    # 2) CapWords in the effect text only (no domain name pack)
     caps = re.findall(r"\b([A-Z][a-zA-Z0-9]{2,40})\b", eff_raw)
     if caps:
         return max(caps, key=len)
@@ -1169,7 +1104,7 @@ def _flows_from_text(text: str) -> list[OperationNode]:
                 "entity": current.get("entity") or "record",
                 "steps": list(steps),
                 "kind": "collect",
-                "prefill_from_button": "item_name",
+                "prefill_from_button": "",
             },
         ))
         current, steps = None, []
@@ -1225,13 +1160,7 @@ def extract_dsl(text: str) -> DSLProgram:
     commands = _commands_from_text(full)
     buttons = _buttons_from_text(full)
     relations = _relations_from_text(full, entities)
-    if any(e.name.lower() == "order" for e in entities) and any(e.name.lower() == "item" for e in entities):
-        relations.append(RelationNode(
-            entity="Order",
-            requires=RequiresNode(operands=["item_name", "quantity"]),
-            action=ActionNode(name="PlaceOrder"),
-            raw="Order requires item_name + quantity",
-        ))
+    # No domain-specific Order/Item relation templates.
 
     operations = _operations_from_text(full, buttons)
     rules = _rules_from_text(full, entities, buttons)

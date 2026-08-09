@@ -105,7 +105,7 @@ _ITEM_HINTS = (
 _BTN_PATTERNS = (
     r"يدوس على زر\s*(?P<label>[^\n]{2,48})",
     r"الضغط على زر\s*(?P<label>[^\n]{2,48})",
-    r"زر\s*[«\"']?(?P<label>[^\n«\"']{2,40})[»\"']?",
+    r"(?<!\w)زر\s+[«\"']?(?P<label>[^\n«\"']{2,40})[»\"']?",
 )
 
 
@@ -116,30 +116,22 @@ def _norm(s: str) -> str:
 
 
 def _slug(label: str) -> str:
-    n = _norm(label)
-    mapping = [
-        (("عرض جميع الاصناف", "عرض الاصناف", "كل الاصناف", "جميع الاصناف"), "show_categories"),
-        (("عرض المنتجات", "كل المنتجات"), "show_products"),
-        (("القائمه", "قائمه الطعام", "المنيو", "menu"), "menu"),
-        (("حظر",), "ban"), (("طرد",), "kick"), (("كتم",), "mute"),
-        (("تسجيل",), "register"), (("تتبع",), "track"),
-    ]
-    for keys, cmd in mapping:
-        if any(k in n for k in keys):
-            return cmd
-    try:
-        from telegram_bot_engine.formal_engine.ontology.telegram_capabilities import (
-            commands_from_capability_evidence,
-        )
-        ev = commands_from_capability_evidence(label)
-        if ev:
-            return ev[0][0]
-    except Exception:
-        pass
-    return "action"
+    """Deterministic slug from label text only — no domain template mapping."""
+    lab = (label or "").strip()
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9_]{1,32}$", lab):
+        return lab.lower()
+    parts = re.findall(r"[a-zA-Z0-9]+", lab)
+    if parts:
+        stem = "_".join(p.lower() for p in parts)[:32]
+        if stem and re.match(r"^[a-z][a-z0-9_]{0,32}$", stem):
+            return stem
+    import hashlib
+    h = hashlib.sha1(lab.encode("utf-8")).hexdigest()[:8]
+    return f"act_{h}"
 
 
 def _extract_button_labels(text: str) -> list[str]:
+    """Extract button labels from user text only — never invent labels."""
     found, seen = [], set()
     for pat in _BTN_PATTERNS:
         for m in re.finditer(pat, text, re.I):
@@ -148,34 +140,55 @@ def _extract_button_labels(text: str) -> list[str]:
             if 2 <= len(lab) <= 48 and lab not in seen:
                 seen.add(lab)
                 found.append(lab)
-    # Emoji / bullet action lines in the user text (not a domain pack — labels only)
-    for ln in (text or "").splitlines():
+
+    section_headers = ("الازرار", "الأزرار", "buttons", "القائمة الرئيسية")
+    lines = (text or "").splitlines()
+    in_btn_section = False
+    for ln in lines:
         s = ln.strip()
-        if not s or len(s) > 40:
+        if not s:
             continue
-        if re.match(r"^[➕📋✅❌🗑•\-\*]\s*\S", s) or re.match(r"^[\-•]\s*.{2,30}$", s):
-            if s not in seen and not s.startswith("/"):
-                seen.add(s)
-                found.append(s)
+        n = _norm(s).rstrip(":")
+        if any(n == _norm(h) or n.startswith(_norm(h)) for h in section_headers):
+            in_btn_section = True
+            continue
+        if in_btn_section and any(
+            n.startswith(_norm(h)) for h in (
+                "الاوامر", "الأوامر", "commands", "الكيانات", "entities",
+                "القواعد", "rules", "التدفقات", "flows",
+            )
+        ):
+            in_btn_section = False
+            continue
+        if not in_btn_section:
+            if re.match(r"^[➕📋✅❌🗑]\s*\S", s) and 2 <= len(s) <= 40:
+                lab = re.sub(r"^[➕📋✅❌🗑]\s*", "", s).strip()
+                if lab and lab not in seen and not lab.startswith("/"):
+                    seen.add(lab)
+                    found.append(lab)
+            continue
+        lab = re.sub(r"^[➕📋✅❌🗑•\-\*]\s*", "", s).strip()
+        if re.match(r"^[A-Za-z][A-Za-z0-9_]*\s*\(", lab):
+            continue
+        if "(" in lab and ")" in lab and re.search(r"\bid\b|,", lab, re.I):
+            continue
+        if 2 <= len(lab) <= 48 and lab not in seen and not lab.startswith("/"):
+            seen.add(lab)
+            found.append(lab)
     return found
 
 
 def _command_stem_from_label(label: str) -> str | None:
-    """Lexical stem → latin command id from the label words only (no domain pack)."""
+    """Derive command id from label words only — no domain packs / fixed stems."""
     lab = (label or "").strip()
-    n = _norm(lab)
-    pairs = (
-        (r"اضافة|إضافة|اضف|ضيف|add", "add"),
-        (r"مهامي|قائمتي|my\s*list|mine", "list_mine"),
-        (r"انهاء|إنهاء|اكمال|إكمال|complete|done", "complete"),
-        (r"حذف|ازالة|إزالة|delete|remove", "remove"),
-        (r"تسجيل|register|signup", "register"),
-        (r"بحث|search", "search"),
-        (r"اعداد|إعداد|settings", "settings"),
-        (r"مساعدة|help", "help"),
-    )
-    for pat, stem in pairs:
-        if re.search(pat, n) or re.search(pat, lab, re.I):
+    if not lab or len(lab) > 40:
+        return None
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9_]{1,32}$", lab):
+        return lab.lower()
+    parts = re.findall(r"[a-zA-Z0-9]+", lab)
+    if parts:
+        stem = "_".join(p.lower() for p in parts)[:32]
+        if stem and re.match(r"^[a-z][a-z0-9_]{0,32}$", stem) and stem not in _BLOCKED_CMD_NAMES:
             return stem
     return None
 
@@ -382,7 +395,68 @@ def _classify_tool_primitive(tool: dict[str, Any]) -> str:
 
 
 
+def _entities_from_user_text(text: str) -> list[dict[str, Any]]:
+    """Extract entities only from explicit user sections — no invented domain entities."""
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    section_headers = (
+        "الكيانات", "كيانات", "entities", "النماذج", "نماذج البيانات",
+        "data models", "models",
+    )
+    lines = (text or "").splitlines()
+    capture = False
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        n = _norm(s)
+        if any(_norm(h) == n.rstrip(":") or n.startswith(_norm(h)) for h in section_headers):
+            capture = True
+            continue
+        if capture and any(
+            n.startswith(_norm(h)) for h in (
+                "الاوامر", "الأوامر", "commands", "الازرار", "الأزرار", "buttons",
+                "القواعد", "rules", "التدفقات", "flows",
+            )
+        ):
+            capture = False
+            continue
+        if not capture:
+            continue
+        body = re.sub(r"^[\-•\*]\s*", "", s).strip()
+        m = re.match(
+            r"^[«\"']?([A-Za-z][A-Za-z0-9_]{1,40})[»\"']?\s*"
+            r"(?:[\(:：]\s*([^\)\n]{1,120})[\)]?)?",
+            body,
+        )
+        if not m or (m.group(2) is None and "(" not in body and ":" not in body and "：" not in body):
+            continue
+        name = m.group(1)
+        key = name.lower()
+        if key in seen or len(name) < 2:
+            continue
+        seen.add(key)
+        raw_fields = m.group(2) or ""
+        fields = [f.strip() for f in re.split(r"[,،]+", raw_fields) if f.strip()]
+        fields = [re.sub(r"[^a-zA-Z0-9_]", "", f) for f in fields]
+        fields = [f for f in fields if f]
+        found.append({"name": name[:1].upper() + name[1:], "fields": fields})
+    for m in re.finditer(
+        r"\b([A-Z][A-Za-z0-9_]{1,40})\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*){0,12})\s*\)",
+        text or "",
+    ):
+        name = m.group(1)
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        fields = [f.strip() for f in m.group(2).split(",") if f.strip()]
+        found.append({"name": name, "fields": fields})
+    return found
+
+
 def structural_translate(user_text: str) -> dict[str, Any]:
+    """Pure extraction from user text — no domain templates, no invented entities/commands."""
     text = (user_text or "").strip()
     spec: dict[str, Any] = {
         "bot_name": "", "commands": [], "buttons": [], "entities": [], "rules": [], "flows": [],
@@ -402,133 +476,105 @@ def structural_translate(user_text: str) -> dict[str, Any]:
         if name in seen:
             continue
         seen.add(name)
-        spec["commands"].append({"name": name, "description": (m.group("desc") or name).strip()[:100]})
+        spec["commands"].append({
+            "name": name,
+            "description": (m.group("desc") or name).strip()[:100],
+        })
 
     for lab in _extract_button_labels(text):
-        spec["buttons"].append({"label": lab})
-        stem = _command_stem_from_label(lab)
-        if stem and not any(c.get("name") == stem for c in spec["commands"]):
-            spec["commands"].append({"name": stem, "description": lab, "admin_only": False})
+        if not any(b.get("label") == lab for b in spec["buttons"]):
+            spec["buttons"].append({"label": lab})
+        if not seen:
+            stem = _command_stem_from_label(lab)
+            if stem and stem not in seen and _valid_cmd_name(stem):
+                seen.add(stem)
+                spec["commands"].append({"name": stem, "description": lab, "admin_only": False})
 
-    # Fresh tools from this request only
     dyn_tools = _extract_dynamic_tools(text)
     if dyn_tools:
         spec["tools"] = dyn_tools
 
-    # If user said the bot asks to type/write something after an add-like action → one collect step
-    if any(c.get("name") == "add" for c in spec["commands"]) and re.search(
-        r"(يطلب|اطلب|اكتب|كتابة|ادخل|أدخل).{0,40}(مهم|نص|اسم|title)",
+    for ent in _entities_from_user_text(text):
+        if not any(e.get("name") == ent["name"] for e in spec["entities"]):
+            spec["entities"].append(ent)
+
+    create_cmds = [
+        c.get("name") for c in spec["commands"]
+        if isinstance(c, dict) and (
+            str(c.get("name") or "").startswith(("new_", "add_", "create_"))
+            or str(c.get("name") or "") in ("register", "new_client", "new_task", "order")
+        )
+    ]
+    if create_cmds and re.search(
+        r"(يطلب|اطلب|اكتب|كتابة|ادخل|أدخل|يجمع).{0,50}(مهم|نص|اسم|title|وصف|بريد|هاتف|كمية)",
         text or "",
         re.I,
     ):
-        if not any(f.get("command") == "add" for f in spec["flows"]):
+        ordered = _detect_ordered_steps(text)
+        steps = ordered if ordered else [{"key": "title", "prompt": "أرسل النص للحفظ:"}]
+        for cn in create_cmds:
+            if any(f.get("command") == cn for f in spec["flows"]):
+                continue
+            ent_name = ""
+            for e in spec["entities"]:
+                en = str(e.get("name") or "").lower()
+                if en and (en in cn or cn.endswith(en)):
+                    ent_name = e["name"]
+                    break
             spec["flows"].append({
-                "id": "add",
-                "command": "add",
-                "entity": "Record",
+                "id": cn,
+                "command": cn,
+                "entity": ent_name,
                 "kind": "collect",
-                "steps": [{"key": "title", "prompt": "أرسل النص للحفظ:"}],
+                "steps": steps,
             })
-        cmd = _slug(lab)
-        if cmd not in seen and cmd != "action":
-            seen.add(cmd)
-            spec["commands"].append({"name": cmd, "description": lab[:100]})
 
-    # Long explicit command lists (docs-style specs) must not invent catalog/order noise
-    slash_cmds = re.findall(r"(?m)(?:^|\\s)/([A-Za-z][A-Za-z0-9_]{1,32})\\b", text or "")
-    dense_command_spec = len(slash_cmds) >= 8
-    # Catalog items only when user evidenced a product/menu list — not action buttons
+    ordered = _detect_ordered_steps(text)
+    if ordered and not spec.get("flows") and spec["commands"]:
+        prefer = None
+        for c in spec["commands"]:
+            n = str(c.get("name") or "")
+            if n in ("register",) or n.startswith(("new_", "add_", "create_")):
+                prefer = n
+                break
+        if prefer is None:
+            prefer = str(spec["commands"][0].get("name") or "start")
+        if prefer not in ("start", "help"):
+            ent_name = ""
+            for e in spec["entities"]:
+                en = str(e.get("name") or "").lower()
+                if prefer.endswith(en) or en in prefer:
+                    ent_name = e["name"]
+                    break
+            spec["flows"].append({
+                "id": prefer,
+                "command": prefer,
+                "entity": ent_name,
+                "kind": "collect",
+                "steps": ordered,
+            })
+
+    slash_cmds = re.findall(r"(?m)(?:^|\s)/([A-Za-z][A-Za-z0-9_]{1,32})\b", text or "")
+    dense_command_spec = len(slash_cmds) >= 6
     _catalog_evidence = any(
         k in _norm(text) for k in ("اصناف", "الأصناف", "منتجات", "المنتجات", "منيو", "menu items", "كتالوج")
     ) or bool(re.search(r"(يظهر له|الأصناف|الاصناف)\s*[:\n]", text or ""))
-    items = [] if dense_command_spec or not _catalog_evidence else _extract_item_list(user_text)
-    # Action-style buttons (إضافة/مهامي/إنهاء…) stay as buttons via _extract_button_labels only
-    if items:
-        spec["entities"].append({"name": "Item", "fields": ["name"]})
-        spec["entities"].append({"name": "Order", "fields": ["item_name", "quantity", "status"]})
+    if not dense_command_spec and _catalog_evidence:
+        items = _extract_item_list(user_text)
         for it in items:
-            spec["buttons"].append({"label": it})
-        if "show_categories" not in seen and "menu" not in seen:
-            desc = next(
-                (b["label"] for b in spec["buttons"]
-                 if "اصناف" in _norm(b.get("label", "")) or "منتجات" in _norm(b.get("label", ""))),
-                "عرض الأصناف",
-            )
-            seen.add("show_categories")
-            spec["commands"].append({"name": "show_categories", "description": desc[:100]})
-            if not any("اصناف" in _norm(b.get("label", "")) for b in spec["buttons"]):
-                spec["buttons"].insert(0, {"label": desc})
-        if "order" not in seen:
-            seen.add("order")
-            spec["commands"].append({"name": "order", "description": "طلب صنف بالكمية"})
-        spec["flows"].append({
-            "id": "order",
-            "command": "order",
-            "entity": "Order",
-            "kind": "collect",
-            "steps": [
-                {"key": "quantity", "prompt": "أرسل الكمية المطلوبة (رقم)"},
-                {"key": "confirm", "prompt": "للتأكيد اكتب: نعم — للإلغاء اكتب: لا"},
-            ],
-            "prefill_from_button": "item_name",
-        })
-        spec["rules"].append("عند اختيار صنف من الأزرار يبدأ تدفق الطلب: كمية ثم تأكيد")
+            if not any(b.get("label") == it for b in spec["buttons"]):
+                spec["buttons"].append({"label": it})
 
     try:
         from telegram_bot_engine.formal_engine.ontology.telegram_capabilities import (
             commands_from_capability_evidence,
         )
         for cmd, _caps, desc in commands_from_capability_evidence(text):
-            if cmd not in seen:
+            if cmd not in seen and _valid_cmd_name(cmd):
                 seen.add(cmd)
                 spec["commands"].append({"name": cmd, "description": desc, "admin_only": True})
     except Exception:
         pass
-
-    # Multi-step sequences from prose (تسجيل: اسم ثم هاتف ثم عنوان / طلب: كمية ثم تأكيد)
-    ordered = _detect_ordered_steps(text)
-    if ordered and not spec.get("flows"):
-        # classify entity
-        keys = [s["key"] for s in ordered]
-        if "quantity" in keys or any(k in _norm(text) for k in ("طلب", "صنف", "منيو", "اوردر")):
-            ent, fid, desc = "Order", "order", "طلب متعدد الخطوات"
-            if "item_name" not in keys and any(k in _norm(text) for k in ("صنف", "منيو", "اصناف", "مطعم", "منتجات")):
-                # item chosen via button; flow starts at quantity
-                ordered = [s for s in ordered if s["key"] != "name"]
-            fields = list(dict.fromkeys(["item_name"] + keys + ["status"]))
-            if not any(e.get("name") == "Order" for e in spec["entities"]):
-                spec["entities"].append({"name": "Order", "fields": fields})
-            if not any(e.get("name") == "Item" for e in spec["entities"]) and any(
-                k in _norm(text) for k in ("صنف", "منيو", "اصناف", "منتج")
-            ):
-                spec["entities"].append({"name": "Item", "fields": ["name"]})
-        else:
-            ent, fid, desc = "Customer", "register", "تسجيل متعدد الخطوات"
-            fields = list(dict.fromkeys(keys))
-            if not any(e.get("name") == "Customer" for e in spec["entities"]):
-                spec["entities"].append({"name": "Customer", "fields": fields})
-        if fid not in seen:
-            seen.add(fid)
-            spec["commands"].append({"name": fid, "description": desc})
-        spec["flows"].append({
-            "id": fid,
-            "command": fid,
-            "entity": ent,
-            "kind": "collect",
-            "steps": ordered,
-            "prefill_from_button": "item_name" if ent == "Order" else "",
-        })
-        # items from inline list without show-hint lines
-        more_items = _extract_item_list(text)
-        if more_items and ent == "Order":
-            for it in more_items:
-                if not any(b.get("label") == it for b in spec["buttons"]):
-                    spec["buttons"].append({"label": it})
-            if "show_categories" not in seen:
-                seen.add("show_categories")
-                spec["commands"].append({"name": "show_categories", "description": "عرض الأصناف"})
-                if not any("اصناف" in _norm(b.get("label", "")) or "منيو" in _norm(b.get("label", "")) for b in spec["buttons"]):
-                    spec["buttons"].insert(0, {"label": "عرض الأصناف"})
 
     if "start" not in seen:
         spec["commands"].insert(0, {"name": "start", "description": "تشغيل البوت"})
@@ -622,27 +668,27 @@ def _spec_to_sectioned_text(data: dict[str, Any], original: str) -> str:
 
 
 _HF_SYSTEM = """You are a Telegram bot SPEC translator (not a coder).
-Convert the user description into JSON ONLY for complex multi-step bots.
+Convert the user description into JSON ONLY.
 
 Schema:
 {
   "bot_name": "string",
-  "commands": [{"name": "latin_snake", "description": "string", "admin_only": false}],
+  "commands": [{"name": "exact_user_name", "description": "string", "admin_only": false}],
   "buttons": [{"label": "string"}],
   "entities": [{"name": "PascalCase", "fields": ["field1", "field2"]}],
-  "flows": [{"id": "order", "command": "order", "entity": "Order", "steps": [{"key": "quantity", "prompt": "..."}, {"key": "confirm", "prompt": "..."}]}],
+  "flows": [{"id": "same_as_command", "command": "exact_user_command", "entity": "EntityFromText", "steps": [{"key": "field", "prompt": "..."}]}],
   "rules": ["string"],
-  "relations": [{"from": "Order", "to": "Item", "via": "item_name"}]
+  "relations": [{"from": "EntityA", "to": "EntityB", "via": "field"}]
 }
 
 STRICT rules:
-1) Extract EVERY command, button, entity, flow step evidenced in the text.
-2) Multi-step conversations (then/بعدين/ثم) become flows with ordered steps.
-3) Menu/catalog items become buttons; ordering becomes Order(item_name, quantity, status).
-4) Command names latin [a-z0-9_]. Never invent domain packs not in the text.
-5) tools: only checks/tools the user asked for [{id,title,input,description}] — rebuild every request from their words.
-5) Always include flows for register/order/booking when steps are described.
-6) JSON only. No markdown. No code.
+1) Extract ONLY what the user wrote. Never invent domains (shop/delivery/tickets/games).
+2) Command names MUST stay exactly as the user wrote them (e.g. /new_task stays new_task — never rename to add).
+3) Entities and fields ONLY from the user text. Do not invent Order/Customer/Item.
+4) Flows attach to the user's command names; steps from the described sequence only.
+5) Buttons are labels only; do not invent commands like show_categories unless the user wrote them.
+6) tools: only what the user asked for. Rebuild every request from their words.
+7) JSON only. No markdown. No code.
 """
 
 
@@ -704,7 +750,7 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
 def _g4f_translate(text: str, timeout: int) -> TranslatorResult:
     """Free multi-provider fallback when HF_TOKEN is missing or HF fails."""
     t0 = time.perf_counter()
-    if os.environ.get("G4F_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+    if os.environ.get("G4F_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return TranslatorResult(ok=False, error="g4f_disabled", path="g4f")
     try:
         from g4f.client import Client  # type: ignore
@@ -771,25 +817,22 @@ def _valid_cmd_name(name: str) -> bool:
         return False
     if not re.match(r"^[a-z][a-z0-9_]{0,32}$", n):
         return False
+    if n.count("_") > 3:
+        return False
+    if re.search(r"_id_[a-z]|_name_[a-z]|_email_|_phone_|_status_|_owner_", n):
+        return False
     return True
 
 
 def _normalize_cmd_name(name: str) -> str:
-    n = (name or "").strip().lstrip("/").lower().replace(" ", "_")
+    """Sanitize only — never rename user-provided command names."""
+    n = (name or "").strip().lstrip("/").lower().replace(" ", "_").replace("-", "_")
+    n = re.sub(r"[^a-z0-9_]", "", n)
+    if not n:
+        return ""
     if not _valid_cmd_name(n) and n not in ("start", "help"):
         return ""
-    aliases = {
-        "ban_user": "ban", "ban_member": "ban", "block": "ban",
-        "kick_user": "kick", "kick_member": "kick",
-        "mute_user": "mute", "mute_member": "mute", "silence": "mute",
-        "unban_user": "unban", "unmute_user": "unmute",
-        "show_menu": "menu", "categories": "show_categories", "catalog": "show_categories",
-        "add_task": "add", "new_task": "add", "create_task": "add",
-        "my_tasks": "list_mine", "tasks": "list_mine",
-        "done_task": "complete", "complete_task": "complete", "finish_task": "complete",
-        "delete_task": "remove",
-    }
-    return aliases.get(n, n)
+    return n
 
 
 def _merge_specs(primary: dict, secondary: dict) -> dict:
@@ -966,7 +1009,8 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         if hf_enabled():
             ai_result = _hf_translate(text, timeout=timeout)
         # 2) g4f fallback when HF failed or unavailable
-        if not (ai_result and ai_result.ok):
+        g4f_on = os.environ.get("G4F_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if g4f_on and not (ai_result and ai_result.ok):
             if complex_hint or not hf_enabled():
                 g4 = _g4f_translate(text, timeout=min(timeout, 50))
                 if g4.ok:

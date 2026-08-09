@@ -105,34 +105,16 @@ def _check_flows_and_callbacks(root: Path) -> tuple[list[str], list[str], dict[s
     checks["has_button_to_cmd"] = "BUTTON_TO_CMD" in src
     checks["has_flows"] = "FLOWS:" in src or "FLOWS =" in src
 
-    # FLOWS entries should not be empty lists if order exists
-    if re.search(r"['\"]order['\"]\s*:\s*\[\s*\]", src):
-        errs.append("flow_order_empty_steps")
-    if "order" in src and "quantity" in src:
-        checks["order_quantity_step"] = True
+    # Structural flow quality only — no domain-specific order/catalog templates.
+    for m in re.finditer(r"['\"]([a-z][a-z0-9_]*)['\"]\s*:\s*\[\s*\]", src):
+        fid = m.group(1)
+        if fid not in ("start", "help"):
+            errs.append(f"flow_{fid}_empty_steps")
+    checks["has_flow_steps"] = bool(re.search(r"['\"][a-z][a-z0-9_]*['\"]\s*:\s*\[\s*\{", src))
+    if "BUTTON_TO_CMD" in src and "main_keyboard" in src:
+        checks["keyboard_wired"] = True
     else:
-        checks["order_quantity_step"] = False
-    if "confirm" in src and ("نعم" in src or "confirm" in src):
-        checks["order_confirm_step"] = "confirm" in src
-    else:
-        checks["order_confirm_step"] = False
-
-    if "show_categories" in src or "show_products" in src:
-        checks["catalog_show"] = "main_keyboard" in src
-        if "reply_markup=kb" not in src and "reply_markup = kb" not in src:
-            warns.append("catalog_show_without_keyboard_markup")
-    else:
-        checks["catalog_show"] = False
-
-    # Item selection should start flow when FLOWS has order
-    if re.search(r"['\"]order['\"]", src) and "FLOWS" in src:
-        if "item_name" in src and ("ud['flow']" in src or 'ud["flow"]' in src or "ud['flow']" in src):
-            checks["item_starts_order_flow"] = True
-        else:
-            checks["item_starts_order_flow"] = False
-            warns.append("catalog_items_may_not_start_order_flow")
-    else:
-        checks["item_starts_order_flow"] = False
+        checks["keyboard_wired"] = "BUTTON_TO_CMD" not in src
 
     return errs, warns, checks
 
@@ -146,12 +128,7 @@ def _check_persistence(root: Path) -> tuple[list[str], list[str], dict[str, bool
     checks["has_store"] = store.exists()
     if models.exists():
         src = models.read_text(encoding="utf-8")
-        checks["model_order"] = "class Order" in src or "Order" in src
-        checks["model_item"] = "class Item" in src or "Item" in src
-        if "quantity" in src:
-            checks["order_has_quantity"] = True
-        if "item_name" in src:
-            checks["order_has_item_name"] = True
+        checks["has_entity_classes"] = bool(re.search(r"^class\s+[A-Z]", src, re.M))
     if store.exists():
         ssrc = store.read_text(encoding="utf-8")
         checks["store_create"] = "async def create" in ssrc or "def create" in ssrc
@@ -164,17 +141,15 @@ def _fidelity_score(checks: dict[str, bool], errors: list[str]) -> float:
     else:
         base = 0.55
     weights = {
-        "has_flows": 0.08,
-        "order_quantity_step": 0.1,
-        "order_confirm_step": 0.1,
-        "catalog_show": 0.07,
-        "item_starts_order_flow": 0.1,
-        "has_models": 0.05,
-        "has_store": 0.05,
-        "model_order": 0.05,
-        "order_has_quantity": 0.05,
-        "order_has_item_name": 0.05,
-        "store_create": 0.05,
+        "has_flows": 0.12,
+        "has_flow_steps": 0.12,
+        "keyboard_wired": 0.1,
+        "has_models": 0.1,
+        "has_store": 0.1,
+        "has_entity_classes": 0.1,
+        "store_create": 0.08,
+        "has_callback_labels": 0.08,
+        "has_button_to_cmd": 0.08,
     }
     score = base
     for k, w in weights.items():
