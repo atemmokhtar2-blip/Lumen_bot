@@ -249,9 +249,47 @@ def generate_bot(request: str, work_dir=None):
 
         from .formal_engine.pipeline_formal import build_from_text
         from .formal_engine.dsl.extractor import extract_dsl
+        from .formal_engine.generation_contract import assess_generation_contract
 
+        # World-class gate: refuse hollow contracts (start/help only). No domain templates.
+        # Assess on merged formal_text (AI structured + user) and original for evidence.
+        contract = assess_generation_contract(formal_text or original_request)
+        if not contract.ready:
+            # Second look at pure user text if AI path stripped signals
+            contract_user = assess_generation_contract(original_request)
+            if contract_user.score > contract.score:
+                contract = contract_user
+                formal_text = original_request
+                grounding_src = original_request
+        stages.append(
+            StageResult.ok(
+                "generation_contract",
+                outputs=contract.to_dict(),
+                warnings=list(contract.gaps)[:8],
+            )
+            if contract.ready
+            else StageResult.failed(
+                "generation_contract",
+                errors=list(contract.gaps)[:8] or ["hollow_contract"],
+            )
+        )
+        if not contract.ready:
+            elapsed = time.perf_counter() - t0
+            return GenerationResult(
+                success=False,
+                project_path=None,
+                stages=stages,
+                validation_reports=[],
+                errors=["hollow_contract"] + list(contract.gaps)[:5],
+                metadata={
+                    "engine": "generation_contract",
+                    "elapsed_ms": round(elapsed * 1000, 1),
+                    "contract": contract.to_dict(),
+                    "needs_richer_spec": True,
+                    "spec_translator": translator_meta,
+                },
+            )
 
-        # SpecTranslator (HF) + formal engine handle vague text; no clarification gate.
         build = build_from_text(
             formal_text,
             project_dir,

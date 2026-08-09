@@ -880,6 +880,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         project_path = getattr(result, "project_path", None)
         errors = getattr(result, "errors", []) or []
         stages = getattr(result, "stages", []) or []
+        meta = getattr(result, "metadata", None) or {}
+
+        # Hollow contract → AI partner asks for missing structure (dynamic, no templates)
+        if (not success) and (
+            meta.get("needs_richer_spec")
+            or "hollow_contract" in errors
+        ):
+            try:
+                from telegram_bot_engine.chat_ai import smart_chat_reply
+                cdict = meta.get("contract") or {}
+                mem_ctx = _mem.context_for_ai() if _mem else ""
+                mem_ctx = (
+                    (mem_ctx + "\n\n") if mem_ctx else ""
+                ) + (
+                    "generation_blocked_hollow_contract\n"
+                    + "contract=" + str(cdict)[:800]
+                    + "\nnote: as senior partner, ask only for the missing structure "
+                    "evidenced by gaps (commands/fields/flows) using the user's language; "
+                    "do not invent domain features; do not claim a bot was generated."
+                )
+                sc = await asyncio.to_thread(
+                    smart_chat_reply,
+                    request,
+                    memory_context=mem_ctx,
+                )
+                sc_text = (getattr(sc, "text", None) or "").strip()
+                if sc_text:
+                    if _mem:
+                        _mem.add_turn(
+                            "assistant",
+                            sc_text,
+                            meta={"capability": "richer_spec"},
+                        )
+                    await status_msg.edit_text(sc_text[:3500])
+                    return
+            except Exception:
+                logger.exception("hollow contract AI follow-up failed")
 
         ok_stages = sum(1 for s in stages if getattr(s, "success", False))
         total_stages = len(stages)
@@ -891,7 +928,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ]
         if project_path:
             summary_lines.append(f"• المسار: `{escape_md(project_path)}`")
-        meta = getattr(result, "metadata", None) or {}
+        # meta already loaded above
         if meta.get("button_count") is not None:
             summary_lines.append(f"• الأزرار في /start: {meta.get('button_count')}")
         if meta.get("buttons"):
