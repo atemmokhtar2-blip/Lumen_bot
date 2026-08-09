@@ -1,17 +1,24 @@
 """
 GitExecutor — Specification 047 (CRITICAL)
 
-Plans and logically executes Git operations after user/permission/repo checks.
+Plans and executes Git operations after user/permission/repo checks.
+Supports both logical (planning) and real (subprocess) modes.
 Dangerous ops require explicit confirmation. Conflict resolution is suggested
 only; never applied without user approval. No autonomous history rewrite.
+
+Real mode activates when request provides repo_path / work_dir and
+execute_real=True (or when the operation is push/pull/commit on a verified path).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from .data_readers import GenericData
 from .report_data import (
@@ -315,26 +322,169 @@ class GitExecutor:
         user_id: str,
         request_data: GenericData,
     ) -> Tuple[str, str, bool, bool]:
-        """Return status, message, verification_ok, rolled_back."""
+        """Return status, message, verification_ok, rolled_back.
+
+        Supports real git execution when repo_path/work_dir is provided
+        and the operation is allowed. Falls back to logical simulation otherwise.
+        """
+        raw = request_data.raw or {}
+
         # Simulate rare failure on merge without confirm conflict handling
-        if op in (OP_MERGE, OP_REBASE) and (request_data.raw or {}).get("simulate_conflict"):
+        if op in (OP_MERGE, OP_REBASE) and raw.get("simulate_conflict"):
             return (
                 STATUS_FAILED,
                 f"{op} encountered conflicts; resolution suggested, not auto-applied",
                 False,
                 False,
             )
-        if op == OP_RESET_HARD and not (request_data.raw or {}).get("confirm_all_dangerous"):
-            # Should have been caught earlier, but safety net
+        if op == OP_RESET_HARD and not raw.get("confirm_all_dangerous"):
             return STATUS_AWAITING_CONFIRMATION, "reset --hard needs confirmation", False, False
 
-        # Success path with verification
-        verification_ok = True
-        message = f"{op} succeeded on {repo} ({branch})"
-        # Rollback support path: if requested rollback flag
-        if (request_data.raw or {}).get("force_fail"):
+        if raw.get("force_fail"):
             return STATUS_ROLLED_BACK, f"{op} failed; rolled back to last stable state", False, True
+
+        # --- Real execution path ---
+        repo_path = raw.get("repo_path") or raw.get("work_dir") or raw.get("path")
+        execute_real = bool(raw.get("execute_real", False)) or op in (
+            OP_PUSH, OP_PULL, OP_FETCH, OP_COMMIT, OP_ADD, OP_CLONE
+        )
+
+        if repo_path and execute_real:
+            try:
+                status, message = self._run_real_git(op, str(repo_path), branch, raw)
+                return status, message, status == STATUS_EXECUTED, False
+            except Exception as exc:
+                _log.exception("Real git execution failed for %s", op)
+                return STATUS_FAILED, f"real git {op} failed: {exc}", False, False
+
+        # --- Logical / planning fallback ---
+        verification_ok = True
+        message = f"{op} succeeded on {repo} ({branch}) [logical]"
         return STATUS_EXECUTED, message, verification_ok, False
+
+    def _run_real_git(
+        self,
+        op: str,
+        repo_path: str,
+        branch: str,
+        raw: Dict[str, Any],
+    ) -> Tuple[str, str]:
+        """Execute a real git command via subprocess. Returns (status, message)."""
+        path = Path(repo_path).resolve()
+        if not path.exists() and op != OP_CLONE:
+            return STATUS_FAILED, f"path does not exist: {path}"
+
+        timeout = int(raw.get("timeout", 120))
+        env = os.environ.copy()
+        # Avoid interactive prompts
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_ASKPASS"] = "echo"
+
+        def run(cmd: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                cmd,
+                cwd=str(cwd or path),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+                check=False,
+            )
+
+        try:
+            if op == OP_CLONE:
+                url = str(raw.get("url") or raw.get("repo_url") or repo_path)
+                target = Path(raw.get("target_dir") or path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                r = run(["git", "clone", "--depth", "1", url, str(target)], cwd=target.parent)
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"clone failed: {r.stderr.strip() or r.stdout.strip()}"
+                return STATUS_EXECUTED, f"cloned {url} → {target}"
+
+            if op == OP_INIT:
+                path.mkdir(parents=True, exist_ok=True)
+                r = run(["git", "init"])
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"init failed: {r.stderr.strip()}"
+                return STATUS_EXECUTED, f"initialized repo at {path}"
+
+            if op == OP_ADD:
+                files = raw.get("files") or ["."]
+                if isinstance(files, str):
+                    files = [files]
+                r = run(["git", "add"] + list(files)[:50])
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"add failed: {r.stderr.strip()}"
+                return STATUS_EXECUTED, f"added {files}"
+
+            if op == OP_COMMIT:
+                msg = str(raw.get("message") or raw.get("commit_title") or "chore: update")
+                # Stage everything first if requested
+                if raw.get("add_all", True):
+                    run(["git", "add", "-A"])
+                r = run(["git", "commit", "-m", msg])
+                if r.returncode != 0:
+                    out = (r.stderr or r.stdout or "").strip()
+                    if "nothing to commit" in out.lower():
+                        return STATUS_EXECUTED, "nothing to commit (clean)"
+                    return STATUS_FAILED, f"commit failed: {out}"
+                return STATUS_EXECUTED, f"committed: {msg[:80]}"
+
+            if op == OP_PUSH:
+                remote = str(raw.get("remote") or "origin")
+                ref = branch or str(raw.get("ref") or "HEAD")
+                force = bool(raw.get("force") or op == OP_FORCE_PUSH)
+                cmd = ["git", "push"]
+                if force:
+                    cmd.append("--force-with-lease")
+                cmd.extend([remote, ref])
+                r = run(cmd)
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"push failed: {(r.stderr or r.stdout or '').strip()}"
+                return STATUS_EXECUTED, f"pushed to {remote}/{ref}"
+
+            if op == OP_PULL:
+                remote = str(raw.get("remote") or "origin")
+                ref = branch or ""
+                cmd = ["git", "pull", remote]
+                if ref:
+                    cmd.append(ref)
+                r = run(cmd)
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"pull failed: {(r.stderr or r.stdout or '').strip()}"
+                return STATUS_EXECUTED, f"pulled from {remote} {ref}".strip()
+
+            if op == OP_FETCH:
+                remote = str(raw.get("remote") or "origin")
+                r = run(["git", "fetch", remote])
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"fetch failed: {(r.stderr or r.stdout or '').strip()}"
+                return STATUS_EXECUTED, f"fetched from {remote}"
+
+            if op == OP_CHECKOUT or op == OP_SWITCH:
+                if not branch:
+                    return STATUS_FAILED, "branch required for checkout/switch"
+                r = run(["git", "checkout", branch])
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"checkout failed: {(r.stderr or r.stdout or '').strip()}"
+                return STATUS_EXECUTED, f"checked out {branch}"
+
+            if op == OP_BRANCH_CREATE:
+                new_branch = str(raw.get("new_branch") or branch)
+                if not new_branch:
+                    return STATUS_FAILED, "new_branch required"
+                r = run(["git", "checkout", "-b", new_branch])
+                if r.returncode != 0:
+                    return STATUS_FAILED, f"branch create failed: {(r.stderr or r.stdout or '').strip()}"
+                return STATUS_EXECUTED, f"created and switched to {new_branch}"
+
+            # Fallback for other ops: logical only
+            return STATUS_EXECUTED, f"{op} succeeded on {path} ({branch}) [logical-fallback]"
+
+        except subprocess.TimeoutExpired:
+            return STATUS_FAILED, f"{op} timed out after {timeout}s"
+        except Exception as exc:
+            return STATUS_FAILED, f"{op} error: {exc}"
 
     def _build_commit(
         self, user_id: str, request_data: GenericData, ts: str
