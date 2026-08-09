@@ -1111,7 +1111,7 @@ def _emit_handlers_module(inf: InferenceResult) -> str:
         raw_blob = f"{cmd.name} {getattr(cmd, 'description', '') or ''}"
         if any(x in raw_blob for x in ("إلغاء", "الغاء", "ملغي", "cancel", "cancelled")):
             status_on_complete[cmd.name] = "cancelled"
-        elif any(x in blob for x in ("complete", "done", "إنهاء", "انهاء", "إكمال")):
+        elif any(x in blob for x in ("complete", "done", "إنهاء", "انهاء", "إكمال", "mark_")) or blob.startswith("mark"):
             status_on_complete[cmd.name] = "done"
         elif any(x in blob for x in ("delete", "حذف", "remove")):
             status_on_complete[cmd.name] = "deleted"

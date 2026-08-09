@@ -518,30 +518,48 @@ def infer(program: DSLProgram) -> InferenceResult:
 
     def _cmd_kind(cname: str, desc: str = "") -> str:
         c = cname.lower()
+        d = desc or ""
         if c in _SKIP_CMDS:
             return "skip"
         parts = [p for p in c.replace("-", "_").split("_") if p]
         # Multi-part commands like cancel_appointment are not pure skip stems
         if len(parts) == 1 and any(s in parts for s in _SKIP_STEMS) and c not in _LOOKUP_CMDS:
             return "skip"
+        # view_/list_/show_ → list (before add_ collect verbs steal "material" paths)
+        if parts and parts[0] in ("view", "list", "show", "browse") or any(
+            x in parts for x in ("list", "menu", "catalog", "materials", "items")
+        ) and parts[0] not in ("add", "create", "new", "mark"):
+            if parts[0] in ("view", "list", "show", "browse") or c.startswith(("view_", "list_", "show_")):
+                return "list"
+        if c in _LIST_CMDS or any(x in parts for x in ("list", "menu", "catalog")):
+            return "list"
+        # remind_/pending_ → mine/list of open items
+        if parts and parts[0] in ("remind", "pending", "open") or c.startswith(("remind_", "pending_")):
+            return "mine"
+        # mark_/complete_/done_ → lookup (id + status change)
+        if parts and parts[0] in ("mark", "complete", "done", "finish") or c.startswith(
+            ("mark_", "complete_", "done_", "finish_")
+        ):
+            return "lookup"
         if c in _LOOKUP_CMDS or any(x in parts for x in ("track", "search", "find", "lookup")):
             return "lookup"
         if c.startswith(_MINE_PREFIX) or c in _MINE_CMDS:
             return "mine"
-        if c in _LIST_CMDS or any(x in parts for x in ("list", "menu", "catalog")):
+        # Arabic description cues for list vs collect
+        if any(h in d for h in ("مشاهدة", "عرض", "قائمة", "list all", "show all", "عرض كل", "شوّف", "شوف")) and not any(
+            h in d for h in ("يجمع", "اجمع", "يطلب", "اضافة", "إضافة", "تسجيل")
+        ):
             return "list"
+        if any(h in d for h in ("تذكير", "المهام اللي", "لسه مخلص", "غير مكتمل")):
+            return "mine"
+        if any(h in d for h in ("كمكتملة", "كمكتمل", "إنهاء", "انهاء", "إكمال")):
+            return "lookup"
         if any(v in parts for v in _INPUT_VERBS):
             return "collect"
         if any(c == v or c.startswith(v + "_") or c.endswith("_" + v) for v in _INPUT_VERBS):
             return "collect"
-        d = desc or ""
-        if any(h in d for h in ("عرض", "قائمة", "list all", "show all", "عرض كل")) and not any(
-            h in d for h in _DESC_INPUT_HINTS
-        ):
-            return "list"
         if any(h in d for h in _DESC_INPUT_HINTS):
             return "collect"
-        # cancel/delete with explicit id collection
         if any(x in c for x in ("cancel", "delete", "remove")) and any(
             x in d for x in ("رقم", "id", "معرّف", "معرف", "يجمع", "يطلب")
         ):
@@ -697,12 +715,16 @@ def infer(program: DSLProgram) -> InferenceResult:
             if not ent_name:
                 ent_name = caps[0]
         fields = _pick_wizard_fields(ent_name, desc, kind)
-        # cancel/delete by appointment number → single id step (from user wording only)
+        # cancel/delete/mark-complete by id → single id step when user did not list other fields
+        if kind == "lookup" and not fields:
+            fields = ["id"]
         if any(x in (desc or "") for x in ("إلغاء", "الغاء", "cancel", "حذف")) and any(
             x in (desc or "") for x in ("رقم الموعد", "رقم الحجز", "رقم الطلب", "id")
         ):
             fields = ["id"]
             kind = "lookup"
+        if kind == "lookup" and any(x in cn for x in ("mark", "complete", "done", "finish")):
+            fields = ["id"]
         if not fields and kind == "collect":
             # Only fields evidenced in command description or entity attrs — never invent "name"
             fields = _fields_from_description(desc)
