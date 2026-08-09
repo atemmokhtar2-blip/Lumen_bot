@@ -103,25 +103,42 @@ def generate_bot(request: str, work_dir=None):
                     formal_text = tr.structured_text
                     grounding_src = original_request  # NEVER ground against AI output (self-justifies hallucinations)
             else:
+                # HF-only: do NOT fall back to raw/structural extraction (causes ssl/information noise)
                 stages.append(
-                    StageResult.ok(
+                    StageResult.failed(
                         "spec_translator",
-                        outputs=tr.to_dict(),
-                        warnings=[tr.error or "fallback_raw_text"],
+                        errors=[tr.error or "spec_translator_failed"],
                     )
                 )
-                formal_text = original_request
-                grounding_src = original_request
+                elapsed = time.perf_counter() - t0
+                return GenerationResult(
+                    success=False,
+                    project_path=None,
+                    stages=stages,
+                    validation_reports=[],
+                    errors=[tr.error or "HF SpecTranslator required — structural path disabled"],
+                    metadata={
+                        "engine": "spec_translator",
+                        "spec_translator": translator_meta,
+                        "elapsed_ms": round(elapsed * 1000, 1),
+                    },
+                )
         except Exception as tr_exc:
             stages.append(
-                StageResult.ok(
+                StageResult.failed(
                     "spec_translator",
-                    outputs={"ok": False, "error": f"{type(tr_exc).__name__}:{tr_exc}"},
-                    warnings=["translator_exception_fallback"],
+                    errors=[f"{type(tr_exc).__name__}:{tr_exc}"],
                 )
             )
-            formal_text = original_request
-            grounding_src = original_request
+            elapsed = time.perf_counter() - t0
+            return GenerationResult(
+                success=False,
+                project_path=None,
+                stages=stages,
+                validation_reports=[],
+                errors=[f"spec_translator_exception:{type(tr_exc).__name__}:{tr_exc}"],
+                metadata={"engine": "spec_translator", "elapsed_ms": round(elapsed * 1000, 1)},
+            )
 
         from .formal_engine.pipeline_formal import build_from_text
         from .formal_engine.dsl.extractor import extract_dsl

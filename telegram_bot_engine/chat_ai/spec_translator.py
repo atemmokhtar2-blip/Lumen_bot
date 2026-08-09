@@ -4,7 +4,7 @@ SpecTranslator — human speech → structured specification ONLY.
 Hard constraints:
   - TRANSLATE only. Never write code. Never invent features or domains.
   - Hugging Face is the only AI path (when HF_TOKEN is set).
-  - Deterministic structural extraction is the non-AI fallback.
+  - Structural extraction is NOT used on the generation path (HF only).
   - Every field is grounded against the original user text.
   - Formal engine is the ONLY code generator.
 
@@ -1161,120 +1161,83 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
     return spec
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
+    """Hugging Face ONLY. No structural fallback (avoids false ssl/information commands)."""
     text = (user_text or "").strip()
     t0 = time.perf_counter()
     if not text:
         return TranslatorResult(
             ok=False,
             error="empty_text",
-            needs_clarification=True,
+            needs_clarification=False,
             clarification_questions=[],
             path="passthrough",
+            elapsed_ms=0.0,
         )
 
     timeout = timeout if timeout is not None else int(os.environ.get("SPEC_TRANSLATOR_TIMEOUT", "45"))
-    # Complex / long specs: prefer AI harder
-    complex_hint = len(text) >= 80 or any(
-        k in text for k in ("ثم", "بعدين", "تدفق", "مراحل", "كيان", "قاعدة", "flow", "steps", "entity")
-    )
 
-    ai_result: TranslatorResult | None = None
-    # 1) HuggingFace when token present
-    from .hf_provider import enabled as hf_enabled
-    if os.environ.get("SPEC_TRANSLATOR", "1").strip().lower() not in {"0", "false", "off"}:
-        if hf_enabled():
-            ai_result = _hf_translate(text, timeout=timeout)
-        # AI path is Hugging Face only. No g4f / third-party free clients.
-        # If HF is unavailable, structural_translate is the deterministic fallback.
-
-    # Always compute structural baseline
-    structural = structural_translate(text)
-
-    # If AI succeeded, merge so it cannot drop catalog items / admin caps / flows
-    if ai_result and ai_result.ok and isinstance(ai_result.grounded_json, dict) and ai_result.grounded_json:
-        merged = _merge_specs(ai_result.grounded_json, structural)
-        # Final ground pass: AI may never introduce un-evidenced fields
-        merged = _ground_spec_to_user_text(merged, text)
-        # ensure capability-friendly command names
-        for c in merged.get("commands") or []:
-            if isinstance(c, dict) and c.get("name"):
-                c["name"] = _normalize_cmd_name(str(c["name"]))
-        merged = _promote_flows_and_buttons(merged, text)
-
-        merged["commands"] = [
-            c for c in (merged.get("commands") or [])
-            if isinstance(c, dict) and _valid_cmd_name(str(c.get("name") or ""))
-        ]
-        # When user pasted a long explicit /command list, keep only those + start/help
-        slash = {m.lower() for m in re.findall(r"(?m)(?:^|\\s)/([A-Za-z][A-Za-z0-9_]{1,32})\\b", text or "")}
-        if len(slash) >= 8:
-            kept = []
-            for c in merged.get("commands") or []:
-                if not isinstance(c, dict):
-                    continue
-                n = str(c.get("name") or "").lower()
-                if n in slash or n in ("start", "help"):
-                    kept.append(c)
-            # restore any slash command missing from kept
-            have = {str(c.get("name") or "").lower() for c in kept}
-            for name in slash:
-                if name not in have:
-                    kept.append({"name": name, "description": name, "admin_only": name in {
-                        "admin","ban","unban","mute","unmute","kick","warn","unwarn","promote","demote",
-                        "broadcast","broadcast_groups","broadcast_users","panel","purge","clear","logs",
-                        "backup","restore","maintenance","shutdown","restart","reload","config","database",
-                        "blacklist","whitelist","export","import","statistics",
-                    }})
-            merged["commands"] = kept
-            # drop invented catalog buttons when dense command list
-            merged["buttons"] = []
-            merged["flows"] = [
-                f for f in (merged.get("flows") or [])
-                if isinstance(f, dict) and (
-                    str(f.get("command") or f.get("id") or "").lower() in have
-                    or str(f.get("command") or "").lower() in slash
-                )
-            ]
-        structured = _spec_to_sectioned_text(merged, text)
-        meaningful = [
-            c for c in (merged.get("commands") or [])
-            if isinstance(c, dict) and c.get("name") not in ("start", "help")
-        ]
-        ok = bool(meaningful or merged.get("buttons") or merged.get("flows"))
+    if os.environ.get("SPEC_TRANSLATOR", "1").strip().lower() in {"0", "false", "off"}:
         return TranslatorResult(
-            ok=ok,
-            structured_text=structured if ok else text,
-            grounded_json=merged,
-            model_used=(ai_result.model_used or "ai") + "+structural",
+            ok=False,
+            error="spec_translator_disabled",
+            path="disabled",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-            path=(ai_result.path or "ai") + "+structural",
-            error=ai_result.error or "",
-            needs_clarification=not ok,
-            clarification_questions=(
-                []
-            ),
         )
 
-    structural = _promote_flows_and_buttons(structural, text)
-    structured = _spec_to_sectioned_text(structural, text)
+    from .hf_provider import enabled as hf_enabled
+    if not hf_enabled():
+        return TranslatorResult(
+            ok=False,
+            error="HF_TOKEN_required — SpecTranslator is Hugging Face only (structural path disabled)",
+            path="hf_missing",
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+
+    ai_result = _hf_translate(text, timeout=timeout)
+    if not ai_result.ok:
+        return TranslatorResult(
+            ok=False,
+            error=ai_result.error or "hf_translate_failed",
+            model_used=ai_result.model_used,
+            path="hf",
+            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+
+    data = ai_result.grounded_json if isinstance(ai_result.grounded_json, dict) else {}
+    # Ground to user text only — never merge structural baseline (source of ssl/information noise)
+    grounded = _ground_spec_to_user_text(data, text)
+
+    for c in grounded.get("commands") or []:
+        if isinstance(c, dict) and c.get("name"):
+            c["name"] = _normalize_cmd_name(str(c["name"]))
+    grounded["commands"] = [
+        c for c in (grounded.get("commands") or [])
+        if isinstance(c, dict) and (
+            _valid_cmd_name(str(c.get("name") or ""))
+            or str(c.get("name") or "") in ("start", "help")
+        )
+    ]
+    grounded = _promote_flows_and_buttons(grounded, text)
+
+    structured = _spec_to_sectioned_text(grounded, text)
     meaningful = [
-        c for c in (structural.get("commands") or [])
+        c for c in (grounded.get("commands") or [])
         if isinstance(c, dict) and c.get("name") not in ("start", "help")
     ]
-    ok = bool(meaningful or (structural.get("buttons") or []) or (structural.get("flows") or []))
+    ok = bool(meaningful or grounded.get("buttons") or grounded.get("flows") or grounded.get("tools"))
+
     return TranslatorResult(
         ok=ok,
-        structured_text=structured if ok else text,
-        grounded_json=structural,
-        model_used="structural",
+        structured_text=structured if ok else "",
+        grounded_json=grounded,
+        model_used=ai_result.model_used or "huggingface",
         elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-        path="structural",
-        error=(ai_result.error if ai_result and not ai_result.ok else ""),
-        needs_clarification=not ok,
-        clarification_questions=(
-            []
-        ),
+        path="hf",
+        error="" if ok else "hf_no_grounded_signal",
+        needs_clarification=False,
+        clarification_questions=[],
     )
+
 
 
 def prepare_formal_text(user_text: str) -> tuple[str, TranslatorResult]:
