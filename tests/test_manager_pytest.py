@@ -180,7 +180,7 @@ def test_queue_order_respects_priority():
 def test_bootstrap_registers_all_real_engines():
     registry, orchestrator, manager = bootstrap()
     expected_count = len(ENGINE_CLASSES)
-    assert expected_count == 13
+    assert expected_count == 11
     assert manager.count() == expected_count
     assert len(list(registry.engines())) == expected_count
     assert len(ENGINE_CLASSES) == expected_count

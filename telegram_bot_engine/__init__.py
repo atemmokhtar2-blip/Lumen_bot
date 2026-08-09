@@ -171,7 +171,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     project_dir.mkdir(parents=True, exist_ok=True)
 
     # Always prefer multi-intent composition so bots are not single-thin packs
-    stack = detect_preset_stack(request, limit=5)
+    stack = detect_preset_stack(request, limit=8)
     if stack:
         session = compose_session(stack, user_id=user_id, request=request)
         spec = session.to_spec()

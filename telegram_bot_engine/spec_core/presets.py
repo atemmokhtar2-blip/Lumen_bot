@@ -50,7 +50,9 @@ _NOTES_KEYS = (
 )
 _SHOP_KEYS = (
     "متجر", "shop", "store", "منتجات", "ecommerce", "مدفوعات", "دفع",
-    "payment", "payments", "invoice", "شراء",
+    "payment", "payments", "invoice", "شراء", "سلة", "cart", "كوبون",
+    "coupon", "refund", "أمنيات", "wishlist", "order", "تبرع", "donation",
+    "خيرية", "صيدلية", "pharmacy",
 )
 _SUB_KEYS = (
     "اشتراك", "اشتراكات", "عضوية", "subscription", "subscribe", "vip",
@@ -277,14 +279,34 @@ def _has_any(text: str, keys: Iterable[str]) -> bool:
 
 
 
+def _token_hit(t: str, k: str) -> bool:
+    k = (k or "").strip().lower()
+    if not k or k not in t:
+        return False
+    if len(k) <= 3:
+        idx = 0
+        while True:
+            i = t.find(k, idx)
+            if i < 0:
+                return False
+            before = t[i - 1] if i > 0 else " "
+            after = t[i + len(k)] if i + len(k) < len(t) else " "
+            def _wc(ch: str) -> bool:
+                return ch.isalnum() or ("\u0600" <= ch <= "\u06FF")
+            if not _wc(before) and not _wc(after):
+                return True
+            idx = i + 1
+        return False
+    return True
+
+
 def _score_keys(text: str, keys: Iterable[str], weight: float = 1.0) -> float:
     t = _norm(text)
-    hits = sum(1 for k in keys if k in t)
-    if not hits:
+    matched = [k for k in keys if _token_hit(t, k)]
+    if not matched:
         return 0.0
-    # Longer keyword matches count a bit more (phrase specificity)
-    best = max((len(k) for k in keys if k in t), default=1)
-    return hits * weight + min(best, 24) * 0.02
+    best = max(len(k) for k in matched)
+    return len(matched) * weight + min(best, 24) * 0.02
 
 
 def score_presets(request: str) -> list[tuple[str, float]]:
@@ -355,27 +377,33 @@ def detect_preset(request: str) -> str | None:
     return ranked[0][0]
 
 
-def detect_preset_stack(request: str, *, limit: int = 4) -> list[str]:
-    """Top matching presets for intelligent composition."""
+def detect_preset_stack(request: str, *, limit: int = 8) -> list[str]:
+    """Multi-domain stack; complex requests get denser enterprise backbone."""
     ranked = score_presets(request)
-    if not ranked:
-        t = _norm(request)
-        if any(k in t for k in ("بوت", "bot", "telegram", "اعمل", "أنشئ", "انشئ", "create", "make")):
-            return ["group_management"]
-        return []
-    top = ranked[0][1]
-    # Keep primary + strong secondary intents (25% of top or absolute score >= 1.2)
     out: list[str] = []
-    for name, sc in ranked:
-        if sc >= top * 0.25 or sc >= 1.2 or len(out) == 0:
+    for name, _score in ranked:
+        if name not in out:
             out.append(name)
         if len(out) >= limit:
             break
-    # commerce_pro absorbs shop/sub/points/wallet/growth
+    t = _norm(request)
+    complexity_keys = (
+        "متكامل", "كامل", "enterprise", "all-in-one", "all in one", "شامل",
+        "معقد", "ضخم", "احترافي", "production", "suite", "منصة", "platform",
+        "multi", "متعدد", "كل شيء", "rule them all", "جاهز للسوق", "operating system",
+    )
+    is_complex = any(k in t for k in complexity_keys) or len(t) > 120 or len(out) >= 3
+    if is_complex:
+        for b in ("commerce_pro", "group_management", "support_pro", "crm", "education", "growth", "wallet", "community"):
+            if b not in out:
+                out.append(b)
+            if len(out) >= 8:
+                break
     if "commerce_pro" in out:
         skip = {"shop", "subscriptions", "points", "wallet", "growth"}
         out = [x for x in out if x not in skip or x == "commerce_pro"]
-    return out
+    return out[:8 if is_complex else limit]
+
 
 
 def compose_session(
@@ -416,6 +444,25 @@ def compose_session(
         s.set_description(
             f"Composed bot: {', '.join(presets)} — multi-intent zero-AI pack"
         )
+
+    t = _norm(request)
+    complexity_hit = any(
+        k in t for k in (
+            "متكامل", "enterprise", "all-in-one", "all in one", "منصة", "suite",
+            "ضخم", "احترافي", "production", "operating system", "جاهز للسوق",
+            "rule them all", "كل شيء", "شامل",
+        )
+    )
+    if len(presets) >= 3 or len(t) > 140 or complexity_hit:
+        for pack in (
+            _GROUP_CAPS, _SHOP_CAPS, _SUB_CAPS, _POINTS_CAPS, _GROWTH_CAPS,
+            _WALLET_CAPS, _SUPPORT_PRO_CAPS, _CRM_CAPS, _EDU_CAPS,
+            _COMMUNITY_CAPS, _EVENTS_CAPS, _SAAS_CAPS, _CONTEST_CAPS,
+        ):
+            s.selected.update(pack)
+        s.selected.update(_COMMERCE_PRO_CAPS)
+        s.selected.add("lang")
+
     return s
 
 
