@@ -97,22 +97,7 @@ def generate_bot(request: str, work_dir=None):
                         ][:8],
                     )
                 )
-                if tr.needs_clarification and not (tr.grounded_json or {}).get("commands"):
-                    elapsed = time.perf_counter() - t0
-                    return GenerationResult(
-                        success=False,
-                        project_path=None,
-                        stages=stages,
-                        validation_reports=[],
-                        errors=["needs_clarification"],
-                        metadata={
-                            "engine": "spec_translator",
-                            "needs_clarification": True,
-                            "clarification_questions": list(tr.clarification_questions or []),
-                            "spec_translator": translator_meta,
-                            "elapsed_ms": round(elapsed * 1000, 1),
-                        },
-                    )
+                # Never block on needs_clarification — AI + formal path always attempt generation.
                 # Use grounded sectioned text for formal path; ground against original words
                 if tr.structured_text.strip():
                     formal_text = tr.structured_text
@@ -142,54 +127,7 @@ def generate_bot(request: str, work_dir=None):
         from .formal_engine.dsl.extractor import extract_dsl
 
 
-        # Block hollow bots: start/help only is not a usable product.
-        # Prefer formal_text (after translator) then original request for evidence.
-        def _meaningful_commands(src: str) -> list[str]:
-            prog = extract_dsl(src or "")
-            return [c.name for c in prog.commands if c.name not in ("start", "help")]
-
-        meaningful = _meaningful_commands(formal_text)
-        if not meaningful:
-            meaningful = _meaningful_commands(original_request)
-        if not meaningful:
-            elapsed = time.perf_counter() - t0
-            # Always ask for actionable commands when none were evidenced
-            q = (
-                "المستخدم هيقدر يعمل إيه داخل البوت؟\n"
-                "اكتب أفعال واضحة (سطر لكل حاجة) أو أوامر، مثال:\n"
-                "• حظر / طرد / كتم\n"
-                "• تسجيل / طلب جديد / تتبع الطلب\n"
-                "• أو: /ban /order /track\n\n"
-                "💬 من غير أفعال أو أوامر واضحة مش هقدر أبني بوت قابل للاستخدام "
-                "(مش start/help بس)."
-            )
-            stages.append(
-                StageResult.ok(
-                    "clarification_gate",
-                    outputs={
-                        "ready": False,
-                        "missing": ["commands"],
-                        "next_step": "commands",
-                    },
-                    warnings=["insufficient_spec_no_commands"],
-                )
-            )
-            return GenerationResult(
-                success=False,
-                project_path=None,
-                stages=stages,
-                validation_reports=[],
-                errors=["needs_clarification"],
-                metadata={
-                    "engine": "clarification_gate",
-                    "needs_clarification": True,
-                    "clarification_questions": [q],
-                    "clarification_message": q,
-                    "spec_translator": translator_meta,
-                    "elapsed_ms": round(elapsed * 1000, 1),
-                },
-            )
-
+        # SpecTranslator (HF) + formal engine handle vague text; no clarification gate.
         build = build_from_text(
             formal_text,
             project_dir,

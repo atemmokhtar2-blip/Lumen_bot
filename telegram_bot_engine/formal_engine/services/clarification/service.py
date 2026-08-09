@@ -46,36 +46,7 @@ _MIN_SCORE = 0.35
 # Progressive order — ask the first gap only
 _STEP_ORDER = ("bot_name", "purpose", "commands", "entities", "buttons")
 
-_STEP_QUESTIONS: dict[str, str] = {
-    "bot_name": (
-        "إيه اسم البوت؟\n"
-        "اكتب مثلًا: عبود   أو   باسم ShopBot"
-    ),
-    "purpose": (
-        "البوت بيعمل إيه باختصار؟\n"
-        "اكتب جملة عادية، مثال:\n"
-        "تسجيل عملاء وطلبات وتتبع الأوردر"
-    ),
-    "commands": (
-        "المستخدم هيقدر يعمل إيه؟\n"
-        "اكتب أفعال أو أوامر بجمل قصيرة (سطر لكل حاجة)، مثال:\n"
-        "تسجيل\n"
-        "طلب جديد\n"
-        "تتبع الطلب\n"
-        "طلباتي\n\n"
-        "أو بصيغة: /register /order /track"
-    ),
-    "entities": (
-        "في بيانات تتسجل؟ لو أيوه اكتبها بجملة بسيطة:\n"
-        "مثال: عميل اسم وهاتف — طلب عنوان وحالة\n"
-        "لو مفيش: اكتب «مفيش»"
-    ),
-    "buttons": (
-        "عايز أزرار في القائمة الرئيسية؟\n"
-        "اكتب أسماءها مفصولة بفاصلة، مثال: تسجيل، طلب جديد، تتبع\n"
-        "لو مش محتاج: اكتب «بدون»"
-    ),
-}
+_STEP_QUESTIONS: dict[str, str] = {}
 
 
 def _extract_bot_name(text: str) -> str:
@@ -109,6 +80,12 @@ def _looks_like_skip(text: str) -> bool:
 
 
 def assess_spec(user_text: str) -> ClarificationResult:
+    """Always ready — progressive questionnaires removed; AI SpecTranslator handles understanding."""
+    _ = user_text
+    return ClarificationResult(ready=True, score=1.0)
+
+
+def _assess_spec_legacy(user_text: str) -> ClarificationResult:
     """
     ready=True  → enough surface to build a real bot
     ready=False → next_step + step_question (ONE question)
@@ -260,29 +237,9 @@ def assess_spec(user_text: str) -> ClarificationResult:
 
 
 def build_clarification_message(result: ClarificationResult) -> str:
-    """ONE focused question + light context (easy UX)."""
-    lines: list[str] = []
-
-    if result.bot_name or result.summary.get("commands"):
-        lines.append("✓ فهمت لحد دلوقتي:")
-        if result.bot_name:
-            lines.append(f"  • الاسم: {result.bot_name}")
-        cmds = result.summary.get("commands") or []
-        if cmds:
-            lines.append("  • أوامر: " + ", ".join(f"/{c}" for c in cmds))
-        ents = result.summary.get("entities") or []
-        if ents:
-            lines.append("  • بيانات: " + ", ".join(str(e) for e in ents))
-        lines.append("")
-
-    q = result.step_question or (result.questions[0] if result.questions else "")
-    if not q:
-        q = _STEP_QUESTIONS["commands"]
-
-    lines.append(q)
-    lines.append("")
-    lines.append("💬 جاوب بجملة عادية — مش لازم صيغة تقنية.")
-    return "\n".join(lines)
+    """Deprecated — questionnaires removed. Returns empty string."""
+    _ = result
+    return ""
 
 
 def _normalize_answer_to_sections(step: str, answer: str) -> str:

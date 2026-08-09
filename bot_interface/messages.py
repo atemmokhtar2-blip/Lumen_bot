@@ -475,58 +475,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ------------------------------------------------------------------
-    # Progressive clarification (ONE question at a time, ZERO LLM)
-    # + Formal generation. No SmartChat / g4f on generation path.
+    # Generate directly via SpecTranslator (HF) + Formal Engine.
+    # No progressive clarification questionnaires — AI handles understanding.
     # ------------------------------------------------------------------
-    from telegram_bot_engine.formal_engine.services.clarification import (
-        assess_spec,
-        build_clarification_message,
-        merge_answers,
-    )
+    if len(request) < 2:
+        await message.reply_text("اكتب وصف البوت عشان أبدأ التوليد.")
+        return
 
-    pending_spec = (context.user_data or {}).get("pending_spec")
-    if pending_spec:
-        original = pending_spec.get("original") or ""
-        prior_extra = pending_spec.get("extra") or ""
-        step = pending_spec.get("step") or ""
-        merged = merge_answers(original, request, prior_extra, step=step)
-        assessment = assess_spec(merged)
-        if not assessment.ready:
-            new_extra = merge_answers("", request, prior_extra, step=step)
-            context.user_data["pending_spec"] = {
-                "original": original,
-                "extra": new_extra.strip(),
-                "round": int(pending_spec.get("round") or 1) + 1,
-                "step": assessment.next_step or "",
-            }
-            # After 5 short rounds, generate with whatever we have
-            if context.user_data["pending_spec"]["round"] >= 5:
-                context.user_data.pop("pending_spec", None)
-                request = merged
-            else:
-                await message.reply_text(build_clarification_message(assessment))
-                return
-        else:
-            context.user_data.pop("pending_spec", None)
-            request = merged
-    else:
-        if len(request) < 2:
-            await message.reply_text("اكتب وصف البوت أو اسمه عشان أبدأ.")
-            return
-
-        assessment = assess_spec(request)
-        if not assessment.ready:
-            context.user_data["pending_spec"] = {
-                "original": request,
-                "extra": "",
-                "round": 1,
-                "step": assessment.next_step or "purpose",
-            }
-            await message.reply_text(build_clarification_message(assessment))
-            return
+    # Clear any leftover clarification session state
+    if context.user_data is not None:
+        context.user_data.pop("pending_spec", None)
 
     status_msg = await message.reply_text(
-        "⏳ جاري الفهم الرسمي وتوليد المشروع (Formal Engine — بدون AI)..."
+        "⏳ جاري ترجمة الوصف وتوليد المشروع (Hugging Face + Formal Engine)..."
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
@@ -537,29 +498,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if result is None:
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
-            return
-
-        meta0 = getattr(result, "metadata", None) or {}
-        if meta0.get("needs_clarification"):
-            qs = meta0.get("clarification_questions") or []
-            lines = [
-                "📌 محتاج تفاصيل أوضح عشان أترجم طلبك لمواصفة دقيقة.",
-                "",
-            ]
-            if qs:
-                for i, q in enumerate(qs, 1):
-                    lines.append(f"{i}) {q}")
-            else:
-                lines.append("اكتب وظائف البوت بجمل قصيرة (تسجيل، تتبع، طلبات…).")
-            lines.append("")
-            lines.append("💬 جاوب بجملة عادية — المترجم يحوّلها والمحرك يبني الكود.")
-            context.user_data["pending_spec"] = {
-                "original": request,
-                "extra": "",
-                "round": 1,
-                "step": "purpose",
-            }
-            await status_msg.edit_text("\n".join(lines))
             return
 
         success = getattr(result, "success", False)

@@ -1168,7 +1168,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
             ok=False,
             error="empty_text",
             needs_clarification=True,
-            clarification_questions=["اكتب وصف البوت والأوامر أو الأزرار المطلوبة."],
+            clarification_questions=[],
             path="passthrough",
         )
 
@@ -1251,7 +1251,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
             error=ai_result.error or "",
             needs_clarification=not ok,
             clarification_questions=(
-                [] if ok else ["المستخدم هيقدر يعمل إيه؟ اكتب أوامر أو أزرار أو قائمة أصناف بشكل واضح."]
+                []
             ),
         )
 
@@ -1272,7 +1272,7 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         error=(ai_result.error if ai_result and not ai_result.ok else ""),
         needs_clarification=not ok,
         clarification_questions=(
-            [] if ok else ["المستخدم هيقدر يعمل إيه؟ اكتب أوامر أو أزرار أو قائمة أصناف بشكل واضح."]
+            []
         ),
     )
 
