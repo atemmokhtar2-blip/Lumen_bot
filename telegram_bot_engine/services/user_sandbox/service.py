@@ -132,7 +132,8 @@ class UserSandbox:
         idx = self._read_index()
         projects = [x for x in (idx.get("projects") or []) if x.get("path") != entry["path"]]
         projects.insert(0, entry)
-        idx["projects"] = projects[:100]  # keep last 100
+        # Hard cap per user — drop oldest from index (files left for offline GC)
+        idx["projects"] = projects[: max_projects_per_user()]
         self._write_index(idx)
         return entry
 
@@ -172,10 +173,30 @@ class UserSandbox:
         return self._read_index()
 
 
+def shard_for_user(user_id: int) -> str:
+    """Two-level shard so millions of users do not sit in one directory.
+
+    Layout: users/<xx>/<yy>/<user_id>/
+    where xx,yy are zero-padded fragments from user_id.
+    """
+    uid = abs(int(user_id or 0))
+    # Use last 4 digits split into 2+2 for even fan-out under any id scheme
+    s = f"{uid:0>8d}"[-4:]
+    return f"{s[:2]}/{s[2:]}"
+
+
+def max_projects_per_user() -> int:
+    try:
+        return max(1, int(os.getenv("MAX_PROJECTS_PER_USER", "50")))
+    except Exception:
+        return 50
+
+
 def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSandbox:
     base = Path(base_dir or os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
     uid = int(user_id or 0)
-    root = base / "users" / str(uid)
+    # Prefer sharded layout; still readable and isolatable per user.
+    root = base / "users" / shard_for_user(uid) / str(uid)
     return UserSandbox(user_id=uid, root=root).ensure()
 
 
@@ -213,4 +234,4 @@ def clean_child_env(bot_token: str, extra: dict[str, str] | None = None) -> dict
     return env
 
 
-__all__ = ["UserSandbox", "get_user_sandbox", "clean_child_env"]
+__all__ = ["UserSandbox", "get_user_sandbox", "clean_child_env", "shard_for_user", "max_projects_per_user"]

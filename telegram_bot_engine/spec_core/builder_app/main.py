@@ -4,6 +4,10 @@ Usage:
   export TELEGRAM_BOT_TOKEN=...
   export BUILDER_OUT_DIR=/path/to/output   # optional (projects under users/<id>/projects)
   export BUILDER_TRY_SECONDS=120           # live try duration
+  export MAX_GLOBAL_LIVE_TRIES=32
+  export MAX_USER_LIVE_TRIES=1
+  export MAX_PROJECTS_PER_USER=50
+  export OUTPUT_DIR=/var/bots
   python -m telegram_bot_engine.spec_core.builder_app.main
 """
 from __future__ import annotations

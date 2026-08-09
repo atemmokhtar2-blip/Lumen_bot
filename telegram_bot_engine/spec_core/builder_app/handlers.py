@@ -26,6 +26,7 @@ from telegram_bot_engine.spec_core.builder_app.keyboards import (
 )
 from telegram_bot_engine.spec_core.pipeline import build_from_spec
 from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+from telegram_bot_engine.spec_core.try_fleet import fleet_status, start_try
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text(
         "مرحباً بك في **بنّاء البوتات** (بدون ذكاء اصطناعي).\n"
         "اختر القدرات → توليد → احفظ في مجلدك → جرب بـ توكن بوتك.\n"
-        f"مجلدك: `{sb.root}`",
+        f"مجلدك: `{sb.root}`\nسعة التجارب: {fleet_status()['active_global']}/{fleet_status()['max_global']}",
         reply_markup=main_menu(),
         parse_mode="Markdown",
     )
@@ -124,53 +125,32 @@ def _resolve_project(user_id: int, project_id: str | None = None) -> Path | None
     return None
 
 
-def _start_live_try(chat_id: int, user_id: int, project_path: Path, token: str, bot) -> None:
-    """Background thread: install + run user bot for a limited window."""
+def _notify_try_result(bot, chat_id: int, report) -> None:
+    import asyncio
 
-    def worker() -> None:
+    text = report.to_user_text() if hasattr(report, "to_user_text") else (
+        f"{'✅' if getattr(report, 'ok', False) else '❌'} "
+        f"{getattr(report, 'phase', '')}: {getattr(report, 'message', '')}"
+    )
+    try:
+        loop = asyncio.new_event_loop()
         try:
-            from telegram_bot_engine.services.live_runner import run_bot_project
+            loop.run_until_complete(bot.send_message(chat_id, text[:3500], parse_mode="Markdown"))
+        except Exception:
+            loop.run_until_complete(bot.send_message(chat_id, text[:3500]))
+        loop.close()
+    except Exception:
+        logger.exception("notify try result failed")
 
-            # Keep try sessions bounded
-            run_seconds = float(os.environ.get("BUILDER_TRY_SECONDS", os.environ.get("LIVE_RUN_SECONDS", "120")))
-            report = run_bot_project(
-                project_path=project_path,
-                bot_token=token,
-                entry_hint="main.py",
-                run_seconds=run_seconds,
-            )
-            text = report.to_user_text() if hasattr(report, "to_user_text") else (
-                f"{'✅' if report.ok else '❌'} {report.phase}: {report.message}"
-            )
-            # schedule send from this thread via bot API is sync-unfriendly; use requests-less approach
-            import asyncio
 
-            try:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(bot.send_message(chat_id, text[:3500], parse_mode="Markdown"))
-                loop.close()
-            except Exception:
-                # fallback plain
-                try:
-                    loop = asyncio.new_event_loop()
-                    loop.run_until_complete(bot.send_message(chat_id, text[:3500]))
-                    loop.close()
-                except Exception as e:
-                    logger.exception("failed to notify try result: %s", e)
-        except Exception as e:
-            logger.exception("live try failed")
-            try:
-                import asyncio
-
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    bot.send_message(chat_id, f"❌ فشل التشغيل: {type(e).__name__}: {e}"[:500])
-                )
-                loop.close()
-            except Exception:
-                pass
-
-    threading.Thread(target=worker, name=f"try-bot-{user_id}", daemon=True).start()
+def _start_live_try(chat_id: int, user_id: int, project_path: Path, token: str, bot) -> tuple[bool, str]:
+    ok, msg = start_try(
+        user_id=user_id,
+        project_path=project_path,
+        bot_token=token,
+        on_done=lambda report: _notify_try_result(bot, chat_id, report),
+    )
+    return ok, msg
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -220,13 +200,21 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 reply_markup=main_menu(),
             )
             return
+        ok, msg = _start_live_try(message.chat_id, user.id, project, token, context.bot)
+        if not ok:
+            await context.bot.send_message(
+                message.chat_id,
+                f"⏸️ {msg}\n\nحالة الأسطول: `{fleet_status()}`",
+                parse_mode="Markdown",
+                reply_markup=main_menu(),
+            )
+            return
         await context.bot.send_message(
             message.chat_id,
             f"جاري تجربة المشروع:\n`{project}`\n"
-            "سيتم التشغيل لفترة محدودة ثم يتوقف تلقائيًا.",
+            f"تشغيل محدود ثم إيقاف تلقائي.\n`{msg}`",
             parse_mode="Markdown",
         )
-        _start_live_try(message.chat_id, user.id, project, token, context.bot)
         return
 
     await message.reply_text("استخدم الأزرار أو /start", reply_markup=main_menu())
