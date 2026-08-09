@@ -25,52 +25,32 @@ logger = logging.getLogger("ai_agent_7h_bot.chat_ai")
 # ---------------------------------------------------------------------------
 
 _CAPABILITIES_TEXT = """
-القدرات المتاحة في النظام (يجب توجيه المستخدم إليها فقط):
-
-1. generate_bot — توليد بوت
-   فهم مواصفة وتوليد مشروع بوت تليجرام من وصف المستخدم.
-
-2. clone_repo — سحب مستودع
-   سحب مستودع Git (GitHub/GitLab) وفهمه. يحتاج رابط + توكن إن كان خاصاً.
-
-3. host_start — بدء الاستضافة
-   تشغيل البوت كخدمة استضافة طويلة الأمد (يحتاج مشروع جاهز + توكن).
-
-4. host_stop — إيقاف الاستضافة
-5. host_status — حالة الاستضافة
-6. host_diagnose — تشخيص الاستضافة
-
-7. static_analysis — تحليل استاتيكي
-8. package_health — صحة الحزم
-9. upgrade_recommend — توصيات الترقية
-10. upgrade_apply — تطبيق ترقيات آمنة
-11. repo_develop — تطوير المستودع النشط
-12. live_run — تشغيل حي قصير ب توكن
-13. help — مساعدة وشرح القدرات
+System capabilities (route only when intent is clear; never invent success):
+generate_bot, clone_repo, host_start, host_stop, host_status, host_diagnose,
+static_analysis, package_health, upgrade_recommend, upgrade_apply,
+repo_develop, live_run, help
 """
 
-_SYSTEM_PROMPT = f"""أنت مساعد ذكي لبوت "AI Agent 7h Bot". دورك **الشات فقط**.
+_SYSTEM_PROMPT = f"""You are a senior software engineer collaborating with the user inside a Telegram bot builder system.
 
-قواعد صارمة جداً (لا تكسرها أبداً):
-1. أنت **مترجم وموجه** فقط. تفهم نية المستخدم من أقل كلمة وتوجهه للمسار الصحيح.
-2. **ممنوع تماماً** توليد أي كود أو ملفات أو مشاريع.
-3. **ممنوع تماماً** الادعاء أنك ولّدت بوت أو عدّلت ملفات.
-4. إذا أراد المستخدم عمل بوت → اسأله أسئلة توضيحية قصيرة وواضحة (نوع البوت، الأوامر، اللغة...).
-5. إذا فهمت النية بوضوح → أرجع توصية بالمسار الصحيح.
-6. ردودك دائماً بالعربية الفصحى البسيطة أو العامية المصرية الواضحة.
-7. كن مختصراً وودوداً ومباشراً.
+Hard rules (never break):
+1. You do NOT write project code or claim files were generated. Engines do that.
+2. You talk like a real professional developer partner: precise, honest, technical when needed, natural Arabic (or English if the user writes English).
+3. NEVER use canned scripts, fixed question lists, or marketing phrases. Every reply must be computed from THIS user's message + the dynamic context you receive (memory, prior projects, resolved paths).
+4. If the request is vague, ask ONE focused clarifying question derived only from what is missing in their text — not a generic questionnaire.
+5. If they refer to prior work and context provides a path/label, treat that as the working project and discuss changes against it.
+6. When intent is clear enough for an engine, return type=route with the right capability_id and a short natural acknowledgment (not a template).
+7. You may challenge weak architecture or missing requirements briefly, like a senior dev would — still no fixed phrases.
+8. Forbidden: domain bot templates, default command packs, pretending work is done.
 
 {_CAPABILITIES_TEXT}
 
-طريقة الرد المطلوبة (التزم بها بدقة):
-- إذا كنت تحتاج توضيحاً من المستخدم → أرجع JSON بهذا الشكل فقط:
-{{"type": "reply", "text": "سؤالك أو ردك هنا"}}
-
-- إذا فهمت النية بوضوح وتريد توجيه النظام → أرجع JSON بهذا الشكل فقط:
-{{"type": "route", "capability_id": "generate_bot", "confidence": 0.85, "params": {{}}, "text": "رسالة قصيرة للمستخدم قبل التنفيذ"}}
-
-capability_id يجب أن يكون واحداً من القائمة أعلاه فقط.
-لا تكتب أي نص خارج الـ JSON.
+Respond with JSON only:
+{{"type":"reply","text":"..."}}
+or
+{{"type":"route","capability_id":"generate_bot","confidence":0.0,"params":{{}},"text":"..."}}
+or
+{{"type":"recommend","capability_id":"...","confidence":0.0,"text":"..."}}
 """
 
 
@@ -89,7 +69,7 @@ def _parse_response(content: str) -> SmartChatResult:
     """Extract JSON from model output robustly."""
     content = (content or "").strip()
     if not content:
-        return SmartChatResult(type="error", text="لم أتمكن من الفهم. حاول صياغة أوضح.")
+        return SmartChatResult(type="error", text="")
 
     # Try direct JSON
     try:
@@ -121,7 +101,7 @@ def _from_dict(data: dict, raw: str) -> SmartChatResult:
             params = {}
         text = str(data.get("text", "") or "")
         if not cap:
-            return SmartChatResult(type="reply", text=text or "وضح أكثر من فضلك.", raw=raw)
+            return SmartChatResult(type="reply", text=text, raw=raw)
         return SmartChatResult(
             type="route",
             text=text,
@@ -130,9 +110,23 @@ def _from_dict(data: dict, raw: str) -> SmartChatResult:
             params=params,
             raw=raw,
         )
-    # default reply
+    if t in ("recommend", "route"):
+        cap = str(data.get("capability_id", "")).strip()
+        conf = float(data.get("confidence", 0.6) or 0.6)
+        params = data.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+        text = str(data.get("text", "") or "")
+        return SmartChatResult(
+            type=t if t == "recommend" else "route",
+            text=text,
+            capability_id=cap,
+            confidence=min(1.0, max(0.0, conf)),
+            params=params,
+            raw=raw,
+        )
     text = str(data.get("text", "") or data.get("message", "") or "")
-    return SmartChatResult(type="reply", text=text or "وضح أكثر من فضلك.", raw=raw)
+    return SmartChatResult(type="reply", text=text, raw=raw)
 
 
 def smart_chat_reply(
@@ -194,12 +188,6 @@ def smart_chat_reply(
         logger.exception("Hugging Face smart_chat failed: %s", e)
         return SmartChatResult(
             type="error",
-            text=(
-                "حدث خطأ مؤقت في المساعد الذكي.\n"
-                "جرّب صياغة أوضح أو استخدم الأوامر المباشرة مثل:\n"
-                "• «اعمل بوت ...»\n"
-                "• «اسحب المستودع ...»\n"
-                "• «مساعدة»"
-            ),
+            text="",
             raw=str(e)[:200],
         )

@@ -561,79 +561,86 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ------------------------------------------------------------------
-    # Conversational AI layer (SmartChat + UserMemory) when the message is not
-    # clearly a bot specification. AI understands and routes; no fixed scripts.
+    # Phase 4 — Developer partner mode (AI only, zero fixed scripts)
+    # SmartChat + memory + context: clarify, challenge, route to engines.
     # ------------------------------------------------------------------
-    if not _is_bot_spec:
-        _rt = chat_route(request)
-        _hard_caps = {
-            "clone_repo", "host_start", "host_stop", "host_status", "host_diagnose",
-            "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
-            "repo_develop", "live_run", "generate_bot",
-        }
-        _is_hard = (
-            _rt is not None
-            and getattr(_rt, "ok", False)
-            and getattr(_rt, "capability_id", "") in _hard_caps
-            and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
-        )
-        if not _is_hard:
-            try:
-                from telegram_bot_engine.chat_ai import smart_chat_reply
-                mem_ctx = _mem.context_for_ai() if _mem else ""
-                if _ctx_res is not None:
-                    extra = []
-                    if _ctx_res.refers_to_prior and _ctx_res.target_path:
-                        extra.append(
-                            f"resolved_prior_project path={_ctx_res.target_path} "
-                            f"kind={_ctx_res.target_kind} label={_ctx_res.target_label} "
-                            f"confidence={_ctx_res.confidence:.2f}"
-                        )
-                    if _ctx_res.source_request_preview:
-                        extra.append(
-                            "prior_source_preview=" + _ctx_res.source_request_preview[:160]
-                        )
-                    if extra:
-                        mem_ctx = (mem_ctx + "\n\n" + "\n".join(extra)).strip()
-                sc = await asyncio.to_thread(
-                    smart_chat_reply,
-                    request,
-                    memory_context=mem_ctx,
-                )
-                sc_type = getattr(sc, "type", "") or ""
-                sc_text = (getattr(sc, "text", None) or "").strip()
-                sc_cap = getattr(sc, "capability_id", None) or ""
-                sc_conf = float(getattr(sc, "confidence", 0) or 0)
+    _rt = chat_route(request)
+    _hard_caps = {
+        "clone_repo", "host_start", "host_stop", "host_status", "host_diagnose",
+        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
+        "repo_develop", "live_run", "generate_bot",
+    }
+    _is_hard = (
+        _rt is not None
+        and getattr(_rt, "ok", False)
+        and getattr(_rt, "capability_id", "") in _hard_caps
+        and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
+    )
+    _slash_cmds = re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)
+    _weak_spec = _is_bot_spec and (
+        len(request) < 60 or len(_slash_cmds) < 2
+    )
+    _need_dev_chat = (not _is_bot_spec and not _is_hard) or _weak_spec
 
-                # AI recommends generation with clear intent → fall through to formal
-                if sc_type == "recommend" and sc_cap == "generate_bot" and sc_conf >= 0.55:
-                    pass  # continue to formal generation below
-                elif sc_type == "recommend" and sc_cap in _hard_caps and sc_conf >= 0.55:
-                    # Let existing handlers above deal with hard caps on next patterns;
-                    # if we reached here, reply with AI text so user can refine.
-                    if sc_text:
-                        if _mem:
-                            _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
-                            _mem.set_last(intent=request[:200], capability=sc_cap)
-                        await message.reply_text(sc_text)
-                        return
-                elif sc_text:
+    if _need_dev_chat:
+        try:
+            from telegram_bot_engine.chat_ai import smart_chat_reply
+            mem_ctx = _mem.context_for_ai() if _mem else ""
+            if _ctx_res is not None:
+                extra = []
+                if _ctx_res.refers_to_prior and _ctx_res.target_path:
+                    extra.append(
+                        f"resolved_prior_project path={_ctx_res.target_path} "
+                        f"kind={_ctx_res.target_kind} label={_ctx_res.target_label} "
+                        f"confidence={_ctx_res.confidence:.2f}"
+                    )
+                if _ctx_res.source_request_preview:
+                    extra.append(
+                        "prior_source_preview=" + _ctx_res.source_request_preview[:160]
+                    )
+                if extra:
+                    mem_ctx = (mem_ctx + "\n\n" + "\n".join(extra)).strip()
+            if _weak_spec:
+                mem_ctx = (
+                    (mem_ctx + "\n\n") if mem_ctx else ""
+                ) + (
+                    "note: user message looks like a bot request but may lack "
+                    "actionable commands or detail; act as senior dev — ask one "
+                    "precise gap question or route generate_bot if enough."
+                )
+            sc = await asyncio.to_thread(
+                smart_chat_reply,
+                request,
+                memory_context=mem_ctx,
+            )
+            sc_type = getattr(sc, "type", "") or ""
+            sc_text = (getattr(sc, "text", None) or "").strip()
+            sc_cap = getattr(sc, "capability_id", None) or ""
+            sc_conf = float(getattr(sc, "confidence", 0) or 0)
+
+            if sc_type in ("recommend", "route") and sc_cap == "generate_bot" and sc_conf >= 0.55:
+                pass  # formal generation below
+            elif sc_type in ("recommend", "route") and sc_cap in _hard_caps and sc_conf >= 0.55:
+                if sc_text:
                     if _mem:
-                        _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap or "chat"})
-                        if sc_cap:
-                            _mem.set_last(intent=request[:200], capability=sc_cap)
+                        _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
+                        _mem.set_last(intent=request[:200], capability=sc_cap)
                     await message.reply_text(sc_text)
                     return
-            except Exception:
-                logger.exception("smart_chat path failed")
-                # fall through to generation attempt rather than fixed error scripts
+            elif sc_text:
+                if _mem:
+                    _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap or "chat"})
+                    if sc_cap:
+                        _mem.set_last(intent=request[:200], capability=sc_cap)
+                await message.reply_text(sc_text)
+                return
+        except Exception:
+            logger.exception("developer partner chat failed")
 
     # ------------------------------------------------------------------
-    # Generate via SpecTranslator (Hugging Face) + Formal Engine.
-    # No progressive clarification questionnaires — AI handles understanding.
+    # Generate via SpecTranslator + Formal Engine (no fixed questionnaires).
     # ------------------------------------------------------------------
     if len(request) < 2:
-        await message.reply_text("اكتب وصف البوت عشان أبدأ التوليد.")
         return
 
     # Clear any leftover clarification session state
