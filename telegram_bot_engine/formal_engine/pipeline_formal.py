@@ -1,15 +1,10 @@
 """
 Formal Logic & DSL Engine pipeline.
 
-text → DSL → Grounding → Inference → Structure Engine → [Gate] → Code (transpile) → Verify
+text → DSL → Grounding → Inference → Structure → Gate → Code Engine → Verify
 
-HARD RULE — zero fixed domain templates:
-  Every command, button, entity, rule, flow, and handler is derived from the
-  user specification only. No shop/ticket/ecommerce/education packs.
-
-Phase 1:
-  Structure Engine materializes signature stubs + structure_manifest.json
-  and runs Structure Gate before the (still monolithic) code transpile.
+HARD RULE — zero fixed domain templates.
+Phase 2: Code Engine fills files from contract with security/contract audit.
 """
 
 from __future__ import annotations
@@ -20,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .code_engine.engine import fill_project
 from .dsl.extractor import extract_dsl
 from .inference.engine import InferenceResult, infer
 from .structure.derive import derive_structure_plan
@@ -44,6 +40,7 @@ class FormalBuildResult:
     structure_gate: dict[str, Any] = field(default_factory=dict)
     structure_files: list[str] = field(default_factory=list)
     structure_only: bool = False
+    code_engine: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +55,7 @@ class FormalBuildResult:
             "grounding": self.grounding.to_dict() if self.grounding else None,
             "structure_plan": dict(self.structure_plan or {}),
             "structure_gate": dict(self.structure_gate or {}),
+            "code_engine": dict(self.code_engine or {}),
         }
 
 
@@ -67,6 +65,7 @@ def _write_manifest(
     *,
     structure_files: list[str],
     code_files: list[str] | None = None,
+    code_engine: dict[str, Any] | None = None,
     extra_notes: list[str] | None = None,
 ) -> None:
     notes = list(getattr(plan, "notes", None) or [])
@@ -83,6 +82,7 @@ def _write_manifest(
         "notes": notes,
         "structure_files": list(structure_files),
         "code_files": list(code_files or []),
+        "code_engine": dict(code_engine or {}),
     }
     (out_dir / "structure_manifest.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -96,24 +96,14 @@ def build_structure_only(
     *,
     grounding_text: str | None = None,
 ) -> FormalBuildResult:
-    """Phase 1 path: signature stubs + manifest + gate. No business logic."""
     text = user_text or ""
     gate_src = grounding_text if grounding_text is not None else text
     program = extract_dsl(text)
     program, grounding = apply_grounding_gate(program, gate_src)
     inf = infer(program)
-
-    plan = derive_structure_plan(
-        inf,
-        bot_name=getattr(program, "bot_name", "") or "",
-    )
+    plan = derive_structure_plan(inf, bot_name=getattr(program, "bot_name", "") or "")
     structure_files = materialize_structure(plan, out_dir, overwrite=True)
-    gate = validate_structure_gate(
-        plan,
-        out_dir=out_dir,
-        require_materialized=True,
-    )
-
+    gate = validate_structure_gate(plan, out_dir=out_dir, require_materialized=True)
     return FormalBuildResult(
         out_dir=str(out_dir),
         files=list(structure_files),
@@ -126,7 +116,6 @@ def build_structure_only(
         dsl_rules=len(getattr(program, "rules", []) or []),
         structure_plan=plan.to_dict(),
         structure_gate=gate.to_dict(),
-        verification=None,
     )
 
 
@@ -137,15 +126,16 @@ def build_from_text(
     grounding_text: str | None = None,
 ) -> FormalBuildResult:
     """
-    Full path with Phase 1 structure stage first, then transitional transpile.
+    Phase 2 pipeline:
+      structure → structure gate → code engine (audited) → verify
 
-    STRUCTURE_ONLY=1 → stop after structure.
-    STRUCTURE_GATE_STRICT=1 → hard-stop if structure gate fails (no code).
+    LEGACY_TRANSPILE=1 falls back to monolithic micro.transpile only.
+    STRUCTURE_ONLY=1 stops after structure.
+    STRUCTURE_GATE_STRICT=1 hard-stops if structure gate fails.
+    CODE_GATE_STRICT=1 (default) refuses to write if audit finds invented surface/danger.
     """
     if os.environ.get("STRUCTURE_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return build_structure_only(
-            user_text, out_dir, grounding_text=grounding_text
-        )
+        return build_structure_only(user_text, out_dir, grounding_text=grounding_text)
 
     text = user_text or ""
     gate_src = grounding_text if grounding_text is not None else text
@@ -153,23 +143,16 @@ def build_from_text(
     program, grounding = apply_grounding_gate(program, gate_src)
     inf = infer(program)
 
-    plan = derive_structure_plan(
-        inf,
-        bot_name=getattr(program, "bot_name", "") or "",
-    )
+    plan = derive_structure_plan(inf, bot_name=getattr(program, "bot_name", "") or "")
     root = Path(out_dir)
     root.mkdir(parents=True, exist_ok=True)
     structure_files = materialize_structure(plan, root, overwrite=True)
-    gate = validate_structure_gate(
-        plan,
-        out_dir=root,
-        require_materialized=True,
-    )
+    gate = validate_structure_gate(plan, out_dir=root, require_materialized=True)
 
-    strict = os.environ.get("STRUCTURE_GATE_STRICT", "").strip().lower() in {
+    strict_struct = os.environ.get("STRUCTURE_GATE_STRICT", "1").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    if strict and not gate.ok:
+    if strict_struct and not gate.ok:
         return FormalBuildResult(
             out_dir=str(root),
             files=list(structure_files),
@@ -182,9 +165,53 @@ def build_from_text(
             dsl_rules=len(getattr(program, "rules", []) or []),
             structure_plan=plan.to_dict(),
             structure_gate=gate.to_dict(),
+            code_engine={"ok": False, "errors": ["structure_gate_blocked"]},
         )
 
-    written = transpile(inf, root)
+    use_legacy = os.environ.get("LEGACY_TRANSPILE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+    code_meta: dict[str, Any] = {}
+    if use_legacy:
+        written = transpile(inf, root)
+        code_meta = {"path": "legacy_transpile", "ok": True, "errors": []}
+    else:
+        batch = fill_project(inf, root, plan=plan)
+        code_meta = {
+            "path": "code_engine",
+            "ok": batch.ok,
+            "errors": list(batch.errors),
+            "files": [f.path for f in batch.files],
+        }
+        if not batch.ok and os.environ.get("CODE_GATE_STRICT", "1").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            # Keep structure stubs; do not claim success
+            _write_manifest(
+                root,
+                plan,
+                structure_files=list(structure_files),
+                code_files=[],
+                code_engine=code_meta,
+                extra_notes=["phase2_code_gate_blocked"],
+            )
+            return FormalBuildResult(
+                out_dir=str(root),
+                files=list(structure_files),
+                structure_files=list(structure_files),
+                structure_only=False,
+                inference=inf,
+                grounding=grounding,
+                dsl_relations=len(program.relations),
+                dsl_operations=len(program.operations),
+                dsl_rules=len(getattr(program, "rules", []) or []),
+                structure_plan=plan.to_dict(),
+                structure_gate=gate.to_dict(),
+                code_engine=code_meta,
+            )
+        written = [str(root / f.path) for f in batch.files]
+
     plan2 = derive_structure_plan(
         inf,
         bot_name=getattr(program, "bot_name", "") or "",
@@ -195,7 +222,8 @@ def build_from_text(
         plan2,
         structure_files=list(structure_files),
         code_files=[str(p) for p in (written or [])],
-        extra_notes=["phase1_structure_then_transpile"],
+        code_engine=code_meta,
+        extra_notes=["phase2_code_engine"],
     )
     gate2 = validate_structure_gate(plan2, out_dir=root, require_materialized=False)
     report = verify_project(root)
@@ -213,4 +241,5 @@ def build_from_text(
         dsl_rules=len(getattr(program, "rules", []) or []),
         structure_plan=plan2.to_dict(),
         structure_gate=gate2.to_dict(),
+        code_engine=code_meta,
     )

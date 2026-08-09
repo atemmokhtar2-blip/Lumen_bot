@@ -262,6 +262,7 @@ def generate_bot(request: str, work_dir=None):
                 "structure_gate": getattr(build, "structure_gate", None) or {},
                 "structure_files": list(getattr(build, "structure_files", None) or []),
                 "structure_only": bool(getattr(build, "structure_only", False)),
+                "code_engine": getattr(build, "code_engine", None) or {},
                 "verify_ok": verify_ok,
                 "commands": cmd_names,
                 "grounding": (
