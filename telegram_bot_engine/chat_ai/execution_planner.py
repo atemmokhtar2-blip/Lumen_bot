@@ -113,13 +113,21 @@ def _normalize(plan: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 
 
 def plan_from_text(user_text: str, *, timeout: int = 120, max_tokens: int | None = None) -> ExecutionPlanResult:
-    from . import hf_provider as hf
+    from . import multi_provider as mp
 
-    if not hf.enabled():
-        return ExecutionPlanResult(False, error="HF_TOKEN not configured")
-    tokens = max_tokens or int(__import__("os").environ.get("HF_PLAN_MAX_TOKENS", "10000"))
+    if not mp.any_enabled():
+        return ExecutionPlanResult(
+            False,
+            error="No AI provider configured (set OPENAI_API_KEY and/or HF_TOKEN)",
+        )
+    tokens = max_tokens or int(
+        __import__("os").environ.get(
+            "PLAN_MAX_TOKENS",
+            __import__("os").environ.get("HF_PLAN_MAX_TOKENS", "10000"),
+        )
+    )
     try:
-        content, model = hf.chat(
+        content, model = mp.chat(
             [
                 {"role": "system", "content": _PLAN_SYSTEM},
                 {"role": "user", "content": "USER REQUIREMENTS:\n" + (user_text or "")[:30000]},
@@ -130,7 +138,7 @@ def plan_from_text(user_text: str, *, timeout: int = 120, max_tokens: int | None
             json_mode=True,
         )
     except Exception as exc:
-        return ExecutionPlanResult(False, model_used="", error=f"hf_plan_failed:{type(exc).__name__}:{exc}"[:1200])
+        return ExecutionPlanResult(False, model_used="", error=f"plan_failed:{type(exc).__name__}:{exc}"[:1200])
     raw = _json_object(content)
     if raw is None:
         return ExecutionPlanResult(False, model_used=model, error="hf_plan_json_parse_failed")

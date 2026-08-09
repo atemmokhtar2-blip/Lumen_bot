@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import hf_provider as hf
+from . import multi_provider as mp
 
 
 _CODE_SYSTEM = r"""You are a senior software engineer implementing a custom Telegram bot.
@@ -74,23 +74,28 @@ def _validate_files(files: Any) -> tuple[list[dict[str, str]], list[str]]:
 
 
 def generate_project_from_plan(plan: dict[str, Any], out_dir: str | Path, *, timeout: int = 240) -> dict[str, Any]:
-    if not hf.enabled():
-        return {"ok": False, "errors": ["HF_TOKEN not configured"], "files": []}
+    if not mp.any_enabled():
+        return {"ok": False, "errors": ["No AI provider configured (OPENAI_API_KEY and/or HF_TOKEN)"], "files": []}
     required = [x.get("path") for x in plan.get("files") or [] if isinstance(x, dict) and x.get("required", True)]
     prompt = (
         "IMPLEMENTATION PLAN:\n" + json.dumps(plan, ensure_ascii=False, indent=2) +
         "\n\nRequired paths must be present: " + json.dumps(required, ensure_ascii=False)
     )
     try:
-        content, model = hf.chat(
+        content, model = mp.chat(
             [{"role": "system", "content": _CODE_SYSTEM}, {"role": "user", "content": prompt[:90000]}],
             timeout=timeout,
-            max_tokens=int(os.environ.get("HF_CODEGEN_MAX_TOKENS", "24000")),
+            max_tokens=int(
+                os.environ.get(
+                    "CODEGEN_MAX_TOKENS",
+                    os.environ.get("HF_CODEGEN_MAX_TOKENS", "16000"),
+                )
+            ),
             temperature=0.0,
             json_mode=True,
         )
     except Exception as exc:
-        return {"ok": False, "errors": [f"hf_codegen_failed:{type(exc).__name__}:{exc}"[:1200]], "files": []}
+        return {"ok": False, "errors": [f"codegen_failed:{type(exc).__name__}:{exc}"[:1200]], "files": []}
     payload = _extract_json(content)
     if payload is None:
         return {"ok": False, "errors": ["hf_codegen_json_parse_failed"], "files": [], "model": model}

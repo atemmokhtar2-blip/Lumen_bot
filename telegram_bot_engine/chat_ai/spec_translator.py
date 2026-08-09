@@ -1126,8 +1126,11 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
     max_tokens = int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200"))
     errors: list[str] = []
 
-    # Provider order is strict: Hugging Face first. Groq only if HF unavailable or fails.
+    # Provider order: OpenAI → HF → Groq (ChatGPT preferred when available).
+    from . import openai_provider as openai
     providers: list[tuple[str, Any]] = []
+    if openai.enabled():
+        providers.append(("openai", openai))
     if hf.enabled():
         providers.append(("hf", hf))
     if groq.enabled():
@@ -1135,7 +1138,7 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
     if not providers:
         return TranslatorResult(
             ok=False,
-            error="No AI provider configured (set HF_TOKEN — Hugging Face is the primary translator; GROQ_API_KEY is optional fallback)",
+            error="No AI provider configured (set OPENAI_API_KEY and/or HF_TOKEN; GROQ_API_KEY optional)",
             path="ai_missing",
         )
 

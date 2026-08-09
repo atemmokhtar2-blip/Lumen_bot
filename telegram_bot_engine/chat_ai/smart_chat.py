@@ -167,52 +167,31 @@ def smart_chat_reply(
         })
     messages.append({"role": "user", "content": user_text})
 
-    # Provider order: Hugging Face first, then Groq (same idea as SpecTranslator).
+    # Provider order: OpenAI → HF → Groq (via multi_provider).
     errors: list[str] = []
     content = ""
     model_used = ""
     provider_used = ""
 
     try:
-        from . import hf_provider as hf
-        if hf.enabled():
+        from . import multi_provider as mp
+        if mp.any_enabled():
             try:
-                content, model_used = hf.chat(
+                content, model_used = mp.chat(
                     messages,
                     timeout=timeout,
                     max_tokens=900,
                     temperature=0.2,
                     json_mode=True,
                 )
-                provider_used = "huggingface"
+                provider_used = (model_used or "").split(":")[0] or "multi"
             except Exception as e:
-                errors.append(f"hf:{type(e).__name__}:{e}")
-                logger.warning("smart_chat HF failed: %s", e)
+                errors.append(f"multi:{type(e).__name__}:{e}")
+                logger.warning("smart_chat multi_provider failed: %s", e)
         else:
-            errors.append("hf:disabled_or_no_token")
+            errors.append("no_provider_configured")
     except Exception as e:
-        errors.append(f"hf_import:{type(e).__name__}:{e}")
-
-    if not content:
-        try:
-            from . import groq_provider as groq
-            if getattr(groq, "enabled", lambda: False)():
-                try:
-                    content, model_used = groq.chat(
-                        messages,
-                        timeout=timeout,
-                        max_tokens=900,
-                        temperature=0.2,
-                        json_mode=True,
-                    )
-                    provider_used = "groq"
-                except Exception as e:
-                    errors.append(f"groq:{type(e).__name__}:{e}")
-                    logger.warning("smart_chat Groq failed: %s", e)
-            else:
-                errors.append("groq:disabled_or_no_key")
-        except Exception as e:
-            errors.append(f"groq_import:{type(e).__name__}:{e}")
+        errors.append(f"multi_import:{type(e).__name__}:{e}")
 
     if not content:
         logger.error("smart_chat all providers failed: %s", "; ".join(errors)[:500])

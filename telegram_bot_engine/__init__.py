@@ -1,22 +1,14 @@
 """
 Telegram Bot Generation Engine
 
-Active path:
+Active path (Formal engine REMOVED permanently from generation):
   user text
-    → [SpecTranslator AI: translate only → JSON]
-    → [Grounding against original text]
-    → Formal DSL → Inference → Flow Composer → Transpile → Verify
-    → [optional] GitOperations (push/pull/commit) when user text requests it
+    → Execution Planner (OpenAI / Hugging Face / Groq)
+    → Plan-driven Codegen
+    → project files on disk
 
-HARD RULES (STRICT — non-negotiable):
-  - AI may ONLY translate speech → structured spec (no code generation).
-  - Grounding drops anything not evidenced in the user text.
-  - Formal engine is the ONLY code generator.
-  - IMPOSSIBLE to create any saved artefact, ready-made bot template,
-    default command packs, or pre-baked structures.
-  - Everything is generated dynamically and exclusively from the user's
-    natural-language text. Zero domain templates / canned packs.
-  - Structural minima only: /start and /help.
+No formal/DSL/transpiler codegen path.
+No domain templates or canned packs.
 """
 
 from __future__ import annotations
@@ -151,16 +143,16 @@ def generate_bot(request: str, work_dir=None):
     """
     Entry point used by the Telegram interface.
 
-    AI SpecTranslator (optional): speech → structured spec only.
-    Formal engine: only code generator. No domain templates.
+    ONLY path (Formal engine removed permanently):
+      user text
+        → Execution Planner (OpenAI / HF / Groq)
+        → Plan-driven Codegen
+        → project files
 
-    STRICT RULE (project-wide, non-negotiable until tomorrow and beyond):
-      Impossible to create any saved artefact, ready-made bot template,
-      default command packs, or pre-baked structures. Everything is
-      generated dynamically and exclusively from the user's natural-language
-      text via SpecTranslator → formal/DSL path.
+    No formal/DSL/transpiler fallback. No domain templates.
     """
     from pathlib import Path
+    import os
     import tempfile
     import time
 
@@ -168,8 +160,7 @@ def generate_bot(request: str, work_dir=None):
 
     t0 = time.perf_counter()
     original_request = (request or "").strip()
-    request = original_request
-    if not request:
+    if not original_request:
         return GenerationResult(
             success=False,
             project_path=None,
@@ -180,7 +171,7 @@ def generate_bot(request: str, work_dir=None):
         )
 
     work_dir = (
-        Path(tempfile.mkdtemp(prefix="formal_bot_"))
+        Path(tempfile.mkdtemp(prefix="ai_bot_"))
         if work_dir is None
         else Path(work_dir)
     )
@@ -189,417 +180,142 @@ def generate_bot(request: str, work_dir=None):
     project_dir.mkdir(parents=True, exist_ok=True)
 
     stages: list = []
-    errors: list = []
-    translator_meta = None
     execution_plan_meta = None
-    formal_text = request
-    grounding_src = original_request
 
     try:
-        # ── HF Execution Planner: one complete implementation contract ──
-        # It is the primary path. The older narrow translator is retained only
-        # as a compatibility fallback when HF is unavailable or returns invalid JSON.
-        planner_ok = False
-        try:
-            from .chat_ai.execution_planner import plan_from_text, plan_to_formal_text
-            execution = plan_from_text(original_request)
-            execution_plan_meta = execution.to_dict()
-            if execution.ok:
-                planner_ok = True
-                formal_text = plan_to_formal_text(execution.plan)
-                grounding_src = original_request
-                (project_dir / "execution_plan.json").write_text(
-                    __import__("json").dumps(execution.plan, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                stages.append(
-                    StageResult.ok(
-                        "execution_planner",
-                        outputs={
-                            "model_used": execution.model_used,
-                            "plan": execution.plan,
-                            "warnings": execution.warnings,
-                        },
-                        warnings=list(execution.warnings),
-                    )
-                )
-                # Direct plan-driven generation is the production path when HF
-                # is available. It never falls back to structural templates.
-                direct_enabled = os.environ.get("HF_DIRECT_CODEGEN", "1").strip().lower() not in {"0", "false", "no", "off"}
-                if direct_enabled:
-                    from .chat_ai.plan_codegen import generate_project_from_plan
-                    generated = generate_project_from_plan(execution.plan, project_dir)
-                    if generated.get("ok"):
-                        stages.append(StageResult.ok("plan_codegen", outputs=generated))
-                        elapsed = time.perf_counter() - t0
-                        return GenerationResult(
-                            success=True,
-                            project_path=str(project_dir),
-                            stages=stages,
-                            validation_reports=[],
-                            errors=[],
-                            metadata={
-                                "engine": "hf_execution_plan",
-                                "execution_plan": execution_plan_meta,
-                                "files_created": generated.get("files") or [],
-                                "model": generated.get("model"),
-                                "elapsed_ms": round(elapsed * 1000, 1),
-                                "ready_for_token": True,
-                            },
-                        )
-                    stages.append(StageResult.failed("plan_codegen", errors=list(generated.get("errors") or ["plan_codegen_failed"])))
-                    elapsed = time.perf_counter() - t0
-                    return GenerationResult(
-                        success=False,
-                        project_path=str(project_dir),
-                        stages=stages,
-                        validation_reports=[],
-                        errors=list(generated.get("errors") or ["plan_codegen_failed"]),
-                        metadata={"engine": "hf_execution_plan", "execution_plan": execution_plan_meta, "elapsed_ms": round(elapsed * 1000, 1)},
-                    )
-            else:
-                stages.append(StageResult.failed("execution_planner", errors=[execution.error or "execution_plan_failed"]))
-        except Exception as plan_exc:
-            stages.append(StageResult.failed("execution_planner", errors=[f"{type(plan_exc).__name__}:{plan_exc}"[:500]]))
+        from .chat_ai.execution_planner import plan_from_text
+        from .chat_ai.plan_codegen import generate_project_from_plan
+        from .chat_ai import multi_provider as mp
 
-        # ── Compatibility translator: used only when the complete plan failed ──
-        if not planner_ok:
-            try:
-                from .chat_ai.spec_translator import prepare_formal_text
-                formal_text, tr = prepare_formal_text(original_request)
-                translator_meta = tr.to_dict()
-                if tr.ok:
-                    stages.append(StageResult.ok("spec_translator", outputs=tr.to_dict()))
-                    if tr.structured_text.strip():
-                        formal_text = tr.structured_text
-                        grounding_src = original_request
-                else:
-                    stages.append(StageResult.failed("spec_translator", errors=[tr.error or "spec_translator_failed"]))
-                    formal_text = original_request
-                    grounding_src = original_request
-            except Exception as tr_exc:
-                stages.append(StageResult.failed("spec_translator", errors=[f"{type(tr_exc).__name__}:{tr_exc}"]))
-                elapsed = time.perf_counter() - t0
-                return GenerationResult(
-                    success=False,
-                    project_path=None,
-                    stages=stages,
-                    validation_reports=[],
-                    errors=[f"spec_translator_exception:{type(tr_exc).__name__}:{tr_exc}"],
-                    metadata={"engine": "spec_translator", "elapsed_ms": round(elapsed * 1000, 1)},
-                )
-
-        from .formal_engine.pipeline_formal import build_from_text
-        from .formal_engine.dsl.extractor import extract_dsl
-        from .formal_engine.generation_contract import assess_generation_contract
-
-        # World-class gate: refuse hollow contracts (start/help only). No domain templates.
-        # Assess on merged formal_text (AI structured + user) and original for evidence.
-        contract = assess_generation_contract(formal_text or original_request)
-        if not contract.ready:
-            # Second look at pure user text if AI path stripped signals
-            contract_user = assess_generation_contract(original_request)
-            if contract_user.score > contract.score:
-                contract = contract_user
-                formal_text = original_request
-                grounding_src = original_request
-        stages.append(
-            StageResult.ok(
-                "generation_contract",
-                outputs=contract.to_dict(),
-                warnings=list(contract.gaps)[:8],
-            )
-            if contract.ready
-            else StageResult.failed(
-                "generation_contract",
-                errors=list(contract.gaps)[:8] or ["hollow_contract"],
-            )
-        )
-        if not contract.ready:
+        if not mp.any_enabled():
             elapsed = time.perf_counter() - t0
             return GenerationResult(
                 success=False,
                 project_path=None,
+                stages=[
+                    StageResult.failed(
+                        "ai_provider",
+                        errors=[
+                            "No AI provider configured. "
+                            "Set OPENAI_API_KEY and/or HF_TOKEN (GROQ_API_KEY optional)."
+                        ],
+                    )
+                ],
+                validation_reports=[],
+                errors=["no_ai_provider"],
+                metadata={
+                    "engine": "ai_plan_codegen",
+                    "elapsed_ms": round(elapsed * 1000, 1),
+                },
+            )
+
+        execution = plan_from_text(original_request)
+        execution_plan_meta = execution.to_dict()
+
+        if not execution.ok:
+            elapsed = time.perf_counter() - t0
+            stages.append(
+                StageResult.failed(
+                    "execution_planner",
+                    errors=[execution.error or "execution_plan_failed"],
+                )
+            )
+            return GenerationResult(
+                success=False,
+                project_path=str(project_dir),
                 stages=stages,
                 validation_reports=[],
-                errors=["hollow_contract"] + list(contract.gaps)[:5],
+                errors=[execution.error or "execution_plan_failed"],
                 metadata={
-                    "engine": "generation_contract",
+                    "engine": "ai_plan_codegen",
+                    "execution_plan": execution_plan_meta,
                     "elapsed_ms": round(elapsed * 1000, 1),
-                    "contract": contract.to_dict(),
-                    "needs_richer_spec": True,
-                    "spec_translator": translator_meta,
                 },
             )
 
-        build = build_from_text(
-            formal_text,
-            project_dir,
-            grounding_text=grounding_src,
+        (project_dir / "execution_plan.json").write_text(
+            __import__("json").dumps(execution.plan, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
-
         stages.append(
             StageResult.ok(
-                "understanding_service",
+                "execution_planner",
                 outputs={
-                    "dsl_relations": build.dsl_relations,
-                    "dsl_operations": build.dsl_operations,
-                    "dsl_rules": build.dsl_rules,
-                    "engine_path": "dsl_formal",
-                    "translator_used": bool(translator_meta and translator_meta.get("ok")),
+                    "model_used": execution.model_used,
+                    "plan": execution.plan,
+                    "warnings": execution.warnings,
                 },
+                warnings=list(execution.warnings or []),
             )
         )
 
-        g = getattr(build, "grounding", None)
-        if g is not None:
-            stages.append(
-                StageResult.ok(
-                    "grounding_gate",
-                    outputs=g.to_dict() if hasattr(g, "to_dict") else {},
-                    warnings=list(getattr(g, "warnings", None) or []),
-                )
-            )
-
-        files = list(build.files or [])
-
-        # Phase 1/2/3 stage reporting
-        sg = getattr(build, "structure_gate", None) or {}
-        if isinstance(sg, dict) and sg.get("ok", True):
-            stages.append(
-                StageResult.ok(
-                    "structure_engine",
-                    outputs={
-                        "structure_files": list(getattr(build, "structure_files", None) or []),
-                        "structure_gate": sg,
-                        "structure_only": bool(getattr(build, "structure_only", False)),
-                    },
-                    warnings=list(sg.get("warnings") or [])[:8],
-                )
-            )
-        else:
-            stages.append(
-                StageResult.failed(
-                    "structure_engine",
-                    errors=list((sg or {}).get("errors") or ["structure_gate_failed"])[:10],
-                )
-            )
-
-        ce = getattr(build, "code_engine", None) or {}
-        if ce.get("ok", True) and not getattr(build, "structure_only", False):
-            stages.append(
-                StageResult.ok(
-                    "code_engine",
-                    outputs=ce,
-                )
-            )
-        elif getattr(build, "structure_only", False):
-            stages.append(
-                StageResult.ok("code_engine", outputs={"skipped": True, "reason": "structure_only"})
-            )
-        else:
-            stages.append(
-                StageResult.failed(
-                    "code_engine",
-                    errors=list(ce.get("errors") or ["code_engine_failed"])[:10],
-                )
-            )
-            errors.extend(list(ce.get("errors") or [])[:5])
-
-        stages.append(
-            StageResult.ok(
-                "codegen_service",
-                outputs={
-                    "project_path": str(project_dir),
-                    "files_created": files,
-                    "file_count": len(files),
-                    "path": (ce.get("path") if isinstance(ce, dict) else None) or "formal",
-                },
-            )
-        )
-
-        verify_ok = True
-        verify_errors: list[str] = []
-        if build.verification is not None:
-            verify_ok = bool(build.verification.ok)
-            verify_errors = list(getattr(build.verification, "errors", None) or [])
-            if verify_ok:
-                stages.append(
-                    StageResult.ok(
-                        "formal_verification",
-                        outputs=build.verification.to_dict()
-                        if hasattr(build.verification, "to_dict")
-                        else {},
-                    )
-                )
-            else:
-                errors.extend(verify_errors[:10])
-                stages.append(
-                    StageResult.failed(
-                        "formal_verification",
-                        errors=verify_errors[:10],
-                    )
-                )
-        else:
-            stages.append(
-                StageResult.ok("formal_verification", outputs={"skipped": True})
-            )
-
-        compile_ok = True
-        compile_errors: list[str] = []
-        try:
-            import py_compile
-
-            for py in sorted(project_dir.rglob("*.py")):
-                try:
-                    py_compile.compile(str(py), doraise=True)
-                except py_compile.PyCompileError as e:
-                    compile_ok = False
-                    compile_errors.append(str(e)[:200])
-            if compile_ok:
-                stages.append(
-                    StageResult.ok(
-                        "py_compile",
-                        outputs={"files": len(list(project_dir.rglob("*.py")))},
-                    )
-                )
-            else:
-                errors.extend(compile_errors[:5])
-                stages.append(
-                    StageResult.failed("py_compile", errors=compile_errors[:5])
-                )
-        except Exception as exc:
-            compile_ok = False
-            errors.append(f"py_compile failed: {exc}")
-            stages.append(StageResult.failed("py_compile", errors=[str(exc)]))
-
-        # Structural runtime-safety verification of generated handlers (no domain packs)
-        gen_verify_meta = {}
-        try:
-            from .formal_engine.services.gen_verify import verify_generated_project
-            gv = verify_generated_project(project_dir)
-            gen_verify_meta = gv.to_dict()
-            if gv.ok:
-                stages.append(
-                    StageResult.ok("gen_verify", outputs=gen_verify_meta)
-                )
-            else:
-                stages.append(
-                    StageResult.failed("gen_verify", errors=list(gv.errors)[:10])
-                )
-                errors.extend(list(gv.errors)[:5])
-                compile_ok = False  # treat as not ready for token
-            for w in list(gv.warnings)[:8]:
-                # stubs are warnings; many stubs degrade success below
-                if str(w).startswith("stub_handler:"):
-                    pass
-        except Exception as gv_exc:
-            stages.append(
-                StageResult.failed(
-                    "gen_verify",
-                    errors=[f"{type(gv_exc).__name__}:{gv_exc}"],
-                )
-            )
-
-        quality = getattr(build, "quality", None) or {}
-        if quality:
-            if quality.get("ok", True):
-                stages.append(StageResult.ok("quality", outputs=quality))
-            else:
-                stages.append(
-                    StageResult.failed(
-                        "quality",
-                        errors=list(quality.get("errors") or [])[:10],
-                    )
-                )
-                # quality errors are soft unless invented_* 
-                for e in list(quality.get("errors") or [])[:5]:
-                    if str(e).startswith("invented_"):
-                        errors.append(str(e))
-
-        # Surface extracted commands for reporting
-        cmd_names: list[str] = []
-        try:
-            from .formal_engine.dsl.extractor import extract_dsl
-            prog = extract_dsl(formal_text)
-            cmd_names = [c.name for c in prog.commands]
-        except Exception:
-            pass
-
-        path_str = str(project_dir) if project_dir.exists() else None
-        ok = (
-            bool(path_str)
-            and verify_ok
-            and compile_ok
-            and not errors
-            and len(files) > 0
-        )
-
-        # ── Optional Git stage: FormalGeneration → GitOperations link ──
-        # Runs only when user text explicitly requests git/push/pull/commit.
-        # STRICT RULE: no templates; ops derived solely from user text + generated path.
-        git_meta = None
-        if ok and path_str:
-            git_meta = _maybe_run_git_stage(
-                original_request=original_request,
-                project_path=path_str,
+        generated = generate_project_from_plan(execution.plan, project_dir)
+        if generated.get("ok"):
+            stages.append(StageResult.ok("plan_codegen", outputs=generated))
+            elapsed = time.perf_counter() - t0
+            return GenerationResult(
+                success=True,
+                project_path=str(project_dir),
                 stages=stages,
+                validation_reports=[],
+                errors=[],
+                metadata={
+                    "engine": "ai_plan_codegen",
+                    "execution_plan": execution_plan_meta,
+                    "files_created": generated.get("files") or [],
+                    "model": generated.get("model"),
+                    "notes": generated.get("notes") or [],
+                    "elapsed_ms": round(elapsed * 1000, 1),
+                    "ready_for_token": True,
+                },
             )
 
-        elapsed = time.perf_counter() - t0
-        meta = {
-            "engine": "dsl_formal",
-            "files_created": files,
-            "elapsed_ms": round(elapsed * 1000, 1),
-            "compile_ok": compile_ok,
-            "ready_for_token": bool(ok),
-            "dsl_relations": build.dsl_relations,
-            "dsl_operations": build.dsl_operations,
-            "dsl_rules": build.dsl_rules,
-            "structure_plan": getattr(build, "structure_plan", None) or {},
-            "structure_gate": getattr(build, "structure_gate", None) or {},
-            "structure_files": list(getattr(build, "structure_files", None) or []),
-            "structure_only": bool(getattr(build, "structure_only", False)),
-            "code_engine": getattr(build, "code_engine", None) or {},
-            "quality": getattr(build, "quality", None) or {},
-            "verify_ok": verify_ok,
-            "gen_verify": gen_verify_meta,
-            "commands": cmd_names,
-            "grounding": (
-                build.grounding.to_dict()
-                if getattr(build, "grounding", None) is not None
-                else None
-            ),
-            "spec_translator": translator_meta,
-            "execution_plan": execution_plan_meta,
-            "execution_plan_used": bool(execution_plan_meta and execution_plan_meta.get("ok")),
-        }
-        if git_meta is not None:
-            meta["git_operations"] = git_meta
-
-        return GenerationResult(
-            success=ok,
-            project_path=path_str,
-            stages=stages,
-            validation_reports=[],
-            errors=errors,
-            metadata=meta,
-        )
-
-    except Exception as exc:
-        errors.append(f"Formal pipeline failed: {type(exc).__name__}: {exc}")
         stages.append(
-            StageResult.failed("formal_pipeline", errors=[str(exc)[:300]])
+            StageResult.failed(
+                "plan_codegen",
+                errors=list(generated.get("errors") or ["plan_codegen_failed"]),
+            )
         )
         elapsed = time.perf_counter() - t0
         return GenerationResult(
             success=False,
-            project_path=None,
+            project_path=str(project_dir),
             stages=stages,
             validation_reports=[],
-            errors=errors,
+            errors=list(generated.get("errors") or ["plan_codegen_failed"]),
             metadata={
-                "engine": "dsl_formal",
+                "engine": "ai_plan_codegen",
+                "execution_plan": execution_plan_meta,
+                "model": generated.get("model"),
                 "elapsed_ms": round(elapsed * 1000, 1),
             },
         )
+    except Exception as exc:
+        elapsed = time.perf_counter() - t0
+        stages.append(
+            StageResult.failed(
+                "ai_plan_codegen",
+                errors=[f"{type(exc).__name__}:{exc}"[:500]],
+            )
+        )
+        return GenerationResult(
+            success=False,
+            project_path=str(project_dir),
+            stages=stages,
+            validation_reports=[],
+            errors=[f"{type(exc).__name__}:{exc}"[:500]],
+            metadata={
+                "engine": "ai_plan_codegen",
+                "execution_plan": execution_plan_meta,
+                "elapsed_ms": round(elapsed * 1000, 1),
+            },
+        )
+
+
+__all__ = [
+    "bootstrap",
+    "build_configuration",
+    "generate_bot",
+    "PipelineOrchestrator",
+    "EngineRegistry",
+]
