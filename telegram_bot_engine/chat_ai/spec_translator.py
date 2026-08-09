@@ -3,7 +3,7 @@ SpecTranslator — human speech → structured specification ONLY.
 
 Hard constraints:
   - TRANSLATE only. Never write code. Never invent features or domains.
-  - AI path: Groq primary (GROQ_API_KEY), Hugging Face optional fallback.
+  - AI path: Groq ONLY primary (GROQ_API_KEY). Hugging Face is last-resort fallback if Groq fails.
   - Structural extraction is NOT used on the generation path.
   - Every field is grounded against the original user text.
   - Formal engine is the ONLY code generator.
@@ -998,7 +998,7 @@ def _parse_spec_json(content: str) -> dict | None:
 
 
 def _hf_translate(text: str, timeout: int) -> TranslatorResult:
-    """AI translate via Groq (primary) then Hugging Face. Returns grounded JSON only."""
+    """AI translate: Groq primary, Hugging Face only if Groq fails/unavailable."""
     from . import groq_provider as groq
     from . import hf_provider as hf
 
@@ -1026,15 +1026,20 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
     max_tokens = int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200"))
     errors: list[str] = []
 
+    # Provider order is strict: Groq first. HF only if Groq unavailable or fails.
     providers: list[tuple[str, Any]] = []
     if groq.enabled():
         providers.append(("groq", groq))
-    if hf.enabled():
+    # HF is optional fallback only — never preferred over Groq
+    if hf.enabled() and not groq.enabled():
+        providers.append(("hf", hf))
+    elif hf.enabled() and groq.enabled():
+        # keep HF as secondary after Groq in the same loop
         providers.append(("hf", hf))
     if not providers:
         return TranslatorResult(
             ok=False,
-            error="No AI provider configured (set GROQ_API_KEY or HF_TOKEN)",
+            error="No AI provider configured (set GROQ_API_KEY — Groq is the primary translator)",
             path="ai_missing",
         )
 
@@ -1052,6 +1057,7 @@ def _hf_translate(text: str, timeout: int) -> TranslatorResult:
             )
             path_used = name
             if content:
+                # Stop at first successful provider (Groq wins when configured)
                 break
         except Exception as exc:
             errors.append(f"{name}:{type(exc).__name__}:{exc}"[:300])

@@ -491,7 +491,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ------------------------------------------------------------------
-    # Generate directly via SpecTranslator (HF) + Formal Engine.
+    # Generate directly via SpecTranslator (Groq primary) + Formal Engine.
     # No progressive clarification questionnaires — AI handles understanding.
     # ------------------------------------------------------------------
     if len(request) < 2:
@@ -503,7 +503,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop("pending_spec", None)
 
     status_msg = await message.reply_text(
-        "⏳ جاري ترجمة الوصف وتوليد المشروع (Hugging Face + Formal Engine)..."
+        "⏳ جاري ترجمة الوصف وتوليد المشروع (Groq + Formal Engine)..."
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
