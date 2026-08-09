@@ -14,14 +14,11 @@ import requests
 logger = logging.getLogger(__name__)
 
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
+# Models verified working on the current HF Inference Providers token.
+# Order: strongest first, then cheaper fallback so the user is never left without a model.
 DEFAULT_MODELS = (
-    # Prefer non-Qwen models first (Qwen often hits provider timeouts/quota).
     "meta-llama/Llama-3.3-70B-Instruct",
-    "meta-llama/Llama-3.1-70B-Instruct",
     "meta-llama/Llama-3.1-8B-Instruct",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1",
-    "google/gemma-2-9b-it",
-    "microsoft/Phi-3.5-mini-instruct",
 )
 
 _TOKEN_ENVS = (
