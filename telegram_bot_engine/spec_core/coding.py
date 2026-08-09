@@ -1048,7 +1048,10 @@ if __name__ == "__main__":
 
 
 def _emit_requirements() -> str:
-    return "python-telegram-bot>=21.0,<22\npython-dotenv>=1.0.0\n"
+    return (
+        "python-telegram-bot>=22.8,<23\n"
+        "python-dotenv>=1.2.2\n"
+    )
 
 
 def _emit_env() -> str:
