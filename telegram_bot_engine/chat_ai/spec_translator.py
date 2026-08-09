@@ -3,8 +3,8 @@ SpecTranslator — human speech → structured specification ONLY.
 
 Hard constraints:
   - TRANSLATE only. Never write code. Never invent features or domains.
-  - Hugging Face is the only AI path (when HF_TOKEN is set).
-  - Structural extraction is NOT used on the generation path (HF only).
+  - AI path: Groq primary (GROQ_API_KEY), Hugging Face optional fallback.
+  - Structural extraction is NOT used on the generation path.
   - Every field is grounded against the original user text.
   - Formal engine is the ONLY code generator.
 
@@ -940,66 +940,109 @@ def _parse_spec_json(content: str) -> dict | None:
 
 
 def _hf_translate(text: str, timeout: int) -> TranslatorResult:
-    """Hugging Face only: speech → JSON spec. Never code. Grounded to user text."""
-    t0 = time.perf_counter()
-    try:
-        from .hf_provider import chat, enabled
-        if not enabled():
-            return TranslatorResult(ok=False, error="HF_TOKEN not configured", path="hf")
-        user_payload = (
-            "Translate the following USER DESCRIPTION into the JSON specification schema.\n"
-            "Rules: translate only; no code; no invention; keep exact command names.\n\n"
-            f"USER DESCRIPTION:\n{text[:12000]}"
-        )
-        content, model = chat(
-            [
-                {"role": "system", "content": _HF_SYSTEM},
-                {"role": "user", "content": user_payload},
-            ],
-            timeout=timeout,
-            max_tokens=int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200")),
-            temperature=0.0,
-            json_mode=True,
-        )
-        if _looks_like_code(content):
-            raise ValueError("model_returned_code_rejected")
-        data = _parse_spec_json(content)
-        if not data:
-            raise ValueError("invalid_json")
-        # Hard ground: drop anything not evidenced in the original human text
-        data = _ground_spec_to_user_text(data, text)
-        has_signal = bool(
-            data.get("commands")
-            or data.get("buttons")
-            or data.get("entities")
-            or data.get("flows")
-            or data.get("tools")
-        )
-        if not has_signal:
-            raise ValueError("no_grounded_signal")
-        return TranslatorResult(
-            ok=True,
-            structured_text=_spec_to_sectioned_text(data, text),
-            grounded_json=data,
-            model_used=f"huggingface:{model}",
-            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-            path="hf",
-        )
-    except Exception as exc:
+    """AI translate via Groq (primary) then Hugging Face. Returns grounded JSON only."""
+    from . import groq_provider as groq
+    from . import hf_provider as hf
+
+    system = (
+        "You are a strict specification translator for Telegram bots. "
+        "Translate the user description into JSON only. "
+        "Never invent domain packs. Only extract what the user described. "
+        "Output a single JSON object with keys: "
+        "bot_name, commands, buttons, entities, flows, rules, relations, tools. "
+        "commands: [{name, description, admin_only}]. "
+        "buttons: [{label}]. "
+        "entities: [{name, fields}]. "
+        "flows: [{command, steps:[{key,prompt}]}]. "
+        "tools: [{id, title, input}]. "
+        "Command names: lowercase snake_case ASCII. "
+        "If the user lists a menu/board of labeled actions, put each as a button "
+        "and also as a command (slug from the English/ASCII words in the label). "
+        "Do not invent SSL/information commands from prose about certificates."
+    )
+    user_msg = f"USER DESCRIPTION:\n{text[:12000]}"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
+    max_tokens = int(os.environ.get("SPEC_TRANSLATOR_MAX_TOKENS", "3200"))
+    errors: list[str] = []
+
+    providers: list[tuple[str, Any]] = []
+    if groq.enabled():
+        providers.append(("groq", groq))
+    if hf.enabled():
+        providers.append(("hf", hf))
+    if not providers:
         return TranslatorResult(
             ok=False,
-            error=f"{type(exc).__name__}:{exc}"[:800],
-            elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-            path="hf",
+            error="No AI provider configured (set GROQ_API_KEY or HF_TOKEN)",
+            path="ai_missing",
         )
+
+    content = ""
+    model_used = ""
+    path_used = ""
+    for name, prov in providers:
+        try:
+            content, model_used = prov.chat(
+                messages,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                json_mode=True,
+            )
+            path_used = name
+            if content:
+                break
+        except Exception as exc:
+            errors.append(f"{name}:{type(exc).__name__}:{exc}"[:300])
+            content = ""
+    if not content:
+        return TranslatorResult(
+            ok=False,
+            error="; ".join(errors)[:800] or "ai_empty",
+            path="ai_failed",
+        )
+
+    # Parse JSON from model output
+    data: dict[str, Any] | None = None
+    try:
+        data = json.loads(content)
+    except Exception:
+        mjson = re.search(r"\{[\s\S]*\}", content)
+        if mjson:
+            try:
+                data = json.loads(mjson.group(0))
+            except Exception:
+                data = None
+    if not isinstance(data, dict):
+        return TranslatorResult(
+            ok=False,
+            error="ai_json_parse_failed",
+            model_used=f"{path_used}:{model_used}",
+            path=path_used or "ai",
+        )
+
+    return TranslatorResult(
+        ok=True,
+        grounded_json=data,
+        model_used=f"{path_used}:{model_used}",
+        path=path_used or "ai",
+        structured_text="",
+        error="",
+    )
+
 
 
 
 
 _BLOCKED_CMD_NAMES = frozenset({
+    "ssl", "tls", "example", "information", "com", "http", "https", "www",
+    "order", "pin", "records", "status", "certificate", "headers",
     "await", "async", "def", "class", "import", "from", "return", "true", "false", "none",
     "user", "users", "group", "groups", "channel", "history", "fully", "the", "and", "or",
-    "get", "set", "view", "open", "show", "list", "new", "old", "all", "with", "from",
+    "get", "set", "view", "open", "show", "list", "new", "old", "all", "with",
     "بالكامل", "command", "commands",
 })
 
@@ -1242,7 +1285,12 @@ def _promote_flows_and_buttons(spec: dict, text: str) -> dict:
 
 
 def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorResult:
-    """Hugging Face ONLY. No structural fallback (avoids false ssl/information commands)."""
+    """AI ONLY (Groq primary, HF secondary). No structural fallback."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
     text = (user_text or "").strip()
     t0 = time.perf_counter()
     if not text:
@@ -1265,12 +1313,13 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
 
-    from .hf_provider import enabled as hf_enabled
-    if not hf_enabled():
+    from . import groq_provider as _groq
+    from . import hf_provider as _hf
+    if not (_groq.enabled() or _hf.enabled()):
         return TranslatorResult(
             ok=False,
-            error="HF_TOKEN_required — SpecTranslator is Hugging Face only (structural path disabled)",
-            path="hf_missing",
+            error="GROQ_API_KEY or HF_TOKEN required — SpecTranslator is AI-only (structural path disabled)",
+            path="ai_missing",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
 
@@ -1278,9 +1327,9 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
     if not ai_result.ok:
         return TranslatorResult(
             ok=False,
-            error=ai_result.error or "hf_translate_failed",
+            error=ai_result.error or "ai_translate_failed",
             model_used=ai_result.model_used,
-            path="hf",
+            path=ai_result.path or "ai",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
 
@@ -1311,10 +1360,10 @@ def translate_spec(user_text: str, *, timeout: int | None = None) -> TranslatorR
         ok=ok,
         structured_text=structured if ok else "",
         grounded_json=grounded,
-        model_used=ai_result.model_used or "huggingface",
+        model_used=ai_result.model_used or "ai",
         elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
-        path="hf",
-        error="" if ok else "hf_no_grounded_signal",
+        path=ai_result.path or "ai",
+        error="" if ok else "ai_no_grounded_signal",
         needs_clarification=False,
         clarification_questions=[],
     )

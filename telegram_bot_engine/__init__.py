@@ -116,7 +116,7 @@ def generate_bot(request: str, work_dir=None):
                     project_path=None,
                     stages=stages,
                     validation_reports=[],
-                    errors=[tr.error or "HF SpecTranslator required — structural path disabled"],
+                    errors=[tr.error or "AI SpecTranslator required (GROQ_API_KEY) — structural path disabled"],
                     metadata={
                         "engine": "spec_translator",
                         "spec_translator": translator_meta,
