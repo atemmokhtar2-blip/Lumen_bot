@@ -139,17 +139,74 @@ def _maybe_run_git_stage(
 
 
 
+
+def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0):
+    """Deterministic path: preset Spec → coding engines (no LLM)."""
+    from pathlib import Path as _Path
+    import tempfile as _tempfile
+    import time as _time
+    from .core.result import GenerationResult, StageResult
+    from .spec_core.presets import detect_preset, session_for_preset
+    from .spec_core.pipeline import build_from_spec
+
+    preset = detect_preset(request)
+    if not preset:
+        return None
+
+    if work_dir is None:
+        work_dir = _Path(_tempfile.mkdtemp(prefix="spec_bot_"))
+    work_dir = _Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    project_dir = work_dir / "generated_bot"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    session = session_for_preset(preset, user_id=user_id)
+    result = build_from_spec(session.to_spec(), project_dir)
+    elapsed = _time.perf_counter() - t0
+    if result.ok:
+        return GenerationResult(
+            success=True,
+            project_path=str(project_dir),
+            stages=[
+                StageResult.ok("spec_preset", outputs={"preset": preset}),
+                StageResult.ok("spec_codegen", outputs={"files": result.files}),
+            ],
+            validation_reports=[],
+            errors=[],
+            metadata={
+                "engine": "spec_core",
+                "preset": preset,
+                "files_created": result.files,
+                "services": result.plan_services,
+                "elapsed_ms": round(elapsed * 1000, 1),
+                "ready_for_token": True,
+                "zero_ai": True,
+            },
+        )
+    return GenerationResult(
+        success=False,
+        project_path=str(project_dir),
+        stages=[StageResult.failed("spec_codegen", errors=list(result.errors))],
+        validation_reports=[],
+        errors=list(result.errors),
+        metadata={
+            "engine": "spec_core",
+            "preset": preset,
+            "elapsed_ms": round(elapsed * 1000, 1),
+            "zero_ai": True,
+        },
+    )
+
+
 def generate_bot(request: str, work_dir=None):
     """
     Entry point used by the Telegram interface.
 
-    ONLY path (Formal engine removed permanently):
-      user text
-        → Execution Planner (OpenAI / HF / Groq)
-        → Plan-driven Codegen
-        → project files
+    Paths:
+      1) Zero-AI presets (group admin / tickets / tasks / notes) via spec_core
+      2) AI plan+codegen when a provider has credit (optional)
 
-    No formal/DSL/transpiler fallback. No domain templates.
+    Formal engine removed. Known bot types no longer require HF/OpenAI.
     """
     from pathlib import Path
     import os
@@ -169,6 +226,14 @@ def generate_bot(request: str, work_dir=None):
             errors=["Empty request"],
             metadata={},
         )
+
+    # Prefer deterministic presets for common requests (works with zero AI credit)
+    try:
+        zero = _generate_bot_zero_ai(original_request, work_dir, t0)
+        if zero is not None:
+            return zero
+    except Exception:
+        pass
 
     work_dir = (
         Path(tempfile.mkdtemp(prefix="ai_bot_"))
