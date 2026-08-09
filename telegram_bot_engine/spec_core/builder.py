@@ -64,6 +64,10 @@ DEFAULT_COMMANDS: dict[str, str] = {
     "broadcast_admin": "broadcast",
 }
 
+# Fill missing command aliases from capability keys
+for _k in CAPABILITIES:
+    DEFAULT_COMMANDS.setdefault(_k, _k.replace("_", "")[:32])
+
 DEFAULT_SUCCESS_AR: dict[str, str] = {
     "user_ban": "تم حظر المستخدم",
     "user_unban": "تم إلغاء الحظر",
@@ -123,7 +127,7 @@ class BuilderSession:
     def needs_sqlite(self) -> bool:
         for key in self.selected:
             cap = get_capability(key)
-            if cap and cap.service in {"tasks", "notes", "welcome", "tickets", "security"}:
+            if cap and cap.service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"}:
                 return True
         return False
 

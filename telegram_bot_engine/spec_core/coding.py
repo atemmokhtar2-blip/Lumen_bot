@@ -45,7 +45,7 @@ def get_settings() -> Settings:
 
 def _emit_db(spec: BotSpec) -> str:
     need = spec.storage.type == "sqlite" or any(
-        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security"})  # type: ignore[union-attr]
+        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"})  # type: ignore[union-attr]
         for f in spec.features
     )
     if not need:
@@ -134,6 +134,18 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extras_kv (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 0,
+                kind TEXT NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
 '''
 
@@ -214,6 +226,21 @@ async def pin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_
 
 async def delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int) -> None:
     await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+
+
+async def lock_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    perms = ChatPermissions(can_send_messages=False)
+    await context.bot.set_chat_permissions(chat_id=chat_id, permissions=perms)
+
+
+async def unlock_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+    perms = ChatPermissions(
+        can_send_messages=True,
+        can_send_media_messages=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
+    await context.bot.set_chat_permissions(chat_id=chat_id, permissions=perms)
 '''
 
 
@@ -543,6 +570,145 @@ def _emit_security() -> str:
     )
 
 
+
+def _emit_extras() -> str:
+    """Shared lightweight services: shop/booking/crm/reminders/community/edu/hr/utils/gate."""
+    return (
+        '"""Market extras — lightweight product modules (deterministic)."""\n'
+        "from __future__ import annotations\n\n"
+        "import random\n"
+        "from datetime import datetime, timezone\n"
+        "from app.db import connect, init_db\n\n"
+        "def ensure() -> None:\n"
+        "    init_db()\n\n"
+        "def _add(user_id: int, kind: str, body: str, status: str = 'open') -> int:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        cur = conn.execute(\n"
+        '            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?, ?, ?, ?)",\n'
+        "            (user_id, kind, body[:2000], status),\n"
+        "        )\n"
+        "        conn.commit()\n"
+        "        return int(cur.lastrowid)\n\n"
+        "def _list(kind: str, user_id: int | None = None, only_open: bool = False, limit: int = 30) -> list[dict]:\n"
+        "    ensure()\n"
+        '    q = "SELECT id, user_id, kind, body, status, created_at FROM extras_kv WHERE kind = ?"\n'
+        "    params: list = [kind]\n"
+        "    if user_id is not None:\n"
+        '        q += " AND user_id = ?"\n'
+        "        params.append(user_id)\n"
+        "    if only_open:\n"
+        '        q += " AND status = \'open\'"\n'
+        '    q += " ORDER BY id DESC LIMIT ?"\n'
+        "    params.append(limit)\n"
+        "    with connect() as conn:\n"
+        "        return [dict(r) for r in conn.execute(q, params).fetchall()]\n\n"
+        "def _close(item_id: int, kind: str | None = None) -> bool:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        "        if kind:\n"
+        '            cur = conn.execute("UPDATE extras_kv SET status = \'closed\' WHERE id = ? AND kind = ?", (item_id, kind))\n'
+        "        else:\n"
+        '            cur = conn.execute("UPDATE extras_kv SET status = \'closed\' WHERE id = ?", (item_id,))\n'
+        "        conn.commit()\n"
+        "        return cur.rowcount > 0\n\n"
+        "# shop\n"
+        "def catalog() -> str:\n"
+        "    items = _list('product')\n"
+        "    if not items:\n"
+        "        return 'لا منتجات بعد'\n"
+        "    return '\\n'.join(f\"#{i['id']} {i['body']}\" for i in items)\n\n"
+        "def add_item(admin_id: int, title: str) -> int:\n"
+        "    return _add(admin_id, 'product', title, 'open')\n\n"
+        "def place_order(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'order', text)\n\n"
+        "def list_orders() -> list[dict]:\n"
+        "    return _list('order', only_open=True)\n\n"
+        "# booking\n"
+        "def book_slot(user_id: int, slot: str) -> int:\n"
+        "    return _add(user_id, 'booking', slot)\n\n"
+        "def list_bookings(user_id: int) -> list[dict]:\n"
+        "    return _list('booking', user_id=user_id, only_open=True)\n\n"
+        "def cancel_booking(user_id: int, item_id: int) -> bool:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        '        cur = conn.execute("UPDATE extras_kv SET status = \'closed\' WHERE id = ? AND user_id = ? AND kind = \'booking\'", (item_id, user_id))\n'
+        "        conn.commit()\n"
+        "        return cur.rowcount > 0\n\n"
+        "def admin_list_bookings() -> list[dict]:\n"
+        "    return _list('booking', only_open=True)\n\n"
+        "# crm\n"
+        "def lead_capture(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'lead', text)\n\n"
+        "def lead_list() -> list[dict]:\n"
+        "    return _list('lead', only_open=True)\n\n"
+        "# reminders\n"
+        "def set_reminder(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'reminder', text)\n\n"
+        "def list_reminders(user_id: int) -> list[dict]:\n"
+        "    return _list('reminder', user_id=user_id, only_open=True)\n\n"
+        "def clear_reminders(user_id: int) -> int:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        '        cur = conn.execute("UPDATE extras_kv SET status = \'closed\' WHERE user_id = ? AND kind = \'reminder\' AND status = \'open\'", (user_id,))\n'
+        "        conn.commit()\n"
+        "        return int(cur.rowcount)\n\n"
+        "# community\n"
+        "def feedback(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'feedback', text)\n\n"
+        "def suggest(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'suggest', text)\n\n"
+        "def report_user(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'user_report', text)\n\n"
+        "def poll_create(admin_id: int, text: str) -> int:\n"
+        "    return _add(admin_id, 'poll', text)\n\n"
+        "# edu / hr\n"
+        "def course_list() -> str:\n"
+        "    items = _list('course')\n"
+        "    return '\\n'.join(f\"#{i['id']} {i['body']}\" for i in items) if items else 'لا دورات'\n\n"
+        "def enroll(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'enroll', text)\n\n"
+        "def quiz_start() -> str:\n"
+        "    return 'اختبار سريع: ما أقوى ممارسة أمنية؟ أ) مشاركة كلمة المرور ب) 2FA — اكتب إجابتك كرسالة'\n\n"
+        "def leave_request(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'leave', text)\n\n"
+        "def leave_list() -> list[dict]:\n"
+        "    return _list('leave', only_open=True)\n\n"
+        "def checkin(user_id: int) -> int:\n"
+        "    return _add(user_id, 'checkin', datetime.now(timezone.utc).isoformat())\n\n"
+        "# gate / utils\n"
+        "def verify_start() -> str:\n"
+        "    return 'للتحقق أرسل: أنا لست روبوت'\n\n"
+        "def verify_ok(text: str) -> bool:\n"
+        "    return 'لست روبوت' in (text or '') or 'not a robot' in (text or '').lower()\n\n"
+        "def force_sub_info() -> str:\n"
+        "    return 'الاشتراك الإجباري: أضف قناتك هنا من الإعدادات لاحقًا. هذه نسخة معلوماتية.'\n\n"
+        "def calc(expr: str) -> str:\n"
+        "    allowed = set('0123456789+-*/(). %')\n"
+        "    e = ''.join(ch for ch in (expr or '') if ch in allowed)\n"
+        "    if not e:\n"
+        "        return 'تعبير غير صالح'\n"
+        "    try:\n"
+        "        return str(eval(e, {'__builtins__': {}}, {}))  # noqa: S307 — filtered charset only\n"
+        "    except Exception:\n"
+        "        return 'تعذر الحساب'\n\n"
+        "def time_now() -> str:\n"
+        "    return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')\n\n"
+        "def echo(text: str) -> str:\n"
+        "    return text or '—'\n\n"
+        "def random_pick(text: str) -> str:\n"
+        "    parts = [p.strip() for p in (text or '').split(',') if p.strip()]\n"
+        "    return random.choice(parts) if parts else 'أدخل عناصر مفصولة بفاصلة'\n\n"
+        "def short_note(user_id: int, text: str) -> int:\n"
+        "    return _add(user_id, 'short_note', text)\n\n"
+        "def stats_basic() -> str:\n"
+        "    ensure()\n"
+        "    with connect() as conn:\n"
+        '        n = conn.execute("SELECT COUNT(*) AS c FROM extras_kv").fetchone()["c"]\n'
+        "    return f'سجلات extras: {n}'\n"
+    )
+
+
 def _emit_keyboards(spec: BotSpec) -> str:
     rows = []
     for b in spec.start_buttons:
@@ -597,6 +763,8 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_welcome = any(_svc(f) == "welcome" for f in spec.features)
     need_tickets = any(_svc(f) == "tickets" for f in spec.features)
     need_security = any(_svc(f) == "security" for f in spec.features)
+    _extra_set = {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"}
+    need_extras = any(_svc(f) in _extra_set for f in spec.features)
 
     imports = [
         "from __future__ import annotations",
@@ -619,6 +787,8 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import tickets as tickets_svc")
     if need_security:
         imports.append("from app.services import security as security_svc")
+    if need_extras:
+        imports.append("from app.services import extras as extras_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -700,6 +870,9 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "demote_user": "demote_user",
                     "warn_user": "warn_user",
                 }
+                if cap.method == "user_info":
+                    lines.append("        await message.reply_text(f'user_id={target_id}')" )
+                    lines.append("        return")
                 m = method_map.get(cap.method, "warn_user")
                 lines.append(f"        await moderation_svc.{m}(context, chat.id, target_id)")
                 lines.append(f"        await message.reply_text({ok!r})")
@@ -812,6 +985,13 @@ def _emit_handlers(spec: BotSpec) -> str:
             elif cap.method == "my_id":
                 lines.append("    chat_id = chat.id if chat else 0")
                 lines.append("    await message.reply_text(f'user_id={user.id}\\nchat_id={chat_id}')")
+            elif cap.method == "settings":
+                lines.append("    await message.reply_text('الإعدادات: اللغة العربية افتراضيًا')")
+            elif cap.method == "language":
+                lines.append("    await message.reply_text('اللغة الحالية: العربية')")
+            elif cap.method == "cancel":
+                lines.append("    context.user_data.clear()")
+                lines.append("    await message.reply_text('تم الإلغاء')")
             else:
                 lines.append(f"    await message.reply_text({ok!r})")
 
@@ -1228,6 +1408,8 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/tickets.py"] = _emit_tickets()
     if "security" in services:
         files["app/services/security.py"] = _emit_security()
+    if {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"} & set(services):
+        files["app/services/extras.py"] = _emit_extras()
     return files
 
 

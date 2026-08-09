@@ -1,7 +1,7 @@
-"""Capability Registry — fixed executable features (no AI).
+"""Capability Registry — executable features for zero-AI generation.
 
-Only features listed here can appear in a valid BotSpec.
-Coding Engine maps each key → deterministic PTB v21 implementation.
+Scale model: many product capabilities, each mapped to a deterministic service/method.
+Offensive cyber / exploit tooling is intentionally excluded.
 """
 from __future__ import annotations
 
@@ -21,287 +21,149 @@ class Capability:
     category: str = "general"
 
 
-CAPABILITIES: dict[str, Capability] = {
-    # ── core ──────────────────────────────────────────────────────────
-    "start": Capability(
-        key="start", service="core", method="start",
-        description_ar="ترحيب وعرض الأزرار الرئيسية",
-        description_en="Welcome and main buttons",
-        category="core",
-    ),
-    "help": Capability(
-        key="help", service="core", method="help",
-        description_ar="عرض المساعدة",
-        description_en="Show help",
-        category="core",
-    ),
-    "about": Capability(
-        key="about", service="core", method="about",
-        description_ar="عن البوت",
-        description_en="About the bot",
-        category="core",
-    ),
-    "ping": Capability(
-        key="ping", service="core", method="ping",
-        description_ar="فحص أن البوت يعمل",
-        description_en="Health ping",
-        category="core",
-    ),
-    "my_id": Capability(
-        key="my_id", service="core", method="my_id",
-        description_ar="عرض معرف المستخدم والمحادثة",
-        description_en="Show user and chat ids",
-        category="core",
-    ),
-    "rules": Capability(
-        key="rules", service="content", method="rules",
-        description_ar="عرض قوانين المجموعة",
-        description_en="Show group rules",
-        category="content",
-    ),
-    "announce": Capability(
-        key="announce", service="content", method="announce",
-        description_ar="إعلان للمشرفين في المحادثة",
-        description_en="Admin announcement",
-        default_actor="admin",
-        category="content",
-    ),
-    # ── moderation ────────────────────────────────────────────────────
-    "user_ban": Capability(
-        key="user_ban", service="moderation", method="ban_user",
-        description_ar="حظر مستخدم من المجموعة",
-        description_en="Ban a user from the chat",
-        default_actor="admin", permissions=("ban_users",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_unban": Capability(
-        key="user_unban", service="moderation", method="unban_user",
-        description_ar="إلغاء حظر مستخدم",
-        description_en="Unban a user",
-        default_actor="admin", permissions=("ban_users",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_mute": Capability(
-        key="user_mute", service="moderation", method="mute_user",
-        description_ar="كتم مستخدم",
-        description_en="Mute a user",
-        default_actor="admin", permissions=("restrict_members",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_unmute": Capability(
-        key="user_unmute", service="moderation", method="unmute_user",
-        description_ar="إلغاء كتم مستخدم",
-        description_en="Unmute a user",
-        default_actor="admin", permissions=("restrict_members",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_kick": Capability(
-        key="user_kick", service="moderation", method="kick_user",
-        description_ar="طرد مستخدم",
-        description_en="Kick a user",
-        default_actor="admin", permissions=("ban_users",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_warn": Capability(
-        key="user_warn", service="moderation", method="warn_user",
-        description_ar="تحذير مستخدم",
-        description_en="Warn a user",
-        default_actor="admin", permissions=("ban_users",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_promote": Capability(
-        key="user_promote", service="moderation", method="promote_user",
-        description_ar="ترقية مشرف",
-        description_en="Promote member to admin",
-        default_actor="owner", permissions=("promote_members",),
-        needs_target_user=True, category="moderation",
-    ),
-    "user_demote": Capability(
-        key="user_demote", service="moderation", method="demote_user",
-        description_ar="إلغاء إشراف",
-        description_en="Demote admin",
-        default_actor="owner", permissions=("promote_members",),
-        needs_target_user=True, category="moderation",
-    ),
-    "pin_message": Capability(
-        key="pin_message", service="moderation", method="pin_message",
-        description_ar="تثبيت رسالة (بالرد)",
-        description_en="Pin replied message",
-        default_actor="admin", permissions=("pin_messages",),
-        category="moderation",
-    ),
-    "delete_message": Capability(
-        key="delete_message", service="moderation", method="delete_message",
-        description_ar="حذف رسالة (بالرد)",
-        description_en="Delete replied message",
-        default_actor="admin", permissions=("delete_messages",),
-        category="moderation",
-    ),
-    # ── tasks ─────────────────────────────────────────────────────────
-    "task_add": Capability(
-        key="task_add", service="tasks", method="add_task",
-        description_ar="إضافة مهمة",
-        description_en="Add a task",
-        category="tasks",
-    ),
-    "task_list": Capability(
-        key="task_list", service="tasks", method="list_tasks",
-        description_ar="عرض المهام",
-        description_en="List tasks",
-        category="tasks",
-    ),
-    "task_done": Capability(
-        key="task_done", service="tasks", method="done_task",
-        description_ar="تعليم تعليم مهمة كمكتملة",
-        description_en="Mark task done",
-        category="tasks",
-    ),
-    "task_delete": Capability(
-        key="task_delete", service="tasks", method="delete_task",
-        description_ar="حذف مهمة",
-        description_en="Delete a task",
-        category="tasks",
-    ),
-    "task_clear": Capability(
-        key="task_clear", service="tasks", method="clear_tasks",
-        description_ar="مسح كل المهام المكتملة",
-        description_en="Clear completed tasks",
-        category="tasks",
-    ),
-    # ── notes ─────────────────────────────────────────────────────────
-    "note_add": Capability(
-        key="note_add", service="notes", method="add_note",
-        description_ar="إضافة ملاحظة شخصية",
-        description_en="Add a personal note",
-        category="notes",
-    ),
-    "note_list": Capability(
-        key="note_list", service="notes", method="list_notes",
-        description_ar="عرض الملاحظات",
-        description_en="List notes",
-        category="notes",
-    ),
-    "note_delete": Capability(
-        key="note_delete", service="notes", method="delete_note",
-        description_ar="حذف ملاحظة",
-        description_en="Delete a note",
-        category="notes",
-    ),
-    # ── welcome ─────────────────────────────────────────────────────
-    "welcome_set": Capability(
-        key="welcome_set", service="welcome", method="set_message",
-        description_ar="تعيين رسالة الترحيب (ترحب بالأعضاء الجدد تلقائياً)",
-        description_en="Set auto-welcome message for new members",
-        default_actor="admin",
-        category="welcome",
-    ),
-    "welcome_toggle": Capability(
-        key="welcome_toggle", service="welcome", method="toggle",
-        description_ar="تفعيل/إيقاف الترحيب التلقائي",
-        description_en="Enable or disable auto-welcome",
-        default_actor="admin",
-        category="welcome",
-    ),
-    "welcome_show": Capability(
-        key="welcome_show", service="welcome", method="show",
-        description_ar="عرض إعدادات الترحيب الحالية",
-        description_en="Show current welcome settings",
-        default_actor="admin",
-        category="welcome",
-    ),
-    "welcome_test": Capability(
-        key="welcome_test", service="welcome", method="test",
-        description_ar="تجربة رسالة الترحيب",
-        description_en="Preview welcome message",
-        default_actor="admin",
-        category="welcome",
-    ),
-    # ── support tickets ─────────────────────────────────────────────
-    "ticket_open": Capability(
-        key="ticket_open", service="tickets", method="open_ticket",
-        description_ar="فتح تذكرة دعم جديدة",
-        description_en="Open a support ticket",
-        category="tickets",
-    ),
-    "ticket_close": Capability(
-        key="ticket_close", service="tickets", method="close_ticket",
-        description_ar="إغلاق تذكرة دعم",
-        description_en="Close a support ticket",
-        category="tickets",
-    ),
-    "ticket_list": Capability(
-        key="ticket_list", service="tickets", method="list_tickets",
-        description_ar="عرض تذاكر الدعم (للمشرف: الكل / للمستخدم: تذاكره)",
-        description_en="List support tickets",
-        category="tickets",
-    ),
-    "ticket_my": Capability(
-        key="ticket_my", service="tickets", method="my_tickets",
-        description_ar="عرض تذاكري المفتوحة",
-        description_en="List my open tickets",
-        category="tickets",
-    ),
-    "ticket_reply": Capability(
-        key="ticket_reply", service="tickets", method="reply_ticket",
-        description_ar="الرد على تذكرة دعم",
-        description_en="Reply to a support ticket",
-        default_actor="admin",
-        category="tickets",
-    ),
-    "ticket_status": Capability(
-        key="ticket_status", service="tickets", method="ticket_status",
-        description_ar="حالة تذكرة برقمها",
-        description_en="Show ticket status by id",
-        category="tickets",
-    ),
-    # ── security (defensive / SOC-lite ops — not offensive tools) ─
-    "sec_report_phish": Capability(
-        key="sec_report_phish", service="security", method="report_phish",
-        description_ar="إبلاغ عن رسالة/رابط مشبوه (تصيّد)",
-        description_en="Report suspicious phishing message/link",
-        category="security",
-    ),
-    "sec_report_incident": Capability(
-        key="sec_report_incident", service="security", method="report_incident",
-        description_ar="فتح بلاغ أمني للفريق",
-        description_en="Open a security incident report",
-        category="security",
-    ),
-    "sec_checklist": Capability(
-        key="sec_checklist", service="security", method="checklist",
-        description_ar="عرض قائمة توعية أمنية أساسية",
-        description_en="Show basic security awareness checklist",
-        category="security",
-    ),
-    "sec_list_reports": Capability(
-        key="sec_list_reports", service="security", method="list_reports",
-        description_ar="عرض البلاغات الأمنية (للمشرف)",
-        description_en="List security reports (staff)",
-        default_actor="admin",
-        category="security",
-    ),
-    "sec_close_report": Capability(
-        key="sec_close_report", service="security", method="close_report",
-        description_ar="إغلاق بلاغ أمني",
-        description_en="Close a security report",
-        default_actor="admin",
-        category="security",
-    ),
-    # ── FAQ / broadcast lite ─────────────────────────────────────
-    "faq_show": Capability(
-        key="faq_show", service="content", method="faq",
-        description_ar="عرض الأسئلة الشائعة",
-        description_en="Show FAQ",
-        category="content",
-    ),
-    "broadcast_admin": Capability(
-        key="broadcast_admin", service="content", method="announce",
-        description_ar="رسالة إذاعة من المشرف",
-        description_en="Admin broadcast message",
-        default_actor="admin",
-        category="content",
-    ),
-}
+def _c(key, service, method, ar, en, actor="user", perms=(), target=False, cat="general"):
+    return Capability(
+        key=key, service=service, method=method,
+        description_ar=ar, description_en=en,
+        default_actor=actor, permissions=tuple(perms),
+        needs_target_user=target, category=cat,
+    )
+
+
+CAPABILITIES: dict[str, Capability] = {}
+
+
+def _add(*caps: Capability) -> None:
+    for c in caps:
+        CAPABILITIES[c.key] = c
+
+
+# ── core ──────────────────────────────────────────────────────────────
+_add(
+    _c("start", "core", "start", "ترحيب وأزرار رئيسية", "Welcome + main buttons", cat="core"),
+    _c("help", "core", "help", "مساعدة الأوامر", "Help", cat="core"),
+    _c("about", "core", "about", "عن البوت", "About", cat="core"),
+    _c("ping", "core", "ping", "فحص التشغيل", "Ping", cat="core"),
+    _c("my_id", "core", "my_id", "معرف المستخدم والمحادثة", "User/chat ids", cat="core"),
+    _c("settings", "core", "settings", "إعدادات المستخدم", "User settings", cat="core"),
+    _c("language", "core", "language", "تغيير اللغة", "Change language", cat="core"),
+    _c("cancel", "core", "cancel", "إلغاء العملية الحالية", "Cancel flow", cat="core"),
+)
+
+# ── content / community ───────────────────────────────────────────────
+_add(
+    _c("rules", "content", "rules", "قوانين المجموعة", "Rules", cat="content"),
+    _c("faq_show", "content", "faq", "أسئلة شائعة", "FAQ", cat="content"),
+    _c("announce", "content", "announce", "إعلان مشرف", "Announce", actor="admin", cat="content"),
+    _c("broadcast_admin", "content", "announce", "إذاعة مشرف", "Broadcast", actor="admin", cat="content"),
+    _c("news", "content", "news", "آخر الأخبار", "News feed", cat="content"),
+    _c("links", "content", "links", "روابط مهمة", "Important links", cat="content"),
+    _c("contact_admin", "content", "contact", "تواصل مع الإدارة", "Contact admins", cat="content"),
+    _c("feedback", "community", "feedback", "إرسال ملاحظة/تقييم", "Send feedback", cat="community"),
+    _c("suggest", "community", "suggest", "اقتراح ميزة", "Suggest feature", cat="community"),
+    _c("poll_create", "community", "poll_create", "إنشاء تصويت بسيط", "Create simple poll", actor="admin", cat="community"),
+    _c("report_user", "community", "report_user", "الإبلاغ عن مستخدم", "Report a user", cat="community"),
+)
+
+# ── moderation ────────────────────────────────────────────────────────
+_add(
+    _c("user_ban", "moderation", "ban_user", "حظر مستخدم", "Ban user", "admin", ("ban_users",), True, "moderation"),
+    _c("user_unban", "moderation", "unban_user", "فك حظر", "Unban", "admin", ("ban_users",), True, "moderation"),
+    _c("user_mute", "moderation", "mute_user", "كتم", "Mute", "admin", ("restrict_members",), True, "moderation"),
+    _c("user_unmute", "moderation", "unmute_user", "فك كتم", "Unmute", "admin", ("restrict_members",), True, "moderation"),
+    _c("user_kick", "moderation", "kick_user", "طرد", "Kick", "admin", ("ban_users",), True, "moderation"),
+    _c("user_warn", "moderation", "warn_user", "تحذير", "Warn", "admin", ("ban_users",), True, "moderation"),
+    _c("user_promote", "moderation", "promote_user", "ترقية مشرف", "Promote", "owner", ("promote_members",), True, "moderation"),
+    _c("user_demote", "moderation", "demote_user", "إلغاء إشراف", "Demote", "owner", ("promote_members",), True, "moderation"),
+    _c("pin_message", "moderation", "pin_message", "تثبيت رسالة", "Pin message", "admin", ("pin_messages",), False, "moderation"),
+    _c("delete_message", "moderation", "delete_message", "حذف رسالة", "Delete message", "admin", ("delete_messages",), False, "moderation"),
+    _c("purge", "moderation", "purge", "تنظيف رسائل (بالرد)", "Purge from reply", "admin", ("delete_messages",), False, "moderation"),
+    _c("lock_chat", "moderation", "lock_chat", "قفل الدردشة للرسائل", "Lock chat", "admin", ("restrict_members",), False, "moderation"),
+    _c("unlock_chat", "moderation", "unlock_chat", "فتح الدردشة", "Unlock chat", "admin", ("restrict_members",), False, "moderation"),
+    _c("slowmode_info", "moderation", "slowmode_info", "عرض وضع التباطؤ", "Slow mode info", "admin", (), False, "moderation"),
+    _c("user_info", "moderation", "user_info", "معلومات عضو", "Member info", "admin", (), True, "moderation"),
+)
+
+# ── welcome / gate ────────────────────────────────────────────────────
+_add(
+    _c("welcome_set", "welcome", "set_message", "تعيين رسالة ترحيب", "Set welcome", "admin", cat="welcome"),
+    _c("welcome_toggle", "welcome", "toggle", "تفعيل/إيقاف الترحيب", "Toggle welcome", "admin", cat="welcome"),
+    _c("welcome_show", "welcome", "show", "عرض إعداد الترحيب", "Show welcome", "admin", cat="welcome"),
+    _c("welcome_test", "welcome", "test", "تجربة الترحيب", "Test welcome", "admin", cat="welcome"),
+    _c("goodbye_set", "welcome", "set_goodbye", "تعيين رسالة وداع", "Set goodbye", "admin", cat="welcome"),
+    _c("verify_start", "gate", "verify_start", "بدء تحقق بسيط للعضو", "Simple member verify", cat="gate"),
+    _c("verify_ok", "gate", "verify_ok", "تأكيد التحقق", "Confirm verify", cat="gate"),
+    _c("force_subscribe_info", "gate", "force_sub_info", "شرح الاشتراك الإجباري", "Force-subscribe info", "admin", cat="gate"),
+)
+
+# ── tasks / notes / reminders ─────────────────────────────────────────
+_add(
+    _c("task_add", "tasks", "add_task", "إضافة مهمة", "Add task", cat="tasks"),
+    _c("task_list", "tasks", "list_tasks", "عرض المهام", "List tasks", cat="tasks"),
+    _c("task_done", "tasks", "done_task", "إكمال مهمة", "Complete task", cat="tasks"),
+    _c("task_delete", "tasks", "delete_task", "حذف مهمة", "Delete task", cat="tasks"),
+    _c("task_clear", "tasks", "clear_tasks", "مسح المكتمل", "Clear done tasks", cat="tasks"),
+    _c("note_add", "notes", "add_note", "إضافة ملاحظة", "Add note", cat="notes"),
+    _c("note_list", "notes", "list_notes", "عرض الملاحظات", "List notes", cat="notes"),
+    _c("note_delete", "notes", "delete_note", "حذف ملاحظة", "Delete note", cat="notes"),
+    _c("remind_set", "reminders", "set_reminder", "تذكير لاحق (نص)", "Set text reminder", cat="reminders"),
+    _c("remind_list", "reminders", "list_reminders", "قائمة التذكيرات", "List reminders", cat="reminders"),
+    _c("remind_clear", "reminders", "clear_reminders", "مسح التذكيرات", "Clear reminders", cat="reminders"),
+)
+
+# ── tickets / CRM lite ────────────────────────────────────────────────
+_add(
+    _c("ticket_open", "tickets", "open_ticket", "فتح تذكرة", "Open ticket", cat="tickets"),
+    _c("ticket_close", "tickets", "close_ticket", "إغلاق تذكرة", "Close ticket", cat="tickets"),
+    _c("ticket_list", "tickets", "list_tickets", "كل التذاكر المفتوحة", "List tickets", cat="tickets"),
+    _c("ticket_my", "tickets", "my_tickets", "تذاكري", "My tickets", cat="tickets"),
+    _c("ticket_reply", "tickets", "reply_ticket", "رد على تذكرة", "Reply ticket", "admin", cat="tickets"),
+    _c("ticket_status", "tickets", "ticket_status", "حالة تذكرة", "Ticket status", cat="tickets"),
+    _c("lead_capture", "crm", "lead_capture", "تسجيل اهتمام/عميل محتمل", "Capture lead", cat="crm"),
+    _c("lead_list", "crm", "lead_list", "عرض العملاء المحتملين", "List leads", "admin", cat="crm"),
+)
+
+# ── security defensive ────────────────────────────────────────────────
+_add(
+    _c("sec_report_phish", "security", "report_phish", "إبلاغ تصيّد", "Report phishing", cat="security"),
+    _c("sec_report_incident", "security", "report_incident", "بلاغ حادث أمني", "Security incident", cat="security"),
+    _c("sec_checklist", "security", "checklist", "توعية أمنية", "Security checklist", cat="security"),
+    _c("sec_list_reports", "security", "list_reports", "بلاغات أمنية", "List sec reports", "admin", cat="security"),
+    _c("sec_close_report", "security", "close_report", "إغلاق بلاغ أمني", "Close sec report", "admin", cat="security"),
+    _c("sec_tips", "security", "tips", "نصائح أمان سريعة", "Quick security tips", cat="security"),
+)
+
+# ── shop / booking lite ───────────────────────────────────────────────
+_add(
+    _c("shop_catalog", "shop", "catalog", "عرض قائمة منتجات", "Product catalog", cat="shop"),
+    _c("shop_add_item", "shop", "add_item", "إضافة منتج (مشرف)", "Add product", "admin", cat="shop"),
+    _c("shop_order", "shop", "place_order", "طلب منتج", "Place order", cat="shop"),
+    _c("shop_orders", "shop", "list_orders", "طلبات المتجر", "List orders", "admin", cat="shop"),
+    _c("book_slot", "booking", "book_slot", "حجز موعد", "Book slot", cat="booking"),
+    _c("book_list", "booking", "list_bookings", "حجوزاتي", "My bookings", cat="booking"),
+    _c("book_cancel", "booking", "cancel_booking", "إلغاء حجز", "Cancel booking", cat="booking"),
+    _c("book_admin_list", "booking", "admin_list", "كل الحجوزات", "All bookings", "admin", cat="booking"),
+)
+
+# ── education / hr lite ───────────────────────────────────────────────
+_add(
+    _c("course_list", "edu", "course_list", "قائمة الدورات", "Course list", cat="edu"),
+    _c("course_enroll", "edu", "enroll", "تسجيل في دورة", "Enroll course", cat="edu"),
+    _c("quiz_start", "edu", "quiz_start", "بدء اختبار قصير", "Start quiz", cat="edu"),
+    _c("hr_leave_request", "hr", "leave_request", "طلب إجازة", "Leave request", cat="hr"),
+    _c("hr_leave_list", "hr", "leave_list", "طلبات الإجازة", "Leave list", "admin", cat="hr"),
+    _c("hr_checkin", "hr", "checkin", "تسجيل حضور", "Check-in", cat="hr"),
+)
+
+# ── utilities ─────────────────────────────────────────────────────────
+_add(
+    _c("calc", "utils", "calc", "حاسبة بسيطة", "Simple calculator", cat="utils"),
+    _c("time_now", "utils", "time_now", "الوقت الحالي", "Current time", cat="utils"),
+    _c("echo", "utils", "echo", "إعادة النص", "Echo text", cat="utils"),
+    _c("random_pick", "utils", "random_pick", "اختيار عشوائي من قائمة", "Random pick", cat="utils"),
+    _c("short_note", "utils", "short_note", "ملاحظة سريعة عامة", "Quick public note", cat="utils"),
+    _c("stats_basic", "utils", "stats_basic", "إحصاء أساسي للبوت", "Basic bot stats", "admin", cat="utils"),
+)
 
 
 def get_capability(key: str) -> Capability | None:

@@ -46,6 +46,9 @@ _NOTES_KEYS = (
     "ملاحظات",
     "notes",
 )
+_SHOP_KEYS = ("متجر", "shop", "store", "منتجات", "ecommerce")
+_BOOK_KEYS = ("حجز", "booking", "موعد", "appointment")
+_HR_KEYS = ("موارد بشرية", "hr", "إجازة", "حضور", "checkin")
 _SECURITY_KEYS = (
     "امن", "أمن", "سيبراني", "security", "cyber", "phishing", "تصيد", "تصيّد",
     "بلاغ", "incident", "soc", "توعية",
@@ -115,6 +118,12 @@ def detect_preset(request: str) -> str | None:
         return "notes"
     if _has_any(request, _SECURITY_KEYS):
         return "security_ops"
+    if _has_any(request, _SHOP_KEYS):
+        return "shop"
+    if _has_any(request, _BOOK_KEYS):
+        return "booking"
+    if _has_any(request, _HR_KEYS):
+        return "hr"
     return None
 
 
@@ -178,6 +187,21 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
         s.set_name(bot_name or "security_ops_bot")
         s.set_description("بوت عمليات أمنية دفاعية: بلاغات وتوعية")
         for k in _SECURITY_CAPS:
+            s.selected.add(k)
+    elif preset == "shop":
+        s.set_name(bot_name or "shop_bot")
+        s.set_description("بوت متجر مبسط")
+        for k in ("start", "help", "shop_catalog", "shop_add_item", "shop_order", "shop_orders", "ticket_open"):
+            s.selected.add(k)
+    elif preset == "booking":
+        s.set_name(bot_name or "booking_bot")
+        s.set_description("بوت حجوزات")
+        for k in ("start", "help", "book_slot", "book_list", "book_cancel", "book_admin_list"):
+            s.selected.add(k)
+    elif preset == "hr":
+        s.set_name(bot_name or "hr_bot")
+        s.set_description("بوت موارد بشرية مبسط")
+        for k in ("start", "help", "hr_leave_request", "hr_leave_list", "hr_checkin"):
             s.selected.add(k)
     else:
         s.set_name(bot_name or "custom_bot")
