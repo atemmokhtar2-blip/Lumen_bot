@@ -2,7 +2,8 @@
 
 Usage:
   export TELEGRAM_BOT_TOKEN=...
-  export BUILDER_OUT_DIR=/path/to/output   # optional
+  export BUILDER_OUT_DIR=/path/to/output   # optional (projects under users/<id>/projects)
+  export BUILDER_TRY_SECONDS=120           # live try duration
   python -m telegram_bot_engine.spec_core.builder_app.main
 """
 from __future__ import annotations
@@ -31,6 +32,7 @@ async def _post_init(app: Application) -> None:
             BotCommand("start", "بدء البنّاء"),
             BotCommand("help", "مساعدة"),
             BotCommand("summary", "ملخص الإعداد"),
+            BotCommand("projects", "مشاريعي المحفوظة"),
         ]
     )
 
@@ -46,6 +48,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("help", handlers.help_cmd))
     app.add_handler(CommandHandler("summary", handlers.summary_cmd))
+    app.add_handler(CommandHandler("projects", handlers.projects_cmd))
     app.add_handler(CallbackQueryHandler(handlers.on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.on_text))
     return app

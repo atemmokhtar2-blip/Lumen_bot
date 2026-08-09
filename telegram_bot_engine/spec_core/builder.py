@@ -86,6 +86,9 @@ class BuilderSession:
     selected: set[str] = field(default_factory=lambda: {"start", "help"})
     awaiting_name: bool = False
     awaiting_description: bool = False
+    awaiting_try_token: bool = False
+    last_project_path: str = ""
+    last_project_id: str = ""
 
     def toggle(self, key: str) -> bool:
         key = (key or "").strip().lower()

@@ -15,6 +15,8 @@ def main_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("3) القدرات", callback_data="b:cats")],
             [InlineKeyboardButton("4) ملخص", callback_data="b:summary")],
             [InlineKeyboardButton("✅ توليد المشروع", callback_data="b:build")],
+            [InlineKeyboardButton("📁 مشاريعي", callback_data="b:projects")],
+            [InlineKeyboardButton("▶️ جرب البوت", callback_data="b:try")],
             [InlineKeyboardButton("🔄 إعادة ضبط", callback_data="b:reset")],
         ]
     )
@@ -53,7 +55,24 @@ def capabilities_menu(session: BuilderSession, category: str) -> InlineKeyboardM
 def after_build_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("▶️ جرب البوت الآن", callback_data="b:try")],
+            [InlineKeyboardButton("📁 مشاريعي", callback_data="b:projects")],
             [InlineKeyboardButton("الملخص", callback_data="b:summary")],
             [InlineKeyboardButton("القائمة", callback_data="b:home")],
         ]
     )
+
+
+def projects_menu(projects: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for p in projects[:8]:
+        pid = str(p.get("id") or "")[:40]
+        label = str(p.get("label") or pid)[:28]
+        rows.append([InlineKeyboardButton(f"📦 {label}", callback_data=f"b:open:{pid}")])
+        rows.append(
+            [
+                InlineKeyboardButton(f"▶️ جرب {label[:12]}", callback_data=f"b:tryid:{pid}"),
+            ]
+        )
+    rows.append([InlineKeyboardButton("« القائمة", callback_data="b:home")])
+    return InlineKeyboardMarkup(rows)
