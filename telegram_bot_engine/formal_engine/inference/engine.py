@@ -322,10 +322,9 @@ def infer(program: DSLProgram) -> InferenceResult:
     # ── Flow Composer: classify commands → collect / lookup / mine / list ──
     # No domain packs. Classification is structural from command name + desc + entities.
     _INPUT_VERBS = (
-        "create", "add", "register", "book", "order", "submit", "new", "enroll",
+        "create", "add", "register", "submit", "new",
         "open", "signup", "sign_up", "join", "apply", "insert", "post",
-        "delivery", "shipping", "invoice", "support", "ticket", "appointment",
-        "reserve", "request", "form", "subscribe", "invite", "rate",
+        "request", "form", "subscribe", "invite",
         "scan", "inspect", "analyze", "audit",
     )
     _LOOKUP_CMDS = {
@@ -336,14 +335,14 @@ def infer(program: DSLProgram) -> InferenceResult:
         "progress", "score", "history", "balance", "profile", "settings",
     }
     _LIST_CMDS = {
-        "list", "menu", "catalog", "courses", "products", "items", "orders",
+        "list", "menu", "items",
         "stats", "statistics", "dashboard",
     }
     _SKIP_CMDS = {
         "cancel", "admin", "broadcast", "ban", "help", "start",
         "show", "view", "get", "delete", "remove", "drop", "reject", "accept",
         "deliver", "arrive", "optimize", "pay", "quiz",
-        "available_orders", "remind", "confirm", "notifications",
+        "remind", "confirm", "notifications",
     }
     _SKIP_STEMS = (
         "cancel", "delete", "remove", "drop", "stats", "admin",
@@ -355,19 +354,7 @@ def infer(program: DSLProgram) -> InferenceResult:
         "بريد", "هاتف", "صف", "collects", "حجز", "طلب",
     )
 
-    _CMD_ENTITY_HINTS: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
-        (("register", "signup", "student", "طالب", "تسجيل"), ("customer", "student", "user", "member", "driver")),
-        (("enroll", "join", "اشتراك"), ("enrollment", "enrolment", "registration")),
-        (("course", "كورس", "مادة"), ("course", "class", "subject")),
-        (("order", "طلب", "شراء", "new_order"), ("order", "purchase")),
-        (("book", "حجز", "appointment"), ("booking", "reservation", "appointment")),
-        (("ticket", "تذكرة", "بلاغ", "support"), ("ticket", "issue")),
-        (("product", "منتج", "سلعة", "add_item"), ("product", "item")),
-        (("quiz", "اختبار"), ("quizattempt", "quiz", "attempt")),
-        (("delivery", "توصيل"), ("order", "delivery")),
-        (("track", "تتبع", "search"), ("order", "ticket", "booking")),
-        (("my_orders", "my_tasks", "my_appointments", "my_clients"), ("order", "task", "appointment", "customer")),
-    ]
+    # Entity binding uses ONLY entities present in the grounded program.
 
     def _cmd_kind(cname: str, desc: str = "") -> str:
         c = cname.lower()
@@ -392,23 +379,24 @@ def infer(program: DSLProgram) -> InferenceResult:
         return "action"
 
     def _entity_for_command(cmd_name: str, cmd_desc: str) -> str | None:
+        """Bind command to an entity that already exists in the user contract only."""
         cn = (cmd_name or "").lower()
         cd = (cmd_desc or "").lower()
         best, best_score = None, 0
         for ename, fields in entity_fields.items():
             el = ename.lower()
             score = 0
-            if el in cn or cn in el:
-                score += 8
-            for stems_cmd, stems_ent in _CMD_ENTITY_HINTS:
-                if any(s in cn or s in cd for s in stems_cmd):
-                    if any(s in el for s in stems_ent):
-                        score += 6
-            # stem overlap
-            stems = {el, el.rstrip("s")}
-            cn_only = cn.replace("_", "")
-            if any(cn_only and cn_only in s for s in stems):
+            if el in cn or cn.endswith("_" + el) or cn.startswith(el + "_"):
+                score += 10
+            if el in cd:
                 score += 4
+            # token overlap with entity name parts
+            for part in el.replace("-", "_").split("_"):
+                if len(part) >= 3 and part in cn.replace("-", "_").split("_"):
+                    score += 6
+            cn_only = cn.replace("_", "")
+            if cn_only and (cn_only in el or el in cn_only):
+                score += 3
             if score > best_score:
                 best_score = score
                 best = ename
@@ -447,9 +435,9 @@ def infer(program: DSLProgram) -> InferenceResult:
         if not ent_name and len(caps) == 1:
             ent_name = caps[0]
         if kind == "lookup" and not ent_name and caps:
-            # prefer Order/Ticket-like for track
+            # Prefer entity whose name appears in the command; else first contract entity
             for cand in caps:
-                if any(s in cand.lower() for s in ("order", "ticket", "booking", "task")):
+                if cand.lower() in cn or any(p and p in cand.lower() for p in cn.split("_")):
                     ent_name = cand
                     break
             if not ent_name:
