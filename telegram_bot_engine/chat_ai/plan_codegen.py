@@ -97,7 +97,11 @@ def _validate_files(files: Any) -> tuple[list[dict[str, str]], list[str]]:
             continue
         content = item["content"]
         if not content.strip():
-            errors.append(f"empty_file:{path}")
+            # Package markers may arrive empty from the model — normalize instead of failing.
+            if path.endswith("__init__.py"):
+                content = '"""Package marker."""\n'
+            else:
+                errors.append(f"empty_file:{path}")
         low = content.lower()
         if any(marker in content for marker in forbidden):
             errors.append(f"placeholder_marker:{path}")
@@ -158,7 +162,17 @@ def generate_project_from_plan(plan: dict[str, Any], out_dir: str | Path, *, tim
         if c not in hc:
             hc.append(c)
     plan["hard_constraints"] = hc
-    required = [str(x.get("path")).replace("\\", "/") for x in plan_files if x.get("required", True)]
+    required = []
+    for x in plan_files:
+        if not x.get("required", True):
+            continue
+        path = str(x.get("path") or "").replace("\\", "/").strip()
+        if not path or path.endswith("/"):
+            continue  # directories are not files
+        if "." not in Path(path).name and not path.endswith(".py"):
+            # skip bare package dirs like handlers, services, models
+            continue
+        required.append(path)
     prompt = (
         "IMPLEMENTATION PLAN:\n" + json.dumps(plan, ensure_ascii=False, indent=2) +
         "\n\nRequired paths must be present: " + json.dumps(required, ensure_ascii=False) +
