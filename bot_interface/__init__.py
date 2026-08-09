@@ -4,6 +4,7 @@ from .config import (
     TELEGRAM_BOT_TOKEN,
     ALLOWED_USER_IDS,
     ALLOW_ALL_USERS,
+    LOCK_BOT_TO_ALLOWLIST,
     OUTPUT_DIR,
     PORT,
     logger,

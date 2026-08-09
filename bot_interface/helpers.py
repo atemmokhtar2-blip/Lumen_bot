@@ -13,15 +13,22 @@ from .config import ALLOWED_USER_IDS, ALLOW_ALL_USERS, logger
 
 
 def is_allowed(user_id: int | None) -> bool:
-    """Return True only if the user is permitted.
+    """Public product: allow everyone by default.
 
-    - If ALLOWED_USER_IDS is non-empty → only those IDs.
-    - If empty and ALLOW_ALL_USERS=1 → everyone (insecure, explicit opt-in).
-    - If empty and ALLOW_ALL_USERS not set → nobody (safe default).
+    - ALLOW_ALL_USERS (default on for public launch) → any user_id.
+    - Only when LOCK_BOT_TO_ALLOWLIST=1 and ALLOWED_USER_IDS is set → allowlist only.
     """
+    if user_id is None:
+        return False
+    from .config import LOCK_BOT_TO_ALLOWLIST
+
+    if LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:
+        return user_id in ALLOWED_USER_IDS
+    if ALLOW_ALL_USERS:
+        return True
     if ALLOWED_USER_IDS:
-        return user_id is not None and user_id in ALLOWED_USER_IDS
-    return bool(ALLOW_ALL_USERS)
+        return user_id in ALLOWED_USER_IDS
+    return False
 
 
 def chat_route(text: str):

@@ -25,21 +25,40 @@ ALLOWED_USER_IDS = {
     for x in os.getenv("ALLOWED_USER_IDS", "").split(",")
     if x.strip().isdigit()
 }
-# Safer default: empty ALLOWED_USER_IDS means DENY everyone unless explicitly
-# ALLOW_ALL_USERS=1 (or true/yes/on). Prevents accidental open bots.
-_ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
-ALLOW_ALL_USERS = _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}
 
-if not ALLOWED_USER_IDS and not ALLOW_ALL_USERS:
-    logger.critical(
-        "ALLOWED_USER_IDS is empty and ALLOW_ALL_USERS is not enabled. "
-        "No users will be able to use the bot. "
-        "Set ALLOWED_USER_IDS=123,456 or ALLOW_ALL_USERS=1 (insecure)."
+# Public product default: open to ALL Telegram users (revenue / growth).
+# Optional lock: set ALLOWED_USER_IDS=1,2,3 to restrict,
+# or LOCK_BOT_TO_ALLOWLIST=1 with an allowlist.
+_LOCK_RAW = (os.getenv("LOCK_BOT_TO_ALLOWLIST") or "").strip().lower()
+LOCK_BOT_TO_ALLOWLIST = _LOCK_RAW in {"1", "true", "yes", "on"}
+
+_ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
+if _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
+    ALLOW_ALL_USERS = False
+elif _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
+    ALLOW_ALL_USERS = True
+else:
+    # Default OPEN for public SaaS-style bot unless explicitly locked
+    ALLOW_ALL_USERS = not LOCK_BOT_TO_ALLOWLIST and not ALLOWED_USER_IDS
+
+if ALLOWED_USER_IDS and LOCK_BOT_TO_ALLOWLIST:
+    logger.info(
+        "Bot locked to ALLOWED_USER_IDS (%s users).",
+        len(ALLOWED_USER_IDS),
     )
-elif not ALLOWED_USER_IDS and ALLOW_ALL_USERS:
+elif ALLOWED_USER_IDS and not LOCK_BOT_TO_ALLOWLIST:
+    # List present but not locked → treat as open unless they only wanted admins
+    # Keep list for future admin features; access stays open.
+    ALLOW_ALL_USERS = True
+    logger.info(
+        "Public bot mode: all users allowed. ALLOWED_USER_IDS kept for admin hints only."
+    )
+elif ALLOW_ALL_USERS:
+    logger.info("Public bot mode: accepting all Telegram users (growth/revenue).")
+else:
     logger.warning(
-        "ALLOW_ALL_USERS=1 — the bot accepts messages from ANY Telegram user. "
-        "This is insecure for production. Prefer ALLOWED_USER_IDS."
+        "Bot access restricted (LOCK_BOT_TO_ALLOWLIST or ALLOW_ALL_USERS=0). "
+        "Set ALLOWED_USER_IDS or remove the lock for public access."
     )
 
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
