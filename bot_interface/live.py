@@ -86,14 +86,15 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
 
 
 async def handle_live_deploy_token(message, context, token: str, pending: dict) -> None:
-    """Spec 065: validate token, deploy, health-check, functional tests."""
+    """Deploy generated bot: LiveDeploymentEngine, fallback to LiveRunner on import/runtime gaps."""
     status = await message.reply_text(
         "🔐 جاري التحقق من التوكن وتشغيل Live Deployment..."
     )
     project_path = pending.get("project_path")
     owner_id = pending.get("owner_user_id")
+    entry = pending.get("entry_point") or ""
 
-    def _run():
+    def _run_engine():
         from telegram_bot_engine.engines.generators.live_deployment import (
             LiveDeploymentEngine,
         )
@@ -104,23 +105,44 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
             owner_user_id=owner_id,
         )
 
+    def _run_runner():
+        from telegram_bot_engine.formal_engine.services.live_runner import run_bot_project
+        return run_bot_project(
+            project_path=project_path,
+            bot_token=token,
+            entry_hint=entry or None,
+            run_seconds=float(os.environ.get("LIVE_RUN_SECONDS", 900)),
+        )
+
+    report = None
     try:
-        report = await asyncio.to_thread(_run)
-    except Exception as e:
-        logger.exception("Live deployment failed")
-        await status.edit_text(f"❌ فشل Live Deployment: {type(e).__name__}: {str(e)[:250]}")
-        return
+        report = await asyncio.to_thread(_run_engine)
+    except Exception as e1:
+        logger.exception("Live deployment engine failed — trying LiveRunner fallback")
+        try:
+            report = await asyncio.to_thread(_run_runner)
+        except Exception as e2:
+            logger.exception("LiveRunner fallback failed")
+            await status.edit_text(
+                f"❌ فشل Live Deployment: {type(e1).__name__}: {str(e1)[:180]}\n"
+                f"fallback: {type(e2).__name__}: {str(e2)[:180]}"
+            )
+            context.user_data.pop("pending_deploy", None)
+            return
     finally:
         token = ""  # noqa: F841
 
     context.user_data.pop("pending_deploy", None)
 
-    tv = report.token_validation
-    lines = [report.message if hasattr(report, "message") else str(report)]
     try:
-        text_out = report.to_user_text() if hasattr(report, "to_user_text") else "\n".join(lines)
+        if hasattr(report, "to_user_text"):
+            text_out = report.to_user_text()
+        elif hasattr(report, "message"):
+            text_out = str(report.message)
+        else:
+            text_out = str(report)
     except Exception:
-        text_out = "\n".join(str(x) for x in lines)
+        text_out = str(report)[:3500]
     if len(text_out) > 3500:
         text_out = text_out[:3500] + "\n…"
     await status.edit_text(text_out)

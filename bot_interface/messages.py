@@ -666,7 +666,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         len(request) < 60 or len(_slash_cmds) < 2
     )
     _adv_flag = bool((context.user_data or {}).get("advanced_brief", {}).get("intent_advanced"))
-    _need_dev_chat = (not _is_bot_spec and not _is_hard) or _weak_spec or _adv_flag
+    # Almost all non-hard messages go through AI — never auto-generate on greetings.
+    _need_dev_chat = (not _is_hard) or _weak_spec or _adv_flag or (not _is_bot_spec)
+    _ai_route_generate = False
 
     if _need_dev_chat:
         try:
@@ -713,7 +715,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             sc_conf = float(getattr(sc, "confidence", 0) or 0)
 
             if sc_type in ("recommend", "route") and sc_conf >= 0.55 and sc_cap == "generate_bot":
-                # Fall through to formal generation — do not only chat.
+                # Only this path may fall through to formal generation.
+                _ai_route_generate = True
                 if sc_text and _mem:
                     _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
                     _mem.set_last(intent=request[:200], capability=sc_cap)
@@ -812,10 +815,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 return
         except Exception:
             logger.exception("developer partner chat failed")
+            # AI failed: never invent a generation for non-spec chat (e.g. اهلا)
+            if not _is_bot_spec:
+                return
 
     # ------------------------------------------------------------------
-    # Generate via SpecTranslator + Formal Engine (no fixed questionnaires).
+    # Generate ONLY when AI routed generate_bot OR strong bot specification.
+    # Greetings / small-talk must never reach formal generation.
     # ------------------------------------------------------------------
+    _strong_bot_spec = bool(
+        _is_bot_spec
+        and (
+            len(_slash_cmds) >= 1
+            or len(request) >= 80
+            or bool(re.search(r"اعمل\s*بوت|أنشئ\s*بوت|انشئ\s*بوت|generate\s*bot", request, re.I))
+        )
+    )
+    if not _ai_route_generate and not _strong_bot_spec:
+        return
+
     if len(request) < 2:
         return
 
