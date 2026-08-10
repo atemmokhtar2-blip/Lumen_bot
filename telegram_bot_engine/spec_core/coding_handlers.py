@@ -1242,8 +1242,25 @@ def _emit_main(spec: BotSpec) -> str:
     if need_pay:
         imports_handlers += ", pre_checkout_handler, successful_payment_handler"
 
+    # Telegram Bot API hard-limit: max 100 entries in set_my_commands.
+    # CommandHandlers may still exceed 100; only the menu list is capped.
+    _prio = {
+        "start": 0, "help": 1, "shop": 2, "catalog": 3, "cart": 4, "orders": 5,
+        "balance": 6, "plans": 7, "wallet": 8, "ticket": 9, "lang": 10,
+    }
+    uniq_cmds: list[tuple[str, str]] = []
+    seen_c: set[str] = set()
+    for c, d in commands:
+        c2 = "".join(ch for ch in (c or "").lower().replace("-", "_") if ch.isalnum() or ch == "_")[:32]
+        if not c2 or c2 in seen_c or not c2[0].isalpha():
+            continue
+        seen_c.add(c2)
+        desc = (d or c2).replace("_", " ").strip()[:48] or c2
+        uniq_cmds.append((c2, desc))
+    uniq_cmds.sort(key=lambda x: (_prio.get(x[0], 50), x[0]))
+    menu_cmds = uniq_cmds[:100]
     bot_cmds = ",\n        ".join(
-        f"BotCommand({c!r}, {d!r})" for c, d in dict.fromkeys(commands)
+        f"BotCommand({c!r}, {d!r})" for c, d in menu_cmds
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
@@ -1288,9 +1305,13 @@ logger = logging.getLogger({spec.bot.name!r})
 
 
 async def _post_init(app: Application) -> None:
-    await app.bot.set_my_commands([
-        {bot_cmds}
-    ])
+    # Telegram allows at most 100 bot commands in the menu.
+    try:
+        await app.bot.set_my_commands([
+            {bot_cmds}
+        ])
+    except Exception as exc:
+        logger.warning("set_my_commands skipped: %s", exc)
 
 
 def build_application() -> Application:
