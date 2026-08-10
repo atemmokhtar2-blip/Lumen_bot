@@ -13,6 +13,43 @@ from .builder import BuilderSession
 from .schema import BotSpec
 from .seed_packs import seed_for_preset
 
+
+def _pack_from_prefixes(
+    prefixes: tuple[str, ...],
+    *,
+    limit: int = 64,
+    extra: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Real registry keys for a domain (prefix_action) — not phantom labels."""
+    from .registry import CAPABILITIES
+
+    out: list[str] = ["start", "help"]
+    for e in extra:
+        if e in CAPABILITIES or e in {"start", "help", "lang"}:
+            out.append(e)
+    prefer = (
+        "list", "view", "create", "search", "status", "stats", "track", "history",
+        "approve", "assign", "checkout", "buy", "sell", "ship", "deliver", "pay",
+        "transfer", "refund", "subscribe", "renew", "upgrade", "start_trial",
+        "dashboard", "balance", "invoice", "payout", "bid", "catalog",
+    )
+    for action in prefer:
+        for pref in prefixes:
+            key = f"{pref}_{action}"
+            if key in CAPABILITIES and key not in out:
+                out.append(key)
+                if len(out) >= limit:
+                    return tuple(dict.fromkeys(out))
+    for pref in prefixes:
+        for key in CAPABILITIES:
+            if key.startswith(pref + "_") and key not in out:
+                out.append(key)
+                if len(out) >= limit:
+                    return tuple(dict.fromkeys(out))
+    out.append("lang")
+    return tuple(dict.fromkeys(out))
+
+
 # keyword packs (Arabic + English), lowercase match
 _GROUP_KEYS = (
     "اداره مجموعات",
@@ -167,6 +204,55 @@ _SAAS_CAPS = (
     "data_export_me", "data_delete_me", "privacy_policy", "terms_of_service",
     "lang", "maintenance_mode",
 )
+
+
+def _saas_pack() -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "saas", "seat", "plan3", "billing2", "meter", "quota", "subscription2",
+            "trial2", "addon2", "workspace2", "org", "team2", "rbac", "flag2",
+            "webhook3", "apikey", "oauth2",
+        ),
+        limit=72,
+        extra=_SAAS_CAPS,
+    )
+
+
+def _marketplace_pack() -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "mkt", "listing2", "vendor2", "buyer", "offer2", "bid2", "escrow",
+            "payout2", "commission2", "catalog2", "storefront", "auction3",
+            "rfq2", "quote2", "dispute3", "review3",
+        ),
+        limit=72,
+        extra=_MARKETPLACE_CAPS,
+    )
+
+
+def _logistics_pack() -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "logi", "ship4", "fleet2", "route3", "hub2", "dock2", "warehouse4",
+            "courier2", "manifest", "lane", "container", "lastmile", "pod2",
+            "eta2", "load2", "trip",
+        ),
+        limit=72,
+        extra=("start", "help", "order_track", "order_status", "lang"),
+    )
+
+
+def _finance_pack() -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "fin", "ledger2", "journal", "payout3", "settle2", "recon", "treasury",
+            "fx", "card3", "wallet3", "loan2", "credit2", "limit2", "kyc2", "aml2",
+            "invoice4", "receivable", "payable", "tax3", "fee2",
+        ),
+        limit=72,
+        extra=("start", "help", "wallet_balance", "wallet_topup", "lang"),
+    )
+
 _COMMUNITY_CAPS = (
     "start", "help", "profile_set", "profile_view", "feed_view", "post_create",
     "post_like", "report_content", "mod_queue", "lang",
@@ -225,10 +311,27 @@ _RESTAURANT_KEYS = (
 _JOBS_KEYS = ("وظيفة", "وظائف", "job", "jobs", "توظيف", "hiring", "career")
 _MARKETPLACE_KEYS = (
     "سوق", "إعلان", "اعلان", "marketplace", "classified", "بيع وشراء",
+    "بائعين", "vendors", "vendor", "متعدد البائعين", "multi-vendor",
+    "escrow", "ضمان", "مزايدة", "storefront", "عمولة", "commission",
+    "سوق إلكتروني", "classifieds",
 )
 _SAAS_KEYS = (
-    "saas", "لوحة تحكم", "analytics", "تحليلات", "webhook", "api token",
-    "اشتراك برمجي",
+    "saas", "ساس", "لوحة تحكم", "analytics", "تحليلات", "webhook", "api token",
+    "اشتراك برمجي", "مقعد", "seats", "seat", "tenant", "مستأجر", "workspace",
+    "مساحة عمل", "rbac", "صلاحيات", "feature flag", "sso", "تجربة مجانية",
+    "trial", "quota", "حصة استخدام", "b2b", "اشتراك برمجيات",
+)
+_LOGISTICS_KEYS = (
+    "لوجستيات", "logistics", "شحن", "shipping", "أسطول", "fleet", "مندوب",
+    "courier", "مستودع", "warehouse", "تتبع شحنة", "tracking",
+    "توصيل", "delivery network", "بيان شحن", "manifest", "حاوية", "container",
+    "مسار توصيل", "route planning", "إثبات تسليم", "pod",
+)
+_FINANCE_KEYS = (
+    "مالية", "finance", "محاسبة", "accounting", "دفتر", "ledger", "خزينة",
+    "treasury", "تسوية", "settlement", "مطابقة", "reconciliation", "ذمم",
+    "kyc", "aml", "قرض", "loan", "ائتمان", "credit", "فاتورة مالية",
+    "receivable", "payable", "fx", "صرف عملات", "رسوم", "fees",
 )
 _COMMUNITY_KEYS = (
     "مجتمع", "community", "سوشيال", "social feed", "منشورات",
@@ -321,10 +424,12 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     # Higher weights for explicit product packs
     add("commerce_pro", _COMMERCE_PRO_KEYS, 3.0)
     add("creator", _CREATOR_KEYS, 2.2)
-    add("saas", _SAAS_KEYS, 2.0)
+    add("saas", _SAAS_KEYS, 2.4)
+    add("marketplace", _MARKETPLACE_KEYS, 2.3)
+    add("logistics", _LOGISTICS_KEYS, 2.3)
+    add("finance", _FINANCE_KEYS, 2.2)
     add("restaurant", _RESTAURANT_KEYS, 2.0)
     add("jobs", _JOBS_KEYS, 1.8)
-    add("marketplace", _MARKETPLACE_KEYS, 1.8)
     add("education", _EDU_KEYS, 1.8)
     add("events", _EVENTS_KEYS, 1.6)
     add("wallet", _WALLET_KEYS, 1.6)
@@ -422,6 +527,19 @@ def compose_session(
     for extra in presets[1:]:
         other = session_for_preset(extra, user_id=user_id)
         s.selected |= other.selected
+
+    # Domain pack densify — complex systems get real registry keys
+    names = set(presets)
+    if "saas" in names:
+        s.selected.update(_saas_pack())
+    if "marketplace" in names:
+        s.selected.update(_marketplace_pack())
+    if "logistics" in names:
+        s.selected.update(_logistics_pack())
+    if "finance" in names:
+        s.selected.update(_finance_pack())
+    if "commerce_pro" in names or "shop" in names:
+        s.selected.update(_COMMERCE_PRO_CAPS)
 
     # Intelligence: global / i18n language
     if _has_any(request, _I18N_KEYS):
@@ -589,14 +707,20 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
             s.selected.add(k)
     elif preset == "marketplace":
         s.set_name(bot_name or "marketplace_bot")
-        s.set_description("Classified marketplace: listings, search, contact seller")
-        for k in _MARKETPLACE_CAPS:
-            s.selected.add(k)
+        s.set_description("Marketplace: vendors, listings, escrow, bids, payouts, disputes")
+        s.selected.update(_marketplace_pack())
     elif preset == "saas":
         s.set_name(bot_name or "saas_bot")
-        s.set_description("SaaS-style bot: plans, analytics, webhooks, compliance, admin")
-        for k in _SAAS_CAPS:
-            s.selected.add(k)
+        s.set_description("SaaS: seats, trials, quotas, billing, RBAC, webhooks, flags")
+        s.selected.update(_saas_pack())
+    elif preset == "logistics":
+        s.set_name(bot_name or "logistics_bot")
+        s.set_description("Logistics: shipments, fleet, routes, hubs, POD, last-mile")
+        s.selected.update(_logistics_pack())
+    elif preset == "finance":
+        s.set_name(bot_name or "finance_bot")
+        s.set_description("Light finance: ledger, payouts, KYC, invoices, wallets")
+        s.selected.update(_finance_pack())
     elif preset == "community":
         s.set_name(bot_name or "community_bot")
         s.set_description("Community feed, profiles, posts, moderation queue")
