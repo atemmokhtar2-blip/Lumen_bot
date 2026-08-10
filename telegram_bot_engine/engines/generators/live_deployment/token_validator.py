@@ -5,7 +5,9 @@ Token Validator + Ownership Verification — Specification 065.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import time
 import urllib.error
 import urllib.request
 import json
@@ -21,6 +23,20 @@ _TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
 
 def looks_like_bot_token(token: str) -> bool:
     return bool(token and _TOKEN_RE.match(token.strip()))
+
+
+def _api_timeout() -> float:
+    try:
+        return max(8.0, min(float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30"), 90.0))
+    except ValueError:
+        return 30.0
+
+
+def _api_retries() -> int:
+    try:
+        return max(1, min(int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3"), 6))
+    except ValueError:
+        return 3
 
 
 class TokenValidator:
@@ -46,18 +62,42 @@ class TokenValidator:
             )
             return result
 
-        try:
-            url = f"https://api.telegram.org/bot{token}/getMe"
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            result.error = f"Telegram rejected the token (HTTP {e.code})."
-            _log.warning("Token validation HTTP error", extra={"code": e.code})
-            return result
-        except Exception as e:
-            result.error = f"Could not reach Telegram API: {type(e).__name__}."
-            _log.warning("Token validation network error", extra={"error": type(e).__name__})
+        timeout = _api_timeout()
+        retries = _api_retries()
+        body: dict = {}
+        last_err = ""
+        for attempt in range(1, retries + 1):
+            try:
+                url = f"https://api.telegram.org/bot{token}/getMe"
+                req = urllib.request.Request(
+                    url,
+                    method="GET",
+                    headers={"User-Agent": "AI-Agent-7h-LiveDeploy/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                last_err = ""
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in {401, 403, 404}:
+                    result.error = f"Telegram rejected the token (HTTP {e.code})."
+                    _log.warning("Token validation HTTP error", extra={"code": e.code})
+                    return result
+                last_err = f"HTTP {e.code}"
+            except Exception as e:
+                last_err = type(e).__name__
+                _log.warning(
+                    "Token validation network error",
+                    extra={"error": last_err, "attempt": attempt},
+                )
+            if attempt < retries:
+                time.sleep(float(attempt))
+
+        if last_err:
+            result.error = (
+                f"Could not reach Telegram API after {retries} attempts ({last_err}). "
+                f"Check outbound HTTPS to api.telegram.org or raise TELEGRAM_API_TIMEOUT."
+            )
             return result
 
         if not body.get("ok"):

@@ -99,23 +99,76 @@ class LiveRunReport:
         return "\n".join(lines)
 
 
-def validate_telegram_token(token: str, timeout: float = 12.0) -> tuple[bool, dict[str, Any], str]:
+def validate_telegram_token(
+    token: str,
+    timeout: float | None = None,
+    *,
+    retries: int | None = None,
+) -> tuple[bool, dict[str, Any], str]:
+    """Call Telegram getMe with retries.
+
+    Network timeouts to api.telegram.org are common on constrained hosts;
+    a single 12s attempt was failing live-run validation even with valid tokens.
+    """
     token = (token or "").strip()
     if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", token):
         return False, {}, "شكل التوكن غير صالح"
+
+    # Env overrides for slow networks / restricted egress
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30")
+        except ValueError:
+            timeout = 30.0
+    if retries is None:
+        try:
+            retries = int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3")
+        except ValueError:
+            retries = 3
+    retries = max(1, min(retries, 6))
+    timeout = max(8.0, min(float(timeout), 90.0))
+
     url = f"https://api.telegram.org/bot{token}/getMe"
-    try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")[:300]
-        return False, {}, f"Telegram HTTP {e.code}: {body}"
-    except Exception as e:
-        return False, {}, f"فشل الاتصال بـ Telegram: {type(e).__name__}: {e}"
-    if not data.get("ok"):
-        return False, data, f"getMe failed: {data}"
-    return True, data.get("result") or {}, "ok"
+    last_err = ""
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                method="GET",
+                headers={"User-Agent": "AI-Agent-7h-LiveRunner/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if not data.get("ok"):
+                # Auth / API logical failure — do not retry
+                desc = (data.get("description") or data) if isinstance(data, dict) else data
+                return False, data if isinstance(data, dict) else {}, f"getMe failed: {desc}"
+            return True, data.get("result") or {}, "ok"
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+            # 401/404 = bad token; no point retrying
+            if e.code in {401, 403, 404}:
+                return False, {}, f"Telegram HTTP {e.code}: {body}"
+            last_err = f"Telegram HTTP {e.code}: {body}"
+        except TimeoutError as e:
+            last_err = f"TimeoutError: {e}"
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", e)
+            last_err = f"URLError: {reason}"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+
+        if attempt < retries:
+            # linear backoff: 1s, 2s, 3s...
+            time.sleep(float(attempt))
+
+    return (
+        False,
+        {},
+        "فشل الاتصال بـ Telegram بعد عدة محاولات: "
+        f"{last_err}. تحقق من اتصال السيرفر بـ api.telegram.org "
+        f"أو ارفع TELEGRAM_API_TIMEOUT (حالياً {timeout:.0f}ث).",
+    )
 
 
 def _find_requirements(root: Path) -> Path | None:
@@ -1056,21 +1109,36 @@ def _error_location_summary(log: str) -> str:
 
 
 
-def _delete_telegram_webhook(token: str, timeout: float = 12.0) -> tuple[bool, str]:
+def _delete_telegram_webhook(token: str, timeout: float | None = None) -> tuple[bool, str]:
     """Clear webhook so polling can start (fixes Conflict with getUpdates)."""
     token = (token or "").strip()
     if not token:
         return False, "empty_token"
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30")
+        except ValueError:
+            timeout = 30.0
+    timeout = max(8.0, min(float(timeout), 90.0))
     url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
-    try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        if data.get("ok"):
-            return True, "webhook_deleted"
-        return False, str(data)[:200]
-    except Exception as e:
-        return False, f"{type(e).__name__}:{e}"
+    last_err = ""
+    for attempt in range(1, 4):
+        try:
+            req = urllib.request.Request(
+                url,
+                method="GET",
+                headers={"User-Agent": "AI-Agent-7h-LiveRunner/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                return True, "webhook_deleted"
+            return False, str(data)[:200]
+        except Exception as e:
+            last_err = f"{type(e).__name__}:{e}"
+            if attempt < 3:
+                time.sleep(float(attempt))
+    return False, last_err
 
 
 def _write_project_env(root: Path, bot_token: str, token_envs: list[str] | None = None) -> str:

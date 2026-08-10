@@ -68,7 +68,30 @@ class HealthChecker:
 
     @staticmethod
     def _api(token: str, method: str) -> dict:
+        import os
+        import time
+        import urllib.error
+        import urllib.request
+
+        try:
+            timeout = max(8.0, min(float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30"), 90.0))
+        except ValueError:
+            timeout = 30.0
         url = f"https://api.telegram.org/bot{token}/{method}"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    method="GET",
+                    headers={"User-Agent": "AI-Agent-7h-LiveDeploy/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                last_exc = e
+                if attempt < 3:
+                    time.sleep(float(attempt))
+        if last_exc:
+            raise last_exc
+        return {}
