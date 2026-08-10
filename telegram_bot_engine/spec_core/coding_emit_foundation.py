@@ -76,8 +76,13 @@ _DB = Path(__file__).resolve().parent.parent / "data.sqlite3"
 
 def connect() -> sqlite3.Connection:
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB)
+    conn = sqlite3.connect(_DB, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
     return conn
 
 

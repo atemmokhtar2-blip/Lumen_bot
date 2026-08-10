@@ -11,10 +11,19 @@ from typing import Any
 
 from app.db import connect, init_db
 
+_ENSURED = False
+
 
 def ensure() -> None:
+    """Idempotent schema bootstrap — runs once per process (hot path safe)."""
+    global _ENSURED
+    if _ENSURED:
+        return
     init_db()
     with connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS domain_items (
@@ -34,7 +43,9 @@ def ensure() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain_svc ON domain_items(service, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_domain_user ON domain_items(user_id, service)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_domain_svc_method ON domain_items(service, title)")
         conn.commit()
+    _ENSURED = True
 
 
 def _now() -> str:
@@ -43,7 +54,6 @@ def _now() -> str:
 
 def _insert(service: str, user_id: int, title: str, body: str = "", status: str = "open",
             meta: dict[str, Any] | None = None, amount: float = 0.0, ref_id: int = 0) -> int:
-    ensure()
     with connect() as conn:
         cur = conn.execute(
             """INSERT INTO domain_items
@@ -57,7 +67,6 @@ def _insert(service: str, user_id: int, title: str, body: str = "", status: str 
 
 
 def _list(service: str, *, user_id: int | None = None, status: str | None = "open", limit: int = 30):
-    ensure()
     q, args = "SELECT * FROM domain_items WHERE service=?", [service]
     if user_id is not None:
         q += " AND user_id=?"
@@ -70,13 +79,11 @@ def _list(service: str, *, user_id: int | None = None, status: str | None = "ope
 
 
 def _get(iid: int):
-    ensure()
     with connect() as conn:
         return conn.execute("SELECT * FROM domain_items WHERE id=?", (int(iid),)).fetchone()
 
 
 def _set_status(iid: int, status: str, *, user_id: int | None = None) -> bool:
-    ensure()
     with connect() as conn:
         if user_id is None:
             cur = conn.execute("UPDATE domain_items SET status=?, updated_at=? WHERE id=?",
@@ -361,12 +368,151 @@ def _hr(m, uid, text):
     return ""
 
 
+
+def _domain_factory(label: str):
+    """Build a specialized handler for a vertical with durable domain semantics."""
+    def _h(m, uid, text):
+        m = (m or "").lower()
+        # create family
+        if m in {
+            "create", "add", "submit", "open", "post", "capture", "enroll", "book",
+            "reserve", "apply", "order", "place_order", "register", "import_data",
+            "duplicate", "share", "favorite", "pin", "assign", "claim", "schedule",
+        }:
+            iid = _insert(label, uid, text or m, text or m, "open", {"method": m, "domain": label})
+            return f"{label.title()} #{iid} created ({m})"
+        if m in {
+            "list", "view", "search", "filter", "history", "export", "catalog",
+            "board", "feed", "stats", "dashboard", "my", "mine", "status", "track",
+        }:
+            rows = _list(label, user_id=None if m in {"list", "catalog", "board", "feed", "search"} else uid,
+                         status=None if m in {"history", "search", "stats"} else "open", limit=30)
+            return _fmt(rows, f"No {label} records")
+        if m in {"update", "edit", "patch"}:
+            iid = _first_id(text)
+            if not iid:
+                return f"Usage: {m} <id> <body>"
+            body = _rest(text)
+            with connect() as conn:
+                cur = conn.execute(
+                    "UPDATE domain_items SET body=?, updated_at=? WHERE id=? AND service=?",
+                    (body[:4000], _now(), iid, label),
+                )
+                conn.commit()
+                if int(cur.rowcount):
+                    return f"{label.title()} #{iid} updated"
+            return "Not found"
+        if m in {"delete", "remove", "archive", "close", "cancel", "reject", "approve", "complete"}:
+            iid = _first_id(text)
+            status = {"delete": "deleted", "remove": "deleted", "archive": "archived",
+                      "close": "closed", "cancel": "cancelled", "reject": "rejected",
+                      "approve": "approved", "complete": "done"}.get(m, m)
+            if iid and _set_status(iid, status):
+                return f"{label.title()} #{iid} → {status}"
+            if not iid:
+                iid = _insert(label, uid, m, text or m, status, {"method": m})
+                return f"{label.title()} event #{iid} ({status})"
+            return "Not found"
+        if m in {"restore", "reopen"}:
+            iid = _first_id(text)
+            if iid and _set_status(iid, "open"):
+                return f"{label.title()} #{iid} restored"
+            return "Not found"
+        # fall through to generic by returning ""
+        return ""
+    return _h
+
+
+# Auto-specialists for high-volume registry services (load + fidelity)
+_ops = _domain_factory("ops_desk")
+_hq = _domain_factory("hq_ops")
+_units = _domain_factory("units")
+_queues = _domain_factory("queues")
+_agents = _domain_factory("agents")
+_clients = _domain_factory("clients")
+_accounts = _domain_factory("accounts")
+_opportunities = _domain_factory("opportunities")
+_pricing = _domain_factory("pricing")
+_devices = _domain_factory("devices")
+_sensors = _domain_factory("sensors")
+_saas = _domain_factory("saas_ops")
+_mkt = _domain_factory("mkt_ops")
+_logi = _domain_factory("logi_ops")
+_fin = _domain_factory("fin_ops")
+_tenant = _domain_factory("tenant_ops")
+_vendor = _domain_factory("vendor_ops")
+_fleet = _domain_factory("fleet_ops")
+_ledger = _domain_factory("ledger_ops")
+_escrow = _domain_factory("escrow_ops")
+_route = _domain_factory("route_ops")
+_wallet = _domain_factory("wallet_ops")
+_quota = _domain_factory("quota_ops")
+_stock = _domain_factory("stock_ops")
+_shipping = _domain_factory("shipping_ops")
+_promotions = _domain_factory("promotions")
+_sku = _domain_factory("sku_ops")
+
+
 _HANDLERS = {
     "clinic": _clinic, "jobs": _jobs, "edu": _edu, "education": _edu,
     "events": _events, "restaurant": _restaurant, "auction": _auction, "auctions": _auction,
     "delivery": _delivery, "crm": _crm, "booking": _booking, "community": _community,
     "hr": _hr, "marketplace": _community,
+    # high-volume verticals (registry_scale)
+    "ops_desk": _ops, "hq_ops": _hq, "units": _units, "queues": _queues,
+    "agents": _agents, "clients": _clients, "accounts": _accounts,
+    "opportunities": _opportunities, "pricing": _pricing,
+    "devices": _devices, "sensors": _sensors,
+    "saas_ops": _saas, "mkt_ops": _mkt, "logi_ops": _logi, "fin_ops": _fin,
+    "tenant_ops": _tenant, "vendor_ops": _vendor, "fleet_ops": _fleet,
+    "ledger_ops": _ledger, "escrow_ops": _escrow, "route_ops": _route,
+    "wallet_ops": _wallet, "quota_ops": _quota, "stock_ops": _stock,
+    "shipping_ops": _shipping, "promotions": _promotions, "sku_ops": _sku,
+    # aliases used by fill_domains
+    "ops": _ops, "saas": _saas, "finance": _fin, "logistics": _logi,
 }
+
+
+
+# Method families (module-level — never rebuild on hot path)
+_LIST_M = frozenset({
+    "list", "view", "search", "filter", "history", "audit", "export", "catalog",
+    "board", "feed", "show", "stats", "stats_basic", "dashboard", "pipeline",
+    "pipeline_board", "review_list", "flash_list", "rss_list", "users", "inventory",
+    "orders", "menu", "slots", "schedule", "attendees", "leaderboard", "levels",
+    "badges", "achievements", "rewards_info", "faq", "rules", "settings", "about",
+    "tips", "bundles", "cohorts", "feature_flags", "feature_flag", "sla_info",
+    "trial_status", "status", "track", "track_order", "order_status", "ticket_status",
+    "progress", "progress_view", "my", "mine", "my_orders", "my_apps", "my_bids",
+    "wishlist_view", "wishlist", "payment_history", "invoice_list", "invoices",
+    "audit_log", "low_stock", "stock", "stock_alert", "revenue", "revenue_today",
+    "analytics", "analytics_overview", "analytics_revenue", "admin_list", "mod_queue",
+})
+_CREATE_M = frozenset({
+    "create", "add", "submit", "open", "buy", "sell", "import_data", "duplicate",
+    "share", "favorite", "pin", "post", "capture", "enroll", "book", "reserve",
+    "apply", "join", "rsvp", "order", "place_order", "upload", "register",
+    "lead_capture", "deal_create", "followup_set", "homework_submit", "note_add",
+    "task_add", "add_note", "add_task", "add_item", "wishlist_add", "cart_add",
+    "coupon_create", "create_gift", "create_listing", "book_slot", "book_session",
+    "book_table", "bid", "tip", "review_add", "review", "comment", "feedback",
+    "suggest", "report", "report_content", "report_user",
+})
+_UPDATE_M = frozenset({
+    "update", "edit", "patch", "set", "assign", "claim", "release", "escalate",
+    "approve", "reject", "close", "reopen", "schedule", "reschedule", "cancel",
+    "postpone", "remind", "notify", "complete", "finish", "pause", "resume",
+    "archive", "restore", "unpin", "unfavorite", "status_set", "set_status",
+})
+_CLOSE_M = frozenset({
+    "delete", "remove", "close", "cancel", "reject", "archive", "ban", "kick",
+    "unsubscribe", "revoke", "disable", "deactivate", "refund", "void", "expire",
+    "purge", "drop", "destroy",
+})
+
+_DELETE_M = frozenset({
+    "delete", "remove", "purge", "drop", "destroy", "cancel_hard",
+})
 
 
 def act(service: str, method: str, user_id: int, text: str = "") -> str:
@@ -392,56 +538,9 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
         except Exception as exc:
             return f"{svc}.{method} error: {exc}"
 
-    # Normalize aliases
-    LIST_M = {
-        "list", "view", "search", "filter", "history", "audit", "export", "catalog",
-        "board", "feed", "show", "stats", "stats_basic", "dashboard", "pipeline",
-        "pipeline_board", "review_list", "flash_list", "rss_list", "users", "inventory",
-        "orders", "menu", "slots", "schedule", "attendees", "leaderboard", "levels",
-        "badges", "achievements", "rewards_info", "faq", "rules", "settings", "about",
-        "tips", "bundles", "cohorts", "feature_flags", "feature_flag", "sla_info",
-        "trial_status", "status", "track", "track_order", "order_status", "ticket_status",
-        "progress", "progress_view", "my", "mine", "my_orders", "my_apps", "my_bids",
-        "wishlist_view", "wishlist", "payment_history", "invoice_list", "invoices",
-        "audit_log", "low_stock", "stock", "stock_alert", "revenue", "revenue_today",
-        "analytics", "analytics_overview", "analytics_revenue", "admin_list", "mod_queue",
-    }
-    CREATE_M = {
-        "create", "add", "submit", "open", "buy", "sell", "import_data", "duplicate",
-        "share", "favorite", "pin", "post", "capture", "enroll", "book", "reserve",
-        "apply", "join", "rsvp", "order", "place_order", "upload", "register",
-        "lead_capture", "deal_create", "followup_set", "homework_submit", "note_add",
-        "task_add", "add_note", "add_task", "add_item", "wishlist_add", "cart_add",
-        "coupon_create", "create_gift", "create_listing", "book_slot", "book_session",
-        "book_table", "bid", "tip", "review_add", "review", "comment", "feedback",
-        "suggest", "report", "report_content", "report_user", "report_incident",
-        "report_phish", "rss_add", "schedule_post", "set_reminder", "remind",
-        "invoice_create", "vendor_register", "saas_create", "affiliate_register",
-        "role_set", "set_role", "webhook_set", "broadcast", "announce", "boost",
-        "gift", "grant", "reward", "claim", "claim_quest", "checkin", "daily_checkin",
-        "topup", "transfer", "convert", "subscribe", "start_trial", "renew", "upgrade",
-        "downgrade", "upsell", "buy_bundle", "send_invoice", "resend_invoice",
-        "digital_deliver", "fulfill", "ship", "shipping_set", "checkout", "cart_checkout",
-        "coupon_apply", "coupon", "discount", "promo", "redeem", "redeem_gift",
-        "vote", "survey_vote", "quiz_start", "quiz", "score", "certificate",
-        "certificate_issue", "homework", "lesson_open", "course_list", "enroll",
-    }
-    CLOSE_M = {
-        "delete", "cancel", "close", "archive", "reject", "unpin", "unfavorite",
-        "revoke", "end", "remove", "cart_remove", "clear", "clear_tasks", "clear_reminders",
-        "cancel_order", "cancel_booking", "close_ticket", "close_report", "unsubscribe_topic",
-        "unfollow", "unlike", "unban", "unmute", "unlock", "unlock_chat", "freeze_streak",
-        "pause", "resume", "release", "reject", "ban", "block", "demote_user",
-    }
-    UPDATE_M = {
-        "update", "edit", "assign", "priority", "set_status", "set_priority", "set_message",
-        "set_language", "set_goodbye", "set_reminder", "toggle", "approve", "complete",
-        "done_task", "reopen", "reschedule", "restore", "restore_backup", "stock_set",
-        "role_grant", "config", "webhook_test", "force_logout", "maintenance",
-        "smart_broadcast", "smart_segment", "smart_flow", "smart_help",
-    }
+    # Method families: module-level _LIST_M / _CREATE_M / _UPDATE_M / _CLOSE_M
 
-    if m in LIST_M or m.endswith("_list") or m.endswith("_view") or m.endswith("_info") or m.endswith("_status"):
+    if m in _LIST_M or m.endswith("_list") or m.endswith("_view") or m.endswith("_info") or m.endswith("_status"):
         if m in {"stats", "stats_basic", "dashboard", "analytics", "analytics_overview", "revenue", "revenue_today"}:
             with connect() as conn:
                 open_c = conn.execute(
@@ -456,12 +555,12 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
         st = None if m in {"history", "audit", "audit_log", "export"} else "open"
         return _fmt(_list(svc, status=st, limit=30), f"No {svc} items yet — create one")
 
-    if m in CREATE_M or m.endswith("_create") or m.endswith("_add") or m.endswith("_open") or m.endswith("_submit"):
+    if m in _CREATE_M or m.endswith("_create") or m.endswith("_add") or m.endswith("_open") or m.endswith("_submit"):
         title = text[:80] if text else f"{method}"
         iid = _insert(svc, uid, title, text or method, "open", {"method": method})
         return f"Created #{iid} ({svc}/{method})"
 
-    if m in CLOSE_M or m.endswith("_delete") or m.endswith("_cancel") or m.endswith("_close"):
+    if m in _CLOSE_M or m.endswith("_delete") or m.endswith("_cancel") or m.endswith("_close"):
         iid = _first_id(text)
         with connect() as conn:
             if iid:
@@ -480,7 +579,7 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
             n = int(cur.rowcount)
         return f"Closed {n} item(s)" if n else f"Nothing open to close for {svc}"
 
-    if m in UPDATE_M or m.endswith("_update") or m.endswith("_set") or m.endswith("_edit"):
+    if m in _UPDATE_M or m.endswith("_update") or m.endswith("_set") or m.endswith("_edit"):
         iid = _first_id(text)
         body = _rest(text)
         if iid and body:

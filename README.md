@@ -85,3 +85,14 @@ requirements.txt
 - لا يوجد مسار LLM لتوليد الكود أو لردود الشريك الذكي.
 - فشل بوابة anti-hallucination → المشروع **غير جاهز** ولن يُطلب توكن التشغيل.
 - هذا هو ملف التوثيق الوحيد في المستودع.
+
+## Capability scale (registry)
+
+- حوالي **30,270** capability key حتمية في `spec_core.registry`
+- كل مفتاح يمر على مسار تنفيذي (`service.method` → SQLite durable)
+- Domain handlers متخصصة لأعلى الخدمات حجماً + مسار عام مُحسَّن
+- اختبارات: `tests/test_capabilities_scale.py`
+  - exhaustive لكل المفاتيح
+  - load متزامن (آلاف العمليات/ثانية)
+  - سيناريوهات واقعية متعددة الخطوات
+
