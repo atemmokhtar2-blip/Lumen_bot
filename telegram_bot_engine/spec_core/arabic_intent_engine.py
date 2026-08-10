@@ -60,7 +60,11 @@ SYNONYM_GROUPS: dict[str, list[str]] = {
     "events": ["فعالية", "حدث", "events", "ticket sales"],
     "crm": ["crm", "عملاء", "leads", "pipeline"],
     "commerce_pro": [
-        "commerce pro", "متجر كامل", "commerce", "ecommerce full", "متجر متكامل",
+        "commerce pro", "متجر كامل", "متجر متكامل", "متجر احترافي", "متجر شامل",
+        "ecommerce full", "commerce suite", "منصة تجارة", "عالمي متكامل",
+        "كتالوج", "فواتير", "مدفوعات تيليجرام", "استرجاع", "تجربة مجانية",
+        "إهداء اشتراك", "لوحة متصدرين", "سلاسل", "إذاعة", "قاعدة معرفة",
+        "وضع صيانة", "ولاء", "تحليلات", "إيرادات",
     ],
 }
 
@@ -112,8 +116,27 @@ def normalize_arabic(text: str) -> str:
     return t
 
 
+def stem_arabic(text: str) -> str:
+    """Lightweight Arabic stemming for intent matching."""
+    text = normalize_arabic(text)
+    rules = [
+        (r"^ال", ""),
+        (r"(ات|ين|ون|ان|ة|ه|ي|ك|كم|هم|هن|نا)$", ""),
+        (r"^(وال|بال|كال|فال)", ""),
+    ]
+    out = []
+    for w in text.split():
+        x = w
+        for pat, rep in rules:
+            x = re.sub(pat, rep, x)
+        out.append(x or w)
+    return " ".join(out)
+
+
 def classify_intent(text: str) -> list[IntentMatch]:
+
     norm = normalize_arabic(text)
+    stemmed = stem_arabic(text)
     if not norm:
         return []
     results: list[IntentMatch] = []
@@ -126,6 +149,9 @@ def classify_intent(text: str) -> list[IntentMatch]:
                 continue
             if k in norm:
                 score += 3.0
+                matched.append(kw)
+            elif stem_arabic(kw) and stem_arabic(kw) in stemmed:
+                score += 2.0
                 matched.append(kw)
             elif any(k in w or w in k for w in norm.split() if len(w) > 2 and len(k) > 2):
                 score += 1.2

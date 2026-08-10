@@ -330,8 +330,34 @@ _CREATOR_KEYS = (
     "عضوية محتوى", "fan", "patreon",
 )
 _COMMERCE_PRO_KEYS = (
-    "متجر متكامل", "commerce pro", "all-in-one shop", "متجر احترافي",
-    "full ecommerce", "متجر شامل", "commerce suite",
+    # Explicit suite names
+    "commerce pro", "commerce suite", "متجر كامل", "متجر متكامل", "متجر احترافي",
+    "متجر شامل", "full ecommerce", "ecommerce full", "all-in-one shop",
+    "منصة تجارة", "commerce platform", "complete shop", "عالمي متكامل",
+    # Catalog / cart / coupons
+    "كتالوج", "catalog", "سلة", "سلة مشتريات", "كوبون", "كوبونات", "خصم", "خصومات",
+    "عروض", "فلاش", "checkout", "إتمام شراء", "مخزون",
+    # Orders / invoices / payments / refunds
+    "فواتير", "فاتورة", "مدفوعات", "مدفوعات تيليجرام", "telegram payments",
+    "تتبع طلب", "إلغاء طلب", "الغاء طلب", "استرجاع", "استرداد", "refund",
+    "order track", "order cancel", "invoice",
+    # Subscriptions lifecycle
+    "تجربة مجانية", "تجربه مجانيه", "تجديد", "إهداء اشتراك", "اهداء اشتراك",
+    "trial", "renew", "gift subscription", "اشتراكات وخطط",
+    # Points / loyalty / levels
+    "لوحة متصدرين", "تحويل نقاط", "مستويات", "مستوى", "leaderboard", "levels",
+    # Wallet
+    "محفظة رصيد", "شحن رصيد", "شحن محفظة",
+    # Growth / streaks / daily
+    "روابط دعوة", "تسجيل يومي", "سلاسل", "سلسلة", "streak", "daily check",
+    # Contests
+    "سحب فائزين", "مسابقات وسحب",
+    # Analytics / broadcast
+    "تحليلات", "إيرادات", "ايرادات", "إذاعة", "اذاعة", "شرائح", "broadcast",
+    "segment", "analytics revenue",
+    # Support / KB / admin
+    "قاعدة معرفة", "وضع صيانة", "صيانة", "maintenance mode", "knowledge base",
+    "privacy", "شروط", "تصدير بياناتي", "حذف بياناتي",
 )
 
 _GROWTH_KEYS = (
@@ -496,23 +522,40 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     add("auction", _AUCTION_KEYS, 1.7)
     add("delivery", _DELIVERY_KEYS, 1.6)
 
-    # Smart boosts: multi-commerce signals → commerce_pro only if shop/payments present
+    # ── Composite commerce_pro detection (Arabic-first multi-domain) ──
+    # Count independent commerce pillars present in the request text.
+    text_l = (request or "").lower()
+    pillars = {
+        "shop": any(k in text_l for k in ("متجر", "كتالوج", "catalog", "منتجات", "سلة", "كوبون", "shop", "store", "cart")),
+        "orders": any(k in text_l for k in ("طلب", "طلبات", "تتبع", "إلغاء", "الغاء", "استرجاع", "استرداد", "order", "refund", "فاتورة", "فواتير")),
+        "payments": any(k in text_l for k in ("دفع", "مدفوعات", "payment", "invoice", "فواتير")),
+        "subs": any(k in text_l for k in ("اشتراك", "اشتراكات", "خطة", "خطط", "تجربة مجانية", "تجديد", "إهداء", "subscription", "trial", "renew")),
+        "points": any(k in text_l for k in ("نقاط", "ولاء", "متصدرين", "مستويات", "points", "loyalty", "leaderboard")),
+        "wallet": any(k in text_l for k in ("محفظة", "رصيد", "شحن", "wallet", "balance")),
+        "growth": any(k in text_l for k in ("إحالة", "احالة", "دعوة", "سلاسل", "تسجيل يومي", "referral", "streak", "check-in", "checkin")),
+        "contests": any(k in text_l for k in ("مسابقة", "مسابقات", "سحب", "contest", "giveaway", "raffle")),
+        "analytics": any(k in text_l for k in ("تحليلات", "إيرادات", "ايرادات", "إذاعة", "اذاعة", "شرائح", "broadcast", "segment", "analytics")),
+        "support": any(k in text_l for k in ("تذكرة", "تذاكر", "دعم", "قاعدة معرفة", "ticket", "knowledge")),
+        "i18n": any(k in text_l for k in ("ترجمة", "عربي", "انجليزي", "إنجليزي", "/lang", "i18n", "multilingual", "عالمي")),
+        "admin": any(k in text_l for k in ("أدمن", "ادمن", "صيانة", "مخزون", "admin", "maintenance")),
+    }
+    pillar_count = sum(1 for v in pillars.values() if v)
     commerce_hits = sum(
         1
-        for pack in ("shop", "subscriptions", "points", "wallet", "growth")
-        if scores.get(pack, 0) > 0
+        for k in ("subscriptions", "points", "wallet", "growth", "contests", "support_tickets", "support_pro")
+        if scores.get(k, 0) > 0
     )
-    if scores.get("shop", 0) > 0 and commerce_hits >= 2:
-        scores["commerce_pro"] = scores.get("commerce_pro", 0) + 2.5 * commerce_hits
+    # Explicit suite phrase or many pillars → strong commerce_pro
+    if scores.get("commerce_pro", 0) > 0 or pillar_count >= 4:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 4.0 + 1.5 * max(pillar_count, commerce_hits)
+    elif scores.get("shop", 0) > 0 and (commerce_hits >= 2 or pillar_count >= 3):
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 3.0 * max(commerce_hits, pillar_count - 1)
+    elif pillar_count >= 5:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 2.5 * pillar_count
     elif commerce_hits >= 3 and scores.get("subscriptions", 0) > 0:
-        scores["commerce_pro"] = scores.get("commerce_pro", 0) + 2.0 * commerce_hits
-    if _has_any(request, _I18N_KEYS) and scores:
-        # Soft preference for market packs when global is requested
-        for name in ("commerce_pro", "shop", "subscriptions", "saas", "creator"):
-            if name in scores:
-                scores[name] += 0.8
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 2.0 * commerce_hits
 
-    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+
     try:
         from .arabic_intent_engine import classify_intent, DOMAIN_TO_PRESET
         for im in classify_intent(request)[:6]:
@@ -522,6 +565,7 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     except Exception:
         pass
 
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
     return ranked
 
 
@@ -550,7 +594,16 @@ def _request_signals(request: str) -> dict[str, float]:
         "wallet_only": n(("محفظة", "wallet", "شحن رصيد", "topup", "top-up")),
         "seats": n(("مقعد", "seats", "seat", "tenant", "workspace", "rbac", "sso", "quota")),
         "trial": n(("trial", "تجربة مجانية", "تجربة")),
-        "commerce_explicit": n(("commerce pro", "متجر متكامل", "متجر احترافي", "full ecommerce", "commerce suite")),
+        "commerce_explicit": n((
+            "commerce pro", "متجر متكامل", "متجر احترافي", "متجر كامل", "متجر شامل",
+            "full ecommerce", "commerce suite", "منصة تجارة", "عالمي متكامل",
+            "commerce platform", "all-in-one shop",
+        )),
+        "commerce_rich": n((
+            "كتالوج", "سلة", "كوبون", "فواتير", "مدفوعات", "اشتراك", "نقاط", "محفظة",
+            "إحالة", "مسابقة", "تحليلات", "تذكرة", "استرجاع", "تجربة مجانية", "سلاسل",
+            "إذاعة", "قاعدة معرفة", "وضع صيانة", "ولاء", "متصدرين",
+        )),
         "platform": n(("منصة", "platform", "operating system", "suite", "enterprise", "متكامل", "شامل")),
         "saas_word": n(("saas", "ساس", "b2b")),
         "logistics_word": n(("لوجستيات", "logistics", "last mile", "lastmile", "manifest",
@@ -582,6 +635,16 @@ def prioritize_preset_stack(
 
     sig = _request_signals(request)
     scores = {n: float(s) for n, s in ranked}
+
+    # Commerce Pro override: rich multi-feature Arabic commerce specs
+    # win over bare shop even without the exact phrase "commerce pro".
+    if sig.get("commerce_explicit", 0) >= 1 or sig.get("commerce_rich", 0) >= 6:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 8.0 + 0.8 * sig.get("commerce_rich", 0)
+        # Demote thin single-domain shop when suite is clearly intended
+        if scores.get("shop", 0) > 0:
+            scores["shop"] = max(0.1, scores.get("shop", 0) - 4.0)
+    elif sig.get("commerce_rich", 0) >= 4 and scores.get("shop", 0) > 0:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 5.0 + 0.5 * sig.get("commerce_rich", 0)
 
     # Specificity bonuses / penalties
     if sig["vendor"] or sig["escrow"] or sig["marketplace_word"]:
