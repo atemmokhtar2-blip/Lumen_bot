@@ -1832,8 +1832,9 @@ def run_bot_project(
 ) -> LiveRunReport:
     """Run a generated bot under isolation.
 
-    SaaS default: Docker is REQUIRED (TBE_REQUIRE_DOCKER=1).
-    Local process is allowed only when TBE_ALLOW_LOCAL_PROCESS=1 (dev only).
+    Prefer Docker when available. If Docker is missing:
+      - default: fall back to local process (sandboxed under OUTPUT_DIR)
+      - strict: set TBE_REQUIRE_DOCKER=1 to refuse local entirely
     """
     import re as _re
     _raw_path = str(project_path or "")
@@ -1851,11 +1852,13 @@ def run_bot_project(
         )
 
     import os as _os
-    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
-    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+    # Default: allow local fallback so testing works on hosts without Docker (Railway etc.)
+    # Strict multi-tenant SaaS: set TBE_REQUIRE_DOCKER=1
+    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or "0").strip().lower() in {
         "1", "true", "yes", "on",
+    }
+    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
     }
     prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
         "0", "false", "no", "off",
@@ -1936,7 +1939,7 @@ def run_bot_project(
         )
 
     __import__("logging").getLogger("live_runner").warning(
-        "Using local process runner (dev only: TBE_ALLOW_LOCAL_PROCESS=1)"
+        "Docker unavailable — using local process runner (sandbox under OUTPUT_DIR)"
     )
     return LiveRunnerService().run(
         project_path=project_path,

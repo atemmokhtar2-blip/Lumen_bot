@@ -44,33 +44,31 @@ _log = logging.getLogger("engine.live_deployment")
 def _select_primary_provider():
     """Select runtime isolation driver.
 
-    SaaS default: Docker is REQUIRED (TBE_REQUIRE_DOCKER=1).
-    LocalProcessDriver is only allowed when explicitly opted in via
-    TBE_ALLOW_LOCAL_PROCESS=1 (dev machines only — never production).
+    Prefer Docker when the daemon is available. If not:
+      - default allow LocalProcessDriver (hosts without Docker, e.g. Railway)
+      - set TBE_REQUIRE_DOCKER=1 to refuse local entirely (strict SaaS)
     """
-    require = (os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower()
-    require_on = require not in {"0", "false", "no", "off"}
-    allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+    require_on = (os.environ.get("TBE_REQUIRE_DOCKER") or "0").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    prefer = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower()
-    prefer_on = prefer not in {"0", "false", "no", "off"}
+    allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    prefer_on = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
-    if docker_available() and (require_on or prefer_on):
-        _log.info("Live deployment primary provider: Docker (mandatory isolation)")
+    if docker_available() and prefer_on:
+        _log.info("Live deployment primary provider: Docker")
         return DockerProcessDriver()
 
     if require_on and not allow_local:
-        _log.error(
-            "Docker required but unavailable — refusing LocalProcessDriver "
-            "(set TBE_ALLOW_LOCAL_PROCESS=1 only for local dev)"
-        )
+        _log.error("Docker required but unavailable — refusing LocalProcessDriver")
         raise RuntimeError(
-            "docker_required_but_unavailable: install Docker or set "
-            "TBE_ALLOW_LOCAL_PROCESS=1 for non-production only"
+            "docker_required_but_unavailable: install Docker or unset TBE_REQUIRE_DOCKER"
         )
 
-    _log.warning("Live deployment falling back to LocalProcessDriver (dev only)")
+    _log.warning("Live deployment using LocalProcessDriver (Docker unavailable)")
     return LocalProcessDriver()
 
 
