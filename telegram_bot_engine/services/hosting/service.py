@@ -123,13 +123,24 @@ class HostingService:
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
+        # Containment: must live under OUTPUT_DIR (never host system paths)
+        try:
+            out_root = Path(os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
+            path.relative_to(out_root)
+        except Exception:
+            return HostResult(ok=False, message="مسار المشروع خارج مساحة العزل")
+
         # Stop existing instance for same path+user
         for inst in list(self.list_for_user(user_id)):
             if Path(inst.project_path).resolve() == path and inst.status == "running":
                 self.stop(instance_id=inst.instance_id, user_id=user_id)
 
-        # Pre-flight via LiveRunner install path is done by LocalProcessDriver
+        # Isolation: Docker required in SaaS (local only with explicit opt-in)
         try:
+            from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                DockerProcessDriver,
+                docker_available,
+            )
             from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
                 LocalProcessDriver,
             )
@@ -145,7 +156,21 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        driver = LocalProcessDriver()
+        require_docker = (os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower() not in {
+            "0", "false", "no", "off",
+        }
+        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if docker_available():
+            driver = DockerProcessDriver()
+        elif require_docker and not allow_local:
+            return HostResult(
+                ok=False,
+                message="Docker مطلوب لاستضافة آمنة وغير متاح على هذا الخادم",
+            )
+        else:
+            driver = LocalProcessDriver()
         env = {
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
@@ -243,16 +268,28 @@ class HostingService:
             return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
 
         try:
-            from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
-                LocalProcessDriver,
-            )
-            driver = LocalProcessDriver()
+            stopped = False
             if inst.deployment_id:
-                driver.stop(inst.deployment_id)
-            elif inst.pid:
-                import os as _os, signal
                 try:
-                    _os.kill(inst.pid, signal.SIGTERM)
+                    from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                        DockerProcessDriver,
+                        docker_available,
+                    )
+                    if docker_available():
+                        DockerProcessDriver().stop(inst.deployment_id)
+                        stopped = True
+                except Exception:
+                    pass
+                if not stopped:
+                    from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
+                        LocalProcessDriver,
+                    )
+                    LocalProcessDriver().stop(inst.deployment_id)
+                    stopped = True
+            if not stopped and inst.pid:
+                import signal
+                try:
+                    os.kill(inst.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
         except Exception as e:

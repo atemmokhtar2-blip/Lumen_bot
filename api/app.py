@@ -11,6 +11,50 @@ from api.routes import billing, dashboard, generate, health, hosts, tenants
 logger = logging.getLogger("ai_agent_7h_api")
 
 
+def _cors_origin_for(request: web.Request) -> str | None:
+    """Return an allowed Origin or None (no ACAO header → browser blocks).
+
+    Default is DENY (empty). Set API_CORS_ORIGIN to a comma-separated allowlist
+    of exact origins, e.g. https://app.example.com,https://admin.example.com
+    Never defaults to *.
+    """
+    raw = (os.getenv("API_CORS_ORIGIN") or "").strip()
+    if not raw or raw == "*":
+        # Explicit * only if operator sets API_CORS_ALLOW_WILDCARD=1 (discouraged)
+        if raw == "*" and (os.getenv("API_CORS_ALLOW_WILDCARD") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return "*"
+        return None
+    allowed = {o.strip() for o in raw.split(",") if o.strip()}
+    origin = (request.headers.get("Origin") or "").strip()
+    if origin and origin in allowed:
+        return origin
+    return None
+
+
+def _cors_origin_for(request: web.Request) -> str | None:
+    """Return an allowed Origin or None (no ACAO header → browser blocks).
+
+    Default is DENY (empty). Set API_CORS_ORIGIN to a comma-separated allowlist
+    of exact origins, e.g. https://app.example.com,https://admin.example.com
+    Never defaults to *.
+    """
+    raw = (os.getenv("API_CORS_ORIGIN") or "").strip()
+    if not raw or raw == "*":
+        # Explicit * only if operator sets API_CORS_ALLOW_WILDCARD=1 (discouraged)
+        if raw == "*" and (os.getenv("API_CORS_ALLOW_WILDCARD") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return "*"
+        return None
+    allowed = {o.strip() for o in raw.split(",") if o.strip()}
+    origin = (request.headers.get("Origin") or "").strip()
+    if origin and origin in allowed:
+        return origin
+    return None
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":
@@ -20,9 +64,19 @@ async def cors_middleware(request: web.Request, handler):
             resp = await handler(request)
         except web.HTTPException as ex:
             resp = ex
-    resp.headers["Access-Control-Allow-Origin"] = os.getenv("API_CORS_ORIGIN", "*")
-    resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Api-Key, X-Admin-Token"
+    origin = _cors_origin_for(request)
+    if origin:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+    resp.headers["Access-Control-Allow-Headers"] = (
+        "Authorization, Content-Type, X-Api-Key, X-Admin-Token"
+    )
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    # Basic hardening headers
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
     return resp
 
 
@@ -32,9 +86,13 @@ async def error_middleware(request: web.Request, handler):
         return await handler(request)
     except web.HTTPException:
         raise
-    except Exception as exc:
-        logger.exception("unhandled api error")
-        return web.json_response({"ok": False, "error": "internal_error", "detail": str(exc)[:200]}, status=500)
+    except Exception:
+        # Never leak exception text / paths / stack traces to clients
+        logger.exception("unhandled api error path=%s", request.path)
+        return web.json_response(
+            {"ok": False, "error": "internal_error"},
+            status=500,
+        )
 
 
 def create_app() -> web.Application:

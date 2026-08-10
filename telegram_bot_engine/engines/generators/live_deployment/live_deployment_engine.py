@@ -42,12 +42,35 @@ _log = logging.getLogger("engine.live_deployment")
 
 
 def _select_primary_provider():
-    """Prefer Docker isolation when the daemon is available; else local process."""
+    """Select runtime isolation driver.
+
+    SaaS default: Docker is REQUIRED (TBE_REQUIRE_DOCKER=1).
+    LocalProcessDriver is only allowed when explicitly opted in via
+    TBE_ALLOW_LOCAL_PROCESS=1 (dev machines only — never production).
+    """
+    require = (os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower()
+    require_on = require not in {"0", "false", "no", "off"}
+    allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     prefer = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower()
-    if prefer not in {"0", "false", "no", "off"} and docker_available():
-        _log.info("Live deployment primary provider: Docker (per-user isolation)")
+    prefer_on = prefer not in {"0", "false", "no", "off"}
+
+    if docker_available() and (require_on or prefer_on):
+        _log.info("Live deployment primary provider: Docker (mandatory isolation)")
         return DockerProcessDriver()
-    _log.info("Live deployment primary provider: LocalProcessDriver")
+
+    if require_on and not allow_local:
+        _log.error(
+            "Docker required but unavailable — refusing LocalProcessDriver "
+            "(set TBE_ALLOW_LOCAL_PROCESS=1 only for local dev)"
+        )
+        raise RuntimeError(
+            "docker_required_but_unavailable: install Docker or set "
+            "TBE_ALLOW_LOCAL_PROCESS=1 for non-production only"
+        )
+
+    _log.warning("Live deployment falling back to LocalProcessDriver (dev only)")
     return LocalProcessDriver()
 
 
