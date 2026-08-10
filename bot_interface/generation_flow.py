@@ -107,15 +107,17 @@ async def deliver_generation_result(
         logger.exception("anti_hallucination report failed")
 
     if ready and context.user_data is not None:
-        context.user_data["pending_deploy"] = {
+        pending_payload = {
             "project_path": str(project_path),
             "owner_user_id": user.id if user else None,
+            "entry_point": "main.py",
+            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
             "sandbox": True,
         }
-        context.user_data["pending_live_run"] = {
-            "project_path": str(project_path),
-            "owner_user_id": user.id if user else None,
-        }
+        # All three keys so any token-handler path finds the project
+        context.user_data["pending_deploy"] = dict(pending_payload)
+        context.user_data["pending_live_run"] = dict(pending_payload)
+        context.user_data["pending_run"] = dict(pending_payload)
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
         await message.reply_text(

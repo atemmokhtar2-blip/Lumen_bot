@@ -56,8 +56,13 @@ def detect_host_intent(text: str) -> str:
     }.get(r.capability_id, "none")
 
 
+def normalize_bot_token(text: str) -> str:
+    """Collapse whitespace/newlines so pasted tokens still match."""
+    return re.sub(r"\s+", "", (text or "").strip())
+
+
 def looks_like_bot_token(text: str) -> bool:
-    return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", (text or "").strip()))
+    return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", normalize_bot_token(text)))
 
 
 def escape_md(text: object) -> str:

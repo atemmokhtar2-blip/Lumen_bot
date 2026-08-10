@@ -19,6 +19,7 @@ from .sanitize import sanitize_error
 from .helpers import (
     is_allowed,
     looks_like_bot_token,
+    normalize_bot_token,
     detect_host_intent,
     chat_route,
     escape_md,
@@ -173,7 +174,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return svc.start(
                 user_id=message.from_user.id if message.from_user else 0,
                 project_path=pending_host.get("project_path") or "",
-                bot_token=request,
+                bot_token=normalize_bot_token(request),
             )
 
         try:
@@ -185,8 +186,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await status.edit_text(result.to_user_text())
         return
 
+    # Accept token even if Telegram wraps it across lines
+    token_text = normalize_bot_token(request) if looks_like_bot_token(request) else ""
     pending_run = (context.user_data or {}).get("pending_run")
-    if looks_like_bot_token(request):
+    # generation_flow historically set pending_live_run / pending_deploy
+    pending_live = (context.user_data or {}).get("pending_live_run")
+    pending_deploy = (context.user_data or {}).get("pending_deploy")
+    if token_text:
+        if not pending_run and pending_live:
+            pending_run = dict(pending_live)
+            context.user_data["pending_run"] = pending_run
+        if not pending_run and pending_deploy:
+            pending_run = {
+                "project_path": pending_deploy.get("project_path") or "",
+                "entry_point": pending_deploy.get("entry_point") or "",
+                "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+            }
+            context.user_data["pending_run"] = pending_run
         if not pending_run:
             active = (context.user_data or {}).get("active_repo") or {}
             if active.get("path") and Path(active["path"]).exists():
@@ -209,9 +225,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
                 }
                 context.user_data["pending_run"] = pending_run
-        if pending_run:
-            await handle_live_run_token(message, context, request, pending_run)
+        if pending_run and pending_run.get("project_path"):
+            await handle_live_run_token(message, context, token_text, pending_run)
             return
+        # Token sent but no project is pending — do NOT treat as bot description
+        await message.reply_text(
+            "استلمت توكن بوت، لكن مفيش مشروع جاهز للتشغيل دلوقتي.\n"
+            "ولّد بوت أو اسحب مستودع أولاً، وبعد رسالة «أرسل توكن البوت» ابعت التوكن."
+        )
+        return
 
     # Private repo: user sends GitHub PAT after auth failure
     pending_clone = (context.user_data or {}).get("pending_clone_auth")
@@ -323,7 +345,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     pending = (context.user_data or {}).get("pending_deploy")
     if pending and looks_like_bot_token(request):
-        await handle_live_deploy_token(message, context, request, pending)
+        await handle_live_deploy_token(message, context, normalize_bot_token(request), pending)
         return
 
     # --- Smart Git: clone repo from natural language + URL ---
