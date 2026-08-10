@@ -1,4 +1,4 @@
-"""Mass capability expansion toward launch scale (20k targets).
+"""Mass capability expansion toward launch scale (30k complex systems).
 
 Generates structured, deterministic capability keys from vertical × action
 templates. Shared service/method patterns keep zero-AI codegen stable.
@@ -121,6 +121,160 @@ ADMIN = (
 )
 
 # Vertical domains: (prefix, service, category, ar_name, en_name)
+
+# Complex systems — methods already executed by generic.act / market
+COMPLEX_SAAS = (
+    ("list", "قائمة", "List"),
+    ("view", "عرض", "View"),
+    ("create", "إنشاء", "Create"),
+    ("update", "تحديث", "Update"),
+    ("delete", "حذف", "Delete"),
+    ("search", "بحث", "Search"),
+    ("filter", "تصفية", "Filter"),
+    ("assign", "تعيين", "Assign"),
+    ("approve", "موافقة", "Approve"),
+    ("reject", "رفض", "Reject"),
+    ("status", "حالة", "Status"),
+    ("stats", "إحصائيات", "Stats"),
+    ("history", "سجل", "History"),
+    ("export", "تصدير", "Export"),
+    ("archive", "أرشفة", "Archive"),
+    ("restore", "استعادة", "Restore"),
+    ("share", "مشاركة", "Share"),
+    ("subscribe", "اشتراك", "Subscribe"),
+    ("renew", "تجديد", "Renew"),
+    ("upgrade", "ترقية", "Upgrade"),
+    ("downgrade", "تخفيض", "Downgrade"),
+    ("start_trial", "تجربة", "Start trial"),
+    ("cancel", "إلغاء", "Cancel"),
+    ("invite", "دعوة", "Invite"),
+    ("revoke", "سحب", "Revoke"),
+    ("set_role", "تعيين دور", "Set role"),
+    ("webhook_set", "ضبط ويب هوك", "Set webhook"),
+    ("webhook_test", "اختبار ويب هوك", "Test webhook"),
+    ("feature_flag", "علم ميزة", "Feature flag"),
+    ("audit", "تدقيق", "Audit"),
+    ("backup", "نسخ احتياطي", "Backup"),
+    ("config", "إعداد", "Config"),
+    ("dashboard", "لوحة", "Dashboard"),
+    ("usage", "استخدام", "Usage"),
+    ("quota", "حصة", "Quota"),
+    ("seat_add", "إضافة مقعد", "Add seat"),
+    ("seat_remove", "إزالة مقعد", "Remove seat"),
+    ("sso_info", "دخول موحد", "SSO info"),
+    ("api_token_issue", "إصدار توكن", "Issue API token"),
+)
+
+COMPLEX_MARKETPLACE = (
+    ("list", "قائمة", "List"),
+    ("view", "عرض", "View"),
+    ("create", "إنشاء", "Create"),
+    ("update", "تحديث", "Update"),
+    ("delete", "حذف", "Delete"),
+    ("search", "بحث", "Search"),
+    ("filter", "تصفية", "Filter"),
+    ("status", "حالة", "Status"),
+    ("stats", "إحصائيات", "Stats"),
+    ("history", "سجل", "History"),
+    ("export", "تصدير", "Export"),
+    ("approve", "موافقة", "Approve"),
+    ("reject", "رفض", "Reject"),
+    ("assign", "تعيين", "Assign"),
+    ("bid", "مزايدة", "Bid"),
+    ("buy", "شراء", "Buy"),
+    ("sell", "بيع", "Sell"),
+    ("checkout", "إتمام شراء", "Checkout"),
+    ("ship", "شحن", "Ship"),
+    ("track", "تتبع", "Track"),
+    ("review", "تقييم", "Review"),
+    ("favorite", "مفضلة", "Favorite"),
+    ("unfavorite", "إزالة مفضلة", "Unfavorite"),
+    ("share", "مشاركة", "Share"),
+    ("report", "بلاغ", "Report"),
+    ("dispute", "نزاع", "Dispute"),
+    ("refund", "استرجاع", "Refund"),
+    ("payout", "صرف", "Payout"),
+    ("commission", "عمولة", "Commission"),
+    ("vendor_register", "تسجيل بائع", "Vendor register"),
+    ("catalog", "كتالوج", "Catalog"),
+    ("offer", "عرض", "Offer"),
+    ("accept", "قبول", "Accept"),
+    ("message", "رسالة", "Message"),
+    ("escalate", "تصعيد", "Escalate"),
+)
+
+COMPLEX_LOGISTICS = (
+    ("list", "قائمة", "List"),
+    ("view", "عرض", "View"),
+    ("create", "إنشاء", "Create"),
+    ("update", "تحديث", "Update"),
+    ("delete", "حذف", "Delete"),
+    ("search", "بحث", "Search"),
+    ("filter", "تصفية", "Filter"),
+    ("status", "حالة", "Status"),
+    ("stats", "إحصائيات", "Stats"),
+    ("history", "سجل", "History"),
+    ("track", "تتبع", "Track"),
+    ("schedule", "جدولة", "Schedule"),
+    ("assign", "تعيين", "Assign"),
+    ("approve", "موافقة", "Approve"),
+    ("reject", "رفض", "Reject"),
+    ("ship", "شحن", "Ship"),
+    ("pickup", "استلام", "Pickup"),
+    ("deliver", "تسليم", "Deliver"),
+    ("return_item", "إرجاع", "Return"),
+    ("reroute", "إعادة توجيه", "Reroute"),
+    ("scan", "مسح", "Scan"),
+    ("pack", "تعبئة", "Pack"),
+    ("dispatch", "إرسال", "Dispatch"),
+    ("arrive", "وصول", "Arrive"),
+    ("depart", "مغادرة", "Depart"),
+    ("capacity", "سعة", "Capacity"),
+    ("eta", "وقت وصول", "ETA"),
+    ("pod", "إثبات تسليم", "Proof of delivery"),
+    ("exception", "استثناء", "Exception"),
+    ("export", "تصدير", "Export"),
+    ("archive", "أرشفة", "Archive"),
+    ("restore", "استعادة", "Restore"),
+)
+
+COMPLEX_FINANCE = (
+    ("list", "قائمة", "List"),
+    ("view", "عرض", "View"),
+    ("create", "إنشاء", "Create"),
+    ("update", "تحديث", "Update"),
+    ("delete", "حذف", "Delete"),
+    ("search", "بحث", "Search"),
+    ("filter", "تصفية", "Filter"),
+    ("status", "حالة", "Status"),
+    ("stats", "إحصائيات", "Stats"),
+    ("history", "سجل", "History"),
+    ("export", "تصدير", "Export"),
+    ("approve", "موافقة", "Approve"),
+    ("reject", "رفض", "Reject"),
+    ("assign", "تعيين", "Assign"),
+    ("pay", "دفع", "Pay"),
+    ("refund", "استرجاع", "Refund"),
+    ("transfer", "تحويل", "Transfer"),
+    ("topup", "شحن", "Top up"),
+    ("withdraw", "سحب", "Withdraw"),
+    ("invoice", "فاتورة", "Invoice"),
+    ("reconcile", "تسوية", "Reconcile"),
+    ("ledger", "دفتر", "Ledger"),
+    ("balance", "رصيد", "Balance"),
+    ("fee", "رسوم", "Fee"),
+    ("tax", "ضريبة", "Tax"),
+    ("payout", "صرف", "Payout"),
+    ("settle", "تصفية", "Settle"),
+    ("chargeback", "استرداد بنكي", "Chargeback"),
+    ("limit", "حد", "Limit"),
+    ("kyc_check", "تحقق هوية", "KYC check"),
+    ("freeze", "تجميد", "Freeze"),
+    ("unfreeze", "إلغاء تجميد", "Unfreeze"),
+    ("statement", "كشف حساب", "Statement"),
+    ("audit", "تدقيق", "Audit"),
+)
+
 VERTICALS: list[tuple[str, str, str, str, str]] = [
     ("inv", "inventory", "inventory", "مخزون", "Inventory"),
     ("sku", "catalog", "catalog", "صنف", "SKU"),
@@ -526,6 +680,91 @@ VERTICALS: list[tuple[str, str, str, str, str]] = [
     ("backup2", "backups", "backups", "نسخة احتياطية", "Backup"),
     ("restore2", "restores", "restores", "استعادة", "Restore ops"),
 
+
+    # ── Complex systems wave → 30k (SaaS / marketplace / logistics / light finance) ──
+    ("saas", "saas_core", "saas", "ساس", "SaaS"),
+    ("seat", "saas_seats", "saas", "مقعد", "Seat"),
+    ("plan3", "saas_plans", "saas", "خطة ساس", "SaaS plan"),
+    ("billing2", "saas_billing", "saas", "فوترة ساس", "SaaS billing"),
+    ("meter", "saas_meters", "saas", "عداد استخدام", "Usage meter"),
+    ("quota", "saas_quotas", "saas", "حصة", "Quota"),
+    ("sso", "saas_sso", "saas", "دخول موحد", "SSO"),
+    ("saml", "saas_saml", "saas", "سامال", "SAML"),
+    ("scim", "saas_scim", "saas", "سكيم", "SCIM"),
+    ("entitlement", "saas_entitlements", "saas", "استحقاق", "Entitlement"),
+    ("subscription2", "saas_subs", "saas", "اشتراك ساس", "SaaS subscription"),
+    ("trial2", "saas_trials", "saas", "تجربة ساس", "SaaS trial"),
+    ("addon2", "saas_addons", "saas", "إضافة ساس", "SaaS add-on"),
+    ("workspace2", "saas_workspaces", "saas", "مساحة ساس", "SaaS workspace"),
+    ("org", "saas_orgs", "saas", "منظمة", "Organization"),
+    ("team2", "saas_teams", "saas", "فريق ساس", "SaaS team"),
+    ("rbac", "saas_rbac", "saas", "صلاحيات", "RBAC"),
+    ("audit3", "saas_audit", "saas", "تدقيق ساس", "SaaS audit"),
+    ("flag2", "saas_flags", "saas", "أعلام ميزات", "Feature flags"),
+    ("env3", "saas_envs", "saas", "بيئة ساس", "SaaS environment"),
+    ("deploy2", "saas_deploys", "saas", "نشر", "Deploy"),
+    ("pipeline2", "saas_pipelines", "saas", "خط نشر", "Pipeline"),
+    ("webhook3", "saas_webhooks", "saas", "ويب هوك ساس", "SaaS webhook"),
+    ("apikey", "saas_apikeys", "saas", "مفتاح API", "API key"),
+    ("oauth2", "saas_oauth", "saas", "أواث", "OAuth"),
+    ("mkt", "mkt_core", "marketplace", "سوق", "Marketplace"),
+    ("listing2", "mkt_listings", "marketplace", "إعلان سوق", "Marketplace listing"),
+    ("vendor2", "mkt_vendors", "marketplace", "بائع سوق", "Marketplace vendor"),
+    ("buyer", "mkt_buyers", "marketplace", "مشتري", "Buyer"),
+    ("offer2", "mkt_offers", "marketplace", "عرض سوق", "Marketplace offer"),
+    ("bid2", "mkt_bids", "marketplace", "مزايدة سوق", "Marketplace bid"),
+    ("escrow", "mkt_escrow", "marketplace", "ضمان", "Escrow"),
+    ("payout2", "mkt_payouts", "marketplace", "صرف بائع", "Vendor payout"),
+    ("commission2", "mkt_commissions", "marketplace", "عمولة سوق", "Marketplace commission"),
+    ("catalog2", "mkt_catalog", "marketplace", "كتالوج سوق", "Marketplace catalog"),
+    ("storefront", "mkt_storefronts", "marketplace", "واجهة متجر", "Storefront"),
+    ("marketplace2", "mkt_hub", "marketplace", "مركز سوق", "Marketplace hub"),
+    ("auction3", "mkt_auctions", "marketplace", "مزاد سوق", "Marketplace auction"),
+    ("rfq2", "mkt_rfqs", "marketplace", "طلب تسعير", "RFQ"),
+    ("quote2", "mkt_quotes", "marketplace", "عرض سعر", "Quote"),
+    ("dispute3", "mkt_disputes", "marketplace", "نزاع سوق", "Marketplace dispute"),
+    ("review3", "mkt_reviews", "marketplace", "تقييم سوق", "Marketplace review"),
+    ("rating2", "mkt_ratings", "marketplace", "تقييم رقمي", "Rating"),
+    ("logi", "logi_core", "logistics", "لوجستيات", "Logistics"),
+    ("ship4", "logi_shipments", "logistics", "شحنة لوجستية", "Logistics shipment"),
+    ("fleet2", "logi_fleet", "logistics", "أسطول", "Fleet"),
+    ("route3", "logi_routes", "logistics", "مسار لوجستي", "Logistics route"),
+    ("hub2", "logi_hubs", "logistics", "مركز توزيع", "Distribution hub"),
+    ("dock2", "logi_docks", "logistics", "رصيف", "Dock"),
+    ("warehouse4", "logi_warehouses", "logistics", "مستودع لوجستي", "Logistics warehouse"),
+    ("courier2", "logi_couriers", "logistics", "مندوب لوجستي", "Logistics courier"),
+    ("manifest", "logi_manifests", "logistics", "بيان شحن", "Manifest"),
+    ("lane", "logi_lanes", "logistics", "مسار ثابت", "Lane"),
+    ("yard2", "logi_yards", "logistics", "ساحة", "Yard"),
+    ("container", "logi_containers", "logistics", "حاوية", "Container"),
+    ("pallet", "logi_pallets", "logistics", "باليت", "Pallet"),
+    ("lastmile", "logi_lastmile", "logistics", "الميل الأخير", "Last mile"),
+    ("crossdock", "logi_crossdock", "logistics", "عبور مستودع", "Cross-dock"),
+    ("pod2", "logi_pod", "logistics", "إثبات تسليم", "POD"),
+    ("eta2", "logi_eta", "logistics", "وقت وصول", "ETA"),
+    ("load2", "logi_loads", "logistics", "حمولة", "Load"),
+    ("trip", "logi_trips", "logistics", "رحلة نقل", "Trip"),
+    ("fin", "fin_core", "finance", "مالية", "Finance"),
+    ("ledger2", "fin_ledger", "finance", "دفتر أستاذ", "Ledger"),
+    ("journal", "fin_journal", "finance", "قيد يومية", "Journal"),
+    ("payout3", "fin_payouts", "finance", "صرف مالي", "Finance payout"),
+    ("settle2", "fin_settlement", "finance", "تسوية مالية", "Settlement"),
+    ("recon", "fin_recon", "finance", "مطابقة", "Reconciliation"),
+    ("treasury", "fin_treasury", "finance", "خزينة", "Treasury"),
+    ("fx", "fin_fx", "finance", "صرف عملات", "FX"),
+    ("card3", "fin_cards", "finance", "بطاقة مالية", "Finance card"),
+    ("wallet3", "fin_wallets", "finance", "محفظة مالية", "Finance wallet"),
+    ("loan2", "fin_loans", "finance", "قرض", "Loan"),
+    ("credit2", "fin_credit", "finance", "ائتمان", "Credit"),
+    ("limit2", "fin_limits", "finance", "حد مالي", "Finance limit"),
+    ("kyc2", "fin_kyc", "finance", "تحقق هوية مالي", "Finance KYC"),
+    ("aml2", "fin_aml", "finance", "مكافحة غسل", "AML"),
+    ("invoice4", "fin_invoices", "finance", "فاتورة مالية", "Finance invoice"),
+    ("receivable", "fin_ar", "finance", "ذمم مدينة", "Receivable"),
+    ("payable", "fin_ap", "finance", "ذمم دائنة", "Payable"),
+    ("tax3", "fin_tax", "finance", "ضريبة مالية", "Finance tax"),
+    ("fee2", "fin_fees", "finance", "رسوم", "Fee"),
+    ("charge2", "fin_charges", "finance", "رسوم مدينة", "Charge"),
 ]
 
 # Domain-specific action sets: which vocab to apply
@@ -557,7 +796,38 @@ _ADMIN_PREFIXES = {
 }
 
 
+
+_SAAS_PREFIXES = {
+    "saas", "tenant3", "workspace", "seat", "plan3", "billing2", "meter",
+    "quota", "sso", "saml", "scim", "entitlement", "subscription2", "trial2",
+    "addon2", "workspace2", "org", "team2", "rbac", "audit3", "flag2",
+    "env3", "deploy2", "pipeline2", "webhook3", "apikey", "oauth2",
+}
+_MARKETPLACE_PREFIXES = {
+    "mkt", "listing2", "vendor2", "buyer", "offer2", "bid2", "escrow",
+    "payout2", "commission2", "catalog2", "storefront", "marketplace2",
+    "auction3", "rfq2", "quote2", "dispute3", "review3", "rating2",
+}
+_LOGISTICS_PREFIXES = {
+    "logi", "ship4", "fleet2", "route3", "hub2", "dock2", "warehouse4",
+    "courier2", "manifest", "lane", "yard2", "container", "pallet",
+    "lastmile", "crossdock", "pod2", "eta2", "load2", "trip",
+}
+_FINANCE_PREFIXES = {
+    "fin", "ledger2", "journal", "payout3", "settle2", "recon", "treasury",
+    "fx", "card3", "wallet3", "loan2", "credit2", "limit2", "kyc2", "aml2",
+    "invoice4", "receivable", "payable", "tax3", "fee2", "charge2",
+}
+
 def _action_set(prefix: str) -> tuple:
+    if prefix in _SAAS_PREFIXES:
+        return COMPLEX_SAAS
+    if prefix in _MARKETPLACE_PREFIXES:
+        return COMPLEX_MARKETPLACE
+    if prefix in _LOGISTICS_PREFIXES:
+        return COMPLEX_LOGISTICS
+    if prefix in _FINANCE_PREFIXES:
+        return COMPLEX_FINANCE
     if prefix in _COMMERCE_PREFIXES:
         return _SETS["commerce"]
     if prefix in _SOCIAL_PREFIXES:
@@ -579,7 +849,7 @@ def _actor_for(action: str) -> str:
     return "user"
 
 
-def expand_scale_capabilities(*, target: int = 20000) -> int:
+def expand_scale_capabilities(*, target: int = 30000) -> int:
     """Generate capabilities until CAPABILITIES reaches target size.
 
     Coverage is non-fake: every key maps to (service, method) executed by
@@ -652,6 +922,19 @@ def expand_scale_capabilities(*, target: int = 20000) -> int:
         ("metric2", "metrics_ops", "analytics"),
         ("report2", "reports_ops", "analytics"),
         ("board2", "boards", "analytics"),
+        # complex systems fill (real methods only)
+        ("saasx", "saas_ops", "saas"),
+        ("mktx", "mkt_ops", "marketplace"),
+        ("logix", "logi_ops", "logistics"),
+        ("finx", "fin_ops", "finance"),
+        ("tenantx", "tenant_ops", "saas"),
+        ("vendorx", "vendor_ops", "marketplace"),
+        ("fleetx", "fleet_ops", "logistics"),
+        ("ledgerx", "ledger_ops", "finance"),
+        ("escrowx", "escrow_ops", "marketplace"),
+        ("routex", "route_ops", "logistics"),
+        ("wallettx", "wallet_ops", "finance"),
+        ("quotax", "quota_ops", "saas"),
     )
     for i in range(1, 1200):
         if len(CAPABILITIES) >= target:
@@ -682,7 +965,7 @@ def expand_scale_capabilities(*, target: int = 20000) -> int:
 
 
 
-# Auto-expand on import toward 20k launch target
-_ADDED = expand_scale_capabilities(target=20000)
+# Auto-expand on import toward 30k complex-systems target
+_ADDED = expand_scale_capabilities(target=30000)
 
 __all__ = ["expand_scale_capabilities", "VERTICALS", "_ADDED"]
