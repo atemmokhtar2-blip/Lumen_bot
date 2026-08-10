@@ -35,7 +35,9 @@ python api_main.py
 | GET | `/v1/me` | هوية المستأجر + الخطة |
 | PATCH | `/v1/me/white-label` | تحديث العلامة البيضاء |
 | POST | `/v1/me/rotate_key` | تدوير مفتاح API |
-| POST | `/v1/generate` | `{ "description": "..." }` → مشروع + تحقق |
+| POST | `/v1/generate` | يقبل المهمة فوراً → `{ job_id, poll_url }` (202) |
+| GET | `/v1/jobs/{job_id}` | حالة المهمة الثقيلة (polling) |
+| GET | `/v1/jobs` | قائمة مهام المستأجر |
 | POST | `/v1/hosts/start` | `{ "project_path", "bot_token" }` |
 | POST | `/v1/hosts/stop` | إيقاف مثيل |
 | GET | `/v1/hosts` | حالة الاستضافة |
@@ -111,3 +113,20 @@ telegram_bot_engine/    # generation + isolation + hosting
   services/hosting/
   services/user_sandbox/
 ```
+
+
+## طابور المهام الثقيلة
+
+`POST /v1/generate` لا يحجز خيط asyncio الافتراضي. يعيد `202` + `job_id`.
+
+```bash
+curl -X POST /v1/generate -H "Authorization: Bearer $KEY" -d '{"description":"..."}'
+# → {"job_id":"job_...","poll_url":"/v1/jobs/job_..."}
+
+curl /v1/jobs/job_... -H "Authorization: Bearer $KEY"
+# → {"status":"running|succeeded|failed","result":{...}}
+```
+
+- عمال مخصصون: `JOB_MAX_WORKERS` (افتراضي 2)
+- تخزين: SQLite تحت `OUTPUT_DIR/platform/jobs.sqlite3`
+- مزامنة للتطوير فقط: `"wait": true` (غير مستحسن إنتاجاً)

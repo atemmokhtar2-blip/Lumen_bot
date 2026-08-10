@@ -6,7 +6,7 @@ import os
 
 from aiohttp import web
 
-from api.routes import billing, dashboard, generate, health, hosts, tenants
+from api.routes import billing, dashboard, generate, health, hosts, jobs, tenants
 
 logger = logging.getLogger("ai_agent_7h_api")
 
@@ -110,6 +110,8 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/me/rotate_key", tenants.rotate_key)
     app.router.add_patch("/v1/me/white-label", tenants.update_white_label)
     app.router.add_post("/v1/generate", generate.generate)
+    app.router.add_get("/v1/jobs/{job_id}", jobs.get_job)
+    app.router.add_get("/v1/jobs", jobs.list_jobs)
     app.router.add_post("/v1/hosts/start", hosts.host_start)
     app.router.add_post("/v1/hosts/stop", hosts.host_stop)
     app.router.add_get("/v1/hosts", hosts.host_status)
