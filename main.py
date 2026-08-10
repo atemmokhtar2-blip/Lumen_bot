@@ -80,6 +80,22 @@ def main() -> None:
         )
         raise SystemExit(1)
 
+    # ── Single poller only (prevents 409 Conflict on getUpdates) ──
+    from bot_interface.singleton import acquire_bot_singleton, clear_telegram_webhook
+
+    try:
+        lock_path = acquire_bot_singleton(OUTPUT_DIR)
+        logger.info("Polling singleton acquired (%s)", lock_path)
+    except SystemExit as e:
+        logger.error("%s", e)
+        raise
+
+    # Clear any leftover webhook so polling is exclusive
+    if clear_telegram_webhook(TELEGRAM_BOT_TOKEN):
+        logger.info("Telegram webhook cleared (polling mode)")
+    else:
+        logger.warning("Could not clear webhook (continuing; may still work)")
+
     logger.info("Starting AI Agent 7h Bot (consumer)...")
     allowed_repr = (
         sorted(ALLOWED_USER_IDS)
@@ -134,7 +150,11 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     logger.info("Telegram bot is running (polling)...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # drop_pending_updates avoids fighting a previous replica's long-poll
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":

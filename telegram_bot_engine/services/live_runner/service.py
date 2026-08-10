@@ -1507,6 +1507,28 @@ class LiveRunnerService:
         if not root.exists():
             return LiveRunReport(ok=False, phase="validate", message="مسار المشروع غير موجود")
 
+        # Refuse to poll with the platform bot token — causes 409 Conflict
+        # and takes down the SaaS bot for every user.
+        platform_tok = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+        user_tok = (bot_token or "").strip()
+        if platform_tok and user_tok and platform_tok == user_tok:
+            return LiveRunReport(
+                ok=False,
+                phase="validate",
+                message=(
+                    "لا تستخدم توكن المنصة للبوت المولَّد. "
+                    "أنشئ بوت جديد من @BotFather والصق التوكن الخاص به فقط."
+                ),
+                errors=["platform_token_forbidden"],
+                duration_ms=(time.perf_counter() - t0) * 1000,
+            )
+
+        # Always clear webhook before child polling (avoids 409 Conflict)
+        try:
+            _delete_telegram_webhook(user_tok)
+        except Exception:
+            pass
+
         ok, me, err = validate_telegram_token(bot_token)
         soft_continue = (os.environ.get("TELEGRAM_VALIDATE_SOFT") or "1").strip().lower() in {
             "1", "true", "yes", "on",

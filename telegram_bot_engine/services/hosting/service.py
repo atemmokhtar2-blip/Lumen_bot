@@ -33,6 +33,7 @@ class HostInstance:
     started_at: float = 0.0
     last_error: str = ""
     last_diagnosis: dict[str, Any] = field(default_factory=dict)
+    token_fp: str = ""  # sha256[:16] of bot token — never store raw token
 
 
 @dataclass
@@ -130,10 +131,38 @@ class HostingService:
         except Exception:
             return HostResult(ok=False, message="مسار المشروع خارج مساحة العزل")
 
-        # Stop existing instance for same path+user
+        # Stop existing instance for same path+user OR same token (409 Conflict)
+        import hashlib
+        token_norm = (bot_token or "").strip()
+        token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""
         for inst in list(self.list_for_user(user_id)):
-            if Path(inst.project_path).resolve() == path and inst.status == "running":
+            same_path = Path(inst.project_path).resolve() == path and inst.status == "running"
+            same_token = (
+                inst.status == "running"
+                and token_fp
+                and (getattr(inst, "token_fp", "") or "") == token_fp
+            )
+            if same_path or same_token:
                 self.stop(instance_id=inst.instance_id, user_id=user_id)
+
+        # Clear webhook so the hosted bot can poll exclusively
+        try:
+            from bot_interface.singleton import clear_telegram_webhook
+
+            clear_telegram_webhook(token_norm)
+        except Exception:
+            pass
+
+        # Never host with the platform's own token (would kill the SaaS bot)
+        platform_tok = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+        if platform_tok and token_norm and token_norm == platform_tok:
+            return HostResult(
+                ok=False,
+                message=(
+                    "لا يمكن استضافة بوت بنفس توكن المنصة. "
+                    "أنشئ بوت جديد من @BotFather واستخدم التوكن الخاص به."
+                ),
+            )
 
         # Isolation: Docker required in SaaS (local only with explicit opt-in)
         try:
@@ -207,6 +236,7 @@ class HostingService:
             pid=pid,
             started_at=time.time(),
             last_error="" if not failed_like else message,
+            token_fp=token_fp,
         )
 
         # Normalize status using known constants
