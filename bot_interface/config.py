@@ -64,3 +64,11 @@ else:
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PORT = int(os.getenv("PORT", "8080"))
+
+
+# ── Tunables (env-overridable, no magic numbers in handlers) ──────────
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE") or "12")
+RATE_LIMIT_WINDOW_SECONDS = float(os.getenv("RATE_LIMIT_WINDOW_SECONDS") or "60")
+LIVE_RUN_SECONDS = float(os.getenv("LIVE_RUN_SECONDS") or "900")
+GENERATION_STATUS_PREVIEW_LIMIT = int(os.getenv("GENERATION_STATUS_PREVIEW_LIMIT") or "3500")
+ZIP_MAX_MB = float(os.getenv("ZIP_MAX_MB") or "48")

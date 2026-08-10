@@ -28,8 +28,7 @@ from .helpers import (
 from .live import handle_live_run_token, handle_live_deploy_token
 
 # Process-safe rate limit (SQLite shared across workers / multi-process).
-_RATE_WINDOW = 60.0
-_RATE_MAX = int(os.environ.get("RATE_LIMIT_PER_MINUTE") or "12")
+from .config import RATE_LIMIT_PER_MINUTE, RATE_LIMIT_WINDOW_SECONDS
 
 
 def _rate_limit_ok(user_id: int) -> bool:
@@ -37,11 +36,10 @@ def _rate_limit_ok(user_id: int) -> bool:
         from b2b_platform.rate_limit import get_rate_limiter
         return get_rate_limiter().allow(
             f"tg:{int(user_id)}",
-            limit=_RATE_MAX,
-            window_sec=_RATE_WINDOW,
+            limit=RATE_LIMIT_PER_MINUTE,
+            window_sec=RATE_LIMIT_WINDOW_SECONDS,
         )
     except Exception:
-        # Fail closed on limiter errors would block everyone; fail open with tight local fallback
         return True
 
 
@@ -747,207 +745,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
             return
 
-        success = getattr(result, "success", False)
-        project_path = getattr(result, "project_path", None)
-        errors = getattr(result, "errors", []) or []
-        stages = getattr(result, "stages", []) or []
-        meta = getattr(result, "metadata", None) or {}
-
-        ok_stages = sum(1 for s in stages if getattr(s, "success", False))
-        total_stages = len(stages)
-
-        summary_lines = [
-            f"{'✅' if success else '⚠️'} *نتيجة التوليد*",
-            f"• النجاح: {'نعم' if success else 'جزئي / فشل'}",
-            f"• المراحل الناجحة: {ok_stages}/{total_stages}",
-        ]
-        if project_path:
-            summary_lines.append(f"• المسار: `{escape_md(project_path)}`")
-        # meta already loaded above
-        if meta.get("button_count") is not None:
-            summary_lines.append(f"• الأزرار في /start: {meta.get('button_count')}")
-        if meta.get("buttons"):
-            summary_lines.append(f"• نصوص الأزرار: {', '.join(meta.get('buttons') or [])}")
-        if meta.get("commands"):
-            summary_lines.append(f"• الأوامر: {'/' + ' /'.join(meta.get('commands') or [])}")
-        if errors:
-            summary_lines.append("• أخطاء:")
-            for e in errors[:5]:
-                # Dynamic engine errors often contain _, *, ` — escape them
-                summary_lines.append(f"  - {escape_md(e)}")
-
-        # Keep summary short — no engine marketing blurb after generation
-
-        await safe_edit_text(status_msg, "\n".join(summary_lines), use_markdown=True)
-
-        # Register into this user's private workspace index (dynamic, no templates)
-        if project_path and Path(project_path).exists():
-            try:
-                from telegram_bot_engine.services.user_sandbox import get_user_sandbox
-                uid = int(user.id) if user else 0
-                get_user_sandbox(uid, OUTPUT_DIR).register_project(
-                    project_path,
-                    label=Path(project_path).name,
-                    source_request=request,
-                    kind="generated",
-                    extra={
-                        "success": bool(success),
-                        "commands": list((meta or {}).get("commands") or [])[:30],
-                    },
-                )
-            except Exception:
-                logger.exception("register_project failed")
-            try:
-                from telegram_bot_engine.services.user_memory import get_user_memory
-                from telegram_bot_engine.services.project_digest import (
-                    build_project_digest,
-                )
-                mem = get_user_memory(uid, OUTPUT_DIR)
-                digest = build_project_digest(project_path, source_request=request)
-                # Bind session into the generated project so chat can work inside it
-                context.user_data["active_repo"] = {
-                    "path": str(project_path),
-                    "url": "",
-                    "contract": {},
-                    "kind": "generated",
-                    "label": Path(project_path).name,
-                    "digest": digest,
-                    "from_generation": True,
-                }
-                try:
-                    from telegram_bot_engine.services.repo_understanding import (
-                        understand_repo,
-                    )
-                    contract = await asyncio.to_thread(understand_repo, project_path, "")
-                    context.user_data["active_repo"]["contract"] = contract.model_dump(
-                        mode="json"
-                    )
-                except Exception:
-                    logger.exception("understand generated project failed")
-
-                mem.set_last(
-                    intent=request[:200],
-                    project_path=str(project_path),
-                    capability="generate_bot",
-                )
-                cmds = list(digest.get("commands") or (meta or {}).get("commands") or [])[:20]
-                note = f"generated project at {project_path}"
-                if cmds:
-                    note += " commands=" + ",".join(cmds)
-                mem.add_turn(
-                    "note",
-                    note,
-                    meta={"capability": "generate_bot", "success": bool(success)},
-                )
-                if digest.get("ai_context"):
-                    mem.add_fact("project_digest: " + digest["ai_context"][:400])
-            except Exception:
-                logger.exception("user_memory/digest update after generate failed")
-
-        # Try to send zip if project exists
-        if project_path and Path(project_path).exists():
-            zip_path = make_zip_from_path(project_path)
-            if zip_path and zip_path.exists() and zip_path.stat().st_size > 0:
-                size_mb = zip_path.stat().st_size / (1024 * 1024)
-                if size_mb < 48:  # Telegram limit ~50MB
-                    await message.reply_document(
-                        document=zip_path.open("rb"),
-                        filename=zip_path.name,
-                        caption="📦 المشروع المُولَّد (zip)",
-                    )
-                else:
-                    await message.reply_text(
-                        f"📦 تم إنشاء المشروع لكن حجم الـ zip كبير ({size_mb:.1f} MB). "
-                        "يمكنك الوصول إليه من السيرفر."
-                    )
-            else:
-                await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
-
-            # Anti-hallucination + structural gates — honest report only
-            ready = bool(success) and bool(meta.get("ready_for_token", False))
-            ah = meta.get("anti_hallucination") or {}
-            gate = meta.get("static_gate") or {}
-
-            # Prefer anti-hallucination user text
-            try:
-                from telegram_bot_engine.services.anti_hallucination import (
-                    run_anti_hallucination_gate,
-                )
-                if project_path and not ah:
-                    _ah = run_anti_hallucination_gate(
-                        project_path,
-                        user_request=request or "",
-                    )
-                    ah = _ah.to_dict()
-                    await message.reply_text(_ah.to_user_text(lang="ar"))
-                elif ah:
-                    # Rebuild short honest summary from meta
-                    lines = []
-                    if ah.get("ok") and ah.get("ready_for_token"):
-                        lines.append("✅ تم التحقق — لا هلوسة هيكلية")
-                    elif ah.get("ok"):
-                        lines.append("⚠️ تم التوليد مع تحذيرات")
-                    else:
-                        lines.append("❌ فشل التحقق — غير جاهز للتشغيل")
-                    vcmds = ah.get("verified_commands") or meta.get("verified_commands") or []
-                    if vcmds:
-                        lines.append("أوامر مؤكدة:")
-                        for c in vcmds[:15]:
-                            lines.append(f"  /{c}")
-                    stubs = ah.get("stub_handlers") or meta.get("stub_handlers") or []
-                    if stubs:
-                        lines.append("handlers وهمية (لم نَعُدّها مزايا):")
-                        for s in stubs[:8]:
-                            lines.append(f"  {s}")
-                    for e in (ah.get("errors") or [])[:10]:
-                        if isinstance(e, dict):
-                            lines.append(f"🔴 {e.get('ar') or e.get('code')}")
-                        else:
-                            lines.append(f"🔴 {e}")
-                    lines.append("")
-                    lines.append("لا ندّعي وجود ميزة إلا بعد التحقق من الكود.")
-                    await message.reply_text("\n".join(lines))
-            except Exception:
-                logger.exception("anti_hallucination user report failed")
-
-            if gate:
-                g_lines = [
-                    "🔬 مراجعة StaticDevGate",
-                    "• النتيجة: " + ("نجاح" if gate.get("ok") else "فشل"),
-                    f"• أخطاء: {gate.get('errors', 0)} | تحذيرات: {gate.get('warnings', 0)}",
-                ]
-                for f in (gate.get("findings") or [])[:8]:
-                    if f.get("severity") == "error":
-                        g_lines.append(f"  🔴 {f.get('code')}: {str(f.get('msg', ''))[:80]}")
-                await message.reply_text("\n".join(g_lines))
-
-            if ready:
-                context.user_data["pending_deploy"] = {
-                    "project_path": str(project_path),
-                    "owner_user_id": user.id if user else None,
-                    "sandbox": True,
-                }
-                context.user_data["pending_live_run"] = {
-                    "project_path": str(project_path),
-                    "owner_user_id": user.id if user else None,
-                }
-                vcmds = meta.get("verified_commands") or (ah.get("verified_commands") if ah else []) or []
-                cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
-                await message.reply_text(
-                    "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
-                    + cmd_line
-                    + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
-                )
-            else:
-                await message.reply_text(
-                    "⚠️ المشروع اتولّد لكن التحقق ضد الهلوسة رفض تسليمه كجاهز.\n"
-                    "راجع التقرير أعلاه — لن نطلب توكن قبل إصلاح الأخطاء الهيكلية."
-                )
-
-        elif not success:
-            await message.reply_text(
-                "لم يُنشأ مشروع. جرّب وصفاً أبسط أو أوضح."
-            )
+        from .generation_flow import deliver_generation_result
+        await deliver_generation_result(
+            message=message,
+            status_msg=status_msg,
+            context=context,
+            user=user,
+            request=request,
+            result=result,
+        )
 
     except Exception as e:
         logger.exception("Generation failed")

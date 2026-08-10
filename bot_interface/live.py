@@ -6,7 +6,7 @@ import asyncio
 import os
 import time
 
-from .config import logger
+from .config import logger, LIVE_RUN_SECONDS
 from .helpers import escape_md, safe_edit_text
 
 
@@ -19,7 +19,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
     entry = pending.get("entry_point") or ""
     run_seconds = float(
         pending.get("run_seconds")
-        or os.environ.get("LIVE_RUN_SECONDS", 900)
+        or LIVE_RUN_SECONDS
     )
 
     # Heartbeat while the blocking worker runs (install can take minutes)

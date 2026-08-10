@@ -21,20 +21,6 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
-    if name in ("bootstrap", "build_configuration"):
-        from .core import bootstrap, build_configuration
-        return {"bootstrap": bootstrap, "build_configuration": build_configuration}[name]
-    if name == "PipelineOrchestrator":
-        from .pipeline import PipelineOrchestrator
-        return PipelineOrchestrator
-    if name == "EngineRegistry":
-        from .registry import EngineRegistry
-        return EngineRegistry
-    if name == "generate_bot":
-        return generate_bot
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 
 def _maybe_run_git_stage(
@@ -329,3 +315,23 @@ __all__ = [
     "PipelineOrchestrator",
     "EngineRegistry",
 ]
+
+
+def bootstrap(*args, **kwargs):
+    from .core import bootstrap as _bootstrap
+    return _bootstrap(*args, **kwargs)
+
+
+def build_configuration(*args, **kwargs):
+    from .core import build_configuration as _bc
+    return _bc(*args, **kwargs)
+
+
+def PipelineOrchestrator(*args, **kwargs):
+    from .pipeline import PipelineOrchestrator as _PO
+    return _PO(*args, **kwargs)
+
+
+def EngineRegistry(*args, **kwargs):
+    from .registry import EngineRegistry as _ER
+    return _ER(*args, **kwargs)
