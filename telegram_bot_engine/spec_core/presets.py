@@ -50,6 +50,43 @@ def _pack_from_prefixes(
     return tuple(dict.fromkeys(out))
 
 
+
+def _request_intensity(request: str, presets: list[str] | None = None) -> str:
+    """simple | medium | complex — drives pack size caps."""
+    presets = list(presets or [])
+    t = _norm(request or "")
+    complex_domains = {"saas", "marketplace", "logistics", "finance", "commerce_pro"}
+    n_complex = sum(1 for d in presets if d in complex_domains)
+    enterprise = any(
+        k in t
+        for k in (
+            "enterprise", "all-in-one", "all in one", "منصة", "suite", "operating system",
+            "متكامل", "شامل", "ضخم", "multi-tenant", "multi vendor", "multi-vendor",
+            "globally", "production grade", "6 month", "شهر", "platform",
+        )
+    )
+    rich = len(t) > 180 or t.count(",") + t.count("،") >= 4 or t.count("+") >= 2
+    if n_complex >= 2 or (enterprise and n_complex >= 1) or (enterprise and rich):
+        return "complex"
+    if n_complex == 1 or any(
+        d in presets
+        for d in ("shop", "crm", "education", "wallet", "subscriptions", "growth", "creator")
+    ):
+        # single domain / shop-scale → medium unless ultra-short simple phrase
+        if len(t) < 28 and n_complex == 0:
+            return "simple"
+        return "medium"
+    return "simple"
+
+
+def _pack_limit_for(intensity: str, *, primary: bool) -> int:
+    if intensity == "complex":
+        return 72 if primary else 48
+    if intensity == "medium":
+        return 28 if primary else 12
+    return 8 if primary else 0
+
+
 # keyword packs (Arabic + English), lowercase match
 _GROUP_KEYS = (
     "اداره مجموعات",
@@ -206,50 +243,50 @@ _SAAS_CAPS = (
 )
 
 
-def _saas_pack() -> tuple[str, ...]:
+def _saas_pack(*, limit: int = 72) -> tuple[str, ...]:
     return _pack_from_prefixes(
         (
             "saas", "seat", "plan3", "billing2", "meter", "quota", "subscription2",
             "trial2", "addon2", "workspace2", "org", "team2", "rbac", "flag2",
             "webhook3", "apikey", "oauth2",
         ),
-        limit=72,
+        limit=limit,
         extra=_SAAS_CAPS,
     )
 
 
-def _marketplace_pack() -> tuple[str, ...]:
+def _marketplace_pack(*, limit: int = 72) -> tuple[str, ...]:
     return _pack_from_prefixes(
         (
             "mkt", "listing2", "vendor2", "buyer", "offer2", "bid2", "escrow",
             "payout2", "commission2", "catalog2", "storefront", "auction3",
             "rfq2", "quote2", "dispute3", "review3",
         ),
-        limit=72,
+        limit=limit,
         extra=_MARKETPLACE_CAPS,
     )
 
 
-def _logistics_pack() -> tuple[str, ...]:
+def _logistics_pack(*, limit: int = 72) -> tuple[str, ...]:
     return _pack_from_prefixes(
         (
             "logi", "ship4", "fleet2", "route3", "hub2", "dock2", "warehouse4",
             "courier2", "manifest", "lane", "container", "lastmile", "pod2",
             "eta2", "load2", "trip",
         ),
-        limit=72,
+        limit=limit,
         extra=("start", "help", "order_track", "order_status", "lang"),
     )
 
 
-def _finance_pack() -> tuple[str, ...]:
+def _finance_pack(*, limit: int = 72) -> tuple[str, ...]:
     return _pack_from_prefixes(
         (
             "fin", "ledger2", "journal", "payout3", "settle2", "recon", "treasury",
             "fx", "card3", "wallet3", "loan2", "credit2", "limit2", "kyc2", "aml2",
             "invoice4", "receivable", "payable", "tax3", "fee2",
         ),
-        limit=72,
+        limit=limit,
         extra=("start", "help", "wallet_balance", "wallet_topup", "lang"),
     )
 
@@ -680,34 +717,82 @@ def compose_session(
         other = session_for_preset(extra, user_id=user_id)
         s.selected |= other.selected
 
-    # Smart domain densify: primary = full pack, secondary = focused subset
+    # Intensity-aware domain packs: medium bots get a hard ceiling
     names = list(presets)
     primary = names[0] if names else ""
     secondary = set(names[1:])
+    intensity = _request_intensity(request, names)
 
     def _take(pack: tuple[str, ...], n: int) -> list[str]:
         core = ["start", "help", "lang"]
         body = [x for x in pack if x not in core]
         return list(dict.fromkeys(core + body[: max(0, n - len(core))]))
 
-    if primary == "saas" or "saas" in secondary:
-        pack = _saas_pack()
-        s.selected.update(pack if primary == "saas" else _take(pack, 36))
-    if primary == "marketplace" or "marketplace" in secondary:
-        pack = _marketplace_pack()
-        s.selected.update(pack if primary == "marketplace" else _take(pack, 36))
-    if primary == "logistics" or "logistics" in secondary:
-        pack = _logistics_pack()
-        s.selected.update(pack if primary == "logistics" else _take(pack, 36))
-    if primary == "finance" or "finance" in secondary:
-        pack = _finance_pack()
-        s.selected.update(pack if primary == "finance" else _take(pack, 36))
+    # Strip prior fat domain keys from session_for_preset so intensity can re-apply
+    _dom_prefixes = (
+        "saas_", "seat_", "plan3_", "billing2_", "meter_", "quota_", "subscription2_",
+        "trial2_", "addon2_", "workspace2_", "org_", "team2_", "rbac_", "flag2_",
+        "webhook3_", "apikey_", "oauth2_",
+        "mkt_", "listing2_", "vendor2_", "buyer_", "offer2_", "bid2_", "escrow_",
+        "payout2_", "commission2_", "catalog2_", "storefront_", "auction3_",
+        "rfq2_", "quote2_", "dispute3_", "review3_",
+        "logi_", "ship4_", "fleet2_", "route3_", "hub2_", "dock2_", "warehouse4_",
+        "courier2_", "manifest_", "lane_", "container_", "lastmile_", "pod2_",
+        "eta2_", "load2_", "trip_",
+        "fin_", "ledger2_", "journal_", "payout3_", "settle2_", "recon_", "treasury_",
+        "fx_", "card3_", "wallet3_", "loan2_", "credit2_", "limit2_", "kyc2_", "aml2_",
+        "invoice4_", "receivable_", "payable_", "tax3_", "fee2_",
+    )
+    if intensity in {"medium", "simple"} and any(
+        d in names for d in ("saas", "marketplace", "logistics", "finance")
+    ):
+        s.selected = {
+            x for x in s.selected
+            if not any(x.startswith(pref) for pref in _dom_prefixes)
+        }
+
+    def _apply_domain(name: str, builder) -> None:
+        if name not in names:
+            return
+        is_primary = primary == name
+        lim = _pack_limit_for(intensity, primary=is_primary)
+        if lim <= 0:
+            return
+        s.selected.update(builder(limit=lim))
+
+    _apply_domain("saas", _saas_pack)
+    _apply_domain("marketplace", _marketplace_pack)
+    _apply_domain("logistics", _logistics_pack)
+    _apply_domain("finance", _finance_pack)
+
     if primary == "commerce_pro":
-        s.selected.update(_COMMERCE_PRO_CAPS)
+        if intensity == "complex":
+            s.selected.update(_COMMERCE_PRO_CAPS)
+        else:
+            s.selected.update(_take(_COMMERCE_PRO_CAPS, 36))
     elif "commerce_pro" in secondary:
-        s.selected.update(_take(_COMMERCE_PRO_CAPS, 40))
+        s.selected.update(_take(_COMMERCE_PRO_CAPS, 24 if intensity != "complex" else 40))
     elif primary == "shop" or "shop" in secondary:
         s.selected.update(_SHOP_CAPS)
+
+    # Hard ceiling for medium bots (keep complex potatoes uncapped)
+    if intensity == "medium" and len(s.selected) > 40:
+        # Prefer primary domain + core commands
+        core = {"start", "help", "lang"}
+        primary_prefs = {
+            "saas": ("saas_", "seat_", "plan3_", "quota_", "trial2_"),
+            "marketplace": ("mkt_", "listing2_", "vendor2_", "escrow_", "payout2_"),
+            "logistics": ("logi_", "ship4_", "fleet2_", "pod2_", "warehouse4_"),
+            "finance": ("fin_", "ledger2_", "kyc2_", "invoice4_", "wallet3_"),
+            "commerce_pro": ("shop_", "cart_", "coupon_", "wallet_", "sub"),
+            "shop": ("shop_", "cart_"),
+        }.get(primary, ())
+        kept = [x for x in s.selected if x in core]
+        rest = [x for x in s.selected if x not in core]
+        rest_pri = [x for x in rest if any(x.startswith(p) for p in primary_prefs)]
+        rest_other = [x for x in rest if x not in rest_pri]
+        ordered = list(dict.fromkeys(kept + rest_pri + rest_other))
+        s.selected = set(ordered[:40])
 
     # Primary-aware bot identity (name + description)
     _identity = {
@@ -902,19 +987,19 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
     elif preset == "marketplace":
         s.set_name(bot_name or "marketplace_bot")
         s.set_description("Marketplace: vendors, listings, escrow, bids, payouts, disputes")
-        s.selected.update(_marketplace_pack())
+        s.selected.update(_marketplace_pack(limit=28))
     elif preset == "saas":
         s.set_name(bot_name or "saas_bot")
         s.set_description("SaaS: seats, trials, quotas, billing, RBAC, webhooks, flags")
-        s.selected.update(_saas_pack())
+        s.selected.update(_saas_pack(limit=28))
     elif preset == "logistics":
         s.set_name(bot_name or "logistics_bot")
         s.set_description("Logistics: shipments, fleet, routes, hubs, POD, last-mile")
-        s.selected.update(_logistics_pack())
+        s.selected.update(_logistics_pack(limit=28))
     elif preset == "finance":
         s.set_name(bot_name or "finance_bot")
         s.set_description("Light finance: ledger, payouts, KYC, invoices, wallets")
-        s.selected.update(_finance_pack())
+        s.selected.update(_finance_pack(limit=28))
     elif preset == "community":
         s.set_name(bot_name or "community_bot")
         s.set_description("Community feed, profiles, posts, moderation queue")
