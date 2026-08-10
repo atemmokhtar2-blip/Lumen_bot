@@ -125,10 +125,11 @@ def validate_telegram_token(
     *,
     retries: int | None = None,
 ) -> tuple[bool, dict[str, Any], str]:
-    """Call Telegram getMe with retries.
+    """Call Telegram getMe with bounded retries.
 
-    Handles slow networks and transient Telegram 502/503/504 Bad Gateway
-    responses (common; not a sign the bot token is invalid).
+    Important: total wall-clock is capped (~45s by default). A previous
+    policy of timeout=30 × retries=5 could burn ~170s before soft-continue,
+    which made live-run appear hung and the bot \"not starting\".
     """
     token = (token or "").strip()
     if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", token):
@@ -136,21 +137,37 @@ def validate_telegram_token(
 
     if timeout is None:
         try:
-            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30")
+            # Per-attempt read timeout (keep modest — 502s return fast)
+            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "12") or "12")
         except ValueError:
-            timeout = 30.0
+            timeout = 12.0
     if retries is None:
         try:
-            retries = int(os.environ.get("TELEGRAM_API_RETRIES", "5") or "5")
+            retries = int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3")
         except ValueError:
-            retries = 5
-    retries = max(1, min(retries, 8))
-    timeout = max(8.0, min(float(timeout), 90.0))
+            retries = 3
+    try:
+        budget = float(os.environ.get("TELEGRAM_VALIDATE_BUDGET", "45") or "45")
+    except ValueError:
+        budget = 45.0
+
+    retries = max(1, min(retries, 5))
+    timeout = max(5.0, min(float(timeout), 25.0))
+    budget = max(15.0, min(budget, 90.0))
 
     url = f"https://api.telegram.org/bot{token}/getMe"
     last_err = ""
     transient = False
+    transient_hits = 0
+    t0 = time.perf_counter()
+
     for attempt in range(1, retries + 1):
+        if (time.perf_counter() - t0) >= budget:
+            last_err = last_err or "validate_budget_exhausted"
+            break
+        # Shrink timeout on later attempts so we stay inside budget
+        remaining = max(5.0, budget - (time.perf_counter() - t0))
+        attempt_timeout = min(timeout, remaining)
         try:
             req = urllib.request.Request(
                 url,
@@ -161,16 +178,16 @@ def validate_telegram_token(
                     "Connection": "close",
                 },
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=attempt_timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if not data.get("ok"):
                 desc = str((data.get("description") or data) if isinstance(data, dict) else data)
                 code = data.get("error_code") if isinstance(data, dict) else None
                 if _is_transient_telegram_failure(code if isinstance(code, int) else None, desc):
                     transient = True
+                    transient_hits += 1
                     last_err = f"Telegram transient: {desc}"
                 else:
-                    # Auth / permanent API failure — do not retry
                     return False, data if isinstance(data, dict) else {}, f"getMe failed: {desc}"
             else:
                 return True, data.get("result") or {}, "ok"
@@ -180,35 +197,43 @@ def validate_telegram_token(
                 return False, {}, f"Telegram HTTP {e.code}: {body}"
             if _is_transient_telegram_failure(e.code, body):
                 transient = True
+                transient_hits += 1
             last_err = f"Telegram HTTP {e.code}: {body}"
         except TimeoutError as e:
             transient = True
+            transient_hits += 1
             last_err = f"TimeoutError: {e}"
         except urllib.error.URLError as e:
             transient = True
+            transient_hits += 1
             reason = getattr(e, "reason", e)
             last_err = f"URLError: {reason}"
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
 
-        if attempt < retries:
-            # Exponential-ish backoff for gateway blips: 2, 4, 6, 8...
-            time.sleep(min(2.0 * float(attempt), 12.0))
+        # Early soft-fail: 2 transient hits is enough — don't burn the budget
+        if transient_hits >= 2 and attempt >= 2:
+            break
 
+        if attempt < retries and (time.perf_counter() - t0) < budget:
+            # Short backoff only (502 is usually instant)
+            time.sleep(min(1.0 * float(attempt), 3.0))
+
+    elapsed = time.perf_counter() - t0
     if transient:
         return (
             False,
-            {"transient": True},
-            "Telegram API غير مستقر مؤقتًا (502/503/timeout) بعد عدة محاولات. "
-            "التوكن شكله صحيح — هذه مشكلة من جهة Telegram أو الشبكة، "
-            f"ليس بالضرورة توكن باطل. أعد المحاولة بعد دقيقة. ({last_err})",
+            {"transient": True, "elapsed_s": round(elapsed, 1)},
+            "Telegram API غير مستقر مؤقتًا (502/503/timeout). "
+            "شكل التوكن صحيح — المشكلة من Telegram/الشبكة. "
+            f"({last_err}; {elapsed:.0f}ث)",
         )
     return (
         False,
         {},
         "فشل الاتصال بـ Telegram بعد عدة محاولات: "
         f"{last_err}. تحقق من اتصال السيرفر بـ api.telegram.org "
-        f"أو ارفع TELEGRAM_API_TIMEOUT (حالياً {timeout:.0f}ث).",
+        f"(timeout={timeout:.0f}ث, budget={budget:.0f}ث).",
     )
 
 
@@ -1157,13 +1182,16 @@ def _delete_telegram_webhook(token: str, timeout: float | None = None) -> tuple[
         return False, "empty_token"
     if timeout is None:
         try:
-            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30")
+            timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "12") or "12")
         except ValueError:
-            timeout = 30.0
-    timeout = max(8.0, min(float(timeout), 90.0))
+            timeout = 12.0
+    timeout = max(5.0, min(float(timeout), 25.0))
     url = f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true"
     last_err = ""
-    for attempt in range(1, 4):
+    t0 = time.perf_counter()
+    for attempt in range(1, 3):
+        if (time.perf_counter() - t0) > 20.0:
+            break
         try:
             req = urllib.request.Request(
                 url,
@@ -1177,8 +1205,8 @@ def _delete_telegram_webhook(token: str, timeout: float | None = None) -> tuple[
             return False, str(data)[:200]
         except Exception as e:
             last_err = f"{type(e).__name__}:{e}"
-            if attempt < 3:
-                time.sleep(float(attempt))
+            if attempt < 2:
+                time.sleep(1.0)
     return False, last_err
 
 
