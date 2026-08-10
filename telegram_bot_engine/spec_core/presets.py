@@ -625,20 +625,28 @@ def prioritize_preset_stack(
     if "commerce_pro" in out:
         out = [x for x in out if x not in {"shop", "subscriptions", "points", "growth"} or x == "commerce_pro"]
 
-    # Controlled backbone: only for true multi-domain platform asks
-    multi_complex = sum(1 for d in ("saas", "marketplace", "logistics", "finance", "commerce_pro") if d in out)
-    if multi_complex >= 2 or (sig["platform"] and multi_complex >= 1):
+    # Protect high-signal complex domains before soft backbone / cap
+    complex_domains = ("saas", "marketplace", "logistics", "finance", "commerce_pro")
+    hard = [x for x in out if x in complex_domains and scores.get(x, 0) >= 3.0]
+    soft = [x for x in out if x not in hard]
+
+    multi_complex = len(hard)
+    if multi_complex >= 2 or (sig.get("platform") and multi_complex >= 1):
         for b in ("support_pro", "crm"):
-            if b not in out:
-                out.append(b)
+            if b not in soft and b not in hard:
+                soft.append(b)
     elif primary in {"group_management", "support_tickets", "tasks"}:
         pass
     else:
-        # avoid stuffing unrelated enterprise packs into focused bots
-        out = [x for x in out if x not in {"education", "community", "events"} or scores.get(x, 0) >= 3.0]
+        soft = [x for x in soft if x not in {"education", "community", "events"} or scores.get(x, 0) >= 3.0]
 
-    # Cap stack
-    return out[: max(1, min(limit, 7))]
+    # Hard complex domains first (preserve 6-month potatoes), then soft
+    merged = list(dict.fromkeys(hard + soft))
+    cap = max(1, min(limit, 8))
+    # Never drop a hard domain for backbone if we still have room pressure
+    if len(hard) >= cap:
+        return hard[:cap]
+    return merged[:cap]
 
 
 def detect_preset_stack(request: str, *, limit: int = 8) -> list[str]:
