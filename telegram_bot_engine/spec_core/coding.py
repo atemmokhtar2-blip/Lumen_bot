@@ -68,7 +68,12 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/security.py"] = _emit_security()
     if "content" in svc_set:
         files["app/services/content.py"] = _emit_content(spec)
-    if any(x in svc_set for x in ("utils", "extras", "clinic", "jobs", "edu", "events", "restaurant", "auction", "delivery", "crm", "booking", "community", "hr", "marketplace", "fitness", "realestate")):
+    if any(x in svc_set for x in (
+        "utils", "extras", "clinic", "jobs", "edu", "events", "restaurant", "auction",
+        "delivery", "crm", "booking", "community", "hr", "marketplace", "fitness",
+        "realestate", "shop", "cart", "wallet", "points", "growth", "subscriptions",
+        "payments", "contests", "i18n", "analytics", "admin", "gate",
+    )):
         files["app/services/extras.py"] = _emit_extras()
     if {
         "shop", "payments", "subscriptions", "points", "contests", "cart",
