@@ -150,11 +150,62 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     logger.info("Telegram bot is running (polling)...")
-    # drop_pending_updates avoids fighting a previous replica's long-poll
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+
+    def _wire(application: Application) -> None:
+        application.add_handler(CommandHandler("start", start_cmd))
+        application.add_handler(CommandHandler("help", help_cmd))
+        application.add_handler(CommandHandler("status", status_cmd))
+        application.add_handler(CommandHandler("lang", lang_cmd))
+        application.add_handler(CommandHandler("language", lang_cmd))
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+        )
+        application.add_handler(
+            MessageHandler(
+                ~filters.TEXT & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
+                handle_non_text,
+            )
+        )
+        application.add_error_handler(error_handler)
+
+    # Retry loop: 409 Conflict during rolling deploy must NOT leave the bot dead.
+    # PTB often stops the Application on Conflict without raising to main().
+    max_cycles = int(os.getenv("POLL_RESTART_MAX", "30") or "30")
+    import time as _time
+
+    for cycle in range(1, max_cycles + 1):
+        try:
+            clear_telegram_webhook(TELEGRAM_BOT_TOKEN)
+            if cycle > 1:
+                app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+                _wire(app)
+            logger.info("Polling cycle %s/%s starting…", cycle, max_cycles)
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+            )
+            # run_polling returned — usually Conflict/stop, not a clean SIGTERM
+            logger.warning(
+                "run_polling returned (cycle=%s). Re-clearing webhook and restarting…",
+                cycle,
+            )
+        except SystemExit:
+            raise
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            logger.error(
+                "Polling exception (%s): %s — cycle %s/%s",
+                type(e).__name__,
+                str(e)[:200],
+                cycle,
+                max_cycles,
+            )
+        _time.sleep(min(2.0 + cycle, 12.0))
+        clear_telegram_webhook(TELEGRAM_BOT_TOKEN)
+
+    logger.error("Exhausted poll restart cycles — exiting")
+    raise SystemExit(2)
 
 
 if __name__ == "__main__":
