@@ -17,7 +17,7 @@ class ProjectOutputReader(_BaseReader):
         if raw is None:
             return data
         data.available = True
-        data.raw = raw if isinstance(raw, dict) else {"value": raw}
+        data.raw = raw if isinstance(raw, dict) else {"value": str(raw)}
         if hasattr(raw, "to_dict"):
             data.items = [raw.to_dict()]
         elif isinstance(raw, dict):
@@ -27,4 +27,27 @@ class ProjectOutputReader(_BaseReader):
         return data
 
 
-__all__ = ["GenericData", "ProjectOutputReader"]
+class MaterializeReader(_BaseReader):
+    ARTEFACT_KEY = "materialize_report"
+
+
+class ProductionReadinessReader(_BaseReader):
+    ARTEFACT_KEY = "production_readiness_report"
+
+
+class E2EReader(_BaseReader):
+    ARTEFACT_KEY = "e2e_scenario_testing_report"
+
+
+class ReviewReader(_BaseReader):
+    ARTEFACT_KEY = "code_refactoring_report"
+
+
+__all__ = [
+    "GenericData",
+    "ProjectOutputReader",
+    "MaterializeReader",
+    "ProductionReadinessReader",
+    "E2EReader",
+    "ReviewReader",
+]
