@@ -154,7 +154,9 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
 
     # ── catalog / products ────────────────────────────────────────────
     if method in {"catalog", "list_content", "flash_list", "search", "product_info", "recommend"}:
-        L.append("    await message.reply_text(market_svc.catalog())")
+        L.append("    cat = market_svc.catalog()")
+        L.append("    text = '【 المتجر 】' + chr(10) + cat + chr(10)+chr(10) + 'أضف للسلة: /cartadd <id> — أو افتح السلة من القائمة'")
+        L.append("    await message.reply_text(text)")
     elif method in {"add_item", "upload", "stock_set"}:
         L += [
             "    if not context.args:",
@@ -265,7 +267,8 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("    await message.reply_text(f'Cleared {n} items')")
     # ── points ────────────────────────────────────────────────────────
     elif method == "balance" and svc == "wallet":
-        L.append("    await message.reply_text(f'Wallet: {market_svc.wallet_balance(user.id)}')")
+        L.append("    bal = market_svc.wallet_balance(user.id)")
+        L.append("    await message.reply_text('【 المحفظة 】' + chr(10) + f'الرصيد: {bal}' + chr(10)+chr(10) + 'شحن: /wallettopup — تحويل: /wallettransfer')")
     elif method == "balance" or (method == "history" and svc == "points"):
         if method == "history":
             L.append("    bal = market_svc.points_balance(user.id)")
@@ -275,7 +278,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method == "leaderboard":
         L += [
             "    rows = market_svc.leaderboard()",
-            "    text = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'لا يوجد متصدرون بعد — اكسب نقاط أولاً | No leaders yet'",
+            "    text = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'لا يوجد متصدرون بعد — اكسب نقاط أولاً'",
             "    await message.reply_text(text)",
         ]
     elif method in {"grant"} and svc == "points":
@@ -437,7 +440,8 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    await message.reply_text(f'Wallet: {bal}')",
         ]
     elif method == "history" and svc == "wallet":
-        L.append("    await message.reply_text(f'Wallet: {market_svc.wallet_balance(user.id)}')")
+        L.append("    bal = market_svc.wallet_balance(user.id)")
+        L.append("    await message.reply_text('【 المحفظة 】' + chr(10) + f'الرصيد: {bal}' + chr(10)+chr(10) + 'شحن: /wallettopup — تحويل: /wallettransfer')")
     elif method == "history" and svc == "payments":
         L.append("    await message.reply_text(market_svc.payment_history(user.id))")
     elif method == "receipt":
@@ -1257,9 +1261,21 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("        if fn is not None:")
     lines.append("            await fn(update, context)")
     lines.append("            return")
+    lines.append("        # Last-chance: fuzzy match handler name")
+    lines.append("        import sys as _sys")
+    lines.append("        mod = _sys.modules[__name__]")
+    lines.append("        for attr in dir(mod):")
+    lines.append("            if not attr.startswith('handle_'):")
+    lines.append("                continue")
+    lines.append("            compact = attr[7:].replace('_', '').lower()")
+    lines.append("            if compact == cmd_compact or cmd_compact in compact:")
+    lines.append("                await getattr(mod, attr)(update, context)")
+    lines.append("                return")
     lines.append("        message = update.effective_message")
     lines.append("        if message is not None:")
-    lines.append("            await message.reply_text('Command /' + (data[4:] or '') + ' is not available.')")
+    lines.append("            await message.reply_text(")
+    lines.append("                'الأمر غير مربوط حالياً: /' + (data[4:] or '') + chr(10) + 'جرّب /help أو /start'")
+    lines.append("            )")
     lines.append("        return")
     if cb_map:
         for cid, handler in cb_map:

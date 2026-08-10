@@ -1370,3 +1370,16 @@ def role_require(user_id: int, minimum: str = "staff") -> bool:
     except ValueError:
         return False
 
+
+
+def ux_wrap(title: str, body: str, hints: list[str] | None = None) -> str:
+    """Never return a bare/fragile one-liner without next-step hints."""
+    body = (body or "").strip() or "لا توجد بيانات بعد."
+    hints = hints or []
+    lines = [f"【 {title} 】", body]
+    if hints:
+        lines.append("")
+        lines.append("التالي:")
+        for h in hints[:5]:
+            lines.append(f"• {h}")
+    return "\n".join(lines)
