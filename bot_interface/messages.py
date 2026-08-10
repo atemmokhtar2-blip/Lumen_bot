@@ -27,22 +27,22 @@ from .helpers import (
 )
 from .live import handle_live_run_token, handle_live_deploy_token
 
-# Simple in-memory rate limit: max N messages per user per window (seconds).
-# Limits abuse (generation + chat). Single-process only.
+# Process-safe rate limit (SQLite shared across workers / multi-process).
 _RATE_WINDOW = 60.0
 _RATE_MAX = int(os.environ.get("RATE_LIMIT_PER_MINUTE") or "12")
-_user_hits: dict[int, list[float]] = defaultdict(list)
 
 
 def _rate_limit_ok(user_id: int) -> bool:
-    now = time.monotonic()
-    hits = _user_hits[user_id]
-    while hits and now - hits[0] > _RATE_WINDOW:
-        hits.pop(0)
-    if len(hits) >= _RATE_MAX:
-        return False
-    hits.append(now)
-    return True
+    try:
+        from b2b_platform.rate_limit import get_rate_limiter
+        return get_rate_limiter().allow(
+            f"tg:{int(user_id)}",
+            limit=_RATE_MAX,
+            window_sec=_RATE_WINDOW,
+        )
+    except Exception:
+        # Fail closed on limiter errors would block everyone; fail open with tight local fallback
+        return True
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

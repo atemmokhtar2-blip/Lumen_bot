@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .filelock import atomic_write_text, exclusive_lock
+
 
 def _new_api_key(prefix: str = "sk_live") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
@@ -68,26 +70,56 @@ class TenantStore:
         self._by_key_hash: dict[str, str] = {}
         self._load()
 
-    def _load(self) -> None:
+    def _ingest(self, data: dict) -> None:
+        self._by_id = {}
+        self._by_key_hash = {}
+        for row in data.get("tenants", []):
+            t = Tenant(**{k: v for k, v in row.items() if k in Tenant.__dataclass_fields__})
+            self._by_id[t.tenant_id] = t
+            if t.api_key_hash:
+                self._by_key_hash[t.api_key_hash] = t.tenant_id
+
+    def _load_unlocked(self) -> None:
         if not self.index_path.exists():
+            self._by_id = {}
+            self._by_key_hash = {}
             return
         try:
             data = json.loads(self.index_path.read_text(encoding="utf-8"))
-            for row in data.get("tenants", []):
-                t = Tenant(**{k: v for k, v in row.items() if k in Tenant.__dataclass_fields__})
-                self._by_id[t.tenant_id] = t
-                if t.api_key_hash:
-                    self._by_key_hash[t.api_key_hash] = t.tenant_id
+            self._ingest(data)
         except Exception:
             self._by_id = {}
             self._by_key_hash = {}
 
-    def _save(self) -> None:
+    def _load(self) -> None:
+        try:
+            with exclusive_lock(self.index_path):
+                self._load_unlocked()
+        except Exception:
+            self._by_id = {}
+            self._by_key_hash = {}
+
+    def _save_unlocked(self) -> None:
         payload = {
             "tenants": [asdict(t) for t in self._by_id.values()],
             "updated_at": time.time(),
         }
-        self.index_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(
+            self.index_path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+
+    def _save(self) -> None:
+        with exclusive_lock(self.index_path):
+            self._save_unlocked()
+
+    def _mutate(self, fn):
+        """Reload → apply fn → save under one exclusive lock (cross-process safe)."""
+        with exclusive_lock(self.index_path):
+            self._load_unlocked()
+            result = fn()
+            self._save_unlocked()
+            return result
 
     def create(
         self,
@@ -114,55 +146,69 @@ class TenantStore:
             api_key_prefix=raw[:12],
             owner_telegram_id=int(owner_telegram_id or 0),
         )
-        self._by_id[tid] = t
-        self._by_key_hash[t.api_key_hash] = tid
-        self._save()
-        return t, raw
+        def _do():
+            self._by_id[tid] = t
+            self._by_key_hash[t.api_key_hash] = tid
+            return t, raw
+        return self._mutate(_do)
 
     def rotate_key(self, tenant_id: str) -> str | None:
         t = self._by_id.get(tenant_id)
         if not t:
             return None
-        if t.api_key_hash in self._by_key_hash:
-            del self._by_key_hash[t.api_key_hash]
-        raw = _new_api_key()
-        t.api_key_hash = _hash_key(raw)
-        t.api_key_prefix = raw[:12]
-        self._by_key_hash[t.api_key_hash] = tenant_id
-        self._save()
-        return raw
+        raw_box: dict = {}
+        def _do():
+            cur = self._by_id.get(tenant_id)
+            if not cur:
+                return None
+            if cur.api_key_hash in self._by_key_hash:
+                del self._by_key_hash[cur.api_key_hash]
+            raw = _new_api_key()
+            cur.api_key_hash = _hash_key(raw)
+            cur.api_key_prefix = raw[:12]
+            self._by_key_hash[cur.api_key_hash] = tenant_id
+            raw_box["raw"] = raw
+            return raw
+        return self._mutate(_do)
 
     def authenticate(self, api_key: str) -> Tenant | None:
         if not api_key:
             return None
         h = _hash_key(api_key.strip())
-        tid = self._by_key_hash.get(h)
-        if not tid:
-            return None
-        t = self._by_id.get(tid)
-        if not t or not t.active:
-            return None
-        return t
+        with exclusive_lock(self.index_path):
+            self._load_unlocked()
+            tid = self._by_key_hash.get(h)
+            if not tid:
+                return None
+            t = self._by_id.get(tid)
+            if not t or not t.active:
+                return None
+            return t
 
     def get(self, tenant_id: str) -> Tenant | None:
-        return self._by_id.get(tenant_id)
+        with exclusive_lock(self.index_path):
+            self._load_unlocked()
+            return self._by_id.get(tenant_id)
 
     def update_white_label(self, tenant_id: str, **fields: Any) -> Tenant | None:
-        t = self._by_id.get(tenant_id)
-        if not t:
-            return None
-        for k in ("brand_name", "brand_logo_url", "primary_color", "support_email", "custom_domain", "name"):
-            if k in fields and fields[k] is not None:
-                setattr(t, k, str(fields[k])[:300])
-        if "plan_id" in fields and fields["plan_id"]:
-            t.plan_id = str(fields["plan_id"]).lower()
-        if "active" in fields:
-            t.active = bool(fields["active"])
-        self._save()
-        return t
+        def _do():
+            cur = self._by_id.get(tenant_id)
+            if not cur:
+                return None
+            for k in ("brand_name", "brand_logo_url", "primary_color", "support_email", "custom_domain", "name"):
+                if k in fields and fields[k] is not None:
+                    setattr(cur, k, str(fields[k])[:300])
+            if "plan_id" in fields and fields["plan_id"]:
+                cur.plan_id = str(fields["plan_id"]).lower()
+            if "active" in fields:
+                cur.active = bool(fields["active"])
+            return cur
+        return self._mutate(_do)
 
     def list_all(self) -> list[Tenant]:
-        return list(self._by_id.values())
+        with exclusive_lock(self.index_path):
+            self._load_unlocked()
+            return list(self._by_id.values())
 
 
 _STORE: TenantStore | None = None

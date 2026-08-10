@@ -37,7 +37,8 @@ async def generate(request: web.Request) -> web.Response:
     project_path = getattr(result, "project_path", None)
     errors = list(getattr(result, "errors", None) or [])
 
-    get_metering().record(tenant.tenant_id, generations=1, event="generate")
+    # generation unit already reserved atomically in enforce_generation(reserve=True)
+    get_metering().record(tenant.tenant_id, event="generate_completed")
 
     # White-label stamp
     brand = tenant.brand_name or tenant.name

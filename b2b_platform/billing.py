@@ -20,6 +20,7 @@ from .stripe_client import (
     verify_webhook_signature,
 )
 from .tenants import get_tenant_store
+from .filelock import atomic_write_text, exclusive_lock
 
 logger = logging.getLogger("b2b_platform.billing")
 
@@ -50,10 +51,9 @@ class BillingService:
         return self.root / f"{invoice_id}.json"
 
     def _save_invoice(self, inv: Invoice) -> None:
-        self._inv_path(inv.invoice_id).write_text(
-            json.dumps(asdict(inv), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        path = self._inv_path(inv.invoice_id)
+        with exclusive_lock(path):
+            atomic_write_text(path, json.dumps(asdict(inv), ensure_ascii=False, indent=2))
 
     def _load_invoice(self, invoice_id: str) -> Invoice | None:
         path = self._inv_path(invoice_id)
@@ -65,14 +65,22 @@ class BillingService:
         except Exception:
             return None
 
-    def enforce_generation(self, tenant_id: str) -> tuple[bool, str]:
+    def enforce_generation(self, tenant_id: str, *, reserve: bool = True) -> tuple[bool, str]:
+        """Check generation quota. When reserve=True (default), atomically consume one unit.
+
+        Atomic reserve closes the TOCTOU race where parallel requests all pass a
+        stale read before any counter is incremented.
+        """
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
         plan = get_plan(t.plan_id)
-        usage = get_metering().snapshot(tenant_id)
         limit = plan.generations_per_month
+        if reserve:
+            ok, reason, _ = get_metering().try_reserve_generation(tenant_id, limit)
+            return ok, reason
+        usage = get_metering().snapshot(tenant_id)
         if limit > 0 and int(usage.get("generations", 0)) >= limit:
             return False, f"generation_quota_exceeded:{limit}"
         return True, "ok"
