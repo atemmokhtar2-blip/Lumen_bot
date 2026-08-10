@@ -1,15 +1,14 @@
 """
 Telegram Bot Generation Engine
 
-Active path (zero-AI, deterministic):
+Active path (zero-AI, deterministic only):
   user text
     → spec_core presets + deterministic coding engines
+    → anti-hallucination gate
     → project files on disk (inside per-user sandbox)
 
-AI path (Execution Planner / plan-driven codegen) is disabled permanently
-for generate_bot. Optional Chat AI is only used for guidance replies.
+No LLM / AI provider path.
 No formal/DSL/transpiler codegen path.
-No domain templates or canned packs for generation.
 """
 
 from __future__ import annotations
