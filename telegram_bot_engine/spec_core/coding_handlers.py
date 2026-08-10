@@ -132,9 +132,24 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     method = cap.method
     L: list[str] = ["    from app.services import market as market_svc"]
 
-    def need_args(min_n: int = 1) -> None:
+    def need_args(min_n: int = 1, prompt: str | None = None, await_key: str | None = None) -> None:
+        """If args missing (e.g. button press), ask user and set conversation state."""
+        key = await_key or f"mkt_{method}"
+        prompts = {
+            "coupon_apply": "أرسل كود الكوبون الآن — Send coupon code now",
+            "apply_coupon": "أرسل كود الكوبون الآن — Send coupon code now",
+            "redeem_gift": "أرسل كود الهدية — Send gift code",
+            "wallet_topup": "أرسل مبلغ الشحن (رقم) — Send top-up amount",
+            "topup": "أرسل مبلغ الشحن (رقم) — Send top-up amount",
+            "transfer": "أرسل: user_id المبلغ — Send: user_id amount",
+            "stock_set": "أرسل: product_id الكمية — Send: product_id qty",
+            "grant_points": "أرسل: user_id النقاط — Send: user_id points",
+            "broadcast_segment": "أرسل نص الإذاعة — Send broadcast text",
+        }
+        msg = prompt or prompts.get(method, "أرسل المطلوب كرسالة تالية — Send required input next")
         L.append(f"    if not context.args or len(context.args) < {min_n}:")
-        L.append(f"        await message.reply_text({fail!r} + ' — args required')")
+        L.append(f"        context.user_data['awaiting'] = {key!r}")
+        L.append(f"        await message.reply_text({msg!r})")
         L.append("        return")
 
     # ── catalog / products ────────────────────────────────────────────
@@ -260,7 +275,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method == "leaderboard":
         L += [
             "    rows = market_svc.leaderboard()",
-            "    text = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'Empty'",
+            "    text = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'لا يوجد متصدرون بعد — اكسب نقاط أولاً | No leaders yet'",
             "    await message.reply_text(text)",
         ]
     elif method in {"grant"} and svc == "points":
@@ -437,9 +452,16 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     # ── i18n ──────────────────────────────────────────────────────────
     elif method in {"set_language", "auto_detect"}:
-        L.append("    lang = context.args[0] if context.args else 'en'")
+        L.append("    if context.args:")
+        L.append("        lang = context.args[0].lower()[:2]")
+        L.append("    else:")
+        L.append("        cur = market_svc.get_lang(user.id) if hasattr(market_svc, 'get_lang') else 'en'")
+        L.append("        lang = 'ar' if str(cur).startswith('en') else 'en'")
         L.append("    new_lang = market_svc.set_lang(user.id, lang)")
-        L.append("    await message.reply_text(f'Language: {new_lang}')")
+        L.append("    if new_lang.startswith('ar'):")
+        L.append("        await message.reply_text('تم تغيير اللغة إلى العربية 🇸🇦 — أعد /start لتحديث القائمة')")
+        L.append("    else:")
+        L.append("        await message.reply_text('Language switched to English 🇬🇧 — Send /start to refresh the menu')")
     elif method == "start_trial":
         L.append("    await message.reply_text(market_svc.start_trial(user.id))")
     elif method == "level":
@@ -682,6 +704,13 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_welcome = any(_svc(f) == "welcome" for f in spec.features)
     need_tickets = any(_svc(f) == "tickets" for f in spec.features)
     need_security = any(_svc(f) == "security" for f in spec.features)
+    need_market = any(
+        _svc(f) in {
+            'shop', 'payments', 'subscriptions', 'points', 'contests',
+            'cart', 'growth', 'wallet', 'i18n', 'analytics', 'admin',
+        }
+        for f in spec.features
+    )
     _extra_set = {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"}
     need_extras = any(_svc(f) in _extra_set for f in spec.features)
 
@@ -1078,7 +1107,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("")
 
     # text router for multi-step captures
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
@@ -1087,6 +1116,40 @@ def _emit_handlers(spec: BotSpec) -> str:
             "    if message is None or user is None or not message.text:",
             "        return",
             "    awaiting = context.user_data.get('awaiting')",
+            "    if isinstance(awaiting, str) and awaiting.startswith('mkt_'):",
+            "        text = (message.text or '').strip()",
+            "        context.user_data.pop('awaiting', None)",
+            "        from app.services import market as market_svc",
+            "        key = awaiting[4:]",
+            "        if key in ('coupon_apply', 'apply_coupon', 'redeem_gift'):",
+            "            await message.reply_text(market_svc.coupon_apply_code(user.id, text, 0))",
+            "            return",
+            "        if key in ('wallet_topup', 'topup'):",
+            "            try:",
+            "                amt = int(text.replace(',', ' ').split()[0])",
+            "                bal = market_svc.wallet_topup(user.id, amt)",
+            "                await message.reply_text('تم الشحن. الرصيد: ' + str(bal))",
+            "            except Exception:",
+            "                await message.reply_text('أرسل رقماً صحيحاً / Send a valid number')",
+            "            return",
+            "        if 'transfer' in key:",
+            "            parts = text.split()",
+            "            if len(parts) < 2:",
+            "                await message.reply_text('الصيغة: user_id amount')",
+            "                return",
+            "            try:",
+            "                to_uid, amt = int(parts[0]), int(parts[1])",
+            "                if market_svc.wallet_balance(user.id) < amt:",
+            "                    await message.reply_text('رصيد غير كافٍ')",
+            "                    return",
+            "                market_svc.wallet_add(user.id, -amt)",
+            "                bal = market_svc.wallet_add(to_uid, amt)",
+            "                await message.reply_text('تم التحويل. رصيد المستلم: ' + str(bal))",
+            "            except Exception:",
+            "                await message.reply_text('صيغة غير صحيحة')",
+            "            return",
+            "        await message.reply_text('تم: ' + text[:100])",
+            "        return",
             "    if awaiting == 'task_title':",
             "        tasks_svc.add_task(user.id, message.text.strip())",
             "        context.user_data.pop('awaiting', None)",
@@ -1349,7 +1412,14 @@ def _emit_main(spec: BotSpec) -> str:
         extra_imports.append(f"handle_{feat.id}".replace("-", "_"))
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
+    need_market = any(
+        (get_capability(f.feature) and get_capability(f.feature).service in {
+            "shop", "payments", "subscriptions", "points", "contests",
+            "cart", "growth", "wallet", "i18n", "analytics", "admin",
+        })  # type: ignore
+        for f in spec.features
+    )
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
         imports_handlers += ", text_router"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
@@ -1378,7 +1448,7 @@ def _emit_main(spec: BotSpec) -> str:
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
         text_handler = "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
     if need_welcome:
         text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
