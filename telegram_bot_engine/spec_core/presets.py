@@ -451,8 +451,75 @@ _CLINIC_KEYS = (
 _AUCTION_KEYS = ("مزاد", "مزادات", "auction", "bid", "مزايدة")
 _DELIVERY_KEYS = ("شحنة", "تتبع شحنة", "delivery", "shipping track", "لوجستيك")
 
+# Modern verticals (zero-AI keyword packs)
+_IOT_KEYS = (
+    "iot", "إنترنت الأشياء", "انترنت الاشياء", "أجهزة ذكية", "اجهزة ذكية",
+    "smart devices", "smart home", "sensors", "حساسات", "مستشعرات", "mqtt",
+    "arduino", "esp32", "raspberry", "أتمتة منزلية", "اتمتة منزلية", "telemetry",
+)
+_BLOCKCHAIN_KEYS = (
+    "blockchain", "بلوك تشين", "بلوكتشين", "crypto", "عملة رقمية", "bitcoin",
+    "بيتكوين", "ethereum", "إيثريوم", "smart contract", "عقد ذكي", "nft",
+    "defi", "web3", "token",
+)
+_AI_KEYS = (
+    "ذكاء اصطناعي", "الذكاء الاصطناعي", "machine learning", "تعلم آلي",
+    "chatgpt", "openai", "gpt", "llm", "neural", "تعلم عميق", "deep learning",
+    "nlp", "تحليل المشاعر", "sentiment",
+)
+_DEVOPS_KEYS = (
+    "devops", "docker", "حاوية", "kubernetes", "k8s", "ci/cd", "cicd",
+    "deployment", "نشر", "aws", "azure", "terraform", "helm", "pipeline",
+)
+_GAMING_KEYS = (
+    "game", "لعبة", "ألعاب", "العاب", "multiplayer", "tournament", "بطولة",
+    "achievement", "إنجاز", "انجاز", "leaderboard", "مباراة",
+)
+
+_IOT_CAPS = (
+    "start", "help", "lang",
+    "device_list", "device_create", "device_view", "device_search",
+    "sensor_list", "sensor_create", "sensor_view", "sensor_search",
+    "note_add", "note_list", "task_add", "task_list", "ticket_open",
+    "project_list", "project_create", "my_id",
+)
+_BLOCKCHAIN_CAPS = (
+    "start", "help", "lang",
+    "wallet_balance", "wallet_history", "wallet_transfer", "wallet_topup",
+    "note_add", "ticket_open", "ticket_list", "rules", "my_id",
+)
+_AI_CAPS = (
+    "start", "help", "lang",
+    "note_add", "note_list", "task_add", "task_list",
+    "ticket_open", "project_create", "project_list", "my_id",
+)
+_DEVOPS_CAPS = (
+    "start", "help", "lang",
+    "deploy_list", "deploy_create", "deploy_view", "deploy_search",
+    "env_list", "secret_list", "log_list",
+    "task_add", "task_list", "note_add", "note_list", "ticket_open",
+    "project_create", "project_list", "my_id",
+)
+_GAMING_CAPS = (
+    "start", "help", "lang",
+    "leaderboard", "contests", "join_contest", "my_entries",
+    "balance", "points_history", "achievement_list",
+    "daily_checkin", "streak_status",
+)
+
+
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
+    """Normalize whitespace + light Arabic orthography (no heavy NLP deps)."""
+    t = (text or "").strip().lower()
+    # strip Arabic diacritics
+    t = re.sub(r"[\u064B-\u065F\u0670]", "", t)
+    # alef variants → ا
+    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ٱ", "ا")
+    # taa marbuta → ه for matching flexibility
+    t = t.replace("ة", "ه")
+    # alef maqsura → ي
+    t = t.replace("ى", "ي")
+    return re.sub(r"\s+", " ", t)
 
 
 def _has_any(text: str, keys: Iterable[str]) -> bool:
@@ -533,6 +600,11 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     add("clinic", _CLINIC_KEYS, 1.9)
     add("auction", _AUCTION_KEYS, 1.7)
     add("delivery", _DELIVERY_KEYS, 1.6)
+    add("iot", _IOT_KEYS, 2.6)
+    add("blockchain", _BLOCKCHAIN_KEYS, 2.5)
+    add("ai_assist", _AI_KEYS, 2.2)
+    add("devops", _DEVOPS_KEYS, 2.4)
+    add("gaming", _GAMING_KEYS, 2.0)
 
     # ── Composite commerce_pro detection (Arabic-first multi-domain) ──
     # Count independent commerce pillars present in the request text.
@@ -577,16 +649,31 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     except Exception:
         pass
 
-    # Cybersecurity dominance: do not let weak commerce pillars steal the stack
+    # Modern / security verticals: do not let weak commerce pillars steal the stack
     try:
         from .domain_detector import detect as _dom_detect
-        if "cybersecurity" in _dom_detect(request):
+        doms = set(_dom_detect(request))
+        if "cybersecurity" in doms:
             sec = scores.get("security_ops", 0.0)
             if sec > 0:
                 scores["security_ops"] = sec + 6.0
-            # Demote commerce when the ask is clearly defensive security
-            if scores.get("commerce_pro", 0) and sec >= scores.get("shop", 0):
+            if scores.get("commerce_pro", 0):
                 scores["commerce_pro"] = max(0.0, scores["commerce_pro"] - 5.0)
+        # Boost explicit modern presets when domain detector fired
+        for domain, preset in (
+            ("iot", "iot"),
+            ("blockchain", "blockchain"),
+            ("ai_ml", "ai_assist"),
+            ("devops", "devops"),
+            ("gaming", "gaming"),
+            ("healthcare", "clinic"),
+        ):
+            if domain in doms:
+                scores[preset] = scores.get(preset, 0.0) + 5.0
+                if scores.get("commerce_pro", 0) and domain != "ecommerce":
+                    scores["commerce_pro"] = max(0.0, scores["commerce_pro"] - 4.0)
+                if scores.get("saas", 0) and domain in {"iot", "ai_ml", "gaming"}:
+                    scores["saas"] = max(0.0, scores["saas"] - 3.0)
     except Exception:
         pass
 
@@ -999,8 +1086,12 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
         from .dynamic_composer import compose_from_text
 
         domains = _detect_domains(request)
-        # Prefer dynamic path for security / multi-domain complex requests
-        if "cybersecurity" in domains or len(domains) >= 2:
+        modern = {
+            "cybersecurity", "iot", "blockchain", "ai_ml", "devops",
+            "healthcare", "gaming", "education", "marketplace",
+        }
+        # Prefer dynamic path for modern verticals / multi-domain requests
+        if (modern & set(domains)) or len(domains) >= 2:
             return compose_from_text(request, user_id=user_id)
     except Exception:
         pass
@@ -1205,6 +1296,31 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
         s.set_name(bot_name or "hr_bot")
         s.set_description("بوت موارد بشرية مبسط")
         for k in ("start", "help", "hr_leave_request", "hr_leave_list", "hr_checkin"):
+            s.selected.add(k)
+    elif preset == "iot":
+        s.set_name(bot_name or "iot_bot")
+        s.set_description("IoT ops: devices, sensors, notes, tasks (sqlite registry)")
+        for k in _IOT_CAPS:
+            s.selected.add(k)
+    elif preset == "blockchain":
+        s.set_name(bot_name or "blockchain_bot")
+        s.set_description("Crypto wallet ops: balance, history, transfer (no chain RPC required)")
+        for k in _BLOCKCHAIN_CAPS:
+            s.selected.add(k)
+    elif preset == "ai_assist":
+        s.set_name(bot_name or "ai_assist_bot")
+        s.set_description("AI workspace: notes, tasks, projects (prompts logged locally)")
+        for k in _AI_CAPS:
+            s.selected.add(k)
+    elif preset == "devops":
+        s.set_name(bot_name or "devops_bot")
+        s.set_description("DevOps ops: deploys, envs, secrets, logs, tasks")
+        for k in _DEVOPS_CAPS:
+            s.selected.add(k)
+    elif preset == "gaming":
+        s.set_name(bot_name or "gaming_bot")
+        s.set_description("Gaming: leaderboard, contests, achievements, points")
+        for k in _GAMING_CAPS:
             s.selected.add(k)
     elif preset in {"echo_basic", "basic", "generic", "echo"}:
         s.set_name(bot_name or "basic_bot")

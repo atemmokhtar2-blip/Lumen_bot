@@ -72,6 +72,26 @@ SYNONYM_GROUPS: dict[str, list[str]] = {
         "domain scan", "website scan", "فحص أمني", "ثغرة", "soc", "incident",
         "شهادة", "security headers", "توعية أمنية", "نصائح أمان",
     ],
+    "iot": [
+        "iot", "إنترنت الأشياء", "حساسات", "مستشعرات", "mqtt", "arduino",
+        "esp32", "أجهزة ذكية", "أتمتة منزلية", "smart home",
+    ],
+    "blockchain": [
+        "blockchain", "بلوك تشين", "crypto", "bitcoin", "ethereum", "nft",
+        "عقد ذكي", "web3", "عملة رقمية",
+    ],
+    "ai_assist": [
+        "ذكاء اصطناعي", "machine learning", "chatgpt", "gpt", "openai",
+        "تعلم آلي", "llm", "nlp",
+    ],
+    "devops": [
+        "devops", "docker", "kubernetes", "k8s", "ci/cd", "deployment",
+        "حاوية", "terraform", "pipeline",
+    ],
+    "gaming": [
+        "لعبة", "ألعاب", "game", "tournament", "بطولة", "leaderboard",
+        "achievement", "إنجاز",
+    ],
 }
 
 DOMAIN_TO_PRESET = {
@@ -102,6 +122,11 @@ DOMAIN_TO_PRESET = {
     "crm": "crm",
     "commerce_pro": "commerce_pro",
     "security_ops": "security_ops",
+    "iot": "iot",
+    "blockchain": "blockchain",
+    "ai_assist": "ai_assist",
+    "devops": "devops",
+    "gaming": "gaming",
     "generic": "echo_basic",
 }
 
