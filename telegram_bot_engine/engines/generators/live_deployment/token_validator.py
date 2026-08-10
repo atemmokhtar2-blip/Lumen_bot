@@ -27,14 +27,14 @@ def looks_like_bot_token(token: str) -> bool:
 
 def _api_timeout() -> float:
     try:
-        return max(8.0, min(float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30"), 90.0))
+        return max(5.0, min(float(os.environ.get("TELEGRAM_API_TIMEOUT", "12") or "12"), 25.0))
     except ValueError:
-        return 30.0
+        return 12.0
 
 
 def _api_retries() -> int:
     try:
-        return max(1, min(int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3"), 6))
+        return max(1, min(int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3"), 5))
     except ValueError:
         return 3
 
