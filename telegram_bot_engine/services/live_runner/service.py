@@ -1835,6 +1835,21 @@ def run_bot_project(
     SaaS default: Docker is REQUIRED (TBE_REQUIRE_DOCKER=1).
     Local process is allowed only when TBE_ALLOW_LOCAL_PROCESS=1 (dev only).
     """
+    import re as _re
+    _raw_path = str(project_path or "")
+    if _re.search(r"[;|&$`<>\\\n\r\0]", _raw_path):
+        return LiveRunReport(
+            ok=False,
+            phase="security",
+            message="invalid_path_characters",
+            install_log="",
+            run_log="",
+            warnings=["path_rejected"],
+            entry_point=entry_hint or "",
+            duration_ms=0.0,
+            details={"error": "invalid_path_characters"},
+        )
+
     import os as _os
     require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower() not in {
         "0", "false", "no", "off",

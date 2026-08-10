@@ -15,6 +15,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from .config import OUTPUT_DIR, logger
+from .sanitize import sanitize_error
 from .helpers import (
     is_allowed,
     looks_like_bot_token,
@@ -179,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             result = await asyncio.to_thread(_do_host)
         except Exception as e:
             logger.exception("hosting start failed")
-            await status.edit_text(f"❌ فشل الاستضافة: {type(e).__name__}: {str(e)[:200]}")
+            await status.edit_text(f"❌ فشل الاستضافة: {type(e).__name__}: {sanitize_error(str(e))}")
             return
         await status.edit_text(result.to_user_text())
         return
@@ -244,11 +245,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             try:
                 result = await asyncio.to_thread(_reclone)
             except Exception as e:
-                logger.exception("private reclone failed")
-                await status.edit_text(f"❌ فشل السحب بالتوكن: {type(e).__name__}: {str(e)[:200]}")
+                err_msg = sanitize_error(f"{type(e).__name__}: {e}")
+                logger.error("private reclone failed: %s", err_msg)
+                await status.edit_text(f"❌ فشل السحب بالتوكن: {err_msg}")
                 return
             finally:
-                git_tok = ""  # noqa: F841
+                try:
+                    git_tok = None  # drop reference
+                    del git_tok
+                except Exception:
+                    pass
 
             if not result.ok:
                 err_msg = f"❌ {result.message}"
@@ -360,7 +366,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             result = await asyncio.to_thread(_do_clone)
         except Exception as e:
             logger.exception("Clone failed")
-            await status.edit_text(f"❌ فشل سحب المستودع: {type(e).__name__}: {str(e)[:200]}")
+            await status.edit_text(f"❌ فشل سحب المستودع: {type(e).__name__}: {sanitize_error(str(e))}")
             return
 
         if result.ok:
@@ -585,7 +591,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 dev = await asyncio.to_thread(_run_dev)
             except Exception as e:
                 logger.exception("RepoDev failed")
-                await status.edit_text(f"❌ فشل التنفيذ على المستودع: {type(e).__name__}: {str(e)[:200]}")
+                await status.edit_text(f"❌ فشل التنفيذ على المستودع: {type(e).__name__}: {sanitize_error(str(e))}")
                 return
 
             if dev.contract is not None:
@@ -757,7 +763,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except Exception as e:
         logger.exception("Generation failed")
-        err_text = escape_md(str(e)[:400])
+        err_text = escape_md(sanitize_error(str(e), max_len=400))
         await safe_edit_text(
             status_msg,
             f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`\n\n"

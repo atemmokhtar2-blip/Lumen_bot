@@ -127,12 +127,21 @@ class DockerProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
-        path = Path(project_path).resolve()
+        # Reject shell metacharacters — docker argv is a list, but we still
+        # refuse dangerous paths before any process is spawned.
+        raw = str(project_path or "")
+        if re.search(r"[;|&$`<>\\\n\r\0]", raw):
+            return DeploymentStatus(
+                provider=self.name,
+                status=DEPLOY_FAILED,
+                message="invalid_path_characters",
+            )
+        path = Path(raw).resolve()
         if not path.is_dir():
             return DeploymentStatus(
                 provider=self.name,
                 status=DEPLOY_FAILED,
-                message=f"Project path not found: {project_path}",
+                message="Project path not found",
             )
 
         if not docker_available():

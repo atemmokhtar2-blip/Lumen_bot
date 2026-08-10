@@ -16,12 +16,13 @@ import os
 import sqlite3
 import threading
 import time
-import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+from .sanitize import sanitize_for_storage
 
 logger = logging.getLogger("b2b_platform.jobs")
 
@@ -184,6 +185,17 @@ class JobStore:
             error=row["error"] or "",
         )
 
+    def cleanup_old_jobs(self, days: int = 7) -> int:
+        """Delete terminal jobs older than `days`. Returns rows deleted."""
+        cutoff = time.time() - (max(1, int(days)) * 86400)
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM jobs WHERE created_at < ? AND status IN (?,?,?)",
+                (cutoff, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_CANCELLED),
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def list_for_tenant(self, tenant_id: str, *, limit: int = 20) -> list[Job]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -246,6 +258,12 @@ class JobRunner:
             input=input_data,
         )
         self.store.create(job)
+        # opportunistic GC of old terminal jobs (at most ~1/50 enqueues)
+        if int(job.created_at * 1000) % 50 == 0:
+            try:
+                self.store.cleanup_old_jobs(days=int(os.getenv('JOB_RETENTION_DAYS') or 7))
+            except Exception:
+                pass
         self._pool.submit(self._run, job.job_id)
         return job
 
@@ -280,15 +298,16 @@ class JobRunner:
                 result=result or {},
             )
         except Exception as exc:
-            logger.exception("job %s failed", job_id)
+            safe = sanitize_for_storage(str(exc), max_len=500)
+            logger.error("job %s failed: %s", job_id, safe)
             self.store.update(
                 job_id,
                 status=STATUS_FAILED,
                 finished_at=time.time(),
                 progress=1.0,
                 message="failed",
-                error=str(exc)[:500],
-                result={"traceback": traceback.format_exc()[-1500:]},
+                error=safe,
+                result={"error_code": "job_failed"},
             )
 
 
