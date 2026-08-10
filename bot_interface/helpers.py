@@ -7,8 +7,6 @@ import re
 import zipfile
 from pathlib import Path
 
-from telegram.constants import ParseMode
-
 from .config import ALLOWED_USER_IDS, ALLOW_ALL_USERS, logger
 
 
@@ -77,6 +75,7 @@ async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> No
     """edit_text with Markdown; fall back to plain text if Telegram rejects entities."""
     if use_markdown:
         try:
+            from telegram.constants import ParseMode
             await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
             return
         except Exception as e:
@@ -119,3 +118,20 @@ def run_generation(request: str, work_dir: Path):
     from telegram_bot_engine import generate_bot
 
     return generate_bot(request, work_dir=str(work_dir))
+
+
+async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:
+    """reply_text that never fails silently on Markdown parse errors."""
+    try:
+        if use_markdown:
+            from telegram.constants import ParseMode
+            await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.reply_text(text)
+        return
+    except Exception:
+        try:
+            await message.reply_text(str(text)[:4000])
+        except Exception:
+            from .config import logger
+            logger.exception("safe_reply_text failed")

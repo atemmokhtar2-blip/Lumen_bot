@@ -28,6 +28,9 @@ from .helpers import (
     run_generation,
 )
 from .live import handle_live_run_token, handle_live_deploy_token
+from .progress_tracker import run_with_heartbeat
+from .session_store import get_session_store
+from .capability_boundaries import rejection_message, get_help_text as honest_help
 
 # Process-safe rate limit (SQLite shared across workers / multi-process).
 from .config import RATE_LIMIT_PER_MINUTE, RATE_LIMIT_WINDOW_SECONDS
@@ -63,6 +66,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     request = message.text.strip()
+
+
+    # Restore durable session (pending_run etc.) after restarts
+    try:
+        if user and context.user_data is not None:
+            saved = get_session_store().load(int(user.id))
+            for k, v in (saved or {}).items():
+                context.user_data.setdefault(k, v)
+    except Exception:
+        pass
     if not request or request.startswith("/"):
         return
 
@@ -693,7 +706,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ):
         try:
             from telegram_bot_engine.services.chat_router import get_router
-            await message.reply_text(get_router().help_text())
+            await message.reply_text(honest_help())
         except Exception:
             await message.reply_text("مساعدة: اسحب مستودع | ولّد بوت | استضافة | تحليل استاتيكي")
         return
@@ -753,6 +766,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if context.user_data is not None:
         context.user_data.pop("pending_spec", None)
 
+    # Feasibility gate — refuse impossible / out-of-scope requests honestly
+    try:
+        from telegram_bot_engine.services.feasibility_gate import check_feasibility
+        _feas = check_feasibility(request)
+        if not _feas.can_generate:
+            await message.reply_text(
+                rejection_message(_feas.reason, _feas.suggested_scope),
+            )
+            return
+        if _feas.blocked_features and _feas.confidence < 0.75:
+            # soft warning but continue
+            pass
+    except Exception:
+        pass
+
     status_msg = await message.reply_text(
         "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
     )
@@ -767,7 +795,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
 
     try:
-        result = await asyncio.to_thread(run_generation, request, work_dir)
+        result = await run_with_heartbeat(run_generation, request, work_dir, status_msg=status_msg)
 
         if result is None:
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")

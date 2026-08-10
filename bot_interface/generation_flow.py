@@ -1,5 +1,7 @@
-"""Generation result handling — extracted from messages orchestrator (SRP)."""
 from __future__ import annotations
+
+from .session_store import get_session_store
+"""Generation result handling — extracted from messages orchestrator (SRP)."""
 
 import logging
 from pathlib import Path
@@ -118,6 +120,11 @@ async def deliver_generation_result(
         context.user_data["pending_deploy"] = dict(pending_payload)
         context.user_data["pending_live_run"] = dict(pending_payload)
         context.user_data["pending_run"] = dict(pending_payload)
+        try:
+            if user:
+                get_session_store().save(int(user.id), context.user_data)
+        except Exception:
+            pass
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
         await message.reply_text(

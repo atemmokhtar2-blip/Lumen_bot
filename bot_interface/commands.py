@@ -1,3 +1,4 @@
+from .capability_boundaries import get_help_text
 """Telegram command handlers (/start, /help, /status, /lang)."""
 
 from __future__ import annotations
