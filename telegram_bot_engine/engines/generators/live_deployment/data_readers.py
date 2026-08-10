@@ -1,20 +1,13 @@
-"""Data readers for Live Deployment Engine (Spec 065)."""
-
+"""Data readers for Live Deployment Engine (Spec 065) — shared GenericData base."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from ..common.tolerant_readers import GenericData, BaseReader as _BaseReader
 
 
-@dataclass
-class GenericData:
-    available: bool = False
-    items: List[Dict[str, Any]] = field(default_factory=list)
-    raw: Any = None
-
-
-class _BaseReader:
-    ARTEFACT_KEY = ""
+class ProjectOutputReader(_BaseReader):
+    ARTEFACT_KEY = "final_project"
 
     def read(self, context) -> GenericData:
         data = GenericData()
@@ -24,7 +17,7 @@ class _BaseReader:
         if raw is None:
             return data
         data.available = True
-        data.raw = raw
+        data.raw = raw if isinstance(raw, dict) else {"value": raw}
         if hasattr(raw, "to_dict"):
             data.items = [raw.to_dict()]
         elif isinstance(raw, dict):
@@ -34,21 +27,4 @@ class _BaseReader:
         return data
 
 
-class ProjectOutputReader(_BaseReader):
-    ARTEFACT_KEY = "final_project"
-
-
-class MaterializeReader(_BaseReader):
-    ARTEFACT_KEY = "materialize_report"
-
-
-class ProductionReadinessReader(_BaseReader):
-    ARTEFACT_KEY = "production_readiness_report"
-
-
-class E2EReader(_BaseReader):
-    ARTEFACT_KEY = "e2e_scenario_testing_report"
-
-
-class ReviewReader(_BaseReader):
-    ARTEFACT_KEY = "code_refactoring_report"
+__all__ = ["GenericData", "ProjectOutputReader"]
