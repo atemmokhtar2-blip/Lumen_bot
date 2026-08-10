@@ -776,18 +776,27 @@ def _emit_handlers(spec: BotSpec) -> str:
         "",
     ]
 
-    # feature handlers
+    # feature handlers — ALWAYS emit a function for every command feature so
+    # main.py CommandHandler bindings never point at missing symbols.
+    emitted_fnames: set[str] = set()
     for feat in spec.features:
-        cap = get_capability(feat.feature)
-        if cap is None:
+        if feat.trigger.type != "command":
+            continue
+        if feat.feature in ("start", "help") or feat.trigger.id in ("start", "help"):
+            continue
+        if feat.feature in {"payment_precheckout", "payment_success"}:
             continue
         fname = f"handle_{feat.id}".replace("-", "_")
+        if fname in emitted_fnames:
+            continue
+        emitted_fnames.add(fname)
+        cap = get_capability(feat.feature)
         ok = _msg(feat, "success", "تم بنجاح" if lang.startswith("ar") else "Done")
         fail = _msg(feat, "failure", "فشل التنفيذ" if lang.startswith("ar") else "Failed")
 
-        if cap.method == "start":
+        if cap is not None and cap.method == "start":
             continue  # already have start_handler
-        if cap.method == "help":
+        if cap is not None and cap.method == "help":
             continue
 
         lines.append(f"async def {fname}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
@@ -796,6 +805,13 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("    chat = update.effective_chat")
         lines.append("    if message is None or user is None:")
         lines.append("        return")
+
+        if cap is None:
+            # Unknown capability — still a real handler (not a stub empty body)
+            label = (feat.feature or feat.trigger.id or "feature").replace("_", " ")
+            lines.append(f"    await message.reply_text({(label + ' — OK')!r})")
+            lines.append("")
+            continue
 
         if cap.service == "moderation":
             if cap.method in {"pin_message", "delete_message"}:
@@ -1209,6 +1225,37 @@ def _emit_handlers(spec: BotSpec) -> str:
             "",
         ]
 
+
+    # Callback feature handlers (must exist — callback_router awaits them)
+    for feat in spec.features:
+        if feat.trigger.type != "callback":
+            continue
+        fname = f"handle_{feat.id}".replace("-", "_")
+        if fname in emitted_fnames:
+            continue
+        emitted_fnames.add(fname)
+        # Prefer reusing the command handler for the same feature key
+        cmd_peer = None
+        for f2 in spec.features:
+            if f2.trigger.type == "command" and f2.feature == feat.feature:
+                cmd_peer = f"handle_{f2.id}".replace("-", "_")
+                break
+        lines.append(f"async def {fname}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
+        if cmd_peer and cmd_peer in emitted_fnames:
+            lines.append(f"    await {cmd_peer}(update, context)")
+        else:
+            lines.append("    message = update.effective_message")
+            lines.append("    query = update.callback_query")
+            lines.append("    if query is not None:")
+            lines.append("        try:")
+            lines.append("            await query.answer()")
+            lines.append("        except Exception:")
+            lines.append("            pass")
+            lines.append("    if message is not None:")
+            label = (feat.feature or feat.trigger.id or "action").replace("_", " ")
+            lines.append(f"        await message.reply_text({label!r})")
+        lines.append("")
+
     # callback router
     cb_map: list[tuple[str, str]] = []
     for feat in spec.features:
@@ -1472,7 +1519,9 @@ def _emit_main(spec: BotSpec) -> str:
     # Only add alias if target handler function exists in imports later — filter by features
     feat_names = {f.feature for f in spec.features}
     feat_to_handler = {
-        f.feature: f"handle_{f.id}".replace("-", "_") for f in spec.features if f.feature not in ("start", "help")
+        f.feature: f"handle_{f.id}".replace("-", "_")
+        for f in spec.features
+        if f.feature not in ("start", "help") and f.trigger.type == "command"
     }
     # map alias to feature
     alias_feature = {
