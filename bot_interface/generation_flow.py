@@ -1,7 +1,5 @@
-from __future__ import annotations
-
-from .session_store import get_session_store
 """Generation result handling — extracted from messages orchestrator (SRP)."""
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -9,6 +7,7 @@ from typing import Any
 
 from .config import GENERATION_STATUS_PREVIEW_LIMIT, ZIP_MAX_MB, OUTPUT_DIR
 from .helpers import escape_md, make_zip_from_path
+from .session_store import get_session_store
 
 logger = logging.getLogger("ai_agent_7h_bot.generation_flow")
 
