@@ -99,6 +99,26 @@ class LiveRunReport:
         return "\n".join(lines)
 
 
+def _is_transient_telegram_failure(http_code: int | None, body_or_desc: str) -> bool:
+    """502/503/504 and Cloudflare/gateway blips are Telegram-side — retry."""
+    if http_code in {429, 500, 502, 503, 504}:
+        return True
+    t = (body_or_desc or "").lower()
+    return any(
+        x in t
+        for x in (
+            "bad gateway",
+            "gateway timeout",
+            "service unavailable",
+            "temporarily unavailable",
+            "error_code\":502",
+            "error_code\":503",
+            "error_code\":504",
+            "error_code\":429",
+        )
+    )
+
+
 def validate_telegram_token(
     token: str,
     timeout: float | None = None,
@@ -107,14 +127,13 @@ def validate_telegram_token(
 ) -> tuple[bool, dict[str, Any], str]:
     """Call Telegram getMe with retries.
 
-    Network timeouts to api.telegram.org are common on constrained hosts;
-    a single 12s attempt was failing live-run validation even with valid tokens.
+    Handles slow networks and transient Telegram 502/503/504 Bad Gateway
+    responses (common; not a sign the bot token is invalid).
     """
     token = (token or "").strip()
     if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", token):
         return False, {}, "شكل التوكن غير صالح"
 
-    # Env overrides for slow networks / restricted egress
     if timeout is None:
         try:
             timeout = float(os.environ.get("TELEGRAM_API_TIMEOUT", "30") or "30")
@@ -122,46 +141,68 @@ def validate_telegram_token(
             timeout = 30.0
     if retries is None:
         try:
-            retries = int(os.environ.get("TELEGRAM_API_RETRIES", "3") or "3")
+            retries = int(os.environ.get("TELEGRAM_API_RETRIES", "5") or "5")
         except ValueError:
-            retries = 3
-    retries = max(1, min(retries, 6))
+            retries = 5
+    retries = max(1, min(retries, 8))
     timeout = max(8.0, min(float(timeout), 90.0))
 
     url = f"https://api.telegram.org/bot{token}/getMe"
     last_err = ""
+    transient = False
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(
                 url,
                 method="GET",
-                headers={"User-Agent": "AI-Agent-7h-LiveRunner/1.0"},
+                headers={
+                    "User-Agent": "AI-Agent-7h-LiveRunner/1.0",
+                    "Accept": "application/json",
+                    "Connection": "close",
+                },
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if not data.get("ok"):
-                # Auth / API logical failure — do not retry
-                desc = (data.get("description") or data) if isinstance(data, dict) else data
-                return False, data if isinstance(data, dict) else {}, f"getMe failed: {desc}"
-            return True, data.get("result") or {}, "ok"
+                desc = str((data.get("description") or data) if isinstance(data, dict) else data)
+                code = data.get("error_code") if isinstance(data, dict) else None
+                if _is_transient_telegram_failure(code if isinstance(code, int) else None, desc):
+                    transient = True
+                    last_err = f"Telegram transient: {desc}"
+                else:
+                    # Auth / permanent API failure — do not retry
+                    return False, data if isinstance(data, dict) else {}, f"getMe failed: {desc}"
+            else:
+                return True, data.get("result") or {}, "ok"
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")[:300]
-            # 401/404 = bad token; no point retrying
             if e.code in {401, 403, 404}:
                 return False, {}, f"Telegram HTTP {e.code}: {body}"
+            if _is_transient_telegram_failure(e.code, body):
+                transient = True
             last_err = f"Telegram HTTP {e.code}: {body}"
         except TimeoutError as e:
+            transient = True
             last_err = f"TimeoutError: {e}"
         except urllib.error.URLError as e:
+            transient = True
             reason = getattr(e, "reason", e)
             last_err = f"URLError: {reason}"
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
 
         if attempt < retries:
-            # linear backoff: 1s, 2s, 3s...
-            time.sleep(float(attempt))
+            # Exponential-ish backoff for gateway blips: 2, 4, 6, 8...
+            time.sleep(min(2.0 * float(attempt), 12.0))
 
+    if transient:
+        return (
+            False,
+            {"transient": True},
+            "Telegram API غير مستقر مؤقتًا (502/503/timeout) بعد عدة محاولات. "
+            "التوكن شكله صحيح — هذه مشكلة من جهة Telegram أو الشبكة، "
+            f"ليس بالضرورة توكن باطل. أعد المحاولة بعد دقيقة. ({last_err})",
+        )
     return (
         False,
         {},
@@ -1428,13 +1469,30 @@ class LiveRunnerService:
             return LiveRunReport(ok=False, phase="validate", message="مسار المشروع غير موجود")
 
         ok, me, err = validate_telegram_token(bot_token)
+        soft_continue = (os.environ.get("TELEGRAM_VALIDATE_SOFT") or "1").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        preflight_warnings: list[str] = []
         if not ok:
-            return LiveRunReport(
-                ok=False, phase="validate", message=err, errors=[err],
-                duration_ms=(time.perf_counter() - t0) * 1000,
+            # Token format already validated inside validate_telegram_token.
+            # On transient Telegram 502/503, optionally continue install+run
+            # so a temporary Telegram outage does not block the user entirely.
+            is_transient = bool((me or {}).get("transient")) or (
+                "غير مستقر مؤقتًا" in (err or "") or "502" in (err or "") or "503" in (err or "")
             )
-        username = me.get("username") or ""
-        bot_id = me.get("id")
+            if not (soft_continue and is_transient):
+                return LiveRunReport(
+                    ok=False, phase="validate", message=err, errors=[err],
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                )
+            # Soft path: proceed without bot username; warn the user
+            me = me if isinstance(me, dict) else {}
+            preflight_warnings.append(
+                "telegram_api_transient: continued despite getMe 502/503 — "
+                "Telegram gateway was unstable; bot may still start"
+            )
+        username = (me or {}).get("username") or ""
+        bot_id = (me or {}).get("id")
 
         entry = _find_entry(root, [entry_hint] if entry_hint else None)
         if entry is None:
@@ -1447,7 +1505,7 @@ class LiveRunnerService:
 
         # Auto-repair common source syntax issues (e.g. \\' written literally)
         from .source_fix import repair_project_sources, discover_token_env_names, syntax_check_entry
-        repair_notes = repair_project_sources(root)
+        repair_notes = list(preflight_warnings) + repair_project_sources(root)
         # Proactive: clear webhook + inject token so polling bots start cleanly
         try:
             ok_wh, wh_msg = _delete_telegram_webhook(bot_token)
