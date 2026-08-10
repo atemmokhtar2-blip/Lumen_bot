@@ -8,7 +8,7 @@ STRICT RULE (project-wide, non-negotiable):
   No pre-baked bot templates, saved tool packs, static command sets,
   or any ready-made bot structures. Every artefact is generated
   dynamically and exclusively from the user's natural-language text
-  via SpecTranslator → formal/DSL path. Nothing is stored as a
+  via zero-AI spec_core path. Nothing is stored as a
   reusable "bot template".
 """
 

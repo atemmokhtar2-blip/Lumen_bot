@@ -23,10 +23,7 @@ from __future__ import annotations
 import os
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    not (os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")),
-    reason="SpecTranslator requires GROQ_API_KEY or HF_TOKEN",
-)
+pytestmark = pytest.mark.skip(reason="legacy AI SpecTranslator path removed")
 
 import ast
 import asyncio

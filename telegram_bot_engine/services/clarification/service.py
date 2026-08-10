@@ -80,7 +80,7 @@ def _looks_like_skip(text: str) -> bool:
 
 
 def assess_spec(user_text: str) -> ClarificationResult:
-    """Always ready — progressive questionnaires removed; AI SpecTranslator handles understanding."""
+    """Always ready — progressive questionnaires removed; zero-AI path handles understanding."""
     _ = user_text
     return ClarificationResult(ready=True, score=1.0)
 

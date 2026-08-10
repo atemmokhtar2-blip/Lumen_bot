@@ -12,10 +12,7 @@ import pytest
 pytestmark = pytest.mark.skip(reason="formal_engine removed")
 
 import os
-pytestmark = pytest.mark.skipif(
-    not (os.getenv("GROQ_API_KEY") or os.getenv("HF_TOKEN")),
-    reason="SpecTranslator requires GROQ_API_KEY or HF_TOKEN",
-)
+pytestmark = pytest.mark.skip(reason="legacy AI SpecTranslator path removed")
 
 from telegram_bot_engine import generate_bot
 # formal_engine removed

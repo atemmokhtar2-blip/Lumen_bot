@@ -689,181 +689,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
     )
     _slash_cmds = re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)
-    _weak_spec = _is_bot_spec and (
-        len(request) < 60 or len(_slash_cmds) < 2
+    # AI chat path removed permanently — no LLM partner routing.
+    _ai_route_generate = bool(
+        _is_hard and getattr(_rt, "capability_id", "") == "generate_bot"
     )
-    _adv_flag = bool((context.user_data or {}).get("advanced_brief", {}).get("intent_advanced"))
-    # Almost all non-hard messages go through AI — never auto-generate on greetings.
-    _need_dev_chat = (not _is_hard) or _weak_spec or _adv_flag or (not _is_bot_spec)
-    _ai_route_generate = False
 
-    if _need_dev_chat:
-        try:
-            from telegram_bot_engine.chat_ai import smart_chat_reply
-            mem_ctx = _mem.context_for_ai() if _mem else ""
-            # Deep project awareness: active generated/cloned project structure
-            try:
-                _ar = (context.user_data or {}).get("active_repo") or {}
-                if _ar.get("digest", {}).get("ai_context"):
-                    mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _ar["digest"]["ai_context"]
-                elif _ar.get("path") and Path(_ar["path"]).exists():
-                    from telegram_bot_engine.services.project_digest import (
-                        build_project_digest,
-                    )
-                    _dg = build_project_digest(_ar["path"])
-                    context.user_data.setdefault("active_repo", {})["digest"] = _dg
-                    if _dg.get("ai_context"):
-                        mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _dg["ai_context"]
-            except Exception:
-                logger.exception("active project digest for chat failed")
-            if _ctx_res is not None:
-                extra = []
-                if _ctx_res.refers_to_prior and _ctx_res.target_path:
-                    extra.append(
-                        f"resolved_prior_project path={_ctx_res.target_path} "
-                        f"kind={_ctx_res.target_kind} label={_ctx_res.target_label} "
-                        f"confidence={_ctx_res.confidence:.2f}"
-                    )
-                if _ctx_res.source_request_preview:
-                    extra.append(
-                        "prior_source_preview=" + _ctx_res.source_request_preview[:160]
-                    )
-                if extra:
-                    mem_ctx = (mem_ctx + "\n\n" + "\n".join(extra)).strip()
-            if _weak_spec:
-                mem_ctx = (
-                    (mem_ctx + "\n\n") if mem_ctx else ""
-                ) + (
-                    "note: user message looks like a bot request but may lack "
-                    "actionable commands or detail; act as senior dev — ask one "
-                    "precise gap question or route generate_bot if enough."
-                )
-            _adv_ai = (context.user_data or {}).get("advanced_brief_ai") or ""
-            if _adv_ai:
-                mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + _adv_ai
-            if (context.user_data or {}).get("advanced_brief", {}).get("intent_advanced"):
-                mem_ctx = ((mem_ctx + "\n\n") if mem_ctx else "") + (
-                    "note: user seeks planning/architecture/version guidance; "
-                    "answer as senior partner using only dynamic project evidence."
-                )
-            sc = await asyncio.to_thread(
-                smart_chat_reply,
-                request,
-                memory_context=mem_ctx,
-            )
-            sc_type = getattr(sc, "type", "") or ""
-            sc_text = (getattr(sc, "text", None) or "").strip()
-            sc_cap = getattr(sc, "capability_id", None) or ""
-            sc_conf = float(getattr(sc, "confidence", 0) or 0)
-
-            if sc_type in ("recommend", "route") and sc_conf >= 0.55 and sc_cap == "generate_bot":
-                # Only this path may fall through to formal generation.
-                _ai_route_generate = True
-                if sc_text and _mem:
-                    _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
-                    _mem.set_last(intent=request[:200], capability=sc_cap)
-                pass
-            elif sc_type in ("recommend", "route") and sc_conf >= 0.55 and sc_cap in _hard_caps:
-                # Execute engines instead of stopping at AI acknowledgement text.
-                if _mem:
-                    _mem.set_last(intent=request[:200], capability=sc_cap)
-                if sc_cap == "clone_repo":
-                    try:
-                        from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
-                            smart_clone,
-                        )
-                        from telegram_bot_engine.services.user_sandbox import (
-                            get_user_sandbox,
-                        )
-                        status = await message.reply_text(sc_text or "…")
-                        await context.bot.send_chat_action(
-                            chat_id=message.chat_id, action=ChatAction.TYPING
-                        )
-                        try:
-                            dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="clone")
-                        except Exception:
-                            dest = Path(OUTPUT_DIR) / "clones"
-                            dest.mkdir(parents=True, exist_ok=True)
-
-                        def _do_clone():
-                            return smart_clone(request, dest_dir=dest)
-
-                        result = await asyncio.to_thread(_do_clone)
-                        ok = bool(getattr(result, "ok", False) or getattr(result, "path", None))
-                        path = getattr(result, "path", None) or ""
-                        url = getattr(result, "url", None) or ""
-                        msg = getattr(result, "message", None) or (
-                            f"path={path}" if path else str(result)[:300]
-                        )
-                        await status.edit_text(msg[:3500])
-                        if ok and path:
-                            context.user_data["active_repo"] = {
-                                "path": path,
-                                "url": url,
-                                "contract": {},
-                            }
-                            try:
-                                from telegram_bot_engine.services.user_sandbox import (
-                                    get_user_sandbox,
-                                )
-                                get_user_sandbox(uid, OUTPUT_DIR).register_clone(
-                                    path, url=url, label=Path(path).name
-                                )
-                            except Exception:
-                                logger.exception("register_clone after AI route failed")
-                        return
-                    except Exception:
-                        logger.exception("AI-routed clone failed")
-                        # fall through rather than silent stop
-                elif sc_cap == "repo_develop":
-                    active = (context.user_data or {}).get("active_repo") or {}
-                    if active.get("path") and Path(active["path"]).exists():
-                        try:
-                            from telegram_bot_engine.services.repo_dev import (
-                                handle_repo_request,
-                            )
-                            status = await message.reply_text(sc_text or "…")
-                            await context.bot.send_chat_action(
-                                chat_id=message.chat_id, action=ChatAction.TYPING
-                            )
-                            dev = await asyncio.to_thread(
-                                handle_repo_request,
-                                request,
-                                active["path"],
-                                contract_dict=active.get("contract"),
-                            )
-                            out = getattr(dev, "message", "") or ""
-                            if getattr(dev, "changed_files", None):
-                                out += "\n" + ", ".join(dev.changed_files[:12])
-                            await status.edit_text((out or str(dev))[:3500])
-                            return
-                        except Exception:
-                            logger.exception("AI-routed repo_develop failed")
-                    elif sc_text:
-                        await message.reply_text(sc_text)
-                        return
-                elif sc_text:
-                    # host_* and other caps: acknowledge; specific handlers may need token next
-                    if _mem:
-                        _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap})
-                    await message.reply_text(sc_text)
-                    return
-            elif sc_text:
-                if _mem:
-                    _mem.add_turn("assistant", sc_text, meta={"capability": sc_cap or "chat"})
-                    if sc_cap:
-                        _mem.set_last(intent=request[:200], capability=sc_cap)
-                await message.reply_text(sc_text)
-                return
-        except Exception:
-            logger.exception("developer partner chat failed")
-            # AI failed: never invent a generation for non-spec chat (e.g. اهلا)
-            if not _is_bot_spec:
-                return
+    # Non-bot, non-hard messages: short deterministic help (no AI)
+    if not _is_hard and not _is_bot_spec:
+        help_ar = (
+            "أرسل وصفاً واضحاً للبوت الذي تريده، مثلاً:\n"
+            "• بوت يرد على الرسائل\n"
+            "• بوت فيه /start و /help\n"
+            "أو استخدم الأوامر: /start /help /status"
+        )
+        await message.reply_text(help_ar)
+        return
 
     # ------------------------------------------------------------------
-    # Generate ONLY when AI routed generate_bot OR strong bot specification.
-    # Greetings / small-talk must never reach formal generation.
+    # Generate only on explicit generate route or strong bot specification.
+    # Greetings / small-talk never reach generation (handled above).
     # ------------------------------------------------------------------
     _strong_bot_spec = bool(
         _is_bot_spec
@@ -908,42 +752,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         errors = getattr(result, "errors", []) or []
         stages = getattr(result, "stages", []) or []
         meta = getattr(result, "metadata", None) or {}
-
-        # Hollow contract → AI partner asks for missing structure (dynamic, no templates)
-        if (not success) and (
-            meta.get("needs_richer_spec")
-            or "hollow_contract" in errors
-        ):
-            try:
-                from telegram_bot_engine.chat_ai import smart_chat_reply
-                cdict = meta.get("contract") or {}
-                mem_ctx = _mem.context_for_ai() if _mem else ""
-                mem_ctx = (
-                    (mem_ctx + "\n\n") if mem_ctx else ""
-                ) + (
-                    "generation_blocked_hollow_contract\n"
-                    + "contract=" + str(cdict)[:800]
-                    + "\nnote: as senior partner, ask only for the missing structure "
-                    "evidenced by gaps (commands/fields/flows) using the user's language; "
-                    "do not invent domain features; do not claim a bot was generated."
-                )
-                sc = await asyncio.to_thread(
-                    smart_chat_reply,
-                    request,
-                    memory_context=mem_ctx,
-                )
-                sc_text = (getattr(sc, "text", None) or "").strip()
-                if sc_text:
-                    if _mem:
-                        _mem.add_turn(
-                            "assistant",
-                            sc_text,
-                            meta={"capability": "richer_spec"},
-                        )
-                    await status_msg.edit_text(sc_text[:3500])
-                    return
-            except Exception:
-                logger.exception("hollow contract AI follow-up failed")
 
         ok_stages = sum(1 for s in stages if getattr(s, "success", False))
         total_stages = len(stages)
