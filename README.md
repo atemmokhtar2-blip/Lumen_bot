@@ -43,7 +43,25 @@ python api_main.py
 | GET | `/v1/usage` | الاستهلاك الشهري |
 | GET/POST | `/v1/invoices` | فواتير |
 | GET | `/v1/dashboard` | لوحة مجمّعة |
-| POST | `/v1/billing/webhook/stripe` | جاهز لـ Stripe |
+| POST | `/v1/billing/checkout` | بدء Stripe Checkout للترقية |
+| GET | `/v1/billing/checkout/success` | عودة بعد الدفع + تفعيل الخطة |
+| GET | `/v1/billing/checkout/cancel` | إلغاء الدفع |
+| POST | `/v1/billing/portal` | بوابة إدارة الاشتراك (Stripe Portal) |
+| POST | `/v1/billing/webhook/stripe` | Webhook رسمي (تحقق توقيع) |
+| POST | `/v1/billing/dev/activate` | تفعيل خطة بدون Stripe (تطوير فقط) |
+
+### Stripe
+
+1. أنشئ Products/Prices في Stripe لـ `pro` و `business`
+2. ضع المتغيرات:
+   - `STRIPE_SECRET_KEY`
+   - `STRIPE_WEBHOOK_SECRET`
+   - `STRIPE_PRICE_PRO` / `STRIPE_PRICE_BUSINESS`
+   - `PUBLIC_BASE_URL` (رابط عام يصل لـ webhook)
+3. Webhook endpoint: `POST /v1/billing/webhook/stripe`  
+   أحداث: `checkout.session.completed`, `invoice.paid`, `customer.subscription.*`
+4. العميل يستدعي `POST /v1/billing/checkout` بـ `{ "plan_id": "pro" }` ويُحوَّل إلى `url`
+
 
 ### الخطط
 

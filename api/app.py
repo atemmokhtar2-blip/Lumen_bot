@@ -45,6 +45,8 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/plans", tenants.list_plans)
     app.router.add_post("/v1/tenants", tenants.create_tenant)
     app.router.add_post("/v1/billing/webhook/stripe", billing.stripe_webhook)
+    app.router.add_get("/v1/billing/checkout/success", billing.checkout_success)
+    app.router.add_get("/v1/billing/checkout/cancel", billing.checkout_cancel)
     # Authenticated
     app.router.add_get("/v1/me", tenants.me)
     app.router.add_post("/v1/me/rotate_key", tenants.rotate_key)
@@ -57,6 +59,9 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/usage", billing.usage)
     app.router.add_get("/v1/invoices", billing.invoices)
     app.router.add_post("/v1/invoices", billing.create_invoice)
+    app.router.add_post("/v1/billing/checkout", billing.checkout)
+    app.router.add_post("/v1/billing/portal", billing.portal)
+    app.router.add_post("/v1/billing/dev/activate", billing.dev_activate)
     app.router.add_get("/v1/dashboard", dashboard.overview)
     return app
 
