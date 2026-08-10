@@ -1,13 +1,12 @@
 """
-Chat AI layer — Hugging Face only.
+Chat AI layer — optional guidance / translation only.
 
 Roles:
   - SpecTranslator: speech → structured specification JSON (translate only, no code)
-  - SmartChat: optional guidance (must not write code)
+  - SmartChat: optional guidance replies (must not write project code)
 
-Never import this package from legacy formal path (removed) internals.
-Formal engine remains the only code generator.
-No g4f or third-party free AI clients.
+Code generation is handled exclusively by the zero-AI path (spec_core).
+This package is never used by generate_bot for emitting project files.
 """
 
 from .smart_chat import SmartChatResult, smart_chat_reply

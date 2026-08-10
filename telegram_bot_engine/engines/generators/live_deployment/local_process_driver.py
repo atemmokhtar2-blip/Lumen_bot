@@ -32,25 +32,30 @@ _RUNNING: Dict[str, dict] = {}
 def _apply_resource_limits() -> None:
     """Apply conservative resource limits to the child process (best-effort).
 
-    This is NOT a full sandbox (no seccomp/network isolation), but reduces
-    damage from runaway or malicious generated code: CPU time, memory,
-    open files, and process count.
+    This is NOT a full sandbox (no seccomp / network / filesystem isolation).
+    Prefer the Docker driver whenever possible. These limits only reduce
+    damage from runaway or malicious generated code: CPU time, address
+    space, open files, and process count.
     """
     try:
         import resource
-        # Soft/hard limits
-        # CPU: 10 minutes
-        resource.setrlimit(resource.RLIMIT_CPU, (600, 600))
-        # Address space ~512 MiB (may be ignored on some platforms)
+        # CPU: 5 minutes hard limit
+        resource.setrlimit(resource.RLIMIT_CPU, (300, 300))
+        # Address space ~256 MiB (may be ignored on some platforms)
         try:
-            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
         except (ValueError, OSError):
             pass
         # Open files
-        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
         # Max processes / threads
         try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+            resource.setrlimit(resource.RLIMIT_NPROC, (24, 24))
+        except (ValueError, OSError):
+            pass
+        # Core dumps off
+        try:
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         except (ValueError, OSError):
             pass
     except Exception as exc:

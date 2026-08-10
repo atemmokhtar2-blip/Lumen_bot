@@ -3,14 +3,17 @@ Docker Process Driver — strong per-user isolation for generated bots.
 
 Each user's bot runs in its own container with:
   - unique name (tbe-u{user_id}-{short_id})
-  - memory / CPU / pids limits
-  - dropped capabilities, no-new-privileges
-  - read-only rootfs + tmpfs for /tmp
-  - only the project directory mounted
-  - minimal env (bot token only, no host AI keys)
-  - outbound network (needed for Telegram API) but no published ports
+  - memory / CPU / pids / ulimit limits
+  - dropped ALL capabilities, no-new-privileges
+  - read-only rootfs + constrained tmpfs
+  - only the user's project directory mounted (scoped sandbox path)
+  - minimal env (bot token only — never host TELEGRAM_BOT_TOKEN or AI keys)
+  - outbound network only (bridge, no published ports)
+  - non-root user when possible, restart=no, log size limits
+  - labels for cleanup and ownership tracking
 
-Falls back gracefully when Docker is unavailable.
+This layer protects the main generator bot from any generated user code.
+Falls back gracefully when Docker is unavailable (local driver with limits).
 """
 
 from __future__ import annotations
@@ -39,10 +42,12 @@ _log = logging.getLogger("engine.live_deployment.docker")
 _RUNNING: Dict[str, dict] = {}
 
 _DEFAULT_IMAGE = os.environ.get("TBE_DOCKER_IMAGE", "python:3.11-slim")
-_MEMORY = os.environ.get("TBE_DOCKER_MEMORY", "256m")
-_CPUS = os.environ.get("TBE_DOCKER_CPUS", "0.5")
-_PIDS = os.environ.get("TBE_DOCKER_PIDS", "64")
+_MEMORY = os.environ.get("TBE_DOCKER_MEMORY", "192m")
+_CPUS = os.environ.get("TBE_DOCKER_CPUS", "0.4")
+_PIDS = os.environ.get("TBE_DOCKER_PIDS", "48")
 _TIMEOUT_PULL = int(os.environ.get("TBE_DOCKER_PULL_TIMEOUT", "120"))
+# Non-root UID/GID inside container (nobody-like). Image must have this user or we fall back.
+_RUN_AS_USER = os.environ.get("TBE_DOCKER_USER", "65534:65534")
 
 
 def docker_available() -> bool:
@@ -82,12 +87,20 @@ def _find_entry_point(project_path: Path) -> Optional[Path]:
 def _extract_user_id(project_path: Path) -> str:
     """Best-effort extract telegram user id from sandbox path layout.
 
-    Expected: .../users/<user_id>/projects/<project_id>/
+    Supports both layouts:
+      .../users/<user_id>/projects/<project_id>/
+      .../users/<xx>/<yy>/<user_id>/projects/<project_id>/   (sharded)
     """
-    parts = project_path.resolve().parts
+    parts = list(project_path.resolve().parts)
     try:
         if "users" in parts:
             idx = parts.index("users")
+            # Prefer the last numeric segment after "users" that looks like a telegram id
+            for i in range(idx + 1, min(idx + 5, len(parts))):
+                seg = parts[i]
+                if seg.isdigit() and len(seg) >= 5:
+                    return _safe_name(seg, 24)
+            # Fallback: first segment after users
             if idx + 1 < len(parts):
                 return _safe_name(parts[idx + 1], 24)
     except Exception:
@@ -190,28 +203,41 @@ class DockerProcessDriver(DeploymentProvider):
             "--label", f"tbe.project={path}",
             "--label", f"tbe.user={user_seg}",
             "--label", "tbe.managed=1",
-            # Resource limits
+            "--label", "tbe.isolation=strong",
+            # Never auto-restart a potentially malicious / broken bot
+            "--restart", "no",
+            # Resource limits (tight defaults protect the host)
             f"--memory={_MEMORY}",
+            f"--memory-swap={_MEMORY}",  # no extra swap
             f"--cpus={_CPUS}",
             f"--pids-limit={_PIDS}",
+            "--ulimit", "nproc=32:32",
+            "--ulimit", "nofile=128:128",
+            # Log size limit so runaway logging cannot fill disk
+            "--log-driver", "json-file",
+            "--log-opt", "max-size=2m",
+            "--log-opt", "max-file=2",
             # Security hardening
             "--security-opt", "no-new-privileges:true",
             "--cap-drop", "ALL",
             "--read-only",
             # Writable spaces only where needed (deps + temp)
             # /tmp must allow exec for pip wheels / native extensions during install
-            "--tmpfs", "/tmp:rw,exec,nosuid,size=128m",
-            "--tmpfs", "/var/tmp:rw,noexec,nosuid,size=16m",
+            "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=96m",
+            "--tmpfs", "/var/tmp:rw,noexec,nosuid,nodev,size=16m",
             # Network: allow outbound (Telegram API) but no published ports
             "--network", "bridge",
-            # Mount project (rw limited to this user's project dir)
+            # Mount ONLY this user's project directory (sandbox path)
             "-v", f"{path}:/app:rw",
             "-w", "/app",
-            # Minimal env — never pass host AI keys
+            # Run as non-root when possible (best-effort; some images lack the uid)
+            "--user", _RUN_AS_USER,
+            # Minimal env — never pass host AI keys or host bot token
             "-e", "PYTHONUNBUFFERED=1",
             "-e", "PYTHONDONTWRITEBYTECODE=1",
             "-e", "TBE_SANDBOX=docker",
             "-e", "TBE_ISOLATED=1",
+            "-e", "HOME=/tmp",
             "-e", "PYTHONPATH=/tmp/deps",
             "-e", f"BOT_TOKEN={bot_token}",
             "-e", f"TELEGRAM_BOT_TOKEN={bot_token}",
@@ -242,6 +268,37 @@ class DockerProcessDriver(DeploymentProvider):
                 status=DEPLOY_FAILED,
                 message=f"docker run failed: {type(e).__name__}: {e}",
             )
+
+        # If --user caused failure (image has no matching uid), retry without it
+        if proc.returncode != 0 and "--user" in cmd:
+            err_txt = ((proc.stderr or "") + (proc.stdout or "")).lower()
+            if any(k in err_txt for k in ("unable to find user", "unknown user", "no such user", "invalid user")):
+                _log.info("Docker --user %s failed; retrying without non-root user", _RUN_AS_USER)
+                cleaned: List[str] = []
+                skip_next = False
+                for c in cmd:
+                    if skip_next:
+                        skip_next = False
+                        continue
+                    if c == "--user":
+                        skip_next = True
+                        continue
+                    cleaned.append(c)
+                try:
+                    proc = subprocess.run(
+                        cleaned,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False,
+                    )
+                except Exception as e:
+                    return DeploymentStatus(
+                        provider=self.name,
+                        deployment_id=dep_id,
+                        status=DEPLOY_FAILED,
+                        message=f"docker run (fallback) failed: {type(e).__name__}: {e}",
+                    )
 
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()[:400]

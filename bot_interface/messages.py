@@ -28,7 +28,7 @@ from .helpers import (
 from .live import handle_live_run_token, handle_live_deploy_token
 
 # Simple in-memory rate limit: max N messages per user per window (seconds).
-# Prevents cost abuse of AI providers. Single-process only.
+# Limits abuse (generation + chat). Single-process only.
 _RATE_WINDOW = 60.0
 _RATE_MAX = int(os.environ.get("RATE_LIMIT_PER_MINUTE") or "12")
 _user_hits: dict[int, list[float]] = defaultdict(list)

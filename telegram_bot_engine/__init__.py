@@ -1,14 +1,15 @@
 """
 Telegram Bot Generation Engine
 
-Active path (Formal engine REMOVED permanently from generation):
+Active path (zero-AI, deterministic):
   user text
-    → Execution Planner (OpenAI / Hugging Face / Groq)
-    → Plan-driven Codegen
-    → project files on disk
+    → spec_core presets + deterministic coding engines
+    → project files on disk (inside per-user sandbox)
 
+AI path (Execution Planner / plan-driven codegen) is disabled permanently
+for generate_bot. Optional Chat AI is only used for guidance replies.
 No formal/DSL/transpiler codegen path.
-No domain templates or canned packs.
+No domain templates or canned packs for generation.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def _maybe_run_git_stage(
     stages: list,
 ) -> dict | None:
     """
-    Optionally run GitOperationsEngine after successful formal generation.
+    Optionally run GitOperationsEngine after successful generation.
 
     Triggered only when the user text explicitly mentions git-related actions
     (push / pull / commit / clone / git / بوش / اسحب / اعمل كوميت ...).
