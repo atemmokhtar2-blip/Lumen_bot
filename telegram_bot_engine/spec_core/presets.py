@@ -482,32 +482,169 @@ def detect_preset(request: str) -> str | None:
     return ranked[0][0]
 
 
-def detect_preset_stack(request: str, *, limit: int = 8) -> list[str]:
-    """Multi-domain stack; complex requests get denser enterprise backbone."""
-    ranked = score_presets(request)
-    out: list[str] = []
-    for name, _score in ranked:
-        if name not in out:
-            out.append(name)
-        if len(out) >= limit:
-            break
+def _request_signals(request: str) -> dict[str, float]:
+    """Fine-grained intent signals for conflict resolution (not just pack scores)."""
     t = _norm(request)
-    complexity_keys = (
-        "متكامل", "كامل", "enterprise", "all-in-one", "all in one", "شامل",
-        "معقد", "ضخم", "احترافي", "production", "suite", "منصة", "platform",
-        "multi", "متعدد", "كل شيء", "rule them all", "جاهز للسوق", "operating system",
-    )
-    is_complex = any(k in t for k in complexity_keys) or len(t) > 120 or len(out) >= 3
-    if is_complex:
-        for b in ("commerce_pro", "group_management", "support_pro", "crm", "education", "growth", "wallet", "community"):
+    def n(keys: Iterable[str]) -> float:
+        return float(sum(1 for k in keys if _token_hit(t, k)))
+
+    return {
+        "vendor": n(("vendor", "vendors", "بائع", "بائعين", "multi-vendor", "متعدد البائعين", "storefront")),
+        "escrow": n(("escrow", "ضمان", "ضمانة")),
+        "cart": n(("سلة", "cart", "checkout", "إتمام شراء")),
+        "catalog": n(("كتالوج", "catalog", "متجر", "shop", "منتجات")),
+        "fleet": n(("أسطول", "fleet", "مندوب", "courier", "مستودع", "warehouse", "hub")),
+        "track_only": n(("تتبع", "track", "tracking", "شحنة")),
+        "ledger": n(("ledger", "دفتر", "محاسبة", "accounting", "kyc", "aml", "خزينة", "treasury")),
+        "wallet_only": n(("محفظة", "wallet", "شحن رصيد", "topup", "top-up")),
+        "seats": n(("مقعد", "seats", "seat", "tenant", "workspace", "rbac", "sso", "quota")),
+        "trial": n(("trial", "تجربة مجانية", "تجربة")),
+        "commerce_explicit": n(("commerce pro", "متجر متكامل", "متجر احترافي", "full ecommerce", "commerce suite")),
+        "platform": n(("منصة", "platform", "operating system", "suite", "enterprise", "متكامل", "شامل")),
+        "saas_word": n(("saas", "ساس", "b2b")),
+        "logistics_word": n(("لوجستيات", "logistics", "last mile", "lastmile", "manifest")),
+        "finance_word": n(("مالية", "finance", "محاسبة", "accounting")),
+        "marketplace_word": n(("marketplace", "سوق", "classified", "سوق إلكتروني")),
+    }
+
+
+def prioritize_preset_stack(
+    ranked: list[tuple[str, float]],
+    request: str,
+    *,
+    limit: int = 6,
+) -> list[str]:
+    """Terrifyingly smart merge priority for overlapping domains.
+
+    Rules (highest impact first):
+    1) Explicit commerce_pro phrase wins pure shop-suite primary.
+    2) Marketplace beats shop when vendor/escrow/multi-vendor signals exist.
+    3) Logistics beats thin delivery when fleet/warehouse/route signals exist.
+    4) Finance beats wallet when ledger/KYC/accounting signals exist.
+    5) SaaS beats bare subscriptions when seats/trial/tenant/RBAC signals exist.
+    6) Never inject commerce_pro into pure SaaS / pure logistics / pure finance.
+    7) Secondary domains keep order by *adjusted* score, not raw keyword count only.
+    """
+    if not ranked:
+        return []
+
+    sig = _request_signals(request)
+    scores = {n: float(s) for n, s in ranked}
+
+    # Specificity bonuses / penalties
+    if sig["vendor"] or sig["escrow"] or sig["marketplace_word"]:
+        scores["marketplace"] = scores.get("marketplace", 0.0) + 4.0 + 1.5 * sig["vendor"] + 2.0 * sig["escrow"]
+        scores["shop"] = scores.get("shop", 0.0) - 2.5
+        if not sig["commerce_explicit"]:
+            scores["commerce_pro"] = scores.get("commerce_pro", 0.0) - 1.5
+
+    if sig["fleet"] or sig["logistics_word"]:
+        scores["logistics"] = scores.get("logistics", 0.0) + 4.0 + 1.2 * sig["fleet"]
+        scores["delivery"] = scores.get("delivery", 0.0) - 2.0
+
+    if sig["ledger"] or sig["finance_word"]:
+        scores["finance"] = scores.get("finance", 0.0) + 4.0 + 1.2 * sig["ledger"]
+        scores["wallet"] = scores.get("wallet", 0.0) - 1.5
+
+    if sig["seats"] or sig["trial"] or sig["saas_word"]:
+        scores["saas"] = scores.get("saas", 0.0) + 4.0 + 1.2 * sig["seats"] + 1.0 * sig["trial"]
+        scores["subscriptions"] = scores.get("subscriptions", 0.0) - 1.2
+
+    if sig["commerce_explicit"]:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 6.0
+
+    if sig["cart"] and not (sig["vendor"] or sig["escrow"]):
+        scores["shop"] = scores.get("shop", 0.0) + 3.5
+        # bare shop/cart — do NOT escalate to commerce_pro unless explicit
+        if not sig["commerce_explicit"]:
+            scores["commerce_pro"] = scores.get("commerce_pro", 0.0) - 3.0
+
+    # Wallet top-up phrasing often contains "شحن" — do not treat as logistics
+    if sig["wallet_only"] and not sig["logistics_word"] and not sig["fleet"]:
+        scores["logistics"] = scores.get("logistics", 0.0) - 5.0
+        scores["delivery"] = scores.get("delivery", 0.0) - 3.0
+        scores["wallet"] = scores.get("wallet", 0.0) + 3.0
+
+    # Platform multi-domain: boost co-mentioned complex systems
+    if sig["platform"]:
+        for d in ("saas", "marketplace", "logistics", "finance"):
+            if scores.get(d, 0) > 0:
+                scores[d] += 1.5
+
+    # Order-of-mention: earlier domain keyword in the request wins ties
+    tnorm = _norm(request)
+    mention_pos: dict[str, int] = {}
+    markers = {
+        "saas": ("saas", "ساس", "workspace", "مقعد", "seats"),
+        "marketplace": ("marketplace", "سوق", "escrow", "multi-vendor", "بائعين"),
+        "logistics": ("logistics", "لوجستيات", "أسطول", "fleet", "مستودع"),
+        "finance": ("finance", "مالية", "ledger", "محاسبة", "kyc"),
+        "commerce_pro": ("commerce pro", "متجر متكامل", "commerce suite"),
+        "shop": ("سلة", "cart", "كتالوج", "catalog", "متجر"),
+        "wallet": ("محفظة", "wallet"),
+    }
+    for dom, words in markers.items():
+        positions = [tnorm.find(w) for w in words if w in tnorm]
+        positions = [x for x in positions if x >= 0]
+        if positions:
+            mention_pos[dom] = min(positions)
+            # slight bonus for appearing early
+            scores[dom] = scores.get(dom, 0.0) + max(0.0, 2.0 - (mention_pos[dom] / 40.0))
+
+    # Drop noise domains with non-positive adjusted score
+    # Tie-break: higher score, then earlier mention, then name
+    def _sort_key(item: tuple[str, float]) -> tuple:
+        name, sc = item
+        pos = mention_pos.get(name, 10_000)
+        return (-sc, pos, name)
+
+    ordered = sorted(scores.items(), key=_sort_key)
+    out = [n for n, s in ordered if s > 0]
+
+    primary = out[0] if out else None
+
+    # Conflict pruning
+    pure_complex = primary in {"saas", "logistics", "finance", "marketplace"}
+    if pure_complex and not sig["commerce_explicit"]:
+        # keep commerce_pro only if strong residual shop suite signal without marketplace primary
+        if primary != "marketplace":
+            out = [x for x in out if x != "commerce_pro"]
+        if primary == "marketplace":
+            out = [x for x in out if x not in {"shop"}]
+        if primary == "logistics":
+            out = [x for x in out if x != "delivery"]
+        if primary == "finance":
+            out = [x for x in out if x != "wallet"] or out
+            out = [x for x in out if x != "wallet"]
+        if primary == "saas":
+            out = [x for x in out if x != "subscriptions"]
+
+    if primary == "shop" and not sig["commerce_explicit"]:
+        out = [x for x in out if x != "commerce_pro"]
+
+    if "commerce_pro" in out:
+        out = [x for x in out if x not in {"shop", "subscriptions", "points", "growth"} or x == "commerce_pro"]
+
+    # Controlled backbone: only for true multi-domain platform asks
+    multi_complex = sum(1 for d in ("saas", "marketplace", "logistics", "finance", "commerce_pro") if d in out)
+    if multi_complex >= 2 or (sig["platform"] and multi_complex >= 1):
+        for b in ("support_pro", "crm"):
             if b not in out:
                 out.append(b)
-            if len(out) >= 8:
-                break
-    if "commerce_pro" in out:
-        skip = {"shop", "subscriptions", "points", "wallet", "growth"}
-        out = [x for x in out if x not in skip or x == "commerce_pro"]
-    return out[:8 if is_complex else limit]
+    elif primary in {"group_management", "support_tickets", "tasks"}:
+        pass
+    else:
+        # avoid stuffing unrelated enterprise packs into focused bots
+        out = [x for x in out if x not in {"education", "community", "events"} or scores.get(x, 0) >= 3.0]
+
+    # Cap stack
+    return out[: max(1, min(limit, 7))]
+
+
+def detect_preset_stack(request: str, *, limit: int = 8) -> list[str]:
+    """Multi-domain stack with smart merge priority (conflict-aware)."""
+    ranked = score_presets(request)
+    return prioritize_preset_stack(ranked, request, limit=limit)
 
 
 
@@ -528,18 +665,54 @@ def compose_session(
         other = session_for_preset(extra, user_id=user_id)
         s.selected |= other.selected
 
-    # Domain pack densify — complex systems get real registry keys
-    names = set(presets)
-    if "saas" in names:
-        s.selected.update(_saas_pack())
-    if "marketplace" in names:
-        s.selected.update(_marketplace_pack())
-    if "logistics" in names:
-        s.selected.update(_logistics_pack())
-    if "finance" in names:
-        s.selected.update(_finance_pack())
-    if "commerce_pro" in names or "shop" in names:
+    # Smart domain densify: primary = full pack, secondary = focused subset
+    names = list(presets)
+    primary = names[0] if names else ""
+    secondary = set(names[1:])
+
+    def _take(pack: tuple[str, ...], n: int) -> list[str]:
+        core = ["start", "help", "lang"]
+        body = [x for x in pack if x not in core]
+        return list(dict.fromkeys(core + body[: max(0, n - len(core))]))
+
+    if primary == "saas" or "saas" in secondary:
+        pack = _saas_pack()
+        s.selected.update(pack if primary == "saas" else _take(pack, 36))
+    if primary == "marketplace" or "marketplace" in secondary:
+        pack = _marketplace_pack()
+        s.selected.update(pack if primary == "marketplace" else _take(pack, 36))
+    if primary == "logistics" or "logistics" in secondary:
+        pack = _logistics_pack()
+        s.selected.update(pack if primary == "logistics" else _take(pack, 36))
+    if primary == "finance" or "finance" in secondary:
+        pack = _finance_pack()
+        s.selected.update(pack if primary == "finance" else _take(pack, 36))
+    if primary == "commerce_pro":
         s.selected.update(_COMMERCE_PRO_CAPS)
+    elif "commerce_pro" in secondary:
+        s.selected.update(_take(_COMMERCE_PRO_CAPS, 40))
+    elif primary == "shop" or "shop" in secondary:
+        s.selected.update(_SHOP_CAPS)
+
+    # Primary-aware bot identity (name + description)
+    _identity = {
+        "saas": ("saas_platform_bot", "SaaS platform: seats, trials, quotas, RBAC, billing"),
+        "marketplace": ("marketplace_platform_bot", "Marketplace: vendors, escrow, listings, payouts"),
+        "logistics": ("logistics_platform_bot", "Logistics: fleet, warehouses, routes, POD tracking"),
+        "finance": ("finance_ops_bot", "Finance ops: ledger, KYC, payouts, invoices"),
+        "commerce_pro": ("commerce_pro_bot", "Commerce pro: shop, cart, subs, points, wallet, growth"),
+        "shop": ("shop_bot", "Shop: catalog, cart, orders"),
+    }
+    if not bot_name and primary in _identity:
+        nm, desc = _identity[primary]
+        s.set_name(nm)
+        s.set_description(desc)
+    elif primary in _identity and (not s.bot_name or s.bot_name in {
+        "group_admin_bot", "custom_bot", "my_bot", "market_bot"
+    }):
+        nm, desc = _identity[primary]
+        s.set_name(nm)
+        s.set_description(desc)
 
     # Intelligence: global / i18n language
     if _has_any(request, _I18N_KEYS):
@@ -571,14 +744,20 @@ def compose_session(
             "rule them all", "كل شيء", "شامل",
         )
     )
-    if len(presets) >= 3 or len(t) > 140 or complexity_hit:
+    multi_complex = sum(
+        1 for d in ("saas", "marketplace", "logistics", "finance", "commerce_pro")
+        if d in presets
+    )
+    # Only dump broad backbone when user clearly wants a huge multi-domain platform
+    if complexity_hit and multi_complex >= 2:
         for pack in (
-            _GROUP_CAPS, _SHOP_CAPS, _SUB_CAPS, _POINTS_CAPS, _GROWTH_CAPS,
-            _WALLET_CAPS, _SUPPORT_PRO_CAPS, _CRM_CAPS, _EDU_CAPS,
-            _COMMUNITY_CAPS, _EVENTS_CAPS, _SAAS_CAPS, _CONTEST_CAPS,
+            _SUPPORT_PRO_CAPS, _CRM_CAPS, _GROWTH_CAPS, _WALLET_CAPS,
         ):
             s.selected.update(pack)
-        s.selected.update(_COMMERCE_PRO_CAPS)
+        s.selected.add("lang")
+    elif complexity_hit and multi_complex == 0 and len(presets) >= 3:
+        # legacy multi-intent without complex systems — light backbone only
+        s.selected.update(_SUPPORT_PRO_CAPS)
         s.selected.add("lang")
 
     # UI language: Arabic request → Arabic menu/welcome
