@@ -502,7 +502,8 @@ def _request_signals(request: str) -> dict[str, float]:
         "commerce_explicit": n(("commerce pro", "متجر متكامل", "متجر احترافي", "full ecommerce", "commerce suite")),
         "platform": n(("منصة", "platform", "operating system", "suite", "enterprise", "متكامل", "شامل")),
         "saas_word": n(("saas", "ساس", "b2b")),
-        "logistics_word": n(("لوجستيات", "logistics", "last mile", "lastmile", "manifest")),
+        "logistics_word": n(("لوجستيات", "logistics", "last mile", "lastmile", "manifest",
+                            "shipment", "shipments", "pod", "warehouse", "مستودع", "شحنة", "شحنات")),
         "finance_word": n(("مالية", "finance", "محاسبة", "accounting")),
         "marketplace_word": n(("marketplace", "سوق", "classified", "سوق إلكتروني")),
     }
@@ -560,7 +561,13 @@ def prioritize_preset_stack(
             scores["commerce_pro"] = scores.get("commerce_pro", 0.0) - 3.0
 
     # Wallet top-up phrasing often contains "شحن" — do not treat as logistics
-    if sig["wallet_only"] and not sig["logistics_word"] and not sig["fleet"]:
+    # Keep logistics when shipment/POD/track signals exist (6-month potato platforms)
+    if (
+        sig["wallet_only"]
+        and not sig["logistics_word"]
+        and not sig["fleet"]
+        and not sig.get("track_only")
+    ):
         scores["logistics"] = scores.get("logistics", 0.0) - 5.0
         scores["delivery"] = scores.get("delivery", 0.0) - 3.0
         scores["wallet"] = scores.get("wallet", 0.0) + 3.0
