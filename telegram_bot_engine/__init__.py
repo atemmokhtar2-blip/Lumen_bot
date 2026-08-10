@@ -13,6 +13,15 @@ No formal/DSL/transpiler codegen path.
 
 from __future__ import annotations
 
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # explicit for mypy/pylint/IDEs — no runtime cycle
+    from .pipeline import PipelineOrchestrator as PipelineOrchestrator
+    from .registry import EngineRegistry as EngineRegistry
+    from .core import bootstrap as bootstrap, build_configuration as build_configuration
+
+
 import os
 
 __all__ = [

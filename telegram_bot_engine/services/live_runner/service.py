@@ -1830,23 +1830,39 @@ def run_bot_project(
     entry_hint: str | None = None,
     run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
 ) -> LiveRunReport:
-    """Prefer Docker isolation when available; fall back to local process runner."""
-    prefer = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower()
-    if prefer not in {"0", "false", "no", "off"}:
+    """Run a generated bot under isolation.
+
+    SaaS default: Docker is REQUIRED (TBE_REQUIRE_DOCKER=1).
+    Local process is allowed only when TBE_ALLOW_LOCAL_PROCESS=1 (dev only).
+    """
+    import os as _os
+    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+    docker_err = ""
+    if prefer or require_docker:
         try:
             from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
                 DockerProcessDriver,
                 docker_available,
             )
-            if docker_available():
+            if not docker_available():
+                docker_err = "docker_daemon_unavailable"
+            else:
                 driver = DockerProcessDriver()
                 st = driver.deploy(
                     str(project_path),
-                    env_vars={"BOT_TOKEN": bot_token},
+                    env_vars={"BOT_TOKEN": bot_token, "TELEGRAM_BOT_TOKEN": bot_token},
                     service_name="live-run",
                 )
-                if st.status == "running":
-                    # Keep container alive for run_seconds then stop
+                if getattr(st, "status", "") == "running":
                     dep_id = st.deployment_id
                     lifetime = max(30.0, float(run_seconds))
 
@@ -1864,8 +1880,7 @@ def run_bot_project(
                         ok=True,
                         phase="run",
                         message=(
-                            f"✅ البوت شغال داخل حاوية Docker معزولة (~{mins} دقيقة).\n"
-                            f"• {st.message}"
+                            f"✅ البوت شغال داخل حاوية Docker معزولة (~{mins} دقيقة)"
                         ),
                         install_log="(docker image + pip inside container)",
                         run_log="\n".join(logs[-15:]) if logs else "(container started)",
@@ -1875,20 +1890,39 @@ def run_bot_project(
                         details={
                             "provider": "docker",
                             "deployment_id": dep_id,
-                            "service_id": st.service_id,
+                            "service_id": getattr(st, "service_id", ""),
                         },
                     )
-                # Docker tried but failed → fall through to local runner with a note
+                docker_err = getattr(st, "message", "") or "docker_deploy_failed"
                 __import__("logging").getLogger("live_runner").warning(
-                    "Docker deploy failed (%s), falling back to local process",
-                    st.message[:200],
+                    "Docker deploy failed: %s", str(docker_err)[:200]
                 )
         except Exception as docker_exc:
+            docker_err = str(docker_exc)
             __import__("logging").getLogger("live_runner").warning(
-                "Docker path unavailable: %s — using local process",
-                docker_exc,
+                "Docker path error: %s", docker_exc
             )
 
+    if require_docker and not allow_local:
+        return LiveRunReport(
+            ok=False,
+            phase="security",
+            message=(
+                "Docker مطلوب لتشغيل آمن وغير متاح أو فشل. "
+                "لا يُسمح بالتشغيل المحلي في وضع الإنتاج "
+                f"({docker_err or 'docker_required'})"
+            ),
+            install_log="",
+            run_log="",
+            warnings=["docker_required", "local_fallback_blocked"],
+            entry_point=entry_hint or "",
+            duration_ms=0.0,
+            details={"provider": "none", "error": docker_err or "docker_required"},
+        )
+
+    __import__("logging").getLogger("live_runner").warning(
+        "Using local process runner (dev only: TBE_ALLOW_LOCAL_PROCESS=1)"
+    )
     return LiveRunnerService().run(
         project_path=project_path,
         bot_token=bot_token,
