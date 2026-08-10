@@ -66,6 +66,12 @@ SYNONYM_GROUPS: dict[str, list[str]] = {
         "إهداء اشتراك", "لوحة متصدرين", "سلاسل", "إذاعة", "قاعدة معرفة",
         "وضع صيانة", "ولاء", "تحليلات", "إيرادات",
     ],
+    "security_ops": [
+        "أمن", "امن", "سيبراني", "cyber", "cybersecurity", "cyberguard",
+        "phishing", "تصيد", "تصيّد", "dns", "tls", "ssl", "spf", "dmarc",
+        "domain scan", "website scan", "فحص أمني", "ثغرة", "soc", "incident",
+        "شهادة", "security headers", "توعية أمنية", "نصائح أمان",
+    ],
 }
 
 DOMAIN_TO_PRESET = {
@@ -95,6 +101,7 @@ DOMAIN_TO_PRESET = {
     "events": "events",
     "crm": "crm",
     "commerce_pro": "commerce_pro",
+    "security_ops": "security_ops",
     "generic": "echo_basic",
 }
 
@@ -192,21 +199,24 @@ def detect_bot_request_arabic(text: str) -> tuple[str | None, float]:
 def extract_bot_name(text: str) -> str | None:
     norm = normalize_arabic(text)
     patterns = [
-        r"بوت\s+([^\s]{2,30})",
-        r"bot\s+([a-z0-9_\-]{2,30})",
-        r"اسمه?\s+([^\s]{2,30})",
-        r"named?\s+([a-z0-9_\-]{2,30})",
+        r"(?:اسمه|اسمها|يسمى|تسمى)\s+([A-Za-z0-9_\u0600-\u06FF\-]{2,40})",
+        r"(?:named|called)\s+([A-Za-z0-9_\-]{2,40})",
+        r"\bbot\s+(?:named\s+|called\s+)?([A-Za-z0-9_\-]{2,40})",
+        r"\b([A-Z][a-zA-Z0-9]{2,30}(?:Guard|Bot|Ops|Hub|Pro|App)?)\b",
     ]
+    stop = {
+        "لبيع", "فيه", "that", "with", "for", "اسمه", "اسمها", "تيليجرام",
+        "telegram", "bot", "بوت", "security_ops", "commerce_pro", "group",
+    }
     for pat in patterns:
-        m = re.search(pat, norm, re.I)
+        m = re.search(pat, text or "", re.I)
+        if not m:
+            m = re.search(pat, norm, re.I)
         if m:
             name = re.sub(r"[^\w\u0600-\u06FF\-]", "_", m.group(1))
             name = re.sub(r"_+", "_", name).strip("_")
-            if name and name not in {"لبيع", "فيه", "فيه", "that", "with", "for"}:
+            if name and name.lower() not in stop and len(name) >= 2:
                 return name[:40]
-    intents = classify_intent(text)
-    if intents:
-        return intents[0].domain[:40]
     return None
 
 

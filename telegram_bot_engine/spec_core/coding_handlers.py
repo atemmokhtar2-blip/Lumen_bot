@@ -1096,6 +1096,10 @@ def _emit_handlers(spec: BotSpec) -> str:
         elif cap.service == "security":
             if cap.method == "checklist":
                 lines.append("    await message.reply_text(security_svc.checklist())")
+            elif cap.method == "tips":
+                lines.append("    await message.reply_text(security_svc.tips())")
+            elif cap.method == "password_tips":
+                lines.append("    await message.reply_text(security_svc.password_tips())")
             elif cap.method in {"report_phish", "report_incident"}:
                 kind = "phish" if cap.method == "report_phish" else "incident"
                 lines.append("    if context.args:")
@@ -1124,6 +1128,16 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append(f"        await message.reply_text({ok!r})")
                 lines.append("    else:")
                 lines.append(f"        await message.reply_text({fail!r})")
+            elif cap.method in {
+                "dns_check", "mx_check", "tls_check", "http_check",
+                "headers_check", "domain_overview",
+            }:
+                lines.append("    if not context.args:")
+                lines.append(f"        await message.reply_text({fail!r} or 'أدخل النطاق: مثال example.com')")
+                lines.append("        return")
+                lines.append("    host = context.args[0]")
+                lines.append(f"    result = security_svc.{cap.method}(host)")
+                lines.append("    await message.reply_text(result)")
             else:
                 lines.append(f"    await message.reply_text({ok!r})")
 

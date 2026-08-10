@@ -131,6 +131,14 @@ _add(
     _c("sec_list_reports", "security", "list_reports", "بلاغات أمنية", "List sec reports", "admin", cat="security"),
     _c("sec_close_report", "security", "close_report", "إغلاق بلاغ أمني", "Close sec report", "admin", cat="security"),
     _c("sec_tips", "security", "tips", "نصائح أمان سريعة", "Quick security tips", cat="security"),
+    # Domain / surface checks — stdlib only (no offensive tooling)
+    _c("sec_dns_check", "security", "dns_check", "فحص سجلات DNS", "DNS A/AAAA lookup", cat="security"),
+    _c("sec_mx_check", "security", "mx_check", "فحص سجلات MX", "MX-oriented host lookup", cat="security"),
+    _c("sec_tls_check", "security", "tls_check", "فحص شهادة TLS/SSL", "TLS certificate overview", cat="security"),
+    _c("sec_http_check", "security", "http_check", "فحص حالة HTTP", "HTTP status probe", cat="security"),
+    _c("sec_headers_check", "security", "headers_check", "رؤوس أمان HTTP", "Security headers probe", cat="security"),
+    _c("sec_domain_overview", "security", "domain_overview", "نظرة عامة على النطاق", "Domain security overview", cat="security"),
+    _c("sec_password_tips", "security", "password_tips", "نصائح كلمات المرور", "Password hygiene tips", cat="security"),
 )
 
 # ── shop / payments (end-user commerce) ───────────────────────────────

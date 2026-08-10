@@ -150,8 +150,12 @@ _I18N_KEYS = (
 _BOOK_KEYS = ("حجز", "booking", "موعد", "appointment")
 _HR_KEYS = ("موارد بشرية", "hr", "إجازة", "حضور", "checkin")
 _SECURITY_KEYS = (
-    "امن", "أمن", "سيبراني", "security", "cyber", "phishing", "تصيد", "تصيّد",
-    "بلاغ", "incident", "soc", "توعية",
+    "امن", "أمن", "سيبراني", "security", "cyber", "cybersecurity", "cyberguard",
+    "phishing", "تصيد", "تصيّد", "بلاغ", "incident", "soc", "توعية",
+    "dns", "tls", "ssl", "spf", "dmarc", "mx records", "certificate", "شهادة",
+    "domain scan", "website scan", "فحص أمني", "فحص dns", "فحص الموقع",
+    "security headers", "رؤوس", "vulnerability", "ثغرة", "pentest",
+    "password", "كلمة المرور", "نصائح أمان", "domain scanner",
 )
 
 _GROUP_CAPS = (
@@ -188,8 +192,16 @@ _SUPPORT_CAPS = (
 )
 _NOTES_CAPS = ("start", "help", "note_add", "note_list", "note_delete")
 _SECURITY_CAPS = (
-    "start", "help", "sec_report_phish", "sec_report_incident",
-    "sec_checklist", "sec_list_reports", "sec_close_report", "rules", "my_id",
+    "start", "help", "lang",
+    "sec_report_phish", "sec_report_incident", "sec_checklist", "sec_tips",
+    "sec_list_reports", "sec_close_report", "sec_password_tips",
+    "sec_dns_check", "sec_mx_check", "sec_tls_check", "sec_http_check",
+    "sec_headers_check", "sec_domain_overview",
+    "project_create", "project_list", "project_view", "project_search",
+    "report_create", "report_list", "report_export",
+    "note_add", "note_list", "task_add", "task_list",
+    "ticket_open", "ticket_list", "ticket_status",
+    "rules", "my_id",
 )
 _SHOP_CAPS = (
     "start", "help", "shop_catalog", "shop_add_item", "shop_buy", "shop_orders",
@@ -513,7 +525,7 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     add("support_tickets", _SUPPORT_KEYS, 1.2)
     add("tasks", _TASK_KEYS, 1.0)
     add("notes", _NOTES_KEYS, 1.0)
-    add("security_ops", _SECURITY_KEYS, 1.3)
+    add("security_ops", _SECURITY_KEYS, 2.8)
     add("booking", _BOOK_KEYS, 1.3)
     add("hr", _HR_KEYS, 1.2)
     add("fitness", _FITNESS_KEYS, 1.9)
@@ -562,6 +574,19 @@ def score_presets(request: str) -> list[tuple[str, float]]:
             preset = DOMAIN_TO_PRESET.get(im.domain)
             if preset:
                 scores[preset] = scores.get(preset, 0.0) + float(im.score)
+    except Exception:
+        pass
+
+    # Cybersecurity dominance: do not let weak commerce pillars steal the stack
+    try:
+        from .domain_detector import detect as _dom_detect
+        if "cybersecurity" in _dom_detect(request):
+            sec = scores.get("security_ops", 0.0)
+            if sec > 0:
+                scores["security_ops"] = sec + 6.0
+            # Demote commerce when the ask is clearly defensive security
+            if scores.get("commerce_pro", 0) and sec >= scores.get("shop", 0):
+                scores["commerce_pro"] = max(0.0, scores["commerce_pro"] - 5.0)
     except Exception:
         pass
 
@@ -965,8 +990,21 @@ _DEFAULT_CAPS = tuple(dict.fromkeys(
 def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     """Always-on high-quality pack when the user asks for a bot.
 
-    Uses multi-intent scoring and pack composition when several domains match.
+    Uses multi-intent scoring, dynamic capability extraction, and multi-domain
+    composition when several domains match.
     """
+    # Dynamic composer handles cybersecurity / multi-domain extraction first
+    try:
+        from .domain_detector import detect as _detect_domains
+        from .dynamic_composer import compose_from_text
+
+        domains = _detect_domains(request)
+        # Prefer dynamic path for security / multi-domain complex requests
+        if "cybersecurity" in domains or len(domains) >= 2:
+            return compose_from_text(request, user_id=user_id)
+    except Exception:
+        pass
+
     stack = detect_preset_stack(request, limit=4)
     if not stack:
         # Intent engine (Arabic synonyms) before any hardcoded fallback
@@ -980,6 +1018,19 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
         except Exception:
             stack = ["echo_basic"]
     s = compose_session(stack, user_id=user_id, request=request)
+
+    # Always enrich with extracted real keys (safe no-op if extractor fails)
+    try:
+        from .capability_extractor import extract_all
+        from .domain_detector import detect as _detect_domains
+
+        for key in extract_all(request, _detect_domains(request)):
+            from .registry import CAPABILITIES as _CAPS
+            if key in _CAPS:
+                s.selected.add(key)
+    except Exception:
+        pass
+
     if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot"}:
         s.set_name("market_bot")
     return s.to_spec()
@@ -1009,7 +1060,10 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
             s.selected.add(k)
     elif preset == "security_ops":
         s.set_name(bot_name or "security_ops_bot")
-        s.set_description("بوت عمليات أمنية دفاعية: بلاغات وتوعية")
+        s.set_description(
+            "Cybersecurity ops: domain checks (DNS/TLS/HTTP/headers), "
+            "incident reports, projects, reports, audit notes"
+        )
         for k in _SECURITY_CAPS:
             s.selected.add(k)
     elif preset == "shop":
