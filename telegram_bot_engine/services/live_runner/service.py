@@ -294,11 +294,18 @@ def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
             continue
         if raw.startswith("-"):
             continue
+        # Drop stdlib / invalid bare names (e.g. "types" from AST auto-heal)
+        name = re.split(r"[<>=!~;\[]", raw)[0].strip().lower()
+        name_us = name.replace("-", "_")
+        if name_us in _NEVER_PIP_INSTALL or name in _NEVER_PIP_INSTALL or name_us in _STDLIB_SKIP:
+            warnings.append(f"skipped_stdlib_or_invalid:{raw[:60]}")
+            continue
         lines_out.append(raw)
 
     cleaned = req.parent / ".tbe_requirements_clean.txt"
     cleaned.write_text("\n".join(lines_out) + ("\n" if lines_out else ""), encoding="utf-8")
     return cleaned, warnings
+
 
 
 def _present_packages(lines: list[str]) -> set[str]:
@@ -635,6 +642,7 @@ _MODULE_TO_PACKAGE: dict[str, str] = {
 # stdlib modules we must never try to pip-install
 _STDLIB_SKIP = {
     "os", "sys", "re", "json", "time", "datetime", "pathlib", "typing",
+    "types", "builtins", "annotations", "__future__", "sysconfig",
     "collections", "functools", "itertools", "subprocess", "threading",
     "asyncio", "logging", "http", "urllib", "email", "html", "xml",
     "sqlite3", "hashlib", "hmac", "base64", "uuid", "copy", "math",
@@ -646,7 +654,30 @@ _STDLIB_SKIP = {
     "zlib", "gzip", "bz2", "lzma", "zipfile", "tarfile", "pickle",
     "shelve", "dbm", "secrets", "statistics", "decimal", "fractions",
     "numbers", "operator", "pprint", "textwrap", "unicodedata",
-    "codecs", "locale", "gettext", "calendar", "zoneinfo",
+    "codecs", "locale", "gettext", "calendar", "zoneinfo", "tomllib",
+    "graphlib", "array", "bisect", "heapq", "weakref", "atexit",
+    "traceback", "linecache", "keyword", "token", "tokenize", "ast",
+    "dis", "pickletools", "site", "sitecustomize", "usercustomize",
+    "posixpath", "ntpath", "genericpath", "stat", "errno", "fcntl",
+    "pwd", "grp", "resource", "termios", "tty", "pty", "fcntl",
+    "msvcrt", "winreg", "mmap", "ctypes", "multiprocessing",
+    "concurrent", "selectors", "asyncore", "asynchat", "smtplib",
+    "poplib", "imaplib", "nntplib", "telnetlib", "xmlrpc", "wsgiref",
+    "http", "urllib", "ipaddress", "html", "xml", "email", "mailbox",
+    "mimetypes", "base64", "binhex", "binascii", "quopri", "uu",
+    "json", "csv", "tomllib", "configparser", "netrc", "logging",
+    "getopt", "getpass", "curses", "readline", "rlcompleter",
+    "unittest", "doctest", "pydoc", "pdb", "profile", "cProfile",
+    "timeit", "trace", "tracemalloc", "gc", "inspect", "site",
+    "code", "codeop", "py_compile", "compileall", "dis", "pickletools",
+    "formatter", "fileinput", "stat", "filecmp", "tempfile",
+    "glob", "fnmatch", "linecache", "shutil", "macpath", "importlib",
+    "pkgutil", "modulefinder", "runpy", "pkg_resources",
+}
+
+# Never pip-install these even if someone puts them in requirements.txt
+_NEVER_PIP_INSTALL = set(_STDLIB_SKIP) | {
+    "types", "typing",  # common false positives from AST / heal — not PyPI packages
 }
 
 
@@ -847,6 +878,8 @@ def _packages_from_modules(modules: list[str]) -> list[str]:
         pkg = _module_to_package(mod)
         if not pkg:
             continue
+        if pkg.lower().replace("-", "_") in _NEVER_PIP_INSTALL or pkg.lower().replace("-", "_") in _STDLIB_SKIP:
+            continue
         key = pkg.lower()
         if key not in seen:
             seen.add(key)
@@ -958,6 +991,15 @@ def _ensure_packages_in_requirements(root: Path, packages: list[str]) -> list[st
     Creates the file if it does not exist.
     Returns the list of packages actually added.
     """
+    if not packages:
+        return []
+    packages = [
+        p for p in packages
+        if p
+        and p.lower().replace("-", "_") not in _NEVER_PIP_INSTALL
+        and p.lower().replace("-", "_") not in _STDLIB_SKIP
+        and p.lower() not in {"types", "typing"}
+    ]
     if not packages:
         return []
     req = _find_requirements(root)

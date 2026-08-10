@@ -1335,3 +1335,38 @@ def broadcast_segment_count(rule: str = "all") -> str:
             n = conn.execute("SELECT COUNT(DISTINCT user_id) c FROM point_ledger").fetchone()["c"]
     return f"Segment '{rule}' size ≈ {n} users (dry-run count — send via admin tools)"
 
+
+def role_grant(actor_id: int, user_id: int, role: str) -> str:
+    """RBAC-lite: grant role (admin|staff|vendor|member) stored in extras_kv."""
+    enterprise_ensure()
+    role = (role or "member").lower()
+    if role not in {"admin", "staff", "vendor", "member", "owner"}:
+        return "Roles: admin|staff|vendor|member|owner"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (int(user_id), "role", role),
+        )
+        conn.commit()
+    _audit(actor_id, "role_grant", "user", user_id, role)
+    return f"User {user_id} granted role={role}"
+
+
+def role_of(user_id: int) -> str:
+    enterprise_ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT body FROM extras_kv WHERE user_id=? AND kind='role' AND status='open' ORDER BY id DESC LIMIT 1",
+            (int(user_id),),
+        ).fetchone()
+    return row["body"] if row else "member"
+
+
+def role_require(user_id: int, minimum: str = "staff") -> bool:
+    order = ["member", "vendor", "staff", "admin", "owner"]
+    cur = role_of(user_id)
+    try:
+        return order.index(cur) >= order.index(minimum)
+    except ValueError:
+        return False
+
