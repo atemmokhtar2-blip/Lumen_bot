@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .schema import BotSpec, Feature
+from .registry import get_capability
 
 
 def _msg(feat: Feature, kind: str, default: str) -> str:

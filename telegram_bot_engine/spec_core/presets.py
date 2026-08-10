@@ -127,6 +127,10 @@ _SHOP_KEYS = (
     "payment", "payments", "invoice", "شراء", "سلة", "cart", "كوبون",
     "coupon", "refund", "أمنيات", "wishlist", "order", "تبرع", "donation",
     "خيرية", "صيدلية", "pharmacy",
+    # Arabic commerce synonyms (intent blindness fix)
+    "بيع", "ببيع", "ابيع", "مبيعات", "ملابس", "احذية", "أحذية", "الكترونيات",
+    "إلكترونيات", "سلع", "بضاعة", "محل", "دكان", "كتالوج", "catalog",
+    "product", "products", "checkout", "طلب", "طلبات",
 )
 _SUB_KEYS = (
     "اشتراك", "اشتراكات", "عضوية", "subscription", "subscribe", "vip",
@@ -477,6 +481,7 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     add("subscriptions", _SUB_KEYS, 1.5)
     add("points", _POINTS_KEYS, 1.4)
     add("shop", _SHOP_KEYS, 1.4)
+    add("community", ("اخبار", "أخبار", "news", "نشرة", "feed", "headline"), 1.3)
     add("support_pro", _SUPPORT_PRO_KEYS, 1.5)
     add("group_management", _GROUP_KEYS, 1.2)
     add("support_tickets", _SUPPORT_KEYS, 1.2)
@@ -508,6 +513,15 @@ def score_presets(request: str) -> list[tuple[str, float]]:
                 scores[name] += 0.8
 
     ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    try:
+        from .arabic_intent_engine import classify_intent, DOMAIN_TO_PRESET
+        for im in classify_intent(request)[:6]:
+            preset = DOMAIN_TO_PRESET.get(im.domain)
+            if preset:
+                scores[preset] = scores.get(preset, 0.0) + float(im.score)
+    except Exception:
+        pass
+
     return ranked
 
 
@@ -709,7 +723,7 @@ def compose_session(
 ) -> BuilderSession:
     """Merge multiple preset capability sets into one intelligent session."""
     if not presets:
-        return session_for_preset("group_management", user_id=user_id, bot_name=bot_name)
+        return session_for_preset("echo_basic", user_id=user_id, bot_name=bot_name)
 
     primary = presets[0]
     s = session_for_preset(primary, user_id=user_id, bot_name=bot_name)
@@ -892,7 +906,16 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     """
     stack = detect_preset_stack(request, limit=4)
     if not stack:
-        stack = ["group_management"]
+        # Intent engine (Arabic synonyms) before any hardcoded fallback
+        try:
+            from .arabic_intent_engine import smart_detect_preset, is_clearly_non_bot
+            if is_clearly_non_bot(request):
+                stack = ["echo_basic"]
+            else:
+                sp = smart_detect_preset(request)
+                stack = [sp] if sp else ["echo_basic"]
+        except Exception:
+            stack = ["echo_basic"]
     s = compose_session(stack, user_id=user_id, request=request)
     if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot"}:
         s.set_name("market_bot")
@@ -1066,6 +1089,10 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
         s.set_description("بوت موارد بشرية مبسط")
         for k in ("start", "help", "hr_leave_request", "hr_leave_list", "hr_checkin"):
             s.selected.add(k)
+    elif preset in {"echo_basic", "basic", "generic", "echo"}:
+        s.set_name(bot_name or "basic_bot")
+        s.set_description("بوت أساسي: /start و /help")
+        s.selected.update({"start", "help"})
     else:
         s.set_name(bot_name or "custom_bot")
         s.selected.update({"start", "help"})

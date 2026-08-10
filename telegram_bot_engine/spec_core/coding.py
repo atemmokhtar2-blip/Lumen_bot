@@ -8,6 +8,28 @@ Split modules:
 """
 from __future__ import annotations
 
+def _emit_bootstrap_sh() -> str:
+    return """#!/usr/bin/env bash
+set -e
+echo "Bootstrapping Telegram bot..."
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Python 3 required"; exit 1
+fi
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+pip install -q --upgrade pip
+pip install -q -r requirements.txt
+if [ ! -f .env ]; then
+  cp .env.example .env 2>/dev/null || true
+  echo "Edit .env and set TELEGRAM_BOT_TOKEN then re-run."
+  exit 1
+fi
+python main.py
+"""
+
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +105,9 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     if spec.storage.type == "sqlite" or len(spec.features) > 2:
         if files.get("app/db.py"):
             files["app/services/generic.py"] = _emit_generic_runtime()
+    files.setdefault("bootstrap.sh", _emit_bootstrap_sh())
+    if "README.md" not in files:
+        files["README.md"] = "# Generated bot\n\nRun: chmod +x bootstrap.sh && ./bootstrap.sh\n"
     return files
 
 

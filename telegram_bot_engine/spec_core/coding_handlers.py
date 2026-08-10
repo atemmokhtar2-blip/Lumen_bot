@@ -249,7 +249,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method in {"add", "cart_add"} and svc in {"cart", "shop"}:
         L += [
             "    if not context.args:",
-            "        await message.reply_text('Usage: /cartadd <product_id> [qty]' + chr(10) + market_svc.catalog())",
+            "        await message.reply_text(t('usage_cart_add') + chr(10) + market_svc.catalog())",
             "        return",
             "    try:",
             "        pid = int(context.args[0])",
@@ -675,16 +675,14 @@ def _emit_handlers(spec: BotSpec) -> str:
     if lang.startswith("ar"):
         welcome = (
             f"مرحباً بك 👋\n"
-            f"بوت متجر متكامل — {n_cmds} أمر جاهز.\n"
-            "من القائمة بالأسفل: المتجر، السلة، الطلبات، النقاط، الخطط، المحفظة والدعم.\n"
-            "اكتب /help لعرض كل الأوامر."
+            f"بوت جاهز — {n_cmds} أمر.\n"
+            "اكتب /help لعرض الأوامر."
         )
     else:
         welcome = (
             f"Welcome 👋\n"
-            f"Full commerce bot — {n_cmds} commands ready.\n"
-            "Use the menu below: Shop, Cart, Orders, Points, Plans, Wallet & Support.\n"
-            "Type /help for the full command list."
+            f"Bot ready — {n_cmds} commands.\n"
+            "Type /help for the command list."
         )
     help_lines = []
     help_lines.append(
@@ -743,6 +741,27 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import extras as extras_svc")
 
     lines: list[str] = imports + ["", ""]
+
+    # i18n for generated user-facing strings
+    if lang.startswith("en"):
+        _i18n = {
+            "usage_cart_add": "Usage: /cartadd <product_id> [qty]",
+            "insufficient_balance": "Insufficient balance",
+            "order_cancelled": "Order cancelled",
+            "invalid_number": "Invalid number",
+            "product_added": "Product added",
+            "coming_soon": "This feature is coming soon.",
+        }
+    else:
+        _i18n = {
+            "usage_cart_add": "الاستخدام: /cartadd <معرف_المنتج> [الكمية]",
+            "insufficient_balance": "الرصيد غير كافٍ",
+            "order_cancelled": "تم إلغاء الطلب",
+            "invalid_number": "رقم غير صالح",
+            "product_added": "تمت إضافة المنتج",
+            "coming_soon": "هذه الميزة قريباً.",
+        }
+    lines += [f"_I18N = {_i18n!r}", "def t(key: str) -> str:", "    return _I18N.get(key, key)", "", ""]
 
     # start / help always useful
     lines += [
@@ -1276,93 +1295,122 @@ def _emit_handlers(spec: BotSpec) -> str:
             cmd_to_handler.append((slug2, h))
 
 
-    # Always-on menu handlers so primary buttons never die
-    lines += [
-        "async def menu_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    if message is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    await message.reply_text('【 المتجر 】' + chr(10) + market_svc.catalog())",
-        "",
-        "async def menu_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    user = update.effective_user",
-        "    if message is None or user is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    await message.reply_text('【 السلة 】' + chr(10) + str(market_svc.cart_view(user.id)))",
-        "",
-        "async def menu_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    user = update.effective_user",
-        "    if message is None or user is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    items = market_svc.my_orders(user.id) if hasattr(market_svc, 'my_orders') else []",
-        "    body = chr(10).join(str(x) for x in items) if items else 'لا طلبات بعد'",
-        "    await message.reply_text('【 طلباتي 】' + chr(10) + body)",
-        "",
-        "async def menu_points(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    user = update.effective_user",
-        "    if message is None or user is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    await message.reply_text('【 النقاط 】' + chr(10) + 'رصيدك: ' + str(market_svc.points_balance(user.id)))",
-        "",
-        "async def menu_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    if message is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    plans = market_svc.list_plans()",
-        "    lines_p = [f'#{p[\"id\"]} {p[\"name\"]} {p[\"price_cents\"]/100:.2f}' for p in (plans or [])]",
-        "    await message.reply_text('【 الخطط 】' + chr(10) + (chr(10).join(lines_p) if lines_p else 'لا خطط'))",
-        "",
-        "async def menu_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    user = update.effective_user",
-        "    if message is None or user is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    await message.reply_text('【 المحفظة 】' + chr(10) + 'الرصيد: ' + str(market_svc.wallet_balance(user.id)))",
-        "",
-        "async def menu_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    if message is None:",
-        "        return",
-        "    context.user_data['awaiting'] = 'mkt_coupon_apply'",
-        "    await message.reply_text('أرسل كود الكوبون الآن')",
-        "",
-        "async def menu_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    if message is None:",
-        "        return",
-        "    context.user_data['awaiting'] = 'ticket_subject'",
-        "    await message.reply_text('اكتب موضوع تذكرة الدعم')",
-        "",
-        "async def menu_board(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    if message is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    rows = market_svc.leaderboard(10)",
-        "    body = chr(10).join(f'{i+1}. {u}: {b}' for i, (u, b) in enumerate(rows)) if rows else 'لا متصدرين بعد'",
-        "    await message.reply_text('【 المتصدرين 】' + chr(10) + body)",
-        "",
-        "async def menu_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-        "    message = update.effective_message",
-        "    user = update.effective_user",
-        "    if message is None or user is None:",
-        "        return",
-        "    from app.services import market as market_svc",
-        "    cur = market_svc.get_lang(user.id)",
-        "    new = 'ar' if str(cur).startswith('en') else 'en'",
-        "    market_svc.set_lang(user.id, new)",
-        "    await message.reply_text('تم تبديل اللغة إلى ' + new + ' — أعد /start')",
-        "",
-    ]
+
+    # Menu handlers ONLY for services present in this bot (avoids ModuleNotFoundError)
+    available_services: set[str] = set()
+    for feat in spec.features:
+        cap = get_capability(feat.feature)
+        if cap:
+            available_services.add(cap.service)
+
+    menu_lines: list[str] = []
+    menu_routes: list[tuple[str, str]] = []
+
+    if "shop" in available_services or "cart" in available_services or "payments" in available_services:
+        menu_lines += [
+            "async def menu_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    await message.reply_text('【 المتجر 】' + chr(10) + market_svc.catalog())",
+            "",
+            "async def menu_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    await message.reply_text('【 السلة 】' + chr(10) + str(market_svc.cart_view(user.id)))",
+            "",
+            "async def menu_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    items = market_svc.my_orders(user.id) if hasattr(market_svc, 'my_orders') else []",
+            "    body = chr(10).join(str(x) for x in items) if items else 'لا طلبات بعد'",
+            "    await message.reply_text('【 طلباتي 】' + chr(10) + body)",
+            "",
+        ]
+        menu_routes += [
+            ("shopcatalog", "menu_shop"),
+            ("cartview", "menu_cart"),
+            ("orders", "menu_orders"),
+        ]
+
+    if "points" in available_services:
+        menu_lines += [
+            "async def menu_points(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    await message.reply_text('【 النقاط 】' + chr(10) + 'رصيدك: ' + str(market_svc.points_balance(user.id)))",
+            "",
+        ]
+        menu_routes.append(("points", "menu_points"))
+
+    if "subscriptions" in available_services:
+        menu_lines += [
+            "async def menu_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    plans = market_svc.list_plans() if hasattr(market_svc, 'list_plans') else []",
+            "    body = chr(10).join(str(p) for p in plans) if plans else 'لا خطط بعد'",
+            "    await message.reply_text('【 الخطط 】' + chr(10) + body)",
+            "",
+        ]
+        menu_routes.append(("plans", "menu_plans"))
+
+    if "wallet" in available_services:
+        menu_lines += [
+            "async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None:",
+            "        return",
+            "    from app.services import market as market_svc",
+            "    bal = market_svc.wallet_balance(user.id) if hasattr(market_svc, 'wallet_balance') else 0",
+            "    await message.reply_text('【 المحفظة 】' + chr(10) + 'الرصيد: ' + str(bal))",
+            "",
+        ]
+        menu_routes.append(("balance", "menu_balance"))
+
+    if "contests" in available_services:
+        menu_lines += [
+            "async def menu_contests(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    await message.reply_text('【 المسابقات 】')",
+            "",
+        ]
+        menu_routes.append(("contests", "menu_contests"))
+
+    if "tickets" in available_services:
+        menu_lines += [
+            "async def menu_ticket_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    await message.reply_text('【 فتح تذكرة 】 أرسل وصف المشكلة.')",
+            "",
+            "async def menu_ticket_my(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    await message.reply_text('【 تذاكري 】')",
+            "",
+        ]
+        menu_routes += [("ticket_open", "menu_ticket_open"), ("ticket_my", "menu_ticket_my")]
+
+    lines.extend(menu_lines)
+
 
     lines.append("async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    query = update.callback_query")
@@ -1381,16 +1429,10 @@ def _emit_handlers(spec: BotSpec) -> str:
                 continue
             seen_map.add(key)
             lines.append(f"            {key!r}: {h},")
-    lines.append("            'shopcatalog': menu_shop,")
-    lines.append("            'cartview': menu_cart,")
-    lines.append("            'shopmyorders': menu_orders,")
-    lines.append("            'balance': menu_points,")
-    lines.append("            'plans': menu_plans,")
-    lines.append("            'walletbalance': menu_wallet,")
-    lines.append("            'couponapply': menu_coupon,")
-    lines.append("            'ticketopen': menu_ticket,")
-    lines.append("            'leaderboard': menu_board,")
-    lines.append("            'lang': menu_lang,")
+    # Only register menu routes that were actually emitted
+    for _mk, _mh in menu_routes:
+        lines.append(f"            {_mk!r}: {_mh},")
+    lines.append("            'lang': help_handler,")
     lines.append("        }")
     lines.append("        _ALIASES = {")
     lines.append("            'shop': 'shopcatalog', 'catalog': 'shopcatalog', 'cart': 'cartview',")

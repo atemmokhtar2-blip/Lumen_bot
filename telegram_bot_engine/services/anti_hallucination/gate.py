@@ -316,6 +316,37 @@ def run_anti_hallucination_gate(
     root = Path(project_dir)
     rep = AntiHallucinationReport(ok=True, ready_for_token=False)
 
+    # Reject clearly non-bot user requests even if a template was emitted
+    try:
+        from ...spec_core.arabic_intent_engine import is_clearly_non_bot, detect_bot_request_arabic
+        if user_request and is_clearly_non_bot(user_request):
+            rep.ok = False
+            rep.ready_for_token = False
+            rep.fidelity_ok = False
+            rep.errors.append(
+                Finding(
+                    "error",
+                    "invalid_request",
+                    "الطلب ليس طلب بوت (مثلاً قصة/مقال). لن يُسلَّم كمشروع جاهز.",
+                    "Request is not a bot specification; refusing ready_for_token.",
+                )
+            )
+            rep.metadata["user_request_preview"] = (user_request or "")[:200]
+            return rep
+        domain, conf = detect_bot_request_arabic(user_request or "")
+        if user_request and conf < 0.15 and domain is None:
+            # soft: continue structural checks but do not claim ready
+            rep.warnings.append(
+                Finding(
+                    "warning",
+                    "low_intent_confidence",
+                    "ثقة منخفضة في أن الطلب يصف بوت تيليجرام.",
+                    "Low confidence that the request describes a Telegram bot.",
+                )
+            )
+    except Exception:
+        pass
+
     if not root.is_dir():
         rep.ok = False
         rep.structure_ok = False

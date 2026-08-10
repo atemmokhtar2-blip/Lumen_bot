@@ -168,8 +168,21 @@ class BuilderSession:
         return key in self.selected
 
     def set_name(self, name: str) -> None:
-        name = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in (name or "").strip())
-        self.bot_name = (name or "my_bot")[:40]
+        """Set bot name with smart extraction (avoids ____ path junk)."""
+        import re as _re
+        raw = (name or "").strip()
+        try:
+            from .arabic_intent_engine import extract_bot_name
+            smart = extract_bot_name(raw)
+            if smart:
+                raw = smart
+        except Exception:
+            pass
+        cleaned = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in raw)
+        cleaned = _re.sub(r"_+", "_", cleaned).strip("_")
+        if not cleaned or set(cleaned) <= {"_"} or len(cleaned) < 2:
+            cleaned = "my_bot"
+        self.bot_name = cleaned[:40]
 
     def set_description(self, text: str) -> None:
         self.description = (text or "").strip()[:200]

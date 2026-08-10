@@ -9,6 +9,8 @@ Modes:
 
 from __future__ import annotations
 
+import asyncio
+import multiprocessing
 import os
 import threading
 
@@ -38,13 +40,36 @@ from bot_interface import (
 from bot_interface.commands import handle_non_text
 
 
-def _start_b2b_api(port: int) -> None:
+def _start_b2b_api_process(port: int) -> None:
+    """Run B2B API in a dedicated process (aiohttp needs main-thread signals otherwise)."""
     from aiohttp import web
     from api.app import create_app
 
     app = create_app()
-    logger.info("B2B API enabled on 0.0.0.0:%s", port)
+    print(f"[B2B API] listening on 0.0.0.0:{port}", flush=True)
     web.run_app(app, host="0.0.0.0", port=port, print=lambda *a, **k: None)
+
+
+def _start_b2b_api_thread(port: int) -> None:
+    """Fallback: AppRunner without signal handlers (safe inside a thread)."""
+
+    async def _serve() -> None:
+        from aiohttp import web
+        from api.app import create_app
+
+        app = create_app()
+        runner = web.AppRunner(app, handle_signals=False)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        logger.info("B2B API (thread/AppRunner) on 0.0.0.0:%s", port)
+        while True:
+            await asyncio.sleep(3600)
+
+    try:
+        asyncio.run(_serve())
+    except Exception:
+        logger.exception("B2B API thread failed")
 
 
 def main() -> None:
@@ -68,9 +93,27 @@ def main() -> None:
         PORT,
     )
 
-    enable_api = (os.getenv("ENABLE_API") or "1").strip().lower() not in {"0", "false", "no", "off"}
+    enable_api = (os.getenv("ENABLE_API") or "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     if enable_api:
-        threading.Thread(target=_start_b2b_api, args=(PORT,), daemon=True).start()
+        mode = (os.getenv("API_PROCESS_MODE") or "process").strip().lower()
+        if mode in {"thread", "runner"}:
+            threading.Thread(
+                target=_start_b2b_api_thread, args=(PORT,), daemon=True, name="b2b-api"
+            ).start()
+        else:
+            # Default: separate process — avoids set_wakeup_fd / signal errors
+            multiprocessing.Process(
+                target=_start_b2b_api_process,
+                args=(PORT,),
+                daemon=True,
+                name="b2b-api-process",
+            ).start()
+            logger.info("B2B API process started on port %s", PORT)
     else:
         threading.Thread(target=start_health_server, args=(PORT,), daemon=True).start()
 
@@ -82,7 +125,12 @@ def main() -> None:
     app.add_handler(CommandHandler("lang", lang_cmd))
     app.add_handler(CommandHandler("language", lang_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND & ~filters.StatusUpdate.ALL, handle_non_text))
+    app.add_handler(
+        MessageHandler(
+            ~filters.TEXT & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
+            handle_non_text,
+        )
+    )
     app.add_error_handler(error_handler)
 
     logger.info("Telegram bot is running (polling)...")
@@ -90,4 +138,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Required on some platforms for multiprocessing spawn
+    multiprocessing.freeze_support()
     main()

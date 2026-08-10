@@ -61,6 +61,18 @@ _SUPPORTED_HINTS = [
 
 def check_feasibility(request: str) -> FeasibilityResult:
     text = (request or "").strip()
+    try:
+        from ..spec_core.arabic_intent_engine import is_clearly_non_bot
+        if is_clearly_non_bot(text):
+            return FeasibilityResult(
+                can_generate=False,
+                confidence=0.98,
+                level=ComplexityLevel.IMPOSSIBLE,
+                reason="هذا ليس طلب بوت (قصة/مقال/ترجمة...). أرسل وصف بوت تيليجرام.",
+                suggested_scope="مثال: بوت متجر فيه /start و /cart",
+            )
+    except Exception:
+        pass
     if len(text) < 3:
         return FeasibilityResult(
             can_generate=False,
