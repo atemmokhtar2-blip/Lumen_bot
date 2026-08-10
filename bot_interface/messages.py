@@ -884,7 +884,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop("pending_spec", None)
 
     status_msg = await message.reply_text(
-        "⏳ جاري ترجمة الوصف وتوليد المشروع (Execution Planner + Codegen)..."
+        "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
@@ -1055,9 +1055,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             else:
                 await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
 
-            # Structural review report + token request only if gate passed
-            ready = bool(success) and bool(meta.get("ready_for_token", success))
+            # Anti-hallucination + structural gates — honest report only
+            ready = bool(success) and bool(meta.get("ready_for_token", False))
+            ah = meta.get("anti_hallucination") or {}
             gate = meta.get("static_gate") or {}
+
+            # Prefer anti-hallucination user text
+            try:
+                from telegram_bot_engine.services.anti_hallucination import (
+                    run_anti_hallucination_gate,
+                )
+                if project_path and not ah:
+                    _ah = run_anti_hallucination_gate(
+                        project_path,
+                        user_request=request or "",
+                    )
+                    ah = _ah.to_dict()
+                    await message.reply_text(_ah.to_user_text(lang="ar"))
+                elif ah:
+                    # Rebuild short honest summary from meta
+                    lines = []
+                    if ah.get("ok") and ah.get("ready_for_token"):
+                        lines.append("✅ تم التحقق — لا هلوسة هيكلية")
+                    elif ah.get("ok"):
+                        lines.append("⚠️ تم التوليد مع تحذيرات")
+                    else:
+                        lines.append("❌ فشل التحقق — غير جاهز للتشغيل")
+                    vcmds = ah.get("verified_commands") or meta.get("verified_commands") or []
+                    if vcmds:
+                        lines.append("أوامر مؤكدة:")
+                        for c in vcmds[:15]:
+                            lines.append(f"  /{c}")
+                    stubs = ah.get("stub_handlers") or meta.get("stub_handlers") or []
+                    if stubs:
+                        lines.append("handlers وهمية (لم نَعُدّها مزايا):")
+                        for s in stubs[:8]:
+                            lines.append(f"  {s}")
+                    for e in (ah.get("errors") or [])[:10]:
+                        if isinstance(e, dict):
+                            lines.append(f"🔴 {e.get('ar') or e.get('code')}")
+                        else:
+                            lines.append(f"🔴 {e}")
+                    lines.append("")
+                    lines.append("لا ندّعي وجود ميزة إلا بعد التحقق من الكود.")
+                    await message.reply_text("\n".join(lines))
+            except Exception:
+                logger.exception("anti_hallucination user report failed")
+
             if gate:
                 g_lines = [
                     "🔬 مراجعة StaticDevGate",
@@ -1079,13 +1123,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "project_path": str(project_path),
                     "owner_user_id": user.id if user else None,
                 }
+                vcmds = meta.get("verified_commands") or (ah.get("verified_commands") if ah else []) or []
+                cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
                 await message.reply_text(
-                    "📦 المشروع جاهز.\n"
-                    "🔑 أرسل توكن البوت من @BotFather لتجربته."
+                    "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
+                    + cmd_line
+                    + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
                 )
             else:
                 await message.reply_text(
-                    "⚠️ المشروع اتولّد لكن في أخطاء — راجع الملخص أعلاه."
+                    "⚠️ المشروع اتولّد لكن التحقق ضد الهلوسة رفض تسليمه كجاهز.\n"
+                    "راجع التقرير أعلاه — لن نطلب توكن قبل إصلاح الأخطاء الهيكلية."
                 )
 
         elif not success:

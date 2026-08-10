@@ -194,21 +194,86 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         "ai_disabled": True,
         "quality": "market_pack_v2",
     }
+
+    # ── Anti-hallucination gate (mandatory before any "ready" claim) ──
+    ah_report = None
+    ah_dict = {}
+    try:
+        from .services.anti_hallucination import run_anti_hallucination_gate
+        claimed = []
+        try:
+            claimed = [getattr(f, "feature", None) or getattr(f, "id", None) for f in (spec.features or [])]
+            claimed = [str(c) for c in claimed if c]
+        except Exception:
+            claimed = []
+        ah_report = run_anti_hallucination_gate(
+            project_dir,
+            claimed_features=claimed,
+            user_request=request or "",
+        )
+        ah_dict = ah_report.to_dict()
+        meta["anti_hallucination"] = ah_dict
+        meta["verified_commands"] = list(ah_report.verified_commands)
+        meta["stub_handlers"] = list(ah_report.stub_handlers)
+        meta["ready_for_token"] = bool(ah_report.ready_for_token)
+    except Exception as exc:
+        meta["anti_hallucination_error"] = str(exc)[:300]
+        meta["ready_for_token"] = False
+
+    if result.ok and ah_report is not None and not ah_report.ok:
+        # Structural generation succeeded but verification failed → not success for user
+        meta.update(
+            {
+                "files_created": result.files,
+                "services": result.plan_services,
+                "ready_for_token": False,
+                "blocked_by": "anti_hallucination",
+            }
+        )
+        errs = list(result.errors) + [f.message_ar for f in ah_report.errors]
+        return GenerationResult(
+            success=False,
+            project_path=str(project_dir),
+            stages=[
+                StageResult.ok("spec_preset", outputs={"preset": tag}),
+                StageResult.ok("spec_codegen", outputs={"files": result.files}),
+                StageResult.failed(
+                    "anti_hallucination",
+                    errors=[f.code for f in ah_report.errors],
+                ),
+            ],
+            validation_reports=[],
+            errors=errs,
+            metadata=meta,
+        )
+
     if result.ok:
         meta.update(
             {
                 "files_created": result.files,
                 "services": result.plan_services,
-                "ready_for_token": True,
+                # ready_for_token already set from gate (or False on gate error)
+                "ready_for_token": bool(meta.get("ready_for_token", False)),
             }
         )
+        stages = [
+            StageResult.ok("spec_preset", outputs={"preset": tag}),
+            StageResult.ok("spec_codegen", outputs={"files": result.files}),
+        ]
+        if ah_report is not None:
+            stages.append(
+                StageResult.ok(
+                    "anti_hallucination",
+                    outputs={
+                        "verified_commands": ah_report.verified_commands,
+                        "ready_for_token": ah_report.ready_for_token,
+                    },
+                )
+            )
         return GenerationResult(
             success=True,
             project_path=str(project_dir),
-            stages=[
-                StageResult.ok("spec_preset", outputs={"preset": tag}),
-                StageResult.ok("spec_codegen", outputs={"files": result.files}),
-            ],
+            stages=stages,
             validation_reports=[],
             errors=[],
             metadata=meta,
