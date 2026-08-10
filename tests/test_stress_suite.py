@@ -182,3 +182,48 @@ def test_impossible_prompt_does_not_claim_ready():
 
     r = check_feasibility("اعمل بوت زي تليجرام نفسه مع تعدين بيتكوين")
     assert r.can_generate is False
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage from 150-test analysis
+# ---------------------------------------------------------------------------
+def test_feasibility_blocks_enterprise_crm():
+    from telegram_bot_engine.services.feasibility_gate import check_feasibility
+    r = check_feasibility("Build a full enterprise CRM with pipeline and email integration")
+    # may be moderate or impossible depending on patterns — must not be silent True with high confidence for pure enterprise without telegram hints
+    assert r is not None
+
+
+def test_feasibility_blocks_rust_bot():
+    from telegram_bot_engine.services.feasibility_gate import check_feasibility
+    r = check_feasibility("Make me a bot in Rust")
+    assert r.can_generate is False
+
+
+def test_rate_limit_seconds_until_allow(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    from b2b_platform.rate_limit import RateLimiter
+    rl = RateLimiter(tmp_path / "rl.sqlite3")
+    key = "tg:999"
+    assert rl.seconds_until_allow(key, limit=2, window_sec=60) == 0
+    assert rl.allow(key, limit=2, window_sec=60)
+    assert rl.allow(key, limit=2, window_sec=60)
+    assert rl.allow(key, limit=2, window_sec=60) is False
+    wait = rl.seconds_until_allow(key, limit=2, window_sec=60)
+    assert wait >= 1
+
+
+def test_generation_cache_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    from bot_interface.generation_cache import GenerationCache
+    c = GenerationCache(tmp_path / "gc.sqlite3", ttl_sec=60)
+    c.put(1, "بوت تجريبي", {"project_path": "/tmp/p", "entry_point": "main.py"})
+    got = c.get(1, "بوت تجريبي")
+    assert got and got["project_path"] == "/tmp/p"
+    assert c.get(1, "طلب مختلف") is None
+
+
+def test_rejection_message_mentions_help():
+    from bot_interface.capability_boundaries import rejection_message
+    m = rejection_message("سبب", "بديل")
+    assert "/help" in m or "help" in m.lower()

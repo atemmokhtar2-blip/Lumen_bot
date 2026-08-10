@@ -1,91 +1,106 @@
-from .capability_boundaries import get_help_text
 """Telegram command handlers (/start, /help, /status, /lang)."""
-
 from __future__ import annotations
 
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from .capability_boundaries import get_help_text
 from .config import OUTPUT_DIR
-from .helpers import is_allowed
+from .helpers import is_allowed, safe_reply_text
 from .i18n import get_lang, set_lang, t, SUPPORTED
+from .session_store import get_session_store
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    message = update.effective_message
+    if not message:
+        return
     if not is_allowed(user.id if user else None):
         lang = get_lang(user, context)
-        await update.message.reply_text(t("not_authorized", lang))
+        await message.reply_text(t("not_authorized", lang))
         return
 
     lang = get_lang(user, context)
-    # First interaction: store detected language so later messages stay consistent
     if context.user_data is not None and "lang" not in context.user_data:
         set_lang(context, lang)
 
-    await update.message.reply_text(
-        t("start_welcome", lang),
-        parse_mode=ParseMode.MARKDOWN,
+    # Restore session so pending token flow survives /start after restart
+    try:
+        if user and context.user_data is not None:
+            for k, v in (get_session_store().load(int(user.id)) or {}).items():
+                context.user_data.setdefault(k, v)
+    except Exception:
+        pass
+
+    welcome = (
+        "👋 مرحباً — مولّد بوتات تيليجرام الحتمي.\n\n"
+        "أرسل وصفاً للبوت الذي تريده (أوامر، متجر، تذاكر…).\n"
+        "أو استخدم: /help لمعرفة ما أستطيع وما لا أستطيع."
     )
+    try:
+        await message.reply_text(welcome)
+    except Exception:
+        await safe_reply_text(message, welcome)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await start_cmd(update, context)
+    message = update.effective_message
+    if not message:
+        return
+    user = update.effective_user
+    if not is_allowed(user.id if user else None):
+        await message.reply_text("⛔ غير مصرح.")
+        return
+    text = get_help_text()
+    try:
+        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await message.reply_text(text)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    lang = get_lang(user, context)
-    if not is_allowed(user.id if user else None):
-        await update.message.reply_text(t("not_authorized_short", lang))
+    message = update.effective_message
+    if not message:
         return
-
-    try:
-        from telegram_bot_engine import bootstrap
-        registry, orchestrator, manager = bootstrap()
-        engine_count = len(
-            getattr(registry, "_engines", {}) or getattr(registry, "engines", {}) or {}
-        )
-        if not engine_count:
-            try:
-                engine_count = len(manager._engines) if hasattr(manager, "_engines") else "?"
-            except Exception:
-                engine_count = "?"
-        msg = t(
-            "status_ok",
-            lang,
-            engine_count=engine_count,
-            output_dir=str(OUTPUT_DIR),
-        )
-    except Exception as e:
-        msg = t("status_error", lang, error=str(e))
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    if not is_allowed(user.id if user else None):
+        await message.reply_text("⛔ غير مصرح.")
+        return
+    pending = {}
+    if context.user_data:
+        for k in ("pending_run", "pending_deploy", "pending_live_run", "active_repo"):
+            if context.user_data.get(k):
+                pending[k] = "yes"
+    lines = [
+        "📊 حالة الجلسة",
+        f"• user_id: {user.id if user else '?'}",
+        f"• OUTPUT_DIR: {OUTPUT_DIR}",
+        f"• pending: {', '.join(pending) if pending else 'لا يوجد'}",
+    ]
+    await message.reply_text("\n".join(lines))
 
 
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Change interface language: /lang en | /lang ar"""
     user = update.effective_user
-    lang = get_lang(user, context)
-    if not is_allowed(user.id if user else None):
-        await update.message.reply_text(t("not_authorized_short", lang))
+    message = update.effective_message
+    if not message:
         return
-
     args = (context.args or []) if context else []
-    if not args:
-        await update.message.reply_text(
-            t("lang_usage", lang, lang=lang),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+    if args and args[0].lower() in SUPPORTED:
+        set_lang(context, args[0].lower())
+        await message.reply_text(f"Language set to {args[0].lower()}")
         return
+    await message.reply_text("Usage: /lang ar | /lang en")
 
-    requested = (args[0] or "").strip().lower()
-    if requested not in SUPPORTED:
-        await update.message.reply_text(t("lang_unsupported", lang))
+
+async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Voice/photo/sticker/document — never silent."""
+    message = update.effective_message
+    if not message:
         return
-
-    new_lang = set_lang(context, requested)
-    await update.message.reply_text(
-        t("lang_changed", new_lang, lang=new_lang),
-        parse_mode=ParseMode.MARKDOWN,
+    await message.reply_text(
+        "حالياً أستقبل النص فقط.\n"
+        "اكتب وصف البوت أو استخدم /help — الصور والصوت غير مدعومين بعد."
     )

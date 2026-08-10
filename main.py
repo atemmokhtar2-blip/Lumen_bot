@@ -35,6 +35,7 @@ from bot_interface import (
     error_handler,
     start_health_server,
 )
+from bot_interface.commands import handle_non_text
 
 
 def _start_b2b_api(port: int) -> None:
@@ -81,6 +82,7 @@ def main() -> None:
     app.add_handler(CommandHandler("lang", lang_cmd))
     app.add_handler(CommandHandler("language", lang_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND & ~filters.StatusUpdate.ALL, handle_non_text))
     app.add_error_handler(error_handler)
 
     logger.info("Telegram bot is running (polling)...")

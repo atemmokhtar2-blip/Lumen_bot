@@ -48,6 +48,26 @@ def _rate_limit_ok(user_id: int) -> bool:
         return True
 
 
+def _rate_limit_wait_seconds(user_id: int) -> int:
+    try:
+        from b2b_platform.rate_limit import get_rate_limiter
+        return get_rate_limiter().seconds_until_allow(
+            f"tg:{int(user_id)}",
+            limit=RATE_LIMIT_PER_MINUTE,
+            window_sec=RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception:
+        return int(RATE_LIMIT_WINDOW_SECONDS)
+
+
+def _persist_session(user, context) -> None:
+    try:
+        if user and context.user_data is not None:
+            get_session_store().save(int(user.id), context.user_data)
+    except Exception:
+        pass
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.message
@@ -60,13 +80,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     uid_check = int(user.id) if user else 0
     if not _rate_limit_ok(uid_check):
+        wait_s = _rate_limit_wait_seconds(uid_check)
         await message.reply_text(
-            "⏳ تجاوزت الحد المسموح من الطلبات. انتظر دقيقة ثم حاول مرة أخرى."
+            f"⏳ تجاوزت الحد المسموح من الطلبات. انتظر حوالي {wait_s} ثانية ثم حاول مرة أخرى."
         )
         return
 
-    request = message.text.strip()
+    # Groups: only respond when @mentioned or replied-to (avoid spam)
+    try:
+        chat = update.effective_chat
+        if chat and getattr(chat, "type", "") in {"group", "supergroup"}:
+            bot_user = getattr(context.bot, "username", None) or ""
+            text0 = (message.text or "")
+            mentioned = bool(bot_user and f"@{bot_user}".lower() in text0.lower())
+            is_reply_to_us = bool(
+                message.reply_to_message
+                and message.reply_to_message.from_user
+                and message.reply_to_message.from_user.id == context.bot.id
+            )
+            if not mentioned and not is_reply_to_us:
+                return
+    except Exception:
+        pass
 
+    request = message.text.strip()
 
     # Restore durable session (pending_run etc.) after restarts
     try:
@@ -76,7 +113,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data.setdefault(k, v)
     except Exception:
         pass
-    if not request or request.startswith("/"):
+
+    if not request:
+        await message.reply_text("اكتب وصفاً للبوت أو /help.")
+        return
+    if request.startswith("/"):
+        return
+    # Very short non-spec confirmations
+    if len(request) < 3 and request.lower() not in {"ok", "yes", "لا", "نعم"}:
+        await message.reply_text(
+            "الرسالة قصيرة جداً. اكتب ماذا يفعل البوت (مثال: بوت فيه /start و /help)."
+        )
         return
 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
@@ -240,6 +287,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["pending_run"] = pending_run
         if pending_run and pending_run.get("project_path"):
             await handle_live_run_token(message, context, token_text, pending_run)
+            _persist_session(user, context)
             return
         # Token sent but no project is pending — do NOT treat as bot description
         await message.reply_text(
@@ -767,6 +815,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data.pop("pending_spec", None)
 
     # Feasibility gate — refuse impossible / out-of-scope requests honestly
+    _soft_note = ""
     try:
         from telegram_bot_engine.services.feasibility_gate import check_feasibility
         _feas = check_feasibility(request)
@@ -775,14 +824,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 rejection_message(_feas.reason, _feas.suggested_scope),
             )
             return
-        if _feas.blocked_features and _feas.confidence < 0.75:
-            # soft warning but continue
-            pass
+        _soft_note = ""
+        if _feas.blocked_features:
+            _soft_note = (
+                "\n⚠️ ملاحظة: بعض الأجزاء تحتاج ربط خارجي ولن تُفعَّل تلقائياً: "
+                + "، ".join(_feas.blocked_features[:4])
+            )
+    except Exception:
+        pass
+
+    # Duplicate identical prompt within TTL → reuse last project path
+    try:
+        from .generation_cache import get_generation_cache
+        _cached = get_generation_cache().get(int(user.id) if user else 0, request)
+        if _cached and _cached.get("project_path"):
+            from pathlib import Path as _P
+            if _P(_cached["project_path"]).is_dir():
+                await message.reply_text(
+                    "✅ نفس الطلب مؤخراً — سأستخدم النتيجة السابقة.\n"
+                    "🔑 أرسل توكن البوت من @BotFather للتشغيل، أو غيّر الوصف لإعادة التوليد."
+                )
+                if context.user_data is not None:
+                    payload = {
+                        "project_path": _cached["project_path"],
+                        "entry_point": _cached.get("entry_point") or "main.py",
+                        "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                    }
+                    context.user_data["pending_run"] = payload
+                    context.user_data["pending_deploy"] = dict(payload)
+                    context.user_data["pending_live_run"] = dict(payload)
+                    _persist_session(user, context)
+                return
     except Exception:
         pass
 
     status_msg = await message.reply_text(
         "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
+        + (_soft_note or "")
     )
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
@@ -810,6 +888,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             request=request,
             result=result,
         )
+        try:
+            if result and getattr(result, "success", False) and getattr(result, "project_path", None):
+                from .generation_cache import get_generation_cache
+                get_generation_cache().put(
+                    int(user.id) if user else 0,
+                    request,
+                    {
+                        "project_path": str(result.project_path),
+                        "entry_point": "main.py",
+                    },
+                )
+            _persist_session(user, context)
+        except Exception:
+            pass
 
     except Exception as e:
         logger.exception("Generation failed")

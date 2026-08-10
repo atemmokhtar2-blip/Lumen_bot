@@ -27,14 +27,16 @@ class FeasibilityResult:
 
 # Patterns that require external services / heavy domain logic we cannot invent
 _IMPOSSIBLE = [
-    (r"يتعلم|machine\s*learning|neural|gpt|llm|ذكاء\s*اصطناعي\s*حقيقي", "تدريب نماذج ذكاء اصطناعي"),
-    (r"blockchain|bitcoin\s*min|تعدين|consensus", "بلوكتشين أو تعدين"),
-    (r"يكسر\s*captcha|hacks?\s+other|اختراق|malware|ransomware", "وظائف ضارة أو غير قانونية"),
-    (r"clone\s*telegram|زي\s*تليجرام\s*نفسه|voip|مكالمات\s*صوتية\s*حقيقية", "بروتوكولات/VoIP خارج نطاق تيليجرام"),
+    (r"يتعلم|machine\s*learning|neural|gpt|llm|ذكاء\s*اصطناعي\s*حقيقي|NLU\s*training", "تدريب نماذج ذكاء اصطناعي"),
+    (r"blockchain|bitcoin\s*min|تعدين|consensus|from\s*scratch.*chain", "بلوكتشين أو تعدين"),
+    (r"يكسر\s*captcha|hacks?\s+other|اختراق|malware|ransomware|worm", "وظائف ضارة أو غير قانونية"),
+    (r"clone\s*telegram|زي\s*تليجرام\s*نفسه|voip|مكالمات\s*صوتية\s*حقيقية|real-?time\s*video", "بروتوكولات/فيديو/VoIP خارج النطاق"),
     (r"self[- ]?replicat|دودة|ينشر\s*نفسه", "سلوك تكراري خبيث"),
     (r"linux\s*server|ssh\s*root|يدير\s*سيرفر", "إدارة أنظمة تشغيل كاملة"),
     (r"predict.*99%|يتوقع\s*أسعار.*دقة", "تنبؤ مالي دقيق"),
-    (r"\b(rust|c\+\+|java|golang|go\s*lang)\b.*bot|بوت.*(rust|c\+\+|java)", "لغات غير Python"),
+    (r"(rust|c\+\+|java|golang|go\s*lang).{0,40}bot|bot.{0,40}(rust|c\+\+|java|golang)|بوت.*(rust|c\+\+|java)", "لغات غير Python"),
+    (r"hipaa|soc\s*2|full\s*gdpr\s*compliance", "امتثال قانوني كامل كمنتج"),
+    (r"jira-?like|full\s*crm\s*enterprise|ats\s*system|neobank", "أنظمة مؤسسية كاملة خارج النطاق"),
 ]
 
 _COMPLEX_NEEDS = [

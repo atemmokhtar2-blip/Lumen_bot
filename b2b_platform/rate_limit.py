@@ -72,6 +72,22 @@ class RateLimiter:
         used = int(row[0]) if row else 0
         return max(0, limit - used)
 
+    def seconds_until_allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
+        """Seconds until oldest hit in window expires (0 if under limit)."""
+        if limit <= 0:
+            return 0
+        now = time.time()
+        cutoff = now - window_sec
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT ts FROM hits WHERE bucket=? AND ts >= ? ORDER BY ts ASC",
+            (str(key), cutoff),
+        ).fetchall()
+        if len(rows) < limit:
+            return 0
+        oldest = float(rows[0][0])
+        return max(1, int(oldest + window_sec - now) + 1)
+
 
 _LIMITER: RateLimiter | None = None
 
