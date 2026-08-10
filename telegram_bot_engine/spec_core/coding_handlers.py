@@ -1568,12 +1568,24 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service in {"shop", "payments", "cart", "subscriptions"})  # type: ignore
         for f in spec.features
     )
+    # Import ONLY symbols that handlers.py actually defines.
+    # payment_precheckout/success use pre_checkout_handler / successful_payment_handler.
     imports_handlers = "start_handler, help_handler, callback_router"
-    extra_imports = []
+    extra_imports: list[str] = []
+    _skip_import_features = {
+        "start",
+        "help",
+        "payment_precheckout",
+        "payment_success",
+    }
     for feat in spec.features:
-        if feat.feature in ("start", "help"):
+        if feat.feature in _skip_import_features:
             continue
-        extra_imports.append(f"handle_{feat.id}".replace("-", "_"))
+        if feat.trigger.type not in ("command", "callback"):
+            continue
+        # Same naming rule as emission in _emit_handlers
+        fname = f"handle_{feat.id}".replace("-", "_")
+        extra_imports.append(fname)
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
     need_market = any(
