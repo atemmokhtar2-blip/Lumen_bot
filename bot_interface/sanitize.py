@@ -3,19 +3,23 @@ from __future__ import annotations
 
 import re
 
-# Telegram bot tokens: 123456789:AA...
-_TG_TOKEN = re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{20,}\b")
-# GitHub PATs
+# Telegram bot tokens: 123456:AA... (BotFather uses 6–12 digit ids)
+_TG_TOKEN = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b")
+# GitHub PATs + fine-grained
 _GH_TOKEN = re.compile(
     r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{10,}\b"
 )
+# Stripe / sk_ live keys
+_STRIPE = re.compile(r"\b(sk_live_|sk_test_|pk_live_|pk_test_|whsec_)[A-Za-z0-9]+")
 # Generic bearer / api keys
 _BEARER = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-]{12,}")
-_API_KEY = re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?([^\s'\"]{8,})")
+_API_KEY = re.compile(
+    r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?([^\s'\"]{8,})"
+)
 # Absolute paths that may leak host layout
 _ABS_PATH = re.compile(r"(/(?:home|tmp|var|app|usr|opt|root)/[^\s:\"']+)")
-# Shell-dangerous chars for path validation
-_UNSAFE_PATH = re.compile(r"[;|&$`<>\\\n\r\0]")
+# Shell-dangerous chars for path validation (incl. command substitution)
+_UNSAFE_PATH = re.compile(r"[;|&$`<>\\\n\r\0*(){}\[\]!#]")
 
 
 def sanitize_error(text: str, *, max_len: int = 200) -> str:
@@ -23,6 +27,7 @@ def sanitize_error(text: str, *, max_len: int = 200) -> str:
     s = str(text or "")
     s = _TG_TOKEN.sub("[REDACTED_TELEGRAM_TOKEN]", s)
     s = _GH_TOKEN.sub("[REDACTED_GITHUB_TOKEN]", s)
+    s = _STRIPE.sub("[REDACTED_STRIPE_KEY]", s)
     s = _BEARER.sub(r"\1[REDACTED]", s)
     s = _API_KEY.sub(r"\1=[REDACTED]", s)
     s = _ABS_PATH.sub("[PATH]", s)
@@ -42,9 +47,13 @@ def assert_safe_fs_path(path: str) -> str:
         raise ValueError("empty_path")
     if _UNSAFE_PATH.search(p):
         raise ValueError("invalid_path_characters")
-    # Null bytes already covered; reject obvious traversal when used as shell arg
-    if "\n" in p or "\r" in p:
+    if "\n" in p or "\r" in p or "\x00" in p:
         raise ValueError("invalid_path_characters")
+    # Reject path segments that look like shell expansion
+    if any(seg.startswith("-") and len(seg) > 1 for seg in p.replace("\\", "/").split("/")):
+        # allow relative "./x" but not "--flag"
+        if "--" in p:
+            raise ValueError("invalid_path_characters")
     return p
 
 

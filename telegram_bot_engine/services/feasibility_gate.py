@@ -27,16 +27,30 @@ class FeasibilityResult:
 
 # Patterns that require external services / heavy domain logic we cannot invent
 _IMPOSSIBLE = [
-    (r"يتعلم|machine\s*learning|neural|gpt|llm|ذكاء\s*اصطناعي\s*حقيقي|NLU\s*training", "تدريب نماذج ذكاء اصطناعي"),
-    (r"blockchain|bitcoin\s*min|تعدين|consensus|from\s*scratch.*chain", "بلوكتشين أو تعدين"),
-    (r"يكسر\s*captcha|hacks?\s+other|اختراق|malware|ransomware|worm", "وظائف ضارة أو غير قانونية"),
-    (r"clone\s*telegram|زي\s*تليجرام\s*نفسه|voip|مكالمات\s*صوتية\s*حقيقية|real-?time\s*video", "بروتوكولات/فيديو/VoIP خارج النطاق"),
-    (r"self[- ]?replicat|دودة|ينشر\s*نفسه", "سلوك تكراري خبيث"),
-    (r"linux\s*server|ssh\s*root|يدير\s*سيرفر", "إدارة أنظمة تشغيل كاملة"),
+    # True ML training / autonomous learning (not lightweight AI workspace stubs)
+    (
+        r"يتعلم\s*من\s*المحادث|يتعلم\s*من\s*البيانات|machine\s*learning|neural\s*net|"
+        r"fine[- ]?tun|يدرب\s*نموذج|تدريب\s*نموذج|ذكاء\s*اصطناعي\s*حقيقي|NLU\s*training|"
+        r"deep\s*learning|يصبح\s*ذكي\s*بال",
+        "تدريب نماذج ذكاء اصطناعي",
+    ),
+    (r"bitcoin\s*min|تعدين\s*(عملات|بيتكوين)|consensus\s*from\s*scratch|from\s*scratch.*blockchain", "بلوكتشين أو تعدين من الصفر"),
+    (
+        r"يكسر\s*captcha|hacks?\s+other|hack\s+bots?|اختراق|malware|ransomware|worm|"
+        r"ddos|phishing\s*kit|keylogger|يستولي\s*على|سرقة\s*حساب",
+        "وظائف ضارة أو غير قانونية",
+    ),
+    (r"clone\s*telegram|زي\s*تليجرام\s*نفسه|voip|مكالمات\s*صوتية\s*حقيقية|real-?time\s*video\s*call", "بروتوكولات/فيديو/VoIP خارج النطاق"),
+    (r"self[- ]?replicat|دودة\s*برمج|ينشر\s*نفسه", "سلوك تكراري خبيث"),
+    (r"linux\s*server\s*fleet|ssh\s*root|يدير\s*سيرفرات", "إدارة أنظمة تشغيل كاملة"),
     (r"predict.*99%|يتوقع\s*أسعار.*دقة", "تنبؤ مالي دقيق"),
-    (r"(rust|c\+\+|java|golang|go\s*lang).{0,40}bot|bot.{0,40}(rust|c\+\+|java|golang)|بوت.*(rust|c\+\+|java)", "لغات غير Python"),
+    (
+        r"(rust|c\+\+|java|golang|go\s*lang|kotlin|swift).{0,40}bot|"
+        r"bot.{0,40}(rust|c\+\+|java|golang)|بوت\s*(ب|بـ)?\s*(rust|c\+\+|java|golang)",
+        "لغات غير Python",
+    ),
     (r"hipaa|soc\s*2|full\s*gdpr\s*compliance", "امتثال قانوني كامل كمنتج"),
-    (r"jira-?like|full\s*crm\s*enterprise|ats\s*system|neobank", "أنظمة مؤسسية كاملة خارج النطاق"),
+    (r"jira-?like|full\s*crm\s*enterprise|ats\s*system|neobank\s*from\s*scratch", "أنظمة مؤسسية كاملة خارج النطاق"),
 ]
 
 _COMPLEX_NEEDS = [

@@ -213,6 +213,24 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as exc:
         meta["anti_hallucination_error"] = str(exc)[:300]
         meta["ready_for_token"] = False
+        # Fail closed: never mark project ready if the gate itself crashed
+        if result.ok:
+            meta["blocked_by"] = "anti_hallucination_exception"
+            return GenerationResult(
+                success=False,
+                project_path=str(project_dir),
+                stages=[
+                    StageResult.ok("spec_preset", outputs={"preset": tag}),
+                    StageResult.ok("spec_codegen", outputs={"files": result.files}),
+                    StageResult.failed(
+                        "anti_hallucination",
+                        errors=[f"gate_exception:{type(exc).__name__}"],
+                    ),
+                ],
+                validation_reports=[],
+                errors=[f"anti_hallucination_gate_failed:{type(exc).__name__}: {str(exc)[:200]}"],
+                metadata=meta,
+            )
 
     if result.ok and ah_report is not None and not ah_report.ok:
         # Structural generation succeeded but verification failed → not success for user

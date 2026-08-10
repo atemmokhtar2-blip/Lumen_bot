@@ -439,14 +439,25 @@ def _present_packages(lines: list[str]) -> set[str]:
 def _preemptive_loosen(cleaned: Path) -> tuple[Path, list[str]]:
     """
     Before first pip install: unpin transitive deps that commonly conflict
-    when their parent framework is also listed.
+    when their parent framework is also listed. Also strip blank/comment-only
+    noise and normalize Windows line endings.
     """
-    lines = [ln.strip() for ln in cleaned.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    raw_text = cleaned.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n").replace("\r", "\n")
+    lines = []
+    for ln in raw_text.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        lines.append(s)
     present = _present_packages(lines)
     to_unpin: set[str] = set()
     for framework, trans in _TRANSITIVE_WHEN.items():
         if framework in present:
             to_unpin |= {t for t in trans if t in present}
+    # Always prefer framework pin; unpin known conflict companions even if
+    # framework name appears only as python-telegram-bot / aiogram etc.
+    if "aiogram" in present or "python-telegram-bot" in present:
+        to_unpin |= {t for t in ("aiofiles", "aiohttp", "httpx", "httpcore") if t in present}
 
     notes: list[str] = []
     out: list[str] = []
@@ -456,7 +467,7 @@ def _preemptive_loosen(cleaned: Path) -> tuple[Path, list[str]]:
             out.append(raw)
             continue
         name, rest = parsed
-        if name in to_unpin and "==" in rest:
+        if name in to_unpin and any(op in rest for op in ("==", "~=", ">=", "<=")):
             extras = ""
             em = re.match(r"(\[[^\]]+\])", rest)
             if em:

@@ -111,6 +111,59 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     return files
 
 
+def _repair_handler_imports(root: Path) -> list[str]:
+    """Ensure main.py only imports symbols that handlers.py actually defines.
+
+    Prevents ImportError on generated bots when emission drifts.
+    """
+    import re
+
+    notes: list[str] = []
+    main_p = root / "main.py"
+    hand_p = root / "app" / "handlers.py"
+    if not main_p.exists() or not hand_p.exists():
+        return notes
+    main = main_p.read_text(encoding="utf-8")
+    handlers = hand_p.read_text(encoding="utf-8")
+    defined = set(re.findall(r"(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", handlers))
+    m = re.search(r"(from app\.handlers import )([^\n]+)", main)
+    if not m:
+        return notes
+    names = [x.strip() for x in m.group(2).split(",") if x.strip()]
+    kept = [n for n in names if n in defined]
+    dropped = [n for n in names if n not in defined]
+    if dropped:
+        notes.append(f"dropped_undefined_handler_imports:{','.join(dropped[:20])}")
+        # Always keep callback_router if defined
+        new_import = m.group(1) + ", ".join(kept) if kept else m.group(1) + "start_handler"
+        main2 = main[: m.start()] + new_import + main[m.end() :]
+        # Also strip CommandHandler registrations that reference missing symbols
+        for name in dropped:
+            main2 = re.sub(
+                rf"\n\s*app\.add_handler\(CommandHandler\([^)]*?,\s*{re.escape(name)}\s*\)\)",
+                "",
+                main2,
+            )
+        main_p.write_text(main2, encoding="utf-8")
+
+    # menu_shop requires market service
+    if "async def menu_shop" in handlers:
+        market = root / "app" / "services" / "market.py"
+        if not market.exists():
+            market.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                market.write_text(_emit_market().rstrip() + "\n", encoding="utf-8")
+                notes.append("emitted_missing_market_service")
+            except Exception:
+                market.write_text(
+                    '"""Auto-stub market service (generated)."""\n'
+                    "def catalog(*a, **k):\n    return 'shop unavailable'\n",
+                    encoding="utf-8",
+                )
+                notes.append("stubbed_missing_market_service")
+    return notes
+
+
 def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     root = Path(out_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -120,6 +173,10 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content.rstrip() + "\n", encoding="utf-8")
         written.append(str(path))
+    try:
+        _repair_handler_imports(root)
+    except Exception:
+        pass
     return written
 
 

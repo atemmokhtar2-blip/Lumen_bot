@@ -964,7 +964,11 @@ def compose_session(
     elif primary == "shop" or "shop" in secondary:
         s.selected.update(_SHOP_CAPS)
 
-    # Hard ceiling for medium bots (keep complex potatoes uncapped)
+    # Hard ceiling: medium stays lean; complex capped for runtime health
+    if intensity == "complex" and len(s.selected) > 72:
+        core = {"start", "help", "lang"}
+        ordered = [x for x in s.selected if x in core] + [x for x in s.selected if x not in core]
+        s.selected = set(list(dict.fromkeys(ordered))[:72])
     if intensity == "medium" and len(s.selected) > 40:
         # Prefer primary domain + core commands
         core = {"start", "help", "lang"}
