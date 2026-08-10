@@ -1,98 +1,95 @@
-# AI Agent 7h Bot
+# AI Agent 7h
 
-بوت تيليجرام عام يولّد مشاريع بوتات تيليجرام من وصف نصي.
+منصة توليد واستضافة بوتات تيليجرام — أربعة أسطح منتج في نظام واحد.
 
-## الوضع الحالي (نهائي)
+## أسطح المنتج
 
-| البند | الحالة |
-|--------|--------|
-| مسار التوليد | **حتمي فقط (zero-AI)** عبر `spec_core` |
-| مسار الذكاء الاصطناعي | **محذوف نهائياً** (لا OpenAI / Groq / HF / planner / codegen بالـ LLM) |
-| الوصول | **عام** لجميع مستخدمي تيليجرام افتراضياً |
-| التحقق بعد التوليد | بوابة **anti-hallucination** إلزامية |
-| تشغيل البوتات المولّدة | عزل قوي (Docker مفضّل + sandbox لكل مستخدم) |
+| السطح | الوصف | التفعيل |
+|--------|--------|---------|
+| **Consumer Bot** | بوت تيليجرام عام للمستخدمين | `python main.py` |
+| **B2B API** | REST API مدفوعة للمطورين + حصص + مفاتيح | `ENABLE_API=1` أو `python api_main.py` |
+| **White-label** | علامة تجارية / ألوان / نطاق لكل مستأجر (Business+) | `PATCH /v1/me/white-label` |
+| **Managed Hosting** | توليد + تشغيل + إيقاف + تشخيص البوتات | `POST /v1/hosts/*` |
 
-## كيف يعمل التوليد
-
-```text
-وصف المستخدم
-  → اختيار preset / تكوين المواصفات (spec_core)
-  → كتابة ملفات المشروع (محركات حتمية)
-  → بوابة ضد الهلوسة (syntax + handlers حقيقية + أوامر مؤكدة)
-  → تسليم للمستخدم فقط إذا نجح التحقق
-```
-
-لا يُعلن عن ميزة أو أمر إلا بعد التحقق من وجود كود حقيقي (وليس stub).
+التوليد **حتمي (zero-AI)** عبر `spec_core` + بوابة **anti-hallucination**.
 
 ## التشغيل
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env   # ثم ضع TELEGRAM_BOT_TOKEN
-python main.py
+cp .env.example .env   # TELEGRAM_BOT_TOKEN=...
+python main.py         # Consumer bot + B2B API على PORT
+# أو API فقط:
+python api_main.py
 ```
 
-أو برمجياً:
+## B2B API (ملخص)
 
-```python
-from telegram_bot_engine import generate_bot
+المصادقة: `Authorization: Bearer sk_live_...` أو `X-Api-Key`.
 
-result = generate_bot("بوت فيه /start ويرد على الرسائل")
-print(result.success, result.project_path, result.metadata)
+| Method | Path | الوصف |
+|--------|------|--------|
+| GET | `/health` | صحة الخدمة |
+| GET | `/v1/plans` | خطط الأسعار |
+| POST | `/v1/tenants` | إنشاء مستأجر (يتطلب `X-Admin-Token` إن وُجد `PLATFORM_ADMIN_TOKEN`) |
+| GET | `/v1/me` | هوية المستأجر + الخطة |
+| PATCH | `/v1/me/white-label` | تحديث العلامة البيضاء |
+| POST | `/v1/me/rotate_key` | تدوير مفتاح API |
+| POST | `/v1/generate` | `{ "description": "..." }` → مشروع + تحقق |
+| POST | `/v1/hosts/start` | `{ "project_path", "bot_token" }` |
+| POST | `/v1/hosts/stop` | إيقاف مثيل |
+| GET | `/v1/hosts` | حالة الاستضافة |
+| POST | `/v1/hosts/diagnose` | تشخيص أعطال |
+| GET | `/v1/usage` | الاستهلاك الشهري |
+| GET/POST | `/v1/invoices` | فواتير |
+| GET | `/v1/dashboard` | لوحة مجمّعة |
+| POST | `/v1/billing/webhook/stripe` | جاهز لـ Stripe |
+
+### الخطط
+
+| Plan | $/mo | Generations | Hosted bots | RPM | White-label |
+|------|------|-------------|-------------|-----|-------------|
+| free | 0 | 20 | 1 | 30 | لا |
+| pro | 49 | 500 | 10 | 120 | لا |
+| business | 199 | 5000 | 100 | 600 | نعم |
+| enterprise | custom | ∞ | ∞ | 3000 | نعم |
+
+## مثال سريع
+
+```bash
+# إنشاء مستأجر
+curl -s -X POST localhost:8080/v1/tenants \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Acme","plan_id":"business","brand_name":"Acme Bots"}'
+
+# توليد
+curl -s -X POST localhost:8080/v1/generate \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"بوت فيه /start ويرد على الرسائل"}'
+
+# لوحة
+curl -s localhost:8080/v1/dashboard -H "Authorization: Bearer $API_KEY"
 ```
 
-## متغيرات البيئة
+## العزل والأمان
 
-| المتغير | الوصف |
-|---------|--------|
-| `TELEGRAM_BOT_TOKEN` | توكن البوت الأساسي (إلزامي) |
-| `ALLOWED_USER_IDS` | قائمة معرفات (اختياري؛ فارغ = عام) |
-| `LOCK_BOT_TO_ALLOWLIST` | `1` لقفل البوت على القائمة فقط |
-| `RATE_LIMIT_PER_MINUTE` | حد الرسائل لكل مستخدم (افتراضي 12) |
-| `MAX_PROJECTS_PER_USER` | حد المشاريع لكل مستخدم (افتراضي 50) |
-| `OUTPUT_DIR` | مجلد المشاريع (افتراضي `/tmp/generated`) |
-| `TBE_PREFER_DOCKER` | تفضيل Docker للعزل (افتراضي مفعّل) |
-| `TBE_DOCKER_MEMORY` / `CPUS` / `PIDS` | حدود موارد الحاوية |
+- Sandbox لكل مستخدم/مستأجر تحت `OUTPUT_DIR`
+- Docker مفضّل لتشغيل البوتات المولَّدة (حدود CPU/RAM/pids)
+- مفاتيح API تُخزَّن **hashed** (SHA-256) — المفتاح الخام يُعرض مرة واحدة
+- Rate limit + حصص شهرية حسب الخطة
+- لا مسار LLM لتوليد الكود
 
-انظر `.env.example` للتفاصيل.
-
-## هيكل المشروع
+## الهيكل
 
 ```text
-main.py                 نقطة تشغيل واجهة تيليجرام
-bot_interface/          أوامر، رسائل، إعدادات، صحة
-telegram_bot_engine/
-  spec_core/            مسار التوليد الحتمي
-  services/
-    anti_hallucination/ بوابة منع الهلوسة
-    user_sandbox/       مجلدات معزولة لكل مستخدم
-    live_runner/        تشغيل/تشخيص البوتات المولّدة
-  engines/generators/
-    live_deployment/    Docker / local isolation
-requirements.txt
-.env.example
+main.py / api_main.py
+bot_interface/          # Consumer Telegram
+api/                    # B2B HTTP (aiohttp)
+b2b_platform/           # tenants, plans, billing, metering
+telegram_bot_engine/    # generation + isolation + hosting
+  spec_core/
+  services/anti_hallucination/
+  services/hosting/
+  services/user_sandbox/
 ```
-
-## العزل
-
-1. **ملفات:** كل مستخدم تحت  
-   `OUTPUT_DIR/users/<shard>/<telegram_id>/projects|clones|runtime`
-2. **تشغيل (Docker):** حاوية منفصلة، `cap-drop ALL`، read-only، حدود memory/CPU/pids، توكن البوت المولَّد فقط (بدون توكن المضيف).
-3. **Fallback محلي:** حدود `resource` + بيئة نظيفة عبر `clean_child_env`.
-
-## ملاحظات
-
-- لا يوجد مسار LLM لتوليد الكود أو لردود الشريك الذكي.
-- فشل بوابة anti-hallucination → المشروع **غير جاهز** ولن يُطلب توكن التشغيل.
-- هذا هو ملف التوثيق الوحيد في المستودع.
-
-## Capability scale (registry)
-
-- حوالي **30,270** capability key حتمية في `spec_core.registry`
-- كل مفتاح يمر على مسار تنفيذي (`service.method` → SQLite durable)
-- Domain handlers متخصصة لأعلى الخدمات حجماً + مسار عام مُحسَّن
-- اختبارات: `tests/test_capabilities_scale.py`
-  - exhaustive لكل المفاتيح
-  - load متزامن (آلاف العمليات/ثانية)
-  - سيناريوهات واقعية متعددة الخطوات
-
