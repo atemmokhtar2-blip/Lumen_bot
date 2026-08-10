@@ -1086,7 +1086,7 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append("    parts = []")
                 lines.append("    for m in msgs[-5:]:")
                 lines.append("        role = 'staff' if m['is_staff'] else 'user'")
-                lines.append("        parts.append(f'- {role}: {m[\'body\']}')")
+                lines.append('        parts.append(f"- {role}: {m[\'body\']}")')
                 lines.append('    tail = "\\n".join(parts)')
                 lines.append('    await message.reply_text(f"#{data[\'id\']} [{data[\'status\']}] {data[\'subject\']}\\n{tail}")')
             else:

@@ -145,23 +145,31 @@ class BillingService:
         return inv
 
     def apply_plan(self, tenant_id: str, plan_id: str, *, stripe_customer: str = "") -> bool:
+        """Atomically set plan_id / active / metadata under one exclusive lock.
+
+        Previously: get() → mutate local copy → update_white_label() (reloads
+        and may drop metadata) → overwrite _by_id + _save(). That race could
+        lose stripe_customer_id / last_plan_change under concurrent writes.
+        """
         store = get_tenant_store()
-        t = store.get(tenant_id)
-        if not t:
-            return False
-        meta = dict(t.metadata or {})
-        if stripe_customer:
-            meta["stripe_customer_id"] = stripe_customer
-        meta["last_plan_change"] = time.time()
-        t.metadata = meta
-        t.plan_id = (plan_id or t.plan_id).lower()
-        t.active = True
-        store.update_white_label(tenant_id, plan_id=t.plan_id)
-        # persist metadata via direct save path
-        store._by_id[tenant_id] = t
-        store._save()
-        logger.info("tenant %s upgraded to plan %s", tenant_id, t.plan_id)
-        return True
+
+        def _do():
+            cur = store._by_id.get(tenant_id)
+            if not cur:
+                return False
+            meta = dict(cur.metadata or {})
+            if stripe_customer:
+                meta["stripe_customer_id"] = stripe_customer
+            meta["last_plan_change"] = time.time()
+            cur.metadata = meta
+            cur.plan_id = (plan_id or cur.plan_id).lower()
+            cur.active = True
+            return True
+
+        ok = bool(store._mutate(_do))
+        if ok:
+            logger.info("tenant %s upgraded to plan %s", tenant_id, (plan_id or "").lower())
+        return ok
 
     def start_checkout(
         self,

@@ -13,10 +13,16 @@ async def create_tenant(request: web.Request) -> web.Response:
     import os
 
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-    if admin:
-        token = (request.headers.get("X-Admin-Token") or "").strip()
-        if token != admin:
-            raise web.HTTPUnauthorized(text='{"error":"admin_required"}', content_type="application/json")
+    if not admin:
+        # When the public API surface is enabled, refuse open tenant creation
+        # so callers cannot self-provision enterprise without an admin token.
+        if (os.getenv("ENABLE_API") or "").strip() in {"1", "true", "yes"}:
+            raise web.HTTPForbidden(
+                text='{"error":"admin_token_required"}',
+                content_type="application/json",
+            )
+    elif (request.headers.get("X-Admin-Token") or "").strip() != admin:
+        raise web.HTTPUnauthorized(text='{"error":"admin_required"}', content_type="application/json")
     body = await request.json()
     name = str(body.get("name") or "Tenant").strip()
     plan_id = str(body.get("plan_id") or "free").lower()

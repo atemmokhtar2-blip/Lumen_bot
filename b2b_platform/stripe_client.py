@@ -138,8 +138,14 @@ def verify_webhook_signature(
     """Verify Stripe-Signature header (t=...,v1=...)."""
     secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
     if not secret:
-        # Dev mode: accept if no secret configured (log warning)
-        logger.warning("STRIPE_WEBHOOK_SECRET unset — skipping signature verify")
+        # Production (Stripe live key present) must never skip verification —
+        # otherwise anyone can POST forged checkout.session.completed events
+        # and upgrade tenants for free.
+        if stripe_configured():
+            logger.error("STRIPE_WEBHOOK_SECRET required when STRIPE_SECRET_KEY is set")
+            return False
+        # Dev-only fallback when Stripe is not configured at all
+        logger.warning("STRIPE_WEBHOOK_SECRET unset (dev only) — skipping signature verify")
         return True
     if not sig_header:
         return False
