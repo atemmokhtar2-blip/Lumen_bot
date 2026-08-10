@@ -5,14 +5,93 @@ from .coding_emit_foundation import _msg
 from .registry import get_capability
 from .schema import BotSpec, Feature
 def _emit_keyboards(spec: BotSpec) -> str:
-    rows = []
-    for b in spec.start_buttons:
-        rows.append(
-            f"        [InlineKeyboardButton({b.label!r}, callback_data={b.callback_id!r})],"
-        )
-    # Fill from primary command features so the UI is not empty/incomplete
-    if len(rows) < 6:
-        seen = {b.callback_id for b in spec.start_buttons}
+    """Build a launch-ready main menu (max ~10 rows) with cmd: callbacks."""
+    lang = (spec.bot.language or "ar").lower()
+    ar = lang.startswith("ar")
+
+    if ar:
+        curated = [
+            ("🛍️ المتجر", "shopcatalog"),
+            ("🛒 السلة", "cartview"),
+            ("📦 طلباتي", "shopmyorders"),
+            ("⭐ النقاط", "balance"),
+            ("💎 الخطط", "plans"),
+            ("👛 المحفظة", "walletbalance"),
+            ("🎟️ كوبون", "couponapply"),
+            ("🎫 تذكرة دعم", "ticketopen"),
+            ("🏆 المتصدرين", "leaderboard"),
+            ("🌐 اللغة", "lang"),
+        ]
+    else:
+        curated = [
+            ("🛍️ Shop", "shopcatalog"),
+            ("🛒 Cart", "cartview"),
+            ("📦 My orders", "shopmyorders"),
+            ("⭐ Points", "balance"),
+            ("💎 Plans", "plans"),
+            ("👛 Wallet", "walletbalance"),
+            ("🎟️ Coupon", "couponapply"),
+            ("🎫 Support", "ticketopen"),
+            ("🏆 Leaderboard", "leaderboard"),
+            ("🌐 Language", "lang"),
+        ]
+
+    feat_keys = {f.feature for f in spec.features}
+    commerce_ish = bool(
+        feat_keys
+        & {
+            "shop_catalog", "shop_buy", "cart_view", "cart_checkout", "balance",
+            "plans", "wallet_balance", "coupon_apply", "ticket_open",
+        }
+    ) or any(x in "".join(feat_keys) for x in ("shop", "cart", "wallet", "points"))
+
+    rows: list[str] = []
+    seen: set[str] = set()
+
+    def _norm_cb(raw: str) -> str:
+        raw = (raw or "").strip()
+        if not raw:
+            return ""
+        if not any(raw.startswith(p) for p in ("cmd:", "nav:", "pay:", "act:")):
+            raw = f"cmd:{raw}"
+        # Telegram callback_data: normalize dots/spaces from legacy packs
+        if raw.startswith("cmd:"):
+            body = raw[4:].replace(".", "").replace(" ", "").replace("-", "_").lower()
+            return f"cmd:{body}"
+        return raw
+
+    # Commerce / global launch: curated menu only (avoid mixed broken start_buttons)
+    if commerce_ish:
+        for label, cmd in curated:
+            cb = f"cmd:{cmd}"
+            rows.append(
+                f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
+            )
+            seen.add(cb)
+    else:
+        for b in spec.start_buttons:
+            cb = _norm_cb(b.callback_id or "")
+            if not cb or cb in seen:
+                continue
+            rows.append(
+                f"        [InlineKeyboardButton({b.label!r}, callback_data={cb!r})],"
+            )
+            seen.add(cb)
+            if len(rows) >= 10:
+                break
+        if len(rows) < 4:
+            for label, cmd in curated:
+                cb = f"cmd:{cmd}"
+                if cb in seen:
+                    continue
+                rows.append(
+                    f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
+                )
+                seen.add(cb)
+                if len(rows) >= 10:
+                    break
+
+    if len(rows) < 4:
         for feat in spec.features:
             if feat.trigger.type != "command":
                 continue
@@ -21,36 +100,28 @@ def _emit_keyboards(spec: BotSpec) -> str:
             cb = f"cmd:{feat.trigger.id}"
             if cb in seen:
                 continue
-            label = (feat.messages.success or feat.feature or feat.trigger.id)[:32]
+            label = (feat.messages.prompt or feat.feature or feat.trigger.id).replace("_", " ")[:28]
             rows.append(
                 f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
             )
             seen.add(cb)
-            if len(rows) >= 10:
+            if len(rows) >= 8:
                 break
-    if not rows:
-        for feat in spec.features:
-            if feat.trigger.type == "callback":
-                label = feat.messages.success or feat.feature
-                rows.append(
-                    f"        [InlineKeyboardButton({label!r}, callback_data={feat.trigger.id!r})],"
-                )
+
     body = "\n".join(rows) if rows else "        # no buttons"
-    return f'''"""Inline keyboards derived from BotSpec."""
-from __future__ import annotations
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
-
-def main_keyboard() -> InlineKeyboardMarkup | None:
-    rows = [
-{body}
-    ]
-    rows = [r for r in rows if r]
-    if not rows:
-        return None
-    return InlineKeyboardMarkup(rows)
-'''
+    return (
+        '"""Inline keyboards derived from BotSpec."""\n'
+        "from __future__ import annotations\n\n"
+        "from telegram import InlineKeyboardButton, InlineKeyboardMarkup\n\n\n"
+        "def main_keyboard() -> InlineKeyboardMarkup | None:\n"
+        "    rows = [\n"
+        f"{body}\n"
+        "    ]\n"
+        "    rows = [r for r in rows if r]\n"
+        "    if not rows:\n"
+        "        return None\n"
+        "    return InlineKeyboardMarkup(rows)\n"
+    )
 
 
 
@@ -577,13 +648,17 @@ def _emit_handlers(spec: BotSpec) -> str:
     n_cmds = len([f for f in spec.features if f.trigger.type == "command"])
     if lang.startswith("ar"):
         welcome = (
-            f"مرحباً بك 👋\nبوت جاهز — {n_cmds} أمر.\n"
-            "اكتب /help لكل الأوامر.\nTELEGRAM_BOT_TOKEN في .env ثم python main.py"
+            f"مرحباً بك 👋\n"
+            f"بوت متجر متكامل — {n_cmds} أمر جاهز.\n"
+            "من القائمة بالأسفل: المتجر، السلة، الطلبات، النقاط، الخطط، المحفظة والدعم.\n"
+            "اكتب /help لعرض كل الأوامر."
         )
     else:
         welcome = (
-            f"Welcome 👋\nRunnable bot — {n_cmds} commands.\n"
-            "Type /help for all commands.\nSet TELEGRAM_BOT_TOKEN then python main.py"
+            f"Welcome 👋\n"
+            f"Full commerce bot — {n_cmds} commands ready.\n"
+            "Use the menu below: Shop, Cart, Orders, Points, Plans, Wallet & Support.\n"
+            "Type /help for the full command list."
         )
     help_lines = []
     help_lines.append(
@@ -1073,6 +1148,19 @@ def _emit_handlers(spec: BotSpec) -> str:
         if feat.trigger.type == "callback":
             cb_map.append((feat.trigger.id, f"handle_{feat.id}".replace("-", "_")))
 
+    # Build command → handler map so inline buttons actually run logic
+    cmd_to_handler: list[tuple[str, str]] = []
+    for feat in spec.features:
+        if feat.trigger.type != "command":
+            continue
+        if feat.feature in ("start", "help") or feat.trigger.id in ("start", "help"):
+            continue
+        h = f"handle_{feat.id}".replace("-", "_")
+        cmd_to_handler.append((feat.trigger.id, h))
+        slug2 = feat.feature.lower().replace("_", "")
+        if slug2 and slug2 != feat.trigger.id:
+            cmd_to_handler.append((slug2, h))
+
     lines.append("async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
     lines.append("    query = update.callback_query")
     lines.append("    if query is None:")
@@ -1080,9 +1168,35 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("    await query.answer()")
     lines.append("    data = query.data or ''")
     lines.append("    if data.startswith('cmd:'):")
+    lines.append("        cmd = (data[4:] or '').strip().lower().replace('-', '_').replace('.', '')")
+    lines.append("        cmd_compact = cmd.replace('_', '').replace(' ', '')")
+    lines.append("        _CMD_MAP = {")
+    seen_map: set[str] = set()
+    for cmd, h in cmd_to_handler:
+        for key in {cmd.lower(), cmd.lower().replace("_", ""), "".join(c for c in cmd.lower() if c.isalnum())}:
+            if not key or key in seen_map:
+                continue
+            seen_map.add(key)
+            lines.append(f"            {key!r}: {h},")
+    lines.append("        }")
+    lines.append("        _ALIASES = {")
+    lines.append("            'shop': 'shopcatalog', 'catalog': 'shopcatalog', 'cart': 'cartview',")
+    lines.append("            'orders': 'shopmyorders', 'myorders': 'shopmyorders', 'points': 'balance',")
+    lines.append("            'wallet': 'walletbalance', 'support': 'ticketopen', 'ticket': 'ticketopen',")
+    lines.append("            'coupon': 'couponapply', 'language': 'lang', 'buy': 'shopbuy',")
+    lines.append("            'plans': 'plans', 'sub': 'plans', 'subs': 'plans', 'leaderboard': 'leaderboard',")
+    lines.append("        }")
+    lines.append("        fn = _CMD_MAP.get(cmd) or _CMD_MAP.get(cmd_compact)")
+    lines.append("        if fn is None:")
+    lines.append("            target = _ALIASES.get(cmd) or _ALIASES.get(cmd_compact)")
+    lines.append("            if target:")
+    lines.append("                fn = _CMD_MAP.get(target) or _CMD_MAP.get(target.replace('_', ''))")
+    lines.append("        if fn is not None:")
+    lines.append("            await fn(update, context)")
+    lines.append("            return")
     lines.append("        message = update.effective_message")
     lines.append("        if message is not None:")
-    lines.append("            await message.reply_text('Use /' + data[4:] + ' to run this command.')")
+    lines.append("            await message.reply_text('Command /' + (data[4:] or '') + ' is not available.')")
     lines.append("        return")
     if cb_map:
         for cid, handler in cb_map:

@@ -463,6 +463,12 @@ def compose_session(
         s.selected.update(_COMMERCE_PRO_CAPS)
         s.selected.add("lang")
 
+    # UI language: Arabic request → Arabic menu/welcome
+    if any("\u0600" <= ch <= "\u06FF" for ch in (request or "")):
+        s.language = "ar"
+    elif any(k in _norm(request) for k in ("english", "global en", "en only")):
+        s.language = "en"
+
     return s
 
 
@@ -620,7 +626,7 @@ def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> 
         )
         for k in _COMMERCE_PRO_CAPS:
             s.selected.add(k)
-        s.language = "en"  # global default for market launch packs
+        # Keep session language (default ar); callers may set en for global EN packs
 
     elif preset == "fitness":
         s.set_name(bot_name or "fitness_bot")
