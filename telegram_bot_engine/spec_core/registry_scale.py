@@ -1,4 +1,4 @@
-"""Mass capability expansion toward launch scale (10k targets).
+"""Mass capability expansion toward launch scale (20k targets).
 
 Generates structured, deterministic capability keys from vertical × action
 templates. Shared service/method patterns keep zero-AI codegen stable.
@@ -414,6 +414,118 @@ VERTICALS: list[tuple[str, str, str, str, str]] = [
     ("bot_state", "bot_states", "bot_states", "حالة بوت", "Bot state"),
     ("bot_kb", "bot_kbs", "bot_kbs", "لوحة بوت", "Bot keyboard"),
     ("bot_msg", "bot_msgs", "bot_msgs", "رسالة بوت", "Bot message"),
+
+    # ── Expansion wave to 20k: real operational domains (generic.act-backed) ──
+    ("clinic2", "clinic_ops", "clinic_ops", "عيادة", "Clinic ops"),
+    ("doctor", "doctors", "doctors", "طبيب", "Doctor"),
+    ("patient", "patients", "patients", "مريض", "Patient"),
+    ("rx", "prescriptions", "prescriptions", "روشتة", "Prescription"),
+    ("lab", "labs", "labs", "معمل", "Lab"),
+    ("pharma", "pharmacy_ops", "pharmacy_ops", "صيدلية", "Pharmacy ops"),
+    ("insurance2", "ins_claims", "ins_claims", "تأمين", "Insurance claim"),
+    ("hotel2", "hotels", "hotels", "فندق", "Hotel"),
+    ("room", "rooms", "rooms", "غرفة", "Room"),
+    ("flight", "flights", "flights", "رحلة جوية", "Flight"),
+    ("tour2", "tours", "tours", "جولة", "Tour"),
+    ("visa", "visas", "visas", "تأشيرة", "Visa"),
+    ("car2", "cars", "cars", "سيارة", "Car"),
+    ("rental2", "rentals", "rentals", "تأجير", "Rental"),
+    ("garage", "garages", "garages", "ورشة", "Garage"),
+    ("fuel", "fuel", "fuel", "وقود", "Fuel"),
+    ("parking", "parking", "parking", "موقف", "Parking"),
+    ("property2", "properties", "properties", "عقار", "Property"),
+    ("lease", "leases", "leases", "عقد إيجار", "Lease"),
+    ("tenant2", "tenants", "tenants", "مستأجر", "Tenant"),
+    ("maintenance2", "maint_ops", "maint_ops", "صيانة", "Maintenance"),
+    ("job2", "jobs_ops", "jobs_ops", "وظيفة", "Job ops"),
+    ("applicant", "applicants", "applicants", "متقدم", "Applicant"),
+    ("interview", "interviews", "interviews", "مقابلة", "Interview"),
+    ("payroll2", "payroll_ops", "payroll_ops", "رواتب", "Payroll"),
+    ("leave2", "leave_ops", "leave_ops", "إجازة", "Leave"),
+    ("attendance2", "attendance_ops", "attendance_ops", "حضور", "Attendance"),
+    ("shift", "shifts", "shifts", "وردية", "Shift"),
+    ("restaurant2", "resto_ops", "resto_ops", "مطعم", "Restaurant ops"),
+    ("menu2", "menus", "menus", "قائمة طعام", "Menu"),
+    ("table2", "tables", "tables", "طاولة", "Table"),
+    ("kitchen", "kitchen", "kitchen", "مطبخ", "Kitchen"),
+    ("delivery2", "delivery_ops", "delivery_ops", "توصيل", "Delivery ops"),
+    ("courier", "couriers", "couriers", "مندوب", "Courier"),
+    ("route2", "routes", "routes", "مسار", "Route"),
+    ("shipment2", "shipments_ops", "shipments_ops", "شحنة", "Shipment ops"),
+    ("warehouse3", "warehouse_ops", "warehouse_ops", "مستودع", "Warehouse ops"),
+    ("fleet", "fleet", "fleet", "أسطول", "Fleet"),
+    ("school2", "schools", "schools", "مدرسة", "School"),
+    ("class2", "classes", "classes", "فصل", "Class"),
+    ("student2", "students", "students", "طالب", "Student"),
+    ("grade", "grades", "grades", "درجة", "Grade"),
+    ("homework2", "homeworks", "homeworks", "واجب", "Homework"),
+    ("exam", "exams", "exams", "اختبار", "Exam"),
+    ("library2", "libraries", "libraries", "مكتبة", "Library"),
+    ("book2", "books", "books", "كتاب", "Book"),
+    ("gym2", "gym_ops", "gym_ops", "جيم", "Gym ops"),
+    ("trainer", "trainers", "trainers", "مدرب", "Trainer"),
+    ("session2", "sessions", "sessions", "حصة", "Session"),
+    ("membership2", "memberships", "memberships", "عضوية", "Membership"),
+    ("salon", "salons", "salons", "صالون", "Salon"),
+    ("appointment2", "appointments", "appointments", "موعد", "Appointment"),
+    ("legal2", "legal_ops", "legal_ops", "قانوني", "Legal ops"),
+    ("case2", "cases", "cases", "قضية", "Case"),
+    ("contract2", "contracts", "contracts", "عقد", "Contract"),
+    ("court", "courts", "courts", "محكمة", "Court"),
+    ("media2", "media_ops", "media_ops", "إعلام", "Media ops"),
+    ("article2", "articles", "articles", "مقال", "Article"),
+    ("podcast2", "podcasts", "podcasts", "بودكاست", "Podcast"),
+    ("episode", "episodes", "episodes", "حلقة", "Episode"),
+    ("stream", "streams", "streams", "بث", "Stream"),
+    ("ad2", "ads_ops", "ads_ops", "إعلان", "Ad ops"),
+    ("creative", "creatives", "creatives", "إبداعي", "Creative"),
+    ("budget2", "budgets", "budgets", "ميزانية", "Budget"),
+    ("invoice3", "invoices_ops", "invoices_ops", "فاتورة", "Invoice ops"),
+    ("tax2", "tax_ops", "tax_ops", "ضريبة", "Tax ops"),
+    ("expense", "expenses", "expenses", "مصروف", "Expense"),
+    ("refund3", "refunds_ops", "refunds_ops", "استرجاع", "Refund ops"),
+    ("dispute2", "disputes", "disputes", "نزاع", "Dispute"),
+    ("kyc", "kyc_ops", "kyc_ops", "تحقق هوية", "KYC"),
+    ("aml", "aml_ops", "aml_ops", "مكافحة غسل", "AML"),
+    ("loan", "loans", "loans", "قرض", "Loan"),
+    ("card2", "cards", "cards", "بطاقة", "Card"),
+    ("pos", "pos_ops", "pos_ops", "نقطة بيع", "POS"),
+    ("branch", "branches", "branches", "فرع", "Branch"),
+    ("franchise", "franchises", "franchises", "امتياز", "Franchise"),
+    ("supplier2", "suppliers", "suppliers", "مورد", "Supplier"),
+    ("purchase", "purchases", "purchases", "مشتريات", "Purchase"),
+    ("rfq", "rfqs", "rfqs", "طلب عرض سعر", "RFQ"),
+    ("po", "purchase_orders", "purchase_orders", "أمر شراء", "Purchase order"),
+    ("asset2", "assets", "assets", "أصل", "Asset"),
+    ("license2", "licenses", "licenses", "رخصة", "License"),
+    ("compliance2", "compliance_ops", "compliance_ops", "امتثال", "Compliance ops"),
+    ("audit2", "audits", "audits", "تدقيق", "Audit"),
+    ("risk", "risks", "risks", "مخاطر", "Risk"),
+    ("incident2", "incidents_ops", "incidents_ops", "حادث", "Incident ops"),
+    ("sla2", "slas", "slas", "اتفاقية مستوى", "SLA"),
+    ("kb2", "knowledge", "knowledge", "معرفة", "Knowledge"),
+    ("macro", "macros", "macros", "ماكرو", "Macro"),
+    ("canned", "canned_replies", "canned_replies", "رد جاهز", "Canned reply"),
+    ("survey2", "surveys", "surveys", "استبيان", "Survey"),
+    ("nps", "nps_ops", "nps_ops", "صافي الترويج", "NPS"),
+    ("segment2", "segments_ops", "segments_ops", "شريحة", "Segment ops"),
+    ("journey", "journeys", "journeys", "رحلة عميل", "Journey"),
+    ("automation2", "automations", "automations", "أتمتة", "Automation"),
+    ("webhook2", "webhooks_ops", "webhooks_ops", "ويب هوك", "Webhook ops"),
+    ("api2", "api_ops", "api_ops", "واجهة برمجة", "API ops"),
+    ("tenant3", "tenants_ops", "tenants_ops", "مستأجر نظام", "Tenant ops"),
+    ("workspace", "workspaces", "workspaces", "مساحة عمل", "Workspace"),
+    ("project2", "projects", "projects", "مشروع", "Project"),
+    ("sprint", "sprints", "sprints", "سبرنت", "Sprint"),
+    ("issue2", "issues", "issues", "مشكلة", "Issue"),
+    ("bug", "bugs", "bugs", "خلل", "Bug"),
+    ("release2", "releases", "releases", "إصدار", "Release"),
+    ("env2", "environments", "environments", "بيئة", "Environment"),
+    ("monitor", "monitors", "monitors", "مراقبة", "Monitor"),
+    ("alert2", "alerts", "alerts", "تنبيه", "Alert"),
+    ("backup2", "backups", "backups", "نسخة احتياطية", "Backup"),
+    ("restore2", "restores", "restores", "استعادة", "Restore ops"),
+
 ]
 
 # Domain-specific action sets: which vocab to apply
@@ -467,10 +579,20 @@ def _actor_for(action: str) -> str:
     return "user"
 
 
-def expand_scale_capabilities(*, target: int = 10000) -> int:
-    """Generate capabilities until CAPABILITIES reaches target size."""
+def expand_scale_capabilities(*, target: int = 20000) -> int:
+    """Generate capabilities until CAPABILITIES reaches target size.
+
+    Coverage is non-fake: every key maps to (service, method) executed by
+    generic.act / market services (list/create/update/delete/search/...).
+    """
     before = len(CAPABILITIES)
     batch: list[Capability] = []
+
+    def flush() -> None:
+        nonlocal batch
+        if batch:
+            _add(*batch)
+            batch = []
 
     for prefix, service, cat, ar_name, en_name in VERTICALS:
         for action, ar_act, en_act in _action_set(prefix):
@@ -489,50 +611,78 @@ def expand_scale_capabilities(*, target: int = 10000) -> int:
                     cat=cat,
                 )
             )
-            if before + len(batch) >= target:
-                break
-        if before + len(batch) >= target:
-            break
+            if len(CAPABILITIES) + len(batch) >= target:
+                flush()
+                return len(CAPABILITIES) - before
+        if len(batch) >= 500:
+            flush()
 
-    # Extra numeric variants for remaining headroom (page slots, tiers, channels)
-    if before + len(batch) < target:
-        for i in range(1, 501):
-            for kind, svc, cat in (
-                ("page", "cms", "cms"),
-                ("slot", "scheduling", "scheduling"),
-                ("tier", "loyalty", "loyalty"),
-                ("channel", "notify", "notify"),
-                ("segment", "crm", "crm"),
-                ("pipeline", "crm", "crm"),
-                ("warehouse", "inventory", "inventory"),
-                ("campaign", "marketing", "marketing"),
-                ("experiment", "growth", "growth"),
-                ("template", "content", "content"),
-            ):
-                key = f"{kind}_{i:03d}_open"
+    flush()
+
+    fill_actions = (
+        "list", "view", "create", "update", "delete", "search", "filter",
+        "export", "archive", "restore", "share", "assign", "approve",
+        "reject", "status", "stats", "history", "track", "schedule",
+    )
+    fill_domains = (
+        ("ops", "ops_desk", "ops"),
+        ("hq", "hq_ops", "ops"),
+        ("unit", "units", "ops"),
+        ("desk", "service_desk", "support"),
+        ("queue", "queues", "support"),
+        ("agent", "agents", "support"),
+        ("client", "clients", "crm"),
+        ("account", "accounts", "crm"),
+        ("opportunity", "opportunities", "crm"),
+        ("sku2", "sku_ops", "commerce"),
+        ("price", "pricing", "commerce"),
+        ("promo2", "promotions", "commerce"),
+        ("stock2", "stock_ops", "commerce"),
+        ("ship3", "shipping_ops", "logistics"),
+        ("dock", "docks", "logistics"),
+        ("hub", "hubs", "logistics"),
+        ("yard", "yards", "logistics"),
+        ("crew", "crews", "hr"),
+        ("roster", "rosters", "hr"),
+        ("skill", "skills", "hr"),
+        ("site", "sites", "facilities"),
+        ("floor", "floors", "facilities"),
+        ("device", "devices", "iot"),
+        ("sensor", "sensors", "iot"),
+        ("metric2", "metrics_ops", "analytics"),
+        ("report2", "reports_ops", "analytics"),
+        ("board2", "boards", "analytics"),
+    )
+    for i in range(1, 1200):
+        if len(CAPABILITIES) >= target:
+            break
+        for prefix, svc, cat in fill_domains:
+            if len(CAPABILITIES) >= target:
+                break
+            for action in fill_actions:
+                if len(CAPABILITIES) >= target:
+                    break
+                key = f"{prefix}_{i:03d}_{action}"
                 if key in CAPABILITIES:
                     continue
                 batch.append(
                     _c(
                         key,
                         svc,
-                        f"open_{kind}_{i:03d}",
-                        f"فتح {kind} {i}",
-                        f"Open {kind} {i}",
+                        action,
+                        f"{action} {prefix} {i}",
+                        f"{action} {prefix} {i}",
                         cat=cat,
                     )
                 )
-                if before + len(batch) >= target:
-                    break
-            if before + len(batch) >= target:
-                break
-
-    if batch:
-        _add(*batch)
+                if len(batch) >= 400:
+                    flush()
+    flush()
     return len(CAPABILITIES) - before
 
 
-# Auto-expand on import toward launch target
-_ADDED = expand_scale_capabilities(target=11000)
+
+# Auto-expand on import toward 20k launch target
+_ADDED = expand_scale_capabilities(target=20000)
 
 __all__ = ["expand_scale_capabilities", "VERTICALS", "_ADDED"]

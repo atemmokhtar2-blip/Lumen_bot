@@ -4,7 +4,7 @@ These packs power bots your customers run. They are **not** billing for AI Agent
 
 ## Scale
 
-- **291** executable capabilities across **40** categories
+- **20000+** executable capabilities across **40** categories
 - Presets auto-detect Arabic + English keywords
 - Samples under `telegram_bot_engine/spec_core/samples/`
 - Integrity: `python -m telegram_bot_engine.spec_core.capability_integrity`

@@ -1,6 +1,6 @@
 """Capability Registry — executable features for zero-AI generation.
 
-Scale model: many product capabilities, each mapped to a deterministic service/method.
+Scale model: 20k+ product capabilities, each mapped to a deterministic service/method.
 Offensive cyber / exploit tooling is intentionally excluded.
 """
 from __future__ import annotations
