@@ -174,7 +174,15 @@ def _edu(m, uid, text):
     if m in {"certificate_issue", "certificate"}:
         return f"Certificate #{_insert('certificates', uid, 'Cert', text or 'done', 'issued')}"
     if m in {"progress_view", "progress"}:
-        return "Enrollments:\n" + _fmt(_list("enrollments", user_id=uid, status=None, limit=20), "none")
+        ens = _list("enrollments", user_id=uid, status=None, limit=20)
+        qs = _list("quizzes", user_id=uid, status="done", limit=50)
+        done = len(qs)
+        enrolled = max(len(ens), 1)
+        pct = min(100, int(100 * done / max(enrolled * 3, 1)))
+        return (
+            f"Progress ~{pct}% (quizzes done={done}, enrollments={len(ens)})\n"
+            + _fmt(ens, "no enrollments")
+        )
     if m in {"lesson_list", "lessons"}:
         return _fmt(_list("lessons", status="open", limit=20), "No lessons")
     if m in {"lesson_open", "open_lesson"}:
@@ -253,8 +261,26 @@ def _auction(m, uid, text):
 
 
 def _delivery(m, uid, text):
+    stages = ["created", "picked", "in_transit", "out_for_delivery", "delivered", "returned"]
     if m in {"create", "add"}:
         return f"Shipment #{_insert('shipments', uid, text or 'Shipment', text, 'created')}"
+    if m in {"advance", "next_stage"}:
+        iid = _first_id(text)
+        if not iid:
+            return "Usage: <shipment_id>"
+        row = _get(iid)
+        if not row or row["service"] != "shipments":
+            return "Shipment not found"
+        cur = row["status"]
+        try:
+            i = stages.index(cur)
+        except ValueError:
+            i = 0
+        if i >= len(stages) - 1:
+            return f"Shipment #{iid} already at {cur}"
+        nxt = stages[i + 1]
+        _set_status(iid, nxt)
+        return f"Shipment #{iid}: {cur} → {nxt}"
     if m in {"track", "status", "view"}:
         iid = _first_id(text)
         if iid:

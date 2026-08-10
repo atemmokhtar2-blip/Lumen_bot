@@ -422,6 +422,131 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     elif method in {"pre_checkout", "successful_payment"}:
         L.append("    await message.reply_text('Payment events are handled automatically after invoice pay — no manual command needed.')")
+    # ── Enterprise depth ────────────────────────────────────────────
+    elif method in {"order_set_status", "set_status"} and svc in {"shop", "orders", "admin"}:
+        need_args(2)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0]); st = context.args[1]",
+            "    except Exception:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    note = ' '.join(context.args[2:]) if len(context.args) > 2 else ''",
+            "    await message.reply_text(market_svc.order_set_status(oid, st, user.id, note))",
+        ]
+    elif method in {"order_timeline", "timeline"}:
+        need_args(1)
+        L += [
+            "    try:",
+            "        oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.order_timeline(oid))",
+        ]
+    elif method in {"stock_adjust", "stock_set"}:
+        need_args(2)
+        L += [
+            "    try:",
+            "        pid = int(context.args[0]); delta = int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.stock_adjust(pid, delta, user.id, ' '.join(context.args[2:])))",
+        ]
+    elif method in {"stock_low", "low_stock"}:
+        L.append("    thr = int(context.args[0]) if context.args and context.args[0].isdigit() else 5")
+        L.append("    await message.reply_text(market_svc.stock_low(thr))")
+    elif method in {"coupon_create", "create_coupon"}:
+        need_args(1)
+        L.append("    await message.reply_text(market_svc.coupon_create(user.id, ' '.join(context.args)))")
+    elif method in {"coupon_apply", "apply_coupon", "redeem_gift"}:
+        need_args(1)
+        L += [
+            "    code = context.args[0]",
+            "    oid = int(context.args[1]) if len(context.args) > 1 and context.args[1].isdigit() else 0",
+            "    await message.reply_text(market_svc.coupon_apply_code(user.id, code, oid))",
+        ]
+    elif method in {"affiliate_register", "referral_code"} and svc in {"growth", "affiliate", "points"}:
+        L.append("    parent = context.args[0] if context.args else ''")
+        L.append("    await message.reply_text(market_svc.affiliate_register(user.id, parent))")
+    elif method in {"affiliate_stats", "referral_stats"}:
+        L.append("    await message.reply_text(market_svc.affiliate_stats(user.id))")
+    elif method in {"affiliate_credit"}:
+        need_args(1)
+        L += [
+            "    try: oid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.affiliate_credit_for_order(oid))",
+        ]
+    elif method in {"vendor_register", "vendor_create"}:
+        L.append("    await message.reply_text(market_svc.vendor_register(user.id, ' '.join(context.args) or 'Vendor'))")
+    elif method in {"vendor_list", "vendors"}:
+        L.append("    await message.reply_text(market_svc.vendor_list())")
+    elif method in {"vendor_attach", "vendor_product"}:
+        need_args(2)
+        L += [
+            "    try:",
+            "        vid = int(context.args[0]); pid = int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.vendor_attach_product(vid, pid))",
+        ]
+    elif method in {"saas_create", "tenant_create", "workspace_create"}:
+        L.append("    plan = context.args[-1] if context.args and context.args[-1].lower() in {'free','pro','enterprise'} else 'free'")
+        L.append("    name = ' '.join(a for a in context.args if a.lower() not in {'free','pro','enterprise'}) or 'Workspace'")
+        L.append("    await message.reply_text(market_svc.saas_create_tenant(user.id, name, plan))")
+    elif method in {"saas_add_member", "tenant_add"}:
+        need_args(2)
+        L += [
+            "    try:",
+            "        tid = int(context.args[0]); uid = int(context.args[1])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    role = context.args[2] if len(context.args) > 2 else 'member'",
+            "    await message.reply_text(market_svc.saas_add_member(tid, uid, role))",
+        ]
+    elif method in {"saas_info", "tenant_info"}:
+        need_args(1)
+        L += [
+            "    try: tid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.saas_tenant_info(tid))",
+        ]
+    elif method in {"invoice_create"}:
+        need_args(1)
+        L += [
+            "    try: amount = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    oid = int(context.args[1]) if len(context.args) > 1 and context.args[1].isdigit() else 0",
+            "    await message.reply_text(market_svc.invoice_create(user.id, amount, oid))",
+        ]
+    elif method in {"invoice_list", "invoices"}:
+        L.append("    await message.reply_text(market_svc.invoice_list(user.id))")
+    elif method in {"invoice_pay"}:
+        need_args(1)
+        L += [
+            "    try: iid = int(context.args[0])",
+            "    except ValueError:",
+            f"        await message.reply_text({fail!r})",
+            "        return",
+            "    await message.reply_text(market_svc.invoice_pay(iid, user.id))",
+        ]
+    elif method in {"analytics_overview", "analytics_revenue", "dashboard", "stats"} and svc in {"analytics", "admin", "shop"}:
+        L.append("    await message.reply_text(market_svc.analytics_dashboard())")
+    elif method in {"audit_tail", "audit_log"}:
+        L.append("    await message.reply_text(market_svc.audit_tail(20))")
+    elif method in {"broadcast_segment"}:
+        L.append("    rule = context.args[0] if context.args else 'all'")
+        L.append("    await message.reply_text(market_svc.broadcast_segment_count(rule))")
     else:
         if svc in {"analytics", "admin", "notify"}:
             L += [
