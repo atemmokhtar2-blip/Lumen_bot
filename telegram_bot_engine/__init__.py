@@ -929,6 +929,22 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 "ready_for_token": bool(meta.get("ready_for_token", False)),
             }
         )
+        # Phase 10: capability diagnostics (offline-safe; never blocks success)
+        try:
+            from .services.capability_detection.health import attach_generation_diagnostics
+            _keys = list(preferred_keys or []) if preferred_keys else []
+            if not _keys:
+                try:
+                    _keys = [getattr(f, "feature", "") for f in (spec.features or [])]
+                except Exception:
+                    _keys = []
+            meta["capability_diagnostics"] = attach_generation_diagnostics(
+                request=request or "",
+                project_path=project_dir,
+                preferred_keys=[k for k in _keys if k],
+            )
+        except Exception as _dx:
+            meta["capability_diagnostics_error"] = str(_dx)[:200]
         stages = [
             StageResult.ok("spec_preset", outputs={"preset": tag}),
             StageResult.ok("spec_codegen", outputs={"files": result.files}),
