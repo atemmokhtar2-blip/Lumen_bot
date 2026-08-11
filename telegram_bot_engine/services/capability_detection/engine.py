@@ -232,6 +232,11 @@ def detect_capabilities(
     try:
         from .packs import ensure_packs_loaded, keyword_hits
         ensure_packs_loaded()
+        try:
+            from .learning_loop import bootstrap_learned_kb_into_runtime
+            bootstrap_learned_kb_into_runtime()
+        except Exception:
+            pass
         _pack_hits = keyword_hits(match_text or original)
     except Exception:
         _pack_hits = []

@@ -40,6 +40,13 @@ from .packs import (
     resolve_gap_with_pack,
     validate_pack,
 )
+from .learning_loop import (
+    LearnedKBEntry,
+    bootstrap_learned_kb_into_runtime,
+    load_learned_kb,
+    promote_gap_to_kb,
+    run_learning_cycle,
+)
 from .web_research import ResearchHit, ResearchResult, research_feature, research_open_gaps, research_for_detection_gaps
 from .research_spec import (
     ResearchSpec,
@@ -109,4 +116,9 @@ __all__ = [
     "research_feature",
     "research_open_gaps",
     "research_for_detection_gaps",
+    "LearnedKBEntry",
+    "load_learned_kb",
+    "promote_gap_to_kb",
+    "run_learning_cycle",
+    "bootstrap_learned_kb_into_runtime",
 ]
