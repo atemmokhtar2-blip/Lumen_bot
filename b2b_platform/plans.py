@@ -1,4 +1,4 @@
-"""Subscription plans — Explorer (free) | Starter | Growth.
+"""Subscription plans — Free | Starter | Growth.
 
 Enforcement is server-side only (billing + metering + generation/hosting gates).
 Never trust client-supplied plan_id for privileges.
@@ -86,11 +86,11 @@ ENGINE_TIERS = {
 
 
 PLANS: dict[str, Plan] = {
-    # 1) Explorer / Hobby — free
-    "explorer": Plan(
-        id="explorer",
-        name="Explorer",
-        name_ar="المجرب",
+    # 1) Free / Hobby
+    "free": Plan(
+        id="free",
+        name="Free",
+        name_ar="مجاني",
         price_usd_month=0,
         price_usd_year=0,
         generations_per_month=25,
@@ -178,9 +178,9 @@ PLANS: dict[str, Plan] = {
 
 # Aliases — old ids + marketing names map to canonical
 _ALIASES = {
-    "free": "explorer",
-    "hobby": "explorer",
-    "explorer": "explorer",
+    "free": "free",
+    "hobby": "free",
+    "explorer": "free",  # legacy
     "indie": "starter",
     "starter": "starter",
     "pro": "growth",
@@ -195,8 +195,8 @@ SUPPORT_EMAIL = "capability7maestro7bot@gmail.com"
 
 
 def normalize_plan_id(plan_id: str | None) -> str:
-    key = (plan_id or "explorer").strip().lower()
-    return _ALIASES.get(key, key if key in PLANS else "explorer")
+    key = (plan_id or "free").strip().lower()
+    return _ALIASES.get(key, key if key in PLANS else "free")
 
 
 def get_plan(plan_id: str | None) -> Plan:

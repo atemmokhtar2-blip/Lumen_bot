@@ -154,10 +154,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         uid = int(user.id) if user else 0
         plan = _mongo_plan_for_user(uid) or "free"
         labels = {
-            "explorer": "المجرب (Explorer) — مجاني",
+            "free": "Free — مجاني",
+            "explorer": "Free — مجاني",
             "starter": "المبادر (Starter) — $8/شهر",
             "growth": "النمو (Growth) — $30/شهر",
-            "free": "المجرب (Explorer) — مجاني",
             "pro": "النمو (Growth)",
             "unlimited": "النمو (Growth)",
         }
@@ -173,7 +173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             extra = ""
         await message.reply_text(
-            f"👤 خطتك الحالية: {labels.get(plan, plan)}\nplan_id=`{plan}`{extra}"
+            f"👤 خطتك الحالية: {labels.get(plan, plan)}{extra}"
         )
         return
 
@@ -1269,7 +1269,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _q_ok, _q_reason, _q_info = check_generation_quota(user_id=int(user.id) if user else 0)
         if not _q_ok:
             limit = _q_info.get("limit") or "?"
-            plan_id = _q_info.get("plan_id") or "explorer"
+            plan_id = _q_info.get("plan_id") or "free"
             await status_msg.edit_text(
                 f"⛔ وصلت للحد الشهري للتوليد على خطة `{plan_id}` "
                 f"({limit} توليد/شهر).\n"

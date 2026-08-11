@@ -25,7 +25,7 @@ def _hash_key(raw: str) -> str:
 class Tenant:
     tenant_id: str
     name: str
-    plan_id: str = "explorer"
+    plan_id: str = "free"
     # White-label
     brand_name: str = ""
     brand_logo_url: str = ""
@@ -125,7 +125,7 @@ class TenantStore:
         self,
         name: str,
         *,
-        plan_id: str = "explorer",
+        plan_id: str = "free",
         brand_name: str = "",
         owner_telegram_id: int = 0,
         **wl: Any,
@@ -233,12 +233,12 @@ def _normalize_plan(plan_id: str | None) -> str:
     except Exception:
         key = (plan_id or "free").strip().lower()
         aliases = {
-            "free": "explorer", "hobby": "explorer", "explorer": "explorer",
+            "free": "free", "hobby": "free", "explorer": "free",
             "indie": "starter", "starter": "starter",
             "pro": "growth", "growth": "growth", "business": "growth",
             "unlimited": "growth", "enterprise": "growth",
         }
-        return aliases.get(key, "explorer")
+        return aliases.get(key, "free")
 
 
 def set_plan(

@@ -26,10 +26,10 @@ async def create_tenant(request: web.Request) -> web.Response:
     body = await request.json()
     name = str(body.get("name") or "Tenant").strip()
     # Only admin may assign plans; unknown → free. Still no self-service enterprise.
-    plan_id = str(body.get("plan_id") or "explorer").lower()
+    plan_id = str(body.get("plan_id") or "free").lower()
     plan_id = normalize_plan_id(plan_id)
     if plan_id not in PLANS:
-        plan_id = "explorer"
+        plan_id = "free"
     tenant, raw_key = get_tenant_store().create(
         name,
         plan_id=plan_id,

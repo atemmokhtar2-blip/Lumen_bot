@@ -28,7 +28,7 @@ def resolve_user_plan(user_id: int | None = None, tenant_id: str | None = None) 
                 return normalize_plan_id(t.plan_id)
     except Exception as exc:
         logger.debug("resolve_user_plan fallback: %s", type(exc).__name__)
-    return "explorer"
+    return "free"
 
 
 def check_generation_quota(user_id: int | None = None, tenant_id: str | None = None) -> tuple[bool, str, dict[str, Any]]:
@@ -47,12 +47,12 @@ def check_generation_quota(user_id: int | None = None, tenant_id: str | None = N
         # No identity yet — allow only if no mongo (dev); else require user record
         if not _mongo_enabled():
             plan = get_plan("explorer")
-            return True, "ok_dev_no_tenant", {"plan_id": "explorer", "limit": plan.generations_per_month}
-        return False, "user_not_registered", {"plan_id": "explorer"}
+            return True, "ok_dev_no_tenant", {"plan_id": "free", "limit": plan.generations_per_month}
+        return False, "user_not_registered", {"plan_id": "free"}
 
     ok, reason = get_billing().enforce_generation(tid, reserve=True)
     t = store.get(tid)
-    plan = get_plan(t.plan_id if t else "explorer")
+    plan = get_plan(t.plan_id if t else "free")
     info = {
         "tenant_id": tid,
         "plan_id": plan.id,

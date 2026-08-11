@@ -111,7 +111,7 @@ class BillingService:
     def live_preview_seconds_for(self, tenant_id: str) -> int:
         store = get_tenant_store()
         t = store.get(tenant_id)
-        plan = get_plan(t.plan_id if t else "explorer")
+        plan = get_plan(t.plan_id if t else "free")
         return int(plan.live_preview_seconds)
 
     def enforce_api(self, tenant_id: str) -> tuple[bool, str]:
@@ -210,9 +210,9 @@ class BillingService:
         if not t:
             return {"ok": False, "error": "tenant_not_found"}
         plan = get_plan(plan_id)
-        if plan.id == "explorer" or plan.price_usd_month <= 0:
-            self.apply_plan(tenant_id, "explorer")
-            return {"ok": True, "plan_id": "explorer", "checkout_required": False}
+        if plan.id == "free" or plan.price_usd_month <= 0:
+            self.apply_plan(tenant_id, "free")
+            return {"ok": True, "plan_id": "free", "checkout_required": False}
 
         base = (os.getenv("PUBLIC_BASE_URL") or "http://localhost:8080").rstrip("/")
         success_url = success_url or f"{base}/v1/billing/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
