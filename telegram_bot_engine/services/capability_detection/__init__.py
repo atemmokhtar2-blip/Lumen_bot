@@ -43,7 +43,10 @@ from .packs import (
 from .learning_loop import (
     LearnedKBEntry,
     bootstrap_learned_kb_into_runtime,
+    learning_stats,
+    list_draft_packs,
     load_learned_kb,
+    maybe_auto_learn,
     promote_gap_to_kb,
     run_learning_cycle,
 )
@@ -121,4 +124,5 @@ __all__ = [
     "promote_gap_to_kb",
     "run_learning_cycle",
     "bootstrap_learned_kb_into_runtime",
+    "maybe_auto_learn",
 ]

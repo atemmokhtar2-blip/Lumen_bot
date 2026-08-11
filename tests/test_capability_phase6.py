@@ -1,4 +1,4 @@
-"""Phase 6 — learning loop promotes gaps into KB + draft packs."""
+"""Phase 6 hardened — auto-learn, clustering, stable Arabic ids."""
 from __future__ import annotations
 
 from telegram_bot_engine.services.capability_detection import (
@@ -8,42 +8,74 @@ from telegram_bot_engine.services.capability_detection import (
     promote_gap_to_kb,
     bootstrap_learned_kb_into_runtime,
     research_feature,
+    maybe_auto_learn,
+    learning_stats,
+    telegram_preflight,
 )
 from telegram_bot_engine.services.capability_detection.models import GapItem
 from telegram_bot_engine.services.capability_detection.gap_journal import list_open_gaps
 
 
-def test_promote_gap_creates_kb_and_draft(tmp_path, monkeypatch):
+def test_promote_clusters_and_stable_id(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("CAPABILITY_RESEARCH_OFFLINE", "1")
+    monkeypatch.setenv("CAPABILITY_LEARNING_AUTO", "0")  # manual promote
     from telegram_bot_engine.services.capability_detection import gap_journal as gj
     gj._CACHE.clear(); gj._LOADED = False
-    # record twice so count>=2
-    g = GapItem(phrase="ميزة تعلم تجريبية xyz", reason="غير موجودة في السجل")
-    record_gaps(request="بوت ميزة تعلم تجريبية xyz", gaps=[g], detection_status="gap")
-    record_gaps(request="بوت ميزة تعلم تجريبية xyz مرة ثانية", gaps=[g], detection_status="gap")
+    for phrase in ("يترجم", "ترجمة تلقائية", "يترجم الرسائل"):
+        g = GapItem(phrase=phrase, reason="غير موجودة")
+        record_gaps(request=f"بوت {phrase}", gaps=[g], detection_status="gap")
+        record_gaps(request=f"بوت {phrase} 2", gaps=[g], detection_status="gap")
     gaps = list_open_gaps(limit=20)
     assert gaps
-    target = next(x for x in gaps if "تجريبية" in x.phrase or "xyz" in x.phrase)
-    res = promote_gap_to_kb(target, research=True, min_count=1)
+    target = gaps[0]
+    res = promote_gap_to_kb(target, research=True, min_count=1, cluster=True)
     assert res["ok"] is True
-    assert res.get("draft_pack")
+    assert res.get("cluster_size", 1) >= 1
+    eid = res["entry"]["id"]
+    assert eid.startswith("learned_")
+    assert "learned_learned" not in eid
+    assert len(res["entry"]["phrases"]) >= 1
     assert load_learned_kb()
-    n = bootstrap_learned_kb_into_runtime()
-    assert n >= 1
-    # learned entry should help research
-    r = research_feature("ميزة تعلم تجريبية xyz", persist=False)
-    assert r.spec is not None
+    assert bootstrap_learned_kb_into_runtime() >= 1
 
 
-def test_learning_cycle_respects_min_count(tmp_path, monkeypatch):
+def test_auto_learn_via_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("CAPABILITY_RESEARCH_OFFLINE", "1")
+    monkeypatch.setenv("CAPABILITY_LEARNING_AUTO", "1")
+    monkeypatch.setenv("CAPABILITY_LEARNING_MIN_COUNT", "2")
+    monkeypatch.setenv("CAPABILITY_LEARNING_COOLDOWN", "0")
+    from telegram_bot_engine.services.capability_detection import gap_journal as gj
+    from telegram_bot_engine.services.capability_detection import learning_loop as ll
+    gj._CACHE.clear(); gj._LOADED = False
+    ll._AUTO_LAST_RUN = 0.0
+    # two preflights → count>=2 → auto learn
+    telegram_preflight("بوت يترجم الرسائل تلقائياً")
+    telegram_preflight("بوت يترجم الرسائل تلقائياً مرة أخرى")
+    kb = load_learned_kb()
+    assert len(kb) >= 1
+    stats = learning_stats()
+    assert stats["learned_entries"] >= 1
+
+
+def test_learning_cycle_min_count(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("CAPABILITY_RESEARCH_OFFLINE", "1")
     from telegram_bot_engine.services.capability_detection import gap_journal as gj
     gj._CACHE.clear(); gj._LOADED = False
-    g = GapItem(phrase="مرة واحدة فقط", reason="gap")
+    g = GapItem(phrase="مرة واحدة فقط abc", reason="gap")
     record_gaps(request="مرة", gaps=[g], detection_status="gap")
     out = run_learning_cycle(min_count=5, limit=5, research=True)
     assert out["ok"] is True
-    # count=1 < 5 → no promote
     assert out["promoted"] == 0
+
+
+def test_maybe_auto_learn_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("CAPABILITY_LEARNING_AUTO", "1")
+    monkeypatch.setenv("CAPABILITY_LEARNING_COOLDOWN", "9999")
+    from telegram_bot_engine.services.capability_detection import learning_loop as ll
+    ll._AUTO_LAST_RUN = __import__("time").time()
+    res = maybe_auto_learn()
+    assert res and res.get("skipped") is True

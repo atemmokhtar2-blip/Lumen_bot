@@ -89,6 +89,12 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             )
         except Exception:
             pass
+        # Phase 6: auto-promote frequent gaps into learned KB (cooldown-gated)
+        try:
+            from .learning_loop import maybe_auto_learn
+            maybe_auto_learn()
+        except Exception:
+            pass
 
     if report.status == DetectionStatus.IMPOSSIBLE or not report.can_generate:
         from bot_interface.capability_boundaries import rejection_message
