@@ -1,6 +1,8 @@
 """Telegram command handlers (/start, /help, /status, /lang)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -26,6 +28,21 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data is not None and "lang" not in context.user_data:
         set_lang(context, lang)
 
+    # Ensure user exists in Mongo (plan = free) on first contact
+    try:
+        if user:
+            from b2b_platform.mongo_users import get_or_create_by_telegram
+            import os
+            if (os.getenv("MONGODB_URI") or "").strip():
+                name = (
+                    getattr(user, "full_name", None)
+                    or getattr(user, "username", None)
+                    or f"tg_{user.id}"
+                )
+                get_or_create_by_telegram(int(user.id), name=str(name)[:120], plan_id="free")
+    except Exception:
+        pass
+
     # Restore session so pending token flow survives /start after restart
     try:
         if user and context.user_data is not None:
@@ -34,15 +51,29 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    welcome = (
-        "👋 مرحباً — مولّد بوتات تيليجرام الحتمي.\n\n"
-        "أرسل وصفاً للبوت الذي تريده (أوامر، متجر، تذاكر…).\n"
-        "أو استخدم: /help لمعرفة ما أستطيع وما لا أستطيع."
+    # Brand welcome (image + caption) — same for every new user
+    caption = (
+        "مرحباً بك في Maestro 👋\n"
+        "أنا هنا لمساعدتك في بناء وإدارة مشاريع البوتات بكل سهولة وذكاء."
     )
-    try:
-        await message.reply_text(welcome)
-    except Exception:
-        await safe_reply_text(message, welcome)
+    welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
+    sent = False
+    if welcome_img.is_file():
+        try:
+            from telegram import InputFile
+            with welcome_img.open("rb") as fh:
+                await message.reply_photo(
+                    photo=InputFile(fh, filename="welcome.jpg"),
+                    caption=caption,
+                )
+            sent = True
+        except Exception:
+            sent = False
+    if not sent:
+        try:
+            await message.reply_text(caption)
+        except Exception:
+            await safe_reply_text(message, caption)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
