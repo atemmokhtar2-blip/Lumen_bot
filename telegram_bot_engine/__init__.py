@@ -584,7 +584,21 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             success=True,
             feature_count=len(_feats),
         )
-        layers_meta["l4_narrative"] = _nav.to_dict()
+        _nav_d = _nav.to_dict()
+        try:
+            from .spec_core.language_understanding.evaluation_layer import (
+                apply_ab_to_narrative,
+                assign_ab_variant,
+                record_ab_exposure,
+            )
+            if user_id:
+                _nav_d = apply_ab_to_narrative(_nav_d, int(user_id))
+                _ab = assign_ab_variant(int(user_id))
+                layers_meta["ab_variant"] = _ab.variant
+                record_ab_exposure(int(user_id), _ab.variant, surface="narrative")
+        except Exception:
+            pass
+        layers_meta["l4_narrative"] = _nav_d
     except Exception:
         pass
 
@@ -599,6 +613,23 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         "user_id": int(user_id) if user_id else None,
         "narrative": layers_meta.get("l4_narrative"),
     }
+    # Stage-5: record outcome for analytics / A/B
+    try:
+        from .spec_core.language_understanding.evaluation_layer import record_generation_outcome
+        record_generation_outcome(
+            int(user_id) if user_id else 0,
+            success=bool(getattr(result, "ok", False)),
+            intent=str(layers_meta.get("l2_intent") or ""),
+            strict=bool(layers_meta.get("l1_strict")),
+            feature_count=len(list(layers_meta.get("l1_features") or layers_meta.get("l2_feature_plan") or [])),
+            preset=str(tag),
+            ab_variant=str(layers_meta.get("ab_variant") or ""),
+            elapsed_ms=meta.get("elapsed_ms"),
+            memory=memory_engine,
+        )
+    except Exception:
+        pass
+
     # L4: persist successful build
     if memory_engine is not None and user_id and result.ok:
         try:

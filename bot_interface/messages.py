@@ -129,6 +129,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
 
+    # ── Stage-5: performance / eval report ───────────────────────────────
+    try:
+        from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+            is_eval_command,
+            build_performance_report,
+        )
+        if is_eval_command(request):
+            rep = build_performance_report(window_hours=24.0)
+            await message.reply_text(rep.to_arabic()[:3500])
+            return
+    except Exception:
+        logger.exception("stage5 eval report failed")
+
     # ── Stage-3: continuous learning from feedback ───────────────────────
     try:
         from telegram_bot_engine.spec_core.language_understanding.continuous_learning import (

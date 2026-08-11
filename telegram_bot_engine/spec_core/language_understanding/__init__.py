@@ -14,6 +14,15 @@ from .engine import (
 )
 from .entities import ExtractedEntities, extract_entities
 from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
+from .evaluation_layer import (
+    PerformanceReport,
+    assign_ab_variant,
+    get_ab_config,
+    apply_ab_to_narrative,
+    record_generation_outcome,
+    build_performance_report,
+    is_eval_command,
+)
 from .smart_generation import (
     GenerationNarrative,
     build_narrative,
@@ -101,6 +110,13 @@ __all__ = [
     "build_narrative",
     "status_text_for_style",
     "format_result_addon",
+    "PerformanceReport",
+    "assign_ab_variant",
+    "get_ab_config",
+    "apply_ab_to_narrative",
+    "record_generation_outcome",
+    "build_performance_report",
+    "is_eval_command",
     "normalize_text",
     "tokenize",
     "light_stem_ar",
