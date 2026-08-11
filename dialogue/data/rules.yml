@@ -29,3 +29,28 @@ rules:
   conversation_start: true
   steps:
   - action: action_session_start
+
+- rule: platform works
+  steps:
+  - intent: how_platform_works
+  - action: utter_how_platform_works
+
+- rule: upgrade path
+  steps:
+  - intent: how_to_upgrade
+  - action: utter_how_to_upgrade
+
+- rule: hosting info
+  steps:
+  - intent: ask_about_hosting
+  - action: utter_hosting
+
+- rule: preview info
+  steps:
+  - intent: ask_about_preview
+  - action: utter_preview
+
+- rule: watermark info
+  steps:
+  - intent: ask_about_watermark
+  - action: utter_watermark

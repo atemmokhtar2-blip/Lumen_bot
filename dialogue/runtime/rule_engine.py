@@ -59,6 +59,70 @@ _INTENTS: tuple[_PatternIntent, ...] = (
         ),
         boost_words=("دولار", "شهر", "شهري", "مجاني", "مدفوع"),
     ),
+
+    _PatternIntent(
+        "how_platform_works",
+        1.35,
+        any_phrases=(
+            "ازاي البوت بيشتغل", "ازاي المنصه بتشتغل", "ازاي maestro بيشتغل",
+            "كيف يعمل البوت", "كيف تشتغل المنصة", "how does it work", "how the bot works",
+            "ايه فكرة النظام", "اشرح النظام", "اشرح المنصة", "نظام الشغل",
+            "ازاي بتشتغلوا", "ما هو maestro", "ما هي المنصة",
+        ),
+        boost_words=("يشتغل", "شغال", "آلية", "workflow"),
+    ),
+    _PatternIntent(
+        "how_to_upgrade",
+        1.4,
+        any_phrases=(
+            "ازاي ارقي", "ازاي أرقى", "ازاي ارقى للبرو", "ترقية للبرو", "ترقيه للبرو",
+            "ارقي للخطة", "أرقى للخطة", "upgrade to pro", "upgrade to growth",
+            "ازاي اشترك", "عايز أرقى", "عايز ارقي", "حولني لبرو", "ترقية الخطة",
+            "ازاي افعل pro", "ازاي افعل starter", "الترقية",
+        ),
+        boost_words=("ترقية", "upgrade", "برو", "pro", "growth", "starter"),
+    ),
+    _PatternIntent(
+        "ask_about_hosting",
+        1.25,
+        any_phrases=(
+            "الاستضافة", "استضافة 24", "هوستينج", "hosting", "شغال 24",
+            "بوت دائم", "استضف البوت", "ازاي استضافة",
+        ),
+    ),
+    _PatternIntent(
+        "ask_about_preview",
+        1.2,
+        any_phrases=(
+            "معاينة حية", "لايف بريفيو", "live preview", "تجربة التشغيل",
+            "كام دقيقة المعاينة", "مدة التجربة",
+        ),
+    ),
+    _PatternIntent(
+        "ask_about_watermark",
+        1.15,
+        any_phrases=(
+            "علامة مائية", "watermark", "powered by maestro", "العلامة المائيه",
+        ),
+    ),
+    _PatternIntent(
+        "ask_about_free",
+        1.2,
+        any_phrases=("خطة free", "الخطة المجانية", "خطة مجانية", "free plan", "الاشتراك المجاني"),
+    ),
+    _PatternIntent(
+        "ask_about_starter",
+        1.2,
+        any_phrases=("خطة starter", "المبادر", "starter plan", "خطة 8 دولار", "خطة ٨"),
+    ),
+    _PatternIntent(
+        "ask_about_growth",
+        1.25,
+        any_phrases=(
+            "خطة growth", "خطة pro", "النمو", "الخطه البرو", "الخطة البرو",
+            "growth plan", "pro plan", "خطة 30 دولار",
+        ),
+    ),
     _PatternIntent(
         "ask_how_to_generate",
         1.2,
@@ -143,11 +207,27 @@ _INTENTS: tuple[_PatternIntent, ...] = (
 )
 
 
+def _phrase_hit(text_n: str, toks: set[str], phrase: str) -> bool:
+    pn = normalize(phrase)
+    if not pn:
+        return False
+    # Short tokens (≤3 chars): require full token match — avoids "لا" inside "علامة"
+    if " " not in pn and len(pn) <= 3:
+        return pn in toks
+    if pn in text_n:
+        return True
+    # token-sequence soft match
+    pt = pn.split()
+    if len(pt) >= 2 and all(any(p in t or t in p for t in toks) for p in pt):
+        return True
+    return False
+
+
 def _score(text_n: str, toks: set[str], spec: _PatternIntent) -> float:
     score = 0.0
     for ph in spec.any_phrases:
         pn = normalize(ph)
-        if pn and pn in text_n:
+        if _phrase_hit(text_n, toks, ph):
             score += spec.weight * (1.0 + min(len(pn), 24) / 48.0)
     for rx in spec.any_regex:
         if re.search(rx, text_n, re.I):
@@ -179,10 +259,17 @@ def classify(text: str) -> tuple[str, float]:
     # Disambiguation: how-to questions vs concrete generation requests
     how_markers = ("ازاي", "ازى", "كيف", "how to", "علمني", "خطوات", "طريقة")
     if any(m in n for m in how_markers) and any(k in n for k in ("اولد", "انشئ", "generate", "بوت", "وصف")):
-        # prefer guidance over handoff when user is asking how
         if best_intent == "describe_bot_idea":
             best_intent = "ask_how_to_generate"
             best_score = max(best_score, 1.4)
+    # Plan detail questions should not collapse to generic ask_plan
+    if best_intent == "ask_plan":
+        if any(x in n for x in ("مجان", "free")) and any(x in n for x in ("فيه", "تفاصيل", "مميز", "حدود", "ايه")):
+            best_intent, best_score = "ask_about_free", max(best_score, 1.5)
+        elif any(x in n for x in ("starter", "مبادر", "8")):
+            best_intent, best_score = "ask_about_starter", max(best_score, 1.5)
+        elif any(x in n for x in ("growth", "pro", "نمو", "30", "برو")):
+            best_intent, best_score = "ask_about_growth", max(best_score, 1.5)
     conf = min(0.99, best_score / 2.5) if best_score > 0 else 0.0
     if best_score < 0.55:
         return "nlu_fallback", conf
@@ -214,81 +301,82 @@ def _plan_body(plan_id: str) -> str:
 
 
 def _reply(intent: str, plan_id: str, text: str) -> str:
+    from .platform_knowledge import (
+        HOW_IT_WORKS,
+        HOW_TO_UPGRADE,
+        PLAN_FREE,
+        PLAN_STARTER,
+        PLAN_GROWTH,
+        HOSTING,
+        PREVIEW,
+        WATERMARK,
+        GENERATE_FLOW,
+        LIMITS,
+    )
     if intent == "greet":
         return (
             "مرحباً بك في Maestro 👋\n"
             "أنا هنا لمساعدتك في بناء وإدارة مشاريع البوتات بكل سهولة وذكاء.\n"
-            "اكتب وصف البوت، أو اسأل عن الخطط والمميزات."
+            "اسألني: ازاي المنصة بتشتغل؟ ازاي أرقى؟ أو اكتب وصف بوت."
         )
     if intent == "goodbye":
         return "إلى اللقاء! اكتب /start أو أي سؤال لما ترجع."
+    if intent == "how_platform_works":
+        return HOW_IT_WORKS
+    if intent == "how_to_upgrade":
+        return HOW_TO_UPGRADE
+    if intent == "ask_about_hosting":
+        return HOSTING
+    if intent == "ask_about_preview":
+        return PREVIEW
+    if intent == "ask_about_watermark":
+        return WATERMARK
+    if intent == "ask_about_free":
+        return PLAN_FREE
+    if intent == "ask_about_starter":
+        return PLAN_STARTER
+    if intent == "ask_about_growth":
+        return PLAN_GROWTH
     if intent == "ask_help":
         return (
-            "أقدر أساعدك في:\n"
-            "• صياغة وصف بوت واضح للتوليد\n"
-            "• شرح الخطط (Free / Starter / Growth)\n"
-            "• توضيح الحدود والصلاحيات\n"
-            "• توجيهك للخطوة الجاية\n\n"
+            "أقدر أشرح لك:\n"
+            "• ازاي Maestro بيشتغل\n"
+            "• الخطط والترقية (Free / Starter / Growth)\n"
+            "• الاستضافة والمعاينة والعلامة المائية\n"
+            "• ازاي توصف بوت للتوليد\n\n"
             "أوامر: /plan · /help · /start"
         )
     if intent == "ask_capabilities":
-        return (
-            "Maestro يولّد بوتات تيليجرام من وصف طبيعي.\n"
-            "أنا بفهم قصدك وأوجّهك؛ التوليد الفعلي حسب صلاحيات خطتك."
-        )
+        return HOW_IT_WORKS
     if intent == "ask_plan":
         return _plan_body(plan_id)
     if intent == "ask_pricing":
         return (
-            "الأسعار:\n"
-            "• Free — مجاني (حدود توليد + معاينة حية)\n"
-            "• Starter — $8/شهر (بوت واحد 24/7 + دفع/Webhooks)\n"
-            "• Growth — $30/شهر (حتى 5 بوتات + DB/تحليلات)\n\n"
-            "خطتك الحالية عبر /plan"
+            PLAN_FREE + "\n" + PLAN_STARTER + "\n" + PLAN_GROWTH
+            + "\nللترقية: اكتب «ازاي أرقى» أو راسل الدعم."
         )
     if intent == "ask_how_to_generate":
-        return (
-            "عشان تولّد بوت:\n"
-            "1) اكتب وصف واضح (الأوامر، الجمهور، المميزات)\n"
-            "2) مثال: «بوت متجر فيه قائمة منتجات وطلب وتأكيد»\n"
-            "3) المنصة تولّد حسب خطتك\n\n"
-            "كل ما الوصف أدق، النتيجة أحسن."
-        )
-    if intent == "describe_bot_idea":
-        return (
-            "فكرة كويسة — عشان نطلع نتيجة أدق:\n"
-            "• الجمهور مين؟\n"
-            "• الأوامر أو الأزرار الأساسية إيه؟\n"
-            "• فيه دفع / أدمن / ردود تلقائية؟\n"
-            "اكتب وصف أوضح وجاهز للتوليد حسب خطتك."
-        )
+        return GENERATE_FLOW
     if intent == "ask_limitations":
-        return (
-            "بوضوح:\n"
-            "• التوليد والاستضافة محدودان حسب الخطة\n"
-            "• المميزات المتقدمة للخطط الأعلى\n"
-            "• لو طلبت حاجة برة النطاق، هقولك بصراحة"
-        )
+        return LIMITS
     if intent == "ask_support":
         return (
             "الدعم للخطط المدفوعة:\n"
             "capability7maestro7bot@gmail.com\n"
-            "أو اكتب سؤالك هنا وأوجّهك."
+            "أو اكتب سؤالك هنا (ترقية، استضافة، حدود…)."
         )
     if intent == "bot_challenge":
-        return "أنا مساعد Maestro — طبقة حوار داخل المنصة (قواعد + Rasa عند التفعيل)."
+        return "أنا مساعد Maestro — بفهم المنصة والخطط ومسار التوليد وأوجّهك بدقة."
     if intent == "affirm":
-        return "تمام، كمّل وصفك أو اسأل اللي محتاجه."
+        return "تمام، كمّل سؤالك أو اكتب وصف البوت."
     if intent == "deny":
-        return "حاضر. لو حابب نبدأ من جديد اكتب /start أو وصف البوت."
+        return "حاضر. لو حابب نبدأ من جديد: /start"
     if intent == "out_of_scope":
-        return "الطلب ده برا نطاق Maestro. أقدر أساعد في بوتات تيليجرام والخطط والتوجيه."
-    # fallback — still helpful, never empty
+        return "الطلب ده برا نطاق Maestro. اسأل عن الخطط، الترقية، أو توليد بوتات تيليجرام."
     return (
-        "مش متأكد إنى فهمت قصدك تماماً.\n"
-        "جرّب: «خطتي» · «الأسعار» · «ازاي أولد بوت» · أو اكتب وصف البوت مباشرة."
+        "مش متأكد إنى فهمت قصدك.\n"
+        "جرّب: «ازاي المنصة بتشتغل» · «ازاي أرقى للبرو» · «خطتي» · أو وصف بوت."
     )
-
 
 class RuleEngine:
     name = "rule_v1"

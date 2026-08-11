@@ -1,0 +1,107 @@
+version: "3.1"
+nlu:
+- intent: how_platform_works
+  examples: |
+    - ازاي البوت بيشتغل
+    - ازاي المنصة بتشتغل
+    - ازاي المنصه بتشتغل
+    - ازاي Maestro بيشتغل
+    - كيف يعمل البوت
+    - كيف تشتغل المنصة
+    - how does it work
+    - how does the bot work
+    - how the platform works
+    - ايه فكرة النظام
+    - اشرح النظام
+    - اشرح المنصة
+    - اشرحلي النظام
+    - نظام الشغل عندكم ايه
+    - ازاي بتشتغلوا
+    - ما هو Maestro
+    - ما هي المنصة
+    - وضح لي آلية العمل
+    - البوت ده بيعمل ايه بالظبط
+    - عايز افهم المنصة
+    - شرح طريقة العمل
+    - workflow بتاعكم ايه
+
+- intent: how_to_upgrade
+  examples: |
+    - ازاي ارقي للخطه البرو
+    - ازاي أرقى للخطة البرو
+    - ازاي ارقى للبرو
+    - ازاي أرقى لـ pro
+    - ترقية للبرو
+    - ترقيه للبرو
+    - عايز أرقى للبرو
+    - عايز ارقي
+    - ازاي اشترك في البرو
+    - ازاي افعل pro
+    - ازاي افعل starter
+    - upgrade to pro
+    - upgrade to growth
+    - how to upgrade
+    - how can I upgrade my plan
+    - حولني لبرو
+    - ترقية الخطة
+    - عايز الخطة المدفوعة
+    - ازاي ادفع للاشتراك
+    - ازاي ارقى ل starter
+    - ازاي ارقى ل growth
+    - ابغى ارقى الاشتراك
+    - طريقة الترقية
+
+- intent: ask_about_hosting
+  examples: |
+    - ايه موضوع الاستضافة
+    - الاستضافة 24 ساعة
+    - فيه استضافة دائمة
+    - hosting
+    - ازاي استضيف البوت
+    - البوت يفضل شغال
+    - استضافة 24/7
+    - هوستينج
+    - هل free فيها استضافة
+
+- intent: ask_about_preview
+  examples: |
+    - المعاينة الحية
+    - live preview
+    - كام دقيقة التجربة
+    - مدة المعاينة
+    - تجربة التشغيل بعد التوليد
+    - لايف بريفيو
+
+- intent: ask_about_watermark
+  examples: |
+    - العلامة المائية
+    - watermark
+    - powered by maestro
+    - ليه في علامة على البوت
+    - هتشيلوا العلامة امتى
+
+- intent: ask_about_free
+  examples: |
+    - تفاصيل خطة free
+    - الخطة المجانية فيها ايه
+    - free plan details
+    - مميزات المجاني
+    - حدود الخطة المجانية ايه
+
+- intent: ask_about_starter
+  examples: |
+    - تفاصيل starter
+    - خطة المبادر
+    - starter plan
+    - خطة 8 دولار فيها ايه
+    - مميزات المبادر
+
+- intent: ask_about_growth
+  examples: |
+    - تفاصيل growth
+    - خطة pro
+    - خطة النمو
+    - growth plan
+    - pro plan details
+    - خطة 30 دولار
+    - مميزات البرو

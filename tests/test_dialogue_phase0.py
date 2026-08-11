@@ -91,3 +91,45 @@ def test_bridge_import():
     text = asyncio.get_event_loop().run_until_complete(_run())
     assert text and ("8" in text or "Starter" in text or "Free" in text)
     assert "rule" in str(dialogue_status().get("active_engine", ""))
+
+
+@pytest.mark.parametrize(
+    "text,intent",
+    [
+        ("ازاي البوت بيشتغل", "how_platform_works"),
+        ("ازاي المنصة بتشتغل", "how_platform_works"),
+        ("how does it work", "how_platform_works"),
+        ("ازاي ارقي للخطه البرو", "how_to_upgrade"),
+        ("ازاي أرقى للبرو", "how_to_upgrade"),
+        ("upgrade to pro", "how_to_upgrade"),
+        ("الاستضافة 24/7", "ask_about_hosting"),
+        ("العلامة المائية", "ask_about_watermark"),
+        ("المعاينة الحية", "ask_about_preview"),
+        ("خطة pro", "ask_about_growth"),
+        ("الخطة المجانية فيها ايه", "ask_about_free"),
+    ],
+)
+def test_platform_understanding_intents(text, intent):
+    got, conf = classify(text)
+    assert got == intent, (text, got, conf)
+
+
+def test_upgrade_answer_quality():
+    eng = RuleEngine()
+    import asyncio
+    resp = asyncio.run(eng.handle(DialogueRequest(
+        text="ازاي ارقي للخطه البرو", sender_id="1", plan_id="free"
+    )))
+    assert resp and resp.handled
+    assert "Starter" in resp.text or "Growth" in resp.text or "ترقى" in resp.text or "ترقي" in resp.text
+    assert "capability7maestro7bot@gmail.com" in resp.text or "$" in resp.text
+
+
+def test_how_it_works_answer():
+    eng = RuleEngine()
+    import asyncio
+    resp = asyncio.run(eng.handle(DialogueRequest(
+        text="ازاي المنصة بتشتغل", sender_id="1", plan_id="free"
+    )))
+    assert resp and resp.handled
+    assert "توليد" in resp.text or "معاينة" in resp.text

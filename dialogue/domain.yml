@@ -17,6 +17,14 @@ intents:
   - describe_bot_idea
   - ask_limitations
   - ask_support
+  - ask_about_growth
+  - ask_about_starter
+  - ask_about_free
+  - ask_about_watermark
+  - ask_about_preview
+  - ask_about_hosting
+  - how_to_upgrade
+  - how_platform_works
   - out_of_scope
   - nlu_fallback
 
@@ -101,6 +109,22 @@ responses:
 
   utter_out_of_scope:
     - text: "الطلب ده برا نطاق Maestro حالياً. أقدر أساعدك في بوتات تيليجرام والخطط والتوجيه."
+
+
+  utter_how_platform_works:
+    - text: "Maestro: شات ذكي + توليد حسب الخطة + معاينة حية + استضافة للمدفوع. التفاصيل اسأل «ازاي المنصة بتشتغل»."
+
+  utter_how_to_upgrade:
+    - text: "للترقية لـ Starter أو Growth تواصل مع capability7maestro7bot@gmail.com أو مسار الدفع. اكتب /plan لخطتك الحالية."
+
+  utter_hosting:
+    - text: "Free بدون استضافة 24/7. Starter بوت واحد. Growth حتى 5 بوتات."
+
+  utter_preview:
+    - text: "المعاينة: Free 30د · Starter ~60د · Growth حتى 120د."
+
+  utter_watermark:
+    - text: "العلامة المائية على Free فقط: Powered by Maestro. المدفوع بدونها."
 
   utter_default:
     - text: "مش متأكد إنى فهمت قصدك. جرّب تصيغها تاني، أو اكتب /help."
