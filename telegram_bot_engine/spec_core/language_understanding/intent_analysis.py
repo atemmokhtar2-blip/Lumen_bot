@@ -147,7 +147,7 @@ def _slot_status(
     mark("jobs_scope", intent == "jobs")
     mark("fitness_scope", intent == "fitness")
     mark("contest_type", intent == "contests")
-    mark("bot_purpose", bool(lu.primary_domain) or intent is not None)
+    mark("bot_purpose", bool(lu.primary_domain))
     mark("audience", intent == "tickets")
 
     missing = [s for s in required if not filled.get(s)]
@@ -525,7 +525,17 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
         if ps and ps not in sec_presets and ps != preset:
             sec_presets.append(ps)
 
-    return IntentAnalysis(
+    # Prefer Layer-3 adaptive queue wording when available (lazy import)
+    try:
+        from .adaptive_questioning import build_question_plan as _bqp
+        # Build a lightweight plan using current analysis fields via a shim
+        # We pass self-like state by temporary IntentAnalysis-less path: use questions from plan
+        # Construct after object... so post-process below
+        _l3_refresh = True
+    except Exception:
+        _l3_refresh = False
+
+    result = IntentAnalysis(
         primary=primary_sig,
         secondary=secondary_sigs,
         complexity=complexity,
@@ -549,6 +559,18 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
         missing_slots=missing,
         evidence_grade=evidence_grade,
     )
+    if _l3_refresh:
+        try:
+            plan = _bqp(raw, intent=result, lu=lu, max_questions=4)
+            if plan.questions:
+                result.questions = [q.text for q in plan.questions]
+                if plan.should_block_generation:
+                    result.should_ask = True
+                    if not result.ask_reason:
+                        result.ask_reason = "adaptive_questions_pending"
+        except Exception:
+            pass
+    return result
 
 
 def analyze(text: str) -> IntentAnalysis:

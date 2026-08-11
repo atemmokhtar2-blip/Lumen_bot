@@ -1,4 +1,11 @@
-"""Language Understanding (L1) + Intent Analysis (L2) — zero-AI foundation."""
+"""L1 Language Understanding + L2 Intent Analysis + L3 Adaptive Questioning."""
+from .adaptive_questioning import (
+    AdaptiveQuestion,
+    QuestionPlan,
+    apply_answer,
+    build_question_plan,
+    next_questions,
+)
 from .engine import (
     DOMAIN_TO_PRESET,
     DomainSignal,
@@ -32,4 +39,9 @@ __all__ = [
     "IntentSignal",
     "detect_language",
     "ASK_THRESHOLD",
+    "build_question_plan",
+    "next_questions",
+    "apply_answer",
+    "AdaptiveQuestion",
+    "QuestionPlan",
 ]
