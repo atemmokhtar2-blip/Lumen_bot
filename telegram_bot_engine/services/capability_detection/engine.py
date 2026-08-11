@@ -1,13 +1,14 @@
-"""Capability Detection Engine — Phase 1.
+"""Capability Detection Engine — Phase 1 (hardened).
 
 Pipeline (deterministic, zero-AI):
-  1. Feasibility gate (impossible / complex external APIs)
-  2. Existing capability_extractor (exact keyword → real keys only)
-  3. Registry search for residual phrases
-  4. Classify: EXISTS | COMPOSABLE | GAP | IMPOSSIBLE
-  5. Build human Fail-Safe report
+  1. Feasibility gate
+  2. Domain detector (hints for extractor)
+  3. capability_extractor (exact keyword → real keys only)
+  4. Primary-only registry search for residual coverage
+  5. Gap analysis
+  6. Classify: EXISTS | COMPOSABLE | GAP | IMPOSSIBLE
 
-Does NOT call the web and does NOT invent capabilities outside CAPABILITIES.
+Never invents keys outside CAPABILITIES. Never calls the web.
 """
 from __future__ import annotations
 
@@ -25,33 +26,49 @@ from .models import (
 )
 from .search import nearest_keys_for_phrase, search_capabilities, tokenize
 
-# Phrases that often signal composition of known domains (not a true gap)
 _COMPOSITION_HINTS = (
-    "مع",
-    "و",
-    "plus",
-    "with",
-    "and",
-    "دمج",
-    "معاً",
-    "مع بعض",
-    "كامل",
-    "متكامل",
+    "مع", "و", "plus", "with", "and", "دمج", "معاً", "مع بعض", "كامل", "متكامل",
 )
 
-# Residual concept patterns that are NOT covered by extractor keywords well
-_GAP_CANDIDATE_RE = re.compile(
-    r"(ترجم|ترجمة|translate|translation|"
-    r"صورة|صور|image|vision|ocr|"
-    r"صوت|voice|speech|tts|stt|"
-    r"ذكاء|ai\b|gpt|llm|"
-    r"بلوكتشين|blockchain|nft|"
-    r"تعدين|mining|"
-    r"اختراق|hack|"
-    r"فيديو\s*حي|live\s*video|voip|"
-    r"stripe|paypal|payment\s*gateway)",
-    re.I,
-)
+# Residual concepts that are commonly requested but not executable as full features
+_GAP_SPECS: list[tuple[re.Pattern[str], str, list[str], list[str]]] = [
+    (
+        re.compile(r"ترجم(ة)?\s*(ال)?رسائل|auto\s*translat|ترجم\s*تلقائ|يترجم", re.I),
+        "الترجمة التلقائية للرسائل غير موجودة كقدرة تنفيذية (lang = لغة الواجهة فقط)",
+        ["lang"],
+        ["i18n"],
+    ),
+    (
+        re.compile(r"تحليل\s*صور|تعرف\s*على\s*الصور|image\s*recog|ocr|وصف\s*الصور|vision\s*api", re.I),
+        "تحليل/وصف الصور يحتاج نماذج خارجية غير متوفرة في المسار الحتمي",
+        [],
+        [],
+    ),
+    (
+        re.compile(r"\b(gpt|llm|chatgpt|openai)\b|ذكاء\s*اصطناعي\s*(حقيقي|توليدي)|يتعلم\s*من", re.I),
+        "نماذج الذكاء الاصطناعي التوليدي خارج نطاق التوليد الحتمي",
+        [],
+        [],
+    ),
+    (
+        re.compile(r"stripe|paypal|payment\s*gateway|بوابة\s*دفع", re.I),
+        "بوابة دفع خارجية تحتاج مفاتيح API غير مضمّنة",
+        ["shop_buy", "payment_success"],
+        ["payments", "shop"],
+    ),
+    (
+        re.compile(r"صوت|voice\s*note|speech|tts|stt|تحويل\s*صوت", re.I),
+        "معالجة الصوت/الكلام غير مدعومة كقدرة تنفيذية حالياً",
+        [],
+        [],
+    ),
+    (
+        re.compile(r"فيديو\s*حي|live\s*video|voip|مكالمة\s*فيديو", re.I),
+        "الفيديو الحي/VoIP خارج نطاق بوتات الأوامر",
+        [],
+        [],
+    ),
+]
 
 
 def _to_matched(key: str, score: float = 1.0, source: str = "extractor") -> MatchedCapability | None:
@@ -70,81 +87,50 @@ def _to_matched(key: str, score: float = 1.0, source: str = "extractor") -> Matc
     )
 
 
-def _merge_matched(
-    primary: list[MatchedCapability],
-    extra: list[MatchedCapability],
-) -> list[MatchedCapability]:
+def _merge_matched(items: list[MatchedCapability]) -> list[MatchedCapability]:
     seen: set[str] = set()
     out: list[MatchedCapability] = []
-    for m in primary + extra:
+    for m in items:
         if m.key in seen:
             continue
         seen.add(m.key)
         out.append(m)
-    # stable: higher score first, then key
     out.sort(key=lambda m: (-m.score, m.key))
     return out
 
 
-def _detect_gap_phrases(request: str, matched_keys: set[str]) -> list[GapItem]:
-    """Heuristic residual phrases not explained by matched capabilities."""
+def _detect_gaps(request: str, matched_keys: set[str]) -> list[GapItem]:
     text = (request or "").strip()
     if not text:
         return []
-
     gaps: list[GapItem] = []
-    # Known hard gaps from pattern list
-    for m in _GAP_CANDIDATE_RE.finditer(text):
-        phrase = m.group(0).strip()
-        # Skip if already covered by a matched key that mentions similar concept
-        covered = False
-        low = phrase.lower()
-        for k in matched_keys:
-            if low in k or any(p in k for p in low.split() if len(p) > 3):
-                covered = True
-                break
-        # lang capability covers "ترجمة" as UI language only — still flag auto-translate intent
-        if low in {"ترجم", "ترجمة", "translate", "translation"}:
-            if "lang" in matched_keys and not re.search(
-                r"ترجم(ة)?\s*(ال)?رسائل|auto\s*translat|ترجم\s*تلقائ", text, re.I
-            ):
-                # UI language change — not a gap
-                continue
-            nearest = nearest_keys_for_phrase(phrase, limit=4)
-            gaps.append(
-                GapItem(
-                    phrase=phrase,
-                    reason="الترجمة التلقائية للرسائل غير موجودة كقدرة تنفيذية (lang = لغة الواجهة فقط)",
-                    suggested_keys=nearest or ["lang"],
-                    suggested_categories=["i18n"],
-                )
-            )
+    for pat, reason, suggested, cats in _GAP_SPECS:
+        if not pat.search(text):
             continue
-        if covered:
+        # skip if already covered by a real matched key that is not merely "lang" for translate
+        if "ترجم" in reason or "translat" in reason.lower():
+            # lang alone does not cover auto-translate
+            pass
+        elif suggested and any(s in matched_keys for s in suggested):
             continue
-        nearest = nearest_keys_for_phrase(phrase, limit=5)
-        cats = []
-        for nk in nearest:
-            c = get_capability(nk)
-            if c and c.category not in cats:
-                cats.append(c.category)
+        m = pat.search(text)
+        phrase = (m.group(0) if m else pat.pattern)[:48]
+        nearest = list(suggested) if suggested else nearest_keys_for_phrase(phrase, limit=4)
         gaps.append(
             GapItem(
                 phrase=phrase,
-                reason="لا يوجد مفتاح مطابق مباشرة في سجل القدرات",
-                suggested_keys=nearest,
-                suggested_categories=cats,
+                reason=reason,
+                suggested_keys=nearest[:6],
+                suggested_categories=list(cats),
             )
         )
-
-    # De-dupe by phrase
+    # de-dupe by reason
     seen: set[str] = set()
     unique: list[GapItem] = []
     for g in gaps:
-        p = g.phrase.lower()
-        if p in seen:
+        if g.reason in seen:
             continue
-        seen.add(p)
+        seen.add(g.reason)
         unique.append(g)
     return unique
 
@@ -156,7 +142,6 @@ def _classify(
     gaps: list[GapItem],
     request: str,
 ) -> tuple[DetectionStatus, float, str, str, str]:
-    """Return status, confidence, reason_ar, reason_en, suggested_scope_ar."""
     if not feas.can_generate or feas.level == ComplexityLevel.IMPOSSIBLE:
         return (
             DetectionStatus.IMPOSSIBLE,
@@ -166,79 +151,87 @@ def _classify(
             feas.suggested_scope or "اطلب بوت أوامر/متجر/تذاكر داخل تيليجرام",
         )
 
-    if gaps and not matched:
+    n = len(matched)
+
+    if n == 0 and gaps:
         return (
             DetectionStatus.GAP,
-            max(0.35, float(feas.confidence) - 0.2),
+            max(0.35, float(feas.confidence) - 0.25),
             "الميزات المطلوبة غير موجودة في سجل القدرات الحالي",
             "Requested features are not in the current capability registry",
             feas.suggested_scope
-            or "جرّب وصفاً يعتمد على أوامر، متجر، نقاط، تذاكر، ترحيب، أو اشتراكات",
+            or "جرّب وصفاً يعتمد على أوامر، متجر، نقاط، تذاكر، ترحيب، مسابقات، أو اشتراكات",
         )
 
-    if gaps and matched:
+    if n == 0:
+        # Nothing matched and no structured gap — still a soft gap
         return (
             DetectionStatus.GAP,
-            max(0.45, float(feas.confidence) - 0.1),
-            f"جزء من الطلب مغطى ({len(matched)} قدرة)؛ توجد فجوات: "
-            + "، ".join(g.phrase for g in gaps[:4]),
-            f"Partial coverage ({len(matched)} caps); gaps remain",
+            max(0.40, float(feas.confidence) - 0.2),
+            "لم يُعثر على قدرات مطابقة بوضوح في السجل",
+            "No clear capability matches in the registry",
+            "اذكر أوامر أو ميزات محددة مثل ترحيب، متجر، تذاكر، نقاط، مسابقات",
+        )
+
+    if gaps:
+        return (
+            DetectionStatus.GAP,
+            max(0.50, float(feas.confidence) - 0.1),
+            f"جزء من الطلب مغطى ({n} قدرة)؛ توجد فجوات",
+            f"Partial coverage ({n} caps); gaps remain",
             "يمكن توليد الجزء المدعوم؛ الفجوات تُستبعد أو تُستبدل بأقرب قدرات",
         )
 
-    # No gaps
-    if len(matched) <= 2 and not any(h in (request or "") for h in _COMPOSITION_HINTS):
-        # single-feature style
+    # Full coverage
+    multi = n >= 3 or any(h in (request or "") for h in _COMPOSITION_HINTS)
+    if multi:
         return (
-            DetectionStatus.EXISTS,
-            min(0.95, float(feas.confidence) + 0.05),
-            f"الميزات المطلوبة موجودة مباشرة ({len(matched)} قدرة)",
-            f"Requested features map directly to registry ({len(matched)} caps)",
+            DetectionStatus.COMPOSABLE,
+            min(0.95, float(feas.confidence) + 0.08),
+            f"يمكن تركيب البوت من {n} قدرة موجودة في السجل",
+            f"Bot can be assembled from {n} known capabilities",
             "",
         )
-
-    # Multiple known caps → composable
     return (
-        DetectionStatus.COMPOSABLE,
-        min(0.92, float(feas.confidence) + 0.05),
-        f"يمكن تركيب البوت من {len(matched)} قدرة موجودة في السجل",
-        f"Bot can be assembled from {len(matched)} known capabilities",
+        DetectionStatus.EXISTS,
+        min(0.96, float(feas.confidence) + 0.08),
+        f"الميزات المطلوبة موجودة مباشرة ({n} قدرة)",
+        f"Requested features map directly to registry ({n} caps)",
         "",
     )
+
+
+def _resolve_domains(request: str, domains: Iterable[str] | None) -> list[str]:
+    if domains:
+        return [d for d in domains if d]
+    try:
+        from ...spec_core.domain_detector import detect
+
+        return list(detect(request) or [])
+    except Exception:
+        return []
 
 
 def detect_capabilities(
     request: str,
     *,
     domains: Iterable[str] | None = None,
-    search_limit: int = 15,
+    search_limit: int = 10,
     include_search: bool = True,
 ) -> DetectionReport:
-    """Main entry — detect what the registry can already satisfy.
-
-    Parameters
-    ----------
-    request:
-        Free-text user description (Arabic/English).
-    domains:
-        Optional domain hints from domain_detector (passed through to extractor).
-    search_limit:
-        Max extra keys from registry search.
-    include_search:
-        If False, only use capability_extractor (stricter).
-    """
+    """Main entry — detect what the registry can already satisfy."""
     text = (request or "").strip()
     feas = check_feasibility(text)
+    resolved_domains = _resolve_domains(text, domains)
 
     # 1) Exact extractor keys (never invents)
-    extracted_keys = extract_all(text, domains=domains)
+    extracted_keys = extract_all(text, domains=resolved_domains or None)
     matched: list[MatchedCapability] = []
     for k in extracted_keys:
         m = _to_matched(k, score=1.0, source="extractor")
         if m:
             matched.append(m)
 
-    # Always ensure core if anything matched
     if matched:
         for core in ("start", "help"):
             if core not in {m.key for m in matched}:
@@ -246,45 +239,72 @@ def detect_capabilities(
                 if cm:
                     matched.append(cm)
 
-    # 2) Soft search for additional related keys (still registry-only)
-    # Prefer extractor; search only fills modest extras and avoids scale noise.
+    # 2) Primary-only soft search
+    #    - If extractor already found real feature keys: only same-category, high score
+    #    - If extractor empty: broader primary search
     if include_search and text and feas.can_generate:
         already = {m.key for m in matched}
-        preferred_cats = {m.category for m in matched if m.source == "extractor"}
-        min_s = 0.35 if matched else 0.25
-        extra_limit = min(search_limit, 6 if matched else 10)
-        for cap, score in search_capabilities(text, limit=max(extra_limit * 3, 15), min_score=min_s):
-            if cap.key in already:
-                continue
-            # When extractor already hit, only accept same-category or strong scores
-            if preferred_cats and cap.category not in preferred_cats and score < 0.55:
-                continue
-            matched.append(
-                MatchedCapability(
-                    key=cap.key,
-                    service=cap.service,
-                    method=cap.method,
-                    category=cap.category,
-                    description_ar=cap.description_ar,
-                    description_en=cap.description_en,
-                    score=float(score),
-                    source="search",
-                )
+        feature_matched = [m for m in matched if m.source == "extractor" and m.key not in {"start", "help"}]
+        preferred_cats = {m.category for m in feature_matched}
+
+        if feature_matched:
+            min_s = 0.40
+            extra_limit = min(search_limit, 5)
+            hits = search_capabilities(
+                text, limit=extra_limit * 2, min_score=min_s, primary_only=True
             )
-            already.add(cap.key)
-            if len([m for m in matched if m.source == "search"]) >= extra_limit:
-                break
+            added = 0
+            for cap, score in hits:
+                if cap.key in already:
+                    continue
+                if preferred_cats and cap.category not in preferred_cats and score < 0.60:
+                    continue
+                matched.append(
+                    MatchedCapability(
+                        key=cap.key,
+                        service=cap.service,
+                        method=cap.method,
+                        category=cap.category,
+                        description_ar=cap.description_ar,
+                        description_en=cap.description_en,
+                        score=float(score),
+                        source="search",
+                    )
+                )
+                already.add(cap.key)
+                added += 1
+                if added >= extra_limit:
+                    break
+        else:
+            hits = search_capabilities(
+                text, limit=search_limit, min_score=0.32, primary_only=True
+            )
+            for cap, score in hits:
+                if cap.key in already:
+                    continue
+                matched.append(
+                    MatchedCapability(
+                        key=cap.key,
+                        service=cap.service,
+                        method=cap.method,
+                        category=cap.category,
+                        description_ar=cap.description_ar,
+                        description_en=cap.description_en,
+                        score=float(score),
+                        source="search",
+                    )
+                )
+                already.add(cap.key)
 
-    matched = _merge_matched(matched, [])
+    matched = _merge_matched(matched)
 
-    # 3) Gaps (only when generation is not already impossible)
+    # 3) Gaps
     gaps: list[GapItem] = []
-    if feas.can_generate:
-        gaps = _detect_gap_phrases(text, {m.key for m in matched})
+    if feas.can_generate or feas.level != ComplexityLevel.IMPOSSIBLE:
+        gaps = _detect_gaps(text, {m.key for m in matched})
 
-    # Feasibility blocked features become gaps too
     for bf in feas.blocked_features or []:
-        if not any(bf.lower() in (g.phrase.lower()) for g in gaps):
+        if not any(bf.lower() in (g.reason.lower() + g.phrase.lower()) for g in gaps):
             gaps.append(
                 GapItem(
                     phrase=bf,
@@ -300,7 +320,6 @@ def detect_capabilities(
 
     cats = sorted({m.category for m in matched})
     can_gen = bool(feas.can_generate) and status != DetectionStatus.IMPOSSIBLE
-    # GAP still allows partial generation of matched parts
     if status == DetectionStatus.GAP and matched:
         can_gen = True
 
@@ -308,12 +327,14 @@ def detect_capabilities(
         "extracted_count": len(extracted_keys),
         "search_enabled": include_search,
         "registry_size": len(CAPABILITIES),
+        "domains": resolved_domains,
         "feasibility": {
             "can_generate": feas.can_generate,
             "level": feas.level.value if hasattr(feas.level, "value") else str(feas.level),
             "confidence": feas.confidence,
         },
         "tokens": tokenize(text)[:24],
+        "feature_keys": [m.key for m in matched if m.key not in {"start", "help"}],
     }
 
     return DetectionReport(
@@ -333,14 +354,12 @@ def detect_capabilities(
 
 
 def detect_status(request: str) -> DetectionStatus:
-    """Convenience: status only."""
     return detect_capabilities(request).status
 
 
 def can_satisfy(request: str) -> bool:
-    """True when EXISTS or COMPOSABLE (full coverage, no gaps)."""
     rep = detect_capabilities(request)
-    return rep.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE)
+    return rep.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE) and not rep.gaps
 
 
 __all__ = [

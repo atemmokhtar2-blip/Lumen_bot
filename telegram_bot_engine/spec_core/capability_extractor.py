@@ -120,7 +120,69 @@ _PATTERNS: dict[str, tuple[str, ...]] = {
     "lock_chat": ("قفل الدردشة", "قفل الشات", "lock chat"),
     "user_info": ("معلومات عضو", "info member", "user info"),
     "announce": ("إعلان", "announce", "إذاعة"),
+    # Contests / giveaways
+    "contests": (
+        "مسابقة", "مسابقات", "contest", "giveaway", "سحب", "سحب فائز",
+        "المسابقات", "تحدي", "تحديات",
+    ),
+    "join_contest": ("انضم للمسابقة", "الاشتراك في مسابقة", "join contest"),
+    "new_contest": ("إنشاء مسابقة", "مسابقة جديدة", "create contest"),
+    "draw_winner": ("سحب فائز", "اختيار فائز", "draw winner", "فائز"),
+    "end_contest": ("إنهاء مسابقة", "إغلاق مسابقة", "end contest"),
+    # Booking / clinic
+    "book_slot": (
+        "حجز", "حجز موعد", "مواعيد", "booking", "book slot", "احجز",
+        "عيادة", "موعد طبي",
+    ),
+    "book_list": ("حجوزاتي", "مواعيدي", "my bookings"),
+    "book_cancel": ("إلغاء حجز", "cancel booking"),
+    "clinic_book": ("حجز عيادة", "موعد عيادة", "clinic book"),
+    # Echo / auto-reply
+    "echo": (
+        "رد آلي", "رد تلقائي", "auto reply", "echo", "يرد على الرسائل",
+        "رد على الرسائل", "يردد", "يعيد النص",
+    ),
+    # Coupons / points extras
+    "coupon_apply": ("كوبون", "كوبونات", "خصم", "coupon", "promo code", "برومو"),
+    "coupon_create": ("إنشاء كوبون", "create coupon"),
+    "redeem_points": ("استبدال نقاط", "redeem points"),
+    "points_history": ("سجل نقاط", "points history"),
+    # Reminders / notify
+    "remind_set": (
+        "تذكير", "ذكرني", "تذكيرات", "reminder", "remind", "إشعار",
+        "اشعار", "notifications", "يبعت إشعارات", "إشعارات",
+    ),
+    "remind_list": ("قائمة التذكيرات", "list reminders"),
+    # Verify / gate
+    "verify_start": (
+        "تحقق", "تحقق عضو", "تحقق الأعضاء", "verification", "verify",
+        "بوابة تحقق", "captcha بسيط",
+    ),
+    "verify_ok": ("تأكيد التحقق", "confirm verify"),
+    "force_subscribe_info": (
+        "اشتراك إجباري", "يجب الاشتراك", "force subscribe", "اشترك أولا",
+    ),
+    # Wallet
+    "wallet_balance": ("محفظة", "رصيد محفظة", "wallet", "wallet balance"),
+    "wallet_history": ("سجل محفظة", "wallet history"),
+    # Subscriptions extras
+    "subscribe": ("اشترك", "الاشتراك", "subscribe"),
+    "my_sub": ("اشتراكي", "my subscription"),
+    # Support extras
+    "ticket_my": ("تذاكري", "my tickets"),
+    "ticket_close": ("إغلاق تذكرة", "close ticket"),
+    # Shop extras already partial — strengthen
+    "shop_order": ("طلب منتج", "place order", "اطلب"),
+    "shop_my_orders": ("طلباتي", "my orders"),
+    "cart_add": ("أضف للسلة", "add to cart"),
+    "cart_checkout": ("إتمام الشراء", "checkout"),
+    # Rules content (group rules — distinct from rate-limit)
+    "rules": (
+        "قوانين", "قوانين المجموعة", "قواعد الجروب", "group rules",
+        "rate limit", "rate limiting", "تحديد المعدل", "throttle", "rules",
+    ),
 }
+
 
 _DOMAIN_CAP_HINTS: dict[str, tuple[str, ...]] = {
     "cybersecurity": (
