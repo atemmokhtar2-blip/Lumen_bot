@@ -145,28 +145,34 @@ class BillingService:
         return inv
 
     def apply_plan(self, tenant_id: str, plan_id: str, *, stripe_customer: str = "") -> bool:
-        """Atomically set plan_id / active / metadata under one exclusive lock.
-
-        Previously: get() → mutate local copy → update_white_label() (reloads
-        and may drop metadata) → overwrite _by_id + _save(). That race could
-        lose stripe_customer_id / last_plan_change under concurrent writes.
-        """
+        """Set user plan (free|pro|unlimited) on the identity store (Mongo or file)."""
         store = get_tenant_store()
-
-        def _do():
-            cur = store._by_id.get(tenant_id)
-            if not cur:
-                return False
-            meta = dict(cur.metadata or {})
-            if stripe_customer:
-                meta["stripe_customer_id"] = stripe_customer
-            meta["last_plan_change"] = time.time()
-            cur.metadata = meta
-            cur.plan_id = (plan_id or cur.plan_id).lower()
-            cur.active = True
-            return True
-
-        ok = bool(store._mutate(_do))
+        meta_updates = {}
+        if stripe_customer:
+            meta_updates["stripe_customer_id"] = stripe_customer
+        # Prefer explicit set_plan (MongoUserStore / TenantStore)
+        if hasattr(store, "set_plan"):
+            ok = bool(
+                store.set_plan(
+                    tenant_id,
+                    plan_id,
+                    metadata_updates=meta_updates or None,
+                    active=True,
+                )
+            )
+        else:
+            def _do():
+                cur = store._by_id.get(tenant_id)
+                if not cur:
+                    return False
+                meta = dict(cur.metadata or {})
+                meta.update(meta_updates)
+                meta["last_plan_change"] = time.time()
+                cur.metadata = meta
+                cur.plan_id = (plan_id or cur.plan_id).lower()
+                cur.active = True
+                return True
+            ok = bool(store._mutate(_do))
         if ok:
             logger.info("tenant %s upgraded to plan %s", tenant_id, (plan_id or "").lower())
         return ok

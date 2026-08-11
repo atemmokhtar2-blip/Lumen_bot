@@ -1,4 +1,4 @@
-"""Subscription plans — B2B commercial surface."""
+"""Subscription plans — free | pro | unlimited."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -39,21 +39,9 @@ PLANS: dict[str, Plan] = {
         generations_per_month=500,
         hosted_bots=10,
         api_rpm=120,
-        white_label=False,
+        white_label=True,
         custom_domain=False,
         priority_support=False,
-        features=("generate", "download_zip", "managed_hosting", "api_access"),
-    ),
-    "business": Plan(
-        id="business",
-        name="Business",
-        price_usd_month=199,
-        generations_per_month=5000,
-        hosted_bots=100,
-        api_rpm=600,
-        white_label=True,
-        custom_domain=True,
-        priority_support=True,
         features=(
             "generate",
             "download_zip",
@@ -61,15 +49,14 @@ PLANS: dict[str, Plan] = {
             "api_access",
             "white_label",
             "dashboard",
-            "team_keys",
         ),
     ),
-    "enterprise": Plan(
-        id="enterprise",
-        name="Enterprise",
-        price_usd_month=0,  # custom
+    "unlimited": Plan(
+        id="unlimited",
+        name="Unlimited",
+        price_usd_month=199,
         generations_per_month=0,  # unlimited
-        hosted_bots=0,
+        hosted_bots=0,  # unlimited
         api_rpm=3000,
         white_label=True,
         custom_domain=True,
@@ -83,12 +70,20 @@ PLANS: dict[str, Plan] = {
             "dashboard",
             "team_keys",
             "sla",
-            "sso",
-            "dedicated_isolation",
+            "priority_support",
         ),
     ),
 }
 
+# Backward-compatible aliases (resolved in get_plan)
+_ALIASES = {
+    "starter": "free",
+    "business": "pro",
+    "enterprise": "unlimited",
+}
+
 
 def get_plan(plan_id: str) -> Plan:
-    return PLANS.get((plan_id or "free").lower(), PLANS["free"])
+    key = (plan_id or "free").strip().lower()
+    key = _ALIASES.get(key, key)
+    return PLANS.get(key, PLANS["free"])

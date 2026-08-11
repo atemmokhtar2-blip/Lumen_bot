@@ -136,7 +136,7 @@ class TenantStore:
         t = Tenant(
             tenant_id=tid,
             name=(name or "Tenant").strip()[:120],
-            plan_id=(plan_id or "free").lower(),
+            plan_id=_normalize_plan(plan_id),
             brand_name=(brand_name or name or "").strip()[:120],
             brand_logo_url=str(wl.get("brand_logo_url") or "")[:300],
             primary_color=str(wl.get("primary_color") or "#2563eb")[:20],
@@ -215,12 +215,73 @@ class TenantStore:
             self._load_unlocked()
             return list(self._by_id.values())
 
+    def get_by_telegram(self, owner_telegram_id: int) -> Tenant | None:
+        with exclusive_lock(self.index_path):
+            self._load_unlocked()
+            uid = int(owner_telegram_id or 0)
+            for t in self._by_id.values():
+                if int(t.owner_telegram_id or 0) == uid:
+                    return t
+            return None
 
-_STORE: TenantStore | None = None
 
 
-def get_tenant_store() -> TenantStore:
+def _normalize_plan(plan_id: str | None) -> str:
+    try:
+        from .mongo_users import normalize_plan_id
+        return normalize_plan_id(plan_id)
+    except Exception:
+        key = (plan_id or "free").strip().lower()
+        aliases = {
+            "free": "free", "starter": "free",
+            "pro": "pro", "business": "pro",
+            "unlimited": "unlimited", "enterprise": "unlimited",
+        }
+        return aliases.get(key, "free")
+
+
+def set_plan(
+    self,
+    tenant_id: str,
+    plan_id: str,
+    *,
+    metadata_updates: dict[str, Any] | None = None,
+    active: bool = True,
+) -> bool:
+    """Update user plan (free|pro|unlimited). Used by billing."""
+    def _do():
+        cur = self._by_id.get(tenant_id)
+        if not cur:
+            return False
+        meta = dict(cur.metadata or {})
+        if metadata_updates:
+            meta.update(metadata_updates)
+        meta["last_plan_change"] = time.time()
+        cur.metadata = meta
+        cur.plan_id = _normalize_plan(plan_id)
+        cur.active = bool(active)
+        return True
+    return bool(self._mutate(_do))
+
+
+# Bind set_plan onto TenantStore class
+TenantStore.set_plan = set_plan  # type: ignore[attr-defined]
+
+
+_STORE = None
+
+
+def get_tenant_store():
+    """Return MongoDB user store when MONGODB_URI is set; else file-backed store.
+
+    User identity + plan_id live only in Mongo when configured.
+    """
     global _STORE
     if _STORE is None:
-        _STORE = TenantStore()
+        uri = (os.getenv("MONGODB_URI") or "").strip()
+        if uri:
+            from .mongo_users import MongoUserStore
+            _STORE = MongoUserStore(uri)
+        else:
+            _STORE = TenantStore()
     return _STORE
