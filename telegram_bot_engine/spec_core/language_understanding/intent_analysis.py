@@ -1,11 +1,13 @@
-"""Layer 2 — Intent Analysis Engine (zero-AI, rule-based, max quality).
+"""Layer 2 — Intent Analysis Engine MAX (zero-AI).
 
-Consumes Layer-1 LanguageUnderstandingResult and produces a multi-dimensional
-intent decision: primary + secondary intents with weight/confidence/source,
-complexity, skill, language, feature plan, and ask-vs-guess gate.
+Decision stack (highest trust first):
+  1) High-precision signatures (anchors) — hard evidence
+  2) Entity boosts (domain/IP/MQTT/payments…)
+  3) Layer-1 LU domain scores — supporting only
+  4) Conflict rules + negative evidence
+  5) Confidence calibration → ask-vs-commit gate
 
-Does NOT invent domains from thin air: every signal is grounded in LU evidence
-or explicit entity/pattern hits.
+Never invents a primary intent without evidence. Vague utterances force ask.
 """
 from __future__ import annotations
 
@@ -18,21 +20,22 @@ from typing import Any
 
 from .engine import DOMAIN_TO_PRESET, LanguageUnderstandingResult, understand
 from .entities import ExtractedEntities
+from .intent_signatures import match_signatures, vague_bot_request
 
 _DATA = Path(__file__).resolve().parent / "data"
 
-# Confidence below this → ask, don't hard-commit fragile features
-ASK_THRESHOLD = 0.60
-# Secondary intents must clear this relative weight
-SECONDARY_MIN_WEIGHT = 0.28
+ASK_THRESHOLD = 0.62
+SECONDARY_MIN_WEIGHT = 0.30
+# Primary must beat runner-up by this margin unless signature-anchored
+PRIMARY_MARGIN = 0.12
 
 
 @dataclass
 class IntentSignal:
     intent: str
-    weight: float  # 0..1 relative importance
-    confidence: float  # 0..1 reliability
-    source: str  # keyword|synonym|context|pattern|entity|lu|rule
+    weight: float
+    confidence: float
+    source: str
     evidence: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,9 +52,9 @@ class IntentSignal:
 class IntentAnalysis:
     primary: IntentSignal | None
     secondary: list[IntentSignal]
-    complexity: str  # simple|medium|complex
-    skill_level: str  # beginner|intermediate|expert
-    language: str  # ar_eg|ar|en|mixed
+    complexity: str
+    skill_level: str
+    language: str
     domain_family: str
     expected_feature_count: tuple[int, int]
     should_ask: bool
@@ -64,6 +67,7 @@ class IntentAnalysis:
     lu_snapshot: dict[str, Any] = field(default_factory=dict)
     filled_slots: dict[str, bool] = field(default_factory=dict)
     missing_slots: list[str] = field(default_factory=list)
+    evidence_grade: str = "none"  # none|weak|solid|hard
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +86,7 @@ class IntentAnalysis:
             "secondary_presets": self.secondary_presets,
             "filled_slots": self.filled_slots,
             "missing_slots": self.missing_slots,
+            "evidence_grade": self.evidence_grade,
             "decision_trace": self.decision_trace,
         }
 
@@ -94,14 +99,6 @@ def _checklists() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@lru_cache(maxsize=1)
-def _rules() -> dict:
-    path = _DATA / "intent_rules.json"
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def detect_language(text: str) -> str:
     t = text or ""
     ar = len(re.findall(r"[\u0600-\u06FF]", t))
@@ -109,23 +106,22 @@ def detect_language(text: str) -> str:
     if ar and en and min(ar, en) / max(ar, en) > 0.25:
         return "mixed"
     if ar >= en:
-        # Egyptian markers
-        if re.search(r"(عايز|عاوز|كده|كدا|اوي|اوى|محتاج|جروب|دلوقتي|ازاي)", t):
+        if re.search(r"(عايز|عاوز|كده|كدا|اوي|محتاج|جروب|دلوقتي|ازاي)", t):
             return "ar_eg"
         return "ar"
     return "en"
 
 
-def _slot_status(intent: str, ent: ExtractedEntities, lu: LanguageUnderstandingResult) -> tuple[dict[str, bool], list[str]]:
+def _slot_status(
+    intent: str, ent: ExtractedEntities, lu: LanguageUnderstandingResult
+) -> tuple[dict[str, bool], list[str]]:
     cl = _checklists().get(intent) or _checklists().get("default") or {}
     required = list(cl.get("required") or [])
-    optional = list(cl.get("optional") or [])
     filled: dict[str, bool] = {}
 
     def mark(slot: str, ok: bool) -> None:
         filled[slot] = bool(ok)
 
-    # Generic evaluators
     mark("product_or_category", bool(ent.product or ent.category))
     mark("payment", bool(ent.payment_methods))
     mark("delivery", bool(ent.wants_delivery))
@@ -133,201 +129,54 @@ def _slot_status(intent: str, ent: ExtractedEntities, lu: LanguageUnderstandingR
     mark("reviews", bool(ent.wants_reviews))
     mark("inventory", bool(ent.wants_inventory))
     mark("wallet", bool(ent.wants_wallet or "wallet" in (ent.payment_methods or [])))
-    mark("security_scope", bool(ent.security_checks or "security" == intent))
+    mark("security_scope", bool(ent.security_checks) or intent == "security")
     mark("target_host", bool(ent.target_domain or ent.target_url or ent.target_ip))
-    mark("report_audience", False)  # only via questions
-    mark("awareness", "phishing" in (ent.security_checks or []))
-    mark("audience", intent == "tickets")  # weak default
-    mark("priority_sla", False)
-    mark("kb", False)
     mark("course_scope", bool(ent.course_topic or ent.category == "دورات" or intent == "education"))
-    mark("quiz", "quiz" in (lu.normalized or "") or "كويز" in (lu.original or "") or "اختبار" in (lu.original or ""))
-    mark("certificate", "شهادة" in (lu.original or "") or "certificate" in (lu.normalized or ""))
-    mark("progress", "تقدم" in (lu.original or "") or "progress" in (lu.normalized or ""))
+    mark("quiz", bool(re.search(r"quiz|كويز|اختبار", (lu.original or "") + (lu.normalized or ""), re.I)))
     mark("booking_type", intent in {"booking", "clinic"})
-    mark("duration", False)
-    mark("reminders", "تذكير" in (lu.original or "") or "remind" in (lu.normalized or ""))
-    mark("menu_or_orders", intent == "restaurant" or "menu" in (lu.normalized or "") or "منيو" in (lu.original or ""))
-    mark("table_booking", "طاولة" in (lu.original or "") or "table" in (lu.normalized or ""))
+    mark("menu_or_orders", intent == "restaurant" or bool(re.search(r"menu|منيو|طلبات", lu.original or "", re.I)))
     mark("connectivity", bool(ent.tech_stack) or intent == "iot")
-    mark("alerts", "تنبيه" in (lu.original or "") or "alert" in (lu.normalized or ""))
-    mark("device_inventory", False)
     mark("ops_scope", intent == "devops" or bool(ent.tech_stack))
-    mark("webhooks", "webhook" in (lu.normalized or ""))
-    mark("status", "status" in (lu.normalized or "") or "حالة" in (lu.original or ""))
-    mark("pipeline", intent == "crm" or "pipeline" in (lu.normalized or "") or "صفقات" in (lu.original or ""))
-    mark("followups", "متابعة" in (lu.original or "") or "follow" in (lu.normalized or ""))
-    mark("broadcast", "إذاعة" in (lu.original or "") or "broadcast" in (lu.normalized or ""))
-    mark("plans", intent in {"saas", "subscriptions"} or "خطة" in (lu.original or "") or "plan" in (lu.normalized or ""))
-    mark("admin", "ادمن" in (lu.original or "") or "admin" in (lu.normalized or ""))
-    mark("analytics", "تحليلات" in (lu.original or "") or "analytics" in (lu.normalized or ""))
-    mark("api", "api" in (lu.normalized or ""))
+    mark("pipeline", intent == "crm" or bool(re.search(r"pipeline|صفقات|ليد", lu.original or "", re.I)))
+    mark("plans", intent in {"saas", "subscriptions"})
     mark("game_loop", intent == "gaming")
-    mark("leaderboard", "متصدر" in (lu.original or "") or "leaderboard" in (lu.normalized or ""))
-    mark("tournaments", "بطولة" in (lu.original or "") or "tournament" in (lu.normalized or ""))
-    mark("economy", "نقاط" in (lu.original or "") or "xp" in (lu.normalized or ""))
     mark("mod_actions", intent == "moderation")
-    mark("filters", "فلتر" in (lu.original or "") or "filter" in (lu.normalized or "") or "spam" in (lu.normalized or ""))
-    mark("rules", "قواعد" in (lu.original or "") or "rules" in (lu.normalized or ""))
     mark("chain_scope", intent == "blockchain")
-    mark("wallet_track", "محفظة" in (lu.original or "") or "wallet" in (lu.normalized or ""))
-    mark("nft", "nft" in (lu.normalized or ""))
     mark("finance_scope", intent == "finance")
-    mark("invoices", "فاتورة" in (lu.original or "") or "invoice" in (lu.normalized or ""))
     mark("logistics_scope", intent == "logistics")
-    mark("tracking", "تتبع" in (lu.original or "") or "track" in (lu.normalized or ""))
-    mark("fleet", "أسطول" in (lu.original or "") or "fleet" in (lu.normalized or ""))
     mark("jobs_scope", intent == "jobs")
-    mark("apply", "تقديم" in (lu.original or "") or "apply" in (lu.normalized or ""))
     mark("fitness_scope", intent == "fitness")
-    mark("streaks", "سلسلة" in (lu.original or "") or "streak" in (lu.normalized or ""))
-    mark("subs", "اشتراك" in (lu.original or "") or "subscription" in (lu.normalized or ""))
     mark("contest_type", intent == "contests")
-    mark("draw", "قرعة" in (lu.original or "") or "draw" in (lu.normalized or ""))
-    mark("rewards", "هدية" in (lu.original or "") or "reward" in (lu.normalized or ""))
-    mark("vendors", "بائع" in (lu.original or "") or "vendor" in (lu.normalized or ""))
-    mark("commission", "عمولة" in (lu.original or "") or "commission" in (lu.normalized or ""))
-    mark("bot_purpose", bool(lu.primary_domain))
+    mark("bot_purpose", bool(lu.primary_domain) or intent is not None)
+    mark("audience", intent == "tickets")
 
     missing = [s for s in required if not filled.get(s)]
-    # also track optional fill ratio in filled
-    for s in optional:
-        filled.setdefault(s, False)
     return filled, missing
 
 
-def _apply_conflict_rules(
-    ranked: list[tuple[str, float, float, list[str]]],
-    text: str,
-    trace: list[str],
-) -> list[tuple[str, float, float, list[str]]]:
-    """Reorder / demote competing intents using weighted rules."""
-    if len(ranked) < 2:
-        return ranked
-    by = {r[0]: r for r in ranked}
-    rules = _rules()
-    low = (text or "").lower()
-
-    def demote(name: str, factor: float, why: str) -> None:
-        if name not in by:
-            return
-        intent, w, c, ev = by[name]
-        by[name] = (intent, w * factor, c * factor, ev + [why])
-        trace.append(f"rule demote {name} x{factor}: {why}")
-
-    def boost(name: str, factor: float, why: str) -> None:
-        if name not in by:
-            return
-        intent, w, c, ev = by[name]
-        by[name] = (intent, min(1.0, w * factor), min(0.99, c * factor), ev + [why])
-        trace.append(f"rule boost {name} x{factor}: {why}")
-
-    # Built-in hard rules (also reflected in JSON)
-    if "security" in by and "shop" in by:
-        if by["security"][1] >= by["shop"][1] * 0.7:
-            demote("shop", 0.4, "security_dominates_shop")
-    if "shop" in by and "delivery" in by:
-        demote("delivery", 0.65, "delivery_is_secondary_to_shop")
-    if "shop" in by and "payments" in by:
-        demote("payments", 0.7, "payments_is_secondary_to_shop")
-    if "moderation" in by and "security" in by:
-        mod_keys = ["حظر", "كتم", "تحذير", "ban", "mute", "warn", "جروب", "مجموعة", "group"]
-        if any(k in text or k in low for k in mod_keys):
-            demote("security", 0.35, "moderation_keywords")
-            boost("moderation", 1.15, "moderation_keywords")
-    if "clinic" in by and "booking" in by:
-        boost("clinic", 1.1, "clinic_over_booking")
-        demote("booking", 0.7, "clinic_primary")
-    if "education" in by and "shop" in by:
-        if by["education"][1] >= 0.45:
-            demote("shop", 0.35, "education_not_shop")
-    if "iot" in by and "shop" in by:
-        demote("shop", 0.3, "iot_not_shop")
-    if "devops" in by and "shop" in by:
-        demote("shop", 0.3, "devops_not_shop")
-    if "gaming" in by and "shop" in by:
-        demote("shop", 0.35, "gaming_not_shop")
-    if "crm" in by and "shop" in by:
-        if by["crm"][1] >= 0.4:
-            demote("shop", 0.4, "crm_not_shop")
-
-    # JSON rules optional extras
-    for _name, rule in rules.items():
-        when = set(rule.get("when") or [])
-        if not when.issubset(by.keys()):
-            continue
-        prefer = rule.get("prefer")
-        if rule.get("always") and prefer in by:
-            for other in when - {prefer}:
-                demote(other, 0.5, f"json_rule:{_name}")
-
-    out = sorted(by.values(), key=lambda x: (-x[1], -x[2], x[0]))
-    return out
-
-
-def _signals_from_lu(lu: LanguageUnderstandingResult) -> list[tuple[str, float, float, list[str], str]]:
-    """Convert LU domain scores into normalized intent candidates."""
-    if not lu.domains:
-        return []
-    top = max(d.score for d in lu.domains) or 1.0
-    out = []
-    for d in lu.domains[:10]:
-        weight = max(0.0, min(1.0, d.score / (top + 0.01)))
-        # blend LU confidence with relative weight
-        conf = max(0.0, min(0.99, 0.55 * d.confidence + 0.45 * weight))
-        src = d.sources[0] if d.sources else "lu"
-        out.append((d.domain, weight, conf, list(d.matched[:6]), src))
-    return out
-
-
-def _entity_intent_boosts(ent: ExtractedEntities) -> list[tuple[str, float, float, list[str], str]]:
-    boosts = []
-    if ent.security_checks or ent.target_domain or ent.target_url or ent.target_ip:
-        boosts.append(
-            (
-                "security",
-                0.95,
-                0.9,
-                list(ent.security_checks[:5]) + ([ent.target_domain] if ent.target_domain else []),
-                "entity",
-            )
-        )
-    if ent.course_topic:
-        boosts.append(("education", 0.85, 0.85, [ent.course_topic], "entity"))
-    if ent.tech_stack:
-        for tech in ent.tech_stack:
-            if tech in {"mqtt", "arduino", "esp32"}:
-                boosts.append(("iot", 0.9, 0.88, [tech], "entity"))
-            if tech in {"docker", "kubernetes", "nginx"}:
-                boosts.append(("devops", 0.88, 0.86, [tech], "entity"))
-    if ent.payment_methods and (ent.product or ent.category or ent.wants_delivery):
-        boosts.append(("shop", 0.7, 0.75, list(ent.payment_methods[:3]), "entity"))
-        boosts.append(("payments", 0.55, 0.7, list(ent.payment_methods[:3]), "entity"))
-    if ent.brand_analogy in {"amazon", "noon", "jumia"}:
-        boosts.append(("marketplace", 0.9, 0.88, [ent.brand_analogy], "entity"))
-    return boosts
-
-
-def _merge_candidates(
-    items: list[tuple[str, float, float, list[str], str]],
-) -> list[tuple[str, float, float, list[str]]]:
-    bag: dict[str, tuple[float, float, list[str], set[str]]] = {}
-    for intent, w, c, ev, src in items:
-        if intent not in bag:
-            bag[intent] = (w, c, list(ev), {src})
-        else:
-            ow, oc, oev, osrc = bag[intent]
-            bag[intent] = (
-                max(ow, w) + 0.15 * min(ow, w),  # soft combine
-                max(oc, c),
-                list(dict.fromkeys(oev + list(ev)))[:10],
-                osrc | {src},
-            )
-    ranked = []
-    for intent, (w, c, ev, srcs) in bag.items():
-        ranked.append((intent, min(1.0, w), min(0.99, c), ev))
-    ranked.sort(key=lambda x: (-x[1], -x[2], x[0]))
-    return ranked
+def _merge(
+    bag: dict[str, dict[str, Any]], intent: str, weight: float, conf: float, source: str, evidence: list[str]
+) -> None:
+    if intent not in bag:
+        bag[intent] = {
+            "weight": weight,
+            "conf": conf,
+            "sources": {source},
+            "evidence": list(evidence)[:8],
+            "hard": source in {"signature", "entity_hard"},
+        }
+        return
+    row = bag[intent]
+    # evidence-additive: max + soft gain from second channel
+    row["weight"] = min(1.0, max(row["weight"], weight) + 0.12 * min(row["weight"], weight))
+    row["conf"] = min(0.99, max(row["conf"], conf) + (0.05 if source != list(row["sources"])[0] else 0))
+    row["sources"].add(source)
+    for e in evidence:
+        if e not in row["evidence"]:
+            row["evidence"].append(e)
+    row["evidence"] = row["evidence"][:10]
+    if source in {"signature", "entity_hard"}:
+        row["hard"] = True
 
 
 def _feature_plan(
@@ -336,109 +185,273 @@ def _feature_plan(
     lu: LanguageUnderstandingResult,
     ent: ExtractedEntities,
 ) -> list[str]:
-    """Union of LU hints filtered by accepted intents only."""
-    allowed = set()
-    if primary:
-        allowed.add(primary)
-    allowed.update(secondary)
-    # always allow payments/delivery as secondary modifiers for commerce
-    if primary in {"shop", "marketplace", "restaurant"}:
-        allowed.update({"payments", "delivery", "wallet"})
-    if primary == "security":
-        allowed.add("security")
-
-    hints = list(lu.feature_hints or [])
-    # Re-derive minimal safety set if LU hints empty
-    if not hints and primary == "security":
-        hints = ["sec_domain_overview", "sec_dns_check", "sec_tls_check", "sec_tips"]
-    if not hints and primary == "shop":
-        hints = ["shop_catalog", "cart_view", "cart_checkout", "shop_add_item"]
-
-    # Filter shop hints if primary is non-commerce
     non_commerce = {
         "security", "education", "iot", "blockchain", "devops", "ai_ml",
         "gaming", "tickets", "crm", "saas", "moderation", "clinic",
-        "healthcare", "finance", "jobs", "fitness", "tasks", "notes", "contests",
+        "healthcare", "finance", "jobs", "fitness", "tasks", "notes",
+        "contests", "wallet", "points", "growth", "subscriptions",
     }
+    hints = list(lu.feature_hints or [])
+    if not hints and primary == "security":
+        hints = ["sec_domain_overview", "sec_dns_check", "sec_tls_check", "sec_tips", "sec_list_reports"]
+    if not hints and primary == "shop":
+        hints = ["shop_catalog", "cart_view", "cart_checkout", "shop_add_item", "shop_orders"]
+    if not hints and primary == "wallet":
+        hints = ["wallet_balance", "wallet_topup", "pay_methods"]
+    if not hints and primary == "moderation":
+        hints = ["rules", "my_id"]
+    if not hints and primary == "tickets":
+        hints = ["ticket_open", "ticket_my", "ticket_list", "ticket_status"]
+
     out: list[str] = []
     for h in hints:
         if primary in non_commerce and h.startswith(("shop_", "cart_", "coupon", "wishlist")):
             continue
+        if primary == "wallet" and h.startswith(("shop_", "cart_")):
+            continue
         if h not in out:
             out.append(h)
 
-    # Entity-driven precision adds
     if primary == "security":
         for chk, feat in (
             ("dns", "sec_dns_check"),
             ("mx", "sec_mx_check"),
             ("tls", "sec_tls_check"),
             ("headers", "sec_headers_check"),
+            ("spf", "sec_dns_check"),
+            ("dmarc", "sec_dns_check"),
         ):
             if chk in (ent.security_checks or []) and feat not in out:
                 out.append(feat)
-    if primary in {"shop", "marketplace"} and "vodafone_cash" in (ent.payment_methods or []):
-        for f in ("vodafone_cash", "pay_methods", "wallet_topup"):
+        for base in ("sec_domain_overview", "sec_dns_check", "sec_tls_check", "sec_tips"):
+            if base not in out:
+                out.append(base)
+    if primary in {"shop", "marketplace"}:
+        pays = set(ent.payment_methods or [])
+        if pays & {"vodafone_cash", "fawry", "instapay", "wallet"}:
+            for f in ("wallet_balance", "wallet_topup", "vodafone_cash", "pay_methods"):
+                if f not in out:
+                    out.append(f)
+        if pays & {"visa", "telegram_payments"}:
+            for f in ("shop_buy", "pay_methods", "payment_history"):
+                if f not in out:
+                    out.append(f)
+        if ent.wants_delivery:
+            for f in ("shipping_set", "order_track"):
+                if f not in out:
+                    out.append(f)
+        if ent.wants_discounts:
+            for f in ("coupon_apply", "coupon_create"):
+                if f not in out:
+                    out.append(f)
+    if primary == "clinic":
+        for f in ("ticket_open", "ticket_my", "ticket_list"):
+            if f not in out:
+                out.append(f)
+    if primary == "booking" and "clinic" in secondary:
+        for f in ("ticket_open", "ticket_my"):
             if f not in out:
                 out.append(f)
     return out
 
 
+def _calibrate_confidence(
+    *,
+    weight: float,
+    base_conf: float,
+    hard: bool,
+    n_sources: int,
+    n_evidence: int,
+    vague: bool,
+    lu_ambiguous: bool,
+    margin: float,
+) -> float:
+    c = base_conf
+    if hard:
+        c = max(c, 0.78)
+        c = min(0.99, c + 0.08)
+    if n_sources >= 2:
+        c = min(0.99, c + 0.06)
+    if n_evidence >= 3:
+        c = min(0.99, c + 0.04)
+    if margin >= 0.25:
+        c = min(0.99, c + 0.05)
+    elif margin < PRIMARY_MARGIN and not hard:
+        c = min(c, 0.55)
+    if vague:
+        c = min(c, 0.35)
+    if lu_ambiguous and not hard:
+        c = min(c, 0.55)
+    # weight floor
+    c = min(c, 0.5 + 0.5 * weight)
+    return max(0.0, min(0.99, c))
+
+
 def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) -> IntentAnalysis:
-    """Full Layer-2 analysis for a user utterance."""
     trace: list[str] = []
+    raw = text or ""
+
     if lu is None:
-        lu = understand(text or "")
+        lu = understand(raw)
         trace.append("lu=fresh")
     else:
         trace.append("lu=provided")
 
-    lang = detect_language(text or "")
+    vague = vague_bot_request(raw)
+    if vague:
+        trace.append("vague_utterance")
+
+    lang = detect_language(raw)
     skill = lu.skill_hint or "beginner"
     complexity = lu.complexity_hint or "simple"
     ent = lu.entities
 
-    candidates = _signals_from_lu(lu)
-    # rewrite to include source in merge
-    flat = [(i, w, c, ev, src) for i, w, c, ev, src in candidates]
-    flat.extend(_entity_intent_boosts(ent))
-    ranked = _merge_candidates(flat)
-    trace.append(f"candidates={[r[0] for r in ranked[:5]]}")
+    bag: dict[str, dict[str, Any]] = {}
 
-    ranked = _apply_conflict_rules(ranked, text or "", trace)
+    # ── Channel A: high-precision signatures ─────────────────────
+    sigs = match_signatures(raw)
+    for h in sigs:
+        _merge(bag, h.intent, min(1.0, 0.55 + h.score * 0.45), min(0.95, 0.7 + h.score * 0.25), "signature", list(h.anchors))
+        trace.append(f"sig:{h.intent}={h.score:.2f}")
+
+    # ── Channel B: hard entities ─────────────────────────────────
+    if ent.security_checks or ent.target_domain or ent.target_url or ent.target_ip:
+        ev = list(ent.security_checks[:5])
+        if ent.target_domain:
+            ev.append(ent.target_domain)
+        _merge(bag, "security", 0.95, 0.92, "entity_hard", ev)
+        trace.append("entity_hard:security")
+    if ent.course_topic:
+        _merge(bag, "education", 0.88, 0.88, "entity_hard", [ent.course_topic])
+    if ent.tech_stack:
+        for tech in ent.tech_stack:
+            if tech in {"mqtt", "arduino", "esp32"}:
+                _merge(bag, "iot", 0.92, 0.9, "entity_hard", [tech])
+            if tech in {"docker", "kubernetes", "nginx"}:
+                _merge(bag, "devops", 0.9, 0.88, "entity_hard", [tech])
+    if ent.brand_analogy in {"amazon", "noon", "jumia"}:
+        _merge(bag, "marketplace", 0.9, 0.88, "entity_hard", [ent.brand_analogy])
+    if ent.payment_methods and (ent.product or ent.category or ent.wants_delivery or ent.wants_discounts):
+        _merge(bag, "shop", 0.75, 0.8, "entity", list(ent.payment_methods[:3]))
+        _merge(bag, "payments", 0.55, 0.72, "entity", list(ent.payment_methods[:3]))
+    elif ent.payment_methods and not (ent.product or ent.category):
+        # pure wallet/pay talk
+        if set(ent.payment_methods) & {"wallet", "vodafone_cash", "fawry", "instapay"} or ent.wants_wallet:
+            _merge(bag, "wallet", 0.8, 0.82, "entity", list(ent.payment_methods[:3]))
+        else:
+            _merge(bag, "payments", 0.7, 0.75, "entity", list(ent.payment_methods[:3]))
+
+    # ── Channel C: LU supporting scores (never sole hard evidence) ─
+    if lu.domains:
+        top = max(d.score for d in lu.domains) or 1.0
+        for d in lu.domains[:8]:
+            w = max(0.0, min(1.0, d.score / (top + 0.01))) * 0.85  # LU discounted
+            c = max(0.0, min(0.9, 0.4 * d.confidence + 0.4 * w))
+            _merge(bag, d.domain, w, c, "lu", list(d.matched[:4]))
+
+    # ── Vague: wipe soft-only intents ────────────────────────────
+    if vague:
+        bag = {k: v for k, v in bag.items() if v.get("hard")}
+        trace.append("cleared_soft_due_to_vague")
+
+    # ── Conflict / vertical locks ────────────────────────────────
+    def demote(name: str, factor: float, why: str) -> None:
+        if name in bag:
+            bag[name]["weight"] *= factor
+            bag[name]["conf"] *= factor
+            bag[name]["evidence"].append(why)
+            trace.append(f"demote:{name}x{factor}:{why}")
+
+    if "security" in bag and "shop" in bag:
+        if bag["security"]["weight"] >= bag["shop"]["weight"] * 0.65 or bag["security"].get("hard"):
+            demote("shop", 0.35, "security_over_shop")
+    if "moderation" in bag and "security" in bag:
+        if bag["moderation"].get("hard") or bag["moderation"]["weight"] >= 0.5:
+            demote("security", 0.3, "moderation_over_security")
+    if "education" in bag and "shop" in bag and bag["education"]["weight"] >= 0.45:
+        demote("shop", 0.3, "education_over_shop")
+    for lock in ("iot", "devops", "gaming", "crm", "blockchain", "ai_ml"):
+        if lock in bag and "shop" in bag and bag[lock]["weight"] >= 0.45:
+            demote("shop", 0.3, f"{lock}_over_shop")
+    if "shop" in bag and "delivery" in bag:
+        demote("delivery", 0.6, "delivery_secondary")
+    if "shop" in bag and "payments" in bag:
+        demote("payments", 0.65, "payments_secondary")
+    if "clinic" in bag and "booking" in bag:
+        bag["clinic"]["weight"] = min(1.0, bag["clinic"]["weight"] * 1.12)
+        demote("booking", 0.7, "clinic_primary")
+    if "wallet" in bag and "shop" in bag and not bag["shop"].get("hard"):
+        # pure money talk without sell verbs → prefer wallet
+        if not re.search(r"يبيع|متجر|منتج|shop|store|cart", raw + (lu.normalized or ""), re.I):
+            demote("shop", 0.25, "wallet_without_commerce")
+
+    ranked = sorted(
+        (
+            (
+                name,
+                min(1.0, row["weight"]),
+                min(0.99, row["conf"]),
+                list(row["evidence"]),
+                bool(row.get("hard")),
+                len(row.get("sources") or []),
+            )
+            for name, row in bag.items()
+        ),
+        key=lambda x: (-x[1], -x[2], x[0]),
+    )
+    trace.append(f"ranked={[r[0] for r in ranked[:5]]}")
 
     primary_sig: IntentSignal | None = None
     secondary_sigs: list[IntentSignal] = []
+    evidence_grade = "none"
 
-    if ranked:
-        intent, w, c, ev = ranked[0]
-        # Cap confidence if LU said ambiguous or very short
-        if lu.is_ambiguous:
-            c = min(c, 0.55)
-            trace.append("confidence_capped_ambiguous")
-        if len((lu.tokens or [])) <= 1:
-            c = min(c, 0.5)
-            trace.append("confidence_capped_short")
-        primary_sig = IntentSignal(
-            intent=intent,
-            weight=min(1.0, w),
-            confidence=c,
-            source="lu+rules",
-            evidence=ev,
-        )
-        for intent2, w2, c2, ev2 in ranked[1:6]:
-            if w2 < SECONDARY_MIN_WEIGHT:
-                continue
-            # secondary weight relative to primary
-            secondary_sigs.append(
-                IntentSignal(
-                    intent=intent2,
-                    weight=min(1.0, w2),
-                    confidence=c2,
-                    source="lu+rules",
-                    evidence=ev2,
+    if ranked and not (vague and not any(r[4] for r in ranked)):
+        name, w, c, ev, hard, nsrc = ranked[0]
+        margin = w - (ranked[1][1] if len(ranked) > 1 else 0.0)
+        # Reject soft primary with weak margin
+        if not hard and margin < PRIMARY_MARGIN and len(ranked) > 1 and ranked[1][1] >= 0.35:
+            # ambiguous competition → no primary commit
+            trace.append(f"reject_weak_margin:{name}_vs_{ranked[1][0]}")
+            primary_sig = None
+            evidence_grade = "weak"
+            # still keep both as secondary candidates for questions
+            for r in ranked[:3]:
+                secondary_sigs.append(
+                    IntentSignal(intent=r[0], weight=r[1], confidence=r[2], source="contested", evidence=r[3])
                 )
+        else:
+            conf = _calibrate_confidence(
+                weight=w,
+                base_conf=c,
+                hard=hard,
+                n_sources=nsrc,
+                n_evidence=len(ev),
+                vague=vague,
+                lu_ambiguous=bool(lu.is_ambiguous),
+                margin=margin,
             )
+            primary_sig = IntentSignal(
+                intent=name,
+                weight=w,
+                confidence=conf,
+                source="signature" if hard else "ensemble",
+                evidence=ev,
+            )
+            evidence_grade = "hard" if hard else ("solid" if conf >= ASK_THRESHOLD else "weak")
+            for r in ranked[1:6]:
+                if r[1] < SECONDARY_MIN_WEIGHT:
+                    continue
+                secondary_sigs.append(
+                    IntentSignal(
+                        intent=r[0],
+                        weight=r[1],
+                        confidence=r[2],
+                        source="ensemble",
+                        evidence=r[3],
+                    )
+                )
+    else:
+        trace.append("no_viable_primary")
 
     primary_name = primary_sig.intent if primary_sig else None
     filled, missing = _slot_status(primary_name or "default", ent, lu)
@@ -446,44 +459,51 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
     family = cl.get("family") or "generic"
     budget = tuple(cl.get("feature_budget") or [4, 12])
 
-    # Complexity refinement from secondary count + missing
-    if len(secondary_sigs) >= 3 or (ent.payment_methods and ent.wants_delivery and ent.wants_discounts):
+    if len(secondary_sigs) >= 3:
         complexity = "complex"
-    elif len(secondary_sigs) >= 1 or missing:
-        complexity = complexity if complexity != "simple" else "medium"
+    elif secondary_sigs or missing:
+        complexity = "medium" if complexity == "simple" else complexity
 
     should_ask = False
     ask_reason = ""
     if primary_sig is None:
         should_ask = True
         ask_reason = "no_primary_intent"
+    elif vague:
+        should_ask = True
+        ask_reason = "vague_utterance"
     elif primary_sig.confidence < ASK_THRESHOLD:
         should_ask = True
         ask_reason = f"low_confidence<{ASK_THRESHOLD}"
     elif missing:
-        # critical slots missing → ask (generation can still use baseline plan)
         should_ask = True
         ask_reason = "missing_required_slots:" + ",".join(missing)
-        trace.append(ask_reason)
+    elif evidence_grade == "weak":
+        should_ask = True
+        ask_reason = "weak_evidence"
 
     questions = list(lu.suggested_questions or [])
-    # Slot-specific questions override/extend
     slot_q = {
         "product_or_category": "هتبيع / المجال إيه بالظبط؟",
         "payment": "طرق الدفع المطلوبة؟",
-        "security_scope": "أي فحوصات أمنية؟ (DNS/TLS/Headers/Phishing)",
+        "security_scope": "أي فحوصات؟ DNS / TLS / Headers / Phishing",
         "target_host": "الدومين أو الرابط المستهدف؟",
         "course_scope": "موضوع الكورسات؟",
-        "connectivity": "بروتوكول الأجهزة؟ MQTT/HTTP؟",
+        "connectivity": "بروتوكول الأجهزة؟ MQTT / HTTP؟",
         "pipeline": "مراحل الـ pipeline؟",
-        "plans": "ما هي خطط الاشتراك؟",
-        "game_loop": "شكل اللعب: نقاط / بطولات / مستويات؟",
-        "mod_actions": "أوامر الإشراف المطلوبة؟",
-        "bot_purpose": "عايز البوت يعمل إيه بالظبط؟",
-        "booking_type": "نوع الحجز؟ موعد / طاولة / خدمة",
+        "plans": "خطط الاشتراك؟",
+        "game_loop": "نقاط / بطولات / مستويات؟",
+        "mod_actions": "أوامر الإشراف: حظر / كتم / تحذير؟",
+        "bot_purpose": "عايز البوت يعمل إيه بالظبط؟ (متجر / أمن / دعم / حجوزات / تعليم / IoT…)",
+        "booking_type": "نوع الحجز: موعد / طاولة / خدمة؟",
         "menu_or_orders": "منيو + طلبات فقط أم مع حجز طاولات؟",
-        "ops_scope": "نطاق DevOps: deploy alerts / status / webhooks؟",
+        "ops_scope": "DevOps: deploy alerts / status / webhooks؟",
+        "audience": "التذاكر لعملاء خارجيين ولا فريق داخلي؟",
     }
+    if primary_sig is None:
+        questions = [slot_q["bot_purpose"]] + [
+            f"هل تقصد: {s.intent}؟" for s in secondary_sigs[:3]
+        ]
     for slot in missing:
         q = slot_q.get(slot)
         if q and q not in questions:
@@ -491,18 +511,15 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
     questions = questions[:5]
 
     secondary_names = [s.intent for s in secondary_sigs]
-    features = _feature_plan(primary_name, secondary_names, lu, ent)
+    features = _feature_plan(primary_name, secondary_names, lu, ent) if primary_sig else []
 
-    # Feature budget trim for beginners with simple complexity
-    low, high = budget
-    if skill == "beginner" and complexity == "simple":
+    # Beginner simple → trim
+    low, high = int(budget[0]), int(budget[1])
+    if primary_sig and skill == "beginner" and complexity == "simple":
         features = features[: max(low, min(len(features), (low + high) // 2))]
-    elif complexity == "complex" or skill == "expert":
-        # keep full plan, budget is advisory
-        pass
 
     preset = DOMAIN_TO_PRESET.get(primary_name) if primary_name else None
-    sec_presets = []
+    sec_presets: list[str] = []
     for n in secondary_names:
         ps = DOMAIN_TO_PRESET.get(n)
         if ps and ps not in sec_presets and ps != preset:
@@ -515,7 +532,7 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
         skill_level=skill,
         language=lang,
         domain_family=family,
-        expected_feature_count=(int(budget[0]), int(budget[1])),
+        expected_feature_count=(low, high),
         should_ask=should_ask,
         ask_reason=ask_reason,
         questions=questions,
@@ -530,11 +547,11 @@ def analyze_intent(text: str, *, lu: LanguageUnderstandingResult | None = None) 
         },
         filled_slots=filled,
         missing_slots=missing,
+        evidence_grade=evidence_grade,
     )
 
 
 def analyze(text: str) -> IntentAnalysis:
-    """Public entry: LU + Intent Analysis pipeline."""
     return analyze_intent(text)
 
 
