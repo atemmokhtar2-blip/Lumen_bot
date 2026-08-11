@@ -179,7 +179,17 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    await message.reply_text(f'Updated #{pid}')",
         ]
     elif method == "checkout" and svc == "cart":
-        L.append("    await message.reply_text(market_svc.cart_checkout(user.id))")
+        L += [
+            "    summary = market_svc.cart_checkout(user.id)",
+            "    await message.reply_text(summary)",
+            "    try:",
+            "        from app.flow_engine import start_flow",
+            "        await start_flow(update, context, 'pay_methods')",
+            "    except Exception:",
+            "        await message.reply_text(",
+            "            'ادفع عبر: /pay (اختيار الطريقة) أو /vfcash أو /buy'",
+            "        )",
+        ]
     elif method in {"place_order", "send_invoice", "checkout", "buy"}:
         L += [
             "    arg = ' '.join(context.args) if context.args else '1'",
@@ -229,6 +239,28 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "        await start_flow(update, context, 'vodafone_cash')",
             "    except Exception:",
             "        await message.reply_text('استخدم /vfcash لبدء دفع فودافون كاش')",
+        ]
+    elif method in {"methods", "pay_methods"}:
+        L += [
+            "    try:",
+            "        from app.flow_engine import start_flow",
+            "        await start_flow(update, context, 'pay_methods')",
+            "    except Exception:",
+            "        await message.reply_text(",
+            "            'طرق الدفع المتاحة:' + chr(10) +",
+            "            '• Telegram Payments — /buy أو /cartcheckout' + chr(10) +",
+            "            '• فودافون كاش — /vfcash' + chr(10) +",
+            "            '• المحفظة — /topup و /balance'",
+            "        )",
+        ]
+    elif method in {"history"} and svc == "wallet":
+        L += [
+            "    await message.reply_text(market_svc.wallet_history(user.id) if hasattr(market_svc, 'wallet_history') else str(market_svc.wallet_balance(user.id)))",
+        ]
+    elif method in {"balance"} and svc == "wallet":
+        L += [
+            "    bal = market_svc.wallet_balance(user.id)",
+            "    await message.reply_text('رصيد المحفظة: ' + str(bal))",
         ]
     elif method in {"list_orders"}:
         L += [
@@ -715,12 +747,32 @@ def _emit_handlers(spec: BotSpec) -> str:
             f"بوت جاهز — {n_cmds} أمر.\n"
             "اكتب /help لعرض الأوامر."
         )
+        if any(
+            (get_capability(f.feature) and get_capability(f.feature).service in {
+                "shop", "payments", "cart", "wallet"
+            })
+            for f in spec.features
+        ):
+            welcome += (
+                "\n\n🛒 المتجر: /shop · /cart · /addproduct"
+                "\n💳 الدفع: /pay · /vfcash · /buy · /topup · /balance"
+            )
     else:
         welcome = (
             f"Welcome 👋\n"
             f"Bot ready — {n_cmds} commands.\n"
             "Type /help for the command list."
         )
+        if any(
+            (get_capability(f.feature) and get_capability(f.feature).service in {
+                "shop", "payments", "cart", "wallet"
+            })
+            for f in spec.features
+        ):
+            welcome += (
+                "\n\n🛒 Shop: /shop · /cart · /addproduct"
+                "\n💳 Pay: /pay · /vfcash · /buy · /topup · /balance"
+            )
     help_lines = []
     help_lines.append(
         f"قائمة الأوامر ({n_cmds}):" if lang.startswith("ar") else f"Commands ({n_cmds}):"

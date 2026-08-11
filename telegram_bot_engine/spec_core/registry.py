@@ -258,6 +258,9 @@ _add(
 _add(
     _c("wallet_balance", "wallet", "balance", "رصيد المحفظة", "Wallet balance", cat="wallet"),
     _c("wallet_topup", "wallet", "topup", "شحن المحفظة", "Top up wallet", cat="wallet"),
+    _c("wallet_history", "wallet", "history", "سجل المحفظة", "Wallet history", cat="wallet"),
+    _c("vodafone_cash", "payments", "vodafone_cash", "فودافون كاش", "Vodafone Cash pay", cat="payments"),
+    _c("pay_methods", "payments", "methods", "طرق الدفع", "Payment methods", cat="payments"),
     _c("wallet_transfer", "wallet", "transfer", "تحويل رصيد", "Transfer credits", cat="wallet"),
     _c("wallet_history", "wallet", "history", "سجل المحفظة", "Wallet history", cat="wallet"),
 )

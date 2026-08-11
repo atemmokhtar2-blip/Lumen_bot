@@ -208,7 +208,12 @@ _SHOP_CAPS = (
     "shop_my_orders", "cart_add", "cart_view", "cart_checkout", "product_search",
     "product_info", "coupon_apply", "wishlist_add", "wishlist_view", "review_add",
     "shipping_set", "digital_deliver", "coupon_apply", "coupon_create",
-    "order_track", "order_cancel", "lang", "privacy_policy", "terms_of_service",
+    "order_track", "order_cancel",
+    # Payment surface — visible to end users
+    "wallet_balance", "wallet_topup", "wallet_history",
+    "payment_history", "invoice_preview",
+    "vodafone_cash", "pay_methods",
+    "lang", "privacy_policy", "terms_of_service",
 )
 _SUB_CAPS = (
     "start", "help", "plans", "subscribe", "my_sub", "grant_sub", "revoke_sub",

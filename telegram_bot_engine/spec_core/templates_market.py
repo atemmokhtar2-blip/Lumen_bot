@@ -136,24 +136,24 @@ def submit_vodafone_payment(
         if auto_ok:
             # credit wallet in same transaction semantics
             conn.execute(
-                "CREATE TABLE IF NOT EXISTS wallet (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
+                "CREATE TABLE IF NOT EXISTS wallets (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
             )
             row = conn.execute(
-                "SELECT balance FROM wallet WHERE user_id=?", (user_id,)
+                "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
             ).fetchone()
             if row:
                 conn.execute(
-                    "UPDATE wallet SET balance=balance+? WHERE user_id=?",
+                    "UPDATE wallets SET balance=balance+? WHERE user_id=?",
                     (amount_cents, user_id),
                 )
             else:
                 conn.execute(
-                    "INSERT INTO wallet (user_id, balance) VALUES (?, ?)",
+                    "INSERT INTO wallets (user_id, balance) VALUES (?, ?)",
                     (user_id, amount_cents),
                 )
             conn.commit()
             bal = conn.execute(
-                "SELECT balance FROM wallet WHERE user_id=?", (user_id,)
+                "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
             ).fetchone()
             return (
                 f"✅ تم التحقق تلقائياً من عملية فودافون #{pid}\n"
@@ -185,16 +185,16 @@ def vfcash_approve(admin_id: int, payment_id: int) -> str:
         uid = int(row["user_id"])
         amt = int(row["amount_cents"])
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS wallet (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
+            "CREATE TABLE IF NOT EXISTS wallets (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
         )
-        w = conn.execute("SELECT balance FROM wallet WHERE user_id=?", (uid,)).fetchone()
+        w = conn.execute("SELECT balance FROM wallets WHERE user_id=?", (uid,)).fetchone()
         if w:
             conn.execute(
-                "UPDATE wallet SET balance=balance+? WHERE user_id=?", (amt, uid)
+                "UPDATE wallets SET balance=balance+? WHERE user_id=?", (amt, uid)
             )
         else:
             conn.execute(
-                "INSERT INTO wallet (user_id, balance) VALUES (?, ?)", (uid, amt)
+                "INSERT INTO wallets (user_id, balance) VALUES (?, ?)", (uid, amt)
             )
         conn.commit()
     return f"✅ اعتمدت عملية فودافون #{payment_id} وتم شحن المحفظة"
@@ -449,6 +449,39 @@ def wallet_add(user_id: int, amount: int) -> int:
         )
         conn.commit()
     return wallet_balance(user_id)
+
+
+def wallet_topup(user_id: int, amount: int) -> int:
+    """Credit wallet. Returns new balance."""
+    return wallet_add(user_id, int(amount))
+
+
+def wallet_history(user_id: int, limit: int = 20) -> str:
+    ensure()
+    bal = wallet_balance(user_id)
+    with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                note TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        rows = conn.execute(
+            "SELECT amount, note, created_at FROM wallet_ledger WHERE user_id=? "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, int(limit)),
+        ).fetchall()
+    if not rows:
+        return f"الرصيد: {bal}\nلا حركات بعد."
+    lines = [f"الرصيد: {bal}", "آخر الحركات:"]
+    for r in rows:
+        lines.append(f"• {r['created_at']}: {r['amount']} — {r['note'] or ''}")
+    return "\n".join(lines)
 
 
 def referral_code(user_id: int) -> str:

@@ -151,6 +151,28 @@ FLOWS: dict[str, dict[str, Any]] = {
         ],
         "on_complete": "vodafone_cash",
     },
+
+    "pay_methods": {
+        "title": "اختيار طريقة الدفع",
+        "steps": [
+            {
+                "id": "method",
+                "prompt": "💳 اختر طريقة الدفع:",
+                "type": "choice",
+                "choices": [
+                    ("telegram", "Telegram Payments"),
+                    ("vodafone", "فودافون كاش"),
+                    ("wallet", "رصيد المحفظة"),
+                ],
+            },
+            {
+                "id": "confirm",
+                "prompt": "✅ تأكيد طريقة الدفع:",
+                "type": "confirm",
+            },
+        ],
+        "on_complete": "pay_methods",
+    },
     "coupon": {
         "title": "تطبيق كوبون",
         "steps": [
@@ -549,7 +571,28 @@ async def _execute(
             f"بانتظار تأكيد الإدارة (/vfcash_approve)."
         )
 
+    if name == "pay_methods":
+        method = str(data.get("method") or "")
+        if method in ("فودافون كاش", "vodafone"):
+            from app.flow_engine import start_flow
+            # re-enter vodafone flow
+            class _U:
+                effective_message = update.effective_message
+                effective_user = update.effective_user
+                effective_chat = update.effective_chat
+            await start_flow(update, context, "vodafone_cash")
+            return "➡️ أكمل بيانات فودافون كاش"
+        if method in ("رصيد المحفظة", "wallet"):
+            from app.services import market as market_svc
+            bal = market_svc.wallet_balance(user_id)
+            return f"رصيد محفظتك: {bal}\nادفع من السلة بـ /cartcheckout بعد تفعيل الخصم من المحفظة."
+        return (
+            "لـ Telegram Payments: استخدم /buy أو /cartcheckout مع PAYMENT_PROVIDER_TOKEN "
+            "في .env (من BotFather payments)."
+        )
+
     if name == "coupon":
+
         from app.services import market as market_svc
 
         code = str(data.get("code") or "")
@@ -568,4 +611,7 @@ FLOW_COMMANDS = {
     "vfcash": "vodafone_cash",
     "vodafone": "vodafone_cash",
     "coupon": "coupon",
+    "pay": "pay_methods",
+    "paymethods": "pay_methods",
+    "payment": "pay_methods",
 }
