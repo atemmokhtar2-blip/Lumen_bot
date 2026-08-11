@@ -73,8 +73,60 @@ async def error_middleware(request: web.Request, handler):
         )
 
 
+def _client_ip(request: web.Request) -> str:
+    # Prefer first X-Forwarded-For hop when behind a trusted proxy
+    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    if xff:
+        return xff[:64]
+    peer = request.remote or "unknown"
+    return str(peer)[:64]
+
+
+@web.middleware
+async def ip_rate_limit_middleware(request: web.Request, handler):
+    """Global per-IP rate limit for public/auth endpoints (DoS / brute-force)."""
+    path = request.path or ""
+    # Skip health probes
+    if path in {"/health", "/ready"}:
+        return await handler(request)
+    try:
+        from b2b_platform.rate_limit import get_rate_limiter
+        limit = int(os.getenv("API_IP_RPM") or "120")
+        if limit > 0:
+            ip = _client_ip(request)
+            key = f"ip:{ip}"
+            lim = get_rate_limiter()
+            if not lim.allow(key, limit=limit, window_sec=60.0):
+                retry = lim.seconds_until_allow(key, limit=limit, window_sec=60.0)
+                return web.json_response(
+                    {"ok": False, "error": "ip_rate_limited", "retry_after": retry},
+                    status=429,
+                    headers={"Retry-After": str(retry)},
+                )
+            # Tighter limit on tenant creation (credential stuffing / spam tenants)
+            if path == "/v1/tenants" and request.method == "POST":
+                tlimit = int(os.getenv("API_TENANT_CREATE_RPM") or "5")
+                tkey = f"ip_tenant:{ip}"
+                if tlimit > 0 and not lim.allow(tkey, limit=tlimit, window_sec=60.0):
+                    retry = lim.seconds_until_allow(tkey, limit=tlimit, window_sec=60.0)
+                    return web.json_response(
+                        {"ok": False, "error": "tenant_create_rate_limited", "retry_after": retry},
+                        status=429,
+                        headers={"Retry-After": str(retry)},
+                    )
+    except Exception:
+        logger.exception("ip_rate_limit_middleware failure")
+        # fail open for availability of health; still protected by other layers
+    return await handler(request)
+
+
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[error_middleware, cors_middleware])
+    # client_max_size: hard cap on request body (default 256 KiB)
+    max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
+    app = web.Application(
+        middlewares=[error_middleware, ip_rate_limit_middleware, cors_middleware],
+        client_max_size=max(4096, max_size),
+    )
     app.router.add_get("/health", health.health)
     app.router.add_get("/ready", health.ready)
     # Public

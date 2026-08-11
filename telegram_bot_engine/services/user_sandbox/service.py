@@ -200,11 +200,39 @@ def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSa
     return UserSandbox(user_id=uid, root=root).ensure()
 
 
-def clean_child_env(bot_token: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:
+    """Write bot token to a 0600 file inside the project; return path or None.
+
+    Reduces ambient exposure vs putting the token only in process environ
+    (still visible via /proc on same-uid hosts — prefer Docker multi-tenant).
+    """
+    token = (bot_token or "").strip()
+    if not token:
+        return None
+    root = Path(project_dir).resolve()
+    path = root / ".tbe_bot_token"
+    try:
+        path.write_text(token, encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+        return path
+    except Exception:
+        return None
+
+
+def clean_child_env(
+    bot_token: str,
+    extra: dict[str, str] | None = None,
+    *,
+    token_file: str | Path | None = None,
+) -> dict[str, str]:
     """Environment for a generated bot process — isolated from the generator bot.
 
-    Keeps minimal system PATH/HOME/LANG. Does NOT inherit the host TELEGRAM_BOT_TOKEN
-    or AI provider keys unless explicitly passed in extra.
+    Keeps minimal system PATH/HOME/LANG. Does NOT inherit host secrets.
+    Prefer token_file (0600) when available; still sets BOT_TOKEN for compatibility
+    with generated bots that read os.environ. Multi-tenant hosts should use Docker.
     """
     token = (bot_token or "").strip()
     keep = (
@@ -221,17 +249,35 @@ def clean_child_env(bot_token: str, extra: dict[str, str] | None = None) -> dict
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["TBE_SANDBOX"] = "1"
     env["TBE_ISOLATED"] = "1"
+    # Minimal token surface: only the two keys generated bots commonly read
     if token:
-        for key in (
-            "BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "TOKEN", "TG_TOKEN",
-            "API_TOKEN", "TELEGRAM_TOKEN",
-        ):
-            env[key] = token
+        env["BOT_TOKEN"] = token
+        env["TELEGRAM_BOT_TOKEN"] = token
+    if token_file:
+        env["BOT_TOKEN_FILE"] = str(token_file)
+        env["TELEGRAM_BOT_TOKEN_FILE"] = str(token_file)
     if extra:
+        # Never allow extra to inject platform secrets back in
+        blocked = {
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "STRIPE_SECRET_KEY",
+            "DATABASE_URL", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN",
+            "CAPABILITY_OPS_ADMINS",
+        }
         for k, v in extra.items():
-            if v is not None:
-                env[str(k)] = str(v)
+            if v is None:
+                continue
+            key = str(k)
+            if key.upper() in blocked or key in blocked:
+                continue
+            env[key] = str(v)
     return env
 
 
-__all__ = ["UserSandbox", "get_user_sandbox", "clean_child_env", "shard_for_user", "max_projects_per_user"]
+__all__ = [
+    "UserSandbox",
+    "get_user_sandbox",
+    "clean_child_env",
+    "write_token_file",
+    "shard_for_user",
+    "max_projects_per_user",
+]

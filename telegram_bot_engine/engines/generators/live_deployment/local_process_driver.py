@@ -149,10 +149,13 @@ class LocalProcessDriver(DeploymentProvider):
                 message=f"SyntaxError in {entry.name}: {syn_err}. repair={repair_notes[:3]}",
             )
 
-        from telegram_bot_engine.services.user_sandbox import clean_child_env
-        child_env = clean_child_env(bot_token)
-        for key in discover_token_env_names(path):
-            child_env[key] = bot_token
+        from telegram_bot_engine.services.user_sandbox import clean_child_env, write_token_file
+        token_path = write_token_file(path, bot_token)
+        child_env = clean_child_env(bot_token, token_file=token_path)
+        # Only inject names the project actually references (capped)
+        for key in discover_token_env_names(path)[:6]:
+            if key not in child_env:
+                child_env[key] = bot_token
         child_env.pop("PORT", None)
         if mode.startswith("target"):
             pp = child_env.get("PYTHONPATH", "")

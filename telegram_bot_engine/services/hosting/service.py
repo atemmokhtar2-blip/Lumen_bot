@@ -185,10 +185,15 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        require_docker = (os.environ.get("TBE_REQUIRE_DOCKER") or "0").strip().lower() in {
+        multi = (os.environ.get("TBE_MULTI_TENANT") or "0").strip().lower() in {
             "1", "true", "yes", "on",
         }
-        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "1").strip().lower() not in {
+        _req_default = "1" if multi else "0"
+        require_docker = (os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        _allow_default = "0" if require_docker else "1"
+        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or _allow_default).strip().lower() not in {
             "0", "false", "no", "off",
         }
         if docker_available():

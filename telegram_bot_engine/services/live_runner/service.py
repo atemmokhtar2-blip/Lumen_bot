@@ -399,23 +399,51 @@ _TRANSITIVE_WHEN = {
 
 
 def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
+    """Whitelist-style sanitizer: only pure PyPI package specs.
+
+    Blocks editable, VCS, nested -r, local paths, direct URLs, archives
+    (sdist setup.py RCE surface), and unknown flags.
+    """
     warnings: list[str] = []
     lines_out: list[str] = []
     for line in req.read_text(encoding="utf-8", errors="ignore").splitlines():
         raw = line.strip()
         if not raw or raw.startswith("#"):
             continue
-        if raw.startswith(("-e ", "--editable")) or raw.startswith("git+"):
+        low = raw.lower()
+        if raw.startswith(("-e ", "--editable")) or low.startswith("git+") or "git+" in low:
             warnings.append(f"skipped_vcs_or_editable:{raw[:60]}")
+            continue
+        if low.startswith(("hg+", "svn+", "bzr+", "ssh+")):
+            warnings.append(f"skipped_vcs:{raw[:60]}")
             continue
         if raw.startswith(("-r ", "--requirement")):
             warnings.append(f"skipped_nested_req:{raw[:60]}")
             continue
-        if raw.startswith("-"):
+        if any(x in low for x in ("http://", "https://", "file://", "ftp://")):
+            warnings.append(f"skipped_url:{raw[:60]}")
             continue
-        # Drop stdlib / invalid bare names (e.g. "types" from AST auto-heal)
+        # Local / relative path specs
+        name_part = re.split(r"[<>=!~;\[@]", raw)[0].strip()
+        if (
+            raw.startswith(("/", ".", "~"))
+            or "\\" in name_part
+            or "/" in name_part
+            or name_part.startswith(".")
+        ):
+            warnings.append(f"skipped_local_path:{raw[:60]}")
+            continue
+        if any(low.rstrip().endswith(ext) for ext in (".tar.gz", ".zip", ".tgz", ".tar", ".whl")):
+            warnings.append(f"skipped_archive:{raw[:60]}")
+            continue
+        if raw.startswith("-"):
+            warnings.append(f"skipped_flag:{raw[:60]}")
+            continue
         name = re.split(r"[<>=!~;\[]", raw)[0].strip().lower()
         name_us = name.replace("-", "_")
+        if not name or not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._+-]*$", name):
+            warnings.append(f"skipped_invalid_name:{raw[:60]}")
+            continue
         if name_us in _NEVER_PIP_INSTALL or name in _NEVER_PIP_INSTALL or name_us in _STDLIB_SKIP:
             warnings.append(f"skipped_stdlib_or_invalid:{raw[:60]}")
             continue
@@ -573,11 +601,16 @@ def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Pa
     warns.extend(prenotes)
     logs: list[str] = [f"--- install using {ready.name} (preemptive fixes: {len(prenotes)}) ---"]
 
+    import os as _os
+    wheels_only = (_os.environ.get("TBE_PIP_WHEELS_ONLY") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    wheel_flags = ["--only-binary=:all:"] if wheels_only else []
     if mode.startswith("venv"):
         _run_pip([py, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], root, timeout=180)
-        base_cmd = [py, "-m", "pip", "install", "-r"]
+        base_cmd = [py, "-m", "pip", "install", *wheel_flags, "-r"]
     else:
-        base_cmd = [py, "-m", "pip", "install", "--target", str(isolation), "-r"]
+        base_cmd = [py, "-m", "pip", "install", "--target", str(isolation), *wheel_flags, "-r"]
 
     # Pass 1: preemptive-ready file
     code, log = _run_pip(base_cmd + [str(ready)], root)
@@ -2039,12 +2072,17 @@ def run_bot_project(
         )
 
     import os as _os
-    # Default: allow local fallback so testing works on hosts without Docker (Railway etc.)
-    # Strict multi-tenant SaaS: set TBE_REQUIRE_DOCKER=1
-    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or "0").strip().lower() in {
+    # Multi-tenant / production: require Docker by default when TBE_MULTI_TENANT=1
+    # or TBE_REQUIRE_DOCKER=1. Local fallback only for explicit single-tenant dev.
+    multi = (_os.environ.get("TBE_MULTI_TENANT") or "0").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "1").strip().lower() not in {
+    _req_default = "1" if multi else "0"
+    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    _allow_default = "0" if require_docker else "1"
+    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or _allow_default).strip().lower() not in {
         "0", "false", "no", "off",
     }
     prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
