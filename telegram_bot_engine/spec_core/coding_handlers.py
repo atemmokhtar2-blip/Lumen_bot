@@ -818,6 +818,12 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_welcome = any(_svc(f) == "welcome" for f in spec.features)
     need_tickets = any(_svc(f) == "tickets" for f in spec.features)
     need_security = any(_svc(f) == "security" for f in spec.features)
+    need_ocr = any(
+        _svc(f) == "ocr"
+        or (getattr(get_capability(f.feature), "method", None) in {"ocr_hint", "ocr_image", "ocr"})
+        or str(f.feature).startswith("scaffold_ocr")
+        for f in spec.features
+    )
     need_market = any(
         _svc(f) in {
             'shop', 'payments', 'subscriptions', 'points', 'contests',
@@ -1308,7 +1314,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("")
 
     # text router for multi-step captures
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
@@ -1424,12 +1430,23 @@ def _emit_handlers(spec: BotSpec) -> str:
             "",
             "",
             "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
             "    try:",
             "        from app.flow_engine import handle_photo as _flow_photo",
             "        if await _flow_photo(update, context):",
             "            return",
             "    except Exception:",
             "        pass",
+            "    # Phase 9: OCR path when user sends a photo",
+            "    if message is not None and user is not None and message.photo:",
+            "        try:",
+            "            from app.services import generic as generic_svc",
+            "            caption = (message.caption or '').strip()",
+            "            result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
+            "            await message.reply_text(result)",
+            "        except Exception:",
+            "            await message.reply_text('تم استلام الصورة. استخدم /ocr مع نص أو فعّل pytesseract.')",
             "",
             "",
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
@@ -1834,6 +1851,17 @@ def _emit_main(spec: BotSpec) -> str:
         (get_capability(f.feature) and get_capability(f.feature).service == "welcome")  # type: ignore
         for f in spec.features
     )
+    need_ocr = any(
+        (
+            get_capability(f.feature)
+            and (
+                get_capability(f.feature).service == "ocr"  # type: ignore
+                or get_capability(f.feature).method in {"ocr_hint", "ocr_image", "ocr"}  # type: ignore
+                or str(f.feature).startswith("scaffold_ocr")
+            )
+        )
+        for f in spec.features
+    )
     need_tickets = any(
         (get_capability(f.feature) and get_capability(f.feature).service == "tickets")  # type: ignore
         for f in spec.features
@@ -1873,7 +1901,7 @@ def _emit_main(spec: BotSpec) -> str:
         })  # type: ignore
         for f in spec.features
     )
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
         imports_handlers += ", text_router, photo_router, cancel_handler"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
@@ -1902,7 +1930,7 @@ def _emit_main(spec: BotSpec) -> str:
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
         text_handler = (
             "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
             "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"

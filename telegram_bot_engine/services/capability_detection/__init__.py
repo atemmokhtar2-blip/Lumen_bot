@@ -40,6 +40,7 @@ from .packs import (
     resolve_gap_with_pack,
     validate_pack,
 )
+from .pipeline_trace import fail_safe_message, pipeline_trace
 from .pack_promotion import (
     auto_promote_ready,
     install_pack,
