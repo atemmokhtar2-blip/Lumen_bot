@@ -41,11 +41,13 @@ from .packs import (
     validate_pack,
 )
 from .pack_promotion import (
+    auto_promote_ready,
     install_pack,
     promote_draft_file,
     promote_latest_drafts,
     promote_learned_entry,
     promotion_status,
+    verify_installed,
 )
 from .learning_loop import (
     LearnedKBEntry,
@@ -137,4 +139,5 @@ __all__ = [
     "promote_latest_drafts",
     "promote_learned_entry",
     "promotion_status",
+    "auto_promote_ready",
 ]

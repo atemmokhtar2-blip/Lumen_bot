@@ -1,4 +1,4 @@
-"""Phase 7 — promote draft/learned packs into installable registry packs."""
+"""Phase 7 hardened — promote, verify, sanitize, auto-promote."""
 from __future__ import annotations
 
 from telegram_bot_engine.services.capability_detection import (
@@ -7,103 +7,92 @@ from telegram_bot_engine.services.capability_detection import (
     install_pack,
     promote_draft_file,
     promote_learned_entry,
-    promote_latest_drafts,
     promotion_status,
+    verify_installed,
+    auto_promote_ready,
     record_gaps,
     promote_gap_to_kb,
-    load_learned_kb,
     detect_capabilities,
+    feature_keys,
 )
 from telegram_bot_engine.services.capability_detection.models import GapItem
 from telegram_bot_engine.spec_core.registry import get_capability
 
 
-def test_install_safe_pack(tmp_path, monkeypatch):
+def test_install_verifies_registry_and_extractor(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     pack = CapabilityPack(
-        id="phase7_test_pack",
+        id="phase7_verify_pack",
         capabilities=[
             PackCapability(
-                key="pack_phase7_echo_tool",
+                key="pack_phase7_verify_tool",
                 service="generic",
                 method="echo",
-                description_ar="أداة اختبار",
-                description_en="Phase7 test tool",
+                description_ar="تحقق تركيب",
+                description_en="Verify install tool",
                 category="utils",
-                keywords=["phase7toolxyz", "أداةاختبار7"],
+                keywords=["تحققتركيب7", "phase7verifytool"],
             )
         ],
     )
     res = install_pack(pack, require_safe_emit=True, overwrite=True)
     assert res["ok"] is True
-    assert get_capability("pack_phase7_echo_tool") is not None
-    assert (tmp_path / "platform" / "capability_packs" / "phase7_test_pack.json").exists()
-    st = promotion_status()
-    assert st["installed_packs"] >= 1
+    assert res["verification"]["ok"] is True
+    assert get_capability("pack_phase7_verify_tool") is not None
+    # detection hits keyword
+    rep = detect_capabilities("بوت phase7verifytool")
+    assert any(m.key == "pack_phase7_verify_tool" for m in rep.matched)
 
 
-def test_reject_unsafe_install(tmp_path, monkeypatch):
+def test_sanitize_unsafe_to_echo(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     pack = CapabilityPack(
-        id="evil7",
+        id="evil_sanitize",
         capabilities=[
             PackCapability(
-                key="pack_evil7",
+                key="pack_evil_sanitize",
                 service="hacker",
                 method="rce",
-                description_ar="x",
-                description_en="x",
+                description_ar="خطر",
+                description_en="danger",
+                keywords=["sanitizeevilkw"],
             )
         ],
     )
-    res = install_pack(pack, require_safe_emit=True)
-    assert res["ok"] is False
+    res = install_pack(pack, require_safe_emit=True, overwrite=True, sanitize=True)
+    assert res["ok"] is True
+    assert res.get("sanitized") is True
+    cap = get_capability("pack_evil_sanitize")
+    assert cap is not None
+    assert cap.service == "generic" and cap.method == "echo"
 
 
-def test_promote_learned_entry_end_to_end(tmp_path, monkeypatch):
+def test_promote_learned_and_generate_path(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("CAPABILITY_RESEARCH_OFFLINE", "1")
     monkeypatch.setenv("CAPABILITY_LEARNING_AUTO", "0")
+    monkeypatch.setenv("CAPABILITY_AUTO_PROMOTE", "0")
     from telegram_bot_engine.services.capability_detection import gap_journal as gj
     gj._CACHE.clear(); gj._LOADED = False
-    g = GapItem(phrase="ميزة ترويج سبعة", reason="غير موجودة")
-    record_gaps(request="بوت ميزة ترويج سبعة", gaps=[g], detection_status="gap")
-    record_gaps(request="بوت ميزة ترويج سبعة 2", gaps=[g], detection_status="gap")
+    g = GapItem(phrase="ميزة ترويج قوية", reason="غير موجودة في السجل")
+    record_gaps(request="بوت ميزة ترويج قوية للاختبار", gaps=[g], detection_status="gap")
     from telegram_bot_engine.services.capability_detection.gap_journal import list_open_gaps
     gap = list_open_gaps(limit=10)[0]
     learned = promote_gap_to_kb(gap, research=True, min_count=1)
     assert learned["ok"]
-    entry_id = learned["entry"]["id"]
-    promo = promote_learned_entry(entry_id, require_safe_emit=True)
+    promo = promote_learned_entry(learned["entry"]["id"], require_safe_emit=True)
     assert promo["ok"] is True
-    # registered key should exist
+    assert promo["verification"]["ok"] is True
     keys = promo.get("registered") or []
-    assert keys
-    assert get_capability(keys[0]) is not None
+    assert keys and get_capability(keys[0]) is not None
+    # detect request
+    rep = detect_capabilities("بوت ميزة ترويج قوية للاختبار")
+    feats = feature_keys(rep, include_core=False)
+    assert keys[0] in feats or any(m.key == keys[0] for m in rep.matched)
 
 
-def test_promote_draft_fallback_to_echo(tmp_path, monkeypatch):
+def test_auto_promote_respects_env(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
-    import json
-    from pathlib import Path
-    draft_dir = tmp_path / "platform" / "learning"
-    draft_dir.mkdir(parents=True)
-    draft = {
-        "id": "draft_unsafe_methods",
-        "version": "0.1.0",
-        "capabilities": [
-            {
-                "key": "pack_needs_fallback",
-                "service": "hacker",
-                "method": "rce",
-                "description_ar": "خطر",
-                "description_en": "danger",
-                "keywords": ["fallbacktestkw"],
-            }
-        ],
-    }
-    path = draft_dir / "draft_unsafe.json"
-    path.write_text(json.dumps(draft), encoding="utf-8")
-    res = promote_draft_file(path, require_safe_emit=True)
-    assert res["ok"] is True
-    assert res.get("fallback_to_echo") is True
+    monkeypatch.setenv("CAPABILITY_AUTO_PROMOTE", "0")
+    res = auto_promote_ready()
+    assert res.get("skipped") is True

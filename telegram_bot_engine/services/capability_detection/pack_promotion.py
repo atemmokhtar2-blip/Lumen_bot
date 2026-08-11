@@ -1,10 +1,10 @@
-"""Phase 7 — Pack Promotion: draft → installed capability pack (emit-safe only).
+"""Phase 7 — Pack Promotion (hardened).
 
-Closes the loop: Gap → Research → Learn → Draft → **Promote** → Registry → Generate.
-Never installs packs that fail the emit contract.
+draft/learned → emit-safe install → registry + extractor + verify.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -13,27 +13,90 @@ from pathlib import Path
 from typing import Any
 
 from .learning_loop import list_draft_packs, load_learned_kb
-from .packs.emit_contract import assess_pack_capabilities
-from .packs.loader import load_pack_file, register_pack
-from .packs.pipeline import approve_and_register
+from .packs.emit_contract import assess_capability, assess_pack_capabilities
+from .packs.loader import load_all_packs, register_pack
 from .packs.schema import CapabilityPack, PackCapability, validate_pack
 
 
+_SAFE_SERVICES = frozenset({
+    "generic", "content", "utils", "core", "shop", "reminders", "notes", "tasks",
+})
+_SAFE_METHODS = frozenset({
+    "echo", "announce", "start", "help", "rules", "faq", "about",
+})
+
+
 def _packs_install_dir() -> Path:
-    """Runtime-writable pack dir (also scanned by load_all_packs)."""
     base = os.getenv("OUTPUT_DIR") or "/tmp/generated"
     p = Path(base) / "platform" / "capability_packs"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
-def _repo_packs_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "spec_core" / "capability_packs"
-
-
 def _safe_filename(pack_id: str) -> str:
-    s = re.sub(r"[^a-zA-Z0-9_\-]+", "_", (pack_id or "pack").strip())
-    return (s or "pack")[:64]
+    raw = (pack_id or "pack").strip()
+    ascii_part = re.sub(r"[^a-zA-Z0-9_\-]+", "", raw)[:40]
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    if ascii_part:
+        return f"{ascii_part}_{digest}"
+    return f"pack_{digest}"
+
+
+def _force_safe_capability(c: PackCapability) -> PackCapability:
+    svc = c.service if c.service in _SAFE_SERVICES else "generic"
+    meth = c.method if c.method in _SAFE_METHODS else "echo"
+    # still verify
+    a = assess_capability(c.key, svc, meth)
+    if not a.safe:
+        svc, meth = "generic", "echo"
+    kws = list(dict.fromkeys(
+        [str(k).strip() for k in (c.keywords or []) if str(k).strip()]
+        + [c.key.replace("_", " ")]
+        + [c.description_ar[:40] if c.description_ar else ""]
+    ))
+    kws = [k for k in kws if len(k) >= 2][:16]
+    return PackCapability(
+        key=c.key if re.match(r"^[a-z][a-z0-9_]*$", c.key or "") else (
+            "pack_" + hashlib.sha1((c.key or "x").encode()).hexdigest()[:12]
+        ),
+        service=svc,
+        method=meth,
+        description_ar=(c.description_ar or c.key or "قدرة")[:200],
+        description_en=(c.description_en or c.description_ar or c.key or "capability")[:200],
+        category=c.category if c.category and c.category != "general" else "utils",
+        default_actor=c.default_actor or "user",
+        keywords=kws,
+        dependencies=list(c.dependencies or []),
+    )
+
+
+def verify_installed(keys: list[str]) -> dict[str, Any]:
+    """Confirm keys live in registry + extractor patterns + command map."""
+    from ...spec_core.registry import get_capability
+    from ...spec_core import capability_extractor as ce
+    try:
+        from ...spec_core.builder import DEFAULT_COMMANDS
+    except Exception:
+        DEFAULT_COMMANDS = {}
+
+    details = []
+    ok_all = True
+    for key in keys:
+        cap = get_capability(key)
+        in_patterns = isinstance(getattr(ce, "_PATTERNS", None), dict) and key in ce._PATTERNS
+        in_cmds = key in DEFAULT_COMMANDS if isinstance(DEFAULT_COMMANDS, dict) else False
+        row = {
+            "key": key,
+            "in_registry": cap is not None,
+            "in_extractor": bool(in_patterns),
+            "in_commands": bool(in_cmds),
+            "service": getattr(cap, "service", None),
+            "method": getattr(cap, "method", None),
+        }
+        if not (row["in_registry"] and row["in_extractor"]):
+            ok_all = False
+        details.append(row)
+    return {"ok": ok_all, "keys": details}
 
 
 def install_pack(
@@ -41,12 +104,22 @@ def install_pack(
     *,
     require_safe_emit: bool = True,
     overwrite: bool = False,
-    write_repo_copy: bool = False,
+    sanitize: bool = True,
 ) -> dict[str, Any]:
-    """Validate, emit-assess, register, and persist pack JSON to install dir."""
+    """Validate, sanitize to emit-safe, register, persist, verify."""
     errors = validate_pack(pack)
     if errors:
         return {"ok": False, "errors": errors}
+
+    original_assessments = assess_pack_capabilities(pack.capabilities)
+    sanitized = False
+    if sanitize:
+        pack.capabilities = [_force_safe_capability(c) for c in pack.capabilities]
+        sanitized = True
+        # re-validate keys after sanitize
+        errors = validate_pack(pack)
+        if errors:
+            return {"ok": False, "errors": errors, "sanitized": True}
 
     assessments = assess_pack_capabilities(pack.capabilities)
     if require_safe_emit:
@@ -58,39 +131,32 @@ def install_pack(
                 "emit_assessments": [a.to_dict() for a in assessments],
             }
 
-    # Force enabled
     pack.enabled = True
-    pack.source = pack.source or "promoted"
+    if not pack.source or pack.source == "local":
+        pack.source = "promoted"
 
     reg = register_pack(pack, overwrite=overwrite)
     if not reg.get("ok"):
         return reg
 
-    # Persist for future process loads
     dest = _packs_install_dir() / f"{_safe_filename(pack.id)}.json"
     payload = pack.to_dict()
     payload["promoted_at"] = time.time()
+    payload["sanitized"] = sanitized
     dest.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    repo_path = None
-    if write_repo_copy:
-        try:
-            rp = _repo_packs_dir()
-            rp.mkdir(parents=True, exist_ok=True)
-            repo_path = rp / f"{_safe_filename(pack.id)}.json"
-            repo_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            repo_path = None
+    registered = list(reg.get("registered") or [])
+    verification = verify_installed(registered)
 
     return {
         "ok": True,
         "pack_id": pack.id,
-        "registered": reg.get("registered"),
+        "registered": registered,
         "path": str(dest),
-        "repo_path": str(repo_path) if repo_path else None,
+        "sanitized": sanitized,
         "emit_assessments": [a.to_dict() for a in assessments],
+        "original_emit_assessments": [a.to_dict() for a in original_assessments],
+        "verification": verification,
     }
 
 
@@ -100,7 +166,6 @@ def promote_draft_file(
     require_safe_emit: bool = True,
     overwrite: bool = True,
 ) -> dict[str, Any]:
-    """Load a draft_*.json pack and install it."""
     path = Path(path)
     if not path.is_file():
         return {"ok": False, "errors": [f"missing: {path}"]}
@@ -109,29 +174,11 @@ def promote_draft_file(
     except Exception as exc:
         return {"ok": False, "errors": [f"json: {exc}"]}
     pack = CapabilityPack.from_dict(data)
-    # Prefer generic.echo if unsafe
-    result = install_pack(pack, require_safe_emit=require_safe_emit, overwrite=overwrite)
-    if not result.get("ok") and require_safe_emit:
-        # rewrite capabilities to safe echo and retry once
-        safe_caps = []
-        for c in pack.capabilities:
-            safe_caps.append(
-                PackCapability(
-                    key=c.key,
-                    service="generic",
-                    method="echo",
-                    description_ar=c.description_ar or c.key,
-                    description_en=c.description_en or c.key,
-                    category=c.category or "utils",
-                    default_actor=c.default_actor or "user",
-                    keywords=list(c.keywords or []),
-                    dependencies=list(c.dependencies or []),
-                )
-            )
-        pack.capabilities = safe_caps
-        pack.id = (pack.id or "pack") + "_safe"
-        result = install_pack(pack, require_safe_emit=True, overwrite=overwrite)
-        result["fallback_to_echo"] = True
+    result = install_pack(
+        pack, require_safe_emit=require_safe_emit, overwrite=overwrite, sanitize=True
+    )
+    if result.get("ok"):
+        result["source_draft"] = str(path)
     return result
 
 
@@ -140,17 +187,15 @@ def promote_latest_drafts(
     limit: int = 5,
     require_safe_emit: bool = True,
 ) -> dict[str, Any]:
-    """Install up to `limit` draft packs from the learning directory."""
     installed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for item in list_draft_packs()[:limit]:
         res = promote_draft_file(
             item["path"], require_safe_emit=require_safe_emit, overwrite=True
         )
-        if res.get("ok"):
-            installed.append(res)
-        else:
-            failed.append({"path": item["path"], "result": res})
+        (installed if res.get("ok") else failed).append(
+            res if res.get("ok") else {"path": item["path"], "result": res}
+        )
     return {
         "ok": True,
         "installed": len(installed),
@@ -165,43 +210,61 @@ def promote_learned_entry(
     *,
     require_safe_emit: bool = True,
 ) -> dict[str, Any]:
-    """Build pack from a learned KB entry and install."""
     entries = {e.id: e for e in load_learned_kb()}
     entry = entries.get(entry_id)
     if not entry:
-        # try draft file
         draft = _learning_dir_draft(entry_id)
         if draft:
             return promote_draft_file(draft, require_safe_emit=require_safe_emit)
         return {"ok": False, "errors": [f"unknown entry: {entry_id}"]}
 
-    # Prefer stable ascii key from entry id hash segment
-    import hashlib
     digest = hashlib.sha1(entry_id.encode("utf-8")).hexdigest()[:12]
     key = f"pack_learned_{digest}"
+
+    # Rich bilingual descriptions
+    desc_ar = (entry.title or entry.phrases[0] if entry.phrases else key)[:200]
+    desc_en = (entry.summary or entry.title or "Learned capability")[:200]
+    if len(desc_en) < 8:
+        desc_en = f"Learned capability: {desc_ar}"[:200]
+
+    keywords = list(dict.fromkeys(
+        list(entry.keywords or [])
+        + list(entry.phrases or [])
+        + [desc_ar]
+    ))
+    keywords = [k for k in keywords if len(str(k).strip()) >= 2][:16]
+
+    svc = entry.suggested_service if entry.suggested_service in _SAFE_SERVICES else "generic"
+    meth = entry.suggested_method if entry.suggested_method in _SAFE_METHODS else "echo"
+
     cap = PackCapability(
         key=key,
-        service=entry.suggested_service if entry.suggested_service in {
-            "generic", "content", "utils", "core", "shop", "reminders"
-        } else "generic",
-        method=entry.suggested_method if entry.suggested_method in {
-            "echo", "announce", "start", "help"
-        } else "echo",
-        description_ar=entry.title or key,
-        description_en=entry.summary or entry.title or key,
+        service=svc,
+        method=meth,
+        description_ar=desc_ar,
+        description_en=desc_en,
         category="utils",
-        keywords=list(entry.keywords or entry.phrases or [])[:16],
+        keywords=keywords,
     )
     pack = CapabilityPack(
-        id=f"promoted_{entry.id}"[:80],
+        id=f"promoted_{digest}",
         version="1.0.0",
-        name=entry.title,
-        description=entry.summary,
+        name=desc_ar,
+        description=desc_en,
         capabilities=[cap],
         source="learning_promoted",
         enabled=True,
     )
-    return install_pack(pack, require_safe_emit=require_safe_emit, overwrite=True)
+    result = install_pack(pack, require_safe_emit=require_safe_emit, overwrite=True, sanitize=True)
+    if result.get("ok"):
+        try:
+            from .gap_journal import mark_gap_status, list_open_gaps
+            for g in list_open_gaps(limit=50):
+                if g.phrase in (entry.phrases or []) or g.phrase == entry.title:
+                    mark_gap_status(g.phrase, g.reason, "resolved")
+        except Exception:
+            pass
+    return result
 
 
 def _learning_dir_draft(entry_id: str) -> Path | None:
@@ -218,7 +281,40 @@ def promotion_status() -> dict[str, Any]:
         "installed_packs": len(installed),
         "drafts": len(list_draft_packs()),
         "learned_entries": len(load_learned_kb()),
-        "installed_files": [p.name for p in installed[:20]],
+        "installed_files": [p.name for p in installed[:30]],
+    }
+
+
+def auto_promote_ready(
+    *,
+    min_hit_count: int = 2,
+    limit: int = 3,
+) -> dict[str, Any]:
+    """Promote learned entries that look ready (hit_count threshold).
+
+    Env gate: CAPABILITY_AUTO_PROMOTE=1
+    """
+    enabled = os.getenv("CAPABILITY_AUTO_PROMOTE", "0").strip().lower() in {
+        "1", "true", "yes",
+    }
+    if not enabled:
+        return {"ok": True, "skipped": True, "reason": "auto_promote_disabled"}
+
+    promoted: list[dict[str, Any]] = []
+    for entry in load_learned_kb():
+        if entry.status != "active":
+            continue
+        if entry.hit_count < min_hit_count:
+            continue
+        res = promote_learned_entry(entry.id, require_safe_emit=True)
+        if res.get("ok"):
+            promoted.append(res)
+        if len(promoted) >= limit:
+            break
+    return {
+        "ok": True,
+        "promoted": len(promoted),
+        "items": promoted,
     }
 
 
@@ -228,4 +324,6 @@ __all__ = [
     "promote_latest_drafts",
     "promote_learned_entry",
     "promotion_status",
+    "verify_installed",
+    "auto_promote_ready",
 ]

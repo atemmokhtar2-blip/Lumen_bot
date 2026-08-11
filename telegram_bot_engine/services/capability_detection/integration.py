@@ -89,10 +89,15 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             )
         except Exception:
             pass
-        # Phase 6: auto-promote frequent gaps into learned KB (cooldown-gated)
+        # Phase 6/7: learn frequent gaps, optionally auto-promote emit-safe packs
         try:
             from .learning_loop import maybe_auto_learn
             maybe_auto_learn()
+        except Exception:
+            pass
+        try:
+            from .pack_promotion import auto_promote_ready
+            auto_promote_ready()
         except Exception:
             pass
 

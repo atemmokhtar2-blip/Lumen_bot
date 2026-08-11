@@ -400,6 +400,12 @@ def run_learning_cycle(
         if len(promoted) >= limit:
             break
     _write_stats_event("cycle", f"n={len(promoted)}", len(promoted))
+    auto_promo = None
+    try:
+        from .pack_promotion import auto_promote_ready
+        auto_promo = auto_promote_ready(min_hit_count=int(os.getenv("CAPABILITY_LEARNING_MIN_COUNT") or min_count))
+    except Exception:
+        auto_promo = None
     return {
         "ok": True,
         "promoted": len(promoted),
@@ -408,6 +414,7 @@ def run_learning_cycle(
         "skipped_items": skipped[:20],
         "learned_kb_size": len(load_learned_kb()),
         "stats": learning_stats(),
+        "auto_promote": auto_promo,
     }
 
 
