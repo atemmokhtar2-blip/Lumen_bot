@@ -244,10 +244,22 @@ def _run_intelligence_layers(
             )
             try:
                 from .spec_core.language_understanding.learning_layer import apply_full_memory
+                from .spec_core.language_understanding.continuous_learning import apply_success_learning
                 _new_req, _notes = apply_full_memory(
                     ent, memory_snap, request=request or ""
                 )
-                # request enrichment is recorded in notes; features/payments mutated on ent
+                # Stage-3: merge success recipes when not strict
+                if ent is not None and not getattr(ent, "strict_spec", False):
+                    merged3 = apply_success_learning(
+                        list(getattr(ent, "features_requested", None) or []),
+                        intent_name,
+                        strict=False,
+                        memory=memory_engine,
+                    )
+                    try:
+                        ent.features_requested = merged3
+                    except Exception:
+                        pass
             except Exception:
                 pass
     except Exception:
@@ -557,6 +569,19 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             primary = layers_meta.get("l2_intent")
             if primary and feats:
                 memory_engine.record_patterns(intent=str(primary), features=feats)
+            try:
+                from .spec_core.language_understanding.continuous_learning import learn_from_success
+                learn_from_success(
+                    int(user_id),
+                    intent=str(primary or "general"),
+                    features=list(feats or []),
+                    purpose=str(getattr(getattr(lu, "entities", None), "bot_purpose", None) or primary or ""),
+                    bot_name=str(getattr(getattr(lu, "entities", None), "bot_name", None) or ""),
+                    request_text=request or "",
+                    memory=memory_engine,
+                )
+            except Exception:
+                pass
         except Exception:
             pass
 

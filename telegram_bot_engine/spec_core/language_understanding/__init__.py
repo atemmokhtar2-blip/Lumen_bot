@@ -14,6 +14,17 @@ from .engine import (
 )
 from .entities import ExtractedEntities, extract_entities
 from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
+from .continuous_learning import (
+    OutcomeSignal,
+    SuccessRecipe,
+    detect_outcome,
+    learn_from_interaction,
+    learn_from_success,
+    learn_from_feedback_message,
+    top_recipes,
+    apply_success_learning,
+    is_feedback_only,
+)
 from .learning_layer import (
     MemorySnapshot,
     recall,
@@ -71,6 +82,15 @@ __all__ = [
     "apply_memory_to_features",
     "is_correction_utterance",
     "parse_correction",
+    "OutcomeSignal",
+    "SuccessRecipe",
+    "detect_outcome",
+    "learn_from_interaction",
+    "learn_from_success",
+    "learn_from_feedback_message",
+    "top_recipes",
+    "apply_success_learning",
+    "is_feedback_only",
     "normalize_text",
     "tokenize",
     "light_stem_ar",

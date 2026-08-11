@@ -129,6 +129,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
 
+    # ── Stage-3: continuous learning from feedback ───────────────────────
+    try:
+        from telegram_bot_engine.spec_core.language_understanding.continuous_learning import (
+            is_feedback_only,
+            learn_from_feedback_message,
+            detect_outcome,
+        )
+        if uid and is_feedback_only(request):
+            sig = learn_from_feedback_message(int(uid), request)
+            if sig.kind == "positive" or sig.kind == "complete":
+                await message.reply_text(
+                    f"شكرًا على تقييمك ✅ (+{sig.score_delta}) — هيتعلم منه النظام."
+                )
+            elif sig.kind == "negative":
+                await message.reply_text(
+                    f"تم تسجيل الملاحظة 📝 ({sig.score_delta}) — هحاول أتجنب نفس الغلط."
+                )
+            return
+    except Exception:
+        logger.exception("stage3 feedback learn failed")
+
     # ── Stage-2: learn from explicit corrections ─────────────────────────
     try:
         from telegram_bot_engine.spec_core.language_understanding import (
