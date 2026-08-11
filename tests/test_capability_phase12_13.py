@@ -93,3 +93,19 @@ def test_generate_schedule_parser_and_batch_env():
         assert "SCHEDULE_BATCH_LIMIT" in env
         assert "list_due_reminders(limit=" in main
         assert "mark_reminder_fired" in main
+
+
+def test_generate_recurring_schedule():
+    _reload()
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت تذكير مجدول",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_schedule"],
+        )
+        assert r.success
+        gen = (Path(r.project_path) / "app" / "services" / "generic.py").read_text(encoding="utf-8")
+        assert "_parse_recurring" in gen
+        assert "recurring" in gen
+        assert "interval_sec" in gen

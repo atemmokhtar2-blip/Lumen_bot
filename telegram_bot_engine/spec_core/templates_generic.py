@@ -553,7 +553,7 @@ def voice_intake(user_id: int, text: str = "") -> str:
     """Record voice-note intent (no STT). Durable row for later processing.
 
     Ready for a future STT backend (VOICE_STT_BACKEND env). Currently
-    acknowledges and stores; generated bots can attach filters.VOICE later.
+    acknowledges and stores; generated bots attach filters.VOICE via voice_from_file.
     """
     ensure()
     import os as _os
@@ -567,13 +567,50 @@ def voice_intake(user_id: int, text: str = "") -> str:
         return (
             f"🎤 ملاحظة صوتية #{iid}\n"
             "تم تسجيل الطلب.\n"
-            "تحويل الصوت لنص يحتاج تفعيل STT (VOICE_STT_BACKEND).\n"
-            "يمكنك إرسال وصف نصي الآن كبديل."
+            "أرسل رسالة صوتية مباشرة وسيتم حفظ الملف.\n"
+            "STT اختياري عبر VOICE_STT_BACKEND."
         )
     return (
         f"🎤 ملاحظة صوتية #{iid}\n"
         f"تم التسجيل (backend={backend}).\n"
         "المعالجة قيد الانتظار."
+    )
+
+
+def voice_from_file(user_id: int, file_path: str = "", file_id: str = "", duration: int = 0) -> str:
+    """Persist an incoming voice/audio file path for later STT processing."""
+    ensure()
+    import os as _os
+    backend = (_os.getenv("VOICE_STT_BACKEND") or "none").strip().lower()
+    meta = {
+        "kind": "voice_file",
+        "file_path": (file_path or "")[-200:],
+        "file_id": (file_id or "")[:120],
+        "duration": int(duration or 0),
+        "stt_backend": backend,
+    }
+    title = f"voice:{file_id[:24]}" if file_id else "voice_file"
+    body = file_path or file_id or "voice_received"
+    iid = _insert("voice", int(user_id), title, body[:500], "open", meta)
+    # Optional: placeholder for external STT — never crash if missing
+    transcript = ""
+    if backend not in {"none", "", "off"} and file_path and _os.path.isfile(file_path):
+        try:
+            # Hook only — real STT providers wired later via env
+            transcript = f"[stt:{backend} pending]"
+        except Exception as exc:
+            transcript = f"[stt_error:{type(exc).__name__}]"
+    if transcript:
+        return (
+            f"🎤 صوت #{iid}\n"
+            f"المدة: {duration or '?'}ث\n"
+            f"{transcript}\n"
+            "تم حفظ الملف للمعالجة."
+        )
+    return (
+        f"🎤 صوت #{iid}\n"
+        f"تم حفظ الرسالة الصوتية (مدة {duration or '?'}ث).\n"
+        "للتفريغ النصي لاحقاً: VOICE_STT_BACKEND=..."
     )
 
 
@@ -612,22 +649,61 @@ def payment_info(user_id: int, text: str = "") -> str:
     return body
 
 
-# Default FAQ seed (can be extended via /faq add by admin flows later)
+# Default FAQ seed + durable custom rows (service=content, title starts with faq:)
 _FAQ_SEED: list[tuple[str, str]] = [
     ("كيف أستخدم البوت؟", "اكتب /help لعرض الأوامر المتاحة، أو أرسل سؤالك مباشرة."),
     ("ما هي طرق الدفع؟", "استخدم /payinfo أو /payment لعرض طرق الدفع المضبوطة."),
-    ("كيف أضيف تذكيراً؟", "مثال: /schedule بعد 10 دقائق اشرب ماء"),
+    ("كيف أضيف تذكيراً؟", "مثال: /schedule بعد 10 دقائق اشرب ماء — أو: /schedule كل يوم صباح التمرين"),
     ("هل يدعم العربية؟", "نعم، الواجهة والردود بالعربية بشكل أساسي."),
     ("كيف أتواصل مع الدعم؟", "أرسل رسالتك هنا وسيتم تسجيلها للمتابعة."),
 ]
 
 
+def _faq_admin_ids() -> set[int]:
+    import os as _os
+    raw = (
+        _os.getenv("FAQ_ADMIN_IDS")
+        or _os.getenv("CAPABILITY_OPS_ADMINS")
+        or _os.getenv("ADMIN_IDS")
+        or ""
+    )
+    out: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.add(int(part))
+    return out
+
+
+def _faq_is_admin(user_id: int) -> bool:
+    import os as _os
+    admins = _faq_admin_ids()
+    if not admins:
+        # open in dev unless FAQ_REQUIRE_ADMIN=1
+        return (_os.getenv("FAQ_REQUIRE_ADMIN") or "0").strip().lower() not in {"1", "true", "yes", "on"}
+    return int(user_id) in admins
+
+
+def _faq_load_custom() -> list[tuple[str, str, int]]:
+    """Load custom FAQ rows from domain_items (title=faq:question)."""
+    ensure()
+    rows = _list("content", user_id=None, status="open", limit=100)
+    out: list[tuple[str, str, int]] = []
+    for r in rows:
+        title = (r.get("title") or "")
+        if title.startswith("faq:"):
+            q = title[4:].strip()
+            a = (r.get("body") or "").strip()
+            if q and a:
+                out.append((q, a, int(r["id"])))
+    return out
+
+
 def faq(user_id: int, text: str = "") -> str:
-    """Simple FAQ: list, search, or show all. Stores view event."""
+    """FAQ: list, search, admin add/delete. Seed + SQLite custom + FAQ_EXTRA_JSON."""
     ensure()
     import os as _os
     q = (text or "").strip()
-    # optional extra FAQs from env (JSON list of {q,a})
     extra: list[tuple[str, str]] = []
     raw = (_os.getenv("FAQ_EXTRA_JSON") or "").strip()
     if raw:
@@ -640,24 +716,62 @@ def faq(user_id: int, text: str = "") -> str:
                         extra.append((str(item["q"]), str(item["a"])))
         except Exception:
             pass
-    items = list(_FAQ_SEED) + extra
+    custom = _faq_load_custom()
+    items: list[tuple[str, str]] = list(_FAQ_SEED) + extra + [(c[0], c[1]) for c in custom]
 
-    if not q or q.lower() in {"list", "all", "قائمة", "الكل", "مساعدة"}:
+    # Admin: /faq add سؤال | جواب
+    low = q.lower()
+    if low.startswith("add ") or q.startswith("أضف ") or q.startswith("اضف "):
+        if not _faq_is_admin(user_id):
+            return "⛔ إضافة FAQ للمشرفين فقط (FAQ_ADMIN_IDS / ADMIN_IDS)."
+        payload = q.split(None, 1)[1] if " " in q else ""
+        if "|" not in payload and "｜" not in payload:
+            return "الصيغة: /faq add السؤال | الجواب"
+        sep = "|" if "|" in payload else "｜"
+        qq, aa = payload.split(sep, 1)
+        qq, aa = qq.strip(), aa.strip()
+        if not qq or not aa:
+            return "السؤال والجواب مطلوبان."
+        iid = _insert("content", int(user_id), f"faq:{qq[:120]}", aa[:2000], "open", {"kind": "faq_custom"})
+        return f"✅ تمت إضافة FAQ #{iid}\nس: {qq[:80]}\nج: {aa[:120]}"
+
+    # Admin: /faq del <id>
+    if low.startswith("del ") or low.startswith("delete ") or q.startswith("حذف "):
+        if not _faq_is_admin(user_id):
+            return "⛔ حذف FAQ للمشرفين فقط."
+        iid = _first_id(q.split(None, 1)[1] if " " in q else "")
+        if not iid:
+            return "حدد رقم العنصر: /faq del 12"
+        with connect() as conn:
+            cur = conn.execute(
+                "UPDATE domain_items SET status='closed', updated_at=? WHERE id=? AND service='content' AND title LIKE 'faq:%'",
+                (_now(), iid),
+            )
+            conn.commit()
+            n = int(cur.rowcount)
+        return f"تم حذف #{iid}" if n else f"غير موجود أو ليس FAQ: #{iid}"
+
+    if not q or low in {"list", "all", "قائمة", "الكل", "مساعدة", "help"}:
         lines = ["❓ الأسئلة الشائعة:"]
         for i, (qq, aa) in enumerate(items, 1):
             lines.append(f"{i}. {qq}")
-        lines.append("\nابحث: /faq كلمة مفتاحية")
+        if custom:
+            lines.append("\n— مخصص (معرّفات):")
+            for qq, aa, iid in custom[:15]:
+                lines.append(f"  #{iid} {qq[:50]}")
+        lines.append("\nابحث: /faq كلمة")
+        if _faq_is_admin(user_id):
+            lines.append("إضافة: /faq add سؤال | جواب")
+            lines.append("حذف: /faq del <id>")
         _insert("content", int(user_id), "faq_list", q or "list", "done", {"count": len(items)})
         return "\n".join(lines)
 
-    # search (simple substring, Arabic-friendly)
     q_low = q.lower()
     hits = []
     for qq, aa in items:
         if q_low in qq.lower() or q_low in aa.lower() or q in qq or q in aa:
             hits.append((qq, aa))
     if not hits:
-        # fallback: show closest first 3
         lines = [
             f"❓ لم أجد تطابقاً لـ «{q[:40]}»",
             "جرّب /faq لعرض القائمة، أو أعد صياغة السؤال.",
@@ -670,6 +784,8 @@ def faq(user_id: int, text: str = "") -> str:
         lines.append(f"• {qq}\n  → {aa}")
     _insert("content", int(user_id), "faq_hit", q[:200], "done", {"hits": len(hits)})
     return "\n".join(lines)
+
+
 
 def translate_text(user_id: int, text: str = "") -> str:
     """Translation helper with optional production backends.
@@ -913,8 +1029,58 @@ def _parse_due_seconds(text: str) -> tuple[int, str]:
     return 3600, t
 
 
+def _parse_recurring(text: str) -> tuple[int | None, str]:
+    """Detect recurring interval. Returns (interval_sec or None, remaining_text)."""
+    import re as _re
+    t = (text or "").strip()
+    # EN: every 1h / daily / weekly / every 30m
+    m = _re.match(
+        r"^(?:every|each)\s+(\d+)\s*(m|min|mins|minutes|h|hr|hours|d|day|days)\b\s*(.*)$",
+        t,
+        _re.I,
+    )
+    if m:
+        n, unit, rest = int(m.group(1)), m.group(2).lower(), (m.group(3) or "").strip()
+        if unit.startswith("m"):
+            return max(60, n * 60), rest or t
+        if unit.startswith("h"):
+            return max(300, n * 3600), rest or t
+        if unit.startswith("d"):
+            return max(3600, n * 86400), rest or t
+    low = t.lower()
+    if low.startswith("daily ") or low == "daily":
+        return 86400, t[6:].strip() if low.startswith("daily ") else "تذكير يومي"
+    if low.startswith("weekly ") or low == "weekly":
+        return 7 * 86400, t[7:].strip() if low.startswith("weekly ") else "تذكير أسبوعي"
+    # AR: كل يوم / كل ساعة / كل 30 دقيقة / كل أسبوع
+    m2 = _re.match(
+        r"^كل\s+(\d+)\s*(دقيقة|دقائق|ساعة|ساعات|يوم|ايام|أيام)\s*(.*)$",
+        t,
+    )
+    if m2:
+        n, unit, rest = int(m2.group(1)), m2.group(2), (m2.group(3) or "").strip()
+        if "دق" in unit:
+            return max(60, n * 60), rest or t
+        if "ساع" in unit:
+            return max(300, n * 3600), rest or t
+        if "يوم" in unit or "ايام" in unit or "أيام" in unit:
+            return max(3600, n * 86400), rest or t
+    fixed = [
+        (r"^كل\s*يوم\s*(.*)$", 86400),
+        (r"^كل\s*ساعة\s*(.*)$", 3600),
+        (r"^كل\s*أسبوع\s*(.*)$", 7 * 86400),
+        (r"^كل\s*اسبوع\s*(.*)$", 7 * 86400),
+    ]
+    for pat, sec in fixed:
+        m3 = _re.match(pat, t)
+        if m3:
+            rest = (m3.group(1) or "").strip()
+            return sec, rest or t
+    return None, t
+
+
 def schedule_note(user_id: int, text: str = "", chat_id: int | None = None) -> str:
-    """Store a reminder with due timestamp; JobQueue fires open rows when due."""
+    """Store a reminder with due timestamp; supports recurring (كل يوم / every 1h)."""
     ensure()
     import time as _time
     text = (text or "").strip()
@@ -925,24 +1091,43 @@ def schedule_note(user_id: int, text: str = "", chat_id: int | None = None) -> s
             "  /schedule in 5m اشرب ماء\n"
             "  /schedule بعد 10 دقائق اجتماع\n"
             "  /schedule بعد نصف ساعة اتصال\n"
+            "  /schedule كل يوم التمرين\n"
+            "  /schedule every 2h اشرب ماء\n"
             "عرض: /jobs — إلغاء: /jobcancel <id>"
         )
-    sec, body = _parse_due_seconds(text)
-    body = (body or text).strip() or "تذكير"
+    interval, rest = _parse_recurring(text)
+    if interval:
+        body = (rest or text).strip() or "تذكير متكرر"
+        sec = interval
+        recurring = True
+    else:
+        sec, body = _parse_due_seconds(text)
+        body = (body or text).strip() or "تذكير"
+        recurring = False
     due_ts = int(_time.time()) + int(sec)
     meta = {
         "kind": "reminder",
         "due_ts": due_ts,
         "delay_sec": sec,
         "chat_id": int(chat_id) if chat_id else int(user_id),
+        "recurring": recurring,
+        "interval_sec": int(interval) if interval else 0,
     }
-    iid = _insert("scheduler", int(user_id), "reminder", body[:500], "open", meta)
+    title = "reminder_recurring" if recurring else "reminder"
+    iid = _insert("scheduler", int(user_id), title, body[:500], "open", meta)
     human = _human_duration(sec)
+    if recurring:
+        return (
+            f"🔁 تذكير متكرر #{iid} كل {human}\n"
+            f"{body[:300]}\n"
+            "يُعاد جدولته تلقائياً بعد كل إرسال (SCHEDULE_ENABLED=1)."
+        )
     return (
         f"⏰ تذكير #{iid} بعد {human}\n"
         f"{body[:300]}\n"
         "سيُرسل تلقائياً عبر JobQueue (SCHEDULE_ENABLED=1)."
     )
+
 
 
 def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]:
@@ -967,14 +1152,41 @@ def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]
                 "chat_id": int(meta.get("chat_id") or r["user_id"] or 0),
                 "body": r["body"],
                 "due_ts": due_ts,
+                "recurring": bool(meta.get("recurring")),
+                "interval_sec": int(meta.get("interval_sec") or 0),
             })
     due.sort(key=lambda x: (x.get("due_ts") or 0, x.get("id") or 0))
     return due[:limit]
 
 
 def mark_reminder_fired(item_id: int) -> bool:
+    """Mark one-shot as done; reschedule recurring by advancing due_ts."""
     ensure()
+    import json as _json
+    import time as _time
     with connect() as conn:
+        row = conn.execute(
+            "SELECT id, meta, status FROM domain_items WHERE id=? AND service='scheduler'",
+            (int(item_id),),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            meta = _json.loads(row["meta"] or "{}")
+        except Exception:
+            meta = {}
+        if meta.get("recurring") and int(meta.get("interval_sec") or 0) > 0:
+            interval = int(meta["interval_sec"])
+            now = int(_time.time())
+            # advance from now (not from old due) to avoid catch-up storms
+            meta["due_ts"] = now + interval
+            meta["last_fired_ts"] = now
+            conn.execute(
+                "UPDATE domain_items SET meta=?, updated_at=?, status='open' WHERE id=?",
+                (_json.dumps(meta, ensure_ascii=False), _now(), int(item_id)),
+            )
+            conn.commit()
+            return True
         cur = conn.execute(
             "UPDATE domain_items SET status='done', updated_at=? WHERE id=? AND service='scheduler'",
             (_now(), int(item_id)),
@@ -1000,13 +1212,14 @@ def job_list(user_id: int, text: str = "") -> str:
             meta = {}
         due_ts = int(meta.get("due_ts") or 0)
         body = (r.get("body") or r.get("title") or "")[:80]
+        badge = "🔁 " if meta.get("recurring") else ""
         if due_ts and due_ts > now:
             rem = _human_duration(due_ts - now)
-            lines.append(f"#{r['id']} بعد {rem} — {body}")
+            lines.append(f"#{r['id']} {badge}بعد {rem} — {body}")
         elif due_ts:
-            lines.append(f"#{r['id']} مستحق الآن — {body}")
+            lines.append(f"#{r['id']} {badge}مستحق الآن — {body}")
         else:
-            lines.append(f"#{r['id']} — {body}")
+            lines.append(f"#{r['id']} {badge}— {body}")
     lines.append("إلغاء: /jobcancel <id>")
     return "\n".join(lines)
 
@@ -1052,6 +1265,8 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
 
 
     # Phase 8 / 14 specialized scaffolds
+    if m in {"voice_from_file"}:
+        return voice_from_file(uid, text)
     if m in {"voice_intake", "voice"} or (svc == "voice"):
         return voice_intake(uid, text)
     if m in {"payment_info", "pay_info"}:

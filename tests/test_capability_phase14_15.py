@@ -162,3 +162,35 @@ def test_generate_payment_extra_env_keys():
         assert r.success
         env = (Path(r.project_path) / ".env.example").read_text(encoding="utf-8")
         assert "PAYMENT_INSTAPAY" in env or "PAYMENT_VODAFONE_CASH" in env
+
+
+def test_generate_voice_router_and_from_file():
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت رسائل صوتية",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_voice"],
+        )
+        assert r.success, r.errors
+        gen = (Path(r.project_path) / "app" / "services" / "generic.py").read_text(encoding="utf-8")
+        assert "def voice_from_file" in gen
+        handlers = (Path(r.project_path) / "app" / "handlers.py").read_text(encoding="utf-8")
+        main = (Path(r.project_path) / "main.py").read_text(encoding="utf-8")
+        assert "voice_router" in handlers
+        assert "filters.VOICE" in main or "VOICE" in main
+
+
+def test_generate_faq_admin_add():
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت أسئلة شائعة",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_faq_bot"],
+        )
+        assert r.success
+        gen = (Path(r.project_path) / "app" / "services" / "generic.py").read_text(encoding="utf-8")
+        assert "_faq_is_admin" in gen
+        assert "faq:" in gen  # title prefix for custom
+        assert "add " in gen or "أضف" in gen

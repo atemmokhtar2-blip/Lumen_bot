@@ -824,6 +824,12 @@ def _emit_handlers(spec: BotSpec) -> str:
         or str(f.feature).startswith("scaffold_ocr")
         for f in spec.features
     )
+    need_voice = any(
+        (getattr(get_capability(f.feature), "method", None) in {"voice_intake", "voice"})
+        or str(f.feature).startswith("scaffold_voice")
+        or _svc(f) == "voice"
+        for f in spec.features
+    )
     need_market = any(
         _svc(f) in {
             'shop', 'payments', 'subscriptions', 'points', 'contests',
@@ -1348,7 +1354,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("")
 
     # text router for multi-step captures
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice:
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
@@ -1497,6 +1503,39 @@ def _emit_handlers(spec: BotSpec) -> str:
             "            await message.reply_text('تم استلام الصورة. استخدم /ocr أو فعّل pytesseract.')",
             "",
             "",
+        ]
+        if need_voice:
+            lines += [
+            "async def voice_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None:",
+            "        return",
+            "    try:",
+            "        from app.services import generic as generic_svc",
+            "        voice = message.voice or message.audio",
+            "        if voice is None:",
+            "            return",
+            "        path = ''",
+            "        try:",
+            "            tg_file = await context.bot.get_file(voice.file_id)",
+            "            ext = 'ogg' if message.voice else 'mp3'",
+            "            path = f'/tmp/voice_{user.id}_{voice.file_id[:24]}.{ext}'",
+            "            await tg_file.download_to_drive(path)",
+            "        except Exception:",
+            "            path = ''",
+            "        duration = int(getattr(voice, 'duration', 0) or 0)",
+            "        if hasattr(generic_svc, 'voice_from_file'):",
+            "            result = generic_svc.voice_from_file(user.id, path, voice.file_id, duration)",
+            "        else:",
+            "            result = generic_svc.voice_intake(user.id, f'file:{voice.file_id}')",
+            "        await message.reply_text(result)",
+            "    except Exception:",
+            "        await message.reply_text('تم استلام الصوت. استخدم /voice أو أعد المحاولة.')",
+            "",
+            "",
+            ]
+        lines += [
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
             "    try:",
@@ -1910,6 +1949,17 @@ def _emit_main(spec: BotSpec) -> str:
         )
         for f in spec.features
     )
+    need_voice = any(
+        (
+            get_capability(f.feature)
+            and (
+                get_capability(f.feature).method in {"voice_intake", "voice"}  # type: ignore
+                or get_capability(f.feature).service == "voice"  # type: ignore
+                or str(f.feature).startswith("scaffold_voice")
+            )
+        )
+        for f in spec.features
+    )
     need_sched = any(
         (
             get_capability(f.feature)
@@ -1960,8 +2010,11 @@ def _emit_main(spec: BotSpec) -> str:
         })  # type: ignore
         for f in spec.features
     )
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice:
         imports_handlers += ", text_router, photo_router, cancel_handler"
+    if need_voice:
+        if "voice_router" not in imports_handlers:
+            imports_handlers += ", voice_router"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
     if need_pay:
@@ -1989,11 +2042,17 @@ def _emit_main(spec: BotSpec) -> str:
     ) or 'BotCommand("start", "start")'
 
     text_handler = ""
-    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr:
+    if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice:
         text_handler = (
             "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
             "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
             "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
+        )
+    else:
+        text_handler = ""
+    if need_voice:
+        text_handler += (
+            "\n    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_router))"
         )
     if need_welcome:
         text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
