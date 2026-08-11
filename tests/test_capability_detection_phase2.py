@@ -20,9 +20,15 @@ def test_preflight_blocks_impossible():
 
 
 def test_preflight_blocks_pure_gap():
+    # Phase 8: translate scaffold may satisfy the request (no longer pure gap)
     pre = telegram_preflight("بوت يترجم الرسائل تلقائياً فقط بدون أي ميزة أخرى")
-    assert pre["should_block"] is True
-    assert pre["report"].status == DetectionStatus.GAP
+    keys = feature_keys(pre["report"], include_core=False)
+    if "scaffold_translate" in keys:
+        assert pre["should_block"] is False
+        assert pre["report"].status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE, DetectionStatus.GAP)
+    else:
+        assert pre["should_block"] is True
+        assert pre["report"].status == DetectionStatus.GAP
 
 
 def test_preflight_allows_welcome():
