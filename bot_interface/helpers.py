@@ -113,11 +113,14 @@ def make_zip_from_path(project_path: str | Path) -> Path | None:
         return None
 
 
-def run_generation(request: str, work_dir: Path):
-    """Synchronous call into the generation engine (runs in a thread)."""
+def run_generation(request: str, work_dir: Path, user_id: int = 0):
+    """Synchronous call into the generation engine (runs in a thread).
+
+    Passes user_id so L4 memory + L6 personalization apply per user.
+    """
     from telegram_bot_engine import generate_bot
 
-    return generate_bot(request, work_dir=str(work_dir))
+    return generate_bot(request, work_dir=str(work_dir), user_id=int(user_id or 0))
 
 
 async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:

@@ -873,7 +873,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
 
     try:
-        result = await run_with_heartbeat(run_generation, request, work_dir, status_msg=status_msg)
+        result = await run_with_heartbeat(
+            run_generation,
+            request,
+            work_dir,
+            int(user.id) if user else 0,
+            status_msg=status_msg,
+        )
 
         if result is None:
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")

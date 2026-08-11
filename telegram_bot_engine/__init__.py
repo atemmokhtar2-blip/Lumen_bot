@@ -135,11 +135,181 @@ def _maybe_run_git_stage(
 
 
 
+def _run_intelligence_layers(
+    request: str,
+    *,
+    user_id: int = 0,
+):
+    """Execute L1→L6 and return a dict used by the generation path.
+
+    L1 understand → L2 intent → L3 question plan → L4 memory →
+    L5 suggestions → L6 personalization.
+    """
+    from .spec_core.language_understanding import (
+        understand,
+        analyze_intent,
+        build_question_plan,
+        suggest,
+        personalize,
+        get_memory_engine,
+    )
+
+    out: dict = {
+        "lu": None,
+        "intent": None,
+        "question_plan": None,
+        "style": None,
+        "suggestion_report": None,
+        "memory_engine": None,
+        "meta": {},
+    }
+    lu = understand(request or "")
+    intent = analyze_intent(request or "", lu=lu)
+    memory_engine = None
+    if user_id:
+        try:
+            memory_engine = get_memory_engine()
+            memory_engine.remember_turn(
+                int(user_id),
+                request or "",
+                intent=intent,
+                lu=lu,
+                features=list(getattr(intent, "feature_plan", None) or []),
+            )
+        except Exception:
+            try:
+                memory_engine = get_memory_engine()
+            except Exception:
+                memory_engine = None
+
+    # L3 — adaptive questions (report in meta; generation continues)
+    question_plan = None
+    try:
+        question_plan = build_question_plan(
+            request or "",
+            intent=intent,
+            lu=lu,
+            user_id=int(user_id) if user_id else None,
+            remember=bool(user_id),
+        )
+    except Exception:
+        question_plan = None
+
+    style = personalize(
+        request or "", intent=intent, lu=lu, user_id=user_id or None, memory=memory_engine
+    )
+    suggestion_report = suggest(
+        request or "",
+        intent=intent,
+        lu=lu,
+        user_id=user_id or None,
+        memory=memory_engine,
+    )
+
+    meta = {
+        "l1_domains": [
+            {"domain": d.domain, "score": round(d.score, 2)}
+            for d in (lu.domains or [])[:6]
+        ] if lu else [],
+        "l1_primary": getattr(lu, "primary_domain", None),
+        "l1_preset": getattr(lu, "primary_preset", None),
+        "l2_intent": intent.primary.intent if intent and intent.primary else None,
+        "l2_skill": getattr(intent, "skill_level", None),
+        "l2_language": getattr(intent, "language", None),
+        "l2_complexity": getattr(intent, "complexity", None),
+        "l2_feature_plan": list(getattr(intent, "feature_plan", None) or [])[:30],
+        "l3_questions": [
+            {"id": q.id, "slot": q.slot, "text": q.text[:120]}
+            for q in (question_plan.questions if question_plan else [])[:6]
+        ],
+        "l3_should_ask": bool(
+            getattr(question_plan, "should_block_generation", False) if question_plan else False
+        ),
+        "l4_user_id": int(user_id) if user_id else None,
+        "l5_build": [s.feature for s in (suggestion_report.build if suggestion_report else [])],
+        "l5_improve": [s.feature for s in (suggestion_report.improve if suggestion_report else [])],
+        "l5_preventive": [
+            s.feature for s in (suggestion_report.preventive if suggestion_report else [])
+        ],
+        "l6_style": style.to_dict() if style else None,
+    }
+    out.update(
+        lu=lu,
+        intent=intent,
+        question_plan=question_plan,
+        style=style,
+        suggestion_report=suggestion_report,
+        memory_engine=memory_engine,
+        meta=meta,
+    )
+    return out
+
+
+def _apply_layers_to_session(session, intel: dict) -> None:
+    """Mutate BuilderSession.selected using L2 plan + L5 suggestions + L6 filter."""
+    if session is None or not hasattr(session, "selected"):
+        return
+    from .spec_core.language_understanding import feature_filter_for_skill
+    from .spec_core.registry import CAPABILITIES
+
+    # L2 feature_plan first
+    intent = intel.get("intent")
+    plan = list(getattr(intent, "feature_plan", None) or [])
+    for feat in plan:
+        if feat in CAPABILITIES:
+            try:
+                session.selected.add(feat)
+            except Exception:
+                pass
+
+    # L5 high-confidence build suggestions
+    report = intel.get("suggestion_report")
+    if report is not None:
+        for s in list(report.build)[:10]:
+            if getattr(s, "confidence", 0) >= 0.50 and getattr(s, "feature", None):
+                if s.feature in CAPABILITIES:
+                    try:
+                        session.selected.add(s.feature)
+                    except Exception:
+                        pass
+
+    # L6 skill/domain density filter
+    style = intel.get("style")
+    if style is not None:
+        try:
+            filtered = feature_filter_for_skill(list(session.selected), style)
+            session.selected = set(filtered)
+        except Exception:
+            pass
+
+
+def _stamp_style_on_spec(spec, style) -> None:
+    """Apply L6 language + description stamp onto BotSpec."""
+    if style is None or spec is None:
+        return
+    try:
+        from .spec_core.language_understanding import style_prompt_ar, phrase
+
+        stamp = style_prompt_ar(style)
+        if hasattr(spec, "bot") and hasattr(spec.bot, "description"):
+            base = (spec.bot.description or "").strip()
+            # Keep generated bot description user-facing + style summary
+            welcome = phrase("welcome", style, with_emoji=True)
+            spec.bot.description = (f"{welcome}\n{base}\n{stamp}").strip()[:600]
+        if hasattr(spec, "bot") and hasattr(spec.bot, "language"):
+            lang = style.language_variant
+            if lang.startswith("ar"):
+                spec.bot.language = "ar"
+            elif lang == "en":
+                spec.bot.language = "en"
+    except Exception:
+        pass
+
+
 def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *, force: bool = False):
     """Deterministic Spec → code only. No LLM providers.
 
-    Runs L1→L6 intelligence stack (understand / intent / questions / memory /
-    suggestions / personalization) then builds the bot from the resolved style.
+    Pipeline: L1→L6 intelligence → compose session → build_from_spec → anti-hallucination.
     """
     from pathlib import Path as _Path
     import tempfile as _tempfile
@@ -156,66 +326,24 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     )
     from .spec_core.pipeline import build_from_spec
 
-    # ── Layers 1–6 (zero-AI intelligence) ──────────────────────────────────
-    lu = None
-    intent = None
-    style = None
-    suggestion_report = None
-    memory_engine = None
-    layers_meta: dict = {}
+    # ── Layers 1–6 ─────────────────────────────────────────────────────────
+    intel: dict = {
+        "lu": None,
+        "intent": None,
+        "style": None,
+        "suggestion_report": None,
+        "memory_engine": None,
+        "meta": {},
+    }
     try:
-        from .spec_core.language_understanding import (
-            understand,
-            analyze_intent,
-            suggest,
-            personalize,
-            feature_filter_for_skill,
-            get_memory_engine,
-        )
-
-        lu = understand(request or "")
-        intent = analyze_intent(request or "", lu=lu)
-        if user_id:
-            try:
-                memory_engine = get_memory_engine()
-                memory_engine.remember_turn(
-                    int(user_id),
-                    request or "",
-                    intent=intent,
-                    lu=lu,
-                    features=list(getattr(intent, "feature_plan", None) or []),
-                )
-            except Exception:
-                try:
-                    memory_engine = get_memory_engine()
-                except Exception:
-                    memory_engine = None
-        style = personalize(
-            request or "", intent=intent, lu=lu, user_id=user_id or None, memory=memory_engine
-        )
-        suggestion_report = suggest(
-            request or "",
-            intent=intent,
-            lu=lu,
-            user_id=user_id or None,
-            memory=memory_engine,
-        )
-        layers_meta = {
-            "l1_domains": [
-                {"domain": d.domain, "score": round(d.score, 2)}
-                for d in (lu.domains or [])[:6]
-            ] if lu else [],
-            "l1_primary": getattr(lu, "primary_domain", None),
-            "l2_intent": intent.primary.intent if intent and intent.primary else None,
-            "l2_skill": getattr(intent, "skill_level", None),
-            "l2_language": getattr(intent, "language", None),
-            "l2_feature_plan": list(getattr(intent, "feature_plan", None) or [])[:20],
-            "l5_build": [s.feature for s in (suggestion_report.build if suggestion_report else [])],
-            "l5_improve": [s.feature for s in (suggestion_report.improve if suggestion_report else [])],
-            "l6_style": style.to_dict() if style else None,
-        }
+        intel = _run_intelligence_layers(request or "", user_id=int(user_id or 0))
+        layers_meta = dict(intel.get("meta") or {})
     except Exception as _lu_exc:
         layers_meta = {"layers_error": f"{type(_lu_exc).__name__}:{str(_lu_exc)[:200]}"}
+
+    lu = intel.get("lu")
+    style = intel.get("style")
+    memory_engine = intel.get("memory_engine")
 
     preset = detect_preset(request)
     if preset is None and not force and not is_bot_request(request):
@@ -232,52 +360,29 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
     # Always prefer multi-intent composition so bots are not single-thin packs
     stack = detect_preset_stack(request, limit=8)
-    # L1 domain can lead the stack when strong
+    # L1 domain / preset leads the stack when strong
     if lu and getattr(lu, "primary_preset", None):
         lead = lu.primary_preset
         if lead and lead not in (stack or []):
             stack = [lead] + list(stack or [])
     if stack:
         session = compose_session(stack, user_id=user_id, request=request)
-        # L5: inject high-confidence suggestion features into selection
-        if suggestion_report is not None:
-            for s in list(suggestion_report.build)[:8]:
-                if getattr(s, "confidence", 0) >= 0.55 and hasattr(session, "selected"):
-                    try:
-                        session.selected.add(s.feature)
-                    except Exception:
-                        pass
-        # L6: skill-based feature density
-        if style is not None and hasattr(session, "selected"):
-            try:
-                filtered = feature_filter_for_skill(list(session.selected), style)
-                session.selected = set(filtered)
-            except Exception:
-                pass
+        _apply_layers_to_session(session, intel)
         spec = session.to_spec()
-        # Stamp personalization into bot meta description
-        if style is not None:
-            try:
-                from .spec_core.language_understanding import style_prompt_ar, phrase
-
-                stamp = style_prompt_ar(style)
-                if hasattr(spec, "bot") and hasattr(spec.bot, "description"):
-                    base = (spec.bot.description or "").strip()
-                    spec.bot.description = (base + "\n" + stamp).strip()[:500]
-                if hasattr(spec, "bot") and hasattr(spec.bot, "language"):
-                    lang = style.language_variant
-                    if lang.startswith("ar"):
-                        spec.bot.language = "ar"
-                    elif lang == "en":
-                        spec.bot.language = "en"
-            except Exception:
-                pass
+        _stamp_style_on_spec(spec, style)
         tag = "+".join(stack)
     elif preset:
-        spec = session_for_preset(preset, user_id=user_id).to_spec()
+        session = session_for_preset(preset, user_id=user_id)
+        if hasattr(session, "selected"):
+            _apply_layers_to_session(session, intel)
+            spec = session.to_spec()
+        else:
+            spec = session.to_spec() if hasattr(session, "to_spec") else session_for_preset(preset, user_id=user_id).to_spec()
+        _stamp_style_on_spec(spec, style)
         tag = preset
     else:
         spec = default_spec_from_request(request, user_id=user_id)
+        _stamp_style_on_spec(spec, style)
         tag = detect_preset(request) or "market_default"
 
     result = build_from_spec(spec, project_dir)
@@ -290,11 +395,21 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         "ai_disabled": True,
         "quality": "market_pack_v2",
         "layers": layers_meta,
+        "user_id": int(user_id) if user_id else None,
     }
-    # Persist L4 memory of successful build intent
+    # L4: persist successful build
     if memory_engine is not None and user_id and result.ok:
         try:
             feats = list(layers_meta.get("l2_feature_plan") or [])
+            # include what actually got selected if available
+            try:
+                feats = list(dict.fromkeys(
+                    feats + [getattr(f, "feature", None) or getattr(f, "id", None)
+                             for f in (spec.features or [])]
+                ))
+                feats = [str(x) for x in feats if x][:40]
+            except Exception:
+                pass
             memory_engine.register_bot(
                 int(user_id),
                 name=getattr(getattr(spec, "bot", None), "name", None) or tag,
@@ -422,11 +537,10 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     )
 
 
-def generate_bot(request: str, work_dir=None):
+def generate_bot(request: str, work_dir=None, user_id: int = 0):
     """Generate a runnable Telegram bot using zero-AI engines only.
 
-    AI plan/codegen path is disabled permanently. All generation goes through
-    spec_core presets + deterministic coding engines.
+    Runs L1→L6 intelligence (per user_id when provided) then deterministic codegen.
     """
     import time
     from .core.result import GenerationResult
@@ -443,7 +557,9 @@ def generate_bot(request: str, work_dir=None):
             metadata={"ai_disabled": True},
         )
 
-    result = _generate_bot_zero_ai(original_request, work_dir, t0, force=True)
+    result = _generate_bot_zero_ai(
+        original_request, work_dir, t0, user_id=int(user_id or 0), force=True
+    )
     if result is not None:
         return result
     return GenerationResult(
