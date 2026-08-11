@@ -60,6 +60,39 @@ def _rate_limit_wait_seconds(user_id: int) -> int:
         return int(RATE_LIMIT_WINDOW_SECONDS)
 
 
+
+def _ensure_mongo_user(user) -> None:
+    """Persist Telegram user identity + plan in MongoDB when MONGODB_URI is set."""
+    if not user:
+        return
+    import os
+    if not (os.getenv("MONGODB_URI") or "").strip():
+        return
+    try:
+        from b2b_platform.mongo_users import get_or_create_by_telegram
+        name = (getattr(user, "full_name", None) or getattr(user, "username", None) or f"tg_{user.id}")
+        tenant, created = get_or_create_by_telegram(int(user.id), name=str(name)[:120], plan_id="free")
+        if created:
+            logger.info("mongo user created tg=%s tenant=%s plan=%s", user.id, tenant.tenant_id, tenant.plan_id)
+    except Exception as exc:
+        logger.warning("mongo user ensure failed tg=%s: %s", getattr(user, "id", None), type(exc).__name__)
+
+
+def _mongo_plan_for_user(user_id: int) -> str | None:
+    import os
+    if not (os.getenv("MONGODB_URI") or "").strip():
+        return None
+    try:
+        from b2b_platform.tenants import get_tenant_store
+        store = get_tenant_store()
+        if hasattr(store, "get_by_telegram"):
+            t = store.get_by_telegram(int(user_id))
+            return t.plan_id if t else None
+    except Exception:
+        return None
+    return None
+
+
 def _persist_session(user, context) -> None:
     try:
         if user and context.user_data is not None:
@@ -77,6 +110,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_allowed(user.id if user else None):
         await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
         return
+
+    # Ensure user identity + plan exist in MongoDB (users collection)
+    _ensure_mongo_user(user)
 
     uid_check = int(user.id) if user else 0
     if not _rate_limit_ok(uid_check):
@@ -104,6 +140,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         pass
 
     request = message.text.strip()
+
+    # User plan status from MongoDB
+    if request.lower().split("@")[0] in {"/plan", "/myplan", "/خطة"}:
+        uid = int(user.id) if user else 0
+        plan = _mongo_plan_for_user(uid) or "free"
+        labels = {"free": "مجاني (Free)", "pro": "برو (Pro)", "unlimited": "بلا حدود (Unlimited)"}
+        await message.reply_text(
+            f"👤 خطتك الحالية: {labels.get(plan, plan)}\n"
+            f"plan_id=`{plan}`"
+        )
+        return
 
     # Phase 13: capability ops commands (health/trace/learn/promote)
     try:
