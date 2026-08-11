@@ -22,6 +22,7 @@ from .evaluation_layer import (
     record_generation_outcome,
     build_performance_report,
     is_eval_command,
+    recommend_generation_tweaks,
 )
 from .smart_generation import (
     GenerationNarrative,
@@ -117,6 +118,7 @@ __all__ = [
     "record_generation_outcome",
     "build_performance_report",
     "is_eval_command",
+    "recommend_generation_tweaks",
     "normalize_text",
     "tokenize",
     "light_stem_ar",

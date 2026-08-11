@@ -262,6 +262,34 @@ def _run_intelligence_layers(
                         ent.features_requested = merged3
                     except Exception:
                         pass
+                    # Stage-5: prefer/avoid features from global performance
+                    try:
+                        from .spec_core.language_understanding.evaluation_layer import (
+                            recommend_generation_tweaks,
+                        )
+                        tweaks = recommend_generation_tweaks(
+                            int(user_id) if user_id else None,
+                            memory=memory_engine,
+                        )
+                        if ent is not None and not getattr(ent, "strict_spec", False):
+                            feats = list(getattr(ent, "features_requested", None) or [])
+                            for f in tweaks.get("prefer_features") or []:
+                                if f not in feats:
+                                    feats.append(f)
+                            avoid = set(tweaks.get("avoid_features") or [])
+                            if avoid:
+                                feats = [f for f in feats if f not in avoid or f in {"start", "help", "lang"}]
+                            ent.features_requested = list(dict.fromkeys(feats))
+                        if isinstance(getattr(ent, "raw", None), dict):
+                            ent.raw["l5_tweaks"] = tweaks
+                        elif ent is not None:
+                            try:
+                                ent.raw = dict(getattr(ent, "raw", None) or {})
+                                ent.raw["l5_tweaks"] = tweaks
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                     try:
                         from .spec_core.language_understanding.continuous_learning import learning_summary
                         # stash on intel via meta later

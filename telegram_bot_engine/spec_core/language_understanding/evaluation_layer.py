@@ -26,6 +26,9 @@ AB_VARIANTS: dict[str, dict[str, Any]] = {
         "show_domain": True,
         "show_learning_notes": True,
         "status_verbose": True,
+        "max_questions": 3,
+        "suggestion_extra": 2,
+        "pre_summary_rich": True,
     },
     "B": {
         "id": "B",
@@ -34,6 +37,9 @@ AB_VARIANTS: dict[str, dict[str, Any]] = {
         "show_domain": False,
         "show_learning_notes": False,
         "status_verbose": False,
+        "max_questions": 1,
+        "suggestion_extra": 0,
+        "pre_summary_rich": False,
     },
 }
 
@@ -65,6 +71,8 @@ class PerformanceReport:
     top_intents: list[tuple[str, int]] = field(default_factory=list)
     learning_velocity: float = 0.0  # net score delta / generations
     notes: list[str] = field(default_factory=list)
+    feature_leaderboard: list[dict[str, Any]] = field(default_factory=list)
+    ab_winner: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +91,8 @@ class PerformanceReport:
             "top_intents": self.top_intents[:8],
             "learning_velocity": round(self.learning_velocity, 3),
             "notes": self.notes[:6],
+            "feature_leaderboard": self.feature_leaderboard[:10],
+            "ab_winner": self.ab_winner,
         }
 
     def to_arabic(self) -> str:
@@ -107,6 +117,16 @@ class PerformanceReport:
         if self.top_intents:
             tops = ", ".join(f"{k}({v})" for k, v in self.top_intents[:5])
             lines.append(f"• أشهر intents: {tops}")
+        if self.ab_winner:
+            lines.append(f"• 🏆 فائز A/B الحالي: {self.ab_winner}")
+        if self.feature_leaderboard:
+            lines.append("• ميزات الأعلى نجاحًا:")
+            for item in self.feature_leaderboard[:5]:
+                lines.append(
+                    f"  – {item.get('feature')}: "
+                    f"{float(item.get('success_rate') or 0)*100:.0f}% "
+                    f"(n={item.get('n', 0)})"
+                )
         for n in self.notes[:3]:
             lines.append(f"• 💡 {n}")
         return "\n".join(lines)
@@ -314,6 +334,13 @@ def build_performance_report(
         pass
     report.learning_velocity = (net / report.generations) if report.generations else (net / max(1, n_out))
 
+    # Map user → variant for rating attribution
+    user_variant: dict[int, str] = {}
+    for g in gen_rows:
+        uid = g.get("_uid")
+        if uid is not None and g.get("ab"):
+            user_variant[int(uid)] = str(g["ab"])
+
     for ab, b in ab_bucket.items():
         n = int(b["n"])
         ok = int(b["ok"])
@@ -321,7 +348,92 @@ def build_performance_report(
             "n": n,
             "success_rate": (ok / n) if n else 0.0,
             "avg_rating": None,
+            "ratings_n": 0,
         }
+
+    # Attribute feedback ratings to AB via user assignment
+    try:
+        with mem._conn() as conn:
+            q = "SELECT user_id, rating FROM user_feedback WHERE created_at>=?"
+            args_f: list[Any] = [cutoff]
+            if user_id:
+                q += " AND user_id=?"
+                args_f.append(int(user_id))
+            for r in conn.execute(q + " LIMIT 1000", tuple(args_f)).fetchall():
+                uid = int(r["user_id"] or 0)
+                rating = int(r["rating"] or 0)
+                if not uid or not rating:
+                    continue
+                ab = user_variant.get(uid) or assign_ab_variant(uid).variant
+                st = report.ab_stats.setdefault(
+                    ab, {"n": 0, "success_rate": 0.0, "avg_rating": None, "ratings_n": 0}
+                )
+                st.setdefault("_sum", 0)
+                st.setdefault("ratings_n", 0)
+                st["_sum"] = int(st.get("_sum") or 0) + rating
+                st["ratings_n"] = int(st.get("ratings_n") or 0) + 1
+        for ab, st in report.ab_stats.items():
+            rn = int(st.get("ratings_n") or 0)
+            if rn and st.get("_sum") is not None:
+                st["avg_rating"] = round(float(st["_sum"]) / rn, 2)
+            st.pop("_sum", None)
+    except Exception:
+        pass
+
+    # Feature-level success from bots_built
+    try:
+        feat_ok: dict[str, int] = {}
+        feat_n: dict[str, int] = {}
+        with mem._conn() as conn:
+            brows = conn.execute(
+                "SELECT features_json, success, created_at FROM bots_built WHERE created_at>=? ORDER BY created_at DESC LIMIT 500",
+                (cutoff,),
+            ).fetchall()
+            for r in brows:
+                try:
+                    feats = json.loads(r["features_json"] or "[]")
+                except Exception:
+                    feats = []
+                ok = 1 if r["success"] else 0
+                for f in feats:
+                    if not isinstance(f, str) or f in {"start", "help", "lang"}:
+                        continue
+                    feat_n[f] = feat_n.get(f, 0) + 1
+                    feat_ok[f] = feat_ok.get(f, 0) + ok
+        board = []
+        for f, n in feat_n.items():
+            if n < 1:
+                continue
+            board.append(
+                {
+                    "feature": f,
+                    "n": n,
+                    "success_rate": (feat_ok.get(f, 0) / n) if n else 0.0,
+                }
+            )
+        board.sort(key=lambda x: (-x["success_rate"], -x["n"]))
+        report.feature_leaderboard = board[:12]
+    except Exception:
+        pass
+
+    # Declare AB winner
+    try:
+        scored = []
+        for ab, st in report.ab_stats.items():
+            if ab in {"?", ""}:
+                continue
+            if int(st.get("n") or 0) < 2:
+                continue
+            score = float(st.get("success_rate") or 0) * 0.7
+            if st.get("avg_rating") is not None:
+                score += (float(st["avg_rating"]) / 5.0) * 0.3
+            scored.append((ab, score, st))
+        if scored:
+            scored.sort(key=lambda x: -x[1])
+            if len(scored) == 1 or scored[0][1] - scored[1][1] >= 0.05:
+                report.ab_winner = scored[0][0]
+    except Exception:
+        pass
 
     # notes / recommendations
     if report.generations >= 3 and report.success_rate < 0.5:
@@ -338,6 +450,36 @@ def build_performance_report(
             report.notes.append(f"A/B: المتغير {winner} أفضل نجاحًا حتى الآن")
 
     return report
+
+
+def recommend_generation_tweaks(
+    user_id: int | None = None,
+    *,
+    memory: MemoryEngine | None = None,
+    window_hours: float = 72.0,
+) -> dict[str, Any]:
+    """Actionable tweaks for generation path from Stage-5 analytics."""
+    rep = build_performance_report(
+        window_hours=window_hours, memory=memory, user_id=None
+    )
+    tweaks: dict[str, Any] = {
+        "prefer_features": [],
+        "avoid_features": [],
+        "ab_winner": rep.ab_winner,
+        "force_variant": None,
+        "notes": list(rep.notes[:4]),
+    }
+    for item in rep.feature_leaderboard[:6]:
+        if float(item.get("success_rate") or 0) >= 0.7 and int(item.get("n") or 0) >= 2:
+            tweaks["prefer_features"].append(item["feature"])
+        if float(item.get("success_rate") or 0) <= 0.35 and int(item.get("n") or 0) >= 2:
+            tweaks["avoid_features"].append(item["feature"])
+    # Optionally bias new users toward winner after enough samples
+    if rep.ab_winner and rep.generations >= 8:
+        total_n = sum(int(st.get("n") or 0) for st in rep.ab_stats.values())
+        if total_n >= 8:
+            tweaks["force_variant"] = None  # keep stable assignment; expose winner only
+    return tweaks
 
 
 def is_eval_command(text: str) -> bool:
@@ -360,4 +502,5 @@ __all__ = [
     "record_ab_exposure",
     "build_performance_report",
     "is_eval_command",
+    "recommend_generation_tweaks",
 ]

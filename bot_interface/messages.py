@@ -136,8 +136,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             build_performance_report,
         )
         if is_eval_command(request):
-            rep = build_performance_report(window_hours=24.0)
-            await message.reply_text(rep.to_arabic()[:3500])
+            low = request.strip().lower()
+            hours = 168.0 if any(x in low for x in ("أسبوع", "اسبوع", "week", "7")) else 24.0
+            rep = build_performance_report(window_hours=hours)
+            text = rep.to_arabic()
+            try:
+                from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+                    assign_ab_variant,
+                    recommend_generation_tweaks,
+                )
+                extra = []
+                if uid:
+                    ab = assign_ab_variant(int(uid))
+                    extra.append(f"• متغيرك A/B: {ab.variant}")
+                tw = recommend_generation_tweaks(int(uid) if uid else None)
+                if tw.get("prefer_features"):
+                    extra.append("• ميزات مُفضّلة عالميًا: " + ", ".join(tw["prefer_features"][:5]))
+                if tw.get("avoid_features"):
+                    extra.append("• ميزات ضعيفة: " + ", ".join(tw["avoid_features"][:4]))
+                if extra:
+                    text += "\n" + "\n".join(extra)
+                    text = text.replace("\\n", "\n")
+                    # actual newlines:
+                    text = rep.to_arabic() + chr(10) + chr(10).join(extra)
+            except Exception:
+                pass
+            await message.reply_text(text[:3500])
             return
     except Exception:
         logger.exception("stage5 eval report failed")
