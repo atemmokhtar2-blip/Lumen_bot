@@ -125,6 +125,69 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     ):
         files["app/services/generic.py"] = _emit_generic_runtime()
     files.setdefault("bootstrap.sh", _emit_bootstrap_sh())
+
+    # Phase 11: optional production backends for translate / OCR / schedule
+    req_lines = ["python-telegram-bot==21.6", "python-dotenv>=1.0.0"]
+    env_lines = ["TELEGRAM_BOT_TOKEN=", "ADMIN_IDS="]
+    readme_extra: list[str] = []
+    feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
+    needs_translate = (
+        "translate" in svc_set
+        or any(str(k).startswith("scaffold_translate") for k in feat_keys)
+    )
+    needs_ocr = (
+        "ocr" in svc_set
+        or any(str(k).startswith("scaffold_ocr") for k in feat_keys)
+    )
+    needs_sched = (
+        "scheduler" in svc_set
+        or "reminders" in svc_set
+        or any(str(k).startswith("scaffold_schedule") for k in feat_keys)
+    )
+    if needs_translate:
+        req_lines += [
+            "# optional translate backends:",
+            "# deep-translator>=1.11.4",
+        ]
+        env_lines += [
+            "TRANSLATE_BACKEND=echo",
+            "TRANSLATE_TARGET=ar",
+            "TRANSLATE_API_URL=http://localhost:5000",
+            "TRANSLATE_TIMEOUT=8",
+        ]
+        readme_extra.append(
+            "- Translate: set TRANSLATE_BACKEND=deep-translator|libre and install optional deps"
+        )
+    if needs_ocr:
+        req_lines += [
+            "# optional OCR:",
+            "# pytesseract>=0.3.10",
+            "# Pillow>=10.0.0",
+        ]
+        env_lines += [
+            "OCR_ENABLED=1",
+            "OCR_LANG=eng+ara",
+        ]
+        readme_extra.append(
+            "- OCR: install Tesseract system package + pip install pytesseract Pillow"
+        )
+    if needs_sched:
+        env_lines += [
+            "# Schedule notes are durable in SQLite; enable JobQueue in host process for firing",
+        ]
+        readme_extra.append(
+            "- Schedule: /schedule stores reminders; wire JobQueue at deploy time for auto-fire"
+        )
+    files["requirements.txt"] = "\n".join(req_lines) + "\n"
+    files[".env.example"] = "\n".join(env_lines) + "\n"
+    if readme_extra:
+        base_readme = files.get("README.md") or ""
+        files["README.md"] = (
+            base_readme
+            + "\n## Optional backends (Phase 11)\n\n"
+            + "\n".join(readme_extra)
+            + "\n"
+        )
     if "README.md" not in files:
         files["README.md"] = "# Generated bot\n\nRun: chmod +x bootstrap.sh && ./bootstrap.sh\n"
     return files

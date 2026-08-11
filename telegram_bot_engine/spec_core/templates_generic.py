@@ -519,47 +519,78 @@ _DELETE_M = frozenset({
 # ----- Phase 8 scaffolds (deterministic; configure via env in production) -----
 
 def translate_text(user_id: int, text: str = "") -> str:
-    """Deterministic translation helper.
+    """Translation helper with optional production backends.
 
-    If TRANSLATE_BACKEND=echo (default): returns structured echo with lang hint.
-    If TRANSLATE_BACKEND=deep-translator and package installed: real translate.
-    Never crashes the bot if optional deps missing.
+    Backends (TRANSLATE_BACKEND):
+      echo (default)           — deterministic offline label
+      deep-translator|google   — GoogleTranslator via deep-translator pkg
+      libre|libretranslate     — HTTP LibreTranslate (TRANSLATE_API_URL)
+
+    Never crashes if optional deps/network missing.
     """
     ensure()
+    import os as _os
     text = (text or "").strip()
     if not text:
         return (
             "🌐 الترجمة\n"
             "الاستخدام: /translate مرحبا بك\n"
             "أو: /translate en:hello world\n"
-            "اختياري: TRANSLATE_BACKEND=deep-translator في .env"
+            "BACKENDS: echo | deep-translator | libre\n"
+            "TRANSLATE_BACKEND=...  TRANSLATE_API_URL=http://localhost:5000"
         )
-    target = "ar"
+    target = (_os.getenv("TRANSLATE_TARGET") or "ar").strip().lower() or "ar"
     payload = text
-    if ":" in text[:6]:
-        # e.g. en:hello or ar:hello
+    if ":" in text[:8]:
         maybe, rest = text.split(":", 1)
-        if len(maybe.strip()) <= 5 and maybe.strip().isalpha():
+        if 1 <= len(maybe.strip()) <= 5 and maybe.strip().replace("-", "").isalpha():
             target = maybe.strip().lower()
             payload = rest.strip()
+    if not payload:
+        return "أدخل نصاً بعد رمز اللغة، مثال: /translate en:مرحبا"
+
+    backend = (_os.getenv("TRANSLATE_BACKEND") or "echo").strip().lower()
     translated = None
-    backend = ""
-    try:
-        import os as _os
-        backend = (_os.getenv("TRANSLATE_BACKEND") or "echo").strip().lower()
-    except Exception:
-        backend = "echo"
+    note = ""
     if backend in {"deep-translator", "deep_translator", "google"}:
         try:
             from deep_translator import GoogleTranslator  # type: ignore
             translated = GoogleTranslator(source="auto", target=target).translate(payload)
+            note = "deep-translator"
         except Exception as exc:
+            note = f"deep-translator failed:{type(exc).__name__}"
             translated = None
-            backend = f"echo (fallback: {type(exc).__name__})"
+    elif backend in {"libre", "libretranslate"}:
+        try:
+            import json as _json
+            from urllib import request as _urlreq
+            api = (_os.getenv("TRANSLATE_API_URL") or "http://localhost:5000").rstrip("/")
+            body = _json.dumps({
+                "q": payload, "source": "auto", "target": target, "format": "text",
+            }).encode("utf-8")
+            req = _urlreq.Request(
+                api + "/translate",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with _urlreq.urlopen(req, timeout=float(_os.getenv("TRANSLATE_TIMEOUT") or "8")) as resp:
+                data = _json.loads(resp.read().decode("utf-8", errors="ignore"))
+            translated = (data.get("translatedText") or data.get("translation") or "").strip()
+            note = "libretranslate"
+            if not translated:
+                note = "libretranslate empty"
+                translated = None
+        except Exception as exc:
+            note = f"libre failed:{type(exc).__name__}"
+            translated = None
+
     if not translated:
-        # Deterministic offline behavior
         translated = f"[{target}] {payload}"
-        backend = backend or "echo"
+        backend = f"echo" + (f" ({note})" if note else "")
+    else:
+        backend = note or backend
+
     iid = _insert(
         "translate", int(user_id), f"to:{target}", payload,
         "done", {"backend": backend, "result": translated[:500]},
@@ -586,22 +617,31 @@ def ocr_hint(user_id: int, text: str = "") -> str:
 
 
 def ocr_from_image(user_id: int, image_path: str = "", caption: str = "") -> str:
-    """Run OCR on a local image path when pytesseract is available; else durable ack."""
+    """Run OCR on a local image path when pytesseract is available; else durable ack.
+
+    Env:
+      OCR_LANG=eng+ara (tesseract langs)
+      OCR_ENABLED=1 (default on when deps exist)
+    """
     ensure()
+    import os as _os
     caption = (caption or "").strip()
     extracted = ""
     backend = "none"
-    if image_path:
+    enabled = (_os.getenv("OCR_ENABLED") or "1").strip().lower() not in {"0", "false", "no"}
+    if image_path and enabled:
         try:
             import pytesseract  # type: ignore
             from PIL import Image  # type: ignore
-            extracted = (pytesseract.image_to_string(Image.open(image_path)) or "").strip()
-            backend = "pytesseract"
+            lang = (_os.getenv("OCR_LANG") or "eng+ara").strip() or "eng"
+            img = Image.open(image_path)
+            extracted = (pytesseract.image_to_string(img, lang=lang) or "").strip()
+            backend = f"pytesseract:{lang}"
         except Exception as exc:
             backend = f"unavailable:{type(exc).__name__}"
     if not extracted and caption:
         extracted = caption
-        backend = backend if backend.startswith("un") else "caption"
+        backend = "caption" if backend == "none" else f"{backend}+caption"
     iid = _insert(
         "ocr", int(user_id), "ocr_image",
         extracted[:2000] or (image_path or "no_text"),
@@ -612,7 +652,8 @@ def ocr_from_image(user_id: int, image_path: str = "", caption: str = "") -> str
         return f"📝 OCR #{iid}\n{extracted[:2000]}"
     return (
         f"📝 OCR #{iid}\n"
-        "تم حفظ الصورة. لم يُستخرج نص (ثبّت pytesseract + Tesseract).\n"
+        "تم حفظ الصورة. لم يُستخرج نص.\n"
+        "ثبّت: pip install pytesseract Pillow  +  Tesseract OCR على النظام\n"
         f"backend={backend}"
     )
 
