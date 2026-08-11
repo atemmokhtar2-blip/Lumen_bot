@@ -31,6 +31,76 @@ def catalog() -> str:
     )
 
 
+def product_search(query: str, limit: int = 20) -> str:
+    """Search products by title/category/description substring."""
+    ensure()
+    seed_demo_catalog()
+    q = (query or "").strip()
+    if not q:
+        return "Usage: /productsearch <keyword>\n" + catalog()
+    like = f"%{q}%"
+    with connect() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT id, title, price_cents, currency, stock, category FROM products "
+                "WHERE active=1 AND (title LIKE ? OR IFNULL(category,'') LIKE ? "
+                "OR IFNULL(description,'') LIKE ?) ORDER BY id DESC LIMIT ?",
+                (like, like, like, int(limit)),
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT id, title, price_cents, currency, stock FROM products "
+                "WHERE active=1 AND title LIKE ? ORDER BY id DESC LIMIT ?",
+                (like, int(limit)),
+            ).fetchall()
+    if not rows:
+        return f"No products matching «{q}»"
+    lines = [f"نتائج البحث عن «{q}»:"]
+    for r in rows:
+        cat = ""
+        try:
+            if r["category"]:
+                cat = f" [{r['category']}]"
+        except Exception:
+            cat = ""
+        lines.append(
+            f"#{r['id']} {r['title']}{cat} — {r['price_cents']/100:.2f} {r['currency']} (stock {r['stock']})"
+        )
+    lines.append("أضف للسلة: /cartadd <id>")
+    return "\n".join(lines)
+
+
+def product_info(product_id: int) -> str:
+    """Detailed product card by id."""
+    ensure()
+    seed_demo_catalog()
+    prod = get_product(int(product_id))
+    if not prod:
+        return f"Product #{product_id} not found. /shop to list."
+    lines = [
+        f"【 منتج #{prod['id']} 】",
+        f"الاسم: {prod.get('title')}",
+        f"السعر: {int(prod.get('price_cents') or 0)/100:.2f} {prod.get('currency') or 'EGP'}",
+        f"المخزون: {prod.get('stock')}",
+    ]
+    if prod.get("category"):
+        lines.append(f"التصنيف: {prod['category']}")
+    if prod.get("description"):
+        lines.append(f"الوصف: {prod['description']}")
+    try:
+        with connect() as conn:
+            rev = conn.execute(
+                "SELECT COUNT(*) c, AVG(rating) a FROM reviews WHERE product_id=?",
+                (int(product_id),),
+            ).fetchone()
+            if rev and int(rev["c"] or 0) > 0:
+                lines.append(f"التقييم: {float(rev['a'] or 0):.1f}/5 ({rev['c']} مراجعة)")
+    except Exception:
+        pass
+    lines.append("أضف للسلة: /cartadd " + str(product_id))
+    return "\n".join(lines)
+
+
 def add_item(admin_id: int, text: str) -> int:
     """Admin-only product create. Returns 0 if unauthorized or invalid."""
     ensure()

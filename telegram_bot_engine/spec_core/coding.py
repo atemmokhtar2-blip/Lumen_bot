@@ -102,14 +102,24 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "payments", "contests", "i18n", "analytics", "admin", "gate",
     )):
         files["app/services/extras.py"] = _emit_extras()
+    need_flow = bool(
+        {
+            "shop", "payments", "subscriptions", "points", "contests", "cart",
+            "growth", "wallet", "i18n", "creator", "tickets", "tasks", "notes",
+            "support",
+        }
+        & svc_set
+    )
     if {
         "shop", "payments", "subscriptions", "points", "contests", "cart",
         "growth", "wallet", "i18n", "creator",
     } & svc_set:
         files["app/services/market.py"] = _emit_market()
+        need_flow = True
+    if need_flow:
         files["app/flow_engine.py"] = _emit_flow_engine()
-    elif {"tickets", "tasks", "notes"} & svc_set:
-        files["app/flow_engine.py"] = _emit_flow_engine()
+        # Flow engine references tickets in open_ticket — always emit module
+        files.setdefault("app/services/tickets.py", _emit_tickets())
     if spec.storage.type == "sqlite" or len(spec.features) > 2:
         if files.get("app/db.py"):
             files["app/services/generic.py"] = _emit_generic_runtime()

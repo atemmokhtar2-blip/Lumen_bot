@@ -103,12 +103,17 @@ FLOWS: dict[str, dict[str, Any]] = {
         "steps": [
             {
                 "id": "amount",
-                "prompt": "💵 مبلغ الشحن؟ (رقم صحيح)\n/cancel · /back",
+                "prompt": (
+                    "💵 الشحن المجاني متوقف.\n"
+                    "أدخل مبلغًا للتحويل عبر فودافون/Telegram لاحقًا، "
+                    "أو اكتب /cancel وافتح /vfcash أو /buy.\n"
+                    "/cancel · /back"
+                ),
                 "type": "number",
                 "min": 1,
                 "max": 1_000_000,
             },
-            {"id": "confirm", "prompt": "✅ تأكيد الشحن:", "type": "confirm"},
+            {"id": "confirm", "prompt": "✅ متابعة (بدون شحن مجاني):", "type": "confirm"},
         ],
         "on_complete": "wallet_topup",
     },
@@ -365,11 +370,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             await update.effective_message.reply_text("تم إلغاء العملية.")
         return True
     if low in {"/back", "back", "رجوع"}:
-        st["step"] = max(0, int(st.get("step") or 0) - 1)
-        # drop last field if possible
-        step = _current_step(st)
-        if step and step.get("id") in (st.get("data") or {}):
-            st["data"].pop(step["id"], None)
+        # Move back and wipe data for the step we re-enter + any later steps
+        new_step = max(0, int(st.get("step") or 0) - 1)
+        st["step"] = new_step
+        data = st.setdefault("data", {})
+        steps = (FLOWS.get(st.get("name") or "") or {}).get("steps") or []
+        for i, s in enumerate(steps):
+            if i >= new_step and isinstance(s, dict) and s.get("id"):
+                data.pop(s["id"], None)
+                # photo aliases
+                if s.get("type") == "photo":
+                    data.pop("photo_file_id", None)
+                    data.pop("photo", None)
         await _prompt_current(update, context)
         return True
     if low in {"/skip", "skip", "تخطي"}:
@@ -456,8 +468,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await q.edit_message_text("تم إلغاء العملية.")
         return True
     if action == "back":
-        st["step"] = max(0, int(st.get("step") or 0) - 1)
-        # fake message for prompt
+        # Same semantics as text /back: re-enter previous step with clean data
+        new_step = max(0, int(st.get("step") or 0) - 1)
+        st["step"] = new_step
+        data = st.setdefault("data", {})
+        steps = (FLOWS.get(st.get("name") or "") or {}).get("steps") or []
+        for i, s in enumerate(steps):
+            if i >= new_step and isinstance(s, dict) and s.get("id"):
+                data.pop(s["id"], None)
+                if s.get("type") == "photo":
+                    data.pop("photo_file_id", None)
+                    data.pop("photo", None)
         class _U:
             effective_message = q.message
         await _prompt_current(_U(), context)  # type: ignore
@@ -551,9 +572,14 @@ async def _execute(
     if name == "wallet_topup":
         from app.services import market as market_svc
 
+        # Free top-up disabled — redirect to real payment rails
         amt = int(data.get("amount") or 0)
-        bal = market_svc.wallet_topup(user_id, amt)
-        return f"✅ تم الشحن. الرصيد الحالي: {bal}"
+        bal = market_svc.wallet_balance(user_id)
+        return (
+            f"⚠️ الشحن المجاني متوقف (طلبت: {amt}).\n"
+            f"الرصيد الحالي: {bal}\n"
+            "ادفع عبر: /vfcash (فودافون + موافقة أدمن) أو /buy (Telegram Payments)."
+        )
 
     if name == "vodafone_cash":
         from app.services import market as market_svc

@@ -153,7 +153,32 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("        return")
 
     # ── catalog / products ────────────────────────────────────────────
-    if method in {"catalog", "list_content", "flash_list", "search", "product_info", "recommend"}:
+    if method in {"search", "product_search"}:
+        L += [
+            "    q = ' '.join(context.args) if context.args else ''",
+            "    if hasattr(market_svc, 'product_search'):",
+            "        text = market_svc.product_search(q)",
+            "    else:",
+            "        text = market_svc.catalog()",
+            "    await message.reply_text(text)",
+        ]
+    elif method in {"product_info", "info"}:
+        L += [
+            "    if not context.args:",
+            "        await message.reply_text('Usage: /productinfo <product_id>')",
+            "        return",
+            "    try:",
+            "        pid = int(context.args[0])",
+            "    except ValueError:",
+            "        await message.reply_text('رقم منتج غير صالح')",
+            "        return",
+            "    if hasattr(market_svc, 'product_info'):",
+            "        text = market_svc.product_info(pid)",
+            "    else:",
+            "        text = market_svc.catalog()",
+            "    await message.reply_text(text)",
+        ]
+    elif method in {"catalog", "list_content", "flash_list", "recommend"}:
         L.append("    cat = market_svc.catalog()")
         L.append("    text = '【 المتجر 】' + chr(10) + cat + chr(10)+chr(10) + 'أضف للسلة: /cartadd <id> — أو افتح السلة من القائمة'")
         L.append("    await message.reply_text(text)")
@@ -1322,36 +1347,67 @@ def _emit_handlers(spec: BotSpec) -> str:
             "            return",
             "        await message.reply_text('تم: ' + text[:100])",
             "        return",
-            "    if awaiting == 'task_title':",
-            "        tasks_svc.add_task(user.id, message.text.strip())",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text('تمت إضافة المهمة')",
-            "        return",
-            "    if awaiting == 'note_body':",
-            "        notes_svc.add_note(user.id, message.text.strip())",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text('تمت إضافة الملاحظة')",
-            "        return",
-            "    if awaiting == 'welcome_message' and chat is not None:",
-            "        welcome_svc.set_message(chat.id, message.text.strip())",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text('تم حفظ رسالة الترحيب')",
-            "        return",
-            "    if awaiting == 'ticket_subject':",
-            "        tid = tickets_svc.open_ticket(user.id, message.text.strip(), chat.id if chat else 0)",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text(f'تم فتح التذكرة #{tid}')",
-            "        return",
-            "    if awaiting == 'sec_phish':",
-            "        rid = security_svc.report(user.id, 'phish', message.text.strip())",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text(f'تم تسجيل بلاغ التصيد #{rid}')",
-            "        return",
-            "    if awaiting == 'sec_incident':",
-            "        rid = security_svc.report(user.id, 'incident', message.text.strip())",
-            "        context.user_data.pop('awaiting', None)",
-            "        await message.reply_text(f'تم تسجيل البلاغ الأمني #{rid}')",
-            "        return",
+            # Optional services — only when imported (need_* flags)
+            *(
+                [
+                    "    if awaiting == 'task_title':",
+                    "        tasks_svc.add_task(user.id, message.text.strip())",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text('تمت إضافة المهمة')",
+                    "        return",
+                ]
+                if need_tasks
+                else []
+            ),
+            *(
+                [
+                    "    if awaiting == 'note_body':",
+                    "        notes_svc.add_note(user.id, message.text.strip())",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text('تمت إضافة الملاحظة')",
+                    "        return",
+                ]
+                if need_notes
+                else []
+            ),
+            *(
+                [
+                    "    if awaiting == 'welcome_message' and chat is not None:",
+                    "        welcome_svc.set_message(chat.id, message.text.strip())",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text('تم حفظ رسالة الترحيب')",
+                    "        return",
+                ]
+                if need_welcome
+                else []
+            ),
+            *(
+                [
+                    "    if awaiting == 'ticket_subject':",
+                    "        tid = tickets_svc.open_ticket(user.id, message.text.strip(), chat.id if chat else 0)",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text(f'تم فتح التذكرة #{tid}')",
+                    "        return",
+                ]
+                if need_tickets
+                else []
+            ),
+            *(
+                [
+                    "    if awaiting == 'sec_phish':",
+                    "        rid = security_svc.report(user.id, 'phish', message.text.strip())",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text(f'تم تسجيل بلاغ التصيد #{rid}')",
+                    "        return",
+                    "    if awaiting == 'sec_incident':",
+                    "        rid = security_svc.report(user.id, 'incident', message.text.strip())",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text(f'تم تسجيل البلاغ الأمني #{rid}')",
+                    "        return",
+                ]
+                if need_security
+                else []
+            ),
             "",
             "",
             "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
@@ -1591,17 +1647,22 @@ def _emit_handlers(spec: BotSpec) -> str:
                 continue
             seen_map.add(key)
             lines.append(f"            {key!r}: {h},")
-    # Only register menu routes that were actually emitted
+    # Only register menu routes that were actually emitted (no key overwrite)
     for _mk, _mh in menu_routes:
+        if _mk in seen_map:
+            continue
+        seen_map.add(_mk)
         lines.append(f"            {_mk!r}: {_mh},")
-    lines.append("            'lang': help_handler,")
+    if "lang" not in seen_map:
+        lines.append("            'lang': help_handler,")
     lines.append("        }")
     lines.append("        _ALIASES = {")
     lines.append("            'shop': 'shopcatalog', 'catalog': 'shopcatalog', 'cart': 'cartview',")
-    lines.append("            'orders': 'shopmyorders', 'myorders': 'shopmyorders', 'points': 'balance',")
+    lines.append("            'orders': 'shopmyorders', 'myorders': 'shopmyorders',")
     lines.append("            'wallet': 'walletbalance', 'support': 'ticketopen', 'ticket': 'ticketopen',")
     lines.append("            'coupon': 'couponapply', 'language': 'lang', 'buy': 'shopbuy',")
     lines.append("            'plans': 'plans', 'sub': 'plans', 'subs': 'plans', 'leaderboard': 'leaderboard',")
+    lines.append("            'points': 'pointsbalance', 'balance': 'walletbalance',")
     lines.append("        }")
     lines.append("        fn = _CMD_MAP.get(cmd) or _CMD_MAP.get(cmd_compact)")
     lines.append("        if fn is None:")
