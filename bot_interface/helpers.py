@@ -113,14 +113,20 @@ def make_zip_from_path(project_path: str | Path) -> Path | None:
         return None
 
 
-def run_generation(request: str, work_dir: Path, user_id: int = 0):
+def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_keys=None):
     """Synchronous call into the generation engine (runs in a thread).
 
     Passes user_id so L4 memory + L6 personalization apply per user.
+    preferred_keys: optional capability keys from Phase-2 detection.
     """
     from telegram_bot_engine import generate_bot
 
-    return generate_bot(request, work_dir=str(work_dir), user_id=int(user_id or 0))
+    return generate_bot(
+        request,
+        work_dir=str(work_dir),
+        user_id=int(user_id or 0),
+        preferred_keys=preferred_keys,
+    )
 
 
 async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:

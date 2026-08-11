@@ -496,10 +496,11 @@ def _stamp_style_on_spec(spec, style) -> None:
 
 
 
-def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *, force: bool = False):
+def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *, force: bool = False, preferred_keys=None):
     """Deterministic Spec → code only. No LLM providers.
 
     Pipeline: L1→L6 intelligence → compose session → build_from_spec → anti-hallucination.
+    preferred_keys: optional list of capability keys from Phase-2 detection.
     """
     from pathlib import Path as _Path
     import tempfile as _tempfile
@@ -617,6 +618,56 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             spec = default_spec_from_request(request, user_id=user_id)
             _stamp_style_on_spec(spec, style)
             tag = detect_preset(request) or "market_default"
+
+    # ── Phase 2: Capability Detection keys → session / spec ─────────────
+    detection_meta: dict = {}
+    try:
+        from .services.capability_detection.integration import (
+            feature_keys,
+            metadata_from_report,
+            run_detection,
+        )
+        from .spec_core.registry import CAPABILITIES as _CAPS_DET
+
+        keys = [k for k in (preferred_keys or []) if isinstance(k, str) and k in _CAPS_DET]
+        if not keys:
+            _det_report = run_detection(request)
+            keys = feature_keys(_det_report, include_core=True)
+            detection_meta = metadata_from_report(_det_report)
+        else:
+            detection_meta = {
+                "capability_detection": {
+                    "matched_keys": [k for k in keys if k not in {"start", "help"}],
+                    "source": "caller",
+                    "status": "provided",
+                }
+            }
+
+        # Do not override strict user-locked menus
+        if keys and not (strict and explicit_feats):
+            sess = locals().get("session")
+            if sess is not None and hasattr(sess, "selected"):
+                for k in keys:
+                    try:
+                        sess.selected.add(k)
+                    except Exception:
+                        pass
+                if hasattr(sess, "to_spec"):
+                    spec = sess.to_spec()
+                    _stamp_style_on_spec(spec, style)
+            layers_meta["detection_preferred_keys"] = [
+                k for k in keys if k not in {"start", "help"}
+            ]
+            if detection_meta:
+                layers_meta.update(detection_meta)
+    except Exception as _det_exc:
+        layers_meta["detection_error"] = f"{type(_det_exc).__name__}:{str(_det_exc)[:160]}"
+        detection_meta = {}
+    if detection_meta:
+        try:
+            layers_meta.update(detection_meta)
+        except Exception:
+            pass
 
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
@@ -847,10 +898,11 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     )
 
 
-def generate_bot(request: str, work_dir=None, user_id: int = 0):
+def generate_bot(request: str, work_dir=None, user_id: int = 0, preferred_keys=None):
     """Generate a runnable Telegram bot using zero-AI engines only.
 
     Runs L1→L6 intelligence (per user_id when provided) then deterministic codegen.
+    preferred_keys: optional capability keys from Capability Detection (Phase 2).
     """
     import time
     from .core.result import GenerationResult
@@ -868,7 +920,12 @@ def generate_bot(request: str, work_dir=None, user_id: int = 0):
         )
 
     result = _generate_bot_zero_ai(
-        original_request, work_dir, t0, user_id=int(user_id or 0), force=True
+        original_request,
+        work_dir,
+        t0,
+        user_id=int(user_id or 0),
+        force=True,
+        preferred_keys=preferred_keys,
     )
     if result is not None:
         return result

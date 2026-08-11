@@ -1,17 +1,18 @@
-"""Capability Detection Engine (Phase 1 — Dynamic Tool Builder foundation).
+"""Capability Detection Engine (Phase 1) + Generation integration (Phase 2).
 
 Deterministic detection over the existing CAPABILITIES registry.
 No web research, no LLM, no invented keys.
-
-Public API:
-  detect_capabilities(request) -> DetectionReport
-  detect_status(request) -> DetectionStatus
-  can_satisfy(request) -> bool
-  search_capabilities(query) -> ranked hits
 """
 from __future__ import annotations
 
 from .engine import can_satisfy, detect_capabilities, detect_status
+from .integration import (
+    apply_detection_to_session,
+    feature_keys,
+    metadata_from_report,
+    run_detection,
+    telegram_preflight,
+)
 from .models import DetectionReport, DetectionStatus, GapItem, MatchedCapability
 from .search import nearest_keys_for_phrase, search_by_category, search_capabilities
 
@@ -26,4 +27,9 @@ __all__ = [
     "search_capabilities",
     "search_by_category",
     "nearest_keys_for_phrase",
+    "run_detection",
+    "feature_keys",
+    "apply_detection_to_session",
+    "telegram_preflight",
+    "metadata_from_report",
 ]

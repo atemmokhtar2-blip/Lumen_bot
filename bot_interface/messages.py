@@ -1001,24 +1001,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if context.user_data is not None:
         context.user_data.pop("pending_spec", None)
 
-    # Feasibility gate — refuse impossible / out-of-scope requests honestly
+    # Capability Detection + feasibility (Phase 2) — honest gate before generation
     _soft_note = ""
+    _detection_meta = {}
     try:
-        from telegram_bot_engine.services.feasibility_gate import check_feasibility
-        _feas = check_feasibility(request)
-        if not _feas.can_generate:
-            await message.reply_text(
-                rejection_message(_feas.reason, _feas.suggested_scope),
-            )
+        from telegram_bot_engine.services.capability_detection import telegram_preflight
+
+        _pre = telegram_preflight(request)
+        _rep = _pre.get("report")
+        if _rep is not None:
+            try:
+                from telegram_bot_engine.services.capability_detection import metadata_from_report
+                _detection_meta = metadata_from_report(_rep)
+            except Exception:
+                _detection_meta = {}
+        if _pre.get("should_block"):
+            await message.reply_text(_pre.get("user_message") or rejection_message("الطلب خارج النطاق", ""))
             return
-        _soft_note = ""
-        if _feas.blocked_features:
-            _soft_note = (
-                "\n⚠️ ملاحظة: بعض الأجزاء تحتاج ربط خارجي ولن تُفعَّل تلقائياً: "
-                + "، ".join(_feas.blocked_features[:4])
-            )
+        _soft_note = _pre.get("soft_note") or ""
+        if context.user_data is not None and _rep is not None:
+            try:
+                from telegram_bot_engine.services.capability_detection import feature_keys
+                context.user_data["detection_preferred_keys"] = feature_keys(_rep, include_core=True)
+                context.user_data["detection_meta"] = _detection_meta
+            except Exception:
+                pass
+        # Fallback: keep legacy blocked_features note if detection silent
+        if not _soft_note:
+            from telegram_bot_engine.services.feasibility_gate import check_feasibility
+            _feas = check_feasibility(request)
+            if not _feas.can_generate:
+                await message.reply_text(
+                    rejection_message(_feas.reason, _feas.suggested_scope),
+                )
+                return
+            if _feas.blocked_features:
+                _soft_note = (
+                    "\n⚠️ ملاحظة: بعض الأجزاء تحتاج ربط خارجي ولن تُفعَّل تلقائياً: "
+                    + "، ".join(_feas.blocked_features[:4])
+                )
     except Exception:
-        pass
+        try:
+            from telegram_bot_engine.services.feasibility_gate import check_feasibility
+            _feas = check_feasibility(request)
+            if not _feas.can_generate:
+                await message.reply_text(
+                    rejection_message(_feas.reason, _feas.suggested_scope),
+                )
+                return
+        except Exception:
+            pass
 
     # ── L3: ask adaptive questions before thin specs (e.g. «بوت متجر») ──
     # Skip if we just finished a clarify session this turn (prevents infinite loop)
@@ -1158,12 +1190,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
 
     try:
+        _pref_keys = None
+        if context.user_data is not None:
+            _pref_keys = context.user_data.get("detection_preferred_keys")
         result = await run_with_heartbeat(
             run_generation,
             request,
             work_dir,
             int(user.id) if user else 0,
             status_msg=status_msg,
+            preferred_keys=_pref_keys,
         )
 
         if result is None:
