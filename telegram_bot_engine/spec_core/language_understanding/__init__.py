@@ -13,6 +13,7 @@ from .engine import (
     understand,
 )
 from .entities import ExtractedEntities, extract_entities
+from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
 from .intent_analysis import (
     ASK_THRESHOLD,
     IntentAnalysis,
@@ -50,6 +51,9 @@ __all__ = [
     "DOMAIN_TO_PRESET",
     "ExtractedEntities",
     "extract_entities",
+    "BotBrief",
+    "ExplicitCommand",
+    "extract_bot_brief",
     "normalize_text",
     "tokenize",
     "light_stem_ar",

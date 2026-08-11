@@ -49,6 +49,17 @@ class ExtractedEntities:
     course_topic: str | None = None
     # devops / iot
     tech_stack: list[str] = field(default_factory=list)
+    # Stage-1 bot brief (strict generation inputs)
+    bot_name: str | None = None
+    bot_purpose: str | None = None
+    framework: str | None = None
+    menu_ids: list[str] = field(default_factory=list)
+    command_ids: list[str] = field(default_factory=list)
+    flows: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    features_requested: list[str] = field(default_factory=list)
+    strict_spec: bool = False
+    brief_confidence: float = 0.0
     # generic
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -76,8 +87,18 @@ class ExtractedEntities:
             "security_checks": list(self.security_checks),
             "course_topic": self.course_topic,
             "tech_stack": list(self.tech_stack),
+            "bot_name": self.bot_name,
+            "bot_purpose": self.bot_purpose,
+            "framework": self.framework,
+            "menu_ids": list(self.menu_ids),
+            "command_ids": list(self.command_ids),
+            "flows": list(self.flows),
+            "constraints": list(self.constraints),
+            "features_requested": list(self.features_requested),
+            "strict_spec": self.strict_spec,
+            "brief_confidence": self.brief_confidence,
         }
-        return {k: v for k, v in d.items() if v not in (None, [], False)}
+        return {k: v for k, v in d.items() if v not in (None, [], False, 0, 0.0)}
 
 
 def _to_float(s: str) -> float | None:
@@ -269,6 +290,25 @@ def extract_entities(text: str) -> ExtractedEntities:
         if any(k in low or k in raw for k in keys):
             if tech not in ent.tech_stack:
                 ent.tech_stack.append(tech)
+
+    # Stage-1: structured bot brief (name, menu, flows, strict mode)
+    try:
+        from .bot_spec_extract import extract_bot_brief
+
+        brief = extract_bot_brief(raw)
+        ent.bot_name = brief.bot_name
+        ent.bot_purpose = brief.purpose
+        ent.framework = brief.framework
+        ent.menu_ids = [c.id for c in brief.menu_items]
+        ent.command_ids = [c.id for c in brief.commands]
+        ent.flows = list(brief.flows)
+        ent.constraints = list(brief.constraints)
+        ent.features_requested = list(brief.features_requested)
+        ent.strict_spec = bool(brief.strict)
+        ent.brief_confidence = float(brief.confidence)
+        ent.raw["bot_brief"] = brief.to_dict()
+    except Exception:
+        pass
 
     return ent
 

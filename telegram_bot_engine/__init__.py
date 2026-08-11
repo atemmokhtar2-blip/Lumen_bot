@@ -218,6 +218,12 @@ def _run_intelligence_layers(
         "l2_language": getattr(intent, "language", None),
         "l2_complexity": getattr(intent, "complexity", None),
         "l2_feature_plan": list(getattr(intent, "feature_plan", None) or [])[:30],
+        "l1_bot_name": getattr(getattr(lu, "entities", None), "bot_name", None) if lu else None,
+        "l1_strict": bool(getattr(getattr(lu, "entities", None), "strict_spec", False)) if lu else False,
+        "l1_menu": list(getattr(getattr(lu, "entities", None), "menu_ids", None) or [])[:12] if lu else [],
+        "l1_flows": list(getattr(getattr(lu, "entities", None), "flows", None) or [])[:12] if lu else [],
+        "l1_features": list(getattr(getattr(lu, "entities", None), "features_requested", None) or [])[:20] if lu else [],
+        "l1_brief_confidence": getattr(getattr(lu, "entities", None), "brief_confidence", 0) if lu else 0,
         "l3_questions": [
             {"id": q.id, "slot": q.slot, "text": q.text[:120]}
             for q in (question_plan.questions if question_plan else [])[:6]
@@ -246,15 +252,51 @@ def _run_intelligence_layers(
 
 
 def _apply_layers_to_session(session, intel: dict) -> None:
-    """Mutate BuilderSession.selected using L2 plan + L5 suggestions + L6 filter."""
+    """Mutate BuilderSession.selected using L2 plan + L5 suggestions + L6 filter.
+
+    Stage-1 strict mode: if the user listed an explicit menu/commands, REPLACE
+    the selection with only extracted features (no invented extras).
+    """
     if session is None or not hasattr(session, "selected"):
         return
     from .spec_core.language_understanding import feature_filter_for_skill
     from .spec_core.registry import CAPABILITIES
 
+    lu = intel.get("lu")
+    ent = getattr(lu, "entities", None) if lu is not None else None
+    strict = bool(getattr(ent, "strict_spec", False)) if ent is not None else False
+    explicit_feats = list(getattr(ent, "features_requested", None) or []) if ent is not None else []
+
+    if strict and explicit_feats:
+        # Only what the user asked for (+ always start/help)
+        chosen: set[str] = set()
+        for feat in explicit_feats + ["start", "help", "lang"]:
+            if feat in CAPABILITIES:
+                chosen.add(feat)
+            # soft aliases if exact key missing
+            elif feat.replace("-", "_") in CAPABILITIES:
+                chosen.add(feat.replace("-", "_"))
+        if chosen:
+            session.selected = chosen
+            # bot name stamp
+            name = getattr(ent, "bot_name", None)
+            if name and hasattr(session, "set_name"):
+                try:
+                    session.set_name(str(name)[:40])
+                except Exception:
+                    pass
+            elif name and hasattr(session, "name"):
+                try:
+                    session.name = str(name)[:40]
+                except Exception:
+                    pass
+            return
+
     # L2 feature_plan first
     intent = intel.get("intent")
     plan = list(getattr(intent, "feature_plan", None) or [])
+    if explicit_feats:
+        plan = list(dict.fromkeys(explicit_feats + plan))
     for feat in plan:
         if feat in CAPABILITIES:
             try:
@@ -262,9 +304,9 @@ def _apply_layers_to_session(session, intel: dict) -> None:
             except Exception:
                 pass
 
-    # L5 high-confidence build suggestions
+    # L5 high-confidence build suggestions (skipped under strict)
     report = intel.get("suggestion_report")
-    if report is not None:
+    if report is not None and not strict:
         for s in list(report.build)[:10]:
             if getattr(s, "confidence", 0) >= 0.50 and getattr(s, "feature", None):
                 if s.feature in CAPABILITIES:
@@ -275,7 +317,7 @@ def _apply_layers_to_session(session, intel: dict) -> None:
 
     # L6 skill/domain density filter
     style = intel.get("style")
-    if style is not None:
+    if style is not None and not strict:
         try:
             filtered = feature_filter_for_skill(list(session.selected), style)
             session.selected = set(filtered)
