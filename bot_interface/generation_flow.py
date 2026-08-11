@@ -39,6 +39,46 @@ async def deliver_generation_result(
         summary_lines.append(f"• المسار: `{escape_md(project_path)}`")
     if meta.get("preset"):
         summary_lines.append(f"• preset: `{escape_md(meta.get('preset'))}`")
+    # Stage-4 smart narrative (personalized result)
+    try:
+        from telegram_bot_engine.spec_core.language_understanding.smart_generation import (
+            build_narrative,
+            format_result_addon,
+        )
+        from telegram_bot_engine.spec_core.language_understanding.personalization_engine import (
+            PersonalizationStyle,
+        )
+        layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
+        style = None
+        l6 = layers.get("l6_style") if isinstance(layers.get("l6_style"), dict) else None
+        if l6:
+            try:
+                style = PersonalizationStyle(
+                    skill_level=str(l6.get("skill_level") or "beginner"),
+                    language_variant=str(l6.get("language_variant") or "ar"),
+                    domain=str(l6.get("domain") or "general"),
+                )
+            except Exception:
+                style = None
+        bot_name = layers.get("l1_bot_name") or meta.get("preset") or "Bot"
+        feats = list(layers.get("l1_features") or layers.get("l2_feature_plan") or [])
+        nav = build_narrative(
+            request or "",
+            style=style,
+            intent_name=layers.get("l2_intent"),
+            features=feats,
+            learning=layers.get("l3_learning") if isinstance(layers.get("l3_learning"), dict) else None,
+            memory_snap=layers.get("l2_memory") if isinstance(layers.get("l2_memory"), dict) else None,
+            strict=bool(layers.get("l1_strict")),
+            bot_name=str(bot_name)[:40],
+            success=success,
+            feature_count=len(feats) or None,
+        )
+        addon = format_result_addon(nav)
+        if addon:
+            summary_lines.insert(1, addon)
+    except Exception:
+        logger.exception("stage4 narrative failed")
     # L1–L6 snapshot (so the user sees the intelligence path is active)
     layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
     if layers and not layers.get("layers_error"):

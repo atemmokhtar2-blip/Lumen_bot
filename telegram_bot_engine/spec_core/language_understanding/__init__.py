@@ -14,6 +14,12 @@ from .engine import (
 )
 from .entities import ExtractedEntities, extract_entities
 from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
+from .smart_generation import (
+    GenerationNarrative,
+    build_narrative,
+    status_text_for_style,
+    format_result_addon,
+)
 from .continuous_learning import (
     OutcomeSignal,
     SuccessRecipe,
@@ -91,6 +97,10 @@ __all__ = [
     "top_recipes",
     "apply_success_learning",
     "is_feedback_only",
+    "GenerationNarrative",
+    "build_narrative",
+    "status_text_for_style",
+    "format_result_addon",
     "normalize_text",
     "tokenize",
     "light_stem_ar",

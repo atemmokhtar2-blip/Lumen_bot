@@ -1068,10 +1068,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    status_msg = await message.reply_text(
-        "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
-        + (_soft_note or "")
-    )
+    # Stage-4: personalized status line
+    _status_line = "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
+    try:
+        from telegram_bot_engine.spec_core.language_understanding import (
+            understand,
+            analyze_intent,
+            personalize,
+            extract_entities,
+        )
+        from telegram_bot_engine.spec_core.language_understanding.smart_generation import (
+            build_narrative,
+        )
+        _lu4 = understand(request)
+        _intent4 = analyze_intent(request, lu=_lu4)
+        _style4 = personalize(
+            request, intent=_intent4, lu=_lu4, user_id=int(user.id) if user else None
+        )
+        _ent4 = getattr(_lu4, "entities", None)
+        _nav4 = build_narrative(
+            request,
+            style=_style4,
+            entities=_ent4,
+            intent_name=_intent4.primary.intent if _intent4 and _intent4.primary else None,
+            features=list(getattr(_ent4, "features_requested", None) or []),
+            strict=bool(getattr(_ent4, "strict_spec", False)) if _ent4 else False,
+            bot_name=getattr(_ent4, "bot_name", None) if _ent4 else None,
+        )
+        if _nav4.pre_summary:
+            await message.reply_text(_nav4.pre_summary[:1500])
+        _status_line = (_nav4.status_start or _status_line) + (_soft_note or "")
+    except Exception:
+        logger.exception("stage4 pre-summary failed")
+        _status_line = _status_line + (_soft_note or "")
+    status_msg = await message.reply_text(_status_line)
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
     # Isolated per-user workspace (never share host bot dir/token space)
