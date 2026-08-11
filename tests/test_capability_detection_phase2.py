@@ -65,3 +65,31 @@ def test_generate_bot_signature_accepts_preferred_keys():
     from telegram_bot_engine import generate_bot
     sig = inspect.signature(generate_bot)
     assert "preferred_keys" in sig.parameters
+
+
+def test_preferred_keys_emit_handlers():
+    import tempfile
+    from pathlib import Path
+    from telegram_bot_engine import generate_bot
+
+    with tempfile.TemporaryDirectory() as d:
+        result = generate_bot(
+            "بوت أوامر بسيط",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "welcome_set", "user_ban"],
+        )
+        assert result is not None and result.success
+        layers = (result.metadata or {}).get("layers") or {}
+        assert "welcome_set" in (layers.get("detection_preferred_keys") or [])
+        root = Path(result.project_path)
+        text = ""
+        for f in root.rglob("*.py"):
+            text += f.read_text(encoding="utf-8", errors="ignore")
+        assert "handle_welcome_set" in text or "welcome" in text.lower()
+        assert "handle_user_ban" in text or "ban" in text.lower()
+
+
+def test_preflight_blocks_nonsense():
+    pre = telegram_preflight("xyz random nonsense 12345")
+    assert pre["should_block"] is True

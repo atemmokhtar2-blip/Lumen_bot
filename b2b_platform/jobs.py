@@ -319,9 +319,37 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
     def handle_generate(job: Job) -> dict[str, Any]:
         from telegram_bot_engine import generate_bot
         from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+        from telegram_bot_engine.services.capability_detection import (
+            feature_keys,
+            telegram_preflight,
+        )
         from b2b_platform.metering import get_metering
 
         description = str(job.input.get("description") or "").strip()
+        # Phase 2: detection gate (same honesty as Telegram consumer)
+        pre = telegram_preflight(description)
+        report = pre.get("report")
+        if pre.get("should_block"):
+            return {
+                "ok": False,
+                "tenant_id": job.tenant_id,
+                "project_path": None,
+                "ready_for_token": False,
+                "verified_commands": [],
+                "anti_hallucination": {},
+                "errors": [pre.get("user_message") or "capability_blocked"],
+                "metadata": {
+                    "engine": "spec_core",
+                    "zero_ai": True,
+                    "blocked_by": "capability_detection",
+                    "capability_detection": {
+                        "status": getattr(getattr(report, "status", None), "value", None),
+                        "reason_ar": getattr(report, "reason_ar", None) if report else None,
+                    },
+                },
+            }
+
+        preferred = feature_keys(report, include_core=True) if report else None
         base = os.getenv("OUTPUT_DIR", "/tmp/generated")
         from api.security import stable_tenant_uid
 
@@ -329,13 +357,16 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
             stable_tenant_uid(job.tenant_id), base
         ).new_project_dir(label="api")
         runner.store.update(job.job_id, progress=0.15, message="generating")
-        result = generate_bot(description, str(work))
+        result = generate_bot(
+            description, str(work), preferred_keys=preferred
+        )
         success = bool(getattr(result, "success", False))
         meta = getattr(result, "metadata", None) or {}
         project_path = getattr(result, "project_path", None)
         errors = list(getattr(result, "errors", None) or [])
         get_metering().record(job.tenant_id, event="generate_completed")
         runner.store.update(job.job_id, progress=0.9, message="finalizing")
+        layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
         return {
             "ok": success,
             "tenant_id": job.tenant_id,
@@ -349,6 +380,9 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
                 "preset": meta.get("preset"),
                 "zero_ai": True,
                 "elapsed_ms": meta.get("elapsed_ms"),
+                "capability_detection": layers.get("capability_detection")
+                or (meta.get("capability_detection")),
+                "soft_note": pre.get("soft_note") or "",
             },
         }
 

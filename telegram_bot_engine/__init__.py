@@ -643,19 +643,58 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 }
             }
 
-        # Do not override strict user-locked menus
-        if keys and not (strict and explicit_feats):
+        # Apply detection keys to the session/spec that will be built.
+        # - preferred_keys from caller (Telegram/API Phase-2): always merge (authoritative)
+        # - auto-detected only: merge unless strict user menu already locked features
+        apply_keys = bool(keys) and (
+            bool(preferred_keys) or not (strict and explicit_feats)
+        )
+        if apply_keys:
             sess = locals().get("session")
+            if sess is None or not hasattr(sess, "selected"):
+                try:
+                    sess = compose_session(
+                        ["echo_basic"], user_id=user_id, request=request
+                    )
+                except Exception:
+                    sess = None
             if sess is not None and hasattr(sess, "selected"):
-                for k in keys:
-                    try:
-                        sess.selected.add(k)
-                    except Exception:
-                        pass
+                # When preferred_keys provided under strict, rebuild selection from
+                # strict locked set UNION detection keys (never drop user menu)
+                if preferred_keys and strict and explicit_feats:
+                    base = set(sess.selected) if sess.selected else {"start", "help"}
+                    for k in list(explicit_feats) + list(keys) + ["start", "help", "lang"]:
+                        if isinstance(k, str) and k in _CAPS_DET:
+                            base.add(k)
+                    sess.selected = base
+                else:
+                    for k in keys:
+                        if k in _CAPS_DET:
+                            try:
+                                sess.selected.add(k)
+                            except Exception:
+                                pass
+                    if preferred_keys:
+                        for k in preferred_keys:
+                            if isinstance(k, str) and k in _CAPS_DET:
+                                try:
+                                    sess.selected.add(k)
+                                except Exception:
+                                    pass
                 if hasattr(sess, "to_spec"):
                     spec = sess.to_spec()
                     _stamp_style_on_spec(spec, style)
+                    tag = (
+                        f"detect:{'+'.join(k for k in keys if k not in {'start','help'})[:5] or 'core'}"
+                    )
             layers_meta["detection_preferred_keys"] = [
+                k for k in keys if k not in {"start", "help"}
+            ]
+            if detection_meta:
+                layers_meta.update(detection_meta)
+        elif keys:
+            # Record what detection wanted even if not applied (strict path)
+            layers_meta["detection_preferred_keys_skipped_strict"] = [
                 k for k in keys if k not in {"start", "help"}
             ]
             if detection_meta:

@@ -104,6 +104,30 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             "report": report,
         }
 
+    # Weak / nonsense: only trivial utils with no bot intent → block
+    _WEAK = {"random_pick", "echo", "time_now", "calc", "uuid_gen", "password_gen", "qr_text", "short_note", "stats_basic"}
+    _req = (request or "").lower()
+    _bot_intent = any(
+        w in _req
+        for w in (
+            "بوت", "bot", "أمر", "اوامر", "أوامر", "ترحيب", "متجر", "سلة",
+            "تذكرة", "نقاط", "مسابقة", "حجز", "اشتراك", "جروب", "مجموعة",
+            "welcome", "shop", "cart", "ticket", "start",
+        )
+    )
+    if feats and set(feats).issubset(_WEAK) and not _bot_intent and report.confidence < 0.7:
+        from bot_interface.capability_boundaries import rejection_message
+        msg = rejection_message(
+            "الوصف غير واضح كطلب بوت — لم يُرصد قصد منتج واضح",
+            "اكتب مثلاً: بوت ترحيب للمجموعة / بوت متجر فيه سلة / بوت تذاكر دعم",
+        )
+        return {
+            "should_block": True,
+            "user_message": msg,
+            "soft_note": "",
+            "report": report,
+        }
+
     soft_parts: list[str] = []
     if report.status == DetectionStatus.GAP and feats:
         soft_parts.append(
