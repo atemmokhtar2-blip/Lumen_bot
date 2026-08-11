@@ -262,30 +262,25 @@ def _run_intelligence_layers(
                         ent.features_requested = merged3
                     except Exception:
                         pass
-                    # Stage-5: prefer/avoid features from global performance
+                    # Stage-5 closed-loop: global + per-user prefer/avoid
                     try:
                         from .spec_core.language_understanding.evaluation_layer import (
-                            recommend_generation_tweaks,
+                            apply_eval_to_features,
                         )
-                        tweaks = recommend_generation_tweaks(
-                            int(user_id) if user_id else None,
-                            memory=memory_engine,
-                        )
-                        if ent is not None and not getattr(ent, "strict_spec", False):
+                        if ent is not None:
                             feats = list(getattr(ent, "features_requested", None) or [])
-                            for f in tweaks.get("prefer_features") or []:
-                                if f not in feats:
-                                    feats.append(f)
-                            avoid = set(tweaks.get("avoid_features") or [])
-                            if avoid:
-                                feats = [f for f in feats if f not in avoid or f in {"start", "help", "lang"}]
-                            ent.features_requested = list(dict.fromkeys(feats))
-                        if isinstance(getattr(ent, "raw", None), dict):
-                            ent.raw["l5_tweaks"] = tweaks
-                        elif ent is not None:
+                            strict5 = bool(getattr(ent, "strict_spec", False))
+                            new_feats, ev_meta = apply_eval_to_features(
+                                feats,
+                                int(user_id) if user_id else None,
+                                strict=strict5,
+                                memory=memory_engine,
+                            )
+                            ent.features_requested = new_feats
+                            raw = dict(getattr(ent, "raw", None) or {})
+                            raw["l5_tweaks"] = ev_meta
                             try:
-                                ent.raw = dict(getattr(ent, "raw", None) or {})
-                                ent.raw["l5_tweaks"] = tweaks
+                                ent.raw = raw
                             except Exception:
                                 pass
                     except Exception:
@@ -644,6 +639,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     # Stage-5: record outcome for analytics / A/B
     try:
         from .spec_core.language_understanding.evaluation_layer import record_generation_outcome
+        from .spec_core.language_understanding.memory_engine import get_memory_engine as _gme5
         record_generation_outcome(
             int(user_id) if user_id else 0,
             success=bool(getattr(result, "ok", False)),
@@ -653,7 +649,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             preset=str(tag),
             ab_variant=str(layers_meta.get("ab_variant") or ""),
             elapsed_ms=meta.get("elapsed_ms"),
-            memory=memory_engine,
+            memory=memory_engine or _gme5(),
         )
     except Exception:
         pass

@@ -452,6 +452,98 @@ def build_performance_report(
     return report
 
 
+def user_feature_stats(
+    user_id: int,
+    *,
+    memory: MemoryEngine | None = None,
+    window_hours: float = 168.0,
+) -> dict[str, Any]:
+    """Per-user feature success from their own bots_built."""
+    mem = memory or get_memory_engine()
+    if not user_id:
+        return {"prefer": [], "avoid": [], "bots": 0, "success_rate": 0.0}
+    cutoff = time.time() - float(window_hours) * 3600.0
+    feat_ok: dict[str, int] = {}
+    feat_n: dict[str, int] = {}
+    bots = 0
+    ok_bots = 0
+    try:
+        with mem._conn() as conn:
+            rows = conn.execute(
+                "SELECT features_json, success, created_at FROM bots_built "
+                "WHERE user_id=? AND created_at>=? ORDER BY created_at DESC LIMIT 100",
+                (int(user_id), cutoff),
+            ).fetchall()
+            for r in rows:
+                bots += 1
+                if r["success"]:
+                    ok_bots += 1
+                try:
+                    feats = json.loads(r["features_json"] or "[]")
+                except Exception:
+                    feats = []
+                for f in feats:
+                    if not isinstance(f, str) or f in {"start", "help", "lang"}:
+                        continue
+                    feat_n[f] = feat_n.get(f, 0) + 1
+                    feat_ok[f] = feat_ok.get(f, 0) + (1 if r["success"] else 0)
+    except Exception:
+        pass
+    prefer, avoid = [], []
+    for f, n in feat_n.items():
+        rate = feat_ok.get(f, 0) / n if n else 0.0
+        if n >= 1 and rate >= 0.67:
+            prefer.append(f)
+        if n >= 1 and rate <= 0.34:
+            avoid.append(f)
+    return {
+        "prefer": prefer[:10],
+        "avoid": avoid[:10],
+        "bots": bots,
+        "success_rate": (ok_bots / bots) if bots else 0.0,
+    }
+
+
+def apply_eval_to_features(
+    features: list[str],
+    user_id: int | None,
+    *,
+    strict: bool = False,
+    memory: MemoryEngine | None = None,
+) -> tuple[list[str], dict[str, Any]]:
+    """Closed-loop: merge global + user prefer/avoid into feature list.
+
+    strict: only DROP user/global avoid for non-core experimental features.
+    non-strict: also ADD prefers.
+    """
+    core = {"start", "help", "lang", "shop_catalog", "order_track", "pay_methods", "ticket_open", "faq_list"}
+    out = list(dict.fromkeys(features or []))
+    tw = recommend_generation_tweaks(user_id, memory=memory)
+    user = user_feature_stats(int(user_id), memory=memory) if user_id else {"prefer": [], "avoid": []}
+    avoid = set(tw.get("avoid_features") or []) | set(user.get("avoid") or [])
+    prefer = list(dict.fromkeys(list(tw.get("prefer_features") or []) + list(user.get("prefer") or [])))
+
+    dropped = [f for f in out if f in avoid and f not in core]
+    out = [f for f in out if f not in set(dropped)]
+    added = []
+    if not strict:
+        for f in prefer:
+            if f not in out:
+                out.append(f)
+                added.append(f)
+            if len(added) >= 5:
+                break
+    meta = {
+        "dropped": dropped[:10],
+        "added": added[:10],
+        "user_success_rate": user.get("success_rate"),
+        "ab_winner": tw.get("ab_winner"),
+        "prefer": prefer[:8],
+        "avoid": list(avoid)[:8],
+    }
+    return list(dict.fromkeys(out)), meta
+
+
 def recommend_generation_tweaks(
     user_id: int | None = None,
     *,
@@ -503,4 +595,5 @@ __all__ = [
     "build_performance_report",
     "is_eval_command",
     "recommend_generation_tweaks",
+    "user_feature_stats",
 ]

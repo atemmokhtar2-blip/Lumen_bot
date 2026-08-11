@@ -23,6 +23,7 @@ from .evaluation_layer import (
     build_performance_report,
     is_eval_command,
     recommend_generation_tweaks,
+    apply_eval_to_features,
 )
 from .smart_generation import (
     GenerationNarrative,
@@ -119,6 +120,8 @@ __all__ = [
     "build_performance_report",
     "is_eval_command",
     "recommend_generation_tweaks",
+    "user_feature_stats",
+    "apply_eval_to_features",
     "normalize_text",
     "tokenize",
     "light_stem_ar",

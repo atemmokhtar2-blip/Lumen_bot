@@ -111,6 +111,34 @@ async def deliver_generation_result(
         for e in errors[:8]:
             summary_lines.append(f"  – {escape_md(e)}")
 
+    # Stage-5 mini closed-loop metrics for this user
+    try:
+        from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+            user_feature_stats,
+            assign_ab_variant,
+        )
+        uid = int(user.id) if user else 0
+        if uid:
+            ust = user_feature_stats(uid)
+            ab = assign_ab_variant(uid)
+            if ust.get("bots"):
+                summary_lines.append(
+                    f"• تقييمك: نجاح {float(ust.get('success_rate') or 0)*100:.0f}% "
+                    f"من {ust.get('bots')} بوت · A/B=`{ab.variant}`"
+                )
+            else:
+                summary_lines.append(f"• A/B=`{ab.variant}` · أول بوت ليك — التقييم هيتحسّن بعد كام تجربة")
+            tw = (layers if isinstance(layers, dict) else {}).get("l5_tweaks") or meta.get("layers", {}).get("l5_tweaks") if isinstance(meta.get("layers"), dict) else None
+            # also from narrative path entities not available - use recommend
+            from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import recommend_generation_tweaks
+            tw = recommend_generation_tweaks(uid)
+            if tw.get("avoid_features"):
+                summary_lines.append("• هنتجنب: " + ", ".join(tw["avoid_features"][:4]))
+            if tw.get("prefer_features"):
+                summary_lines.append("• مُفضّل عالميًا: " + ", ".join(tw["prefer_features"][:4]))
+    except Exception:
+        logger.exception("stage5 mini metrics failed")
+
     try:
         await status_msg.edit_text(
             "\n".join(summary_lines)[:GENERATION_STATUS_PREVIEW_LIMIT]

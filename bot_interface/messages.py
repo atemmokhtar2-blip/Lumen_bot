@@ -191,64 +191,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 n_feats = len(feats) if isinstance(feats, list) else 0
             except Exception:
                 pass
-            if sig.kind == "positive" or sig.kind == "complete":
-                await message.reply_text(
-                    f"شكرًا ✅ (+{sig.score_delta})\n"
-                    f"اتقوّت وصفة «{bot_name}» ({n_feats} ميزة) للتوليدات الجاية."
+            loop_note = ""
+            try:
+                from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+                    apply_eval_to_features,
+                    user_feature_stats,
                 )
-            elif sig.kind == "negative":
-                await message.reply_text(
-                    f"تم 📝 ({sig.score_delta})\n"
-                    f"ميزات «{bot_name}» هتتتجنب أو تتضعف في المرات الجاية."
-                )
-            return
-    except Exception:
-        logger.exception("stage3 feedback learn failed")
-
-    # ── Stage-2: learn from explicit corrections ─────────────────────────
-    try:
-        from telegram_bot_engine.spec_core.language_understanding import (
-            is_correction_utterance,
-            parse_correction,
-            get_memory_engine,
-        )
-        if uid and is_correction_utterance(request):
-            corr = parse_correction(request)
-            if corr:
-                mem = get_memory_engine()
-                mem.record_correction(
+                ust = user_feature_stats(int(uid))
+                _feats, meta5 = apply_eval_to_features(
+                    list((last or {}).get("features") or []) if isinstance((last or {}).get("features"), list) else [],
                     int(uid),
-                    rejected=corr.get("rejected") or "",
-                    preferred=corr.get("preferred") or "",
-                    context=request[:200],
+                    strict=False,
                 )
-                # Apply immediately to durable user slots when payment/feature known
+                if meta5.get("dropped"):
+                    loop_note += "\n⏭️ التوليد الجاي هيتجنب: " + ", ".join(meta5["dropped"][:5])
+                if meta5.get("prefer"):
+                    loop_note += "\n⭐ هيتفضّل: " + ", ".join(list(meta5["prefer"])[:5])
+                loop_note += f"\n📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
+            except Exception:
+                pass
+            if sig.kind == "positive" or sig.kind == "complete":
+                loop_lines = []
                 try:
-                    from telegram_bot_engine.spec_core.language_understanding.learning_layer import (
-                        _match_pay,
-                        _match_feature,
+                    from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+                        user_feature_stats,
+                        recommend_generation_tweaks,
                     )
-                    pref = corr.get("preferred") or ""
-                    rej = corr.get("rejected") or ""
-                    if _match_pay(pref):
-                        mem.set_durable_slot(int(uid), "preferred_payment", _match_pay(pref))
-                    if _match_pay(rej):
-                        mem.set_durable_slot(int(uid), "rejected_payment", _match_pay(rej))
-                    if _match_feature(pref):
-                        mem.set_durable_slot(int(uid), "preferred_feature", _match_feature(pref))
+                    ust = user_feature_stats(int(uid))
+                    tw = recommend_generation_tweaks(int(uid))
+                    loop_lines.append(
+                        f"📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
+                    )
+                    if tw.get("prefer_features"):
+                        loop_lines.append("⭐ مُفضّل: " + ", ".join(tw["prefer_features"][:4]))
                 except Exception:
                     pass
-                pref_show = (corr.get("preferred") or "").strip()
-                rej_show = (corr.get("rejected") or "").strip()
-                msg = "تم تسجيل التصحيح ✅ — هيتطبّق على التوليد الجاي"
-                if rej_show or pref_show:
-                    msg += f"\n❌ {rej_show or '—'} → ✅ {pref_show or '—'}"
+                msg = (
+                    f"شكرًا ✅ (+{sig.score_delta})" + chr(10)
+                    + f"اتقوّت وصفة «{bot_name}» ({n_feats} ميزة) للتوليدات الجاية."
+                )
+                if loop_lines:
+                    msg += chr(10) + chr(10).join(loop_lines)
                 await message.reply_text(msg)
-                # If message is ONLY a correction (short), stop here
-                if len(request.split()) <= 12 and not any(
-                    k in request for k in ("بوت", "bot", "اعمل", "سوّي", "سوي", "generate")
-                ):
-                    return
+            elif sig.kind == "negative":
+                loop_lines = []
+                try:
+                    from telegram_bot_engine.spec_core.language_understanding.evaluation_layer import (
+                        user_feature_stats,
+                        recommend_generation_tweaks,
+                    )
+                    ust = user_feature_stats(int(uid))
+                    tw = recommend_generation_tweaks(int(uid))
+                    loop_lines.append(
+                        f"📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
+                    )
+                    if tw.get("avoid_features"):
+                        loop_lines.append("⏭️ الجاي هيتجنب: " + ", ".join(tw["avoid_features"][:4]))
+                except Exception:
+                    pass
+                msg = (
+                    f"تم 📝 ({sig.score_delta})" + chr(10)
+                    + f"ميزات «{bot_name}» هتتضعف في المرات الجاية."
+                )
+                if loop_lines:
+                    msg += chr(10) + chr(10).join(loop_lines)
+                await message.reply_text(msg)
+            return
     except Exception:
         logger.exception("stage2 correction learn failed")
 

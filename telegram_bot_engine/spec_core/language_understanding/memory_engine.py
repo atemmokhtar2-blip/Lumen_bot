@@ -28,9 +28,16 @@ from .intent_analysis import IntentAnalysis
 
 
 def _default_db_path() -> Path:
-    root = Path(os.getenv("OUTPUT_DIR") or "/tmp/generated")
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "memory_engine.sqlite3"
+    # Prefer explicit MEMORY_DB_PATH, then durable data dir under OUTPUT_DIR, else cwd/data
+    env = (os.getenv("MEMORY_DB_PATH") or "").strip()
+    if env:
+        path = Path(env)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    out = (os.getenv("OUTPUT_DIR") or "").strip()
+    base = (Path(out) / "data") if out else (Path.cwd() / "data")
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "memory_engine.sqlite3"
 
 
 def _now() -> float:
