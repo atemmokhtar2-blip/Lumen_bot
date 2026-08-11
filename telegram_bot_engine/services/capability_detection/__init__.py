@@ -40,6 +40,7 @@ from .packs import (
     resolve_gap_with_pack,
     validate_pack,
 )
+from .web_research import ResearchHit, ResearchResult, research_feature, research_open_gaps
 from .research_spec import (
     ResearchSpec,
     list_research_specs,
@@ -103,4 +104,8 @@ __all__ = [
     "load_research_spec",
     "list_research_specs",
     "research_spec_from_gap",
+    "ResearchHit",
+    "ResearchResult",
+    "research_feature",
+    "research_open_gaps",
 ]
