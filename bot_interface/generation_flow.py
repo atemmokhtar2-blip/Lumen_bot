@@ -74,9 +74,19 @@ async def deliver_generation_result(
             success=success,
             feature_count=len(feats) or None,
         )
-        addon = format_result_addon(nav)
+        baked = meta.get("narrative") if isinstance(meta.get("narrative"), dict) else None
+        if baked and baked.get("result_header"):
+            addon = (baked.get("result_header") or "") + chr(10) + (baked.get("result_body") or "")
+            notes = baked.get("adaptation_notes") or []
+            if notes:
+                addon += chr(10) + "📌 " + " · ".join(str(x) for x in list(notes)[:4])
+        else:
+            addon = format_result_addon(nav)
         if addon:
-            summary_lines.insert(1, addon)
+            summary_lines.insert(1, addon.strip())
+            menu = list((baked or {}).get("menu_preview") or getattr(nav, "menu_preview", None) or [])[:6]
+            if menu:
+                summary_lines.insert(2, "القائمة:" + chr(10) + chr(10).join(menu))
     except Exception:
         logger.exception("stage4 narrative failed")
     # L1–L6 snapshot (so the user sees the intelligence path is active)

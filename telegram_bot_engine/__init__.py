@@ -401,26 +401,36 @@ def _apply_layers_to_session(session, intel: dict) -> None:
 
 
 def _stamp_style_on_spec(spec, style) -> None:
-    """Apply L6 language + description stamp onto BotSpec."""
+    """Apply L6 + Stage-4 adaptive description onto BotSpec (drives /start tone)."""
     if style is None or spec is None:
         return
     try:
         from .spec_core.language_understanding import style_prompt_ar, phrase
 
         stamp = style_prompt_ar(style)
+        welcome = phrase("welcome", style, with_emoji=True)
+        skill = getattr(style, "skill_level", "beginner") or "beginner"
+        domain = getattr(style, "domain", "") or ""
         if hasattr(spec, "bot") and hasattr(spec.bot, "description"):
             base = (spec.bot.description or "").strip()
-            # Keep generated bot description user-facing + style summary
-            welcome = phrase("welcome", style, with_emoji=True)
-            spec.bot.description = (f"{welcome}\n{base}\n{stamp}").strip()[:600]
+            if skill == "beginner":
+                tip = "اكتب /help لو احتجت قائمة الأوامر."
+            elif skill == "expert":
+                tip = f"domain={domain} · skill=expert · /help for full map."
+            else:
+                tip = "استخدم الأزرار أو /help."
+            parts = [welcome, base, tip, stamp]
+            spec.bot.description = chr(10).join(p for p in parts if p).strip()[:700]
         if hasattr(spec, "bot") and hasattr(spec.bot, "language"):
-            lang = style.language_variant
-            if lang.startswith("ar"):
+            if getattr(style, "prefer_arabic", True) or str(
+                getattr(style, "language_variant", "")
+            ).startswith("ar"):
                 spec.bot.language = "ar"
-            elif lang == "en":
+            elif str(getattr(style, "language_variant", "")).startswith("en"):
                 spec.bot.language = "en"
     except Exception:
         pass
+
 
 
 def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *, force: bool = False):
@@ -547,6 +557,37 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
+    # Stage-4: bake narrative into metadata for delivery
+    try:
+        from .spec_core.language_understanding.smart_generation import build_narrative
+        _ent = getattr(lu, "entities", None) if lu is not None else None
+        _feats = list(layers_meta.get("l1_features") or layers_meta.get("l2_feature_plan") or [])
+        if hasattr(spec, "features") and spec.features:
+            _feats = list(dict.fromkeys(
+                _feats + [getattr(f, "feature", None) or getattr(f, "id", None) for f in spec.features]
+            ))
+            _feats = [str(x) for x in _feats if x]
+        _nav = build_narrative(
+            request or "",
+            style=style,
+            entities=_ent,
+            intent_name=layers_meta.get("l2_intent"),
+            features=_feats,
+            learning=layers_meta.get("l3_learning") if isinstance(layers_meta.get("l3_learning"), dict) else None,
+            memory_snap=layers_meta.get("l2_memory") if isinstance(layers_meta.get("l2_memory"), dict) else None,
+            strict=bool(layers_meta.get("l1_strict")),
+            bot_name=str(
+                layers_meta.get("l1_bot_name")
+                or getattr(getattr(spec, "bot", None), "name", None)
+                or tag
+            )[:40],
+            success=True,
+            feature_count=len(_feats),
+        )
+        layers_meta["l4_narrative"] = _nav.to_dict()
+    except Exception:
+        pass
+
     meta = {
         "engine": "spec_core",
         "preset": tag,
@@ -556,6 +597,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         "quality": "market_pack_v2",
         "layers": layers_meta,
         "user_id": int(user_id) if user_id else None,
+        "narrative": layers_meta.get("l4_narrative"),
     }
     # L4: persist successful build
     if memory_engine is not None and user_id and result.ok:

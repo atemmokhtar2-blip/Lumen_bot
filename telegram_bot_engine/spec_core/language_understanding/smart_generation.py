@@ -43,7 +43,10 @@ class GenerationNarrative:
 def _ar(style: PersonalizationStyle | None) -> bool:
     if style is None:
         return True
-    return not str(getattr(style, "language_variant", "ar") or "ar").startswith("en")
+    if bool(getattr(style, "prefer_arabic", True)):
+        return True
+    lv = str(getattr(style, "language_variant", "ar") or "ar").lower()
+    return not lv.startswith("en")
 
 
 def _skill(style: PersonalizationStyle | None) -> str:
@@ -145,25 +148,39 @@ def build_narrative(
     nav.menu_preview = _menu_preview(brief, feats, ar)
 
     # ── Pre-summary (understanding) ──────────────────────────────
+    domain = str(getattr(style, "domain", "") or intent_name or "") if style else (intent_name or "")
+    tone = str(getattr(style, "tone", "") or "") if style else ""
+    pays = list(getattr(entities, "payment_methods", None) or []) if entities is not None else []
+
     if ar:
         if skill == "beginner":
-            nav.pre_summary = (
-                f"{em} تمام، هبنيلك «{name}» بشكل بسيط وواضح"
-            )
+            nav.pre_summary = f"{em} تمام، هبنيلك «{name}» بشكل بسيط وواضح"
         elif skill == "expert":
             nav.pre_summary = (
-                f"{em} فهمت المطلوب — «{name}»"
-                + (f" · intent={intent_name}" if intent_name else "")
-                + (f" · strict={is_strict}" if is_strict else "")
+                f"{em} Spec ready — «{name}»"
+                + (f" · {intent_name}" if intent_name else "")
+                + (f" · domain={domain}" if domain else "")
+                + (" · strict" if is_strict else "")
+                + f" · n={n}"
             )
         else:
             nav.pre_summary = f"{em} جاري تجهيز «{name}» حسب وصفك"
+        if domain and skill != "expert":
+            nav.pre_summary += f"\nالمجال: {domain}" + (f" · نبرة {tone}" if tone else "")
+        if pays:
+            nav.pre_summary += "\nالدفع: " + "، ".join(str(p) for p in pays[:4])
         if nav.menu_preview:
-            nav.pre_summary += "\nالقائمة:\n" + "\n".join(nav.menu_preview[:6])
+            nav.pre_summary += "\nالقائمة اللي هتظهر في /start:\n" + "\n".join(nav.menu_preview[:6])
         if is_strict:
-            nav.pre_summary += "\n🔒 وضع صارم: الأوامر دي بس، من غير زيادة."
+            nav.pre_summary += "\n🔒 وضع صارم: الأوامر دي بس — مش هزوّد سلة ولا نقاط من عندي."
+        elif skill == "beginner":
+            nav.pre_summary += "\nهخلي الأوامر قليلة وواضحة."
+        elif skill == "expert":
+            nav.pre_summary += "\nوضع خبير: كثافة أوامر أعلى لو الوصف يسمح."
     else:
         nav.pre_summary = f"{em} Building «{name}» from your brief"
+        if domain:
+            nav.pre_summary += f"\nDomain: {domain}"
         if is_strict:
             nav.pre_summary += "\n🔒 Strict: only the features you listed."
         if nav.menu_preview:
@@ -175,7 +192,7 @@ def build_narrative(
             "beginner": f"⏳ لحظة… بجهّز «{name}»",
             "intermediate": f"⏳ توليد «{name}» ({n} ميزة)…",
             "expert": f"⏳ spec→code «{name}» n={n} strict={is_strict}",
-        }.get(skill, f"⏳ جاري التوليد…")
+        }.get(skill, "⏳ جاري التوليد…")
         nav.status_done = {
             "beginner": f"✅ «{name}» جاهز!",
             "intermediate": f"✅ تم توليد «{name}» — {n} أوامر",
