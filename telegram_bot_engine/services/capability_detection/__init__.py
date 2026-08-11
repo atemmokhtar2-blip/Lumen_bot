@@ -15,6 +15,7 @@ from .integration import (
 )
 from .models import DetectionReport, DetectionStatus, GapItem, MatchedCapability
 from .search import nearest_keys_for_phrase, search_by_category, search_capabilities
+from .synthesis import SynthesisPlan, synthesize_from_keys, synthesize_from_report, synthesize_for_request
 
 __all__ = [
     "DetectionStatus",
@@ -32,4 +33,8 @@ __all__ = [
     "apply_detection_to_session",
     "telegram_preflight",
     "metadata_from_report",
+    "SynthesisPlan",
+    "synthesize_from_keys",
+    "synthesize_from_report",
+    "synthesize_for_request",
 ]

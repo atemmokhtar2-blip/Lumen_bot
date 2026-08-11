@@ -15,8 +15,21 @@ def run_detection(request: str) -> DetectionReport:
     return detect_capabilities(request or "")
 
 
-def feature_keys(report: DetectionReport, *, include_core: bool = True) -> list[str]:
-    """Matched registry keys suitable for session.selected."""
+def feature_keys(report: DetectionReport, *, include_core: bool = True, synthesize: bool = True) -> list[str]:
+    """Matched registry keys suitable for session.selected.
+
+    When synthesize=True (default), expands dependencies via Template Synthesis.
+    """
+    if synthesize:
+        try:
+            from .synthesis import synthesize_from_report
+            plan = synthesize_from_report(report)
+            keys = list(plan.keys)
+            if not include_core:
+                keys = [k for k in keys if k not in {"start", "help"}]
+            return keys
+        except Exception:
+            pass
     keys: list[str] = []
     seen: set[str] = set()
     for m in report.matched:
@@ -154,11 +167,18 @@ def telegram_preflight(request: str) -> dict[str, Any]:
 
 
 def metadata_from_report(report: DetectionReport) -> dict[str, Any]:
+    synthesis = None
+    try:
+        from .synthesis import synthesize_from_report
+        synthesis = synthesize_from_report(report).to_dict()
+    except Exception:
+        synthesis = None
     return {
         "capability_detection": {
             "status": report.status.value,
             "confidence": report.confidence,
-            "matched_keys": feature_keys(report, include_core=False),
+            "matched_keys": feature_keys(report, include_core=False, synthesize=False),
+            "synthesized_keys": feature_keys(report, include_core=False, synthesize=True),
             "categories": list(report.categories_covered),
             "gaps": [
                 {"phrase": g.phrase, "reason": g.reason, "suggested": g.suggested_keys[:5]}
@@ -166,6 +186,7 @@ def metadata_from_report(report: DetectionReport) -> dict[str, Any]:
             ],
             "can_generate": report.can_generate,
             "reason_ar": report.reason_ar,
+            "synthesis": synthesis,
         }
     }
 
