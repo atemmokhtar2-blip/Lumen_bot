@@ -515,6 +515,74 @@ _DELETE_M = frozenset({
 })
 
 
+
+# ----- Phase 8 scaffolds (deterministic; configure via env in production) -----
+
+def translate_text(user_id: int, text: str = "") -> str:
+    """Scaffold: acknowledges translation request; real API wired via env later."""
+    ensure()
+    text = (text or "").strip()
+    if not text:
+        return (
+            "أرسل نصاً للترجمة بعد الأمر.\n"
+            "Translate scaffold ready. Set TRANSLATOR_BACKEND=deep-translator|libre later."
+        )
+    iid = _insert("translate", int(user_id), "translate", text, "open", {"scaffold": True})
+    preview = text if len(text) <= 120 else text[:117] + "..."
+    return (
+        f"#{iid} ترجمة (scaffold)\n"
+        f"النص: {preview}\n"
+        "الوضع: محاكاة — فعّل مكتبة ترجمة في البيئة لاحقاً (deep-translator / LibreTranslate)."
+    )
+
+
+def ocr_hint(user_id: int, text: str = "") -> str:
+    """Scaffold: instructs user to send a photo; records intent."""
+    ensure()
+    iid = _insert("ocr", int(user_id), "ocr_hint", text or "photo", "open", {"scaffold": True})
+    return (
+        f"#{iid} OCR (scaffold)\n"
+        "أرسل صورة نصية في الرسالة التالية.\n"
+        "يتطلب pytesseract + Tesseract binary عند التفعيل الكامل."
+    )
+
+
+def schedule_note(user_id: int, text: str = "") -> str:
+    """Scaffold: stores a scheduled note row (no background worker guaranteed)."""
+    ensure()
+    text = (text or "").strip()
+    if not text:
+        return "الاستخدام: /schedule غداً 10:00 تذكير الاجتماع"
+    iid = _insert("scheduler", int(user_id), "schedule_note", text, "open", {"scaffold": True})
+    return (
+        f"#{iid} جدولة (scaffold)\n"
+        f"المحتوى: {text[:200]}\n"
+        "ملاحظة: التخزين تم — شغّل JobQueue/APScheduler في النشر لتفعيل التنفيذ."
+    )
+
+
+def job_list(user_id: int, text: str = "") -> str:
+    ensure()
+    rows = _list("scheduler", user_id=int(user_id), status="open", limit=20)
+    return _fmt(rows, "لا توجد تذكيرات مجدولة")
+
+
+def job_cancel(user_id: int, text: str = "") -> str:
+    ensure()
+    iid = _first_id(text or "")
+    if not iid:
+        return "حدد رقم التذكير: /job_cancel 3"
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE domain_items SET status='closed', updated_at=? WHERE id=? AND service='scheduler' AND user_id=?",
+            (_now(), iid, int(user_id)),
+        )
+        conn.commit()
+        n = int(cur.rowcount)
+    return f"تم إلغاء #{iid}" if n else "غير موجود"
+
+
+
 def act(service: str, method: str, user_id: int, text: str = "") -> str:
     """Execute any capability with durable SQLite side-effects.
 
@@ -527,6 +595,19 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
     method = (method or "run").strip()[:40]
     text = (text or "").strip()[:2000]
     m, svc, uid = method.lower(), service.lower(), int(user_id)
+
+
+    # Phase 8 specialized scaffolds
+    if m in {"translate", "translate_text"} or (svc in {"translate", "utils", "content"} and m == "translate"):
+        return translate_text(uid, text)
+    if m in {"ocr_image", "ocr_hint", "ocr"} or (svc == "ocr" and m in {"image", "hint", "run"}):
+        return ocr_hint(uid, text)
+    if m in {"schedule_note", "schedule"} or (svc in {"scheduler", "reminders"} and m in {"schedule_note", "schedule", "remind"}):
+        return schedule_note(uid, text)
+    if m in {"job_list", "list_jobs"} or (svc == "scheduler" and m in {"list", "job_list"}):
+        return job_list(uid, text)
+    if m in {"job_cancel", "cancel_job"} or (svc == "scheduler" and m in {"cancel", "job_cancel"}):
+        return job_cancel(uid, text)
 
     # Domain specialists (clinic, jobs, edu, ...)
     handler = _HANDLERS.get(svc)

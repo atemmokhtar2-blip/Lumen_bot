@@ -1264,6 +1264,38 @@ def _emit_handlers(spec: BotSpec) -> str:
             "compliance", "analytics", "admin", "notify",
         }:
             lines.extend(_market_handler_lines(cap, ok, fail))
+        elif cap.service in {"translate", "ocr", "scheduler"} or (
+            cap.service in {"utils", "content", "generic", "reminders"}
+            and cap.method in {
+                "translate", "translate_toggle", "ocr_image", "ocr_hint",
+                "schedule_note", "job_list", "job_cancel",
+            }
+        ):
+            # Phase 8 scaffolds via generic service specialists
+            lines.append("    from app.services import generic as generic_svc")
+            if cap.method in {"translate", "translate_toggle"} or cap.service == "translate":
+                lines.append(
+                    "    result = generic_svc.translate_text(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            elif cap.method in {"ocr_image", "ocr_hint", "ocr"} or cap.service == "ocr":
+                lines.append(
+                    "    result = generic_svc.ocr_hint(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            elif cap.method in {"job_list", "list_jobs"}:
+                lines.append("    result = generic_svc.job_list(user.id, '')")
+            elif cap.method in {"job_cancel", "cancel_job"}:
+                lines.append(
+                    "    result = generic_svc.job_cancel(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            else:
+                lines.append(
+                    "    result = generic_svc.schedule_note(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            lines.append("    await message.reply_text(result)")
         else:
             # Durable generic executor — no empty success stubs
             lines.append("    from app.services import generic as generic_svc")

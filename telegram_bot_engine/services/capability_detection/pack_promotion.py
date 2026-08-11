@@ -20,9 +20,12 @@ from .packs.schema import CapabilityPack, PackCapability, validate_pack
 
 _SAFE_SERVICES = frozenset({
     "generic", "content", "utils", "core", "shop", "reminders", "notes", "tasks",
+    "translate", "ocr", "scheduler",
 })
 _SAFE_METHODS = frozenset({
     "echo", "announce", "start", "help", "rules", "faq", "about",
+    "translate", "translate_toggle", "ocr_image", "ocr_hint",
+    "schedule_note", "job_list", "job_cancel",
 })
 
 

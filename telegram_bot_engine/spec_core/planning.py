@@ -62,10 +62,10 @@ def plan_from_spec(spec: BotSpec) -> PlanResult:
         files.append(PlannedFile("app/services/tickets.py", "tickets service"))
     if "security" in services:
         files.append(PlannedFile("app/services/security.py", "security reports service"))
-    extra_services = {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate"}
+    extra_services = {"shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate", "translate", "ocr", "scheduler", "generic"}
     if extra_services & set(services):
         files.append(PlannedFile("app/services/extras.py", "market extras modules"))
-    if "welcome" in services or "tickets" in services or "tasks" in services or "notes" in services:
+    if "welcome" in services or "tickets" in services or "tasks" in services or "notes" in services or "translate" in services or "ocr" in services or "scheduler" in services or "generic" in services:
         if not any(f.path == "app/db.py" for f in files):
             files.append(PlannedFile("app/db.py", "sqlite helpers"))
     files.append(PlannedFile("app/services/__init__.py", "services package"))

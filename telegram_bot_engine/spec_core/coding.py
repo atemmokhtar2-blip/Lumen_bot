@@ -120,9 +120,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/flow_engine.py"] = _emit_flow_engine()
         # Flow engine references tickets in open_ticket — always emit module
         files.setdefault("app/services/tickets.py", _emit_tickets())
-    if spec.storage.type == "sqlite" or len(spec.features) > 2:
-        if files.get("app/db.py"):
-            files["app/services/generic.py"] = _emit_generic_runtime()
+    if spec.storage.type == "sqlite" or len(spec.features) > 2 or (
+        {"translate", "ocr", "scheduler", "generic", "utils"} & svc_set
+    ):
+        files["app/services/generic.py"] = _emit_generic_runtime()
     files.setdefault("bootstrap.sh", _emit_bootstrap_sh())
     if "README.md" not in files:
         files["README.md"] = "# Generated bot\n\nRun: chmod +x bootstrap.sh && ./bootstrap.sh\n"

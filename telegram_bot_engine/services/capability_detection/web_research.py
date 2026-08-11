@@ -71,8 +71,8 @@ _LOCAL_KB: list[dict[str, Any]] = [
             "Rate-limit external API calls",
         ],
         "keywords": ["ترجمة", "translate", "auto_translate"],
-        "suggested_service": "content",
-        "suggested_method": "announce",  # placeholder until real emitter exists
+        "suggested_service": "translate",
+        "suggested_method": "translate",
         "risks": ["third_party_api_quota", "privacy_of_message_content"],
     },
     {
@@ -96,8 +96,8 @@ _LOCAL_KB: list[dict[str, Any]] = [
             "Require tesseract system binary if using pytesseract",
         ],
         "keywords": ["ocr", "صورة", "pytesseract"],
-        "suggested_service": "utils",
-        "suggested_method": "echo",
+        "suggested_service": "ocr",
+        "suggested_method": "ocr_hint",
         "risks": ["system_dependency_tesseract", "large_image_memory"],
     },
     {
@@ -169,8 +169,8 @@ _LOCAL_KB: list[dict[str, Any]] = [
             "Persist job metadata in SQLite",
         ],
         "keywords": ["schedule", "jobqueue", "تذكير"],
-        "suggested_service": "reminders",
-        "suggested_method": "echo",
+        "suggested_service": "scheduler",
+        "suggested_method": "schedule_note",
         "risks": ["process_restart_drops_in_memory_jobs"],
     },
 ]

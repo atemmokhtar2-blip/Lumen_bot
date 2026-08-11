@@ -16,6 +16,7 @@ KNOWN_SERVICES: frozenset[str] = frozenset({
     "security", "market", "generic", "shop", "cart", "points", "subs",
     "booking", "notify", "growth", "utils", "gate", "core", "admin",
     "crm", "edu", "clinic", "wallet", "polls", "faq", "reminders",
+    "translate", "ocr", "scheduler",
 })
 
 # Methods with dedicated branches in coding_handlers / market templates
@@ -36,6 +37,8 @@ KNOWN_METHODS: frozenset[str] = frozenset({
     "start", "help", "echo", "random_pick",
     "broadcast_segment", "smart_broadcast",
     "referral_code", "referral_stats",
+    "translate", "translate_toggle", "ocr_image", "ocr_hint",
+    "schedule_note", "job_list", "job_cancel",
 })
 
 
