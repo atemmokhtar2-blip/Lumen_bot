@@ -26,6 +26,7 @@ _SAFE_METHODS = frozenset({
     "echo", "announce", "start", "help", "rules", "faq", "about",
     "translate", "translate_toggle", "ocr_image", "ocr_hint",
     "schedule_note", "job_list", "job_cancel",
+    "voice_intake", "payment_info", "faq",
 })
 
 

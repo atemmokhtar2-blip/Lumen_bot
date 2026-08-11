@@ -547,6 +547,40 @@ def backend_status() -> str:
     return "\n".join(lines)
 
 
+
+
+def voice_intake(user_id: int, text: str = "") -> str:
+    """Record voice-note intent (no STT). Durable row for later processing."""
+    ensure()
+    text = (text or "").strip() or "voice_note_received"
+    iid = _insert("voice", int(user_id), "voice_intake", text[:500], "open", {"kind": "voice"})
+    return (
+        f"🎤 ملاحظة صوتية #{iid}\n"
+        "تم تسجيل الطلب. تحويل الصوت لنص يحتاج خدمة STT خارجية لاحقاً.\n"
+        "أرسل وصفاً نصياً الآن أو أعد إرسال الصوت بعد التفعيل."
+    )
+
+
+def payment_info(user_id: int, text: str = "") -> str:
+    """Show manual payment instructions from env; never embeds secrets in code."""
+    ensure()
+    import os as _os
+    lines = ["💳 طرق الدفع اليدوي"]
+    vcash = (_os.getenv("PAYMENT_VODAFONE_CASH") or "").strip()
+    bank = (_os.getenv("PAYMENT_BANK_IBAN") or "").strip()
+    note = (_os.getenv("PAYMENT_INSTRUCTIONS") or "").strip()
+    if vcash:
+        lines.append(f"فودافون كاش: {vcash}")
+    if bank:
+        lines.append(f"تحويل بنكي: {bank}")
+    if note:
+        lines.append(note)
+    if len(lines) == 1:
+        lines.append("لم تُضبط بعد. ضع PAYMENT_VODAFONE_CASH / PAYMENT_BANK_IBAN في .env")
+    body = "\n".join(lines)
+    _insert("payments", int(user_id), "payment_info", (text or "")[:200], "done", {"view": True})
+    return body
+
 def translate_text(user_id: int, text: str = "") -> str:
     """Translation helper with optional production backends.
 
@@ -826,6 +860,10 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
 
 
     # Phase 8 specialized scaffolds
+    if m in {"voice_intake", "voice"} or (svc == "voice"):
+        return voice_intake(uid, text)
+    if m in {"payment_info", "pay_info"}:
+        return payment_info(uid, text)
     if m in {"translate", "translate_text"} or (svc in {"translate", "utils", "content"} and m == "translate"):
         return translate_text(uid, text)
     if m in {"ocr_from_image"}:

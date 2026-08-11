@@ -68,7 +68,7 @@ def capability_system_health() -> dict[str, Any]:
         from ...spec_core.builder import DEFAULT_COMMANDS
 
         info = load_all_packs()
-        for key in ("scaffold_translate", "scaffold_ocr", "scaffold_schedule"):
+        for key in ("scaffold_translate", "scaffold_ocr", "scaffold_schedule", "scaffold_voice", "scaffold_payment_info"):
             cap = get_capability(key)
             if cap is None:
                 _fail(f"scaffold:{key}", "missing from registry")

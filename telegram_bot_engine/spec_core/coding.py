@@ -145,6 +145,17 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         or "reminders" in svc_set
         or any(str(k).startswith("scaffold_schedule") for k in feat_keys)
     )
+    needs_payinfo = any(str(k).startswith("scaffold_payment") for k in feat_keys)
+    if not needs_payinfo:
+        try:
+            from .registry import get_capability as _gc_pay
+            for _k in feat_keys:
+                _c = _gc_pay(str(_k))
+                if _c and getattr(_c, "method", "") in {"payment_info", "pay_info"}:
+                    needs_payinfo = True
+                    break
+        except Exception:
+            pass
     if needs_translate:
         opt_req.append("deep-translator>=1.11.4")
         env_lines += [
@@ -177,6 +188,16 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
             "# system: apt install tesseract-ocr tesseract-ocr-ara",
             "```",
             "Env: `OCR_ENABLED=1`, `OCR_LANG=eng+ara`",
+        ]
+    if needs_payinfo:
+        env_lines += [
+            "PAYMENT_VODAFONE_CASH=",
+            "PAYMENT_BANK_IBAN=",
+            "PAYMENT_INSTRUCTIONS=",
+        ]
+        readme_extra += [
+            "### Payment info",
+            "Set PAYMENT_VODAFONE_CASH / PAYMENT_BANK_IBAN / PAYMENT_INSTRUCTIONS in .env",
         ]
     if needs_sched:
         # PTB JobQueue extra (APScheduler)

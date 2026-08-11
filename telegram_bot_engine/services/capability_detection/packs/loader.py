@@ -89,6 +89,9 @@ def register_pack(
                 "job_cancel": "jobcancel",
                 "echo": "echo",
                 "announce": "announce",
+                "voice_intake": "voice",
+                "payment_info": "payinfo",
+                "faq": "faq",
             }
             cmd = _METHOD_CMD.get(pc.method) or pc.key.replace("_", "")[:32]
             # Prefer short method-based commands for scaffolds

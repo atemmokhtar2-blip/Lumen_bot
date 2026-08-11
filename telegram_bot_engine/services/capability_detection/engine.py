@@ -111,6 +111,9 @@ _GAP_COVER_KEYS: dict[str, set[str]] = {
     "schedule": {
         "scaffold_schedule", "remind_set", "schedule_note",
     },
+    "voice": {
+        "scaffold_voice",
+    },
 }
 
 
@@ -133,6 +136,10 @@ def _matched_covers_gap(kind: str, matched_keys: set[str]) -> bool:
             or cap.method in {"schedule_note", "schedule", "remind_set"}
         ):
             return True
+        if kind == "voice" and (
+            cap.method in {"voice_intake", "voice"} or cap.key == "scaffold_voice"
+        ):
+            return True
     return False
 
 
@@ -148,6 +155,8 @@ def _detect_gaps(request: str, matched_keys: set[str]) -> list[GapItem]:
         if ("ترجم" in reason or "translat" in reason.lower()) and _matched_covers_gap("translate", matched_keys):
             continue
         if ("صور" in reason or "ocr" in reason.lower() or "vision" in reason.lower()) and _matched_covers_gap("ocr", matched_keys):
+            continue
+        if ("صوت" in reason or "speech" in reason.lower() or "voice" in reason.lower()) and _matched_covers_gap("voice", matched_keys):
             continue
         if suggested and any(s in matched_keys for s in suggested):
             # lang alone does not cover auto-translate

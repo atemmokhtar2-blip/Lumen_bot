@@ -39,6 +39,7 @@ KNOWN_METHODS: frozenset[str] = frozenset({
     "referral_code", "referral_stats",
     "translate", "translate_toggle", "ocr_image", "ocr_hint",
     "schedule_note", "job_list", "job_cancel",
+    "voice_intake", "payment_info",
 })
 
 

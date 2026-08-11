@@ -1275,11 +1275,22 @@ def _emit_handlers(spec: BotSpec) -> str:
             and cap.method in {
                 "translate", "translate_toggle", "ocr_image", "ocr_hint",
                 "schedule_note", "job_list", "job_cancel",
+                "voice_intake", "payment_info",
             }
         ):
             # Phase 8 scaffolds via generic service specialists
             lines.append("    from app.services import generic as generic_svc")
-            if cap.method in {"translate", "translate_toggle"} or cap.service == "translate":
+            if cap.method in {"voice_intake", "voice"}:
+                lines.append(
+                    "    result = generic_svc.voice_intake(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            elif cap.method in {"payment_info", "pay_info"}:
+                lines.append(
+                    "    result = generic_svc.payment_info(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            elif cap.method in {"translate", "translate_toggle"} or cap.service == "translate":
                 lines.append(
                     "    result = generic_svc.translate_text(user.id, "
                     "' '.join(context.args) if context.args else '')"
