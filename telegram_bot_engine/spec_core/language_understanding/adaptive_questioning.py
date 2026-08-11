@@ -238,8 +238,15 @@ def build_question_plan(
     lu: LanguageUnderstandingResult | None = None,
     max_questions: int = 5,
     include_optional: bool | None = None,
+    user_id: int | None = None,
+    session_id: str = "default",
+    remember: bool = True,
 ) -> QuestionPlan:
-    """Build adaptive question queue for this utterance."""
+    """Build adaptive question queue for this utterance.
+
+    When user_id is set, Layer-4 session answers and user prefs fill known slots
+    so we never re-ask what the user already answered this session.
+    """
     if lu is None:
         lu = understand(text or "")
     if intent is None:
@@ -249,6 +256,24 @@ def build_question_plan(
     lang = intent.language or "ar"
     primary = intent.primary.intent if intent.primary else None
     known = _known_answers(intent, lu)
+
+    # Layer-4: merge session answers + nudge skill from profile
+    mem = None
+    if user_id is not None:
+        try:
+            from .memory_engine import get_memory_engine
+            mem = get_memory_engine()
+            profile = mem.get_user(int(user_id))
+            # durable skill preference (profile can upgrade wording)
+            order = {"beginner": 0, "intermediate": 1, "expert": 2}
+            if order.get(profile.skill_level, 0) > order.get(skill, 0):
+                skill = profile.skill_level
+            if profile.language_preference and not lang:
+                lang = profile.language_preference
+            known = mem.merge_session_answers_into_known(int(user_id), known, session_id=session_id)
+            # Preferred features are NOT questions — just memory
+        except Exception:
+            mem = None
 
     if include_optional is None:
         # experts tolerate more optional; beginners: required first only unless few required
@@ -383,7 +408,7 @@ def build_question_plan(
         "جاهز." if not questions else f"هناك {len(questions)} سؤال."
     )
 
-    return QuestionPlan(
+    plan = QuestionPlan(
         questions=questions,
         answers_known=known,
         skill_level=skill,
@@ -394,6 +419,19 @@ def build_question_plan(
         summary_en=summary_en,
         intent=intent,
     )
+    if remember and user_id is not None and mem is not None:
+        try:
+            mem.remember_turn(
+                int(user_id),
+                text or "",
+                intent=intent,
+                lu=lu,
+                questions=[q.to_dict() for q in questions],
+                session_id=session_id,
+            )
+        except Exception:
+            pass
+    return plan
 
 
 def next_questions(text: str, *, max_questions: int = 4) -> list[dict[str, Any]]:
@@ -401,15 +439,21 @@ def next_questions(text: str, *, max_questions: int = 4) -> list[dict[str, Any]]
     return [q.to_dict() for q in plan.questions]
 
 
-def apply_answer(plan: QuestionPlan, question_id: str, answer: str) -> dict[str, Any]:
-    """Record an answer into known map (stateless helper for session layers)."""
+def apply_answer(
+    plan: QuestionPlan,
+    question_id: str,
+    answer: str,
+    *,
+    user_id: int | None = None,
+    session_id: str = "default",
+) -> dict[str, Any]:
+    """Record an answer into known map (+ Layer-4 session when user_id set)."""
     ans = (answer or "").strip()
     known = dict(plan.answers_known)
     q = next((x for x in plan.questions if x.id == question_id), None)
     if not q:
         return known
     known[q.slot] = ans
-    # light interpretation
     low = ans.lower()
     if q.slot == "delivery" and any(x in low for x in ("نعم", "yes", "y", "ايوه")):
         known["delivery"] = True
@@ -417,8 +461,8 @@ def apply_answer(plan: QuestionPlan, question_id: str, answer: str) -> dict[str,
         known["discounts"] = True
     if q.slot == "payment":
         mapped = []
-        if any(x in low for x in ("فيزا", "visa", "card")):
-            mapped.append("visa")
+        if any(x in low for x in ("فيزا", "visa", "card", "stripe")):
+            mapped.append("visa" if "stripe" not in low else "stripe")
         if any(x in low for x in ("فودافون", "vodafone")):
             mapped.append("vodafone_cash")
         if any(x in low for x in ("فوري", "fawry")):
@@ -429,6 +473,12 @@ def apply_answer(plan: QuestionPlan, question_id: str, answer: str) -> dict[str,
             mapped.append("cod")
         if mapped:
             known["payment"] = mapped
+    if user_id is not None:
+        try:
+            from .memory_engine import get_memory_engine
+            get_memory_engine().record_answer(int(user_id), q.slot, ans, session_id=session_id)
+        except Exception:
+            pass
     return known
 
 

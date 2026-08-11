@@ -1,4 +1,4 @@
-"""L1 Language Understanding + L2 Intent Analysis + L3 Adaptive Questioning."""
+"""L1 LU + L2 Intent + L3 Adaptive Questions + L4 Memory."""
 from .adaptive_questioning import (
     AdaptiveQuestion,
     QuestionPlan,
@@ -20,6 +20,12 @@ from .intent_analysis import (
     analyze,
     analyze_intent,
     detect_language,
+)
+from .memory_engine import (
+    MemoryEngine,
+    SessionMemory,
+    UserProfile,
+    get_memory_engine,
 )
 from .normalize import light_stem_ar, normalize_text, tokenize
 
@@ -44,4 +50,8 @@ __all__ = [
     "apply_answer",
     "AdaptiveQuestion",
     "QuestionPlan",
+    "MemoryEngine",
+    "SessionMemory",
+    "UserProfile",
+    "get_memory_engine",
 ]
