@@ -251,38 +251,40 @@ def _extract_constraints(text: str) -> list[str]:
 
 
 def _features_from_brief(brief: BotBrief) -> list[str]:
-    """Map extracted actions/flows → internal capability keys (conservative)."""
-    feats: list[str] = ["start", "help"]
-    mapping = {
-        "products": "shop_catalog",
-        "order_track": "order_track",
-        "payment_methods": "pay_methods",
-        "shipping": "shop_shipping_info",
-        "support": "ticket_open",
-        "faq": "faq_list",
-        "cart": "cart_view",
-        "my_orders": "shop_my_orders",
-        "wallet": "wallet_balance",
-        "coupons": "coupon_apply",
-        "points": "points_balance",
-        "booking": "book_slot",
+    """Map extracted actions/flows → real registry keys only (no invented extras)."""
+    feats: list[str] = ["start", "help", "lang"]
+    mapping: dict[str, list[str]] = {
+        "products": ["shop_catalog", "product_info", "product_search"],
+        "order_track": ["order_track"],
+        "payment_methods": ["pay_methods"],
+        "shipping": ["shipping_set"],
+        "support": ["ticket_open", "ticket_my"],
+        "faq": ["faq_list", "faq_show"],
+        "cart": ["cart_view", "cart_add"],
+        "my_orders": ["shop_my_orders"],
+        "wallet": ["wallet_balance"],
+        "coupons": ["coupon_apply"],
+        "points": ["points_balance"],
+        "booking": ["book_slot"],
     }
     for aid in brief.all_action_ids():
-        if aid in mapping and mapping[aid] not in feats:
-            feats.append(mapping[aid])
-        elif aid in {"start", "help"} and aid not in feats:
-            feats.append(aid)
-    flow_map = {
-        "order_track_by_id": "order_track",
-        "faq_auto_reply": "faq_list",
-        "support_handoff": "ticket_open",
-        "staff_support_panel": "ticket_list",
-        "save_conversations": "note_add",
+        if aid in {"start", "help", "lang"}:
+            continue
+        for cap in mapping.get(aid, []):
+            if cap not in feats:
+                feats.append(cap)
+    flow_map: dict[str, list[str]] = {
+        "order_track_by_id": ["order_track"],
+        "faq_auto_reply": ["faq_list", "faq_show"],
+        "support_handoff": ["ticket_open"],
+        "staff_support_panel": ["ticket_list", "ticket_reply", "ticket_close"],
+        "save_conversations": ["note_add", "note_list"],
+        "privacy_own_data": [],
     }
     for f in brief.flows:
-        cap = flow_map.get(f)
-        if cap and cap not in feats:
-            feats.append(cap)
+        for cap in flow_map.get(f, []):
+            if cap not in feats:
+                feats.append(cap)
     return feats
 
 

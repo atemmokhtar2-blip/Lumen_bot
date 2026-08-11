@@ -400,32 +400,75 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     project_dir = work_dir / "generated_bot"
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    # Always prefer multi-intent composition so bots are not single-thin packs
-    stack = detect_preset_stack(request, limit=8)
-    # L1 domain / preset leads the stack when strong
-    if lu and getattr(lu, "primary_preset", None):
-        lead = lu.primary_preset
-        if lead and lead not in (stack or []):
-            stack = [lead] + list(stack or [])
-    if stack:
-        session = compose_session(stack, user_id=user_id, request=request)
-        _apply_layers_to_session(session, intel)
+    # Stage-1 strict: user listed exact menu → NEVER inflate with fat multi-presets
+    ent = getattr(lu, "entities", None) if lu is not None else None
+    strict = bool(getattr(ent, "strict_spec", False)) if ent is not None else False
+    explicit_feats = list(getattr(ent, "features_requested", None) or []) if ent is not None else []
+
+    if strict and explicit_feats:
+        from .spec_core.registry import CAPABILITIES as _CAPS
+
+        session = compose_session(["echo_basic"], user_id=user_id, request=request)
+        locked = {"start", "help", "lang"}
+        for feat in explicit_feats:
+            if feat in _CAPS:
+                locked.add(feat)
+        session.selected = set(locked)
+        bot_name = getattr(ent, "bot_name", None)
+        if bot_name:
+            try:
+                if hasattr(session, "set_name"):
+                    session.set_name(str(bot_name)[:40])
+                elif hasattr(session, "name"):
+                    session.name = str(bot_name)[:40]
+            except Exception:
+                pass
         spec = session.to_spec()
+        if bot_name and hasattr(spec, "bot") and hasattr(spec.bot, "name"):
+            try:
+                spec.bot.name = str(bot_name)[:40]
+            except Exception:
+                pass
+        if hasattr(spec, "bot") and hasattr(spec.bot, "description"):
+            menu = list(getattr(ent, "menu_ids", None) or [])
+            flows = list(getattr(ent, "flows", None) or [])
+            spec.bot.description = (
+                f"Strict user brief: {bot_name or 'bot'} | "
+                f"menu={','.join(menu[:8])} | flows={','.join(flows[:6])}"
+            )[:500]
         _stamp_style_on_spec(spec, style)
-        tag = "+".join(stack)
-    elif preset:
-        session = session_for_preset(preset, user_id=user_id)
-        if hasattr(session, "selected"):
+        tag = f"strict:{(bot_name or 'bot')}"
+        layers_meta["strict_locked_features"] = sorted(locked)
+    else:
+        # Multi-intent composition for open-ended requests only
+        stack = detect_preset_stack(request, limit=8)
+        if lu and getattr(lu, "primary_preset", None):
+            lead = lu.primary_preset
+            if lead and lead not in (stack or []):
+                stack = [lead] + list(stack or [])
+        if stack:
+            session = compose_session(stack, user_id=user_id, request=request)
             _apply_layers_to_session(session, intel)
             spec = session.to_spec()
+            _stamp_style_on_spec(spec, style)
+            tag = "+".join(stack)
+        elif preset:
+            session = session_for_preset(preset, user_id=user_id)
+            if hasattr(session, "selected"):
+                _apply_layers_to_session(session, intel)
+                spec = session.to_spec()
+            else:
+                spec = (
+                    session.to_spec()
+                    if hasattr(session, "to_spec")
+                    else session_for_preset(preset, user_id=user_id).to_spec()
+                )
+            _stamp_style_on_spec(spec, style)
+            tag = preset
         else:
-            spec = session.to_spec() if hasattr(session, "to_spec") else session_for_preset(preset, user_id=user_id).to_spec()
-        _stamp_style_on_spec(spec, style)
-        tag = preset
-    else:
-        spec = default_spec_from_request(request, user_id=user_id)
-        _stamp_style_on_spec(spec, style)
-        tag = detect_preset(request) or "market_default"
+            spec = default_spec_from_request(request, user_id=user_id)
+            _stamp_style_on_spec(spec, style)
+            tag = detect_preset(request) or "market_default"
 
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
