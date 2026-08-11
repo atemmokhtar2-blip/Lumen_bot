@@ -254,12 +254,12 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
     """Map extracted actions/flows → real registry keys only (no invented extras)."""
     feats: list[str] = ["start", "help", "lang"]
     mapping: dict[str, list[str]] = {
-        "products": ["shop_catalog", "product_info", "product_search"],
+        "products": ["shop_catalog"],  # one menu item = catalog only
         "order_track": ["order_track"],
         "payment_methods": ["pay_methods"],
         "shipping": ["shipping_set"],
-        "support": ["ticket_open", "ticket_my"],
-        "faq": ["faq_list", "faq_show"],
+        "support": ["ticket_open"],  # support button opens ticket; staff list via flow
+        "faq": ["faq_list"],
         "cart": ["cart_view", "cart_add"],
         "my_orders": ["shop_my_orders"],
         "wallet": ["wallet_balance"],
@@ -275,7 +275,7 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
                 feats.append(cap)
     flow_map: dict[str, list[str]] = {
         "order_track_by_id": ["order_track"],
-        "faq_auto_reply": ["faq_list", "faq_show"],
+        "faq_auto_reply": ["faq_list"],
         "support_handoff": ["ticket_open"],
         "staff_support_panel": ["ticket_list", "ticket_reply", "ticket_close"],
         "save_conversations": ["note_add", "note_list"],

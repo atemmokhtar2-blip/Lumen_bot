@@ -491,6 +491,65 @@ class MemoryEngine:
         return out
 
     # ── Bots built registry ──────────────────────────────────────
+    # ── Stage-2: persist extracted bot briefs (strict user intent) ──
+    def store_bot_brief(self, user_id: int, brief: dict, request_text: str = "") -> None:
+        """Remember the structured brief so generation/corrections stay aligned."""
+        if not user_id or not brief:
+            return
+        payload = {
+            "brief": brief,
+            "request": (request_text or "")[:500],
+        }
+        self._event(int(user_id), "bot_brief", payload)
+        # also stash on session for same-turn use
+        try:
+            sid = "default"
+            sm = self.get_session(int(user_id), sid)
+            answers = dict(getattr(sm, "answers", None) or {})
+            answers["_bot_brief"] = brief
+            # re-save session answers if API allows
+            with self._lock:
+                with self._conn() as conn:
+                    row = conn.execute(
+                        "SELECT data_json FROM session_memory WHERE user_id=? AND session_id=?",
+                        (int(user_id), sid),
+                    ).fetchone()
+                    import json as _json
+                    data = {}
+                    if row and row[0]:
+                        try:
+                            data = _json.loads(row[0])
+                        except Exception:
+                            data = {}
+                    data["answers"] = answers
+                    data["updated_at"] = _now()
+                    conn.execute(
+                        "INSERT INTO session_memory(user_id, session_id, data_json, updated_at) VALUES(?,?,?,?) "
+                        "ON CONFLICT(user_id, session_id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
+                        (int(user_id), sid, _json.dumps(data, ensure_ascii=False, default=str), _now()),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+
+    def last_bot_brief(self, user_id: int) -> dict | None:
+        """Most recent bot_brief event for this user."""
+        if not user_id:
+            return None
+        try:
+            with self._conn() as conn:
+                row = conn.execute(
+                    "SELECT payload_json FROM event_log WHERE user_id=? AND event=? ORDER BY id DESC LIMIT 1",
+                    (int(user_id), "bot_brief"),
+                ).fetchone()
+            if not row or not row[0]:
+                return None
+            import json as _json
+            data = _json.loads(row[0])
+            return data.get("brief") if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     def register_bot(
         self,
         user_id: int,

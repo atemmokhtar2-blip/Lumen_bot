@@ -5,125 +5,91 @@ from .coding_emit_foundation import _msg
 from .registry import get_capability
 from .schema import BotSpec, Feature
 def _emit_keyboards(spec: BotSpec) -> str:
-    """Build a launch-ready main menu (max ~10 rows) with cmd: callbacks."""
+    """Main menu from ACTUAL spec.features only — never invent cart/points/etc."""
     lang = (spec.bot.language or "ar").lower()
     ar = lang.startswith("ar")
 
-    if ar:
-        curated = [
-            ("🛍️ المتجر", "shopcatalog"),
-            ("🛒 السلة", "cartview"),
-            ("📦 طلباتي", "shopmyorders"),
-            ("⭐ النقاط", "balance"),
-            ("💎 الخطط", "plans"),
-            ("👛 المحفظة", "walletbalance"),
-            ("🎟️ كوبون", "couponapply"),
-            ("🎫 تذكرة دعم", "ticketopen"),
-            ("🏆 المتصدرين", "leaderboard"),
-            ("🌐 اللغة", "lang"),
-        ]
-    else:
-        curated = [
-            ("🛍️ Shop", "shopcatalog"),
-            ("🛒 Cart", "cartview"),
-            ("📦 My orders", "shopmyorders"),
-            ("⭐ Points", "balance"),
-            ("💎 Plans", "plans"),
-            ("👛 Wallet", "walletbalance"),
-            ("🎟️ Coupon", "couponapply"),
-            ("🎫 Support", "ticketopen"),
-            ("🏆 Leaderboard", "leaderboard"),
-            ("🌐 Language", "lang"),
-        ]
+    feat_btn = {
+        "shop_catalog": ("🛍️ المنتجات", "🛍️ Products", "shopcatalog"),
+        "product_info": ("ℹ️ تفاصيل منتج", "ℹ️ Product info", "productinfo"),
+        "product_search": ("🔎 بحث", "🔎 Search", "productsearch"),
+        "order_track": ("📦 متابعة الطلب", "📦 Track order", "ordertrack"),
+        "shop_my_orders": ("📋 طلباتي", "📋 My orders", "shopmyorders"),
+        "pay_methods": ("💳 طرق الدفع", "💳 Payments", "pay"),
+        "shipping_set": ("🚚 الشحن والتوصيل", "🚚 Shipping", "shippingset"),
+        "ticket_open": ("📞 الدعم", "📞 Support", "ticket"),
+        "ticket_my": ("🎫 تذاكري", "🎫 My tickets", "mytickets"),
+        "faq_list": ("❓ الأسئلة الشائعة", "❓ FAQ", "faqlist"),
+        "faq_show": ("❓ FAQ", "❓ FAQ", "faq"),
+        "cart_view": ("🛒 السلة", "🛒 Cart", "cartview"),
+        "wallet_balance": ("👛 المحفظة", "👛 Wallet", "walletbalance"),
+        "coupon_apply": ("🎟️ كوبون", "🎟️ Coupon", "couponapply"),
+        "points_balance": ("⭐ النقاط", "⭐ Points", "balance"),
+        "plans": ("💎 الخطط", "💎 Plans", "plans"),
+        "lang": ("🌐 اللغة", "🌐 Language", "lang"),
+    }
 
-    feat_keys = {f.feature for f in spec.features}
-    commerce_ish = bool(
-        feat_keys
-        & {
-            "shop_catalog", "shop_buy", "cart_view", "cart_checkout", "balance",
-            "plans", "wallet_balance", "coupon_apply", "ticket_open",
-        }
-    ) or any(x in "".join(feat_keys) for x in ("shop", "cart", "wallet", "points"))
+    ordered_keys: list[str] = []
+    seen: set[str] = set()
+    for f in spec.features:
+        if f.feature in seen or f.feature in {"start", "help"}:
+            continue
+        seen.add(f.feature)
+        ordered_keys.append(f.feature)
 
     rows: list[str] = []
-    seen: set[str] = set()
-
-    def _norm_cb(raw: str) -> str:
-        raw = (raw or "").strip()
-        if not raw:
-            return ""
-        if not any(raw.startswith(p) for p in ("cmd:", "nav:", "pay:", "act:")):
-            raw = f"cmd:{raw}"
-        # Telegram callback_data: normalize dots/spaces from legacy packs
-        if raw.startswith("cmd:"):
-            body = raw[4:].replace(".", "").replace(" ", "").replace("-", "_").lower()
-            return f"cmd:{body}"
-        return raw
-
-    # Commerce / global launch: curated menu only (avoid mixed broken start_buttons)
-    if commerce_ish:
-        for label, cmd in curated:
-            cb = f"cmd:{cmd}"
-            rows.append(
-                f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
-            )
-            seen.add(cb)
-    else:
-        for b in spec.start_buttons:
-            cb = _norm_cb(b.callback_id or "")
-            if not cb or cb in seen:
+    seen_cb: set[str] = set()
+    for k in ordered_keys:
+        if k in feat_btn:
+            ar_l, en_l, body_cb = feat_btn[k]
+            label = ar_l if ar else en_l
+            cb = f"cmd:{body_cb}"
+        else:
+            ff = next((x for x in spec.features if x.feature == k), None)
+            if not ff or ff.trigger.type != "command" or ff.trigger.id in {"start", "help"}:
                 continue
-            rows.append(
-                f"        [InlineKeyboardButton({b.label!r}, callback_data={cb!r})],"
-            )
-            seen.add(cb)
-            if len(rows) >= 10:
-                break
-        if len(rows) < 4:
-            for label, cmd in curated:
-                cb = f"cmd:{cmd}"
-                if cb in seen:
-                    continue
-                rows.append(
-                    f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
-                )
-                seen.add(cb)
-                if len(rows) >= 10:
-                    break
-
-    if len(rows) < 4:
-        for feat in spec.features:
-            if feat.trigger.type != "command":
-                continue
-            if feat.trigger.id in {"start", "help"}:
-                continue
-            cb = f"cmd:{feat.trigger.id}"
-            if cb in seen:
-                continue
-            label = (feat.messages.prompt or feat.feature or feat.trigger.id).replace("_", " ")[:28]
-            rows.append(
-                f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
-            )
-            seen.add(cb)
-            if len(rows) >= 8:
-                break
+            label = (ff.messages.prompt or k).replace("_", " ")[:28]
+            body_cb = ff.trigger.id.replace(".", "").replace("-", "_").lower()
+            cb = f"cmd:{body_cb}"
+        if cb in seen_cb:
+            continue
+        rows.append(
+            f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
+        )
+        seen_cb.add(cb)
+        if len(rows) >= 10:
+            break
 
     body = "\n".join(rows) if rows else "        # no buttons"
+    # NOTE: body above is wrong - we need real newlines in the *output* source
+    body = chr(10).join(rows) if rows else "        # no buttons"
     return (
-        '"""Inline keyboards derived from BotSpec."""\n'
-        "from __future__ import annotations\n\n"
-        "from telegram import InlineKeyboardButton, InlineKeyboardMarkup\n\n\n"
-        "def main_keyboard() -> InlineKeyboardMarkup | None:\n"
-        "    rows = [\n"
-        f"{body}\n"
-        "    ]\n"
-        "    rows = [r for r in rows if r]\n"
-        "    if not rows:\n"
-        "        return None\n"
-        "    return InlineKeyboardMarkup(rows)\n"
+        '"""Inline keyboards derived from BotSpec features only."""'
+        + chr(10)
+        + "from __future__ import annotations"
+        + chr(10)
+        + chr(10)
+        + "from telegram import InlineKeyboardButton, InlineKeyboardMarkup"
+        + chr(10)
+        + chr(10)
+        + chr(10)
+        + "def main_keyboard() -> InlineKeyboardMarkup | None:"
+        + chr(10)
+        + "    rows = ["
+        + chr(10)
+        + f"{body}"
+        + chr(10)
+        + "    ]"
+        + chr(10)
+        + "    rows = [r for r in rows if r]"
+        + chr(10)
+        + "    if not rows:"
+        + chr(10)
+        + "        return None"
+        + chr(10)
+        + "    return InlineKeyboardMarkup(rows)"
+        + chr(10)
     )
-
-
 
 
 def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
@@ -816,38 +782,20 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
 def _emit_handlers(spec: BotSpec) -> str:
     lang = (spec.bot.language or "ar").lower()
     n_cmds = len([f for f in spec.features if f.trigger.type == "command"])
+    bot_name = (getattr(spec.bot, "name", None) or "Bot").strip() or "Bot"
     if lang.startswith("ar"):
         welcome = (
-            f"مرحباً بك 👋\n"
-            f"بوت جاهز — {n_cmds} أمر.\n"
-            "اكتب /help لعرض الأوامر."
+            f"مرحباً بك في {bot_name} 👋\n"
+            f"الأوامر المتاحة: {n_cmds}.\n"
+            "اضغط الأزرار أو اكتب /help."
         )
-        if any(
-            (get_capability(f.feature) and get_capability(f.feature).service in {
-                "shop", "payments", "cart", "wallet"
-            })
-            for f in spec.features
-        ):
-            welcome += (
-                "\n\n🛒 المتجر: /shop · /cart · /addproduct"
-                "\n💳 الدفع: /pay · /vfcash · /buy · /topup · /balance"
-            )
     else:
         welcome = (
-            f"Welcome 👋\n"
-            f"Bot ready — {n_cmds} commands.\n"
-            "Type /help for the command list."
+            f"Welcome to {bot_name} 👋\n"
+            f"{n_cmds} commands available.\n"
+            "Use the menu or /help."
         )
-        if any(
-            (get_capability(f.feature) and get_capability(f.feature).service in {
-                "shop", "payments", "cart", "wallet"
-            })
-            for f in spec.features
-        ):
-            welcome += (
-                "\n\n🛒 Shop: /shop · /cart · /addproduct"
-                "\n💳 Pay: /pay · /vfcash · /buy · /topup · /balance"
-            )
+
     help_lines = []
     help_lines.append(
         f"قائمة الأوامر ({n_cmds}):" if lang.startswith("ar") else f"Commands ({n_cmds}):"
