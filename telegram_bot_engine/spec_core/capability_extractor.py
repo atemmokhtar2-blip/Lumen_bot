@@ -100,6 +100,26 @@ _PATTERNS: dict[str, tuple[str, ...]] = {
     "lang": ("i18n", "multi-language", "متعدد اللغات", "ترجمة", "lang"),
     "my_id": ("api key", "مفتاح api", "token", "my id"),
     "rules": ("rate limit", "rate limiting", "تحديد المعدل", "throttle", "rules"),
+    # Welcome / group gate (Phase-1 detection coverage)
+    "welcome_set": (
+        "ترحيب", "رسالة ترحيب", "نظام ترحيب", "ترحيب الأعضاء", "ترحيب اعضاء",
+        "welcome", "welcome message", "set welcome",
+    ),
+    "welcome_toggle": ("تفعيل الترحيب", "إيقاف الترحيب", "toggle welcome"),
+    "welcome_show": ("عرض الترحيب", "إعداد الترحيب", "show welcome"),
+    "welcome_test": ("تجربة الترحيب", "test welcome"),
+    "goodbye_set": ("وداع", "رسالة وداع", "goodbye"),
+    "verify_start": ("تحقق عضو", "تحقق الأعضاء", "member verify", "verification"),
+    # Moderation / group management
+    "user_ban": ("حظر", "بان", "ban user", "حظر مستخدم"),
+    "user_mute": ("كتم", "ميوت", "mute"),
+    "user_kick": ("طرد", "kick"),
+    "user_warn": ("تحذير", "warn"),
+    "pin_message": ("تثبيت", "pin message", "تثبيت رسالة"),
+    "delete_message": ("حذف رسالة", "delete message"),
+    "lock_chat": ("قفل الدردشة", "قفل الشات", "lock chat"),
+    "user_info": ("معلومات عضو", "info member", "user info"),
+    "announce": ("إعلان", "announce", "إذاعة"),
 }
 
 _DOMAIN_CAP_HINTS: dict[str, tuple[str, ...]] = {
