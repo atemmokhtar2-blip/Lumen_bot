@@ -212,7 +212,7 @@ def _run_intelligence_layers(
         from .spec_core.language_understanding.learning_layer import (
             recall,
             record_turn_learning,
-            apply_memory_to_features,
+            apply_full_memory,
         )
         ent = getattr(lu, "entities", None)
         brief = None
@@ -242,22 +242,14 @@ def _run_intelligence_layers(
                 memory=memory_engine,
                 intent_name=intent_name,
             )
-            # soft-merge collective features into entity plan when not strict
-            if (
-                memory_snap
-                and ent is not None
-                and not getattr(ent, "strict_spec", False)
-                and memory_snap.collective_features
-            ):
-                merged = apply_memory_to_features(
-                    list(getattr(ent, "features_requested", None) or []),
-                    memory_snap,
-                    strict=False,
+            try:
+                from .spec_core.language_understanding.learning_layer import apply_full_memory
+                _new_req, _notes = apply_full_memory(
+                    ent, memory_snap, request=request or ""
                 )
-                try:
-                    ent.features_requested = merged
-                except Exception:
-                    pass
+                # request enrichment is recorded in notes; features/payments mutated on ent
+            except Exception:
+                pass
     except Exception:
         memory_snap = None
 

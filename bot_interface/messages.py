@@ -139,18 +139,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if uid and is_correction_utterance(request):
             corr = parse_correction(request)
             if corr:
-                get_memory_engine().record_correction(
+                mem = get_memory_engine()
+                mem.record_correction(
                     int(uid),
                     rejected=corr.get("rejected") or "",
                     preferred=corr.get("preferred") or "",
                     context=request[:200],
                 )
-                # acknowledge without blocking generation path
-                await message.reply_text(
-                    "تم تسجيل التصحيح ✅ — هراعيه في التوليدات الجاية.\n"
-                    + (f"تفضيل: {corr.get('preferred')}" if corr.get("preferred") else "")
-                )
-                # continue — user may still want generation on same message if rich
+                # Apply immediately to durable user slots when payment/feature known
+                try:
+                    from telegram_bot_engine.spec_core.language_understanding.learning_layer import (
+                        _match_pay,
+                        _match_feature,
+                    )
+                    pref = corr.get("preferred") or ""
+                    rej = corr.get("rejected") or ""
+                    if _match_pay(pref):
+                        mem.set_durable_slot(int(uid), "preferred_payment", _match_pay(pref))
+                    if _match_pay(rej):
+                        mem.set_durable_slot(int(uid), "rejected_payment", _match_pay(rej))
+                    if _match_feature(pref):
+                        mem.set_durable_slot(int(uid), "preferred_feature", _match_feature(pref))
+                except Exception:
+                    pass
+                pref_show = (corr.get("preferred") or "").strip()
+                rej_show = (corr.get("rejected") or "").strip()
+                msg = "تم تسجيل التصحيح ✅ — هيتطبّق على التوليد الجاي"
+                if rej_show or pref_show:
+                    msg += f"\n❌ {rej_show or '—'} → ✅ {pref_show or '—'}"
+                await message.reply_text(msg)
+                # If message is ONLY a correction (short), stop here
+                if len(request.split()) <= 12 and not any(
+                    k in request for k in ("بوت", "bot", "اعمل", "سوّي", "سوي", "generate")
+                ):
+                    return
     except Exception:
         logger.exception("stage2 correction learn failed")
 

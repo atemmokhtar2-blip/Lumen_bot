@@ -653,29 +653,37 @@ class MemoryEngine:
             return []
 
     def find_similar_briefs(self, request_text: str, *, limit: int = 5) -> list[dict]:
-        """Token-overlap similarity over brief_index + bots_built (no vector DB)."""
-        q = set(
-            w for w in (request_text or "").lower().replace("_", " ").split() if len(w) > 2
-        )
+        """Similarity via normalized token overlap (Arabic-aware)."""
+        try:
+            from .normalize import normalize_text, tokenize
+            q = set(tokenize(normalize_text(request_text or "")))
+        except Exception:
+            q = set(w for w in (request_text or "").lower().split() if len(w) > 2)
+        # also raw lowercase tokens for latin keys
+        q |= set(w for w in (request_text or "").lower().replace("_", " ").split() if len(w) > 2)
         if not q:
             return []
         out: list[dict] = []
         try:
             with self._conn() as conn:
-                # ensure table
                 try:
                     rows = conn.execute(
                         "SELECT bot_name, purpose, features_json, menu_json, request_text, tokens "
-                        "FROM brief_index ORDER BY id DESC LIMIT 200"
+                        "FROM brief_index ORDER BY id DESC LIMIT 300"
                     ).fetchall()
                 except Exception:
                     rows = []
                 for r in rows:
-                    tokens = set(
-                        w
-                        for w in str(r["tokens"] or r["request_text"] or "").lower().split()
-                        if len(w) > 2
+                    blob = " ".join(
+                        str(x or "")
+                        for x in (r["tokens"], r["request_text"], r["purpose"], r["bot_name"], r["features_json"])
                     )
+                    try:
+                        from .normalize import normalize_text, tokenize
+                        tokens = set(tokenize(normalize_text(blob)))
+                    except Exception:
+                        tokens = set(w for w in blob.lower().split() if len(w) > 2)
+                    tokens |= set(w for w in blob.lower().replace("_", " ").split() if len(w) > 2)
                     if not tokens:
                         continue
                     inter = len(q & tokens)
@@ -683,7 +691,10 @@ class MemoryEngine:
                         continue
                     union = len(q | tokens)
                     score = inter / union if union else 0.0
-                    if score < 0.08:
+                    # boost shared purpose words
+                    if inter >= 2:
+                        score += 0.05 * min(inter, 5)
+                    if score < 0.05:
                         continue
                     try:
                         feats = json.loads(r["features_json"] or "[]")
@@ -694,32 +705,33 @@ class MemoryEngine:
                             "bot_name": r["bot_name"],
                             "purpose": r["purpose"],
                             "features": feats if isinstance(feats, list) else [],
-                            "score": round(score, 3),
+                            "score": round(min(score, 1.0), 3),
                             "request": (r["request_text"] or "")[:120],
                         }
                     )
-                # also scan successful bots
                 try:
                     brows = conn.execute(
                         "SELECT name, intent, features_json, request_text FROM bots_built "
-                        "WHERE success=1 ORDER BY created_at DESC LIMIT 100"
+                        "WHERE success=1 ORDER BY created_at DESC LIMIT 150"
                     ).fetchall()
                 except Exception:
                     brows = []
                 for r in brows:
-                    tokens = set(
-                        w
-                        for w in str(r["request_text"] or r["name"] or "").lower().split()
-                        if len(w) > 2
-                    )
-                    if not tokens:
-                        continue
+                    blob = " ".join(str(x or "") for x in (r["request_text"], r["name"], r["intent"], r["features_json"]))
+                    try:
+                        from .normalize import normalize_text, tokenize
+                        tokens = set(tokenize(normalize_text(blob)))
+                    except Exception:
+                        tokens = set(w for w in blob.lower().split() if len(w) > 2)
+                    tokens |= set(w for w in blob.lower().replace("_", " ").split() if len(w) > 2)
                     inter = len(q & tokens)
                     if inter <= 0:
                         continue
                     union = len(q | tokens)
                     score = inter / union if union else 0.0
-                    if score < 0.08:
+                    if inter >= 2:
+                        score += 0.05 * min(inter, 5)
+                    if score < 0.05:
                         continue
                     try:
                         feats = json.loads(r["features_json"] or "[]")
@@ -730,18 +742,17 @@ class MemoryEngine:
                             "bot_name": r["name"],
                             "purpose": r["intent"],
                             "features": feats if isinstance(feats, list) else [],
-                            "score": round(score, 3),
+                            "score": round(min(score, 1.0), 3),
                             "request": (r["request_text"] or "")[:120],
                         }
                     )
         except Exception:
             return []
         out.sort(key=lambda x: -float(x.get("score") or 0))
-        # dedupe by name
         seen: set[str] = set()
         deduped = []
         for item in out:
-            key = str(item.get("bot_name") or item.get("request") or "")[:40]
+            key = str(item.get("bot_name") or "") + "|" + str(item.get("request") or "")[:40]
             if key in seen:
                 continue
             seen.add(key)

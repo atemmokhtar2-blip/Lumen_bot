@@ -21,6 +21,9 @@ from .learning_layer import (
     apply_memory_to_features,
     is_correction_utterance,
     parse_correction,
+    enrich_request_with_memory,
+    apply_corrections_to_entities,
+    apply_full_memory,
 )
 from .intent_analysis import (
     ASK_THRESHOLD,
