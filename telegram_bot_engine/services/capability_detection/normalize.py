@@ -92,3 +92,28 @@ def expand_for_match(text: str) -> str:
 
 
 __all__ = ["normalize_ar", "expand_for_match"]
+
+
+def strip_negations(text: str) -> str:
+    """Remove negated capability phrases so "بدون ترحيب" does not match welcome.
+
+    Patterns: بدون X / من غير X / without X / no X (short window).
+    """
+    import re
+    t = text or ""
+    # Arabic: بدون <1-3 words>
+    t = re.sub(
+        r"(?<!\w)(?:بدون|من\s*غير|مش\s+عايز|مش\s+عاوز|بلا)\s+[\w؀-ۿ]{2,20}(?:\s+[\w؀-ۿ]{2,20}){0,2}",
+        " ",
+        t,
+        flags=re.I,
+    )
+    # English: without X / no X
+    t = re.sub(
+        r"(?i)(?<!\w)(?:without|no)\s+[a-z][a-z\-_]{1,24}(?:\s+[a-z][a-z\-_]{1,24}){0,2}",
+        " ",
+        t,
+    )
+    return re.sub(r"\s+", " ", t).strip()
+
+

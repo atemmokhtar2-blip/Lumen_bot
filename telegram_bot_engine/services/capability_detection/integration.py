@@ -109,7 +109,10 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             "report": report,
         }
 
-    if report.status == DetectionStatus.GAP and not feats:
+    # Treat lang-only as non-feature for gap decisions
+    _incidental = {"lang"}
+    _real_feats = [f for f in feats if f not in _incidental]
+    if report.status == DetectionStatus.GAP and not _real_feats:
         from bot_interface.capability_boundaries import rejection_message
 
         msg = rejection_message(
@@ -121,6 +124,21 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             msg += "\n\nالفجوات:\n" + "\n".join(
                 f"• {g.phrase}: {g.reason}" for g in report.gaps[:5]
             )
+        # Phase 5 research note on pure gap (offline-safe)
+        try:
+            import os as _os
+            if _os.getenv("CAPABILITY_RESEARCH_ON_GAP", "1").strip().lower() in {"1", "true", "yes"}:
+                from .web_research import research_for_detection_gaps
+                _rs = research_for_detection_gaps(report.gaps, request=request, limit=1, persist=True)
+                if _rs and _rs[0].get("spec"):
+                    _sp = _rs[0]["spec"]
+                    _libs = ", ".join((_sp.get("libraries") or [])[:4])
+                    msg += "\n\n🔎 مسودة بحث: " + str(_sp.get("title") or "")[:80]
+                    if _libs:
+                        msg += f"\nمكتبات مرشحة: {_libs}"
+                    msg += "\n(لن يُفعَّل تلقائياً — يحتاج موافقة + emit-safe pack)"
+        except Exception:
+            pass
         return {
             "should_block": True,
             "user_message": msg,
@@ -129,7 +147,7 @@ def telegram_preflight(request: str) -> dict[str, Any]:
         }
 
     # Weak / nonsense: no bot-intent language and no real product category → block
-    _WEAK_CATS = {"utils", "core"}
+    _WEAK_CATS = {"utils", "core", "i18n", "general"}
     _req = (request or "").lower()
     _bot_intent = any(
         w in _req
@@ -158,14 +176,14 @@ def telegram_preflight(request: str) -> dict[str, Any]:
         }
 
     soft_parts: list[str] = []
-    if report.status == DetectionStatus.GAP and feats:
+    if report.status == DetectionStatus.GAP and _real_feats:
         soft_parts.append(
             "⚠️ جزء من طلبك غير مدعوم بالكامل؛ سأبني الجزء المتاح من القوالب."
         )
         for g in report.gaps[:3]:
             soft_parts.append(f"• غير متاح: {g.phrase} — {g.reason}")
         soft_parts.append(
-            "المدعوم: " + "، ".join(feats[:10]) + ("…" if len(feats) > 10 else "")
+            "المدعوم: " + "، ".join(_real_feats[:10]) + ("…" if len(_real_feats) > 10 else "")
         )
         # Phase 5: optional research note (local KB / web) — never auto-registers
         try:

@@ -24,7 +24,7 @@ from .models import (
     GapItem,
     MatchedCapability,
 )
-from .normalize import expand_for_match, normalize_ar
+from .normalize import expand_for_match, normalize_ar, strip_negations
 from .search import nearest_keys_for_phrase, search_capabilities, tokenize
 
 _COMPOSITION_HINTS = (
@@ -224,7 +224,7 @@ def detect_capabilities(
     original = (request or "").strip()
     text = original
     # Dialect/synonym expansion for matching only
-    match_text = expand_for_match(original) if original else ""
+    match_text = expand_for_match(strip_negations(original)) if original else ""
     feas = check_feasibility(original)
     resolved_domains = _resolve_domains(match_text or original, domains)
 
