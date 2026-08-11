@@ -1881,6 +1881,17 @@ def _emit_main(spec: BotSpec) -> str:
         )
         for f in spec.features
     )
+    need_sched = any(
+        (
+            get_capability(f.feature)
+            and (
+                get_capability(f.feature).service in {"scheduler", "reminders"}  # type: ignore
+                or get_capability(f.feature).method in {"schedule_note", "job_list", "job_cancel"}  # type: ignore
+                or str(f.feature).startswith("scaffold_schedule")
+            )
+        )
+        for f in spec.features
+    )
     need_tickets = any(
         (get_capability(f.feature) and get_capability(f.feature).service == "tickets")  # type: ignore
         for f in spec.features
@@ -1965,6 +1976,45 @@ def _emit_main(spec: BotSpec) -> str:
             "\n    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))"
         )
 
+    # Phase 12: JobQueue poller for due schedule_note rows
+    if need_sched:
+        sched_job_block = '''
+async def _fire_due_reminders(context) -> None:
+    try:
+        from app.services import generic as generic_svc
+        due = generic_svc.list_due_reminders()
+        for item in due:
+            uid = int(item.get("user_id") or 0)
+            body = str(item.get("body") or "")
+            iid = item.get("id")
+            if uid and body:
+                try:
+                    await context.bot.send_message(chat_id=uid, text=f"⏰ تذكير #{iid}\\n{body[:500]}")
+                except Exception:
+                    pass
+            if iid is not None:
+                try:
+                    generic_svc.mark_reminder_fired(int(iid))
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.warning("fire_due_reminders: %s", exc)
+'''
+        sched_post_init = '''
+    # Phase 12 JobQueue: poll due reminders every 60s
+    try:
+        if app.job_queue is not None:
+            app.job_queue.run_repeating(_fire_due_reminders, interval=60, first=15, name="due_reminders")
+            logger.info("JobQueue due_reminders scheduled")
+        else:
+            logger.warning("JobQueue unavailable — install python-telegram-bot[job-queue]")
+    except Exception as exc:
+        logger.warning("JobQueue setup failed: %s", exc)
+'''
+    else:
+        sched_job_block = ""
+        sched_post_init = ""
+
     return f'''"""Application entry — python-telegram-bot v21."""
 from __future__ import annotations
 
@@ -1993,6 +2043,7 @@ logging.basicConfig(
 logger = logging.getLogger({spec.bot.name!r})
 
 
+{sched_job_block}
 async def _post_init(app: Application) -> None:
     # Telegram allows at most 100 bot commands in the menu.
     try:
@@ -2001,7 +2052,7 @@ async def _post_init(app: Application) -> None:
         ])
     except Exception as exc:
         logger.warning("set_my_commands skipped: %s", exc)
-
+{sched_post_init}
 
 def build_application() -> Application:
     settings = get_settings()

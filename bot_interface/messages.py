@@ -105,6 +105,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     request = message.text.strip()
 
+    # Phase 13: capability ops commands (health/trace/learn/promote)
+    try:
+        from telegram_bot_engine.services.capability_detection.ops import handle_ops_command
+        _ops = handle_ops_command(request, user_id=getattr(update.effective_user, "id", None))
+        if _ops:
+            await message.reply_text(_ops)
+            return
+    except Exception:
+        pass
+
     # Restore durable session (pending_run etc.) after restarts
     try:
         if user and context.user_data is not None:

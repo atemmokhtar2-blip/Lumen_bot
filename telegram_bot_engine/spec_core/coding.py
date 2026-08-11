@@ -184,7 +184,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         ]
         readme_extra += [
             "### Schedule",
-            "`/schedule` stores reminders in SQLite. Attach JobQueue in host process to fire them.",
+            "`/schedule in 5m text` stores due_ts; generated main JobQueue polls every 60s.",
         ]
     files["requirements.txt"] = "\n".join(req_lines) + "\n"
     if opt_req:

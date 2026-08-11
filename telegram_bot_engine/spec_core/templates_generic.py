@@ -696,22 +696,91 @@ def ocr_from_image(user_id: int, image_path: str = "", caption: str = "") -> str
     )
 
 
+def _parse_due_seconds(text: str) -> tuple[int, str]:
+    """Parse simple relative due times. Returns (seconds_from_now, cleaned_body)."""
+    import re as _re
+    t = (text or "").strip()
+    # in 5m / 10min / 1h / 2d
+    m = _re.match(r"^(?:in\s+)?(\d+)\s*(m|min|mins|minutes|h|hr|hours|d|day|days)\b\s*(.*)$", t, _re.I)
+    if m:
+        n, unit, rest = int(m.group(1)), m.group(2).lower(), (m.group(3) or "").strip()
+        if unit in {"m", "min", "mins", "minutes"}:
+            return max(30, n * 60), rest or t
+        if unit in {"h", "hr", "hours"}:
+            return max(60, n * 3600), rest or t
+        if unit in {"d", "day", "days"}:
+            return max(60, n * 86400), rest or t
+    # Arabic: بعد 5 دقائق / بعد ساعة
+    m2 = _re.match(r"^بعد\s+(\d+)\s*(دقيقة|دقائق|ساعة|ساعات|يوم|ايام|أيام)\s*(.*)$", t)
+    if m2:
+        n, unit, rest = int(m2.group(1)), m2.group(2), (m2.group(3) or "").strip()
+        if "دق" in unit:
+            return max(30, n * 60), rest or t
+        if "ساع" in unit:
+            return max(60, n * 3600), rest or t
+        if "يوم" in unit or "ايام" in unit or "أيام" in unit:
+            return max(60, n * 86400), rest or t
+    # default: 1 hour
+    return 3600, t
+
+
 def schedule_note(user_id: int, text: str = "") -> str:
-    """Store a reminder note (durable). JobQueue activation is deployment-side."""
+    """Store a reminder with due timestamp; JobQueue fires open rows when due."""
     ensure()
+    import time as _time
     text = (text or "").strip()
     if not text:
         return (
             "⏰ الجدولة\n"
-            "الاستخدام: /schedule غداً 10:00 اجتماع الفريق\n"
+            "الاستخدام:\n"
+            "  /schedule in 5m اشرب ماء\n"
+            "  /schedule بعد 10 دقائق اجتماع\n"
             "عرض: /jobs — إلغاء: /jobcancel <id>"
         )
-    iid = _insert("scheduler", int(user_id), "reminder", text, "open", {"kind": "reminder"})
+    sec, body = _parse_due_seconds(text)
+    due_ts = int(_time.time()) + int(sec)
+    meta = {"kind": "reminder", "due_ts": due_ts, "delay_sec": sec}
+    iid = _insert("scheduler", int(user_id), "reminder", body, "open", meta)
     return (
-        f"⏰ تذكير #{iid} محفوظ\n"
-        f"{text[:300]}\n"
-        "للتنفيذ التلقائي لاحقاً: فعّل JobQueue في عملية البوت."
+        f"⏰ تذكير #{iid} بعد {sec} ث\n"
+        f"{body[:300]}\n"
+        "سيُرسل تلقائياً إذا كان JobQueue مفعّلاً في main.py."
     )
+
+
+def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]:
+    """Return open scheduler rows whose due_ts <= now."""
+    ensure()
+    import json as _json
+    import time as _time
+    now = int(now_ts if now_ts is not None else _time.time())
+    rows = _list("scheduler", user_id=None, status="open", limit=limit)
+    due = []
+    for r in rows:
+        try:
+            meta = _json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        due_ts = int(meta.get("due_ts") or 0)
+        if due_ts and due_ts <= now:
+            due.append({
+                "id": r["id"],
+                "user_id": r["user_id"],
+                "body": r["body"],
+                "due_ts": due_ts,
+            })
+    return due
+
+
+def mark_reminder_fired(item_id: int) -> bool:
+    ensure()
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE domain_items SET status='done', updated_at=? WHERE id=? AND service='scheduler'",
+            (_now(), int(item_id)),
+        )
+        conn.commit()
+        return int(cur.rowcount) > 0
 
 
 def job_list(user_id: int, text: str = "") -> str:

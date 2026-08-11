@@ -41,6 +41,7 @@ from .packs import (
     validate_pack,
 )
 from .pipeline_trace import fail_safe_message, pipeline_trace
+from .ops import handle_ops_command, ops_enabled
 from .health import (
     attach_generation_diagnostics,
     capability_system_health,
