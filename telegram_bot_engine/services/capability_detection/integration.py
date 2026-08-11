@@ -248,6 +248,20 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             + ("…" if len(feats) > 8 else "")
         )
 
+    # Phase 9: optional pipeline fail-safe summary
+    try:
+        import os as _os
+        if _os.getenv("CAPABILITY_PIPELINE_TRACE", "1").strip().lower() in {"1", "true", "yes"}:
+            from .pipeline_trace import pipeline_trace, fail_safe_message
+            _tr = pipeline_trace(request, include_research=False)
+            _fs = _tr.get("fail_safe") or {}
+            if _fs.get("level") in {"partial", "emit_risk"}:
+                soft_parts.append(str(_fs.get("title_ar") or ""))
+            if _fs.get("commands_ar") and not any("أوامر" in x for x in soft_parts):
+                soft_parts.append("أوامر: " + " ".join(str(c) for c in _fs["commands_ar"][:8]))
+    except Exception:
+        pass
+
     return {
         "should_block": False,
         "user_message": "",
@@ -263,7 +277,7 @@ def metadata_from_report(report: DetectionReport) -> dict[str, Any]:
         synthesis = synthesize_from_report(report).to_dict()
     except Exception:
         synthesis = None
-    return {
+    out = {
         "capability_detection": {
             "status": report.status.value,
             "confidence": report.confidence,
@@ -279,6 +293,14 @@ def metadata_from_report(report: DetectionReport) -> dict[str, Any]:
             "synthesis": synthesis,
         }
     }
+    try:
+        from .pipeline_trace import pipeline_trace
+        tr = pipeline_trace(report.request, include_research=False)
+        out["pipeline_fail_safe"] = tr.get("fail_safe")
+        out["pipeline_emit_unsafe"] = (tr.get("emit") or {}).get("unsafe_count")
+    except Exception:
+        pass
+    return out
 
 
 __all__ = [

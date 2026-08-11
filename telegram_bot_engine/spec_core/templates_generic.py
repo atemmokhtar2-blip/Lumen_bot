@@ -577,12 +577,43 @@ def ocr_hint(user_id: int, text: str = "") -> str:
     text = (text or "").strip()
     iid = _insert("ocr", int(user_id), "ocr_hint", text or "awaiting_photo", "open", {"awaiting": "photo"})
     if text and len(text) > 5:
-        # offline: treat long text as already-extracted
         return f"📝 OCR #{iid}\nالنص المستلم:\n{text[:1500]}"
     return (
         f"📝 OCR #{iid}\n"
-        "أرسل صورة فيها نص، أو الصق النص مباشرة بعد /ocr\n"
+        "أرسل صورة فيها نص الآن، أو الصق النص بعد الأمر.\n"
         "للتفعيل الكامل: pip install pytesseract + Tesseract OCR"
+    )
+
+
+def ocr_from_image(user_id: int, image_path: str = "", caption: str = "") -> str:
+    """Run OCR on a local image path when pytesseract is available; else durable ack."""
+    ensure()
+    caption = (caption or "").strip()
+    extracted = ""
+    backend = "none"
+    if image_path:
+        try:
+            import pytesseract  # type: ignore
+            from PIL import Image  # type: ignore
+            extracted = (pytesseract.image_to_string(Image.open(image_path)) or "").strip()
+            backend = "pytesseract"
+        except Exception as exc:
+            backend = f"unavailable:{type(exc).__name__}"
+    if not extracted and caption:
+        extracted = caption
+        backend = backend if backend.startswith("un") else "caption"
+    iid = _insert(
+        "ocr", int(user_id), "ocr_image",
+        extracted[:2000] or (image_path or "no_text"),
+        "done" if extracted else "open",
+        {"backend": backend, "path": (image_path or "")[-120:]},
+    )
+    if extracted:
+        return f"📝 OCR #{iid}\n{extracted[:2000]}"
+    return (
+        f"📝 OCR #{iid}\n"
+        "تم حفظ الصورة. لم يُستخرج نص (ثبّت pytesseract + Tesseract).\n"
+        f"backend={backend}"
     )
 
 
@@ -643,6 +674,8 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
     # Phase 8 specialized scaffolds
     if m in {"translate", "translate_text"} or (svc in {"translate", "utils", "content"} and m == "translate"):
         return translate_text(uid, text)
+    if m in {"ocr_from_image"}:
+        return ocr_from_image(uid, text, "")
     if m in {"ocr_image", "ocr_hint", "ocr"} or (svc == "ocr" and m in {"image", "hint", "run"}):
         return ocr_hint(uid, text)
     if m in {"schedule_note", "schedule"} or (svc in {"scheduler", "reminders"} and m in {"schedule_note", "schedule", "remind"}):

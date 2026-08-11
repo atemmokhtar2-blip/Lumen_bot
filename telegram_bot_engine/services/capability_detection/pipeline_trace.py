@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from .engine import detect_capabilities
-from .integration import feature_keys, telegram_preflight
+from .integration import feature_keys
 from .models import DetectionStatus
 from .packs.emit_contract import assess_capability
 from .synthesis import synthesize_from_report
@@ -22,8 +22,18 @@ def pipeline_trace(request: str, *, include_research: bool = True) -> dict[str, 
     report = detect_capabilities(request)
     feats = feature_keys(report, include_core=False)
     core_feats = feature_keys(report, include_core=True)
-    pre = telegram_preflight(request)
     plan = synthesize_from_report(report)
+    # Local block decision — do NOT call telegram_preflight (avoids recursion with soft_note)
+    should_block = (
+        report.status == DetectionStatus.IMPOSSIBLE
+        or not report.can_generate
+        or (report.status == DetectionStatus.GAP and not feats)
+    )
+    pre = {
+        "should_block": should_block,
+        "soft_note": "",
+        "user_message": report.reason_ar or "",
+    }
 
     emit_rows: list[dict[str, Any]] = []
     for key in plan.keys:
@@ -77,12 +87,19 @@ def pipeline_trace(request: str, *, include_research: bool = True) -> dict[str, 
             ],
         }
     elif report.gaps and feats:
+        alts = []
+        if research_note and isinstance(research_note, dict):
+            sp = research_note.get("spec") or {}
+            libs = sp.get("libraries") or []
+            if libs:
+                alts.append("بحث: " + ", ".join(str(x) for x in libs[:4]))
         fail_safe = {
             "level": "partial",
             "title_ar": "توليد جزئي — بعض الأجزاء غير مكتملة",
             "detail_ar": "؛ ".join(f"{g.phrase}: {g.reason}" for g in report.gaps[:3]),
             "available_ar": feats[:12],
             "scaffolds_ar": scaffold_keys,
+            "alternatives_ar": alts,
         }
     elif unsafe:
         fail_safe = {
@@ -92,12 +109,24 @@ def pipeline_trace(request: str, *, include_research: bool = True) -> dict[str, 
             "available_ar": feats[:12],
         }
     else:
+        # map keys to friendly commands when possible
+        try:
+            from ...spec_core.builder import DEFAULT_COMMANDS
+            cmds = []
+            for k in plan.keys:
+                if k in {"start", "help"}:
+                    continue
+                c = DEFAULT_COMMANDS.get(k) or k
+                cmds.append(f"/{c}")
+        except Exception:
+            cmds = []
         fail_safe = {
             "level": "ok",
             "title_ar": "جاهز للتوليد الحتمي",
             "detail_ar": f"{len(plan.keys)} قدرة — status={plan.status}",
             "available_ar": plan.keys[:16],
             "scaffolds_ar": scaffold_keys,
+            "commands_ar": cmds[:12],
         }
 
     return {
@@ -148,6 +177,8 @@ def fail_safe_message(trace: dict[str, Any]) -> str:
         lines.append("Scaffold: " + "، ".join(str(x) for x in fs["scaffolds_ar"][:8]))
     if fs.get("alternatives_ar"):
         lines.append("بدائل: " + " / ".join(str(x) for x in fs["alternatives_ar"][:6]))
+    if fs.get("commands_ar"):
+        lines.append("أوامر: " + " ".join(str(x) for x in fs["commands_ar"][:10]))
     det = trace.get("detection") or {}
     lines.append(f"الحالة: {det.get('status')} — ثقة {det.get('confidence')}")
     return "\n".join(lines)

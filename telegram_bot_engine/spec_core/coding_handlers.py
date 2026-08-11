@@ -1285,9 +1285,14 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "' '.join(context.args) if context.args else '')"
                 )
             elif cap.method in {"ocr_image", "ocr_hint", "ocr"} or cap.service == "ocr":
+                lines.append("    args = ' '.join(context.args) if context.args else ''")
+                lines.append("    if args:")
+                lines.append("        result = generic_svc.ocr_hint(user.id, args)")
+                lines.append("        await message.reply_text(result)")
+                lines.append("        return")
+                lines.append("    context.user_data['awaiting'] = 'ocr_photo'")
                 lines.append(
-                    "    result = generic_svc.ocr_hint(user.id, "
-                    "' '.join(context.args) if context.args else '')"
+                    "    result = generic_svc.ocr_hint(user.id, '')"
                 )
             elif cap.method in {"job_list", "list_jobs"}:
                 lines.append("    result = generic_svc.job_list(user.id, '')")
@@ -1438,15 +1443,29 @@ def _emit_handlers(spec: BotSpec) -> str:
             "            return",
             "    except Exception:",
             "        pass",
-            "    # Phase 9: OCR path when user sends a photo",
+            "    # Phase 9: OCR path when user sends a photo (or after /ocr awaiting)",
             "    if message is not None and user is not None and message.photo:",
+            "        awaiting = context.user_data.get('awaiting')",
             "        try:",
             "            from app.services import generic as generic_svc",
             "            caption = (message.caption or '').strip()",
-            "            result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
+            "            photo = message.photo[-1]",
+            "            path = ''",
+            "            try:",
+            "                tg_file = await context.bot.get_file(photo.file_id)",
+            "                path = f'/tmp/ocr_{user.id}_{photo.file_id}.jpg'",
+            "                await tg_file.download_to_drive(path)",
+            "            except Exception:",
+            "                path = ''",
+            "            if path and hasattr(generic_svc, 'ocr_from_image'):",
+            "                result = generic_svc.ocr_from_image(user.id, path, caption)",
+            "            else:",
+            "                result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
+            "            if awaiting == 'ocr_photo':",
+            "                context.user_data.pop('awaiting', None)",
             "            await message.reply_text(result)",
             "        except Exception:",
-            "            await message.reply_text('تم استلام الصورة. استخدم /ocr مع نص أو فعّل pytesseract.')",
+            "            await message.reply_text('تم استلام الصورة. استخدم /ocr أو فعّل pytesseract.')",
             "",
             "",
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
