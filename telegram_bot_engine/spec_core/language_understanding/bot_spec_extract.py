@@ -78,6 +78,7 @@ _NAME_PATTERNS = [
         r"(?:اسمه|اسمها|يسمى|تسمى|called|named|name\s*[:=])\s*[«\"']?([A-Za-z][\w\-]{1,40}|[\u0600-\u06FF][\w\u0600-\u06FF]{1,40})[»\"']?",
         re.I,
     ),
+    re.compile(r"(?:بوت|bot)\s+(?:تيليجرام\s+)?(?:اسمه|اسمها|called)\s+([A-Za-z][\w\-]{1,40})", re.I),
     re.compile(r"\b([A-Z][a-zA-Z]+(?:Help|Bot|Shop|Support|Care|Aid))\b"),
     re.compile(r"(?:بوت|bot)\s+(?:تيليجرام\s+)?(?:ل|لـ|for)?\s*[^\n]{0,40}?(?:اسمه|اسمها)\s+(\S+)", re.I),
 ]
@@ -93,12 +94,12 @@ _MENU_LINE = re.compile(
 
 # Map Arabic/English labels → stable action ids (capability-ish)
 _LABEL_TO_ID: list[tuple[tuple[str, ...], str, str]] = [
-    (("المنتجات", "منتجات", "products", "catalog", "shop"), "products", "🛍️ المنتجات"),
-    (("متابعة الطلب", "تتبع الطلب", "حالة الطلب", "order track", "track order", "order status"),
+    (("المنتجات", "منتجات", "منتج", "products", "catalog", "shop", "كتالوج"), "products", "🛍️ المنتجات"),
+    (("متابعة الطلب", "متابعة طلب", "تتبع الطلب", "تتبع طلب", "حالة الطلب", "order track", "track order", "order status", "تتبع"),
      "order_track", "📦 متابعة الطلب"),
-    (("طرق الدفع", "الدفع", "payment", "pay methods"), "payment_methods", "💳 طرق الدفع"),
-    (("الشحن", "التوصيل", "shipping", "delivery"), "shipping", "🚚 الشحن والتوصيل"),
-    (("التواصل مع الدعم", "الدعم", "support", "contact support", "موظف"), "support", "📞 التواصل مع الدعم"),
+    (("طرق الدفع", "الدفع", "دفع", "payment", "pay methods", "مدفوعات"), "payment_methods", "💳 طرق الدفع"),
+    (("الشحن", "شحن", "التوصيل", "توصيل", "shipping", "delivery"), "shipping", "🚚 الشحن والتوصيل"),
+    (("التواصل مع الدعم", "الدعم", "دعم", "support", "tickets", "ticket", "contact support", "موظف"), "support", "📞 التواصل مع الدعم"),
     (("الأسئلة الشائعة", "faq", "أسئلة شائعة"), "faq", "❓ الأسئلة الشائعة"),
     (("السلة", "cart"), "cart", "🛒 السلة"),
     (("الطلبات", "orders", "طلباتي"), "my_orders", "📋 طلباتي"),
@@ -152,8 +153,8 @@ def _extract_purpose(text: str) -> str | None:
     low = text.lower()
     norm = normalize_text(text)
     rules = [
-        (("خدمة عملاء", "customer service", "support bot", "دعم فني", "دعم العملاء"), "support"),
-        (("متجر", "ecommerce", "e-commerce", "shop", "store", "بيع"), "shop"),
+        (("خدمة عملاء", "customer service", "customer support", "support bot", "دعم فني", "دعم العملاء", "helpdesk", "help desk"), "support"),
+        (("متجر", "ecommerce", "e-commerce", "shop", "store", "بيع", "storefront"), "shop"),
         (("حجز", "booking", "موعد", "عيادة"), "booking"),
         (("تعليمي", "كورس", "education", "course"), "education"),
         (("أمن", "security", "cyber"), "security"),
@@ -164,13 +165,26 @@ def _extract_purpose(text: str) -> str | None:
     return None
 
 
+def _bot_context(text: str) -> bool:
+    """True when the utterance is about building/describing a bot."""
+    low = (text or "").lower()
+    keys = (
+        "بوت", "bot", "telegram", "تيليجرام", "اعمل", "سوي", "سوّي", "أبي",
+        "عايز", "أريد", "generate", "خدمة عملاء", "متجر", "قائمة", "menu",
+        "فيه", "فيها", "يشمل", "with", "commands", "أوامر",
+    )
+    return any(k in text or k in low for k in keys)
+
+
 def _extract_menu_and_commands(text: str) -> tuple[list[ExplicitCommand], list[ExplicitCommand]]:
     menu: list[ExplicitCommand] = []
     cmds: list[ExplicitCommand] = []
     seen: set[str] = set()
+    raw = text or ""
+    low = raw.lower()
 
     # Explicit slash commands
-    for m in _SLASH_CMD.finditer(text):
+    for m in _SLASH_CMD.finditer(raw):
         cid = m.group(0).lstrip("/").lower()
         if cid in seen:
             continue
@@ -178,9 +192,8 @@ def _extract_menu_and_commands(text: str) -> tuple[list[ExplicitCommand], list[E
         cmds.append(ExplicitCommand(id=cid, label_en=cid, kind="command"))
 
     # Emoji / bullet menu lines
-    for m in _MENU_LINE.finditer(text):
+    for m in _MENU_LINE.finditer(raw):
         label = m.group(1).strip()
-        # skip prose-y long lines
         if len(label) > 60:
             continue
         matched = _match_label(label)
@@ -193,23 +206,35 @@ def _extract_menu_and_commands(text: str) -> tuple[list[ExplicitCommand], list[E
         menu.append(
             ExplicitCommand(
                 id=aid,
-                label_ar=label if any("\u0600" <= c <= "\u06FF" for c in label) else default_lab,
+                label_ar=label if any("؀" <= c <= "ۿ" for c in label) else default_lab,
                 label_en=aid,
                 kind="menu",
                 details=label,
             )
         )
 
-    # Inline mentions without bullets: "فيها منتجات ومتابعة طلب..."
-    if not menu:
+    # Inline feature scan — works without "قائمة" if bot-building context
+    # e.g. "فيه منتجات ومتابعة طلب ودفع وشحن ودعم"
+    inline_gate = _bot_context(raw) or bool(menu) or any(
+        w in raw for w in ("قائمة", "menu", "أزرار", "فيها", "فيه", "تشمل", "with", "and")
+    )
+    if inline_gate:
         for keys, aid, default_lab in _LABEL_TO_ID:
             if aid in seen or aid in {"start", "help"}:
                 continue
-            if any(k in text or k.lower() in text.lower() for k in keys):
-                # only if appears near menu context words
-                if any(w in text for w in ("قائمة", "menu", "أزرار", "فيها", "تشمل", "فيها:")):
-                    seen.add(aid)
-                    menu.append(ExplicitCommand(id=aid, label_ar=default_lab, kind="menu"))
+            hit = False
+            norm_raw = normalize_text(raw)
+            for k in keys:
+                if len(k) <= 1:
+                    continue
+                if len(k) <= 2 and k not in ("دفع", "شحن", "دعم"):
+                    continue
+                if k in raw or k.lower() in low or normalize_text(k) in norm_raw:
+                    hit = True
+                    break
+            if hit:
+                seen.add(aid)
+                menu.append(ExplicitCommand(id=aid, label_ar=default_lab, kind="menu"))
 
     return menu, cmds
 
@@ -218,8 +243,8 @@ def _extract_flows(text: str) -> list[str]:
     flows: list[str] = []
     low = text.lower()
     pairs = [
-        (("رقم الطلب", "order id", "order number", "يتابع الطلب", "متابعة الطلب"), "order_track_by_id"),
-        (("أسئلة شائعة", "faq", "يرد تلقائي"), "faq_auto_reply"),
+        (("رقم الطلب", "order id", "order number", "يتابع الطلب", "متابعة الطلب", "تتبع الطلب", "track order", "order status"), "order_track_by_id"),
+        (("أسئلة شائعة", "الأسئلة الشائعة", "faq", "faqs", "يرد تلقائي", "auto reply"), "faq_auto_reply"),
         (("موظف", "support agent", "يحوله", "تحويل للدعم", "قسم الدعم"), "support_handoff"),
         (("حفظ محادثات", "conversation history", "سجل المحادثة"), "save_conversations"),
         (("بياناته هو فقط", "own data only", "خصوصية", "privacy"), "privacy_own_data"),
@@ -235,7 +260,7 @@ def _extract_flows(text: str) -> list[str]:
 def _extract_constraints(text: str) -> list[str]:
     constraints: list[str] = []
     low = text.lower()
-    if any(k in text or k in low for k in ("فقط", "only", "ما يعملش من دماغه", "لا تضف", "بدون زيادة", "زي ما المستخدم")):
+    if any(k in text or k in low for k in ("فقط", "only", "بس", "ما يعملش من دماغه", "لا تضف", "بدون زيادة", "زي ما المستخدم", "من غير زيادة", "exactly")):
         constraints.append("strict_no_extra_commands")
     if any(k in text or k in low for k in ("قابل للتطوير", "scalable", "منظم")):
         constraints.append("modular_structure")
@@ -307,10 +332,15 @@ def extract_bot_brief(text: str) -> BotBrief:
     brief.constraints = _extract_constraints(raw)
     brief.features_requested = _features_from_brief(brief)
 
-    # Strict when user listed a concrete menu OR said only/exactly
-    brief.strict = bool(menu) or ("strict_no_extra_commands" in brief.constraints)
-    # Also strict if many explicit slash commands
-    if len(cmds) >= 3:
+    # Strict when user listed concrete features/menu or said only/exactly
+    brief.strict = (
+        len(menu) >= 2
+        or ("strict_no_extra_commands" in brief.constraints)
+        or len(cmds) >= 3
+        or (len(menu) >= 1 and any(k in (raw or "") for k in ("فقط", "بس", "only")))
+    )
+    # Single explicit full menu block still strict
+    if len(menu) >= 1 and any(k in (raw or "") for k in ("قائمة", "menu", "/start")):
         brief.strict = True
 
     score = 0.0

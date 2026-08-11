@@ -48,16 +48,17 @@ _PAY_ALIASES: dict[str, list[str]] = {
 }
 
 _FEATURE_ALIASES: dict[str, list[str]] = {
-    "shop_catalog": ["منتجات", "كتالوج", "catalog", "products", "المتجر"],
-    "order_track": ["متابعة", "تتبع", "track", "order track", "حالة الطلب"],
-    "pay_methods": ["دفع", "payment", "طرق الدفع"],
+    "shop_catalog": ["منتجات", "كتالوج", "catalog", "products", "المتجر", "منتج"],
+    "order_track": ["متابعة", "تتبع", "track", "order track", "حالة الطلب", "متابعة الطلب", "تتبع الطلب"],
+    "pay_methods": ["دفع", "payment", "طرق الدفع", "مدفوعات"],
     "shipping_set": ["شحن", "توصيل", "shipping", "delivery"],
-    "ticket_open": ["دعم", "support", "تذكرة", "موظف"],
-    "faq_list": ["faq", "أسئلة", "شائعة"],
+    "ticket_open": ["دعم", "support", "تذكرة", "موظف", "tickets"],
+    "faq_list": ["faq", "أسئلة", "شائعة", "faqs"],
     "wallet_balance": ["محفظة", "wallet"],
     "coupon_apply": ["كوبون", "coupon", "خصم"],
     "points_balance": ["نقاط", "points"],
-    "cart_view": ["سلة", "cart"],
+    "cart_view": ["سلة", "cart", "السلة"],
+    "cart_add": ["إضافة للسلة", "add to cart"],
 }
 
 
@@ -194,24 +195,44 @@ def enrich_request_with_memory(
     *,
     entities: Any = None,
 ) -> str:
-    """Augment short/follow-up requests with last brief so generation stays consistent."""
+    """Augment short/follow-up/correction requests with last brief."""
     raw = (request or "").strip()
     if not raw:
         return raw
 
-    # short follow-ups that mean "continue previous brief"
     follow = any(
         k in raw
         for k in (
             "نفس", "زي اللي فات", "كمل", "نفس البوت", "عدّل", "عدل", "change",
-            "modify", "update the bot", "same",
+            "modify", "update the bot", "same", "كمان", "برضو", "again",
         )
     )
     brief = snap.last_brief
     if not brief:
         return raw
 
-    if follow or len(raw.split()) <= 4:
+    # Apply last brief features onto entities when follow-up/short/correction
+    should_merge = follow or len(raw.split()) <= 6 or is_correction_utterance(raw)
+    if should_merge and entities is not None:
+        try:
+            prev_feats = list(brief.get("features_requested") or [])
+            cur = list(getattr(entities, "features_requested", None) or [])
+            # start from previous brief then apply current corrections already on entities
+            if prev_feats and (
+                not cur or set(cur) <= {"start", "help", "lang"}
+            ):
+                entities.features_requested = list(dict.fromkeys(prev_feats + cur))
+            if brief.get("bot_name") and not getattr(entities, "bot_name", None):
+                entities.bot_name = brief.get("bot_name")
+            if brief.get("strict"):
+                entities.strict_spec = True
+            menu = brief.get("action_ids") or []
+            if menu and not getattr(entities, "menu_ids", None):
+                entities.menu_ids = list(menu)[:12]
+        except Exception:
+            pass
+
+    if follow or len(raw.split()) <= 6 or is_correction_utterance(raw):
         name = brief.get("bot_name") or ""
         menu = brief.get("action_ids") or []
         if not menu and isinstance(brief.get("menu_items"), list):
@@ -219,7 +240,7 @@ def enrich_request_with_memory(
                 (m.get("id") if isinstance(m, dict) else str(m))
                 for m in brief["menu_items"]
             ]
-        feats = brief.get("features_requested") or []
+        feats = list(getattr(entities, "features_requested", None) or brief.get("features_requested") or [])
         extra = (
             f" [ذاكرة: اسم={name} قائمة={','.join(map(str, menu[:8]))} "
             f"ميزات={','.join(map(str, feats[:10]))}]"

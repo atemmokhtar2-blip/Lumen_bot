@@ -14,6 +14,7 @@ from .engine import (
 )
 from .entities import ExtractedEntities, extract_entities
 from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
+from .context_manager import TurnContext, build_turn_context
 from .evaluation_layer import (
     PerformanceReport,
     assign_ab_variant,
@@ -93,6 +94,8 @@ __all__ = [
     "BotBrief",
     "ExplicitCommand",
     "extract_bot_brief",
+    "TurnContext",
+    "build_turn_context",
     "MemorySnapshot",
     "recall",
     "record_turn_learning",

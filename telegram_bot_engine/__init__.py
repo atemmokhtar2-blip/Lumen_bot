@@ -165,6 +165,41 @@ def _run_intelligence_layers(
     }
     lu = understand(request or "")
     intent = analyze_intent(request or "", lu=lu)
+    # Stage-1 harden: ensure brief features land on entities (inline menus)
+    try:
+        from .spec_core.language_understanding.bot_spec_extract import extract_bot_brief
+        _brief = extract_bot_brief(request or "")
+        _ent = getattr(lu, "entities", None)
+        if _ent is not None and _brief is not None:
+            if _brief.features_requested:
+                # merge brief features (prefer union, brief first for order)
+                merged = list(dict.fromkeys(
+                    list(_brief.features_requested)
+                    + list(getattr(_ent, "features_requested", None) or [])
+                ))
+                _ent.features_requested = merged
+            if _brief.bot_name:
+                _ent.bot_name = _brief.bot_name
+            if _brief.purpose:
+                _ent.bot_purpose = _brief.purpose
+            if _brief.menu_items:
+                _ent.menu_ids = [c.id for c in _brief.menu_items]
+            if _brief.strict:
+                _ent.strict_spec = True
+            if _brief.flows:
+                _ent.flows = list(_brief.flows)
+            raw = dict(getattr(_ent, "raw", None) or {})
+            raw["bot_brief"] = _brief.to_dict()
+            _ent.raw = raw
+            # force brief features into intent plan when strict
+            if _brief.strict and _brief.features_requested and intent is not None:
+                try:
+                    plan = list(getattr(intent, "feature_plan", None) or [])
+                    intent.feature_plan = list(dict.fromkeys(list(_brief.features_requested) + plan))
+                except Exception:
+                    pass
+    except Exception:
+        pass
     memory_engine = None
     if user_id:
         try:
