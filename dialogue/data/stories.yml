@@ -1,42 +1,33 @@
 version: "3.1"
 stories:
-- story: greet and help
+- story: greet help capabilities
   steps:
   - intent: greet
   - action: utter_greet
   - intent: ask_help
   - action: utter_help
-
-- story: capabilities path
-  steps:
   - intent: ask_capabilities
   - action: utter_capabilities
 
-- story: pricing then plan
+- story: pricing to plan
   steps:
   - intent: ask_pricing
   - action: utter_pricing
   - intent: ask_plan
   - action: action_report_plan
 
-- story: how to generate
+- story: how to generate then idea handoff style
   steps:
   - intent: ask_how_to_generate
   - action: utter_how_to_generate
-
-- story: user describes idea then clarify
-  steps:
   - intent: describe_bot_idea
   - action: action_note_bot_idea
   - action: utter_ask_clarify_idea
 
-- story: limitations honesty
+- story: limitations support
   steps:
   - intent: ask_limitations
   - action: utter_limitations
-
-- story: support
-  steps:
   - intent: ask_support
   - action: utter_support
 
@@ -55,15 +46,32 @@ stories:
   - intent: out_of_scope
   - action: utter_out_of_scope
 
-- story: greet then idea
+- story: greet then plan
   steps:
   - intent: greet
   - action: utter_greet
+  - intent: ask_plan
+  - action: action_report_plan
+
+- story: affirm after clarify
+  steps:
   - intent: describe_bot_idea
   - action: action_note_bot_idea
   - action: utter_ask_clarify_idea
+  - intent: affirm
+  - action: utter_how_to_generate
 
-- story: plan direct
+- story: deny path
+  steps:
+  - intent: deny
+  - action: utter_deny
+
+- story: help only
+  steps:
+  - intent: ask_help
+  - action: utter_help
+
+- story: plan only
   steps:
   - intent: ask_plan
   - action: action_report_plan

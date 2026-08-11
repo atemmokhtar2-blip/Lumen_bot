@@ -1,48 +1,46 @@
-# Maestro Dialogue (Rasa) — Phase 0
+# Maestro Dialogue — Phase 0 (Solid Foundation)
 
-Smart guided chat for **Free and Pro**. Does **not** run the generation engine.
+Smart guided chat for **Free and Pro**. Generation stays in `telegram_bot_engine`.
 
-## Layout
+## Architecture (stable)
 
-| Path | Role |
-|------|------|
-| `config.yml` | NLU pipeline + Core policies |
-| `domain.yml` | Intents, slots, responses, actions |
-| `data/nlu.yml` | Training examples (AR/EN) |
-| `data/stories.yml` | Dialogue paths |
-| `data/rules.yml` | Deterministic rules |
-| `actions/` | rasa-sdk (plan report, session, fallback) |
-| `models/` | Trained `.tar.gz` shipped to hosting |
+```
+Telegram
+  → bot_interface/messages.py
+  → dialogue_bridge
+  → dialogue.runtime.handle_turn
+       ├─ RasaEngine   (if DIALOGUE_ENABLED=1 AND models/*.tar.gz)
+       └─ RuleEngine   (always available — production backbone)
+```
 
-## Train (dev machine / CI)
+| Component | Role |
+|-----------|------|
+| `runtime/contract.py` | Stable Request/Response/Engine protocol |
+| `runtime/rule_engine.py` | Deterministic AR/EN guided chat (no deps) |
+| `runtime/rasa_engine.py` | Optional ML layer on top of rules |
+| `runtime/registry.py` | Engine selection + fallback |
+| `data/*` | Rasa training corpus (expand continuously) |
+| `actions/` | rasa-sdk hooks to plan/Mongo |
+
+## Behaviour guarantees
+
+1. **Never generates bots** from this layer.
+2. **`describe_bot_idea` is handoff** (`handled=False`) → legacy generation path runs.
+3. **Rasa failure → RuleEngine** automatically.
+4. **`DIALOGUE_RUNTIME=0`** disables the whole layer (full legacy).
+5. **Default `DIALOGUE_RUNTIME=1`** so chat is smart without training.
+
+## Train Rasa (optional upgrade path)
 
 ```bash
 ./scripts/train_dialogue.sh
+# deploy dialogue/models/*.tar.gz
+export DIALOGUE_ENABLED=1
+export DIALOGUE_RUNTIME=1
 ```
 
-## Enable on hosting
+## Tests
 
 ```bash
-DIALOGUE_ENABLED=1
-# optional action server later:
-# rasa run actions --actions actions -p 5055
+python -m pytest tests/test_dialogue_phase0.py -q
 ```
-
-`bot_interface/dialogue_bridge.py` loads the latest `models/*.tar.gz`.
-If no model or flag off → Telegram keeps the legacy path (no breakage).
-
-## Integration boundary
-
-```
-Telegram → bot_interface → dialogue_bridge → Rasa Agent
-                              ↘ None → legacy messages.py paths
-telegram_bot_engine  = generation only (unchanged in Phase 0)
-b2b_platform         = plans / Mongo (actions read plan only)
-```
-
-## Next phases
-
-1. Wire bridge early in `handle_message` behind the flag  
-2. Expand NLU (augmentation)  
-3. Pro-only actions for generation handoff  
-4. Optional Mongo tracker store  
