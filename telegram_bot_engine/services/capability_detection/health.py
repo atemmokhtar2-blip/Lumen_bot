@@ -1,28 +1,50 @@
-"""Phase 10 — Capability system health + post-generation smoke checks.
+"""Phase 10 — Capability system health + post-generation smoke (hardened).
 
-Deterministic. No network required (offline-safe).
+Deterministic. Offline-safe.
+Env:
+  CAPABILITY_SMOKE_STRICT=1  → smoke failures can fail the build (via caller)
+  CAPABILITY_HEALTH_LOG=1    → persist last health JSON under OUTPUT_DIR
 """
 from __future__ import annotations
 
 import ast
+import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 
+def _data_dir() -> Path:
+    base = os.getenv("OUTPUT_DIR") or "/tmp/generated"
+    p = Path(base) / "platform" / "health"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _persist_report(name: str, payload: dict[str, Any]) -> str | None:
+    if os.getenv("CAPABILITY_HEALTH_LOG", "1").strip().lower() not in {"1", "true", "yes"}:
+        return None
+    try:
+        path = _data_dir() / f"{name}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(path)
+    except Exception:
+        return None
+
+
 def capability_system_health() -> dict[str, Any]:
-    """Import/load smoke for the whole Dynamic Tool Builder stack."""
+    """Import/load smoke for the Dynamic Tool Builder stack."""
     t0 = time.time()
     checks: list[dict[str, Any]] = []
 
-    def _ok(name: str, detail: str = "") -> None:
-        checks.append({"name": name, "ok": True, "detail": detail})
+    def _ok(name: str, detail: str = "", *, critical: bool = False) -> None:
+        checks.append({"name": name, "ok": True, "detail": detail, "critical": critical})
 
-    def _fail(name: str, detail: str) -> None:
-        checks.append({"name": name, "ok": False, "detail": detail})
+    def _fail(name: str, detail: str, *, critical: bool = True) -> None:
+        checks.append({"name": name, "ok": False, "detail": detail, "critical": critical})
 
-    # Module imports
     modules = [
         "telegram_bot_engine.services.capability_detection.engine",
         "telegram_bot_engine.services.capability_detection.synthesis",
@@ -40,7 +62,6 @@ def capability_system_health() -> dict[str, Any]:
         except Exception as exc:
             _fail(f"import:{mod.split('.')[-1]}", f"{type(exc).__name__}: {exc}")
 
-    # Packs + scaffolds
     try:
         from .packs.loader import load_all_packs
         from ...spec_core.registry import get_capability
@@ -58,7 +79,6 @@ def capability_system_health() -> dict[str, Any]:
     except Exception as exc:
         _fail("packs", f"{type(exc).__name__}: {exc}")
 
-    # Detection sanity
     try:
         from .engine import detect_capabilities
         from .models import DetectionStatus
@@ -77,7 +97,6 @@ def capability_system_health() -> dict[str, Any]:
     except Exception as exc:
         _fail("detection", f"{type(exc).__name__}: {exc}")
 
-    # Emit contract
     try:
         from .packs.emit_contract import assess_capability
 
@@ -95,7 +114,6 @@ def capability_system_health() -> dict[str, Any]:
     except Exception as exc:
         _fail("emit_contract", str(exc))
 
-    # Pipeline trace (no recursion)
     try:
         from .pipeline_trace import pipeline_trace
 
@@ -107,14 +125,26 @@ def capability_system_health() -> dict[str, Any]:
     except Exception as exc:
         _fail("pipeline_trace", f"{type(exc).__name__}: {exc}")
 
-    ok_all = all(c["ok"] for c in checks)
-    return {
+    critical_failed = [c for c in checks if not c["ok"] and c.get("critical", True)]
+    ok_all = len(critical_failed) == 0
+    out = {
         "ok": ok_all,
         "checks": checks,
         "passed": sum(1 for c in checks if c["ok"]),
         "failed": sum(1 for c in checks if not c["ok"]),
+        "critical_failed": len(critical_failed),
         "elapsed_ms": int((time.time() - t0) * 1000),
     }
+    out["log_path"] = _persist_report("system_health_last", out)
+    return out
+
+
+def _command_for_key(key: str) -> str:
+    try:
+        from ...spec_core.builder import DEFAULT_COMMANDS
+        return str(DEFAULT_COMMANDS.get(key) or key.replace("_", "")[:32])
+    except Exception:
+        return key.replace("_", "")[:32]
 
 
 def smoke_generated_project(
@@ -127,30 +157,36 @@ def smoke_generated_project(
     checks: list[dict[str, Any]] = []
     errors: list[str] = []
 
-    def _ok(name: str, detail: str = "") -> None:
-        checks.append({"name": name, "ok": True, "detail": detail})
+    def _ok(name: str, detail: str = "", *, critical: bool = False) -> None:
+        checks.append({"name": name, "ok": True, "detail": detail, "critical": critical})
 
-    def _fail(name: str, detail: str) -> None:
-        checks.append({"name": name, "ok": False, "detail": detail})
+    def _fail(name: str, detail: str, *, critical: bool = True) -> None:
+        checks.append({"name": name, "ok": False, "detail": detail, "critical": critical})
         errors.append(f"{name}: {detail}")
 
     if not root.is_dir():
-        return {"ok": False, "errors": [f"missing_dir:{root}"], "checks": []}
+        return {
+            "ok": False,
+            "errors": [f"missing_dir:{root}"],
+            "checks": [],
+            "critical_failed": 1,
+        }
 
     required = [
-        "main.py",
-        "app/handlers.py",
-        "app/config.py",
-        "requirements.txt",
+        ("main.py", True),
+        ("app/handlers.py", True),
+        ("app/config.py", True),
+        ("requirements.txt", True),
+        (".env.example", False),
+        ("README.md", False),
     ]
-    for rel in required:
+    for rel, critical in required:
         p = root / rel
         if p.is_file() and p.stat().st_size > 0:
-            _ok(f"file:{rel}", f"bytes={p.stat().st_size}")
+            _ok(f"file:{rel}", f"bytes={p.stat().st_size}", critical=critical)
         else:
-            _fail(f"file:{rel}", "missing_or_empty")
+            _fail(f"file:{rel}", "missing_or_empty", critical=critical)
 
-    # Parse handlers for syntax
     handlers = root / "app" / "handlers.py"
     handler_src = ""
     if handlers.is_file():
@@ -171,22 +207,50 @@ def smoke_generated_project(
         except SyntaxError as exc:
             _fail("main_syntax", str(exc))
 
-    # Expected capability handlers / commands
-    for key in expected_keys or []:
+    # requirements must mention telegram
+    req = root / "requirements.txt"
+    if req.is_file():
+        rtxt = req.read_text(encoding="utf-8", errors="ignore").lower()
+        if "python-telegram-bot" in rtxt or "telegram" in rtxt:
+            _ok("requirements_telegram")
+        else:
+            _fail("requirements_telegram", "python-telegram-bot not pinned")
+
+    expected = list(expected_keys or [])
+    for key in expected:
         if key in {"start", "help"}:
             continue
         hname = f"handle_{key}".replace("-", "_")
-        # command may be shortened
-        if handler_src and (hname in handler_src or key in handler_src):
+        if handler_src and (hname in handler_src or f"handle_{key}" in handler_src or key in handler_src):
             _ok(f"handler:{key}")
         else:
             _fail(f"handler:{key}", f"missing {hname}")
 
-    # Scaffold-specific markers
+        # CommandHandler registration in main
+        cmd = _command_for_key(key)
+        if main_src:
+            # accept CommandHandler('cmd' or "cmd"
+            pat = re.compile(
+                rf"CommandHandler\(\s*['\"]({re.escape(cmd)}|{re.escape(key)})['\"]",
+                re.I,
+            )
+            if pat.search(main_src) or f"'{cmd}'" in main_src or f'"{cmd}"' in main_src:
+                _ok(f"command_registered:{cmd}")
+            else:
+                # non-critical if handler exists (alias path)
+                _fail(
+                    f"command_registered:{cmd}",
+                    f"CommandHandler for {cmd}/{key} not found in main",
+                    critical=False,
+                )
+
+    # Scaffold runtimes
     generic = root / "app" / "services" / "generic.py"
-    if any(k.startswith("scaffold_") or k in {
-        "scaffold_translate", "scaffold_ocr", "scaffold_schedule"
-    } for k in (expected_keys or [])):
+    needs_generic = any(
+        k.startswith("scaffold_") or k.startswith("pack_learned_")
+        for k in expected
+    )
+    if needs_generic:
         if generic.is_file():
             gsrc = generic.read_text(encoding="utf-8")
             try:
@@ -194,38 +258,48 @@ def smoke_generated_project(
                 _ok("generic_syntax")
             except SyntaxError as exc:
                 _fail("generic_syntax", str(exc))
-            if "scaffold_translate" in (expected_keys or []) and "translate_text" not in gsrc:
-                _fail("scaffold_translate_runtime", "translate_text missing")
-            elif "scaffold_translate" in (expected_keys or []):
-                _ok("scaffold_translate_runtime")
-            if "scaffold_ocr" in (expected_keys or []):
+            if "scaffold_translate" in expected:
+                if "translate_text" in gsrc:
+                    _ok("scaffold_translate_runtime")
+                else:
+                    _fail("scaffold_translate_runtime", "translate_text missing")
+            if "scaffold_ocr" in expected:
                 if "ocr_hint" in gsrc or "ocr_from_image" in gsrc:
                     _ok("scaffold_ocr_runtime")
                 else:
                     _fail("scaffold_ocr_runtime", "ocr helpers missing")
-                if "photo_router" not in handler_src and "filters.PHOTO" not in main_src:
-                    _fail("ocr_photo_wiring", "photo_router not registered")
-                else:
+                if "photo_router" in handler_src or "filters.PHOTO" in main_src:
                     _ok("ocr_photo_wiring")
+                else:
+                    _fail("ocr_photo_wiring", "photo_router not registered")
+            if "scaffold_schedule" in expected:
+                if "schedule_note" in gsrc:
+                    _ok("scaffold_schedule_runtime")
+                else:
+                    _fail("scaffold_schedule_runtime", "schedule_note missing")
         else:
             _fail("generic.py", "missing for scaffold features")
 
-    # main registers Application
     if main_src:
         if "Application" in main_src and "add_handler" in main_src:
             _ok("main_registers_handlers")
         else:
             _fail("main_registers_handlers", "no Application/add_handler")
 
-    ok_all = all(c["ok"] for c in checks) if checks else False
-    return {
+    critical_failed = [c for c in checks if not c["ok"] and c.get("critical", True)]
+    ok_all = len(critical_failed) == 0
+    out = {
         "ok": ok_all,
         "project_path": str(root),
         "checks": checks,
         "passed": sum(1 for c in checks if c["ok"]),
         "failed": sum(1 for c in checks if not c["ok"]),
+        "critical_failed": len(critical_failed),
         "errors": errors,
+        "strict": os.getenv("CAPABILITY_SMOKE_STRICT", "").strip().lower() in {"1", "true", "yes"},
     }
+    out["log_path"] = _persist_report("project_smoke_last", out)
+    return out
 
 
 def attach_generation_diagnostics(
@@ -247,14 +321,35 @@ def attach_generation_diagnostics(
         out["project_smoke"] = smoke_generated_project(
             project_path, expected_keys=list(preferred_keys or [])
         )
-    out["ok"] = bool(out["system_health"].get("ok")) and (
-        out.get("project_smoke", {}).get("ok", True)
+    health_ok = bool(out["system_health"].get("ok"))
+    smoke_ok = bool(out.get("project_smoke", {}).get("ok", True))
+    out["ok"] = health_ok and smoke_ok
+    # strict: caller may fail build when project_smoke has critical failures
+    out["should_fail_build"] = bool(
+        out.get("project_smoke", {}).get("strict")
+        and (out.get("project_smoke", {}).get("critical_failed") or 0) > 0
     )
+    out["log_path"] = _persist_report("diagnostics_last", {
+        "ok": out["ok"],
+        "should_fail_build": out["should_fail_build"],
+        "request": (request or "")[:200],
+        "project_path": str(project_path) if project_path else None,
+    })
     return out
+
+
+def health_summary_ar(health: dict[str, Any] | None = None) -> str:
+    """Short Arabic summary for soft notes / ops."""
+    h = health or capability_system_health()
+    if h.get("ok"):
+        return f"✅ صحة النظام: {h.get('passed')}/{h.get('passed', 0) + h.get('failed', 0)} فحص ناجح"
+    fails = [c["name"] for c in h.get("checks", []) if not c.get("ok")]
+    return "⚠️ صحة النظام: فشل " + "، ".join(fails[:6])
 
 
 __all__ = [
     "capability_system_health",
     "smoke_generated_project",
     "attach_generation_diagnostics",
+    "health_summary_ar",
 ]

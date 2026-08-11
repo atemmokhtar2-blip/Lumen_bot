@@ -44,6 +44,7 @@ from .pipeline_trace import fail_safe_message, pipeline_trace
 from .health import (
     attach_generation_diagnostics,
     capability_system_health,
+    health_summary_ar,
     smoke_generated_project,
 )
 from .pack_promotion import (

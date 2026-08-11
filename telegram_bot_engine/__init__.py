@@ -903,6 +903,15 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 "blocked_by": "anti_hallucination",
             }
         )
+        try:
+            from .services.capability_detection.health import capability_system_health
+            meta["capability_diagnostics"] = {
+                "system_health": capability_system_health(),
+                "ok": False,
+                "note": "attached_on_anti_hallucination_failure",
+            }
+        except Exception:
+            pass
         errs = list(result.errors) + [f.message_ar for f in ah_report.errors]
         return GenerationResult(
             success=False,
@@ -929,7 +938,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 "ready_for_token": bool(meta.get("ready_for_token", False)),
             }
         )
-        # Phase 10: capability diagnostics (offline-safe; never blocks success)
+        # Phase 10: capability diagnostics + optional strict smoke gate
         try:
             from .services.capability_detection.health import attach_generation_diagnostics
             _keys = list(preferred_keys or []) if preferred_keys else []
@@ -943,6 +952,23 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 project_path=project_dir,
                 preferred_keys=[k for k in _keys if k],
             )
+            _diag = meta["capability_diagnostics"]
+            if _diag.get("should_fail_build"):
+                meta["ready_for_token"] = False
+                meta["blocked_by"] = "capability_smoke_strict"
+                _smoke_errs = list((_diag.get("project_smoke") or {}).get("errors") or [])
+                return GenerationResult(
+                    success=False,
+                    project_path=str(project_dir),
+                    stages=[
+                        StageResult.ok("spec_preset", outputs={"preset": tag}),
+                        StageResult.ok("spec_codegen", outputs={"files": result.files}),
+                        StageResult.failed("capability_smoke", errors=_smoke_errs[:12]),
+                    ],
+                    validation_reports=[],
+                    errors=_smoke_errs or ["capability_smoke_strict_failed"],
+                    metadata=meta,
+                )
         except Exception as _dx:
             meta["capability_diagnostics_error"] = str(_dx)[:200]
         stages = [
