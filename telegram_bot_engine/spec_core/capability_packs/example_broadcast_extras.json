@@ -1,0 +1,21 @@
+{
+  "id": "example_broadcast_extras",
+  "version": "1.0.0",
+  "name": "Broadcast extras example pack",
+  "description": "Example extensible pack — demonstrates Phase 4 overlay registration",
+  "source": "local",
+  "enabled": true,
+  "capabilities": [
+    {
+      "key": "broadcast_schedule",
+      "service": "content",
+      "method": "schedule_broadcast",
+      "description_ar": "جدولة رسالة جماعية",
+      "description_en": "Schedule a broadcast message",
+      "category": "content",
+      "default_actor": "admin",
+      "keywords": ["جدولة إذاعة", "schedule broadcast", "رسالة مجدولة", "برودكاست مجدول"],
+      "dependencies": ["broadcast_admin"]
+    }
+  ]
+}

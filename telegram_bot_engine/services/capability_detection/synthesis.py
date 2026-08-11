@@ -270,10 +270,25 @@ def _coherence_filter(
     return kept, pruned
 
 
+def _pack_dependency_map() -> dict[str, tuple[str, ...]]:
+    """Optional dependencies declared in loaded capability packs."""
+    try:
+        from .packs import loaded_packs
+        out: dict[str, tuple[str, ...]] = {}
+        for pack in loaded_packs().values():
+            for c in pack.capabilities:
+                if c.dependencies:
+                    out[c.key] = tuple(c.dependencies)
+        return out
+    except Exception:
+        return {}
+
+
 def _expand_dependencies(keys: Iterable[str]) -> tuple[list[str], list[str]]:
     selected: list[str] = []
     seen: set[str] = set()
     added_deps: list[str] = []
+    pack_deps = _pack_dependency_map()
 
     def add(k: str, as_dep: bool = False) -> None:
         if k in seen or not _valid_key(k):
@@ -289,7 +304,7 @@ def _expand_dependencies(keys: Iterable[str]) -> tuple[list[str], list[str]]:
     for _ in range(2):
         snapshot = list(selected)
         for k in snapshot:
-            for dep in _DEPENDENCIES.get(k, ()):
+            for dep in _DEPENDENCIES.get(k, ()) + pack_deps.get(k, ()):
                 add(dep, as_dep=True)
 
     # companions only for dominant categories already in pack

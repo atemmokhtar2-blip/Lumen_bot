@@ -78,6 +78,17 @@ def telegram_preflight(request: str) -> dict[str, Any]:
     """
     report = run_detection(request)
     feats = feature_keys(report, include_core=False)
+    # Phase 4: persist gaps for future research / packs
+    if report.gaps:
+        try:
+            from .gap_journal import record_gaps
+            record_gaps(
+                request=request,
+                gaps=report.gaps,
+                detection_status=report.status.value,
+            )
+        except Exception:
+            pass
 
     if report.status == DetectionStatus.IMPOSSIBLE or not report.can_generate:
         from bot_interface.capability_boundaries import rejection_message
@@ -117,8 +128,8 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             "report": report,
         }
 
-    # Weak / nonsense: only trivial utils with no bot intent → block
-    _WEAK = {"random_pick", "echo", "time_now", "calc", "uuid_gen", "password_gen", "qr_text", "short_note", "stats_basic"}
+    # Weak / nonsense: no bot-intent language and no real product category → block
+    _WEAK_CATS = {"utils", "core"}
     _req = (request or "").lower()
     _bot_intent = any(
         w in _req
@@ -128,7 +139,12 @@ def telegram_preflight(request: str) -> dict[str, Any]:
             "welcome", "shop", "cart", "ticket", "start",
         )
     )
-    if feats and set(feats).issubset(_WEAK) and not _bot_intent and report.confidence < 0.7:
+    _product_cats = {
+        m.category
+        for m in report.matched
+        if m.key not in {"start", "help"} and m.category not in _WEAK_CATS
+    }
+    if not _bot_intent and not _product_cats:
         from bot_interface.capability_boundaries import rejection_message
         msg = rejection_message(
             "الوصف غير واضح كطلب بوت — لم يُرصد قصد منتج واضح",

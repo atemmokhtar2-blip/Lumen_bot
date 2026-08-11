@@ -228,8 +228,19 @@ def detect_capabilities(
     feas = check_feasibility(original)
     resolved_domains = _resolve_domains(match_text or original, domains)
 
+    # Phase 4: load capability packs (overlay registry + keyword index)
+    try:
+        from .packs import ensure_packs_loaded, keyword_hits
+        ensure_packs_loaded()
+        _pack_hits = keyword_hits(match_text or original)
+    except Exception:
+        _pack_hits = []
+
     # 1) Exact extractor keys (never invents) — run on expanded match text
     extracted_keys = extract_all(match_text or original, domains=resolved_domains or None)
+    for _pk in _pack_hits:
+        if _pk not in extracted_keys:
+            extracted_keys.append(_pk)
     matched: list[MatchedCapability] = []
     from .search import is_bulk_key
     for k in extracted_keys:
