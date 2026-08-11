@@ -167,6 +167,18 @@ def telegram_preflight(request: str) -> dict[str, Any]:
         soft_parts.append(
             "المدعوم: " + "، ".join(feats[:10]) + ("…" if len(feats) > 10 else "")
         )
+        # Phase 5: optional research note (local KB / web) — never auto-registers
+        try:
+            import os as _os
+            if _os.getenv("CAPABILITY_RESEARCH_ON_GAP", "").strip() in {"1", "true", "yes"}:
+                from .web_research import research_for_detection_gaps
+                _rs = research_for_detection_gaps(report.gaps, request=request, limit=1, persist=True)
+                if _rs and _rs[0].get("spec"):
+                    _title = (_rs[0]["spec"].get("title") or "")[:80]
+                    _libs = ", ".join((_rs[0]["spec"].get("libraries") or [])[:4])
+                    soft_parts.append(f"🔎 بحث مسودة: {_title}" + (f" | libs: {_libs}" if _libs else ""))
+        except Exception:
+            pass
     elif report.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE) and feats:
         soft_parts.append(
             f"🔧 تم رصد {len(feats)} قدرة من السجل: "
