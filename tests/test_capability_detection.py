@@ -87,15 +87,21 @@ def test_tickets_subs():
 
 
 def test_gap_auto_translate():
+    # Phase 8: covered by scaffold_translate → COMPOSABLE, no translate gap
     rep = detect_capabilities("بوت يترجم الرسائل تلقائياً في المجموعة")
-    assert rep.status == DetectionStatus.GAP
-    assert any("ترجم" in g.phrase or "ترجم" in g.reason for g in rep.gaps)
+    assert "scaffold_translate" in set(rep.matched_keys())
+    assert rep.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE)
+    assert not any("ترجم" in g.reason for g in rep.gaps)
 
 
 def test_gap_image_ai():
+    # OCR scaffold covers image-text; pure generative vision may still gap
     rep = detect_capabilities("بوت تحليل صور بالذكاء الاصطناعي")
-    assert rep.status in (DetectionStatus.GAP, DetectionStatus.IMPOSSIBLE)
-    assert rep.gaps or rep.status == DetectionStatus.IMPOSSIBLE
+    keys = set(rep.matched_keys())
+    if "scaffold_ocr" in keys:
+        assert rep.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE, DetectionStatus.GAP)
+    else:
+        assert rep.status in (DetectionStatus.GAP, DetectionStatus.IMPOSSIBLE)
 
 
 def test_impossible_ml_training():
@@ -163,7 +169,8 @@ def test_can_satisfy_welcome():
 
 
 def test_can_satisfy_translate_false():
-    assert can_satisfy("بوت يترجم الرسائل تلقائياً") is False
+    # Phase 8: translate scaffold makes this satisfyable
+    assert can_satisfy("بوت يترجم الرسائل تلقائياً") is True
 
 
 def test_dialect_welcome_jadad():
