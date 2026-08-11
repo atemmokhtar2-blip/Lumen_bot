@@ -35,9 +35,12 @@ from .personalization_engine import (
     build_personalization,
     feature_filter_for_skill,
     personalize,
+    personalize_suggestions,
     phrase,
+    score_feature_for_style,
     style_prompt_ar,
     style_prompt_en,
+    suggestion_titles,
 )
 
 __all__ = [
@@ -75,6 +78,9 @@ __all__ = [
     "phrase",
     "feature_filter_for_skill",
     "adapt_message",
+    "score_feature_for_style",
+    "personalize_suggestions",
+    "suggestion_titles",
     "style_prompt_ar",
     "style_prompt_en",
 ]

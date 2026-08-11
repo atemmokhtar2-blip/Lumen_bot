@@ -124,6 +124,7 @@ class SuggestionReport:
     already: list[str] = field(default_factory=list)
     prompt_ar: str = ""
     prompt_en: str = ""
+    style: dict[str, Any] | None = None  # L6 personalization snapshot
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -134,6 +135,7 @@ class SuggestionReport:
             "preventive": [s.to_dict() for s in self.preventive],
             "prompt_ar": self.prompt_ar,
             "prompt_en": self.prompt_en,
+            "style": self.style,
         }
 
     def all_features(self) -> list[str]:
@@ -396,11 +398,18 @@ def _format_prompt(
     lang: str = "ar",
     style: Any = None,
 ) -> tuple[str, str]:
-    # Closing question adapts via L6 when available (never a single fixed line)
+    # Closing + titles from L6 when available
+    titles = {
+        "build": ("💡 اقتراحات أثناء البناء:", "💡 Build suggestions:"),
+        "improve": ("💡 تحسينات بعد التوليد:", "💡 Post-build improvements:"),
+        "preventive": ("⚠️ تنبيهات وقائية:", "⚠️ Preventive tips:"),
+    }
+    close_ar, close_en = "عايز أضيف أي منهم؟", "Add any of these?"
     if style is not None:
         try:
-            from .personalization_engine import phrase as _phrase
+            from .personalization_engine import phrase as _phrase, suggestion_titles
 
+            titles = suggestion_titles(style)
             close_ar = _phrase("lets_add", style, subject="أي من دول؟", with_emoji=False)
             close_en = _phrase("lets_add", style, subject="any of these?", with_emoji=False)
             if style.language_variant == "en":
@@ -408,9 +417,7 @@ def _format_prompt(
             if style.language_variant in {"ar", "ar_eg", "mixed"}:
                 close_en = "Add any of these?"
         except Exception:
-            close_ar, close_en = "عايز أضيف أي منهم؟", "Add any of these?"
-    else:
-        close_ar, close_en = "عايز أضيف أي منهم؟", "Add any of these?"
+            pass
 
     def block(title_ar: str, title_en: str, items: list[Suggestion]) -> tuple[str, str]:
         if not items:
@@ -426,15 +433,18 @@ def _format_prompt(
         return "\n".join(ar_lines), "\n".join(en_lines)
 
     ar_parts, en_parts = [], []
-    a, e = block("💡 اقتراحات أثناء البناء:", "💡 Build suggestions:", report.build)
+    ba, be = titles.get("build", ("💡 اقتراحات:", "💡 Build:"))
+    a, e = block(ba, be, report.build)
     if a:
         ar_parts.append(a)
         en_parts.append(e)
-    a, e = block("💡 تحسينات بعد التوليد:", "💡 Post-build improvements:", report.improve)
+    ia, ie = titles.get("improve", ("💡 تحسينات:", "💡 Improve:"))
+    a, e = block(ia, ie, report.improve)
     if a:
         ar_parts.append(a)
         en_parts.append(e)
-    a, e = block("⚠️ تنبيهات وقائية:", "⚠️ Preventive tips:", report.preventive)
+    pa, pe = titles.get("preventive", ("⚠️ تنبيهات:", "⚠️ Preventive:"))
+    a, e = block(pa, pe, report.preventive)
     if a:
         ar_parts.append(a)
         en_parts.append(e)
@@ -451,7 +461,7 @@ def suggest(
     memory: MemoryEngine | None = None,
     limit: int = 6,
 ) -> SuggestionReport:
-    """Compute dynamic suggestions for this bot request / build."""
+    """Compute dynamic suggestions for this bot request / build (L5 + L6)."""
     if lu is None and text:
         lu = understand(text)
     if intent is None and text:
@@ -472,7 +482,11 @@ def suggest(
     # L6 personalization (optional, never breaks L5)
     style = None
     try:
-        from .personalization_engine import build_personalization, feature_filter_for_skill
+        from .personalization_engine import (
+            build_personalization,
+            feature_filter_for_skill,
+            personalize_suggestions,
+        )
 
         style = build_personalization(
             text=text, intent=intent, lu=lu, user_id=user_id, memory=mem
@@ -482,6 +496,7 @@ def suggest(
             already |= set(filtered)
     except Exception:
         style = None
+        personalize_suggestions = None  # type: ignore[assignment]
 
     build: list[Suggestion] = []
     if primary:
@@ -497,11 +512,30 @@ def suggest(
         prev = bag.get(s.feature)
         if not prev or s.confidence > prev.confidence:
             bag[s.feature] = s
-    build = sorted(bag.values(), key=lambda s: -s.confidence)[:limit]
+    build = sorted(bag.values(), key=lambda s: -s.confidence)
 
     selected = list(selected_features or (intent.feature_plan if intent else []) or [])
-    improve = _audit_improve(selected, primary)[:limit]
-    preventive = _preventive(selected, primary, lu)[:limit]
+    improve = _audit_improve(selected, primary)
+    preventive = _preventive(selected, primary, lu)
+
+    # Deep L6 pass: rewrite labels/reasons/order per user style
+    if style is not None and personalize_suggestions is not None:
+        try:
+            build = personalize_suggestions(build, style, kind="build", limit=limit)
+            improve = personalize_suggestions(improve, style, kind="improve", limit=limit)
+            # Beginners: fewer preventive noise
+            prev_limit = 2 if style.skill_level == "beginner" else limit
+            preventive = personalize_suggestions(
+                preventive, style, kind="preventive", limit=prev_limit
+            )
+        except Exception:
+            build = build[:limit]
+            improve = improve[:limit]
+            preventive = preventive[:limit]
+    else:
+        build = build[:limit]
+        improve = improve[:limit]
+        preventive = preventive[:limit]
 
     report = SuggestionReport(
         build=build,
@@ -509,6 +543,7 @@ def suggest(
         preventive=preventive,
         intent=primary,
         already=sorted(already),
+        style=style.to_dict() if style is not None else None,
     )
     lang = intent.language if intent else "ar"
     report.prompt_ar, report.prompt_en = _format_prompt(report, lang=lang, style=style)

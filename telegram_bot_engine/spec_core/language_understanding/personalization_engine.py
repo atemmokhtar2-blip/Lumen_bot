@@ -1,14 +1,21 @@
-"""Layer 6 — Personalization Engine (zero-AI, fully dynamic).
+"""Layer 6 — Personalization Engine (zero-AI, fully dynamic, L5-aware).
 
-Problem solved: generated bots used to look the same for every user.
-This layer adapts *per user* using:
+Problem solved: generated bots + suggestion prompts looked the same for everyone.
+
+Adapts *per user* using:
   • skill_level (beginner / intermediate / expert)
   • domain / intent (shop, restaurant, electronics, kids, …)
   • language variant (ar_eg / ar / en)
-  • UserProfile durable prefs (complexity, naming, favorite intents)
+  • UserProfile durable prefs (complexity, preferred_features, favorite_intents)
 
-Nothing is a final hard-coded speech. Every phrase is composed at call time
-from style tokens + domain flavor + skill rules.
+Nothing is a final hard-coded speech. Every phrase / label / reason is composed
+at call time from style tokens + domain flavor + skill rules.
+
+Deep L5 integration:
+  • personalize_suggestions() — rewrite labels, reasons, confidence, order
+  • domain affinity boosts for features
+  • skill filters which suggestion kinds appear
+  • profile preferred_features get priority
 
 No external libraries — pure template / rule logic.
 """
@@ -22,76 +29,102 @@ from .intent_analysis import IntentAnalysis, detect_language
 from .memory_engine import MemoryEngine, UserProfile, get_memory_engine
 
 
-# ── Domain flavor (emojis + tone labels only; never full fixed sentences) ──
+# ── Domain flavor ───────────────────────────────────────────────────────────
 _DOMAIN_FLAVOR: dict[str, dict[str, Any]] = {
     "shop": {
         "emojis": ["🛒", "🛍️", "💳", "📦"],
         "tone": "commerce",
         "accent": "clean",
+        "boost": ["cart_view", "cart_checkout", "product_search", "pay_methods", "order_track", "coupon_apply", "review_add"],
+        "soft": ["wishlist_add"],
     },
     "marketplace": {
         "emojis": ["🏪", "🔍", "⭐", "📦"],
         "tone": "commerce",
         "accent": "clean",
+        "boost": ["listing_create", "listing_search", "pay_methods", "review_add"],
+        "soft": [],
     },
     "restaurant": {
         "emojis": ["🍕", "🍔", "🍽️", "📋"],
         "tone": "warm",
         "accent": "appetizing",
+        "boost": ["menu_view", "menu_order", "table_book", "order_status"],
+        "soft": ["coupon_apply"],
     },
     "kids": {
         "emojis": ["🧸", "🎈", "🌈", "✨"],
         "tone": "playful",
         "accent": "soft",
+        "boost": ["product_search", "wishlist_add", "cart_view", "coupon_apply"],
+        "soft": ["review_add"],
+        "avoid": ["sec_headers_check", "pipeline_board", "bulk_import", "webhook_set"],
     },
     "electronics": {
         "emojis": ["📱", "💻", "🔌", "⚡"],
         "tone": "technical",
         "accent": "precise",
+        "boost": ["product_search", "review_add", "pay_methods", "order_track", "wishlist_add"],
+        "soft": [],
     },
     "education": {
         "emojis": ["📚", "🎓", "✅", "📝"],
         "tone": "encouraging",
         "accent": "clear",
+        "boost": ["course_list", "quiz_start", "progress_view", "course_enroll"],
+        "soft": [],
     },
     "security": {
         "emojis": ["🔒", "🛡️", "🔍", "⚠️"],
         "tone": "professional",
         "accent": "precise",
+        "boost": ["sec_dns_check", "sec_tls_check", "sec_headers_check", "sec_tips", "sec_domain_overview"],
+        "soft": [],
     },
     "tickets": {
         "emojis": ["🎫", "💬", "📌", "✅"],
         "tone": "supportive",
         "accent": "clear",
+        "boost": ["ticket_open", "ticket_status", "ticket_reply", "ticket_list"],
+        "soft": [],
     },
     "crm": {
         "emojis": ["📊", "🤝", "📈", "💼"],
         "tone": "professional",
         "accent": "clean",
+        "boost": ["lead_capture", "pipeline_board", "deal_create", "followup_set"],
+        "soft": [],
     },
     "gaming": {
         "emojis": ["🎮", "🏆", "⚡", "🔥"],
         "tone": "energetic",
         "accent": "fun",
+        "boost": ["leaderboard", "contests", "balance"],
+        "soft": [],
     },
     "wallet": {
         "emojis": ["💰", "💳", "📱", "✅"],
         "tone": "trust",
         "accent": "clear",
+        "boost": ["wallet_balance", "wallet_topup", "pay_methods"],
+        "soft": [],
     },
     "booking": {
         "emojis": ["📅", "🗓️", "✅", "⏰"],
         "tone": "calm",
         "accent": "clear",
+        "boost": ["table_book"],
+        "soft": [],
     },
     "default": {
         "emojis": ["🤖", "✨", "✅", "📌"],
         "tone": "neutral",
         "accent": "clean",
+        "boost": [],
+        "soft": [],
     },
 }
 
-# Map free-text domain hints (from entities / request) → flavor key
 _DOMAIN_ALIAS: dict[str, str] = {
     "اطفال": "kids",
     "أطفال": "kids",
@@ -99,38 +132,76 @@ _DOMAIN_ALIAS: dict[str, str] = {
     "children": "kids",
     "العاب": "kids",
     "العاب اطفال": "kids",
+    "لعب": "kids",
     "الكترونيات": "electronics",
     "إلكترونيات": "electronics",
     "electronics": "electronics",
     "موبايل": "electronics",
     "لابتوب": "electronics",
     "tech": "electronics",
+    "هاتف": "electronics",
+    "جوال": "electronics",
     "مطعم": "restaurant",
     "restaurant": "restaurant",
     "كافيه": "restaurant",
     "cafe": "restaurant",
+    "منيو": "restaurant",
+    "اكل": "restaurant",
+    "أكل": "restaurant",
     "متجر": "shop",
     "shop": "shop",
     "store": "shop",
+    "محل": "shop",
+    "امن": "security",
+    "أمن": "security",
+    "security": "security",
+    "تعليم": "education",
+    "كورس": "education",
+    "education": "education",
+    "تذكرة": "tickets",
+    "تذاكر": "tickets",
+    "support": "tickets",
 }
+
+# Features treated as advanced (hidden/demoted for beginners)
+_ADVANCED_FEATURES = {
+    "coupon_create",
+    "admin_panel",
+    "api_endpoint",
+    "webhook_set",
+    "analytics_view",
+    "bulk_import",
+    "role_manage",
+    "sec_headers_check",
+    "pipeline_board",
+    "wallet_topup",
+    "sec_list_reports",
+    "deal_create",
+}
+
+_HEAVY_FEATURES = {"bulk_import", "role_manage", "webhook_set", "api_endpoint"}
 
 
 @dataclass
 class PersonalizationStyle:
     """Resolved style for one user + one generation request."""
 
-    skill_level: str = "beginner"  # beginner | intermediate | expert
+    skill_level: str = "beginner"
     domain: str = "default"
-    language_variant: str = "ar"  # ar_eg | ar | en | mixed
-    complexity: str = "simple"  # simple | medium | complex
+    language_variant: str = "ar"
+    complexity: str = "simple"
     tone: str = "neutral"
     accent: str = "clean"
     emojis: list[str] = field(default_factory=lambda: ["🤖", "✨"])
-    command_density: str = "few"  # few | normal | rich
+    command_density: str = "few"
     show_advanced: bool = False
     show_admin_panel: bool = False
     prefer_arabic: bool = True
     naming_style: str = "mixed"
+    preferred_features: list[str] = field(default_factory=list)
+    domain_boost: list[str] = field(default_factory=list)
+    domain_soft: list[str] = field(default_factory=list)
+    domain_avoid: list[str] = field(default_factory=list)
     user_id: int | None = None
     reasons: list[str] = field(default_factory=list)
 
@@ -154,145 +225,87 @@ class PersonalizationStyle:
             "show_admin_panel": self.show_admin_panel,
             "prefer_arabic": self.prefer_arabic,
             "naming_style": self.naming_style,
+            "preferred_features": list(self.preferred_features),
+            "domain_boost": list(self.domain_boost),
             "user_id": self.user_id,
             "reasons": list(self.reasons),
         }
 
 
-# ── Phrase atoms (never full final sentences; composed at runtime) ──────────
-
+# ── Phrase atoms ────────────────────────────────────────────────────────────
 _ATOMS: dict[str, dict[str, dict[str, str]]] = {
-    # action keys → language_variant → skill → fragment
     "lets_add": {
-        "ar_eg": {
-            "beginner": "يلا نضيف",
-            "intermediate": "يلا نضيف",
-            "expert": "هنضيف",
-        },
-        "ar": {
-            "beginner": "لنقم بإضافة",
-            "intermediate": "سنضيف",
-            "expert": "أضف",
-        },
-        "en": {
-            "beginner": "Let's add",
-            "intermediate": "We'll add",
-            "expert": "Add",
-        },
+        "ar_eg": {"beginner": "يلا نضيف", "intermediate": "يلا نضيف", "expert": "هنضيف"},
+        "ar": {"beginner": "لنقم بإضافة", "intermediate": "سنضيف", "expert": "أضف"},
+        "en": {"beginner": "Let's add", "intermediate": "We'll add", "expert": "Add"},
     },
     "welcome": {
-        "ar_eg": {
-            "beginner": "أهلاً بيك",
-            "intermediate": "مرحباً",
-            "expert": "مرحباً",
-        },
-        "ar": {
-            "beginner": "مرحباً بك",
-            "intermediate": "مرحباً",
-            "expert": "أهلاً",
-        },
-        "en": {
-            "beginner": "Welcome",
-            "intermediate": "Hi",
-            "expert": "Hello",
-        },
+        "ar_eg": {"beginner": "أهلاً بيك", "intermediate": "مرحباً", "expert": "مرحباً"},
+        "ar": {"beginner": "مرحباً بك", "intermediate": "مرحباً", "expert": "أهلاً"},
+        "en": {"beginner": "Welcome", "intermediate": "Hi", "expert": "Hello"},
     },
     "help_hint": {
-        "ar_eg": {
-            "beginner": "لو محتار اكتب /help",
-            "intermediate": "للتفاصيل: /help",
-            "expert": "/help للأوامر",
-        },
-        "ar": {
-            "beginner": "للمساعدة اكتب /help",
-            "intermediate": "التفاصيل عبر /help",
-            "expert": "/help",
-        },
-        "en": {
-            "beginner": "Type /help if you need guidance",
-            "intermediate": "See /help for details",
-            "expert": "/help",
-        },
+        "ar_eg": {"beginner": "لو محتار اكتب /help", "intermediate": "للتفاصيل: /help", "expert": "/help للأوامر"},
+        "ar": {"beginner": "للمساعدة اكتب /help", "intermediate": "التفاصيل عبر /help", "expert": "/help"},
+        "en": {"beginner": "Type /help if you need guidance", "intermediate": "See /help for details", "expert": "/help"},
     },
     "success": {
-        "ar_eg": {
-            "beginner": "تمام، اتعمل بنجاح",
-            "intermediate": "تم بنجاح",
-            "expert": "تم",
-        },
-        "ar": {
-            "beginner": "تم بنجاح",
-            "intermediate": "تم",
-            "expert": "✓",
-        },
-        "en": {
-            "beginner": "Done successfully",
-            "intermediate": "Done",
-            "expert": "OK",
-        },
+        "ar_eg": {"beginner": "تمام، اتعمل بنجاح", "intermediate": "تم بنجاح", "expert": "تم"},
+        "ar": {"beginner": "تم بنجاح", "intermediate": "تم", "expert": "✓"},
+        "en": {"beginner": "Done successfully", "intermediate": "Done", "expert": "OK"},
     },
     "failure": {
-        "ar_eg": {
-            "beginner": "حصلت مشكلة، جرب تاني",
-            "intermediate": "فشل — راجع المدخلات",
-            "expert": "فشل",
-        },
-        "ar": {
-            "beginner": "حدث خطأ، حاول مرة أخرى",
-            "intermediate": "فشل — راجع المدخلات",
-            "expert": "فشل",
-        },
-        "en": {
-            "beginner": "Something went wrong, try again",
-            "intermediate": "Failed — check inputs",
-            "expert": "Failed",
-        },
+        "ar_eg": {"beginner": "حصلت مشكلة، جرب تاني", "intermediate": "فشل — راجع المدخلات", "expert": "فشل"},
+        "ar": {"beginner": "حدث خطأ، حاول مرة أخرى", "intermediate": "فشل — راجع المدخلات", "expert": "فشل"},
+        "en": {"beginner": "Something went wrong, try again", "intermediate": "Failed — check inputs", "expert": "Failed"},
     },
-    "simple_bot": {
-        "ar_eg": {
-            "beginner": "بوت بسيط وواضح",
-            "intermediate": "بوت عملي",
-            "expert": "بوت مضبوط",
-        },
-        "ar": {
-            "beginner": "بوت بسيط وواضح",
-            "intermediate": "بوت عملي",
-            "expert": "بوت مضبوط",
-        },
-        "en": {
-            "beginner": "a simple clear bot",
-            "intermediate": "a practical bot",
-            "expert": "a tight bot",
-        },
+    "suggest_build": {
+        "ar_eg": {"beginner": "اقتراحات مناسبة ليك", "intermediate": "اقتراحات أثناء البناء", "expert": "Build gaps"},
+        "ar": {"beginner": "اقتراحات مناسبة لك", "intermediate": "اقتراحات أثناء البناء", "expert": "فجوات البناء"},
+        "en": {"beginner": "Suggestions for you", "intermediate": "Build suggestions", "expert": "Build gaps"},
     },
-    "advanced_bot": {
-        "ar_eg": {
-            "beginner": "بوت فيه خيارات أكتر",
-            "intermediate": "بوت متقدم",
-            "expert": "بوت كامل (API + Admin)",
-        },
-        "ar": {
-            "beginner": "بوت بخيارات أكثر",
-            "intermediate": "بوت متقدم",
-            "expert": "بوت كامل (API + Admin)",
-        },
-        "en": {
-            "beginner": "a bot with more options",
-            "intermediate": "an advanced bot",
-            "expert": "full bot (API + Admin)",
-        },
+    "suggest_improve": {
+        "ar_eg": {"beginner": "تحسينات بسيطة بعد التوليد", "intermediate": "تحسينات بعد التوليد", "expert": "Post-build"},
+        "ar": {"beginner": "تحسينات بعد التوليد", "intermediate": "تحسينات بعد التوليد", "expert": "تحسينات لاحقة"},
+        "en": {"beginner": "Simple improvements", "intermediate": "Post-build improvements", "expert": "Post-build"},
+    },
+    "suggest_preventive": {
+        "ar_eg": {"beginner": "تنبيهات مهمة", "intermediate": "تنبيهات وقائية", "expert": "Risk notes"},
+        "ar": {"beginner": "تنبيهات مهمة", "intermediate": "تنبيهات وقائية", "expert": "ملاحظات مخاطر"},
+        "en": {"beginner": "Important notes", "intermediate": "Preventive tips", "expert": "Risk notes"},
+    },
+    "because_you": {
+        "ar_eg": {"beginner": "مناسب لمستواك", "intermediate": "مناسب لأسلوبك", "expert": "matches your profile"},
+        "ar": {"beginner": "مناسب لمستواك", "intermediate": "مناسب لأسلوبك", "expert": "يتوافق مع ملفك"},
+        "en": {"beginner": "fits your level", "intermediate": "fits your style", "expert": "matches your profile"},
+    },
+    "because_domain": {
+        "ar_eg": {"beginner": "شائع في المجال ده", "intermediate": "شائع في هذا المجال", "expert": "domain prior"},
+        "ar": {"beginner": "شائع في هذا المجال", "intermediate": "شائع في هذا المجال", "expert": "أولوية المجال"},
+        "en": {"beginner": "common in this domain", "intermediate": "common in this domain", "expert": "domain prior"},
+    },
+    "because_pref": {
+        "ar_eg": {"beginner": "من تفضيلاتك السابقة", "intermediate": "من تفضيلاتك", "expert": "your prefs"},
+        "ar": {"beginner": "من تفضيلاتك السابقة", "intermediate": "من تفضيلاتك", "expert": "تفضيلاتك"},
+        "en": {"beginner": "from your past prefs", "intermediate": "from your prefs", "expert": "your prefs"},
     },
 }
 
 
+def _lang_key(style: PersonalizationStyle) -> str:
+    lang = style.language_variant
+    if lang in {"ar_eg", "ar", "en"}:
+        return lang
+    return "ar_eg" if style.prefer_arabic else "en"
+
+
+def _skill_key(style: PersonalizationStyle) -> str:
+    return style.skill_level if style.skill_level in {"beginner", "intermediate", "expert"} else "beginner"
+
+
 def _atom(key: str, style: PersonalizationStyle) -> str:
-    """Pick a phrase atom for this style (never a fixed final sentence)."""
-    lang = style.language_variant if style.language_variant in {"ar_eg", "ar", "en"} else (
-        "ar_eg" if style.prefer_arabic else "en"
-    )
-    if lang == "mixed":
-        lang = "ar_eg" if style.prefer_arabic else "en"
-    skill = style.skill_level if style.skill_level in {"beginner", "intermediate", "expert"} else "beginner"
+    lang = _lang_key(style)
+    skill = _skill_key(style)
     bucket = _ATOMS.get(key) or {}
     by_lang = bucket.get(lang) or bucket.get("ar") or bucket.get("en") or {}
     return by_lang.get(skill) or by_lang.get("beginner") or key
@@ -319,20 +332,31 @@ def phrase(
     return " ".join(p for p in parts if p).strip()
 
 
+def _text_blob(
+    text: str,
+    lu: LanguageUnderstandingResult | None,
+) -> str:
+    parts = [text or ""]
+    if lu:
+        parts.append(lu.original or "")
+        parts.append(lu.normalized or "")
+    return " ".join(parts)
+
+
 def _resolve_domain(
     intent: str | None,
     lu: LanguageUnderstandingResult | None,
     profile: UserProfile | None,
+    text: str = "",
 ) -> tuple[str, list[str]]:
-    """Pick domain flavor key + reasons (dynamic, not fixed)."""
     reasons: list[str] = []
-    text = ""
-    if lu:
-        text = (lu.original or "") + " " + (lu.normalized or "")
-    text_l = text.lower()
+    blob = _text_blob(text, lu)
+    blob_l = blob.lower()
 
-    for alias, key in _DOMAIN_ALIAS.items():
-        if alias in text_l or alias in text:
+    # Longer aliases first for better match
+    for alias in sorted(_DOMAIN_ALIAS.keys(), key=len, reverse=True):
+        if alias in blob_l or alias in blob:
+            key = _DOMAIN_ALIAS[alias]
             reasons.append(f"domain_alias:{alias}→{key}")
             return key, reasons
 
@@ -384,6 +408,8 @@ def _resolve_skill(
             skill = profile.skill_level
         elif profile.total_builds >= 5 and skill == "beginner":
             skill = "intermediate"
+        elif profile.total_builds >= 15 and skill != "expert":
+            skill = "expert"
     return skill if skill in order else "beginner"
 
 
@@ -412,7 +438,7 @@ def build_personalization(
     elif lu:
         primary = lu.primary_domain
 
-    domain, dom_reasons = _resolve_domain(primary, lu, profile)
+    domain, dom_reasons = _resolve_domain(primary, lu, profile, text=text)
     reasons.extend(dom_reasons)
 
     flavor = _DOMAIN_FLAVOR.get(domain) or _DOMAIN_FLAVOR["default"]
@@ -444,6 +470,7 @@ def build_personalization(
 
     prefer_ar = lang in {"ar", "ar_eg", "mixed"}
     naming = profile.naming_style if profile else "mixed"
+    prefs = list(profile.preferred_features) if profile else []
 
     return PersonalizationStyle(
         skill_level=skill,
@@ -458,6 +485,10 @@ def build_personalization(
         show_admin_panel=admin,
         prefer_arabic=prefer_ar,
         naming_style=naming,
+        preferred_features=prefs,
+        domain_boost=list(flavor.get("boost") or []),
+        domain_soft=list(flavor.get("soft") or []),
+        domain_avoid=list(flavor.get("avoid") or []),
         user_id=user_id,
         reasons=reasons,
     )
@@ -467,26 +498,15 @@ def feature_filter_for_skill(
     features: list[str],
     style: PersonalizationStyle,
 ) -> list[str]:
-    """Reduce / keep features according to command density (core features stay)."""
+    """Reduce / keep features according to command density (core stays)."""
+    out = list(features)
+    if style.domain_avoid:
+        out = [f for f in out if f not in set(style.domain_avoid)]
     if style.command_density == "rich" or style.skill_level == "expert":
-        return list(features)
-
-    advanced = {
-        "coupon_create",
-        "admin_panel",
-        "api_endpoint",
-        "webhook_set",
-        "analytics_view",
-        "bulk_import",
-        "role_manage",
-        "sec_headers_check",
-        "pipeline_board",
-        "wallet_topup",
-    }
+        return out
     if style.command_density == "few":
-        return [f for f in features if f not in advanced]
-    heavy = {"bulk_import", "role_manage", "webhook_set"}
-    return [f for f in features if f not in heavy]
+        return [f for f in out if f not in _ADVANCED_FEATURES]
+    return [f for f in out if f not in _HEAVY_FEATURES]
 
 
 def adapt_message(
@@ -495,7 +515,7 @@ def adapt_message(
     *,
     kind: str = "success",
 ) -> str:
-    """Adapt an existing message string to the user's style without replacing meaning."""
+    """Adapt an existing message string to the user's style."""
     base = (base or "").strip()
     if not base:
         return phrase(kind if kind in _ATOMS else "success", style)
@@ -516,8 +536,134 @@ def adapt_message(
     return base
 
 
+def score_feature_for_style(feature: str, style: PersonalizationStyle) -> float:
+    """0..1 affinity score of a feature under this personalization."""
+    score = 0.5
+    if feature in style.preferred_features:
+        score += 0.35
+    if feature in style.domain_boost:
+        score += 0.25
+    if feature in style.domain_soft:
+        score += 0.12
+    if feature in style.domain_avoid:
+        score -= 0.4
+    if feature in _ADVANCED_FEATURES:
+        if style.skill_level == "beginner":
+            score -= 0.35
+        elif style.skill_level == "intermediate":
+            score -= 0.1
+        else:
+            score += 0.08
+    if feature in _HEAVY_FEATURES and style.skill_level != "expert":
+        score -= 0.25
+    return max(0.0, min(1.0, score))
+
+
+def personalize_suggestions(
+    suggestions: list[Any],
+    style: PersonalizationStyle,
+    *,
+    kind: str = "build",
+    limit: int | None = None,
+) -> list[Any]:
+    """Rewrite + reorder L5 suggestions for this user style.
+
+    Expects objects with: feature, label_ar, label_en, confidence, reason, source, kind
+    Returns same type instances with personalized fields.
+    """
+    if not suggestions:
+        return []
+
+    emoji = style.primary_emoji()
+    out: list[Any] = []
+
+    for s in suggestions:
+        feat = getattr(s, "feature", "") or ""
+        # Hard filter avoided / too advanced for beginners on build list
+        if feat in style.domain_avoid:
+            continue
+        if kind == "build" and style.skill_level == "beginner" and feat in _ADVANCED_FEATURES:
+            continue
+        if kind == "preventive" and style.skill_level == "beginner" and feat in _HEAVY_FEATURES:
+            continue
+
+        affinity = score_feature_for_style(feat, style)
+        conf = float(getattr(s, "confidence", 0.5) or 0.5)
+        # Blend original confidence with personalization affinity
+        new_conf = min(0.99, conf * 0.65 + affinity * 0.45)
+
+        label_ar = getattr(s, "label_ar", "") or feat
+        label_en = getattr(s, "label_en", "") or feat
+        # Domain emoji prefix (dynamic, not fixed speech)
+        if emoji and emoji not in label_ar:
+            label_ar = f"{emoji} {label_ar}"
+        if emoji and emoji not in label_en:
+            label_en = f"{emoji} {label_en}"
+
+        reason = getattr(s, "reason", "") or ""
+        # Append personalization hint (composed, not a fixed final sentence)
+        if feat in style.preferred_features:
+            hint = _atom("because_pref", style)
+            if hint and hint not in reason:
+                reason = f"{reason} — {hint}".strip(" —")
+        elif feat in style.domain_boost:
+            hint = _atom("because_domain", style)
+            if hint and hint not in reason:
+                reason = f"{reason} — {hint}".strip(" —")
+        elif style.skill_level == "beginner":
+            hint = _atom("because_you", style)
+            if hint and hint not in reason and affinity >= 0.55:
+                reason = f"{reason} — {hint}".strip(" —")
+
+        # Rebuild same dataclass-like object
+        try:
+            new_s = type(s)(
+                feature=feat,
+                label_ar=label_ar,
+                label_en=label_en,
+                confidence=new_conf,
+                reason=reason,
+                source=getattr(s, "source", "prior"),
+                kind=getattr(s, "kind", kind),
+            )
+        except TypeError:
+            # Fallback: mutate copy if construction signature differs
+            new_s = s
+            try:
+                new_s.label_ar = label_ar
+                new_s.label_en = label_en
+                new_s.confidence = new_conf
+                new_s.reason = reason
+            except Exception:
+                pass
+        out.append(new_s)
+
+    out.sort(key=lambda x: -float(getattr(x, "confidence", 0) or 0))
+    if limit is not None:
+        out = out[:limit]
+    return out
+
+
+def suggestion_titles(style: PersonalizationStyle) -> dict[str, tuple[str, str]]:
+    """Dynamic section titles for L5 prompts (ar, en)."""
+    em = style.primary_emoji()
+    return {
+        "build": (
+            f"{em} {_atom('suggest_build', style)}:",
+            f"{em} {_atom('suggest_build', style)}:",
+        ),
+        "improve": (
+            f"💡 {_atom('suggest_improve', style)}:",
+            f"💡 {_atom('suggest_improve', style)}:",
+        ),
+        "preventive": (
+            f"⚠️ {_atom('suggest_preventive', style)}:",
+            f"⚠️ {_atom('suggest_preventive', style)}:",
+        ),
+    }
+
+
 def style_prompt_ar(style: PersonalizationStyle) -> str:
-    """Human-readable summary (Arabic) of the active personalization — dynamic."""
     skill_ar = {
         "beginner": "مبتدئ → أوامر قليلة ورسائل واضحة",
         "intermediate": "متوسط → توازن بين الوضوح والخيارات",
@@ -536,6 +682,10 @@ def style_prompt_ar(style: PersonalizationStyle) -> str:
         "shop": "متجر",
         "security": "أمن",
         "education": "تعليم",
+        "tickets": "تذاكر دعم",
+        "crm": "CRM",
+        "gaming": "ألعاب",
+        "wallet": "محفظة",
     }.get(style.domain, style.domain)
     em = " ".join(style.emoji_pack(3))
     return (
@@ -591,6 +741,9 @@ __all__ = [
     "phrase",
     "feature_filter_for_skill",
     "adapt_message",
+    "score_feature_for_style",
+    "personalize_suggestions",
+    "suggestion_titles",
     "style_prompt_ar",
     "style_prompt_en",
 ]
