@@ -159,9 +159,16 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("    await message.reply_text(text)")
     elif method in {"add_item", "upload"}:
         L += [
+            "    # Admin/staff only — product create",
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
             "    # Multi-step wizard (name → price → category → desc → photo → confirm)",
             "    if context.args:",
             "        pid = market_svc.add_item(user.id, ' '.join(context.args))",
+            "        if not pid:",
+            "            await message.reply_text('❌ فشل الإضافة أو غير مصرح')",
+            "            return",
             "        await message.reply_text(f'Product added #{pid}')",
             "        return",
             "    try:",
@@ -172,11 +179,20 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     elif method in {"stock_set"}:
         L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
             "    if not context.args:",
             "        await message.reply_text('Usage: /stock product_id qty')",
             "        return",
-            "    pid = market_svc.add_item(user.id, ' '.join(context.args))",
-            "    await message.reply_text(f'Updated #{pid}')",
+            "    # stock_set should use dedicated API when available",
+            "    try:",
+            "        parts = context.args",
+            "        pid, qty = int(parts[0]), int(parts[1])",
+            "        msg = market_svc.stock_set(user.id, pid, qty) if hasattr(market_svc, 'stock_set') else 'use admin panel'",
+            "        await message.reply_text(str(msg))",
+            "    except Exception:",
+            "        await message.reply_text('Usage: /stock product_id qty')",
         ]
     elif method == "checkout" and svc == "cart":
         L += [
@@ -218,19 +234,12 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     elif method in {"wallet_topup", "topup"}:
         L += [
-            "    if context.args:",
-            "        try:",
-            "            amt = int(str(context.args[0]).replace(',', ''))",
-            "            bal = market_svc.wallet_topup(user.id, amt)",
-            "            await message.reply_text('تم الشحن. الرصيد: ' + str(bal))",
-            "        except Exception:",
-            "            await message.reply_text('مبلغ غير صالح')",
-            "        return",
-            "    try:",
-            "        from app.flow_engine import start_flow",
-            "        await start_flow(update, context, 'wallet_topup')",
-            "    except Exception:",
-            "        await message.reply_text('أرسل: /topup 100')",
+            "    # Free top-up disabled — redirect to real payment rails",
+            "    await message.reply_text(",
+            "        '⚠️ الشحن المجاني متوقف.' + chr(10) +",
+            "        'ادفع عبر: /buy (Telegram Payments) أو /vfcash (فودافون كاش + موافقة أدمن)' + chr(10) +",
+            "        'الرصيد الحالي: ' + str(market_svc.wallet_balance(user.id))",
+            "    )",
         ]
     elif method in {"vodafone", "vfcash", "vodafone_cash"}:
         L += [
@@ -306,12 +315,15 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method in {"coupon_create", "create_coupon", "create_gift"}:
         need_args(2)
         L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
             "    try:",
             "        code, pct = context.args[0], int(context.args[1])",
             "    except ValueError:",
             f"        await message.reply_text({fail!r})",
             "        return",
-            "    made = market_svc.create_coupon(code, pct)",
+            "    made = market_svc.create_coupon(code, pct, admin_id=user.id)",
             f"    await message.reply_text(({ok!r} + ' ' + made) if made else {fail!r})",
         ]
     # ── cart ──────────────────────────────────────────────────────────
@@ -625,7 +637,12 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("    await message.reply_text(market_svc.stock_low(thr))")
     elif method in {"coupon_create", "create_coupon"}:
         need_args(1)
-        L.append("    await message.reply_text(market_svc.coupon_create(user.id, ' '.join(context.args)))")
+        L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
+            "    await message.reply_text(market_svc.coupon_create(user.id, ' '.join(context.args)))",
+        ]
     elif method in {"coupon_apply", "apply_coupon", "redeem_gift"}:
         need_args(1)
         L += [
@@ -1281,12 +1298,9 @@ def _emit_handlers(spec: BotSpec) -> str:
             "            await message.reply_text(market_svc.coupon_apply_code(user.id, text, 0))",
             "            return",
             "        if key in ('wallet_topup', 'topup'):",
-            "            try:",
-            "                amt = int(text.replace(',', ' ').split()[0])",
-            "                bal = market_svc.wallet_topup(user.id, amt)",
-            "                await message.reply_text('تم الشحن. الرصيد: ' + str(bal))",
-            "            except Exception:",
-            "                await message.reply_text('أرسل رقماً صحيحاً / Send a valid number')",
+            "            await message.reply_text(",
+            "                '⚠️ الشحن المجاني متوقف. استخدم /buy أو /vfcash'",
+            "            )",
             "            return",
             "        if 'transfer' in key:",
             "            parts = text.split()",
@@ -1295,10 +1309,12 @@ def _emit_handlers(spec: BotSpec) -> str:
             "                return",
             "            try:",
             "                to_uid, amt = int(parts[0]), int(parts[1])",
-            "                if market_svc.wallet_balance(user.id) < amt:",
+            "                if amt <= 0:",
+            "                    await message.reply_text('مبلغ غير صالح')",
+            "                    return",
+            "                if not market_svc.wallet_debit(user.id, amt, note='transfer_out'):",
             "                    await message.reply_text('رصيد غير كافٍ')",
             "                    return",
-            "                market_svc.wallet_add(user.id, -amt)",
             "                bal = market_svc.wallet_add(to_uid, amt)",
             "                await message.reply_text('تم التحويل. رصيد المستلم: ' + str(bal))",
             "            except Exception:",

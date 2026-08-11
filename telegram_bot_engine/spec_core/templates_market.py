@@ -32,7 +32,10 @@ def catalog() -> str:
 
 
 def add_item(admin_id: int, text: str) -> int:
+    """Admin-only product create. Returns 0 if unauthorized or invalid."""
     ensure()
+    if not role_require(int(admin_id), "staff"):
+        return 0
     title, _, price = (text or "").partition("|")
     title = title.strip() or "Item"
     try:
@@ -45,7 +48,12 @@ def add_item(admin_id: int, text: str) -> int:
             (title[:200], max(0, price_cents)),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        pid = int(cur.lastrowid)
+    try:
+        _audit(int(admin_id), "add_item", "product", pid, title[:80])
+    except Exception:
+        pass
+    return pid
 
 
 def add_item_structured(
@@ -57,8 +65,10 @@ def add_item_structured(
     description: str = "",
     photo_file_id: str = "",
 ) -> int:
-    """Multi-step flow product create (title/price/category/desc/photo)."""
+    """Multi-step flow product create — staff/admin only. Returns 0 if unauthorized."""
     ensure()
+    if not role_require(int(admin_id), "staff"):
+        return 0
     title = (title or "Item").strip()[:200]
     price_cents = max(0, int(price_cents or 0))
     category = (category or "")[:80]
@@ -88,13 +98,9 @@ def submit_vodafone_payment(
     reference: str,
     photo_file_id: str = "",
 ) -> str:
-    """Record Vodafone Cash proof. Auto-approve if reference is unique + well-formed.
+    """Record Vodafone Cash proof — ALWAYS pending until admin approves.
 
-    Real bank API is not available deterministically — we:
-      1) reject duplicate references
-      2) store pending payment for admin
-      3) auto-credit wallet when reference looks valid and never seen
-    Admin can still /vfcash_reject if needed.
+    Never auto-credits. Rejects duplicate references. Admin uses vfcash_approve.
     """
     ensure()
     amount_cents = max(0, int(amount_cents or 0))
@@ -122,54 +128,25 @@ def submit_vodafone_payment(
         ).fetchone()
         if exists:
             return f"❌ رقم العملية مستخدم من قبل (#{exists['id']} — {exists['status']})"
-        # Auto-approve unique well-formed refs (deterministic policy)
-        import re as _re
-
-        auto_ok = bool(_re.match(r"^[A-Za-z0-9\-]{8,40}$", reference)) and amount_cents >= 100
-        status = "approved" if auto_ok else "pending"
         cur = conn.execute(
             "INSERT INTO vodafone_payments (user_id, amount_cents, reference, photo_file_id, status) "
             "VALUES (?,?,?,?,?)",
-            (user_id, amount_cents, reference, photo_file_id, status),
+            (user_id, amount_cents, reference, photo_file_id, "pending"),
         )
         pid = int(cur.lastrowid)
-        if auto_ok:
-            # credit wallet in same transaction semantics
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS wallets (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
-            )
-            row = conn.execute(
-                "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
-            ).fetchone()
-            if row:
-                conn.execute(
-                    "UPDATE wallets SET balance=balance+? WHERE user_id=?",
-                    (amount_cents, user_id),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO wallets (user_id, balance) VALUES (?, ?)",
-                    (user_id, amount_cents),
-                )
-            conn.commit()
-            bal = conn.execute(
-                "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
-            ).fetchone()
-            return (
-                f"✅ تم التحقق تلقائياً من عملية فودافون #{pid}\n"
-                f"المبلغ: {amount_cents/100:.2f}\nالمرجع: {reference}\n"
-                f"الرصيد: {(bal['balance'] if bal else amount_cents)}"
-            )
         conn.commit()
         return (
             f"⏳ تم تسجيل إثبات فودافون #{pid}\n"
             f"المبلغ: {amount_cents/100:.2f} · المرجع: {reference}\n"
-            f"بانتظار مراجعة الإدارة."
+            f"بانتظار مراجعة الإدارة (لا شحن تلقائي)."
         )
 
 
 def vfcash_approve(admin_id: int, payment_id: int) -> str:
+    """Staff/admin only — credit wallet after human verification."""
     ensure()
+    if not role_require(int(admin_id), "staff"):
+        return "❌ غير مصرح — صلاحيات إدارة مطلوبة"
     with connect() as conn:
         row = conn.execute(
             "SELECT * FROM vodafone_payments WHERE id=?", (payment_id,)
@@ -179,9 +156,11 @@ def vfcash_approve(admin_id: int, payment_id: int) -> str:
         if row["status"] == "approved":
             return "معتمدة مسبقاً"
         conn.execute(
-            "UPDATE vodafone_payments SET status='approved' WHERE id=?",
+            "UPDATE vodafone_payments SET status='approved' WHERE id=? AND status='pending'",
             (payment_id,),
         )
+        if conn.total_changes == 0:
+            return "تعذر الاعتماد"
         uid = int(row["user_id"])
         amt = int(row["amount_cents"])
         conn.execute(
@@ -197,10 +176,15 @@ def vfcash_approve(admin_id: int, payment_id: int) -> str:
                 "INSERT INTO wallets (user_id, balance) VALUES (?, ?)", (uid, amt)
             )
         conn.commit()
+    try:
+        _audit(int(admin_id), "vfcash_approve", "vodafone", payment_id, str(amt))
+    except Exception:
+        pass
     return f"✅ اعتمدت عملية فودافون #{payment_id} وتم شحن المحفظة"
 
 
 def place_order(user_id: int, text: str) -> int:
+    """Create pending order with atomic stock reservation (prevents overselling)."""
     ensure()
     seed_demo_catalog()
     try:
@@ -208,10 +192,20 @@ def place_order(user_id: int, text: str) -> int:
     except Exception:
         return 0
     with connect() as conn:
+        # Atomic: only decrement if stock still > 0
+        cur = conn.execute(
+            "UPDATE products SET stock = stock - 1 "
+            "WHERE id=? AND active=1 AND stock > 0",
+            (pid,),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return 0
         prod = conn.execute(
             "SELECT * FROM products WHERE id=? AND active=1", (pid,)
         ).fetchone()
-        if not prod or int(prod["stock"]) <= 0:
+        if not prod:
+            conn.rollback()
             return 0
         cur = conn.execute(
             "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
@@ -287,10 +281,24 @@ def points_credit(user_id: int, delta: int, reason: str = "") -> int:
 
 
 def points_debit(user_id: int, amount: int, reason: str = "") -> bool:
+    """Atomic points debit — check + write in one transaction (no race)."""
     amount = abs(int(amount))
-    if points_balance(user_id) < amount:
-        return False
-    points_credit(user_id, -amount, reason or "debit")
+    if amount <= 0:
+        return True
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(delta),0) AS b FROM point_ledger WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        bal = int(row["b"] if row else 0)
+        if bal < amount:
+            return False
+        conn.execute(
+            "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
+            (user_id, -amount, (reason or "debit")[:200]),
+        )
+        conn.commit()
     return True
 
 
@@ -440,20 +448,77 @@ def wallet_balance(user_id: int) -> int:
 
 
 def wallet_add(user_id: int, amount: int) -> int:
+    """Credit only (amount must be > 0). For debits use wallet_debit."""
     ensure()
+    amount = int(amount)
+    if amount <= 0:
+        return wallet_balance(user_id)
     with connect() as conn:
         conn.execute(
             "INSERT INTO wallets (user_id, balance) VALUES (?,?) "
             "ON CONFLICT(user_id) DO UPDATE SET balance=balance+excluded.balance",
-            (user_id, int(amount)),
+            (user_id, amount),
         )
+        try:
+            conn.execute(
+                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
+                (user_id, amount, "credit"),
+            )
+        except Exception:
+            pass
         conn.commit()
     return wallet_balance(user_id)
 
 
+def wallet_debit(user_id: int, amount: int, note: str = "debit") -> bool:
+    """Atomic debit — never allows negative balance."""
+    ensure()
+    amount = abs(int(amount))
+    if amount <= 0:
+        return True
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE wallets SET balance = balance - ? "
+            "WHERE user_id=? AND balance >= ?",
+            (amount, user_id, amount),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        try:
+            conn.execute(
+                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
+                (user_id, -amount, (note or "debit")[:200]),
+            )
+        except Exception:
+            pass
+        conn.commit()
+    return True
+
+
 def wallet_topup(user_id: int, amount: int) -> int:
-    """Credit wallet. Returns new balance."""
-    return wallet_add(user_id, int(amount))
+    """DISABLED free top-up. Use payment flows (Telegram invoice / Vodafone+admin).
+
+    Returns current balance unchanged. Admin credit: wallet_admin_credit.
+    """
+    # Intentionally does NOT credit — prevents free money
+    return wallet_balance(user_id)
+
+
+def wallet_admin_credit(admin_id: int, user_id: int, amount: int, note: str = "") -> int:
+    """Staff/admin only wallet credit (manual adjustment after verified payment)."""
+    ensure()
+    if not role_require(int(admin_id), "staff"):
+        return wallet_balance(user_id)
+    amount = int(amount)
+    if amount <= 0:
+        return wallet_balance(user_id)
+    bal = wallet_add(user_id, amount)
+    try:
+        _audit(int(admin_id), "wallet_admin_credit", "wallet", user_id, f"{amount}:{note}")
+    except Exception:
+        pass
+    return bal
 
 
 def wallet_history(user_id: int, limit: int = 20) -> str:
@@ -543,8 +608,14 @@ def set_lang(user_id: int, lang: str) -> str:
     return lang
 
 
-def create_coupon(code: str, percent: int) -> str:
+def create_coupon(code: str, percent: int, admin_id: int = 0) -> str:
+    """Admin-only legacy coupon create. Prefer coupon_create(admin_id, text)."""
     ensure()
+    if admin_id and not role_require(int(admin_id), "staff"):
+        return ""
+    if not admin_id:
+        # Refuse anonymous create — security: no open coupon minting
+        return ""
     code = (code or "").strip().upper()[:32]
     percent = max(1, min(100, int(percent)))
     if not code:
@@ -719,9 +790,21 @@ def levels_for(user_id: int) -> str:
 
 
 def get_order(order_id: int) -> dict | None:
+    """Internal lookup by id only — prefer get_user_order for user-facing paths."""
     ensure()
     with connect() as conn:
         row = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_order(user_id: int, order_id: int) -> dict | None:
+    """Ownership-safe order fetch."""
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM orders WHERE id=? AND user_id=?",
+            (int(order_id), int(user_id)),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -868,7 +951,11 @@ def cart_clear(user_id: int) -> int:
 
 
 def cart_checkout(user_id: int) -> str:
-    """Create pending orders for every cart line; clear cart on success."""
+    """Create pending orders for cart lines. Only clear lines that succeeded.
+
+    Stock is reserved atomically inside place_order — partial success keeps
+    failed lines in the cart (no silent overselling + wipe).
+    """
     ensure()
     seed_demo_catalog()
     with connect() as conn:
@@ -878,18 +965,38 @@ def cart_checkout(user_id: int) -> str:
         ).fetchall()
     if not rows:
         return "Cart empty — add items with /cartadd <product_id>"
-    order_ids = []
+    order_ids: list[int] = []
+    failed: list[str] = []
     for r in rows:
         pid = int(r["product_id"])
         qty = int(r["qty"] or 1)
+        ok_qty = 0
         for _ in range(max(1, qty)):
             oid = place_order(user_id, str(pid))
             if oid:
                 order_ids.append(oid)
-    cart_clear(user_id)
+                ok_qty += 1
+            else:
+                failed.append(f"#{pid}")
+                break
+        with connect() as conn:
+            if ok_qty >= max(1, qty):
+                conn.execute(
+                    "DELETE FROM cart_items WHERE user_id=? AND product_id=?",
+                    (user_id, pid),
+                )
+            elif ok_qty > 0:
+                conn.execute(
+                    "UPDATE cart_items SET qty = qty - ? WHERE user_id=? AND product_id=?",
+                    (ok_qty, user_id, pid),
+                )
+            conn.commit()
     if not order_ids:
-        return "Checkout failed — no valid products"
-    return f"Checkout OK — orders: {', '.join(f'#{i}' for i in order_ids)}"
+        return "Checkout failed — stock unavailable for cart items"
+    msg = f"Checkout OK — orders: {', '.join(f'#{i}' for i in order_ids)}"
+    if failed:
+        msg += f" | partial fail (no stock): {', '.join(sorted(set(failed)))}"
+    return msg
 
 
 def wishlist_add(user_id: int, product_id: int) -> str:
@@ -934,8 +1041,9 @@ def refund_request(user_id: int, order_id: int) -> str:
 
 
 def digital_deliver(user_id: int, order_id: int) -> str:
+    """Ownership-safe digital delivery — only the order owner can redeem."""
     ensure()
-    order = get_order(order_id)
+    order = get_user_order(int(user_id), int(order_id))
     if not order:
         return "Order not found"
     if order["status"] != "paid":
@@ -1188,8 +1296,10 @@ def stock_low(threshold: int = 5) -> str:
 
 
 def coupon_create(admin_id: int, text: str) -> str:
-    """text: CODE|percent|max_uses  e.g. SAVE10|10|50"""
+    """text: CODE|percent|max_uses  e.g. SAVE10|10|50 — staff/admin only."""
     enterprise_ensure()
+    if not role_require(int(admin_id), "staff"):
+        return "❌ غير مصرح — صلاحيات إدارة مطلوبة"
     parts = [p.strip() for p in (text or "").split("|")]
     if not parts or not parts[0]:
         return "Usage: CODE|percent|max_uses"
@@ -1211,6 +1321,7 @@ def coupon_create(admin_id: int, text: str) -> str:
 
 
 def coupon_apply_code(user_id: int, code: str, order_id: int = 0) -> str:
+    """Apply coupon once per user. Requires valid order ownership when order_id set."""
     enterprise_ensure()
     code = (code or "").strip().upper()
     with connect() as conn:
@@ -1221,21 +1332,39 @@ def coupon_apply_code(user_id: int, code: str, order_id: int = 0) -> str:
             return "Invalid or inactive coupon"
         if int(c["used"]) >= int(c["max_uses"]):
             return "Coupon exhausted"
-        if c["expires_at"]:
-            # best-effort string compare ISO
-            pass
-        conn.execute("UPDATE coupons SET used=used+1 WHERE id=?", (c["id"],))
-        conn.execute(
-            "INSERT INTO coupon_redemptions (coupon_id, user_id, order_id) VALUES (?,?,?)",
-            (c["id"], int(user_id), int(order_id)),
-        )
-        # apply to order if provided
+        # One redemption per user per coupon
+        prior = conn.execute(
+            "SELECT id FROM coupon_redemptions WHERE coupon_id=? AND user_id=? LIMIT 1",
+            (c["id"], int(user_id)),
+        ).fetchone()
+        if prior:
+            return "You already used this coupon"
         if order_id:
-            o = conn.execute("SELECT amount_cents FROM orders WHERE id=?", (int(order_id),)).fetchone()
-            if o:
-                off = int(int(o["amount_cents"]) * float(c["percent_off"]) / 100.0)
-                new_total = max(0, int(o["amount_cents"]) - off)
-                conn.execute("UPDATE orders SET amount_cents=? WHERE id=?", (new_total, int(order_id)))
+            o = conn.execute(
+                "SELECT amount_cents, user_id FROM orders WHERE id=?",
+                (int(order_id),),
+            ).fetchone()
+            if not o or int(o["user_id"]) != int(user_id):
+                return "Order not found"
+            # Atomic increment only if under max_uses
+            cur = conn.execute(
+                "UPDATE coupons SET used=used+1 WHERE id=? AND used < max_uses",
+                (c["id"],),
+            )
+            if cur.rowcount != 1:
+                return "Coupon exhausted"
+            off = int(int(o["amount_cents"]) * float(c["percent_off"]) / 100.0)
+            new_total = max(0, int(o["amount_cents"]) - off)
+            conn.execute(
+                "UPDATE orders SET amount_cents=? WHERE id=?",
+                (new_total, int(order_id)),
+            )
+            conn.execute(
+                "INSERT INTO coupon_redemptions (coupon_id, user_id, order_id) VALUES (?,?,?)",
+                (c["id"], int(user_id), int(order_id)),
+            )
+        else:
+            return "Provide a valid order_id to apply coupon"
         conn.commit()
     return f"Coupon {code} applied ({c['percent_off']}% off)"
 
@@ -1439,6 +1568,11 @@ def invoice_list(user_id: int = 0) -> str:
 
 
 def invoice_pay(invoice_id: int, user_id: int) -> str:
+    """Do NOT mark paid without a real payment provider callback.
+
+    Returns instructions only. Actual status change happens via
+    Telegram successful_payment handler or admin confirm.
+    """
     enterprise_ensure()
     with connect() as conn:
         inv = conn.execute("SELECT * FROM invoices WHERE id=?", (int(invoice_id),)).fetchone()
@@ -1448,10 +1582,11 @@ def invoice_pay(invoice_id: int, user_id: int) -> str:
             return "Already paid"
         if int(inv["user_id"]) != int(user_id):
             return "Not your invoice"
-        conn.execute("UPDATE invoices SET status='paid' WHERE id=?", (int(invoice_id),))
-        conn.commit()
-    _audit(user_id, "invoice_pay", "invoice", invoice_id, "paid")
-    return f"Invoice #{invoice_id} paid"
+    return (
+        f"Invoice #{invoice_id} is unpaid. "
+        "Use Telegram Payments (/buy) or submit Vodafone proof (/vfcash) — "
+        "status changes only after verified payment."
+    )
 
 
 def analytics_dashboard() -> str:
