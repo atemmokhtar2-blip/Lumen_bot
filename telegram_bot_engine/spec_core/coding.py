@@ -49,6 +49,11 @@ from .planning import plan_from_spec
 from .schema import BotSpec
 
 
+
+def _emit_flow_engine() -> str:
+    path = Path(__file__).resolve().parent / "templates_flow_engine.py"
+    return path.read_text(encoding="utf-8")
+
 def _emit_market() -> str:
     path = Path(__file__).resolve().parent / "templates_market.py"
     return path.read_text(encoding="utf-8")
@@ -102,6 +107,9 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "growth", "wallet", "i18n", "creator",
     } & svc_set:
         files["app/services/market.py"] = _emit_market()
+        files["app/flow_engine.py"] = _emit_flow_engine()
+    elif {"tickets", "tasks", "notes"} & svc_set:
+        files["app/flow_engine.py"] = _emit_flow_engine()
     if spec.storage.type == "sqlite" or len(spec.features) > 2:
         if files.get("app/db.py"):
             files["app/services/generic.py"] = _emit_generic_runtime()

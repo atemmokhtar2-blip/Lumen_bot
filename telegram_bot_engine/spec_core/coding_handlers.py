@@ -157,13 +157,26 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         L.append("    cat = market_svc.catalog()")
         L.append("    text = '【 المتجر 】' + chr(10) + cat + chr(10)+chr(10) + 'أضف للسلة: /cartadd <id> — أو افتح السلة من القائمة'")
         L.append("    await message.reply_text(text)")
-    elif method in {"add_item", "upload", "stock_set"}:
+    elif method in {"add_item", "upload"}:
+        L += [
+            "    # Multi-step wizard (name → price → category → desc → photo → confirm)",
+            "    if context.args:",
+            "        pid = market_svc.add_item(user.id, ' '.join(context.args))",
+            "        await message.reply_text(f'Product added #{pid}')",
+            "        return",
+            "    try:",
+            "        from app.flow_engine import start_flow",
+            "        await start_flow(update, context, 'add_product')",
+            "    except Exception:",
+            "        await message.reply_text('Usage: /addproduct Title|price_cents  e.g. Book|999')",
+        ]
+    elif method in {"stock_set"}:
         L += [
             "    if not context.args:",
-            "        await message.reply_text('Usage: /addproduct Title|price_cents  e.g. Book|999')",
+            "        await message.reply_text('Usage: /stock product_id qty')",
             "        return",
             "    pid = market_svc.add_item(user.id, ' '.join(context.args))",
-            "    await message.reply_text(f'Product added #{pid}')",
+            "    await message.reply_text(f'Updated #{pid}')",
         ]
     elif method == "checkout" and svc == "cart":
         L.append("    await message.reply_text(market_svc.cart_checkout(user.id))")
@@ -192,6 +205,30 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "        currency=str(order.get('currency') or settings.default_currency),",
             "        prices=[LabeledPrice(str(title)[:32], int(order['amount_cents']))],",
             "    )",
+        ]
+    elif method in {"wallet_topup", "topup"}:
+        L += [
+            "    if context.args:",
+            "        try:",
+            "            amt = int(str(context.args[0]).replace(',', ''))",
+            "            bal = market_svc.wallet_topup(user.id, amt)",
+            "            await message.reply_text('تم الشحن. الرصيد: ' + str(bal))",
+            "        except Exception:",
+            "            await message.reply_text('مبلغ غير صالح')",
+            "        return",
+            "    try:",
+            "        from app.flow_engine import start_flow",
+            "        await start_flow(update, context, 'wallet_topup')",
+            "    except Exception:",
+            "        await message.reply_text('أرسل: /topup 100')",
+        ]
+    elif method in {"vodafone", "vfcash", "vodafone_cash"}:
+        L += [
+            "    try:",
+            "        from app.flow_engine import start_flow",
+            "        await start_flow(update, context, 'vodafone_cash')",
+            "    except Exception:",
+            "        await message.reply_text('استخدم /vfcash لبدء دفع فودافون كاش')",
         ]
     elif method in {"list_orders"}:
         L += [
@@ -1026,8 +1063,12 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append("        tid = tickets_svc.open_ticket(user.id, subject, chat.id if chat else 0)")
                 lines.append(f"        await message.reply_text({ok!r} + f' #{{tid}}')")
                 lines.append("        return")
-                lines.append("    context.user_data['awaiting'] = 'ticket_subject'")
-                lines.append("    await message.reply_text('اكتب موضوع تذكرة الدعم')")
+                lines.append("    try:")
+                lines.append("        from app.flow_engine import start_flow")
+                lines.append("        await start_flow(update, context, 'open_ticket')")
+                lines.append("    except Exception:")
+                lines.append("        context.user_data['awaiting'] = 'ticket_subject'")
+                lines.append("        await message.reply_text('اكتب موضوع تذكرة الدعم')")
             elif cap.method == "close_ticket":
                 lines.append("    if not context.args:")
                 lines.append(f"        await message.reply_text({fail!r})")
@@ -1166,7 +1207,17 @@ def _emit_handlers(spec: BotSpec) -> str:
             "    message = update.effective_message",
             "    user = update.effective_user",
             "    chat = update.effective_chat",
-            "    if message is None or user is None or not message.text:",
+            "    if message is None or user is None:",
+            "        return",
+            "    # Dynamic multi-step flow engine (wizard)",
+            "    try:",
+            "        from app.flow_engine import handle_text as _flow_text, active_flow",
+            "        if active_flow(context) or context.user_data.get('flow'):",
+            "            if message.text and await _flow_text(update, context):",
+            "                return",
+            "    except Exception:",
+            "        pass",
+            "    if not message.text:",
             "        return",
             "    awaiting = context.user_data.get('awaiting')",
             "    if isinstance(awaiting, str) and awaiting.startswith('mkt_'):",
@@ -1233,6 +1284,27 @@ def _emit_handlers(spec: BotSpec) -> str:
             "        context.user_data.pop('awaiting', None)",
             "        await message.reply_text(f'تم تسجيل البلاغ الأمني #{rid}')",
             "        return",
+            "",
+            "",
+            "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    try:",
+            "        from app.flow_engine import handle_photo as _flow_photo",
+            "        if await _flow_photo(update, context):",
+            "            return",
+            "    except Exception:",
+            "        pass",
+            "",
+            "",
+            "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    try:",
+            "        from app.flow_engine import clear_flow",
+            "        clear_flow(context)",
+            "    except Exception:",
+            "        context.user_data.pop('awaiting', None)",
+            "        context.user_data.pop('flow', None)",
+            "    if message is not None:",
+            "        await message.reply_text('تم إلغاء العملية الحالية.')",
             "",
             "",
         ]
@@ -1430,8 +1502,16 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("    query = update.callback_query")
     lines.append("    if query is None:")
     lines.append("        return")
-    lines.append("    await query.answer()")
     lines.append("    data = query.data or ''")
+    lines.append("    # Flow engine callbacks (choice / confirm / cancel / back)")
+    lines.append("    if data.startswith('flow:'):")
+    lines.append("        try:")
+    lines.append("            from app.flow_engine import handle_callback as _flow_cb")
+    lines.append("            if await _flow_cb(update, context):")
+    lines.append("                return")
+    lines.append("        except Exception:")
+    lines.append("            pass")
+    lines.append("    await query.answer()")
     lines.append("    if data.startswith('cmd:'):")
     lines.append("        cmd = (data[4:] or '').strip().lower().replace('-', '_').replace('.', '')")
     lines.append("        cmd_compact = cmd.replace('_', '').replace(' ', '')")
@@ -1652,7 +1732,7 @@ def _emit_main(spec: BotSpec) -> str:
         for f in spec.features
     )
     if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
-        imports_handlers += ", text_router"
+        imports_handlers += ", text_router, photo_router, cancel_handler"
     if need_welcome:
         imports_handlers += ", chat_member_handler"
     if need_pay:
@@ -1681,7 +1761,11 @@ def _emit_main(spec: BotSpec) -> str:
 
     text_handler = ""
     if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market:
-        text_handler = "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
+        text_handler = (
+            "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
+            "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
+            "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
+        )
     if need_welcome:
         text_handler += "\n    app.add_handler(ChatMemberHandler(chat_member_handler, ChatMemberHandler.CHAT_MEMBER))"
 

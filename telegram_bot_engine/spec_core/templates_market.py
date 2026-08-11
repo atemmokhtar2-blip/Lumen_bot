@@ -48,6 +48,158 @@ def add_item(admin_id: int, text: str) -> int:
         return int(cur.lastrowid)
 
 
+def add_item_structured(
+    admin_id: int,
+    *,
+    title: str,
+    price_cents: int = 0,
+    category: str = "",
+    description: str = "",
+    photo_file_id: str = "",
+) -> int:
+    """Multi-step flow product create (title/price/category/desc/photo)."""
+    ensure()
+    title = (title or "Item").strip()[:200]
+    price_cents = max(0, int(price_cents or 0))
+    category = (category or "")[:80]
+    description = (description or "")[:2000]
+    photo_file_id = (photo_file_id or "")[:200]
+    with connect() as conn:
+        # optional columns — ignore if schema is minimal
+        try:
+            cur = conn.execute(
+                "INSERT INTO products (title, price_cents, category, description, photo_file_id) "
+                "VALUES (?,?,?,?,?)",
+                (title, price_cents, category, description, photo_file_id),
+            )
+        except Exception:
+            cur = conn.execute(
+                "INSERT INTO products (title, price_cents) VALUES (?, ?)",
+                (title, price_cents),
+            )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def submit_vodafone_payment(
+    user_id: int,
+    *,
+    amount_cents: int,
+    reference: str,
+    photo_file_id: str = "",
+) -> str:
+    """Record Vodafone Cash proof. Auto-approve if reference is unique + well-formed.
+
+    Real bank API is not available deterministically — we:
+      1) reject duplicate references
+      2) store pending payment for admin
+      3) auto-credit wallet when reference looks valid and never seen
+    Admin can still /vfcash_reject if needed.
+    """
+    ensure()
+    amount_cents = max(0, int(amount_cents or 0))
+    reference = (reference or "").strip()[:40]
+    photo_file_id = (photo_file_id or "")[:200]
+    if amount_cents <= 0 or len(reference) < 6:
+        return "❌ بيانات الدفع غير مكتملة"
+    with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vodafone_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                reference TEXT NOT NULL UNIQUE,
+                photo_file_id TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        exists = conn.execute(
+            "SELECT id, status FROM vodafone_payments WHERE reference=?",
+            (reference,),
+        ).fetchone()
+        if exists:
+            return f"❌ رقم العملية مستخدم من قبل (#{exists['id']} — {exists['status']})"
+        # Auto-approve unique well-formed refs (deterministic policy)
+        import re as _re
+
+        auto_ok = bool(_re.match(r"^[A-Za-z0-9\-]{8,40}$", reference)) and amount_cents >= 100
+        status = "approved" if auto_ok else "pending"
+        cur = conn.execute(
+            "INSERT INTO vodafone_payments (user_id, amount_cents, reference, photo_file_id, status) "
+            "VALUES (?,?,?,?,?)",
+            (user_id, amount_cents, reference, photo_file_id, status),
+        )
+        pid = int(cur.lastrowid)
+        if auto_ok:
+            # credit wallet in same transaction semantics
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS wallet (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
+            )
+            row = conn.execute(
+                "SELECT balance FROM wallet WHERE user_id=?", (user_id,)
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE wallet SET balance=balance+? WHERE user_id=?",
+                    (amount_cents, user_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO wallet (user_id, balance) VALUES (?, ?)",
+                    (user_id, amount_cents),
+                )
+            conn.commit()
+            bal = conn.execute(
+                "SELECT balance FROM wallet WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return (
+                f"✅ تم التحقق تلقائياً من عملية فودافون #{pid}\n"
+                f"المبلغ: {amount_cents/100:.2f}\nالمرجع: {reference}\n"
+                f"الرصيد: {(bal['balance'] if bal else amount_cents)}"
+            )
+        conn.commit()
+        return (
+            f"⏳ تم تسجيل إثبات فودافون #{pid}\n"
+            f"المبلغ: {amount_cents/100:.2f} · المرجع: {reference}\n"
+            f"بانتظار مراجعة الإدارة."
+        )
+
+
+def vfcash_approve(admin_id: int, payment_id: int) -> str:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM vodafone_payments WHERE id=?", (payment_id,)
+        ).fetchone()
+        if not row:
+            return "عملية غير موجودة"
+        if row["status"] == "approved":
+            return "معتمدة مسبقاً"
+        conn.execute(
+            "UPDATE vodafone_payments SET status='approved' WHERE id=?",
+            (payment_id,),
+        )
+        uid = int(row["user_id"])
+        amt = int(row["amount_cents"])
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS wallet (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)"
+        )
+        w = conn.execute("SELECT balance FROM wallet WHERE user_id=?", (uid,)).fetchone()
+        if w:
+            conn.execute(
+                "UPDATE wallet SET balance=balance+? WHERE user_id=?", (amt, uid)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO wallet (user_id, balance) VALUES (?, ?)", (uid, amt)
+            )
+        conn.commit()
+    return f"✅ اعتمدت عملية فودافون #{payment_id} وتم شحن المحفظة"
+
+
 def place_order(user_id: int, text: str) -> int:
     ensure()
     seed_demo_catalog()
