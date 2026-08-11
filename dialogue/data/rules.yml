@@ -1,56 +1,117 @@
 version: "3.1"
 rules:
-- rule: greet always
+- rule: greet
   steps:
   - intent: greet
   - action: utter_greet
 
-- rule: goodbye always
+- rule: goodbye
   steps:
   - intent: goodbye
   - action: utter_goodbye
 
-- rule: fallback
+- rule: affirm
   steps:
-  - intent: nlu_fallback
-  - action: action_default_fallback
+  - intent: affirm
+  - action: utter_affirm
 
-- rule: help always
+- rule: deny
+  steps:
+  - intent: deny
+  - action: utter_deny
+
+- rule: help
   steps:
   - intent: ask_help
   - action: utter_help
 
-- rule: plan always
+- rule: capabilities
+  steps:
+  - intent: ask_capabilities
+  - action: utter_capabilities
+
+- rule: plan
   steps:
   - intent: ask_plan
   - action: action_report_plan
 
-- rule: session start
-  conversation_start: true
+- rule: pricing
   steps:
-  - action: action_session_start
+  - intent: ask_pricing
+  - action: utter_pricing
+
+- rule: how generate
+  steps:
+  - intent: ask_how_to_generate
+  - action: utter_how_to_generate
+
+- rule: limitations
+  steps:
+  - intent: ask_limitations
+  - action: utter_limitations
+
+- rule: support
+  steps:
+  - intent: ask_support
+  - action: utter_support
 
 - rule: platform works
   steps:
   - intent: how_platform_works
   - action: utter_how_platform_works
 
-- rule: upgrade path
+- rule: upgrade
   steps:
   - intent: how_to_upgrade
   - action: utter_how_to_upgrade
 
-- rule: hosting info
+- rule: hosting
   steps:
   - intent: ask_about_hosting
   - action: utter_hosting
 
-- rule: preview info
+- rule: preview
   steps:
   - intent: ask_about_preview
   - action: utter_preview
 
-- rule: watermark info
+- rule: watermark
   steps:
   - intent: ask_about_watermark
   - action: utter_watermark
+
+- rule: free plan
+  steps:
+  - intent: ask_about_free
+  - action: utter_ask_about_free
+
+- rule: starter plan
+  steps:
+  - intent: ask_about_starter
+  - action: utter_ask_about_starter
+
+- rule: growth plan
+  steps:
+  - intent: ask_about_growth
+  - action: utter_ask_about_growth
+
+- rule: bot challenge
+  steps:
+  - intent: bot_challenge
+  - action: utter_iamabot
+
+- rule: out of scope
+  steps:
+  - intent: out_of_scope
+  - action: utter_out_of_scope
+
+- rule: fallback
+  steps:
+  - intent: nlu_fallback
+  - action: action_default_fallback
+
+- rule: idea note
+  steps:
+  - intent: describe_bot_idea
+  - action: action_note_bot_idea
+  - action: utter_ask_clarify_idea

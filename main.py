@@ -73,6 +73,17 @@ def _start_b2b_api_thread(port: int) -> None:
 
 
 def main() -> None:
+    # Optional one-shot Rasa train on hosting when no model shipped
+    try:
+        import runpy
+        from pathlib import Path as _P
+        runpy.run_path(
+            str(_P(__file__).resolve().parent / "scripts" / "ensure_dialogue_model.py"),
+            run_name="__main__",
+        )
+    except Exception:
+        pass
+
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN is not set. "

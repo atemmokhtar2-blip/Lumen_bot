@@ -1,35 +1,35 @@
-"""Engine selection — Rasa if ready, else solid RuleEngine."""
+"""Dialogue engine selection — Rasa only (no rule-based fake intelligence).
+
+DIALOGUE_ENABLED=1 + models/*.tar.gz → Rasa Agent
+Otherwise → None (Telegram keeps legacy path; no phrase-memory bot)
+"""
 from __future__ import annotations
 
 import logging
 import os
 from typing import Any
 
-from .contract import DialogueEngine, DialogueRequest, DialogueResponse
-from .rule_engine import RuleEngine
+from .contract import DialogueRequest, DialogueResponse
 from .rasa_engine import RasaEngine
 
 logger = logging.getLogger(__name__)
 
-_rule = RuleEngine()
 _rasa = RasaEngine()
 
 
+def _flag(name: str, default: str = "0") -> bool:
+    return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def dialogue_runtime_enabled() -> bool:
-    """Master switch for dialogue layer in Telegram.
-
-    DIALOGUE_RUNTIME=1 → use RuleEngine and/or Rasa (default ON for Phase 0 solid chat).
-    DIALOGUE_ENABLED=1 → prefer Rasa when model exists.
-    Set DIALOGUE_RUNTIME=0 only to force full legacy messages.py behaviour.
-    """
-    v = (os.getenv("DIALOGUE_RUNTIME") or "1").strip().lower()
-    return v in {"1", "true", "yes", "on"}
+    """True only when Rasa dialogue is intentionally enabled."""
+    return _flag("DIALOGUE_ENABLED", "0")
 
 
-def get_dialogue_engine() -> DialogueEngine:
-    if _rasa.available():
+def get_dialogue_engine():
+    if dialogue_runtime_enabled() and _rasa.available():
         return _rasa
-    return _rule
+    return None
 
 
 async def handle_turn(
@@ -39,7 +39,8 @@ async def handle_turn(
     plan_id: str = "free",
     metadata: dict[str, Any] | None = None,
 ) -> DialogueResponse | None:
-    if not dialogue_runtime_enabled():
+    engine = get_dialogue_engine()
+    if engine is None:
         return None
     req = DialogueRequest(
         text=text or "",
@@ -47,32 +48,18 @@ async def handle_turn(
         plan_id=plan_id or "free",
         metadata=dict(metadata or {}),
     )
-    engine = get_dialogue_engine()
     try:
-        resp = await engine.handle(req)
+        return await engine.handle(req)
     except Exception:
-        logger.exception("dialogue engine %s failed — trying rule fallback", getattr(engine, "name", "?"))
-        if engine is not _rule:
-            try:
-                resp = await _rule.handle(req)
-            except Exception:
-                logger.exception("rule fallback failed")
-                return None
-        else:
-            return None
-    # If Rasa returns nothing useful, fall back to rules
-    if resp is None and engine is not _rule:
-        try:
-            resp = await _rule.handle(req)
-        except Exception:
-            return None
-    return resp
+        logger.exception("Rasa dialogue failed")
+        return None
 
 
 def runtime_status() -> dict[str, Any]:
+    eng = get_dialogue_engine()
     return {
-        "runtime_enabled": dialogue_runtime_enabled(),
-        "active_engine": get_dialogue_engine().name if dialogue_runtime_enabled() else None,
+        "DIALOGUE_ENABLED": dialogue_runtime_enabled(),
         "rasa_available": _rasa.available(),
-        "rule_available": _rule.available(),
+        "active_engine": eng.name if eng else None,
+        "rule_engine": "disabled",
     }

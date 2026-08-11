@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Train Maestro Rasa dialogue model (run in repo root).
+# Train Rasa model on this machine / hosting. Run from repo root or any cwd.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+echo "[train] root=$ROOT"
+python -m pip install -q -r requirements-dialogue.txt
 cd "$ROOT/dialogue"
-echo "[train] working dir: $(pwd)"
-if ! command -v rasa >/dev/null 2>&1; then
-  echo "[train] installing rasa (this may take a few minutes)..."
-  pip install -q -r "$ROOT/requirements-dialogue.txt"
-fi
 mkdir -p models
+echo "[train] validating data..."
 rasa data validate --domain domain.yml --data data || true
-rasa train --domain domain.yml --config config.yml --data data --out models
-echo "[train] done. Models:"
-ls -la models/
+echo "[train] training model (may take several minutes)..."
+rasa train --domain domain.yml --config config.yml --data data --out models --fixed-model-name maestro-dialogue
+echo "[train] models:"
+ls -lah models/
+echo "[train] DONE — set DIALOGUE_ENABLED=1 and restart the bot process"

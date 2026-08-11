@@ -1,5 +1,3 @@
-# Maestro Dialogue — Rasa pipeline (NLU + Core)
-# Phase 0 foundation: local ML, no external LLM at runtime.
 recipe: default.v1
 language: ar
 assistant_id: maestro_dialogue
@@ -14,27 +12,22 @@ pipeline:
     min_ngram: 1
     max_ngram: 4
   - name: DIETClassifier
-    epochs: 80
+    epochs: 40
     constrain_similarities: true
     entity_recognition: true
   - name: EntitySynonymMapper
-  - name: ResponseSelector
-    epochs: 40
-    constrain_similarities: true
   - name: FallbackClassifier
-    threshold: 0.3
+    threshold: 0.35
     ambiguity_threshold: 0.1
 
 policies:
   - name: MemoizationPolicy
     max_history: 5
   - name: RulePolicy
-    core_fallback_threshold: 0.3
+    core_fallback_threshold: 0.35
     core_fallback_action_name: "action_default_fallback"
     enable_fallback_prediction: true
   - name: TEDPolicy
     max_history: 5
-    epochs: 60
+    epochs: 30
     constrain_similarities: true
-
-# Smaller models for faster train on modest hosts; raise later if needed.

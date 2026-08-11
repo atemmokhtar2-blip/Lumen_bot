@@ -1,46 +1,32 @@
-# Maestro Dialogue — Phase 0 (Solid Foundation)
+# Maestro Dialogue — Rasa only
 
-Smart guided chat for **Free and Pro**. Generation stays in `telegram_bot_engine`.
+**No rule-based chat in production.** Understanding comes from a trained Rasa model.
 
-## Architecture (stable)
-
-```
-Telegram
-  → bot_interface/messages.py
-  → dialogue_bridge
-  → dialogue.runtime.handle_turn
-       ├─ RasaEngine   (if DIALOGUE_ENABLED=1 AND models/*.tar.gz)
-       └─ RuleEngine   (always available — production backbone)
-```
-
-| Component | Role |
-|-----------|------|
-| `runtime/contract.py` | Stable Request/Response/Engine protocol |
-| `runtime/rule_engine.py` | Deterministic AR/EN guided chat (no deps) |
-| `runtime/rasa_engine.py` | Optional ML layer on top of rules |
-| `runtime/registry.py` | Engine selection + fallback |
-| `data/*` | Rasa training corpus (expand continuously) |
-| `actions/` | rasa-sdk hooks to plan/Mongo |
-
-## Behaviour guarantees
-
-1. **Never generates bots** from this layer.
-2. **`describe_bot_idea` is handoff** (`handled=False`) → legacy generation path runs.
-3. **Rasa failure → RuleEngine** automatically.
-4. **`DIALOGUE_RUNTIME=0`** disables the whole layer (full legacy).
-5. **Default `DIALOGUE_RUNTIME=1`** so chat is smart without training.
-
-## Train Rasa (optional upgrade path)
+## Enable on hosting
 
 ```bash
-./scripts/train_dialogue.sh
-# deploy dialogue/models/*.tar.gz
-export DIALOGUE_ENABLED=1
-export DIALOGUE_RUNTIME=1
+DIALOGUE_ENABLED=1
+# first deploy without model:
+DIALOGUE_TRAIN_ON_START=1
 ```
 
-## Tests
+Or SSH/one-off:
 
 ```bash
-python -m pytest tests/test_dialogue_phase0.py -q
+bash scripts/train_dialogue.sh
+# restarts bot after models/maestro-dialogue.tar.gz exists
+```
+
+## Data
+
+- `data/nlu.yml` + `data/nlu_platform.yml` — intents & examples  
+- `data/stories.yml` + `data/rules.yml` — dialogue paths  
+- `domain.yml` — responses (platform knowledge)  
+- `models/*.tar.gz` — trained artifact
+
+## Architecture
+
+```
+Telegram → dialogue_bridge → Rasa Agent (model required)
+                          ↘ None → legacy messages.py
 ```

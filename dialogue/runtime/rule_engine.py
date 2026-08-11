@@ -1,8 +1,4 @@
-"""Deterministic smart guided dialogue — always on, zero extra dependencies.
-
-This is the Phase 0 backbone: works in production without Rasa installed.
-RasaEngine sits on top when a trained model is present.
-"""
+"""DEPRECATED — phrase rules are NOT the product brain.\n\nKept only for offline unit experiments. Production uses Rasa models.\nSet DIALOGUE_ENABLED=1 and ship dialogue/models/*.tar.gz.\n"""
 from __future__ import annotations
 
 import re
