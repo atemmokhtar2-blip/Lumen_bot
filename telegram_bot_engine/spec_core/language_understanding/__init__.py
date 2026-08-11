@@ -1,4 +1,4 @@
-"""L1 LU + L2 Intent + L3 Adaptive Questions + L4 Memory."""
+"""L1 LU + L2 Intent + L3 Adaptive Questions + L4 Memory + L5 Suggestions + L6 Personalization."""
 from .adaptive_questioning import (
     AdaptiveQuestion,
     QuestionPlan,
@@ -29,6 +29,16 @@ from .memory_engine import (
     get_memory_engine,
 )
 from .normalize import light_stem_ar, normalize_text, tokenize
+from .personalization_engine import (
+    PersonalizationStyle,
+    adapt_message,
+    build_personalization,
+    feature_filter_for_skill,
+    personalize,
+    phrase,
+    style_prompt_ar,
+    style_prompt_en,
+)
 
 __all__ = [
     "understand",
@@ -59,4 +69,12 @@ __all__ = [
     "suggest_for_spec_features",
     "Suggestion",
     "SuggestionReport",
+    "PersonalizationStyle",
+    "build_personalization",
+    "personalize",
+    "phrase",
+    "feature_filter_for_skill",
+    "adapt_message",
+    "style_prompt_ar",
+    "style_prompt_en",
 ]

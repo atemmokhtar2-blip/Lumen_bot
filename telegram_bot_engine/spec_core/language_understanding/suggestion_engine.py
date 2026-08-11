@@ -390,7 +390,28 @@ def _preventive(selected: list[str], intent: str | None, lu: LanguageUnderstandi
     return out
 
 
-def _format_prompt(report: "SuggestionReport", *, lang: str = "ar") -> tuple[str, str]:
+def _format_prompt(
+    report: "SuggestionReport",
+    *,
+    lang: str = "ar",
+    style: Any = None,
+) -> tuple[str, str]:
+    # Closing question adapts via L6 when available (never a single fixed line)
+    if style is not None:
+        try:
+            from .personalization_engine import phrase as _phrase
+
+            close_ar = _phrase("lets_add", style, subject="أي من دول؟", with_emoji=False)
+            close_en = _phrase("lets_add", style, subject="any of these?", with_emoji=False)
+            if style.language_variant == "en":
+                close_ar = "عايز أضيف أي منهم؟"
+            if style.language_variant in {"ar", "ar_eg", "mixed"}:
+                close_en = "Add any of these?"
+        except Exception:
+            close_ar, close_en = "عايز أضيف أي منهم؟", "Add any of these?"
+    else:
+        close_ar, close_en = "عايز أضيف أي منهم؟", "Add any of these?"
+
     def block(title_ar: str, title_en: str, items: list[Suggestion]) -> tuple[str, str]:
         if not items:
             return "", ""
@@ -400,8 +421,8 @@ def _format_prompt(report: "SuggestionReport", *, lang: str = "ar") -> tuple[str
             pct = int(round(s.confidence * 100))
             ar_lines.append(f"  • {s.label_ar} — {s.reason} ({pct}%)")
             en_lines.append(f"  • {s.label_en} — {s.reason} ({pct}%)")
-        ar_lines.append("  عايز أضيف أي منهم؟")
-        en_lines.append("  Add any of these?")
+        ar_lines.append(f"  {close_ar}")
+        en_lines.append(f"  {close_en}")
         return "\n".join(ar_lines), "\n".join(en_lines)
 
     ar_parts, en_parts = [], []
@@ -448,6 +469,20 @@ def suggest(
         except Exception:
             mem = None
 
+    # L6 personalization (optional, never breaks L5)
+    style = None
+    try:
+        from .personalization_engine import build_personalization, feature_filter_for_skill
+
+        style = build_personalization(
+            text=text, intent=intent, lu=lu, user_id=user_id, memory=mem
+        )
+        if style and intent and intent.feature_plan:
+            filtered = feature_filter_for_skill(list(intent.feature_plan), style)
+            already |= set(filtered)
+    except Exception:
+        style = None
+
     build: list[Suggestion] = []
     if primary:
         build.extend(_entity_suggestions(primary, lu, already))
@@ -476,7 +511,7 @@ def suggest(
         already=sorted(already),
     )
     lang = intent.language if intent else "ar"
-    report.prompt_ar, report.prompt_en = _format_prompt(report, lang=lang)
+    report.prompt_ar, report.prompt_en = _format_prompt(report, lang=lang, style=style)
     return report
 
 
