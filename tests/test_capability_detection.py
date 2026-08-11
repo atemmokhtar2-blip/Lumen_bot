@@ -164,3 +164,39 @@ def test_can_satisfy_welcome():
 
 def test_can_satisfy_translate_false():
     assert can_satisfy("بوت يترجم الرسائل تلقائياً") is False
+
+
+def test_dialect_welcome_jadad():
+    rep = detect_capabilities("عايز بوت للجروب يرحب بالاعضاء الجداد ويعطيهم قوانين")
+    keys = set(rep.matched_keys())
+    assert "welcome_set" in keys
+    assert "rules" in keys
+
+
+def test_salon_booking():
+    rep = detect_capabilities("عايز بوت حجوزات لصالون تجميل")
+    keys = set(rep.matched_keys())
+    assert "book_slot" in keys or "clinic_book" in keys
+
+
+def test_currency_convert():
+    rep = detect_capabilities("بوت يحول العملات")
+    assert "currency_convert" in rep.matched_keys()
+
+
+def test_poll_create():
+    rep = detect_capabilities("بوت استبيانات وتصويت")
+    assert "poll_create" in rep.matched_keys()
+
+
+def test_broadcast_group():
+    rep = detect_capabilities("بوت يبعت رسائل جماعية للاعضاء")
+    keys = set(rep.matched_keys())
+    assert "broadcast_admin" in keys or "announce" in keys
+    assert "purge" not in keys
+
+
+def test_translate_no_noise_keys():
+    rep = detect_capabilities("بوت يترجم من عربي لانجليزي تلقائي لكل رسالة")
+    assert rep.status == DetectionStatus.GAP
+    assert not [k for k in rep.matched_keys() if k not in ("start", "help", "lang")]

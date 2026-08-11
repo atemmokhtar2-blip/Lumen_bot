@@ -24,6 +24,7 @@ from .models import (
     GapItem,
     MatchedCapability,
 )
+from .normalize import expand_for_match, normalize_ar
 from .search import nearest_keys_for_phrase, search_capabilities, tokenize
 
 _COMPOSITION_HINTS = (
@@ -220,17 +221,27 @@ def detect_capabilities(
     include_search: bool = True,
 ) -> DetectionReport:
     """Main entry — detect what the registry can already satisfy."""
-    text = (request or "").strip()
-    feas = check_feasibility(text)
-    resolved_domains = _resolve_domains(text, domains)
+    original = (request or "").strip()
+    text = original
+    # Dialect/synonym expansion for matching only
+    match_text = expand_for_match(original) if original else ""
+    feas = check_feasibility(original)
+    resolved_domains = _resolve_domains(match_text or original, domains)
 
-    # 1) Exact extractor keys (never invents)
-    extracted_keys = extract_all(text, domains=resolved_domains or None)
+    # 1) Exact extractor keys (never invents) — run on expanded match text
+    extracted_keys = extract_all(match_text or original, domains=resolved_domains or None)
     matched: list[MatchedCapability] = []
+    from .search import is_bulk_key
     for k in extracted_keys:
         m = _to_matched(k, score=1.0, source="extractor")
-        if m:
-            matched.append(m)
+        if not m:
+            continue
+        # Domain packs sometimes inject scale-like keys; drop bulk noise
+        if is_bulk_key(m.key, m.category) and m.key not in {
+            "shop_catalog", "cart_view", "balance", "leaderboard", "plans",
+        }:
+            continue
+        matched.append(m)
 
     if matched:
         for core in ("start", "help"):
@@ -239,10 +250,16 @@ def detect_capabilities(
                 if cm:
                     matched.append(cm)
 
-    # 2) Primary-only soft search
+    # Early structured gaps (translate/vision/LLM...) — avoid noisy soft-search
+    early_gaps = _detect_gaps(original, {m.key for m in matched})
+    hard_gap = bool(early_gaps) and not any(
+        m.key not in {"start", "help", "lang"} for m in matched
+    )
+
+    # 2) Primary-only soft search (skip when hard external gap dominates)
     #    - If extractor already found real feature keys: only same-category, high score
     #    - If extractor empty: broader primary search
-    if include_search and text and feas.can_generate:
+    if include_search and text and feas.can_generate and not hard_gap:
         already = {m.key for m in matched}
         feature_matched = [m for m in matched if m.source == "extractor" and m.key not in {"start", "help"}]
         preferred_cats = {m.category for m in feature_matched}
@@ -251,7 +268,7 @@ def detect_capabilities(
             min_s = 0.40
             extra_limit = min(search_limit, 5)
             hits = search_capabilities(
-                text, limit=extra_limit * 2, min_score=min_s, primary_only=True
+                match_text or text, limit=extra_limit * 2, min_score=min_s, primary_only=True
             )
             added = 0
             for cap, score in hits:
@@ -277,7 +294,7 @@ def detect_capabilities(
                     break
         else:
             hits = search_capabilities(
-                text, limit=search_limit, min_score=0.32, primary_only=True
+                match_text or text, limit=search_limit, min_score=0.32, primary_only=True
             )
             for cap, score in hits:
                 if cap.key in already:
@@ -301,7 +318,7 @@ def detect_capabilities(
     # 3) Gaps
     gaps: list[GapItem] = []
     if feas.can_generate or feas.level != ComplexityLevel.IMPOSSIBLE:
-        gaps = _detect_gaps(text, {m.key for m in matched})
+        gaps = _detect_gaps(original, {m.key for m in matched})
 
     for bf in feas.blocked_features or []:
         if not any(bf.lower() in (g.reason.lower() + g.phrase.lower()) for g in gaps):
@@ -315,7 +332,7 @@ def detect_capabilities(
             )
 
     status, confidence, reason_ar, reason_en, scope_ar = _classify(
-        feas=feas, matched=matched, gaps=gaps, request=text
+        feas=feas, matched=matched, gaps=gaps, request=original
     )
 
     cats = sorted({m.category for m in matched})
@@ -333,13 +350,13 @@ def detect_capabilities(
             "level": feas.level.value if hasattr(feas.level, "value") else str(feas.level),
             "confidence": feas.confidence,
         },
-        "tokens": tokenize(text)[:24],
+        "tokens": tokenize(match_text or original)[:24],
         "feature_keys": [m.key for m in matched if m.key not in {"start", "help"}],
     }
 
     return DetectionReport(
         status=status,
-        request=text,
+        request=original,
         matched=matched,
         gaps=gaps,
         categories_covered=cats,

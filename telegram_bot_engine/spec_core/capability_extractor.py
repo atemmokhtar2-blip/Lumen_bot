@@ -103,7 +103,8 @@ _PATTERNS: dict[str, tuple[str, ...]] = {
     # Welcome / group gate (Phase-1 detection coverage)
     "welcome_set": (
         "ترحيب", "رسالة ترحيب", "نظام ترحيب", "ترحيب الأعضاء", "ترحيب اعضاء",
-        "welcome", "welcome message", "set welcome",
+        "يرحب", "يرحّب", "بالاعضاء", "بالأعضاء", "اعضاء جدد", "أعضاء جدد",
+        "الجدد", "الجداد", "welcome", "welcome message", "set welcome",
     ),
     "welcome_toggle": ("تفعيل الترحيب", "إيقاف الترحيب", "toggle welcome"),
     "welcome_show": ("عرض الترحيب", "إعداد الترحيب", "show welcome"),
@@ -132,7 +133,8 @@ _PATTERNS: dict[str, tuple[str, ...]] = {
     # Booking / clinic
     "book_slot": (
         "حجز", "حجز موعد", "مواعيد", "booking", "book slot", "احجز",
-        "عيادة", "موعد طبي",
+        "عيادة", "موعد طبي", "صالون", "تجميل", "حلاق", "باربر", "salon",
+        "موعد", "احجز موعد",
     ),
     "book_list": ("حجوزاتي", "مواعيدي", "my bookings"),
     "book_cancel": ("إلغاء حجز", "cancel booking"),
@@ -181,8 +183,32 @@ _PATTERNS: dict[str, tuple[str, ...]] = {
         "قوانين", "قوانين المجموعة", "قواعد الجروب", "group rules",
         "rate limit", "rate limiting", "تحديد المعدل", "throttle", "rules",
     ),
-}
 
+    # Broadcast / admin roles / polls / currency / referrals / balance
+    "broadcast_admin": (
+        "رسائل جماعية", "رسائل جماعيه", "رسالة جماعية", "رسالة جماعيه",
+        "برودكاست", "broadcast", "اذاعة للجميع", "إعلان جماعي",
+        "يبعت للعضاء", "يبعت للأعضاء", "ارسال جماعي", "إرسال جماعي",
+        "رسائل جماعي",
+    ),
+    "admin_dashboard": ("لوحة مشرف", "لوحة الادمن", "admin dashboard", "صلاحيات", "ادمن"),
+    "admin_set_role": ("تعيين دور", "set role", "رتبة", "رول"),
+    "user_promote": ("ترقية مشرف", "promote", "ترقية"),
+    "poll_create": (
+        "تصويت", "استبيان", "استبيانات", "poll", "تصويتات", "عمل تصويت",
+    ),
+    "currency_convert": (
+        "تحويل عملة", "تحويل العملات", "يحول العملات", "currency", "سعر الصرف",
+        "عملات", "تحويل فلوس",
+    ),
+    "balance": ("رصيد نقاط", "نقاطي", "رصيدي", "points balance", "ولاء", "نقاط ولاء"),
+    "leaderboard": ("متصدرين", "لوحة المتصدرين", "leaderboard"),
+    "referral_code": ("إحالة", "احالة", "كود دعوة", "referral", "ريفيرال"),
+    "referral_invite": ("رابط دعوة", "invite link", "دعوة أصدقاء"),
+    "task_add": ("تودو", "todo", "مهمة", "مهام", "قائمة مهام", "to-do", "تودوليست"),
+    "faq_show": ("faq", "أسئلة شائعة", "اسئله شائعه", "اسئلة شائعة", "الأسئلة الشائعة"),
+
+}
 
 _DOMAIN_CAP_HINTS: dict[str, tuple[str, ...]] = {
     "cybersecurity": (
@@ -278,6 +304,8 @@ def _norm(text: str) -> str:
 
 def extract(text: str) -> list[str]:
     t = _norm(text)
+    # Fold teh-marbuta so dialect/normalization stays aligned with patterns
+    t_fold = t.replace("ة", "ه")
     out: list[str] = []
     seen: set[str] = set()
 
@@ -287,8 +315,11 @@ def extract(text: str) -> list[str]:
             out.append(key)
 
     for key, keywords in _PATTERNS.items():
-        if any(kw in t for kw in keywords):
-            add(key)
+        for kw in keywords:
+            kw_fold = kw.lower().replace("ة", "ه")
+            if kw.lower() in t or kw_fold in t_fold:
+                add(key)
+                break
 
     if out:
         for core in ("start", "help"):
