@@ -129,6 +129,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
 
+    # ── Stage-2: learn from explicit corrections ─────────────────────────
+    try:
+        from telegram_bot_engine.spec_core.language_understanding import (
+            is_correction_utterance,
+            parse_correction,
+            get_memory_engine,
+        )
+        if uid and is_correction_utterance(request):
+            corr = parse_correction(request)
+            if corr:
+                get_memory_engine().record_correction(
+                    int(uid),
+                    rejected=corr.get("rejected") or "",
+                    preferred=corr.get("preferred") or "",
+                    context=request[:200],
+                )
+                # acknowledge without blocking generation path
+                await message.reply_text(
+                    "تم تسجيل التصحيح ✅ — هراعيه في التوليدات الجاية.\n"
+                    + (f"تفضيل: {corr.get('preferred')}" if corr.get("preferred") else "")
+                )
+                # continue — user may still want generation on same message if rich
+    except Exception:
+        logger.exception("stage2 correction learn failed")
+
     # ── L3 clarification resume (answers for pending questions) ──────────
     _pending_q = (context.user_data or {}).get("pending_clarify") if context.user_data else None
     _clarify_done = False

@@ -501,6 +501,45 @@ class MemoryEngine:
             "request": (request_text or "")[:500],
         }
         self._event(int(user_id), "bot_brief", payload)
+        try:
+            feats = brief.get("features_requested") or brief.get("action_ids") or []
+            menu = brief.get("action_ids") or []
+            tokens = " ".join(
+                str(x) for x in (
+                    [brief.get("bot_name"), brief.get("purpose")]
+                    + list(feats)[:20]
+                    + list(menu)[:10]
+                    + (request_text or "").split()[:30]
+                ) if x
+            )
+            with self._lock:
+                with self._conn() as conn:
+                    try:
+                        conn.execute(
+                            "CREATE TABLE IF NOT EXISTS brief_index ("
+                            "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, bot_name TEXT, "
+                            "purpose TEXT, features_json TEXT, menu_json TEXT, request_text TEXT, "
+                            "tokens TEXT, created_at REAL NOT NULL)"
+                        )
+                    except Exception:
+                        pass
+                    conn.execute(
+                        "INSERT INTO brief_index(user_id, bot_name, purpose, features_json, menu_json, request_text, tokens, created_at) "
+                        "VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            int(user_id),
+                            str(brief.get("bot_name") or "")[:80],
+                            str(brief.get("purpose") or "")[:40],
+                            json.dumps(list(feats)[:30], ensure_ascii=False),
+                            json.dumps(list(menu)[:20], ensure_ascii=False),
+                            (request_text or "")[:500],
+                            tokens[:800],
+                            _now(),
+                        ),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
         # also stash on session for same-turn use
         try:
             sid = "default"
@@ -549,6 +588,168 @@ class MemoryEngine:
             return data.get("brief") if isinstance(data, dict) else None
         except Exception:
             return None
+
+    def record_correction(
+        self,
+        user_id: int,
+        *,
+        rejected: str = "",
+        preferred: str = "",
+        context: str = "",
+    ) -> None:
+        if not user_id:
+            return
+        with self._lock:
+            with self._conn() as conn:
+                try:
+                    conn.execute(
+                        "INSERT INTO corrections(user_id, rejected, preferred, context, created_at) VALUES (?,?,?,?,?)",
+                        (
+                            int(user_id),
+                            (rejected or "")[:120],
+                            (preferred or "")[:200],
+                            (context or "")[:400],
+                            _now(),
+                        ),
+                    )
+                    conn.commit()
+                except Exception:
+                    # table may not exist on old DBs — create once
+                    try:
+                        conn.execute(
+                            "CREATE TABLE IF NOT EXISTS corrections ("
+                            "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                            "rejected TEXT, preferred TEXT, context TEXT, created_at REAL NOT NULL)"
+                        )
+                        conn.execute(
+                            "INSERT INTO corrections(user_id, rejected, preferred, context, created_at) VALUES (?,?,?,?,?)",
+                            (int(user_id), (rejected or "")[:120], (preferred or "")[:200], (context or "")[:400], _now()),
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
+        self._event(int(user_id), "correction", {"rejected": rejected, "preferred": preferred})
+
+    def list_corrections(self, user_id: int, *, limit: int = 10) -> list[dict]:
+        if not user_id:
+            return []
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT rejected, preferred, context, created_at FROM corrections "
+                    "WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                    (int(user_id), int(limit)),
+                ).fetchall()
+            return [
+                {
+                    "rejected": r["rejected"],
+                    "preferred": r["preferred"],
+                    "context": r["context"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+        except Exception:
+            return []
+
+    def find_similar_briefs(self, request_text: str, *, limit: int = 5) -> list[dict]:
+        """Token-overlap similarity over brief_index + bots_built (no vector DB)."""
+        q = set(
+            w for w in (request_text or "").lower().replace("_", " ").split() if len(w) > 2
+        )
+        if not q:
+            return []
+        out: list[dict] = []
+        try:
+            with self._conn() as conn:
+                # ensure table
+                try:
+                    rows = conn.execute(
+                        "SELECT bot_name, purpose, features_json, menu_json, request_text, tokens "
+                        "FROM brief_index ORDER BY id DESC LIMIT 200"
+                    ).fetchall()
+                except Exception:
+                    rows = []
+                for r in rows:
+                    tokens = set(
+                        w
+                        for w in str(r["tokens"] or r["request_text"] or "").lower().split()
+                        if len(w) > 2
+                    )
+                    if not tokens:
+                        continue
+                    inter = len(q & tokens)
+                    if inter <= 0:
+                        continue
+                    union = len(q | tokens)
+                    score = inter / union if union else 0.0
+                    if score < 0.08:
+                        continue
+                    try:
+                        feats = json.loads(r["features_json"] or "[]")
+                    except Exception:
+                        feats = []
+                    out.append(
+                        {
+                            "bot_name": r["bot_name"],
+                            "purpose": r["purpose"],
+                            "features": feats if isinstance(feats, list) else [],
+                            "score": round(score, 3),
+                            "request": (r["request_text"] or "")[:120],
+                        }
+                    )
+                # also scan successful bots
+                try:
+                    brows = conn.execute(
+                        "SELECT name, intent, features_json, request_text FROM bots_built "
+                        "WHERE success=1 ORDER BY created_at DESC LIMIT 100"
+                    ).fetchall()
+                except Exception:
+                    brows = []
+                for r in brows:
+                    tokens = set(
+                        w
+                        for w in str(r["request_text"] or r["name"] or "").lower().split()
+                        if len(w) > 2
+                    )
+                    if not tokens:
+                        continue
+                    inter = len(q & tokens)
+                    if inter <= 0:
+                        continue
+                    union = len(q | tokens)
+                    score = inter / union if union else 0.0
+                    if score < 0.08:
+                        continue
+                    try:
+                        feats = json.loads(r["features_json"] or "[]")
+                    except Exception:
+                        feats = []
+                    out.append(
+                        {
+                            "bot_name": r["name"],
+                            "purpose": r["intent"],
+                            "features": feats if isinstance(feats, list) else [],
+                            "score": round(score, 3),
+                            "request": (r["request_text"] or "")[:120],
+                        }
+                    )
+        except Exception:
+            return []
+        out.sort(key=lambda x: -float(x.get("score") or 0))
+        # dedupe by name
+        seen: set[str] = set()
+        deduped = []
+        for item in out:
+            key = str(item.get("bot_name") or item.get("request") or "")[:40]
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+            if len(deduped) >= limit:
+                break
+        return deduped
+
 
     def register_bot(
         self,

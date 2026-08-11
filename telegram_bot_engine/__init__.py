@@ -206,6 +206,61 @@ def _run_intelligence_layers(
         memory=memory_engine,
     )
 
+    # Stage-2 memory: store brief, corrections, recall collective knowledge
+    memory_snap = None
+    try:
+        from .spec_core.language_understanding.learning_layer import (
+            recall,
+            record_turn_learning,
+            apply_memory_to_features,
+        )
+        ent = getattr(lu, "entities", None)
+        brief = None
+        if ent is not None:
+            brief = (getattr(ent, "raw", None) or {}).get("bot_brief")
+            if not brief and getattr(ent, "strict_spec", False):
+                brief = {
+                    "bot_name": getattr(ent, "bot_name", None),
+                    "purpose": getattr(ent, "bot_purpose", None),
+                    "features_requested": list(getattr(ent, "features_requested", None) or []),
+                    "action_ids": list(getattr(ent, "menu_ids", None) or []),
+                    "strict": True,
+                }
+        intent_name = intent.primary.intent if intent and intent.primary else None
+        record_turn_learning(
+            int(user_id) if user_id else 0,
+            request or "",
+            brief=brief,
+            intent_name=intent_name,
+            features=list(getattr(ent, "features_requested", None) or []) if ent else None,
+            memory=memory_engine,
+        )
+        if user_id:
+            memory_snap = recall(
+                int(user_id),
+                request or "",
+                memory=memory_engine,
+                intent_name=intent_name,
+            )
+            # soft-merge collective features into entity plan when not strict
+            if (
+                memory_snap
+                and ent is not None
+                and not getattr(ent, "strict_spec", False)
+                and memory_snap.collective_features
+            ):
+                merged = apply_memory_to_features(
+                    list(getattr(ent, "features_requested", None) or []),
+                    memory_snap,
+                    strict=False,
+                )
+                try:
+                    ent.features_requested = merged
+                except Exception:
+                    pass
+    except Exception:
+        memory_snap = None
+
     meta = {
         "l1_domains": [
             {"domain": d.domain, "score": round(d.score, 2)}
@@ -238,6 +293,7 @@ def _run_intelligence_layers(
             s.feature for s in (suggestion_report.preventive if suggestion_report else [])
         ],
         "l6_style": style.to_dict() if style else None,
+        "l2_memory": memory_snap.to_dict() if memory_snap else None,
     }
     out.update(
         lu=lu,
@@ -246,6 +302,7 @@ def _run_intelligence_layers(
         style=style,
         suggestion_report=suggestion_report,
         memory_engine=memory_engine,
+        memory_snap=memory_snap,
         meta=meta,
     )
     return out

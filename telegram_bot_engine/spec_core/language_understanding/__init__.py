@@ -14,6 +14,14 @@ from .engine import (
 )
 from .entities import ExtractedEntities, extract_entities
 from .bot_spec_extract import BotBrief, ExplicitCommand, extract_bot_brief
+from .learning_layer import (
+    MemorySnapshot,
+    recall,
+    record_turn_learning,
+    apply_memory_to_features,
+    is_correction_utterance,
+    parse_correction,
+)
 from .intent_analysis import (
     ASK_THRESHOLD,
     IntentAnalysis,
@@ -54,6 +62,12 @@ __all__ = [
     "BotBrief",
     "ExplicitCommand",
     "extract_bot_brief",
+    "MemorySnapshot",
+    "recall",
+    "record_turn_learning",
+    "apply_memory_to_features",
+    "is_correction_utterance",
+    "parse_correction",
     "normalize_text",
     "tokenize",
     "light_stem_ar",
