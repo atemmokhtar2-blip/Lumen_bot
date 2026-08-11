@@ -191,11 +191,16 @@ def _run_intelligence_layers(
             raw = dict(getattr(_ent, "raw", None) or {})
             raw["bot_brief"] = _brief.to_dict()
             _ent.raw = raw
-            # force brief features into intent plan when strict
-            if _brief.strict and _brief.features_requested and intent is not None:
+            # Strict: REPLACE intent plan (never merge fat preset plan)
+            if intent is not None and _brief.features_requested:
                 try:
-                    plan = list(getattr(intent, "feature_plan", None) or [])
-                    intent.feature_plan = list(dict.fromkeys(list(_brief.features_requested) + plan))
+                    if _brief.strict:
+                        intent.feature_plan = list(dict.fromkeys(list(_brief.features_requested)))
+                    else:
+                        plan = list(getattr(intent, "feature_plan", None) or [])
+                        intent.feature_plan = list(
+                            dict.fromkeys(list(_brief.features_requested) + plan)
+                        )
                 except Exception:
                     pass
     except Exception:

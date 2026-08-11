@@ -195,7 +195,8 @@ def _feature_plan(
     if not hints and primary == "security":
         hints = ["sec_domain_overview", "sec_dns_check", "sec_tls_check", "sec_tips", "sec_list_reports"]
     if not hints and primary == "shop":
-        hints = ["shop_catalog", "cart_view", "cart_checkout", "shop_add_item", "shop_orders"]
+        # minimal shop — cart/admin only if user signal later
+        hints = ["shop_catalog", "order_track", "pay_methods"]
     if not hints and primary == "wallet":
         hints = ["wallet_balance", "wallet_topup", "pay_methods"]
     if not hints and primary == "moderation":
@@ -245,13 +246,22 @@ def _feature_plan(
                 if f not in out:
                     out.append(f)
     if primary == "clinic":
-        for f in ("ticket_open", "ticket_my", "ticket_list"):
+        for f in ("book_slot", "ticket_open", "ticket_my"):
             if f not in out:
                 out.append(f)
-    if primary == "booking" and "clinic" in secondary:
-        for f in ("ticket_open", "ticket_my"):
+    if primary == "booking":
+        for f in ("book_slot", "ticket_open"):
             if f not in out:
                 out.append(f)
+    # Prefer features already extracted from the user brief
+    try:
+        user_feats = [f for f in list(getattr(ent, "features_requested", None) or []) if f]
+        if user_feats:
+            out = list(dict.fromkeys(user_feats + out))
+            if getattr(ent, "strict_spec", False):
+                out = list(dict.fromkeys(user_feats))
+    except Exception:
+        pass
     return out
 
 

@@ -291,6 +291,7 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
         "coupons": ["coupon_apply"],
         "points": ["points_balance"],
         "booking": ["book_slot"],
+        "wallet": ["wallet_balance"],
     }
     for aid in brief.all_action_ids():
         if aid in {"start", "help", "lang"}:
@@ -330,18 +331,45 @@ def extract_bot_brief(text: str) -> BotBrief:
     brief.commands = cmds
     brief.flows = _extract_flows(raw)
     brief.constraints = _extract_constraints(raw)
+    # User-explicit menu/commands captured before soft defaults
+    user_menu_n = len(brief.menu_items)
+    user_cmd_n = len(brief.commands)
     brief.features_requested = _features_from_brief(brief)
 
-    # Strict when user listed concrete features/menu or said only/exactly
+    # Soft domain defaults (NOT strict) when only "بوت متجر" / "بوت حجوزات"
+    real = [f for f in brief.features_requested if f not in {"start", "help", "lang"}]
+    soft_defaults = False
+    if not real and brief.purpose:
+        soft_defaults = True
+        defaults = {
+            "shop": ["shop_catalog", "order_track", "pay_methods"],
+            "support": ["ticket_open", "faq_list"],
+            "booking": ["book_slot", "ticket_open"],
+            "education": ["faq_list"],
+        }
+        for f in defaults.get(brief.purpose) or []:
+            if f not in brief.features_requested:
+                brief.features_requested.append(f)
+        soft_menu = {
+            "shop": ["products", "order_track", "payment_methods"],
+            "support": ["support", "faq"],
+            "booking": ["booking"],
+        }
+        if not brief.menu_items:
+            for mid in soft_menu.get(brief.purpose) or []:
+                brief.menu_items.append(
+                    ExplicitCommand(id=mid, label_ar=mid, kind="menu")
+                )
+        brief.constraints.append("soft_domain_defaults")
+
+    # Strict only from USER-explicit signals — never from soft defaults
     brief.strict = (
-        len(menu) >= 2
+        (user_menu_n >= 2 and not soft_defaults)
         or ("strict_no_extra_commands" in brief.constraints)
-        or len(cmds) >= 3
-        or (len(menu) >= 1 and any(k in (raw or "") for k in ("فقط", "بس", "only")))
+        or user_cmd_n >= 3
+        or (user_menu_n >= 1 and any(k in (raw or "") for k in ("فقط", "بس", "only")))
+        or (user_menu_n >= 1 and any(k in (raw or "") for k in ("قائمة", "menu", "/start")))
     )
-    # Single explicit full menu block still strict
-    if len(menu) >= 1 and any(k in (raw or "") for k in ("قائمة", "menu", "/start")):
-        brief.strict = True
 
     score = 0.0
     if brief.bot_name:
