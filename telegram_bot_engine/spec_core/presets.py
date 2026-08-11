@@ -1150,39 +1150,56 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     except Exception:
         pass
 
-    # Layer-1 LU: personalize features from entities (payments/delivery/discounts…)
+    # Layer-2 Intent Analysis: multi-intent plan grounded in Layer-1 LU
     try:
+        from .language_understanding import analyze_intent as _analyze_intent
+        from .language_understanding import understand as _lu_understand
+        from .registry import CAPABILITIES as _CAPS
+
         if lu is None:
-            from .language_understanding import understand as _lu_understand
             lu = _lu_understand(request or "")
-        if lu is not None:
-            from .registry import CAPABILITIES as _CAPS
-            for key in (lu.feature_hints or []):
-                if key in _CAPS:
-                    s.selected.add(key)
-            # Prefer LU primary preset when stack is thin / generic shop
-            if lu.primary_preset and (not stack or stack[0] in {"shop", "custom"}):
-                if lu.primary_preset not in stack:
-                    stack = [lu.primary_preset] + list(stack or [])
-            # Stamp description with entities so bots differ per request
-            bits = []
-            if lu.entities.product:
-                bits.append(f"product={lu.entities.product}")
-            if getattr(lu.entities, "category", None):
-                bits.append(f"category={lu.entities.category}")
-            if lu.entities.audience:
-                bits.append(f"audience={lu.entities.audience}")
-            if lu.entities.payment_methods:
-                bits.append("pay=" + ",".join(lu.entities.payment_methods))
-            if lu.entities.wants_delivery:
-                bits.append("delivery")
-            if getattr(lu.entities, "brand_analogy", None):
-                bits.append(f"like={lu.entities.brand_analogy}")
-            if getattr(lu, "complexity_hint", None):
-                bits.append(f"complexity={lu.complexity_hint}")
-            if bits:
-                base = (s.description or "").strip()
-                s.set_description((base + " | " if base else "") + "LU: " + "; ".join(bits))
+        intent = _analyze_intent(request or "", lu=lu)
+
+        # Feature plan from intent engine (already filtered against bleed)
+        for key in (intent.feature_plan or []):
+            if key in _CAPS:
+                s.selected.add(key)
+
+        # Prefer intent preset when stack is thin/generic
+        if intent.preset and (not stack or stack[0] in {"shop", "custom", "group_admin"}):
+            if intent.preset not in (stack or []):
+                stack = [intent.preset] + list(stack or [])
+        for sp in (intent.secondary_presets or [])[:3]:
+            if sp not in (stack or []):
+                stack = list(stack or []) + [sp]
+
+        # Stamp description with intent decision (debug + differentiation)
+        bits = []
+        if intent.primary:
+            bits.append(
+                f"intent={intent.primary.intent}:{intent.primary.confidence:.2f}"
+            )
+        if intent.secondary:
+            bits.append(
+                "sec=" + ",".join(f"{x.intent}:{x.weight:.2f}" for x in intent.secondary[:3])
+            )
+        bits.append(f"skill={intent.skill_level}")
+        bits.append(f"complexity={intent.complexity}")
+        bits.append(f"lang={intent.language}")
+        if intent.should_ask:
+            bits.append("ask=" + (intent.ask_reason or "yes"))
+        if lu and lu.entities.product:
+            bits.append(f"product={lu.entities.product}")
+        if lu and getattr(lu.entities, "security_checks", None):
+            bits.append("sec_checks=" + ",".join(lu.entities.security_checks[:4]))
+        if bits:
+            base = (s.description or "").strip()
+            s.set_description((base + " | " if base else "") + "L2: " + "; ".join(bits))
+
+        # Attach questions onto description tip for upstream UX (non-breaking)
+        if intent.should_ask and intent.questions:
+            tip = " | ask: " + " / ".join(intent.questions[:2])
+            s.set_description((s.description or "") + tip)
     except Exception:
         pass
 
