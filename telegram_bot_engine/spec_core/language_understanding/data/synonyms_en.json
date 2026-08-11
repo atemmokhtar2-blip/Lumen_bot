@@ -8,38 +8,47 @@
     "cart",
     "products",
     "merchandise",
-    "boutique"
+    "boutique",
+    "outlet",
+    "amazon-like",
+    "mini amazon",
+    "online store",
+    "webshop"
   ],
   "marketplace": [
     "marketplace",
     "multi-vendor",
     "vendors",
-    "bazaar"
+    "bazaar",
+    "multi seller"
   ],
   "restaurant": [
     "restaurant",
     "food",
     "menu",
     "cafe",
-    "delivery food"
+    "delivery food",
+    "kitchen"
   ],
   "booking": [
     "booking",
     "appointment",
     "reservation",
-    "schedule"
+    "schedule",
+    "slots"
   ],
   "tickets": [
     "support",
     "ticket",
     "helpdesk",
-    "complaint"
+    "complaint",
+    "customer care"
   ],
   "wallet": [
     "wallet",
     "balance",
     "topup",
-    "vodafone cash"
+    "e-wallet"
   ],
   "payments": [
     "payment",
@@ -47,20 +56,29 @@
     "visa",
     "card",
     "checkout",
-    "invoice"
+    "invoice",
+    "cod",
+    "cash on delivery",
+    "fawry",
+    "vodafone cash",
+    "orange cash",
+    "apple pay",
+    "gateway"
   ],
   "delivery": [
     "delivery",
     "shipping",
     "courier",
-    "tracking"
+    "tracking",
+    "free shipping"
   ],
   "education": [
     "education",
     "course",
     "lesson",
     "quiz",
-    "school"
+    "school",
+    "lms"
   ],
   "crm": [
     "crm",
@@ -79,7 +97,8 @@
     "cyber",
     "dns",
     "tls",
-    "scan"
+    "scan",
+    "phishing"
   ],
   "iot": [
     "iot",

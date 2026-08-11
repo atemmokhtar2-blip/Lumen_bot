@@ -6,13 +6,20 @@
       "shop",
       "store",
       "منتجات",
-      "سلة"
+      "سلة",
+      "بيع",
+      "يبيع",
+      "لبيع",
+      "ecommerce"
     ],
     "secondary": [
       "كوبون",
       "خصم",
       "كتالوج",
-      "طلب"
+      "طلب",
+      "منتج",
+      "بضاعة",
+      "سلع"
     ]
   },
   "payments": {
@@ -20,45 +27,68 @@
       "دفع",
       "فيزا",
       "payment",
-      "مدفوعات"
+      "مدفوعات",
+      "فوري",
+      "فودافون"
     ],
     "secondary": [
-      "فودافون",
       "محفظة",
-      "invoice"
+      "invoice",
+      "كاش",
+      "بطاقة",
+      "visa",
+      "cod"
     ]
   },
   "delivery": {
     "primary": [
       "توصيل",
       "شحن",
-      "delivery"
+      "delivery",
+      "shipping"
     ],
     "secondary": [
       "تتبع",
-      "مندوب"
+      "مندوب",
+      "شحنة"
     ]
   },
   "tickets": {
     "primary": [
       "دعم",
       "تذكرة",
-      "support"
+      "support",
+      "helpdesk"
     ],
     "secondary": [
       "شكوى",
-      "helpdesk"
+      "بلاغ"
     ]
   },
   "booking": {
     "primary": [
       "حجز",
       "موعد",
-      "booking"
+      "booking",
+      "appointment"
     ],
     "secondary": [
       "جدول",
       "reservation"
+    ]
+  },
+  "marketplace": {
+    "primary": [
+      "marketplace",
+      "بائعين",
+      "متعدد البائعين",
+      "زي امازون",
+      "مثل امازون"
+    ],
+    "secondary": [
+      "نون",
+      "jumia",
+      "وسطاء"
     ]
   }
 }

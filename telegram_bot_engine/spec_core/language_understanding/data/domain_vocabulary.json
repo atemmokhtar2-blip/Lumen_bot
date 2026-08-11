@@ -6,7 +6,8 @@
     "coupon",
     "sku",
     "inventory",
-    "wishlist"
+    "wishlist",
+    "product"
   ],
   "restaurant": [
     "menu",
@@ -24,5 +25,11 @@
     "priority",
     "agent",
     "sla"
+  ],
+  "marketplace": [
+    "vendor",
+    "escrow",
+    "commission",
+    "listing"
   ]
 }

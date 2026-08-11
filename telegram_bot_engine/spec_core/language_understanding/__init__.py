@@ -1,4 +1,4 @@
-"""Layer 1 — Language Understanding Engine (zero-AI)."""
+"""Layer 1 — Language Understanding Engine MAX (zero-AI)."""
 from .engine import (
     DOMAIN_TO_PRESET,
     DomainSignal,
@@ -6,7 +6,7 @@ from .engine import (
     understand,
 )
 from .entities import ExtractedEntities, extract_entities
-from .normalize import normalize_text, tokenize
+from .normalize import light_stem_ar, normalize_text, tokenize
 
 __all__ = [
     "understand",
@@ -17,4 +17,5 @@ __all__ = [
     "extract_entities",
     "normalize_text",
     "tokenize",
+    "light_stem_ar",
 ]

@@ -1168,12 +1168,18 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
             bits = []
             if lu.entities.product:
                 bits.append(f"product={lu.entities.product}")
+            if getattr(lu.entities, "category", None):
+                bits.append(f"category={lu.entities.category}")
             if lu.entities.audience:
                 bits.append(f"audience={lu.entities.audience}")
             if lu.entities.payment_methods:
                 bits.append("pay=" + ",".join(lu.entities.payment_methods))
             if lu.entities.wants_delivery:
                 bits.append("delivery")
+            if getattr(lu.entities, "brand_analogy", None):
+                bits.append(f"like={lu.entities.brand_analogy}")
+            if getattr(lu, "complexity_hint", None):
+                bits.append(f"complexity={lu.complexity_hint}")
             if bits:
                 base = (s.description or "").strip()
                 s.set_description((base + " | " if base else "") + "LU: " + "; ".join(bits))
