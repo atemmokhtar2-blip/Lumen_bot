@@ -279,28 +279,103 @@ def top_recipes(
     return recipes[:limit]
 
 
+def feature_weights(
+    intent: str | None,
+    *,
+    memory: MemoryEngine | None = None,
+    user_id: int | None = None,
+) -> dict[str, float]:
+    """Positive weights from success recipes, negative from avoids."""
+    mem = memory or get_memory_engine()
+    weights: dict[str, float] = {}
+    if intent:
+        for rec in top_recipes(intent, memory=mem, limit=5):
+            for i, f in enumerate(rec.features):
+                weights[f] = weights.get(f, 0.0) + float(rec.weight) * (1.0 / (1 + i * 0.05))
+        try:
+            for f, s in mem.top_features_for_intent(str(intent), limit=15):
+                if f in {"start", "help", "lang"}:
+                    continue
+                weights[f] = weights.get(f, 0.0) + float(s)
+        except Exception:
+            pass
+    # Global avoid list from pattern_avoid events (+ user-specific)
+    try:
+        with mem._conn() as conn:
+            rows = conn.execute(
+                "SELECT user_id, payload_json FROM event_log WHERE event=? ORDER BY id DESC LIMIT 150",
+                ("pattern_avoid",),
+            ).fetchall()
+        for r in rows:
+            try:
+                data = json.loads(r["payload_json"] or "{}")
+            except Exception:
+                continue
+            # prefer user-specific avoids
+            boost = 1.0 if user_id and r["user_id"] == int(user_id) else 0.4
+            if intent and data.get("intent") and data["intent"] != intent:
+                continue
+            for f in data.get("features") or []:
+                if isinstance(f, str):
+                    # soft decay — single negative must not erase success recipes
+                    weights[f] = weights.get(f, 0.0) - 0.7 * boost
+    except Exception:
+        pass
+    return weights
+
+
 def apply_success_learning(
     base_features: list[str],
     intent: str | None,
     *,
     strict: bool = False,
     memory: MemoryEngine | None = None,
-    max_extra: int = 6,
+    user_id: int | None = None,
+    max_extra: int = 8,
 ) -> list[str]:
-    """Merge success recipes into feature plan (never under strict)."""
+    """Rank + merge + drop avoided features.
+
+    strict: never ADD features, but still DROP features with strong negative weight
+            (so bad extras learned from failures get removed).
+    """
     out = list(dict.fromkeys(base_features or []))
+    weights = feature_weights(intent, memory=memory, user_id=user_id)
+
+    # Drop strongly avoided features (even under strict) except core
+    core = {"start", "help", "lang"}
+    dropped = []
+    kept = []
+    for f in out:
+        if f not in core and weights.get(f, 0.0) <= -1.6:
+            dropped.append(f)
+            continue
+        kept.append(f)
+    out = kept
+
     if strict or not intent:
         return out
-    recipes = top_recipes(intent, memory=memory, limit=3)
+
+    # Add high-weight success features not already present
+    ranked = sorted(
+        ((f, w) for f, w in weights.items() if w > 0.4 and f not in core),
+        key=lambda x: -x[1],
+    )
     added = 0
-    for rec in recipes:
-        for f in rec.features:
-            if f in out or f in {"start", "help", "lang"}:
-                continue
-            out.append(f)
-            added += 1
-            if added >= max_extra:
-                return out
+    for f, _w in ranked:
+        if f in out:
+            continue
+        out.append(f)
+        added += 1
+        if added >= max_extra:
+            break
+
+    # Re-rank: core first, then by weight desc
+    def sort_key(f: str) -> tuple:
+        if f in core:
+            return (0, -10.0, f)
+        return (1, -float(weights.get(f, 0.0)), f)
+
+    out = list(dict.fromkeys(sorted(out, key=sort_key)))
     return out
 
 
@@ -311,12 +386,31 @@ def learn_from_feedback_message(
     bot_id: str | None = None,
     memory: MemoryEngine | None = None,
 ) -> OutcomeSignal:
-    """Explicit feedback after generation (تمام / مش شغال)."""
+    """Feedback after generation — ties to LAST bot features for real learning."""
     sig = detect_outcome(text)
     if not user_id:
         return sig
     mem = memory or get_memory_engine()
     rating = 5 if sig.score_delta >= 5 else (1 if sig.score_delta < 0 else 3)
+
+    last = None
+    try:
+        last = mem.last_bot(int(user_id))
+    except Exception:
+        last = None
+    last_feats: list[str] = []
+    last_intent = ""
+    if last:
+        bot_id = bot_id or str(last.get("bot_id") or last.get("name") or "")
+        last_intent = str(last.get("intent") or "")
+        feats = last.get("features") or []
+        if isinstance(feats, str):
+            try:
+                feats = json.loads(feats)
+            except Exception:
+                feats = []
+        last_feats = [str(f) for f in feats if f]
+
     try:
         mem.record_feedback(
             int(user_id),
@@ -327,11 +421,98 @@ def learn_from_feedback_message(
         )
     except Exception:
         pass
+
+    # Reinforce or avoid the exact feature set of the last bot
+    if last_feats:
+        if sig.score_delta > 0:
+            try:
+                for _ in range(2):
+                    mem.record_patterns(
+                        intent=last_intent or "general",
+                        features=last_feats,
+                    )
+                mem._event(
+                    int(user_id),
+                    "success_recipe",
+                    {
+                        "intent": last_intent or "general",
+                        "purpose": last_intent or "",
+                        "features": last_feats[:24],
+                        "bot_name": (last or {}).get("name"),
+                        "request": ((last or {}).get("request_text") or "")[:200],
+                        "from_feedback": True,
+                    },
+                )
+            except Exception:
+                pass
+        elif sig.score_delta < 0:
+            try:
+                # Soft-avoid experimental extras only (not core commerce/support verbs)
+                protect = {
+                    "start", "help", "lang", "shop_catalog", "order_track",
+                    "pay_methods", "ticket_open", "faq_list", "product_info",
+                }
+                avoid_feats = [f for f in last_feats if f not in protect][:24]
+                if not avoid_feats:
+                    # if only core features, mark mild avoid on nothing — just rating
+                    avoid_feats = []
+                if avoid_feats:
+                    mem._event(
+                        int(user_id),
+                        "pattern_avoid",
+                        {
+                            "intent": last_intent or "general",
+                            "features": avoid_feats,
+                            "reason": text[:120],
+                        },
+                    )
+                mem._event(
+                    int(user_id),
+                    "bot_failed",
+                    {
+                        "intent": last_intent or "general",
+                        "bot": (last or {}).get("name"),
+                        "features": last_feats[:20],
+                        "reason": text[:120],
+                    },
+                )
+            except Exception:
+                pass
+
     return learn_from_interaction(
         int(user_id),
         text,
+        intent=last_intent or None,
+        features=last_feats or None,
         memory=mem,
     )
+
+
+def learning_summary(
+    user_id: int | None,
+    intent: str | None,
+    *,
+    memory: MemoryEngine | None = None,
+) -> dict[str, Any]:
+    """Explain what Stage-3 knows — for meta / user transparency."""
+    mem = memory or get_memory_engine()
+    weights = feature_weights(intent, memory=mem, user_id=user_id)
+    top_pos = sorted(((f, w) for f, w in weights.items() if w > 0), key=lambda x: -x[1])[:8]
+    top_neg = sorted(((f, w) for f, w in weights.items() if w < 0), key=lambda x: x[1])[:6]
+    score = 0
+    if user_id:
+        try:
+            profile = mem.get_user(int(user_id))
+            data = dict(getattr(profile, "data", None) or {})
+            score = int(data.get("learning_score", 0) or 0)
+        except Exception:
+            pass
+    return {
+        "user_score": score,
+        "boost": [{"feature": f, "w": round(w, 2)} for f, w in top_pos],
+        "avoid": [{"feature": f, "w": round(w, 2)} for f, w in top_neg],
+        "recipes": [r.to_dict() for r in top_recipes(intent or "general", memory=mem, limit=3)],
+    }
 
 
 def is_feedback_only(text: str) -> bool:
@@ -357,5 +538,7 @@ __all__ = [
     "learn_from_feedback_message",
     "top_recipes",
     "apply_success_learning",
+    "feature_weights",
+    "learning_summary",
     "is_feedback_only",
 ]

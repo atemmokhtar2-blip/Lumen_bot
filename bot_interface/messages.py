@@ -137,14 +137,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             detect_outcome,
         )
         if uid and is_feedback_only(request):
+            from telegram_bot_engine.spec_core.language_understanding.memory_engine import get_memory_engine as _gme
+            last = None
+            try:
+                last = _gme().last_bot(int(uid))
+            except Exception:
+                last = None
             sig = learn_from_feedback_message(int(uid), request)
+            bot_name = (last or {}).get("name") or "آخر بوت"
+            n_feats = 0
+            try:
+                feats = (last or {}).get("features") or []
+                if isinstance(feats, str):
+                    import json as _json
+                    feats = _json.loads(feats)
+                n_feats = len(feats) if isinstance(feats, list) else 0
+            except Exception:
+                pass
             if sig.kind == "positive" or sig.kind == "complete":
                 await message.reply_text(
-                    f"شكرًا على تقييمك ✅ (+{sig.score_delta}) — هيتعلم منه النظام."
+                    f"شكرًا ✅ (+{sig.score_delta})\n"
+                    f"اتقوّت وصفة «{bot_name}» ({n_feats} ميزة) للتوليدات الجاية."
                 )
             elif sig.kind == "negative":
                 await message.reply_text(
-                    f"تم تسجيل الملاحظة 📝 ({sig.score_delta}) — هحاول أتجنب نفس الغلط."
+                    f"تم 📝 ({sig.score_delta})\n"
+                    f"ميزات «{bot_name}» هتتتجنب أو تتضعف في المرات الجاية."
                 )
             return
     except Exception:

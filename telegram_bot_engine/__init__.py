@@ -249,15 +249,29 @@ def _run_intelligence_layers(
                     ent, memory_snap, request=request or ""
                 )
                 # Stage-3: merge success recipes when not strict
-                if ent is not None and not getattr(ent, "strict_spec", False):
+                if ent is not None:
+                    strict3 = bool(getattr(ent, "strict_spec", False))
                     merged3 = apply_success_learning(
                         list(getattr(ent, "features_requested", None) or []),
                         intent_name,
-                        strict=False,
+                        strict=strict3,
                         memory=memory_engine,
+                        user_id=int(user_id) if user_id else None,
                     )
                     try:
                         ent.features_requested = merged3
+                    except Exception:
+                        pass
+                    try:
+                        from .spec_core.language_understanding.continuous_learning import learning_summary
+                        # stash on intel via meta later
+                        if not hasattr(ent, "raw") or ent.raw is None:
+                            ent.raw = {}
+                        ent.raw["l3_learning"] = learning_summary(
+                            int(user_id) if user_id else None,
+                            intent_name,
+                            memory=memory_engine,
+                        )
                     except Exception:
                         pass
             except Exception:
