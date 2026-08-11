@@ -128,6 +128,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
+
+    # ── L3 clarification resume (answers for pending questions) ──────────
+    _pending_q = (context.user_data or {}).get("pending_clarify") if context.user_data else None
+    if isinstance(_pending_q, dict) and _pending_q.get("questions"):
+        try:
+            answers = dict(_pending_q.get("answers") or {})
+            qlist = list(_pending_q.get("questions") or [])
+            idx = int(_pending_q.get("idx") or 0)
+            base_req = str(_pending_q.get("base_request") or "")
+            # skip / cancel
+            low = request.lower().strip()
+            if low in {"/cancel", "cancel", "إلغاء", "الغاء", "تخطي الكل", "skip all"}:
+                context.user_data.pop("pending_clarify", None)
+                await message.reply_text("تم إلغاء التوضيح. اكتب وصفاً جديداً للتوليد.")
+                return
+            if low in {"تخطي", "skip", "/skip"}:
+                idx += 1
+            else:
+                cur = qlist[idx] if idx < len(qlist) else None
+                if cur:
+                    answers[str(cur.get("slot") or cur.get("id") or f"q{idx}")] = request.strip()
+                idx += 1
+            if idx < len(qlist):
+                context.user_data["pending_clarify"] = {
+                    "base_request": base_req,
+                    "questions": qlist,
+                    "answers": answers,
+                    "idx": idx,
+                }
+                nq = qlist[idx]
+                await message.reply_text(
+                    f"❓ ({idx+1}/{len(qlist)}) {nq.get('text') or nq.get('slot')}\n"
+                    "• اكتب الإجابة · تخطي · إلغاء"
+                )
+                return
+            # All answered → enrich request and fall through to generation
+            context.user_data.pop("pending_clarify", None)
+            extra = " | ".join(f"{k}: {v}" for k, v in answers.items() if v)
+            request = (base_req + ("\n" + extra if extra else "")).strip()
+            await message.reply_text("👍 تمام — هولّد البوت بالمواصفات دي...")
+        except Exception:
+            logger.exception("pending_clarify resume failed")
+            if context.user_data is not None:
+                context.user_data.pop("pending_clarify", None)
+
     try:
         from telegram_bot_engine.services.user_memory import get_user_memory
         _mem = get_user_memory(uid, OUTPUT_DIR)
@@ -832,6 +877,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     except Exception:
         pass
+
+    # ── L3: ask adaptive questions before thin specs (e.g. «بوت متجر») ──
+    try:
+        from telegram_bot_engine.spec_core.language_understanding import (
+            understand,
+            analyze_intent,
+            build_question_plan,
+        )
+        _lu = understand(request)
+        _intent = analyze_intent(request, lu=_lu)
+        _qp = build_question_plan(
+            request,
+            intent=_intent,
+            lu=_lu,
+            user_id=int(user.id) if user else None,
+            remember=True,
+            max_questions=3,
+        )
+        if (
+            _qp
+            and getattr(_qp, "should_block_generation", False)
+            and getattr(_qp, "questions", None)
+            and context.user_data is not None
+            and len(request) < 120  # rich specs skip Q&A
+        ):
+            q_payload = [
+                {
+                    "id": getattr(q, "id", None) or getattr(q, "slot", f"q{i}"),
+                    "slot": getattr(q, "slot", None) or getattr(q, "id", f"q{i}"),
+                    "text": getattr(q, "text", "") or str(getattr(q, "slot", "")),
+                }
+                for i, q in enumerate(list(_qp.questions)[:3])
+            ]
+            if q_payload:
+                context.user_data["pending_clarify"] = {
+                    "base_request": request,
+                    "questions": q_payload,
+                    "answers": {},
+                    "idx": 0,
+                }
+                await message.reply_text(
+                    "🧠 هخصص البوت ليك — جاوب على كام سؤال سريع:\n\n"
+                    f"❓ (1/{len(q_payload)}) {q_payload[0]['text']}\n"
+                    "• اكتب الإجابة · تخطي · إلغاء"
+                )
+                return
+    except Exception:
+        logger.exception("L3 pre-generation questions failed")
 
     # Duplicate identical prompt within TTL → reuse last project path
     try:

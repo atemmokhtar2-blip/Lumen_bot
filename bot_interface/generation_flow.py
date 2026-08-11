@@ -39,6 +39,23 @@ async def deliver_generation_result(
         summary_lines.append(f"• المسار: `{escape_md(project_path)}`")
     if meta.get("preset"):
         summary_lines.append(f"• preset: `{escape_md(meta.get('preset'))}`")
+    # L1–L6 snapshot (so the user sees the intelligence path is active)
+    layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
+    if layers and not layers.get("layers_error"):
+        l1 = layers.get("l1_primary") or layers.get("l1_preset") or "—"
+        l2 = layers.get("l2_intent") or "—"
+        l2_skill = layers.get("l2_skill") or "—"
+        l3_n = len(layers.get("l3_questions") or [])
+        l5_n = len(layers.get("l5_build") or [])
+        l6 = (layers.get("l6_style") or {}) if isinstance(layers.get("l6_style"), dict) else {}
+        l6_dom = l6.get("domain") or "—"
+        l6_lang = l6.get("language_variant") or "—"
+        summary_lines.append(
+            f"• طبقات: L1=`{escape_md(str(l1))}` · L2=`{escape_md(str(l2))}`/{escape_md(str(l2_skill))} · "
+            f"L3={l3_n}س · L5={l5_n} · L6=`{escape_md(str(l6_dom))}`/{escape_md(str(l6_lang))}`"
+        )
+    elif layers.get("layers_error"):
+        summary_lines.append(f"• طبقات: ⚠️ `{escape_md(str(layers.get('layers_error'))[:80])}`")
     if errors:
         summary_lines.append("• أخطاء:")
         for e in errors[:8]:
