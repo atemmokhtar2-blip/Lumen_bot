@@ -682,6 +682,25 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     except Exception:
         pass
 
+    # Layer-1 Language Understanding soft boost (synonyms / fuzzy / entities)
+    try:
+        from .language_understanding import understand as _lu
+        from .language_understanding import DOMAIN_TO_PRESET as _LU_MAP
+        _res = _lu(request or "")
+        for d in (_res.domains or [])[:6]:
+            preset = _LU_MAP.get(d.domain)
+            if preset:
+                scores[preset] = scores.get(preset, 0.0) + float(d.score) * 0.85
+        if _res.entities.wants_delivery or _res.entities.payment_methods:
+            scores["shop"] = scores.get("shop", 0.0) + 1.5
+            if any(
+                p in (_res.entities.payment_methods or [])
+                for p in ("visa", "telegram_payments", "vodafone_cash")
+            ):
+                scores["shop"] = scores.get("shop", 0.0) + 1.0
+    except Exception:
+        pass
+
     ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
     return ranked
 
@@ -1128,6 +1147,36 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
             from .registry import CAPABILITIES as _CAPS
             if key in _CAPS:
                 s.selected.add(key)
+    except Exception:
+        pass
+
+    # Layer-1 LU: personalize features from entities (payments/delivery/discounts…)
+    try:
+        if lu is None:
+            from .language_understanding import understand as _lu_understand
+            lu = _lu_understand(request or "")
+        if lu is not None:
+            from .registry import CAPABILITIES as _CAPS
+            for key in (lu.feature_hints or []):
+                if key in _CAPS:
+                    s.selected.add(key)
+            # Prefer LU primary preset when stack is thin / generic shop
+            if lu.primary_preset and (not stack or stack[0] in {"shop", "custom"}):
+                if lu.primary_preset not in stack:
+                    stack = [lu.primary_preset] + list(stack or [])
+            # Stamp description with entities so bots differ per request
+            bits = []
+            if lu.entities.product:
+                bits.append(f"product={lu.entities.product}")
+            if lu.entities.audience:
+                bits.append(f"audience={lu.entities.audience}")
+            if lu.entities.payment_methods:
+                bits.append("pay=" + ",".join(lu.entities.payment_methods))
+            if lu.entities.wants_delivery:
+                bits.append("delivery")
+            if bits:
+                base = (s.description or "").strip()
+                s.set_description((base + " | " if base else "") + "LU: " + "; ".join(bits))
     except Exception:
         pass
 

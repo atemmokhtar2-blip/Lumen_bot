@@ -1,0 +1,64 @@
+{
+  "shop": {
+    "primary": [
+      "متجر",
+      "محل",
+      "shop",
+      "store",
+      "منتجات",
+      "سلة"
+    ],
+    "secondary": [
+      "كوبون",
+      "خصم",
+      "كتالوج",
+      "طلب"
+    ]
+  },
+  "payments": {
+    "primary": [
+      "دفع",
+      "فيزا",
+      "payment",
+      "مدفوعات"
+    ],
+    "secondary": [
+      "فودافون",
+      "محفظة",
+      "invoice"
+    ]
+  },
+  "delivery": {
+    "primary": [
+      "توصيل",
+      "شحن",
+      "delivery"
+    ],
+    "secondary": [
+      "تتبع",
+      "مندوب"
+    ]
+  },
+  "tickets": {
+    "primary": [
+      "دعم",
+      "تذكرة",
+      "support"
+    ],
+    "secondary": [
+      "شكوى",
+      "helpdesk"
+    ]
+  },
+  "booking": {
+    "primary": [
+      "حجز",
+      "موعد",
+      "booking"
+    ],
+    "secondary": [
+      "جدول",
+      "reservation"
+    ]
+  }
+}

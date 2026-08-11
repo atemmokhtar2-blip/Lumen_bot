@@ -1,0 +1,145 @@
+{
+  "shop": [
+    "shop",
+    "store",
+    "ecommerce",
+    "e-commerce",
+    "catalog",
+    "cart",
+    "products",
+    "merchandise",
+    "boutique"
+  ],
+  "marketplace": [
+    "marketplace",
+    "multi-vendor",
+    "vendors",
+    "bazaar"
+  ],
+  "restaurant": [
+    "restaurant",
+    "food",
+    "menu",
+    "cafe",
+    "delivery food"
+  ],
+  "booking": [
+    "booking",
+    "appointment",
+    "reservation",
+    "schedule"
+  ],
+  "tickets": [
+    "support",
+    "ticket",
+    "helpdesk",
+    "complaint"
+  ],
+  "wallet": [
+    "wallet",
+    "balance",
+    "topup",
+    "vodafone cash"
+  ],
+  "payments": [
+    "payment",
+    "payments",
+    "visa",
+    "card",
+    "checkout",
+    "invoice"
+  ],
+  "delivery": [
+    "delivery",
+    "shipping",
+    "courier",
+    "tracking"
+  ],
+  "education": [
+    "education",
+    "course",
+    "lesson",
+    "quiz",
+    "school"
+  ],
+  "crm": [
+    "crm",
+    "leads",
+    "pipeline",
+    "sales"
+  ],
+  "saas": [
+    "saas",
+    "platform",
+    "workspace",
+    "tenant"
+  ],
+  "security": [
+    "security",
+    "cyber",
+    "dns",
+    "tls",
+    "scan"
+  ],
+  "iot": [
+    "iot",
+    "sensors",
+    "smart home",
+    "mqtt"
+  ],
+  "tasks": [
+    "tasks",
+    "todo",
+    "reminders"
+  ],
+  "notes": [
+    "notes",
+    "memo"
+  ],
+  "growth": [
+    "referral",
+    "affiliate",
+    "invite"
+  ],
+  "points": [
+    "points",
+    "loyalty",
+    "rewards"
+  ],
+  "subscriptions": [
+    "subscription",
+    "plan",
+    "membership",
+    "vip"
+  ],
+  "contests": [
+    "contest",
+    "giveaway",
+    "raffle"
+  ],
+  "jobs": [
+    "jobs",
+    "recruitment",
+    "hiring",
+    "cv"
+  ],
+  "events": [
+    "events",
+    "tickets sale"
+  ],
+  "fitness": [
+    "gym",
+    "fitness",
+    "workout"
+  ],
+  "clinic": [
+    "clinic",
+    "doctor",
+    "patients"
+  ],
+  "bot": [
+    "bot",
+    "telegram bot",
+    "chatbot"
+  ]
+}

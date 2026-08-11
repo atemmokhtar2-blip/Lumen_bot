@@ -1,0 +1,28 @@
+{
+  "shop": [
+    "catalog",
+    "cart",
+    "checkout",
+    "coupon",
+    "sku",
+    "inventory",
+    "wishlist"
+  ],
+  "restaurant": [
+    "menu",
+    "table",
+    "order",
+    "kitchen"
+  ],
+  "booking": [
+    "slot",
+    "calendar",
+    "appointment"
+  ],
+  "tickets": [
+    "ticket",
+    "priority",
+    "agent",
+    "sla"
+  ]
+}
