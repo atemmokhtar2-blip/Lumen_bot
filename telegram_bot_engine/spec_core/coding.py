@@ -192,23 +192,28 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     if needs_payinfo:
         env_lines += [
             "PAYMENT_VODAFONE_CASH=",
+            "PAYMENT_INSTAPAY=",
             "PAYMENT_BANK_IBAN=",
+            "PAYMENT_WALLET=",
             "PAYMENT_INSTRUCTIONS=",
         ]
         readme_extra += [
             "### Payment info",
-            "Set PAYMENT_VODAFONE_CASH / PAYMENT_BANK_IBAN / PAYMENT_INSTRUCTIONS in .env",
+            "Set PAYMENT_VODAFONE_CASH / PAYMENT_INSTAPAY / PAYMENT_BANK_IBAN / PAYMENT_WALLET / PAYMENT_INSTRUCTIONS in .env",
         ]
     if needs_sched:
         # PTB JobQueue extra (APScheduler)
         opt_req.append("python-telegram-bot[job-queue]==21.6")
         env_lines += [
             "SCHEDULE_ENABLED=1",
+            "SCHEDULE_BATCH_LIMIT=20",
         ]
         readme_extra += [
             "### Schedule",
-            "`/schedule in 5m text` stores due_ts + chat_id.",
+            "`/schedule in 5m text` or `/schedule بعد 10 دقائق نص` stores due_ts + chat_id.",
+            "Supports: بعد نصف ساعة / بعد ساعة / in 90s / بعد يومين …",
             "main.py polls JobQueue every 60s when SCHEDULE_ENABLED=1.",
+            "SCHEDULE_BATCH_LIMIT caps deliveries per tick (default 20).",
             "Requires: pip install 'python-telegram-bot[job-queue]==21.6'",
         ]
     files["requirements.txt"] = "\n".join(req_lines) + "\n"

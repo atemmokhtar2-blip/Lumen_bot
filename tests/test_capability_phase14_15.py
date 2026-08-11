@@ -45,6 +45,7 @@ def test_phase14_caps_registered():
     assert get_capability("scaffold_faq_bot") is not None
     assert assess_capability("x", "utils", "voice_intake").safe is True
     assert assess_capability("x", "utils", "payment_info").safe is True
+    assert assess_capability("x", "content", "faq").safe is True
 
 
 def test_voice_request_matches_scaffold():
@@ -129,3 +130,35 @@ def test_integration_system_health_full():
 def test_integration_impossible_still_blocks():
     pre = telegram_preflight("بوت يتعلم من المحادثات ويدرب نموذج ذكاء اصطناعي")
     assert pre["should_block"] is True
+
+
+def test_generate_faq_scaffold_emits_faq_fn():
+    """FAQ scaffold must emit a real faq() implementation, not generic list-only."""
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت أسئلة شائعة",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_faq_bot"],
+        )
+        assert r.success, r.errors
+        gen = (Path(r.project_path) / "app" / "services" / "generic.py").read_text(encoding="utf-8")
+        assert "def faq(" in gen
+        assert "_FAQ_SEED" in gen
+        main = (Path(r.project_path) / "main.py").read_text(encoding="utf-8")
+        assert "faq" in main.lower()
+        handlers = (Path(r.project_path) / "app" / "handlers.py").read_text(encoding="utf-8")
+        assert "generic_svc.faq" in handlers or "def faq" in gen
+
+
+def test_generate_payment_extra_env_keys():
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت دفع يدوي",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_payment_info"],
+        )
+        assert r.success
+        env = (Path(r.project_path) / ".env.example").read_text(encoding="utf-8")
+        assert "PAYMENT_INSTAPAY" in env or "PAYMENT_VODAFONE_CASH" in env

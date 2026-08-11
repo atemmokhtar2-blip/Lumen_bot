@@ -1,12 +1,19 @@
 """Phase 13 — Ops commands (hardened): admin allowlist + confirm for mutations."""
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 _LAST_MUTATION: dict[str, float] = {}
 _MUTATION_COOLDOWN_SEC = 15.0
+_OPS_CMDS = frozenset({
+    "/cap_help", "/capops", "/cap_health", "/cap_trace",
+    "/cap_learn", "/cap_promote",
+})
 
 
 def _is_truthy(v: str | None) -> bool:
@@ -54,6 +61,14 @@ def _cooldown_ok(key: str) -> bool:
     return True
 
 
+def _audit(user_id: int | None, cmd: str, detail: str = "") -> None:
+    """Lightweight ops audit log (no PII beyond user_id)."""
+    try:
+        logger.info("ops_audit user=%s cmd=%s %s", user_id, cmd, detail[:120])
+    except Exception:
+        pass
+
+
 def handle_ops_command(text: str, *, user_id: int | None = None) -> str | None:
     """If text is an ops command, return Arabic response; else None."""
     if not ops_enabled():
@@ -66,24 +81,29 @@ def handle_ops_command(text: str, *, user_id: int | None = None) -> str | None:
     arg = " ".join(parts[1:]).strip()
     args_l = arg.lower().split()
 
-    if cmd not in {
-        "/cap_help", "/capops", "/cap_health", "/cap_trace",
-        "/cap_learn", "/cap_promote",
-    }:
+    if cmd not in _OPS_CMDS:
         return None
 
     if not is_ops_admin(user_id):
+        _audit(user_id, cmd, "denied")
         return "⛔ أوامر القدرات متاحة للمشرفين فقط (CAPABILITY_OPS_ADMINS)."
 
+    _audit(user_id, cmd, arg[:80] if arg else "ok")
+
     if cmd in {"/cap_help", "/capops"}:
+        admins = _parse_admin_ids()
+        mode = "admin-list" if admins else (
+            "require-admin" if _is_truthy(os.getenv("CAPABILITY_OPS_REQUIRE_ADMIN", "0")) else "dev-open"
+        )
         return (
             "🛠 أوامر القدرات (ops)\n"
-            "/cap_health — صحة النظام\n"
-            "/cap_trace <وصف> — تقرير المسار\n"
-            "/cap_learn — إحصائيات التعلم\n"
-            "/cap_learn run — دورة تعلم\n"
-            "/cap_promote — حالة الترقية\n"
-            "/cap_promote run confirm — ترقية المسودات (يتطلب تأكيد)\n"
+            "/cap_health — صحة النظام + فحوصات الـ scaffolds\n"
+            "/cap_trace <وصف> — تقرير المسار (detect→preflight→emit)\n"
+            "/cap_learn — إحصائيات التعلم والفجوات\n"
+            "/cap_learn run — تشغيل دورة تعلم واحدة\n"
+            "/cap_promote — حالة المسودات والترقية\n"
+            "/cap_promote run confirm — ترقية المسودات (يتطلب تأكيد صريح)\n"
+            f"الوضع: {mode} | cooldown={int(_MUTATION_COOLDOWN_SEC)}ث\n"
             "الصلاحية: CAPABILITY_OPS_ADMINS أو ADMIN_IDS"
         )
 

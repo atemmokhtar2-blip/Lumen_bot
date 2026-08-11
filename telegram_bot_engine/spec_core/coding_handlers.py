@@ -1083,7 +1083,19 @@ def _emit_handlers(spec: BotSpec) -> str:
             if cap.method == "rules":
                 lines.append("    await message.reply_text(content_svc.rules())")
             elif cap.method == "faq":
-                lines.append("    await message.reply_text(content_svc.faq() if hasattr(content_svc, 'faq') else content_svc.rules())")
+                # Prefer durable FAQ scaffold (search + seed) when available
+                lines.append("    from app.services import generic as generic_svc")
+                lines.append(
+                    "    if hasattr(generic_svc, 'faq'):"
+                )
+                lines.append(
+                    "        result = generic_svc.faq(user.id, ' '.join(context.args) if context.args else '')"
+                )
+                lines.append("        await message.reply_text(result)")
+                lines.append("    else:")
+                lines.append(
+                    "        await message.reply_text(content_svc.faq() if hasattr(content_svc, 'faq') else content_svc.rules())"
+                )
             elif cap.method == "announce":
                 lines.append("    body = ' '.join(context.args) if context.args else ''")
                 lines.append("    if not body:")
@@ -1275,10 +1287,10 @@ def _emit_handlers(spec: BotSpec) -> str:
             and cap.method in {
                 "translate", "translate_toggle", "ocr_image", "ocr_hint",
                 "schedule_note", "job_list", "job_cancel",
-                "voice_intake", "payment_info",
+                "voice_intake", "payment_info", "faq",
             }
         ):
-            # Phase 8 scaffolds via generic service specialists
+            # Phase 8/14 scaffolds via generic service specialists
             lines.append("    from app.services import generic as generic_svc")
             if cap.method in {"voice_intake", "voice"}:
                 lines.append(
@@ -1288,6 +1300,11 @@ def _emit_handlers(spec: BotSpec) -> str:
             elif cap.method in {"payment_info", "pay_info"}:
                 lines.append(
                     "    result = generic_svc.payment_info(user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            elif cap.method in {"faq", "faq_list", "faq_search"}:
+                lines.append(
+                    "    result = generic_svc.faq(user.id, "
                     "' '.join(context.args) if context.args else '')"
                 )
             elif cap.method in {"translate", "translate_toggle"} or cap.service == "translate":
@@ -1988,30 +2005,45 @@ def _emit_main(spec: BotSpec) -> str:
             "\n    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))"
         )
 
-    # Phase 12: JobQueue poller for due schedule_note rows
+    # Phase 12: JobQueue poller for due schedule_note rows (hardened)
     if need_sched:
         sched_job_block = '''
 async def _fire_due_reminders(context) -> None:
+    """Poll open reminders and deliver to stored chat_id. Cap batch to avoid flood."""
     try:
         import os as _os
         if (_os.getenv("SCHEDULE_ENABLED") or "1").strip().lower() in {"0", "false", "no"}:
             return
         from app.services import generic as generic_svc
-        due = generic_svc.list_due_reminders()
+        batch = int((_os.getenv("SCHEDULE_BATCH_LIMIT") or "20").strip() or "20")
+        due = generic_svc.list_due_reminders(limit=max(1, min(batch, 50)))
+        sent = 0
         for item in due:
             chat_id = int(item.get("chat_id") or item.get("user_id") or 0)
             body = str(item.get("body") or "")
             iid = item.get("id")
+            ok = False
             if chat_id and body:
                 try:
-                    await context.bot.send_message(chat_id=chat_id, text=f"⏰ تذكير #{iid}\\n{body[:500]}")
-                except Exception:
-                    pass
-            if iid is not None:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⏰ تذكير #{iid}\\n{body[:500]}",
+                    )
+                    ok = True
+                    sent += 1
+                except Exception as send_exc:
+                    logger.warning(
+                        "reminder send failed id=%s chat_id=%s: %s",
+                        iid, chat_id, send_exc,
+                    )
+            # mark fired only on successful delivery (or empty payload — avoid loops)
+            if iid is not None and (ok or not (chat_id and body)):
                 try:
                     generic_svc.mark_reminder_fired(int(iid))
-                except Exception:
-                    pass
+                except Exception as mark_exc:
+                    logger.warning("mark_reminder_fired id=%s: %s", iid, mark_exc)
+        if sent:
+            logger.info("due_reminders delivered=%s batch=%s", sent, len(due))
     except Exception as exc:
         logger.warning("fire_due_reminders: %s", exc)
 '''

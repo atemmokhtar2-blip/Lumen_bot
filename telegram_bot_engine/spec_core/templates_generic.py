@@ -550,14 +550,30 @@ def backend_status() -> str:
 
 
 def voice_intake(user_id: int, text: str = "") -> str:
-    """Record voice-note intent (no STT). Durable row for later processing."""
+    """Record voice-note intent (no STT). Durable row for later processing.
+
+    Ready for a future STT backend (VOICE_STT_BACKEND env). Currently
+    acknowledges and stores; generated bots can attach filters.VOICE later.
+    """
     ensure()
+    import os as _os
     text = (text or "").strip() or "voice_note_received"
-    iid = _insert("voice", int(user_id), "voice_intake", text[:500], "open", {"kind": "voice"})
+    backend = (_os.getenv("VOICE_STT_BACKEND") or "none").strip().lower()
+    iid = _insert(
+        "voice", int(user_id), "voice_intake", text[:500], "open",
+        {"kind": "voice", "stt_backend": backend},
+    )
+    if backend in {"none", "", "off"}:
+        return (
+            f"🎤 ملاحظة صوتية #{iid}\n"
+            "تم تسجيل الطلب.\n"
+            "تحويل الصوت لنص يحتاج تفعيل STT (VOICE_STT_BACKEND).\n"
+            "يمكنك إرسال وصف نصي الآن كبديل."
+        )
     return (
         f"🎤 ملاحظة صوتية #{iid}\n"
-        "تم تسجيل الطلب. تحويل الصوت لنص يحتاج خدمة STT خارجية لاحقاً.\n"
-        "أرسل وصفاً نصياً الآن أو أعد إرسال الصوت بعد التفعيل."
+        f"تم التسجيل (backend={backend}).\n"
+        "المعالجة قيد الانتظار."
     )
 
 
@@ -568,18 +584,92 @@ def payment_info(user_id: int, text: str = "") -> str:
     lines = ["💳 طرق الدفع اليدوي"]
     vcash = (_os.getenv("PAYMENT_VODAFONE_CASH") or "").strip()
     bank = (_os.getenv("PAYMENT_BANK_IBAN") or "").strip()
+    instapay = (_os.getenv("PAYMENT_INSTAPAY") or "").strip()
+    wallet = (_os.getenv("PAYMENT_WALLET") or "").strip()
     note = (_os.getenv("PAYMENT_INSTRUCTIONS") or "").strip()
     if vcash:
         lines.append(f"فودافون كاش: {vcash}")
+    if instapay:
+        lines.append(f"InstaPay: {instapay}")
     if bank:
         lines.append(f"تحويل بنكي: {bank}")
+    if wallet:
+        lines.append(f"محفظة: {wallet}")
     if note:
         lines.append(note)
     if len(lines) == 1:
-        lines.append("لم تُضبط بعد. ضع PAYMENT_VODAFONE_CASH / PAYMENT_BANK_IBAN في .env")
+        lines.append(
+            "لم تُضبط بعد.\n"
+            "ضع في .env:\n"
+            "  PAYMENT_VODAFONE_CASH=\n"
+            "  PAYMENT_INSTAPAY=\n"
+            "  PAYMENT_BANK_IBAN=\n"
+            "  PAYMENT_WALLET=\n"
+            "  PAYMENT_INSTRUCTIONS="
+        )
     body = "\n".join(lines)
     _insert("payments", int(user_id), "payment_info", (text or "")[:200], "done", {"view": True})
     return body
+
+
+# Default FAQ seed (can be extended via /faq add by admin flows later)
+_FAQ_SEED: list[tuple[str, str]] = [
+    ("كيف أستخدم البوت؟", "اكتب /help لعرض الأوامر المتاحة، أو أرسل سؤالك مباشرة."),
+    ("ما هي طرق الدفع؟", "استخدم /payinfo أو /payment لعرض طرق الدفع المضبوطة."),
+    ("كيف أضيف تذكيراً؟", "مثال: /schedule بعد 10 دقائق اشرب ماء"),
+    ("هل يدعم العربية؟", "نعم، الواجهة والردود بالعربية بشكل أساسي."),
+    ("كيف أتواصل مع الدعم؟", "أرسل رسالتك هنا وسيتم تسجيلها للمتابعة."),
+]
+
+
+def faq(user_id: int, text: str = "") -> str:
+    """Simple FAQ: list, search, or show all. Stores view event."""
+    ensure()
+    import os as _os
+    q = (text or "").strip()
+    # optional extra FAQs from env (JSON list of {q,a})
+    extra: list[tuple[str, str]] = []
+    raw = (_os.getenv("FAQ_EXTRA_JSON") or "").strip()
+    if raw:
+        try:
+            import json as _json
+            data = _json.loads(raw)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get("q") and item.get("a"):
+                        extra.append((str(item["q"]), str(item["a"])))
+        except Exception:
+            pass
+    items = list(_FAQ_SEED) + extra
+
+    if not q or q.lower() in {"list", "all", "قائمة", "الكل", "مساعدة"}:
+        lines = ["❓ الأسئلة الشائعة:"]
+        for i, (qq, aa) in enumerate(items, 1):
+            lines.append(f"{i}. {qq}")
+        lines.append("\nابحث: /faq كلمة مفتاحية")
+        _insert("content", int(user_id), "faq_list", q or "list", "done", {"count": len(items)})
+        return "\n".join(lines)
+
+    # search (simple substring, Arabic-friendly)
+    q_low = q.lower()
+    hits = []
+    for qq, aa in items:
+        if q_low in qq.lower() or q_low in aa.lower() or q in qq or q in aa:
+            hits.append((qq, aa))
+    if not hits:
+        # fallback: show closest first 3
+        lines = [
+            f"❓ لم أجد تطابقاً لـ «{q[:40]}»",
+            "جرّب /faq لعرض القائمة، أو أعد صياغة السؤال.",
+        ]
+        _insert("content", int(user_id), "faq_miss", q[:200], "done", {})
+        return "\n".join(lines)
+
+    lines = [f"❓ نتائج البحث ({len(hits)}):"]
+    for qq, aa in hits[:5]:
+        lines.append(f"• {qq}\n  → {aa}")
+    _insert("content", int(user_id), "faq_hit", q[:200], "done", {"hits": len(hits)})
+    return "\n".join(lines)
 
 def translate_text(user_id: int, text: str = "") -> str:
     """Translation helper with optional production backends.
@@ -730,31 +820,96 @@ def ocr_from_image(user_id: int, image_path: str = "", caption: str = "") -> str
     )
 
 
+def _human_duration(sec: int) -> str:
+    """Arabic-friendly human duration for UX."""
+    sec = max(0, int(sec))
+    if sec < 60:
+        return f"{sec} ثانية"
+    if sec < 3600:
+        m = sec // 60
+        return f"{m} دقيقة" if m == 1 else f"{m} دقائق"
+    if sec < 86400:
+        h = sec // 3600
+        rem = (sec % 3600) // 60
+        base = "ساعة" if h == 1 else f"{h} ساعات"
+        if rem:
+            return f"{base} و {rem} دقيقة"
+        return base
+    d = sec // 86400
+    rem_h = (sec % 86400) // 3600
+    base = "يوم" if d == 1 else f"{d} أيام"
+    if rem_h:
+        return f"{base} و {rem_h} ساعة"
+    return base
+
+
 def _parse_due_seconds(text: str) -> tuple[int, str]:
-    """Parse simple relative due times. Returns (seconds_from_now, cleaned_body)."""
+    """Parse relative due times (EN + AR). Returns (seconds_from_now, cleaned_body).
+
+    Supported examples:
+      in 5m / in 10 min / 1h / 2d / in 90s
+      بعد 10 دقائق / بعد ساعة / بعد ساعتين / بعد نصف ساعة / بعد ربع ساعة
+      بعد يوم / بعد يومين / بعد شوية
+    Fallback: 1 hour (body = full text).
+    """
     import re as _re
     t = (text or "").strip()
-    # in 5m / 10min / 1h / 2d
-    m = _re.match(r"^(?:in\s+)?(\d+)\s*(m|min|mins|minutes|h|hr|hours|d|day|days)\b\s*(.*)$", t, _re.I)
+    if not t:
+        return 3600, t
+
+    # English: in 5m / 10min / 1h / 2d / 90s / after 5 minutes
+    m = _re.match(
+        r"^(?:in|after)?\s*(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours|d|day|days)\b\s*(.*)$",
+        t,
+        _re.I,
+    )
     if m:
         n, unit, rest = int(m.group(1)), m.group(2).lower(), (m.group(3) or "").strip()
+        if unit in {"s", "sec", "secs", "seconds"}:
+            return max(15, n), rest or t
         if unit in {"m", "min", "mins", "minutes"}:
             return max(30, n * 60), rest or t
-        if unit in {"h", "hr", "hours"}:
+        if unit in {"h", "hr", "hrs", "hours"}:
             return max(60, n * 3600), rest or t
         if unit in {"d", "day", "days"}:
             return max(60, n * 86400), rest or t
-    # Arabic: بعد 5 دقائق / بعد ساعة
-    m2 = _re.match(r"^بعد\s+(\d+)\s*(دقيقة|دقائق|ساعة|ساعات|يوم|ايام|أيام)\s*(.*)$", t)
+
+    # Arabic numeric: بعد 5 دقائق / بعد 2 ساعة / بعد 3 أيام
+    m2 = _re.match(
+        r"^بعد\s+(\d+)\s*(ثانية|ثواني|دقيقة|دقائق|ساعة|ساعات|يوم|يومين|ايام|أيام)\s*(.*)$",
+        t,
+    )
     if m2:
         n, unit, rest = int(m2.group(1)), m2.group(2), (m2.group(3) or "").strip()
+        if unit in {"ثانية", "ثواني"}:
+            return max(15, n), rest or t
         if "دق" in unit:
             return max(30, n * 60), rest or t
         if "ساع" in unit:
             return max(60, n * 3600), rest or t
         if "يوم" in unit or "ايام" in unit or "أيام" in unit:
+            # يومين already covered by numeric + unit; treat n=2 يومين ok
             return max(60, n * 86400), rest or t
-    # default: 1 hour
+
+    # Arabic fixed phrases (no number)
+    fixed = [
+        (r"^بعد\s+شوية\s*(.*)$", 15 * 60),
+        (r"^بعد\s+قليل\s*(.*)$", 10 * 60),
+        (r"^بعد\s+ربع\s*ساعة\s*(.*)$", 15 * 60),
+        (r"^بعد\s+نصف\s*ساعة\s*(.*)$", 30 * 60),
+        (r"^بعد\s+ساعة\s*ونص(?:ف)?\s*(.*)$", 90 * 60),
+        (r"^بعد\s+ساعة\s*(.*)$", 3600),
+        (r"^بعد\s+ساعتين\s*(.*)$", 2 * 3600),
+        (r"^بعد\s+يومين\s*(.*)$", 2 * 86400),
+        (r"^بعد\s+يوم\s*(.*)$", 86400),
+    ]
+    for pat, sec in fixed:
+        m3 = _re.match(pat, t)
+        if m3:
+            rest = (m3.group(1) or "").strip()
+            return max(30, sec), rest or t
+
+    # default: 1 hour, keep full text as body
     return 3600, t
 
 
@@ -769,9 +924,11 @@ def schedule_note(user_id: int, text: str = "", chat_id: int | None = None) -> s
             "الاستخدام:\n"
             "  /schedule in 5m اشرب ماء\n"
             "  /schedule بعد 10 دقائق اجتماع\n"
+            "  /schedule بعد نصف ساعة اتصال\n"
             "عرض: /jobs — إلغاء: /jobcancel <id>"
         )
     sec, body = _parse_due_seconds(text)
+    body = (body or text).strip() or "تذكير"
     due_ts = int(_time.time()) + int(sec)
     meta = {
         "kind": "reminder",
@@ -779,21 +936,23 @@ def schedule_note(user_id: int, text: str = "", chat_id: int | None = None) -> s
         "delay_sec": sec,
         "chat_id": int(chat_id) if chat_id else int(user_id),
     }
-    iid = _insert("scheduler", int(user_id), "reminder", body, "open", meta)
+    iid = _insert("scheduler", int(user_id), "reminder", body[:500], "open", meta)
+    human = _human_duration(sec)
     return (
-        f"⏰ تذكير #{iid} بعد {sec} ث\n"
+        f"⏰ تذكير #{iid} بعد {human}\n"
         f"{body[:300]}\n"
         "سيُرسل تلقائياً عبر JobQueue (SCHEDULE_ENABLED=1)."
     )
 
 
 def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]:
-    """Return open scheduler rows whose due_ts <= now."""
+    """Return open scheduler rows whose due_ts <= now (oldest first, capped)."""
     ensure()
     import json as _json
     import time as _time
     now = int(now_ts if now_ts is not None else _time.time())
-    rows = _list("scheduler", user_id=None, status="open", limit=limit)
+    # fetch a bit more then filter — avoids missing due items when many open
+    rows = _list("scheduler", user_id=None, status="open", limit=max(limit * 3, 80))
     due = []
     for r in rows:
         try:
@@ -809,7 +968,8 @@ def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]
                 "body": r["body"],
                 "due_ts": due_ts,
             })
-    return due
+    due.sort(key=lambda x: (x.get("due_ts") or 0, x.get("id") or 0))
+    return due[:limit]
 
 
 def mark_reminder_fired(item_id: int) -> bool:
@@ -824,24 +984,56 @@ def mark_reminder_fired(item_id: int) -> bool:
 
 
 def job_list(user_id: int, text: str = "") -> str:
+    """List open reminders for user with remaining time."""
     ensure()
+    import json as _json
+    import time as _time
     rows = _list("scheduler", user_id=int(user_id), status="open", limit=20)
-    return _fmt(rows, "لا توجد تذكيرات مجدولة")
+    if not rows:
+        return "لا توجد تذكيرات مجدولة\nأضف واحداً: /schedule بعد 10 دقائق نص"
+    now = int(_time.time())
+    lines = ["⏰ تذكيراتك المفتوحة:"]
+    for r in rows:
+        try:
+            meta = _json.loads(r.get("meta") or "{}")
+        except Exception:
+            meta = {}
+        due_ts = int(meta.get("due_ts") or 0)
+        body = (r.get("body") or r.get("title") or "")[:80]
+        if due_ts and due_ts > now:
+            rem = _human_duration(due_ts - now)
+            lines.append(f"#{r['id']} بعد {rem} — {body}")
+        elif due_ts:
+            lines.append(f"#{r['id']} مستحق الآن — {body}")
+        else:
+            lines.append(f"#{r['id']} — {body}")
+    lines.append("إلغاء: /jobcancel <id>")
+    return "\n".join(lines)
 
 
 def job_cancel(user_id: int, text: str = "") -> str:
     ensure()
     iid = _first_id(text or "")
     if not iid:
-        return "حدد رقم التذكير: /job_cancel 3"
+        return "حدد رقم التذكير: /jobcancel 3\nعرض القائمة: /jobs"
     with connect() as conn:
+        # fetch first for better message
+        row = conn.execute(
+            "SELECT id, body, status FROM domain_items WHERE id=? AND service='scheduler' AND user_id=?",
+            (iid, int(user_id)),
+        ).fetchone()
+        if not row:
+            return f"غير موجود أو ليس لك: #{iid}"
+        if row["status"] != "open":
+            return f"#{iid} حالته أصلاً «{row['status']}» — لا حاجة لإلغاء"
         cur = conn.execute(
             "UPDATE domain_items SET status='closed', updated_at=? WHERE id=? AND service='scheduler' AND user_id=?",
             (_now(), iid, int(user_id)),
         )
         conn.commit()
         n = int(cur.rowcount)
-    return f"تم إلغاء #{iid}" if n else "غير موجود"
+    snippet = (row["body"] or "")[:60]
+    return f"تم إلغاء #{iid}\n{snippet}" if n else f"تعذر إلغاء #{iid}"
 
 
 
@@ -859,11 +1051,13 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
     m, svc, uid = method.lower(), service.lower(), int(user_id)
 
 
-    # Phase 8 specialized scaffolds
+    # Phase 8 / 14 specialized scaffolds
     if m in {"voice_intake", "voice"} or (svc == "voice"):
         return voice_intake(uid, text)
     if m in {"payment_info", "pay_info"}:
         return payment_info(uid, text)
+    if m in {"faq", "faq_list", "faq_search"} or (svc in {"content", "utils"} and m == "faq"):
+        return faq(uid, text)
     if m in {"translate", "translate_text"} or (svc in {"translate", "utils", "content"} and m == "translate"):
         return translate_text(uid, text)
     if m in {"ocr_from_image"}:

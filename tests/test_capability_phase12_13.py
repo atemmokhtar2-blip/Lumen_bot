@@ -70,3 +70,26 @@ def test_ops_help_lists_commands(monkeypatch):
     monkeypatch.setenv("CAPABILITY_OPS_REQUIRE_ADMIN", "0")
     h = handle_ops_command("/cap_help", user_id=1)
     assert h and "cap_health" in h and "confirm" in h
+    assert "cooldown" in h or "الوضع" in h
+
+
+def test_generate_schedule_parser_and_batch_env():
+    """Hardened parser + batch limit appear in emitted generic + env."""
+    _reload()
+    with tempfile.TemporaryDirectory() as d:
+        r = generate_bot(
+            "بوت تذكير مجدول",
+            work_dir=d,
+            user_id=0,
+            preferred_keys=["start", "help", "scaffold_schedule"],
+        )
+        assert r.success
+        root = Path(r.project_path)
+        gen = (root / "app" / "services" / "generic.py").read_text(encoding="utf-8")
+        env = (root / ".env.example").read_text(encoding="utf-8")
+        main = (root / "main.py").read_text(encoding="utf-8")
+        assert "_human_duration" in gen
+        assert "نصف ساعة" in gen or "بعد نصف" in gen
+        assert "SCHEDULE_BATCH_LIMIT" in env
+        assert "list_due_reminders(limit=" in main
+        assert "mark_reminder_fired" in main
