@@ -6,8 +6,26 @@
     "can_skip": false,
     "ar": "عايز البوت يعمل إيه بالظبط؟",
     "en": "What should the bot do exactly?",
-    "choices_ar": ["متجر", "أمن سيبراني", "دعم/تذاكر", "حجوزات", "تعليم", "IoT", "CRM", "أخرى"],
-    "choices_en": ["Shop", "Cybersecurity", "Support", "Booking", "Education", "IoT", "CRM", "Other"],
+    "choices_ar": [
+      "متجر",
+      "أمن سيبراني",
+      "دعم/تذاكر",
+      "حجوزات",
+      "تعليم",
+      "IoT",
+      "CRM",
+      "أخرى"
+    ],
+    "choices_en": [
+      "Shop",
+      "Cybersecurity",
+      "Support",
+      "Booking",
+      "Education",
+      "IoT",
+      "CRM",
+      "Other"
+    ],
     "expert_ar": "حدد الـ vertical الأساسي (shop / security / support / booking / saas / iot…).",
     "expert_en": "Specify primary vertical (shop / security / support / booking / saas / iot…)."
   },
@@ -15,12 +33,29 @@
     "id": "product_or_category",
     "priority": 9,
     "slot": "product_or_category",
-    "intents": ["shop", "marketplace"],
+    "intents": [
+      "shop",
+      "marketplace"
+    ],
     "can_skip": false,
     "ar": "هتبيع إيه؟ (مثال: ملابس أطفال / أحذية / إلكترونيات)",
     "en": "What will you sell? (e.g. kids clothes / shoes / electronics)",
-    "choices_ar": ["ملابس", "أحذية", "إلكترونيات", "أكل", "خدمات رقمية", "أخرى"],
-    "choices_en": ["Clothes", "Shoes", "Electronics", "Food", "Digital", "Other"],
+    "choices_ar": [
+      "ملابس",
+      "أحذية",
+      "إلكترونيات",
+      "أكل",
+      "خدمات رقمية",
+      "أخرى"
+    ],
+    "choices_en": [
+      "Clothes",
+      "Shoes",
+      "Electronics",
+      "Food",
+      "Digital",
+      "Other"
+    ],
     "expert_ar": "حدد catalog domain + نوع SKU (physical/digital).",
     "expert_en": "Define catalog domain + SKU type (physical/digital)."
   },
@@ -28,12 +63,30 @@
     "id": "payment",
     "priority": 9,
     "slot": "payment",
-    "intents": ["shop", "marketplace", "restaurant"],
-    "can_skip": false,
+    "intents": [
+      "shop",
+      "marketplace",
+      "restaurant"
+    ],
+    "can_skip": true,
     "ar": "طرق الدفع؟",
     "en": "Which payment methods?",
-    "choices_ar": ["فيزا", "فودافون كاش", "فوري", "محفظة", "عند الاستلام", "أكثر من طريقة"],
-    "choices_en": ["Visa/Card", "Vodafone Cash", "Fawry", "Wallet", "COD", "Multiple"],
+    "choices_ar": [
+      "فيزا",
+      "فودافون كاش",
+      "فوري",
+      "محفظة",
+      "عند الاستلام",
+      "أكثر من طريقة"
+    ],
+    "choices_en": [
+      "Visa/Card",
+      "Vodafone Cash",
+      "Fawry",
+      "Wallet",
+      "COD",
+      "Multiple"
+    ],
     "expert_ar": "Payment rails: Telegram Payments / VF Cash / COD / wallet top-up؟",
     "expert_en": "Payment rails: Telegram Payments / VF Cash / COD / wallet top-up?"
   },
@@ -41,34 +94,71 @@
     "id": "delivery",
     "priority": 6,
     "slot": "delivery",
-    "intents": ["shop", "marketplace", "restaurant"],
+    "intents": [
+      "shop",
+      "marketplace",
+      "restaurant"
+    ],
     "can_skip": true,
     "ar": "محتاج توصيل وتتبع شحنات؟",
     "en": "Do you need delivery + shipment tracking?",
-    "choices_ar": ["نعم", "لا", "لاحقاً"],
-    "choices_en": ["Yes", "No", "Later"]
+    "choices_ar": [
+      "نعم",
+      "لا",
+      "لاحقاً"
+    ],
+    "choices_en": [
+      "Yes",
+      "No",
+      "Later"
+    ]
   },
   "discounts": {
     "id": "discounts",
     "priority": 5,
     "slot": "discounts",
-    "intents": ["shop", "marketplace"],
+    "intents": [
+      "shop",
+      "marketplace"
+    ],
     "can_skip": true,
     "ar": "كوبونات وخصومات؟",
     "en": "Coupons and discounts?",
-    "choices_ar": ["نعم", "لا"],
-    "choices_en": ["Yes", "No"]
+    "choices_ar": [
+      "نعم",
+      "لا"
+    ],
+    "choices_en": [
+      "Yes",
+      "No"
+    ]
   },
   "security_scope": {
     "id": "security_scope",
     "priority": 9,
     "slot": "security_scope",
-    "intents": ["security"],
+    "intents": [
+      "security"
+    ],
     "can_skip": false,
     "ar": "أي فحوصات أمنية؟",
     "en": "Which security checks?",
-    "choices_ar": ["DNS", "TLS/SSL", "Headers", "Phishing توعية", "تقارير حوادث", "الكل"],
-    "choices_en": ["DNS", "TLS/SSL", "Headers", "Phishing tips", "Incidents", "All"],
+    "choices_ar": [
+      "DNS",
+      "TLS/SSL",
+      "Headers",
+      "Phishing توعية",
+      "تقارير حوادث",
+      "الكل"
+    ],
+    "choices_en": [
+      "DNS",
+      "TLS/SSL",
+      "Headers",
+      "Phishing tips",
+      "Incidents",
+      "All"
+    ],
     "expert_ar": "Scope: DNS/MX/SPF/DMARC + TLS + headers + awareness + incident tickets؟",
     "expert_en": "Scope: DNS/MX/SPF/DMARC + TLS + headers + awareness + incident tickets?"
   },
@@ -76,7 +166,9 @@
     "id": "target_host",
     "priority": 7,
     "slot": "target_host",
-    "intents": ["security"],
+    "intents": [
+      "security"
+    ],
     "can_skip": true,
     "ar": "دومين/رابط للفحص؟ (مثال: example.com)",
     "en": "Domain/URL to scan? (e.g. example.com)",
@@ -87,133 +179,269 @@
     "id": "report_audience",
     "priority": 5,
     "slot": "report_audience",
-    "intents": ["security"],
+    "intents": [
+      "security"
+    ],
     "can_skip": true,
     "ar": "التقارير للمستخدم ولا للإدمن فقط؟",
     "en": "Reports for end-users or admin-only?",
-    "choices_ar": ["المستخدم", "الإدمن", "الاتنين"],
-    "choices_en": ["End-user", "Admin", "Both"]
+    "choices_ar": [
+      "المستخدم",
+      "الإدمن",
+      "الاتنين"
+    ],
+    "choices_en": [
+      "End-user",
+      "Admin",
+      "Both"
+    ]
   },
   "ticket_audience": {
     "id": "ticket_audience",
     "priority": 8,
     "slot": "audience",
-    "intents": ["tickets"],
+    "intents": [
+      "tickets"
+    ],
     "can_skip": false,
     "ar": "التذاكر لعملاء خارجيين ولا فريق داخلي؟",
     "en": "Tickets for external customers or internal team?",
-    "choices_ar": ["عملاء", "داخلي", "الاتنين"],
-    "choices_en": ["Customers", "Internal", "Both"]
+    "choices_ar": [
+      "عملاء",
+      "داخلي",
+      "الاتنين"
+    ],
+    "choices_en": [
+      "Customers",
+      "Internal",
+      "Both"
+    ]
   },
   "priority_sla": {
     "id": "priority_sla",
     "priority": 5,
     "slot": "priority_sla",
-    "intents": ["tickets"],
+    "intents": [
+      "tickets"
+    ],
     "can_skip": true,
     "ar": "محتاج أولويات (low/normal/high) وSLA؟",
     "en": "Need priorities (low/normal/high) and SLA?",
-    "choices_ar": ["نعم", "لا"],
-    "choices_en": ["Yes", "No"]
+    "choices_ar": [
+      "نعم",
+      "لا"
+    ],
+    "choices_en": [
+      "Yes",
+      "No"
+    ]
   },
   "booking_type": {
     "id": "booking_type",
     "priority": 9,
     "slot": "booking_type",
-    "intents": ["booking", "clinic"],
+    "intents": [
+      "booking",
+      "clinic"
+    ],
     "can_skip": false,
     "ar": "نوع الحجز؟",
     "en": "Booking type?",
-    "choices_ar": ["موعد عيادة", "طاولة مطعم", "خدمة عامة", "أخرى"],
-    "choices_en": ["Clinic appointment", "Restaurant table", "General service", "Other"]
+    "choices_ar": [
+      "موعد عيادة",
+      "طاولة مطعم",
+      "خدمة عامة",
+      "أخرى"
+    ],
+    "choices_en": [
+      "Clinic appointment",
+      "Restaurant table",
+      "General service",
+      "Other"
+    ]
   },
   "course_scope": {
     "id": "course_scope",
     "priority": 9,
     "slot": "course_scope",
-    "intents": ["education"],
+    "intents": [
+      "education"
+    ],
     "can_skip": false,
     "ar": "الكورسات عن إيه؟ وعايز اختبارات/شهادات؟",
     "en": "Course topic? Quizzes/certificates needed?",
-    "choices_ar": ["تقنية", "لغات", "بيزنس", "مع كويز", "مع شهادة"],
-    "choices_en": ["Tech", "Languages", "Business", "With quiz", "With certificate"]
+    "choices_ar": [
+      "تقنية",
+      "لغات",
+      "بيزنس",
+      "مع كويز",
+      "مع شهادة"
+    ],
+    "choices_en": [
+      "Tech",
+      "Languages",
+      "Business",
+      "With quiz",
+      "With certificate"
+    ]
   },
   "connectivity": {
     "id": "connectivity",
     "priority": 9,
     "slot": "connectivity",
-    "intents": ["iot"],
+    "intents": [
+      "iot"
+    ],
     "can_skip": false,
     "ar": "الأجهزة تتصل بإيه؟",
     "en": "How do devices connect?",
-    "choices_ar": ["MQTT", "HTTP", "Telegram alerts", "أخرى"],
-    "choices_en": ["MQTT", "HTTP", "Telegram alerts", "Other"]
+    "choices_ar": [
+      "MQTT",
+      "HTTP",
+      "Telegram alerts",
+      "أخرى"
+    ],
+    "choices_en": [
+      "MQTT",
+      "HTTP",
+      "Telegram alerts",
+      "Other"
+    ]
   },
   "ops_scope": {
     "id": "ops_scope",
     "priority": 8,
     "slot": "ops_scope",
-    "intents": ["devops"],
+    "intents": [
+      "devops"
+    ],
     "can_skip": false,
     "ar": "نطاق DevOps؟",
     "en": "DevOps scope?",
-    "choices_ar": ["تنبيهات deploy", "حالة خدمات", "webhooks", "الكل"],
-    "choices_en": ["Deploy alerts", "Service status", "Webhooks", "All"]
+    "choices_ar": [
+      "تنبيهات deploy",
+      "حالة خدمات",
+      "webhooks",
+      "الكل"
+    ],
+    "choices_en": [
+      "Deploy alerts",
+      "Service status",
+      "Webhooks",
+      "All"
+    ]
   },
   "pipeline": {
     "id": "pipeline",
     "priority": 8,
     "slot": "pipeline",
-    "intents": ["crm"],
+    "intents": [
+      "crm"
+    ],
     "can_skip": false,
     "ar": "مراحل الـ pipeline؟",
     "en": "Pipeline stages?",
-    "choices_ar": ["جديد→تواصل→صفقة", "مخصص", "بسيط"],
-    "choices_en": ["New→Contact→Deal", "Custom", "Simple"]
+    "choices_ar": [
+      "جديد→تواصل→صفقة",
+      "مخصص",
+      "بسيط"
+    ],
+    "choices_en": [
+      "New→Contact→Deal",
+      "Custom",
+      "Simple"
+    ]
   },
   "plans": {
     "id": "plans",
     "priority": 8,
     "slot": "plans",
-    "intents": ["saas", "subscriptions"],
+    "intents": [
+      "saas",
+      "subscriptions"
+    ],
     "can_skip": false,
     "ar": "خطط الاشتراك؟",
     "en": "Subscription plans?",
-    "choices_ar": ["مجاني+مدفوع", "شهري/سنوي", "مخصص"],
-    "choices_en": ["Free+Paid", "Monthly/Yearly", "Custom"]
+    "choices_ar": [
+      "مجاني+مدفوع",
+      "شهري/سنوي",
+      "مخصص"
+    ],
+    "choices_en": [
+      "Free+Paid",
+      "Monthly/Yearly",
+      "Custom"
+    ]
   },
   "game_loop": {
     "id": "game_loop",
     "priority": 8,
     "slot": "game_loop",
-    "intents": ["gaming"],
+    "intents": [
+      "gaming"
+    ],
     "can_skip": false,
     "ar": "شكل اللعب؟",
     "en": "Game loop?",
-    "choices_ar": ["نقاط", "بطولات", "مستويات", "الكل"],
-    "choices_en": ["Points", "Tournaments", "Levels", "All"]
+    "choices_ar": [
+      "نقاط",
+      "بطولات",
+      "مستويات",
+      "الكل"
+    ],
+    "choices_en": [
+      "Points",
+      "Tournaments",
+      "Levels",
+      "All"
+    ]
   },
   "mod_actions": {
     "id": "mod_actions",
     "priority": 8,
     "slot": "mod_actions",
-    "intents": ["moderation"],
+    "intents": [
+      "moderation"
+    ],
     "can_skip": false,
     "ar": "أوامر الإشراف المطلوبة؟",
     "en": "Which moderation actions?",
-    "choices_ar": ["حظر", "كتم", "تحذير", "فلتر كلمات", "الكل"],
-    "choices_en": ["Ban", "Mute", "Warn", "Word filter", "All"]
+    "choices_ar": [
+      "حظر",
+      "كتم",
+      "تحذير",
+      "فلتر كلمات",
+      "الكل"
+    ],
+    "choices_en": [
+      "Ban",
+      "Mute",
+      "Warn",
+      "Word filter",
+      "All"
+    ]
   },
   "menu_or_orders": {
     "id": "menu_or_orders",
     "priority": 8,
     "slot": "menu_or_orders",
-    "intents": ["restaurant"],
+    "intents": [
+      "restaurant"
+    ],
     "can_skip": false,
     "ar": "منيو + طلبات فقط، ولا كمان حجز طاولات؟",
     "en": "Menu + orders only, or table booking too?",
-    "choices_ar": ["طلبات فقط", "مع حجز طاولات", "مع توصيل"],
-    "choices_en": ["Orders only", "With tables", "With delivery"]
+    "choices_ar": [
+      "طلبات فقط",
+      "مع حجز طاولات",
+      "مع توصيل"
+    ],
+    "choices_en": [
+      "Orders only",
+      "With tables",
+      "With delivery"
+    ]
   },
   "language_ui": {
     "id": "language_ui",
@@ -222,7 +450,15 @@
     "can_skip": true,
     "ar": "لغة واجهة البوت؟",
     "en": "Bot UI language?",
-    "choices_ar": ["عربي", "English", "الاتنين"],
-    "choices_en": ["Arabic", "English", "Both"]
+    "choices_ar": [
+      "عربي",
+      "English",
+      "الاتنين"
+    ],
+    "choices_en": [
+      "Arabic",
+      "English",
+      "Both"
+    ]
   }
 }

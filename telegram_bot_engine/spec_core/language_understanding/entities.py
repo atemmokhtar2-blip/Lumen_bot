@@ -140,6 +140,8 @@ _PAY_MAP = {
     "wallet": ["محفظة", "محفظه", "wallet", "رصيد"],
     "telegram_payments": ["telegram payments", "دفع تيليجرام", "invoice"],
     "cod": ["دفع عند الاستلام", "عند الاستلام", "cod", "cash on delivery"],
+    "stripe": ["stripe", "سترايب"],
+    "paypal": ["paypal", "باي بال", "بايبال"],
 }
 
 _CITIES = [

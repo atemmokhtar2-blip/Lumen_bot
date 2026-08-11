@@ -110,45 +110,115 @@ def _is_ar(lang: str) -> bool:
 
 
 def _known_answers(intent: IntentAnalysis, lu: LanguageUnderstandingResult) -> dict[str, Any]:
-    """Facts already extracted — never ask these again."""
+    """Facts already present in text / L1 / L2 — never ask again."""
+    import re
     ent = lu.entities
+    raw = lu.original or ""
     known: dict[str, Any] = {}
+
     if intent.primary:
         known["bot_purpose"] = intent.primary.intent
-    if ent.product:
-        known["product_or_category"] = ent.product
-    elif ent.category:
+
+    non_commerce_cat = {"أمن سيبراني", "دورات"}
+    if ent.product and (not ent.category or ent.category not in non_commerce_cat):
+        # trim noisy long captures
+        prod = (ent.product or "").strip()
+        if len(prod) <= 60 and prod:
+            known["product_or_category"] = prod
+    elif ent.category and ent.category not in non_commerce_cat:
         known["product_or_category"] = ent.category
-    if ent.payment_methods:
-        known["payment"] = list(ent.payment_methods)
-    if ent.wants_delivery:
+    if "product_or_category" not in known:
+        if re.search(r"\bproducts?\b|\bitems?\b|منتجات|بضاعة|سلع", raw, re.I):
+            known["product_or_category"] = "products"
+        elif re.search(
+            r"ملابس|احذية|أحذية|إلكترونيات|الكترونيات|عطور|مكياج|هدايا|أكل|اطفال|أطفال",
+            raw,
+            re.I,
+        ):
+            m = re.search(
+                r"(ملابس|احذية|أحذية|إلكترونيات|الكترونيات|عطور|مكياج|هدايا|أكل|اطفال|أطفال)",
+                raw,
+                re.I,
+            )
+            if m:
+                known["product_or_category"] = m.group(1)
+
+    pays = list(ent.payment_methods or [])
+    extra_pay = [
+        ("stripe", r"stripe|سترايب"),
+        ("paypal", r"paypal|باي\s*بال|بايبال"),
+        ("visa", r"فيزا|visa|mastercard|بطاقة|\bcard\b"),
+        ("vodafone_cash", r"فودافون|vodafone"),
+        ("fawry", r"فوري|fawry"),
+        ("cod", r"عند\s*الاستلام|cash\s*on\s*delivery|\bcod\b"),
+        ("wallet", r"محفظة|wallet"),
+        ("instapay", r"instapay|انستا\s*باي"),
+        ("telegram_payments", r"telegram\s*payments|دفع\s*تيليجرام"),
+    ]
+    for name, pat in extra_pay:
+        if re.search(pat, raw, re.I) and name not in pays:
+            pays.append(name)
+    if pays:
+        known["payment"] = pays
+
+    if ent.wants_delivery or re.search(r"توصيل|شحن|shipping|delivery", raw, re.I):
         known["delivery"] = True
-    if ent.wants_discounts:
+    if ent.wants_discounts or re.search(r"كوبون|خصم|coupon|discount", raw, re.I):
         known["discounts"] = True
+    if ent.wants_reviews or re.search(r"تقييم|review|rating", raw, re.I):
+        known["reviews"] = True
+
     if ent.security_checks:
         known["security_scope"] = list(ent.security_checks)
+    elif intent.primary and intent.primary.intent == "security":
+        if re.search(r"dns|tls|ssl|spf|dmarc|headers|phishing|تصيد|فحص", raw, re.I):
+            known["security_scope"] = True
     if ent.target_domain or ent.target_url or ent.target_ip:
         known["target_host"] = ent.target_domain or ent.target_url or ent.target_ip
+
     if ent.course_topic:
         known["course_scope"] = ent.course_topic
+    elif intent.primary and intent.primary.intent == "education":
+        if re.search(r"كورس|دورة|course|كويز|quiz|شهادة", raw, re.I):
+            known["course_scope"] = True
+
     if ent.tech_stack:
         known["connectivity"] = list(ent.tech_stack)
         known["ops_scope"] = list(ent.tech_stack)
+
     if intent.primary and intent.primary.intent == "moderation":
-        known["mod_actions"] = intent.primary.evidence[:4] or True
+        known["mod_actions"] = True
     if intent.primary and intent.primary.intent in {"booking", "clinic"}:
         known["booking_type"] = intent.primary.intent
     if intent.primary and intent.primary.intent == "restaurant":
         known["menu_or_orders"] = True
+        if re.search(r"طاولة|tables?", raw, re.I):
+            known["table_booking"] = True
     if intent.primary and intent.primary.intent == "gaming":
         known["game_loop"] = True
     if intent.primary and intent.primary.intent == "crm":
         known["pipeline"] = True
     if intent.primary and intent.primary.intent in {"saas", "subscriptions"}:
         known["plans"] = True
+
     if intent.primary and intent.primary.intent == "tickets":
-        # audience still often unknown
-        pass
+        if re.search(r"عملاء|زبائن|customer|external", raw, re.I):
+            known["audience"] = "customers"
+        elif re.search(r"داخلي|internal|فريق", raw, re.I):
+            known["audience"] = "internal"
+        if re.search(r"أولوي|priority|sla|\bhigh\b|\blow\b|normal", raw, re.I):
+            known["priority_sla"] = True
+
+    if re.search(r"للإدمن|admin\s*only|للإدارة", raw, re.I):
+        known["report_audience"] = "admin"
+    elif re.search(r"للمستخدم|end\s*user", raw, re.I):
+        known["report_audience"] = "user"
+
+    if re.search(r"\benglish\b|بالإنجليزي|انجليزي", raw, re.I):
+        known["language_ui"] = "en"
+    elif re.search(r"عربي|arabic", raw, re.I) and re.search(r"لغة|language|واجهة", raw, re.I):
+        known["language_ui"] = "ar"
+
     return known
 
 
@@ -211,16 +281,28 @@ def build_question_plan(
         # required vs optional: skip optional when not include_optional
         # required slots are those in intent.missing_slots OR can_skip false
         can_skip = bool(meta.get("can_skip", True))
-        is_required = (not can_skip) or (slot in (intent.missing_slots or []))
+        # Required ONLY if checklist says missing — can_skip=false alone is not enough
+        # if the slot was already inferred in known answers
+        is_required = slot in (intent.missing_slots or []) or (
+            not can_skip and slot not in known and not primary
+        )
+        # Shop special: product + payment are required if missing from known
+        if primary in {"shop", "marketplace"} and slot in {"product_or_category", "payment"}:
+            if slot not in known:
+                is_required = True
+                can_skip = False
         if not is_required and not include_optional:
             continue
-        # if we have solid primary and slot optional and beginner — skip polish questions
+        # solid primary + optional + beginner → skip polish
         if (
             can_skip
+            and not is_required
             and skill == "beginner"
             and intent.evidence_grade in {"hard", "solid"}
-            and slot not in (intent.missing_slots or [])
         ):
+            continue
+        # never ask language_ui until purpose known
+        if slot == "language_ui" and not primary:
             continue
 
         # wording by skill + language
