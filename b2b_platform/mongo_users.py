@@ -14,21 +14,23 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Canonical plan ids for this product surface
-CANONICAL_PLANS = frozenset({"free", "pro", "unlimited"})
-PLAN_ALIASES = {
-    "free": "free",
-    "starter": "free",
-    "pro": "pro",
-    "business": "pro",
-    "unlimited": "unlimited",
-    "enterprise": "unlimited",
-}
+# Canonical plan ids — explorer | starter | growth
+CANONICAL_PLANS = frozenset({"explorer", "starter", "growth"})
 
 
 def normalize_plan_id(plan_id: str | None) -> str:
-    key = (plan_id or "free").strip().lower()
-    return PLAN_ALIASES.get(key, "free" if key not in CANONICAL_PLANS else key)
+    try:
+        from .plans import normalize_plan_id as _np
+        return _np(plan_id)
+    except Exception:
+        key = (plan_id or "explorer").strip().lower()
+        aliases = {
+            "free": "explorer", "hobby": "explorer", "explorer": "explorer",
+            "indie": "starter", "starter": "starter",
+            "pro": "growth", "growth": "growth", "business": "growth",
+            "unlimited": "growth", "enterprise": "growth",
+        }
+        return aliases.get(key, "explorer")
 
 
 def _new_api_key(prefix: str = "sk_live") -> str:
@@ -111,7 +113,7 @@ class MongoUserStore:
         self,
         name: str,
         *,
-        plan_id: str = "free",
+        plan_id: str = "explorer",
         brand_name: str = "",
         owner_telegram_id: int = 0,
         **wl: Any,
@@ -243,7 +245,7 @@ def get_or_create_by_telegram(
     owner_telegram_id: int,
     *,
     name: str = "",
-    plan_id: str = "free",
+    plan_id: str = "explorer",
 ) -> tuple:
     """Ensure a Mongo user exists for a Telegram user_id; return (tenant, created: bool)."""
     from .tenants import get_tenant_store

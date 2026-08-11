@@ -4,7 +4,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from api.auth import require_tenant
-from b2b_platform.plans import PLANS, get_plan
+from b2b_platform.plans import PLANS, get_plan, normalize_plan_id, public_plan_dict
 from b2b_platform.tenants import get_tenant_store
 
 
@@ -26,9 +26,10 @@ async def create_tenant(request: web.Request) -> web.Response:
     body = await request.json()
     name = str(body.get("name") or "Tenant").strip()
     # Only admin may assign plans; unknown → free. Still no self-service enterprise.
-    plan_id = str(body.get("plan_id") or "free").lower()
+    plan_id = str(body.get("plan_id") or "explorer").lower()
+    plan_id = normalize_plan_id(plan_id)
     if plan_id not in PLANS:
-        plan_id = "free"
+        plan_id = "explorer"
     tenant, raw_key = get_tenant_store().create(
         name,
         plan_id=plan_id,
@@ -44,7 +45,7 @@ async def create_tenant(request: web.Request) -> web.Response:
             "ok": True,
             "tenant": tenant.public_dict(),
             "api_key": raw_key,  # shown once
-            "plan": get_plan(tenant.plan_id).__dict__,
+            "plan": public_plan_dict(get_plan(tenant.plan_id)),
         },
         status=201,
     )
@@ -60,7 +61,7 @@ async def update_white_label(request: web.Request) -> web.Response:
     """Update brand fields only — never plan_id / active (billing owns those)."""
     tenant = require_tenant(request)
     plan = get_plan(tenant.plan_id)
-    if not plan.white_label and plan.id not in ("business", "enterprise"):
+    if not plan.white_label:
         raise web.HTTPForbidden(
             text='{"error":"plan_lacks_white_label"}',
             content_type="application/json",

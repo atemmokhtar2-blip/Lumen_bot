@@ -207,7 +207,7 @@ async def deliver_generation_result(
             "project_path": str(project_path),
             "owner_user_id": user.id if user else None,
             "entry_point": "main.py",
-            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 1800)),  # overridden by plan gate in messages
             "sandbox": True,
         }
         # All three keys so any token-handler path finds the project

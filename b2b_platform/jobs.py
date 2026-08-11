@@ -350,6 +350,12 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
             }
 
         preferred = feature_keys(report, include_core=True) if report else None
+        # Plan engine tier filter (Explorer=basic only — no payments/db)
+        try:
+            from b2b_platform.plan_gate import filter_preferred_keys
+            preferred = filter_preferred_keys(preferred, tenant_id=job.tenant_id)
+        except Exception:
+            pass
         base = os.getenv("OUTPUT_DIR", "/tmp/generated")
         from api.security import stable_tenant_uid
 
@@ -364,6 +370,12 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
         meta = getattr(result, "metadata", None) or {}
         project_path = getattr(result, "project_path", None)
         errors = list(getattr(result, "errors", None) or [])
+        if success and project_path:
+            try:
+                from b2b_platform.plan_gate import apply_post_generation
+                apply_post_generation(str(project_path), tenant_id=job.tenant_id)
+            except Exception:
+                logger.exception("post-generation plan hooks failed")
         get_metering().record(job.tenant_id, event="generate_completed")
         runner.store.update(job.job_id, progress=0.9, message="finalizing")
         layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}

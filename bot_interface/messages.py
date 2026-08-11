@@ -93,6 +93,14 @@ def _mongo_plan_for_user(user_id: int) -> str | None:
     return None
 
 
+def _plan_live_seconds(user) -> int:
+    try:
+        from b2b_platform.plan_gate import live_seconds_for_user
+        return int(live_seconds_for_user(user_id=int(user.id) if user else 0))
+    except Exception:
+        return 30 * 60
+
+
 def _persist_session(user, context) -> None:
     try:
         if user and context.user_data is not None:
@@ -145,10 +153,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if request.lower().split("@")[0] in {"/plan", "/myplan", "/خطة"}:
         uid = int(user.id) if user else 0
         plan = _mongo_plan_for_user(uid) or "free"
-        labels = {"free": "مجاني (Free)", "pro": "برو (Pro)", "unlimited": "بلا حدود (Unlimited)"}
+        labels = {
+            "explorer": "المجرب (Explorer) — مجاني",
+            "starter": "المبادر (Starter) — $8/شهر",
+            "growth": "النمو (Growth) — $30/شهر",
+            "free": "المجرب (Explorer) — مجاني",
+            "pro": "النمو (Growth)",
+            "unlimited": "النمو (Growth)",
+        }
+        try:
+            from b2b_platform.plans import get_plan, public_plan_dict
+            pd = public_plan_dict(get_plan(plan))
+            extra = (
+                f"\n• التوليد: {pd['generations_per_month']}/شهر"
+                f"\n• الاستضافة 24/7: {pd['hosted_bots']} بوت"
+                f"\n• معاينة حية: {pd['live_preview_minutes']} دقيقة"
+                f"\n• المحرك: {pd['engine_tier']}"
+            )
+        except Exception:
+            extra = ""
         await message.reply_text(
-            f"👤 خطتك الحالية: {labels.get(plan, plan)}\n"
-            f"plan_id=`{plan}`"
+            f"👤 خطتك الحالية: {labels.get(plan, plan)}\nplan_id=`{plan}`{extra}"
         )
         return
 
@@ -498,7 +523,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pending_run = {
                 "project_path": pending_deploy.get("project_path") or "",
                 "entry_point": pending_deploy.get("entry_point") or "",
-                "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                "run_seconds": _plan_live_seconds(user),
             }
             context.user_data["pending_run"] = pending_run
         if not pending_run:
@@ -520,7 +545,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pending_run = {
                     "project_path": active["path"],
                     "entry_point": entry,
-                    "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                    "run_seconds": _plan_live_seconds(user),
                 }
                 context.user_data["pending_run"] = pending_run
         if pending_run and pending_run.get("project_path"):
@@ -632,7 +657,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     context.user_data["pending_run"] = {
                         "project_path": result.path,
                         "entry_point": entry,
-                        "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                        "run_seconds": _plan_live_seconds(user),
                     }
                     lines.append("")
                     lines.append("🚀 *للتشغيل الحقيقي:* أرسل توكن البوت من @BotFather")
@@ -751,7 +776,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         context.user_data["pending_run"] = {
                             "project_path": result.path,
                             "entry_point": entry,
-                            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                            "run_seconds": _plan_live_seconds(user),
                         }
                         lines.append("")
                         lines.append(
@@ -1192,7 +1217,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     payload = {
                         "project_path": _cached["project_path"],
                         "entry_point": _cached.get("entry_point") or "main.py",
-                        "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 900)),
+                        "run_seconds": _plan_live_seconds(user),
                     }
                     context.user_data["pending_run"] = payload
                     context.user_data["pending_deploy"] = dict(payload)
@@ -1238,6 +1263,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status_msg = await message.reply_text(_status_line)
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
+    # Server-side plan quota (Explorer 25 / Starter 50 / Growth 300 per month)
+    try:
+        from b2b_platform.plan_gate import check_generation_quota
+        _q_ok, _q_reason, _q_info = check_generation_quota(user_id=int(user.id) if user else 0)
+        if not _q_ok:
+            limit = _q_info.get("limit") or "?"
+            plan_id = _q_info.get("plan_id") or "explorer"
+            await status_msg.edit_text(
+                f"⛔ وصلت للحد الشهري للتوليد على خطة `{plan_id}` "
+                f"({limit} توليد/شهر).\n"
+                "رقِّ خطتك: /plan — المبادر $8 أو النمو $30."
+            )
+            return
+    except Exception:
+        logger.exception("plan quota check failed")
+
     # Isolated per-user workspace (never share host bot dir/token space)
     try:
         from telegram_bot_engine.services.user_sandbox import get_user_sandbox
@@ -1250,6 +1291,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _pref_keys = None
         if context.user_data is not None:
             _pref_keys = context.user_data.get("detection_preferred_keys")
+        try:
+            from b2b_platform.plan_gate import filter_preferred_keys
+            _pref_keys = filter_preferred_keys(
+                list(_pref_keys) if _pref_keys else None,
+                user_id=int(user.id) if user else 0,
+            )
+        except Exception:
+            pass
         result = await run_with_heartbeat(
             run_generation,
             request,
@@ -1262,6 +1311,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if result is None:
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
             return
+
+        # Explorer watermark + plan post-process (server-side, cannot be skipped by client)
+        try:
+            if result and getattr(result, "success", False) and getattr(result, "project_path", None):
+                from b2b_platform.plan_gate import apply_post_generation
+                apply_post_generation(
+                    str(result.project_path),
+                    user_id=int(user.id) if user else 0,
+                )
+        except Exception:
+            logger.exception("post-generation plan hooks failed")
 
         from .generation_flow import deliver_generation_result
         await deliver_generation_result(

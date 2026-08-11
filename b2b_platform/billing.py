@@ -86,16 +86,33 @@ class BillingService:
         return True, "ok"
 
     def enforce_hosting(self, tenant_id: str, current_hosted: int) -> tuple[bool, str]:
+        """24/7 hosting gate — Explorer has hosted_bots=0 (preview only)."""
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
         plan = get_plan(t.plan_id)
-        if plan.hosted_bots > 0 and current_hosted >= plan.hosted_bots:
-            return False, f"hosted_bots_quota_exceeded:{plan.hosted_bots}"
-        if "managed_hosting" not in plan.features and plan.id == "free":
+        if "managed_hosting" not in plan.features or plan.hosted_bots <= 0:
             return False, "plan_lacks_managed_hosting"
+        if current_hosted >= plan.hosted_bots:
+            return False, f"hosted_bots_quota_exceeded:{plan.hosted_bots}"
         return True, "ok"
+
+    def enforce_feature(self, tenant_id: str, feature: str) -> tuple[bool, str]:
+        store = get_tenant_store()
+        t = store.get(tenant_id)
+        if not t or not t.active:
+            return False, "tenant_inactive"
+        plan = get_plan(t.plan_id)
+        if feature not in plan.features:
+            return False, f"plan_lacks_feature:{feature}"
+        return True, "ok"
+
+    def live_preview_seconds_for(self, tenant_id: str) -> int:
+        store = get_tenant_store()
+        t = store.get(tenant_id)
+        plan = get_plan(t.plan_id if t else "explorer")
+        return int(plan.live_preview_seconds)
 
     def enforce_api(self, tenant_id: str) -> tuple[bool, str]:
         store = get_tenant_store()
@@ -151,6 +168,8 @@ class BillingService:
         if stripe_customer:
             meta_updates["stripe_customer_id"] = stripe_customer
         # Prefer explicit set_plan (MongoUserStore / TenantStore)
+        from .plans import normalize_plan_id
+        plan_id = normalize_plan_id(plan_id)
         if hasattr(store, "set_plan"):
             ok = bool(
                 store.set_plan(
@@ -191,15 +210,9 @@ class BillingService:
         if not t:
             return {"ok": False, "error": "tenant_not_found"}
         plan = get_plan(plan_id)
-        if plan.id == "free":
-            self.apply_plan(tenant_id, "free")
-            return {"ok": True, "plan_id": "free", "checkout_required": False}
-        if plan.id == "enterprise":
-            return {
-                "ok": False,
-                "error": "enterprise_sales_required",
-                "hint": "Contact sales for enterprise pricing",
-            }
+        if plan.id == "explorer" or plan.price_usd_month <= 0:
+            self.apply_plan(tenant_id, "explorer")
+            return {"ok": True, "plan_id": "explorer", "checkout_required": False}
 
         base = (os.getenv("PUBLIC_BASE_URL") or "http://localhost:8080").rstrip("/")
         success_url = success_url or f"{base}/v1/billing/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
@@ -294,7 +307,7 @@ class BillingService:
 
         if etype == "customer.subscription.deleted":
             if tenant_id:
-                self.apply_plan(tenant_id, "free")
+                self.apply_plan(tenant_id, "explorer")
             return {"ok": True, "handled": etype, "tenant_id": tenant_id, "plan_id": "free"}
 
         return {"ok": True, "handled": False, "type": etype}
