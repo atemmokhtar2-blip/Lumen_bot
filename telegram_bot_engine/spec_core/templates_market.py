@@ -293,14 +293,31 @@ def place_order(user_id: int, text: str) -> int:
         return int(cur.lastrowid)
 
 
-def list_orders(only_open: bool = True) -> list[dict]:
+def list_orders(
+    only_open: bool = True,
+    *,
+    user_id: int | None = None,
+    admin_id: int = 0,
+) -> list[dict]:
+    """List orders. Non-admins only see their own rows (no IDOR)."""
     ensure()
-    q = "SELECT * FROM orders"
-    if only_open:
-        q += " WHERE status IN ('pending','paid')"
-    q += " ORDER BY id DESC LIMIT 40"
     with connect() as conn:
-        return [dict(r) for r in conn.execute(q).fetchall()]
+        if admin_id and role_require(int(admin_id), "staff"):
+            q = "SELECT * FROM orders"
+            args: list = []
+            if only_open:
+                q += " WHERE status IN ('pending','paid')"
+            q += " ORDER BY id DESC LIMIT 40"
+            return [dict(r) for r in conn.execute(q, args).fetchall()]
+        uid = int(user_id or 0)
+        if not uid:
+            return []
+        q = "SELECT * FROM orders WHERE user_id=?"
+        args = [uid]
+        if only_open:
+            q += " AND status IN ('pending','paid')"
+        q += " ORDER BY id DESC LIMIT 40"
+        return [dict(r) for r in conn.execute(q, args).fetchall()]
 
 
 def my_orders(user_id: int) -> list[dict]:
@@ -337,14 +354,22 @@ def points_balance(user_id: int) -> int:
     return int(row["b"] if row else 0)
 
 
-def points_credit(user_id: int, delta: int, reason: str = "") -> int:
+def points_credit(
+    user_id: int, delta: int, reason: str = "", actor_id: int = 0
+) -> int:
+    """Credit points. Positive grants from outside payment require staff actor."""
     ensure()
-    if int(delta) == 0:
+    delta = int(delta)
+    if delta == 0:
         return points_balance(user_id)
+    # Large or free grants must be staff-authorized
+    if delta > 0 and (reason or "").startswith("admin"):
+        if not actor_id or not role_require(int(actor_id), "staff"):
+            return points_balance(user_id)
     with connect() as conn:
         conn.execute(
             "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
-            (user_id, int(delta), (reason or "")[:200]),
+            (user_id, delta, (reason or "")[:200]),
         )
         conn.commit()
     return points_balance(user_id)
@@ -412,8 +437,11 @@ def is_sub_active(user_id: int) -> bool:
     return (not ends) or ends >= now
 
 
-def grant_sub(user_id: int, plan_id: int) -> bool:
+def grant_sub(user_id: int, plan_id: int, actor_id: int = 0) -> bool:
+    """Grant subscription — staff/admin only (actor_id required)."""
     ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return False
     list_plans()  # ensure default Free/Pro plans exist
     with connect() as conn:
         plan = conn.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
@@ -429,6 +457,10 @@ def grant_sub(user_id: int, plan_id: int) -> bool:
             (user_id, plan_id, ends),
         )
         conn.commit()
+    try:
+        _audit(int(actor_id), "grant_sub", "subscription", int(user_id), str(plan_id))
+    except Exception:
+        pass
     return True
 
 
@@ -489,9 +521,13 @@ def join_contest(user_id: int, contest_id: int) -> bool:
             return False
 
 
-def draw_winner(contest_id: int) -> int:
-    """Deterministic winner: lowest user_id among entries (documented)."""
+def draw_winner(contest_id: int, actor_id: int = 0) -> int:
+    """Random winner among entries — staff only."""
+    import random as _random
+
     ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return 0
     with connect() as conn:
         rows = conn.execute(
             "SELECT user_id FROM contest_entries WHERE contest_id=?",
@@ -499,12 +535,16 @@ def draw_winner(contest_id: int) -> int:
         ).fetchall()
         if not rows:
             return 0
-        winner = min(int(r["user_id"]) for r in rows)
+        winner = int(_random.choice([int(r["user_id"]) for r in rows]))
         conn.execute(
             "UPDATE contests SET status='closed', winner_user_id=? WHERE id=?",
             (winner, contest_id),
         )
         conn.commit()
+        try:
+            _audit(int(actor_id), "draw_winner", "contest", int(contest_id), str(winner))
+        except Exception:
+            pass
         return winner
 
 
@@ -699,21 +739,40 @@ def create_coupon(code: str, percent: int, admin_id: int = 0) -> str:
     return code
 
 
-def apply_coupon(code: str) -> int:
-    """Return discount percent or 0 if invalid."""
+def apply_coupon(code: str, user_id: int = 0) -> int:
+    """Legacy percent lookup — one redemption per user when user_id set.
+
+    Prefer coupon_apply_code(user_id, code, order_id) for real checkout.
+    """
     ensure()
     code = (code or "").strip().upper()
+    if not code:
+        return 0
     with connect() as conn:
         row = conn.execute(
-            "SELECT body FROM extras_kv WHERE kind='coupon' AND status='open' AND body LIKE ?",
+            "SELECT id, body FROM extras_kv WHERE kind='coupon' AND status='open' AND body LIKE ?",
             (f"{code}|%",),
         ).fetchone()
-    if not row:
-        return 0
-    try:
-        return int(str(row["body"]).split("|", 1)[1])
-    except Exception:
-        return 0
+        if not row:
+            return 0
+        try:
+            pct = int(str(row["body"]).split("|", 1)[1])
+        except Exception:
+            return 0
+        if user_id:
+            # one-shot: mark redeemed for this user via extras_kv
+            prior = conn.execute(
+                "SELECT id FROM extras_kv WHERE kind='coupon_used' AND user_id=? AND body=? LIMIT 1",
+                (int(user_id), code),
+            ).fetchone()
+            if prior:
+                return 0
+            conn.execute(
+                "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+                (int(user_id), "coupon_used", code),
+            )
+            conn.commit()
+        return pct
 
 
 def format_orders(items: list) -> str:
@@ -1566,12 +1625,32 @@ def saas_create_tenant(owner_id: int, name: str, plan: str = "free") -> str:
     return f"Tenant #{tid} plan={plan} seats={seats}"
 
 
-def saas_add_member(tenant_id: int, user_id: int, role: str = "member") -> str:
+def saas_add_member(
+    tenant_id: int, user_id: int, role: str = "member", actor_id: int = 0
+) -> str:
+    """Add member — actor must be owner/admin of the tenant or platform staff."""
     enterprise_ensure()
+    if not actor_id:
+        return "actor required"
     with connect() as conn:
-        t = conn.execute("SELECT seats, name FROM saas_tenants WHERE id=?", (int(tenant_id),)).fetchone()
+        t = conn.execute(
+            "SELECT seats, name, owner_id FROM saas_tenants WHERE id=?",
+            (int(tenant_id),),
+        ).fetchone()
         if not t:
             return "Tenant not found"
+        is_owner = int(t["owner_id"] or 0) == int(actor_id) if "owner_id" in t.keys() else False
+        is_member_admin = False
+        try:
+            m = conn.execute(
+                "SELECT role FROM saas_members WHERE tenant_id=? AND user_id=?",
+                (int(tenant_id), int(actor_id)),
+            ).fetchone()
+            is_member_admin = bool(m and str(m["role"]).lower() in {"owner", "admin"})
+        except Exception:
+            pass
+        if not (is_owner or is_member_admin or role_require(int(actor_id), "staff")):
+            return "Not authorized for this tenant"
         n = conn.execute(
             "SELECT COUNT(*) c FROM saas_members WHERE tenant_id=?", (int(tenant_id),)
         ).fetchone()["c"]
@@ -1659,8 +1738,11 @@ def invoice_pay(invoice_id: int, user_id: int) -> str:
     )
 
 
-def analytics_dashboard() -> str:
+def analytics_dashboard(admin_id: int = 0) -> str:
+    """Staff-only aggregate metrics (no public revenue leak)."""
     enterprise_ensure()
+    if not admin_id or not role_require(int(admin_id), "staff"):
+        return "❌ Analytics — للأدمن فقط"
     with connect() as conn:
         products = conn.execute("SELECT COUNT(*) c FROM products WHERE active=1").fetchone()["c"]
         orders = conn.execute("SELECT COUNT(*) c FROM orders").fetchone()["c"]
@@ -1727,11 +1809,18 @@ def broadcast_segment_count(rule: str = "all") -> str:
 
 
 def role_grant(actor_id: int, user_id: int, role: str) -> str:
-    """RBAC-lite: grant role (admin|staff|vendor|member) stored in extras_kv."""
+    """RBAC-lite: only admin/owner can grant roles."""
     enterprise_ensure()
+    if not actor_id or not role_require(int(actor_id), "admin"):
+        return "❌ غير مصرح — للأدمن فقط"
     role = (role or "member").lower()
     if role not in {"admin", "staff", "vendor", "member", "owner"}:
         return "Roles: admin|staff|vendor|member|owner"
+    # Prevent privilege self-escalation to owner without existing owner
+    if role == "owner" and role_of(int(actor_id)) != "owner":
+        # allow platform ADMIN_IDS only
+        if role_of(int(actor_id)) not in {"admin", "owner"}:
+            return "Cannot grant owner"
     with connect() as conn:
         conn.execute(
             "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
@@ -1744,6 +1833,17 @@ def role_grant(actor_id: int, user_id: int, role: str) -> str:
 
 def role_of(user_id: int) -> str:
     enterprise_ensure()
+    # Bootstrap: ADMIN_IDS from env are always admin
+    try:
+        import os as _os
+
+        raw = (_os.getenv("ADMIN_IDS") or "").strip()
+        if raw:
+            admins = {int(x) for x in raw.replace(";", ",").split(",") if x.strip().isdigit()}
+            if int(user_id) in admins:
+                return "admin"
+    except Exception:
+        pass
     with connect() as conn:
         row = conn.execute(
             "SELECT body FROM extras_kv WHERE user_id=? AND kind='role' AND status='open' ORDER BY id DESC LIMIT 1",

@@ -298,7 +298,11 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     elif method in {"list_orders"}:
         L += [
-            "    items = market_svc.list_orders()",
+            "    # Staff sees all; others only own orders (no IDOR)",
+            "    if market_svc.role_require(user.id, 'staff'):",
+            "        items = market_svc.list_orders(admin_id=user.id)",
+            "    else:",
+            "        items = market_svc.list_orders(user_id=user.id)",
             "    await message.reply_text(market_svc.format_orders(items) if hasattr(market_svc, 'format_orders') else (",
             "        chr(10).join(f\"#{i['id']} {i['status']} {i['amount_cents']}\" for i in items) if items else 'No orders'",
             "    ))",
@@ -335,8 +339,8 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     elif method in {"coupon_apply", "redeem_gift", "apply_coupon"}:
         need_args(1)
-        L.append("    pct = market_svc.apply_coupon(context.args[0])")
-        L.append("    await message.reply_text(f'Discount: {pct}%' if pct else 'Invalid coupon')")
+        L.append("    pct = market_svc.apply_coupon(context.args[0], user_id=user.id)")
+        L.append("    await message.reply_text(f'Discount: {pct}%' if pct else 'Invalid or already used')")
     elif method in {"coupon_create", "create_coupon", "create_gift"}:
         need_args(2)
         L += [
@@ -390,12 +394,15 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method in {"grant"} and svc == "points":
         need_args(2)
         L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
             "    try:",
             "        uid, amt = int(context.args[0]), int(context.args[1])",
             "    except ValueError:",
             f"        await message.reply_text({fail!r})",
             "        return",
-            "    market_svc.points_credit(uid, amt, 'admin_grant')",
+            "    market_svc.points_credit(uid, amt, 'admin_grant', actor_id=user.id)",
             f"    await message.reply_text({ok!r})",
         ]
     elif method in {"debit", "redeem"}:
@@ -420,11 +427,12 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    except ValueError:",
             f"        await message.reply_text({fail!r})",
             "        return",
-            "    # simple wallet move: add to target, subtract from sender if balance allows",
-            "    if market_svc.wallet_balance(user.id) < amt:",
-            "        await message.reply_text('Insufficient wallet balance — /topup <amount> first')",
+            "    if amt <= 0:",
+            "        await message.reply_text('مبلغ غير صالح')",
             "        return",
-            "    market_svc.wallet_add(user.id, -amt)",
+            "    if not market_svc.wallet_debit(user.id, amt, note='transfer_out'):",
+            "        await message.reply_text('رصيد غير كافٍ')",
+            "        return",
             "    bal = market_svc.wallet_add(to_uid, amt)",
             "    await message.reply_text(f'Transferred. Target wallet={bal}')",
         ]
@@ -469,8 +477,15 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             L.append("    except ValueError:")
             L.append("        await message.reply_text('plan_id must be a number — try /plans')")
             L.append("        return")
-            L.append("    ok_g = market_svc.grant_sub(target, plan_id)")
-            L.append("    await message.reply_text((f'Subscription granted plan={plan_id}') if ok_g else 'Plan not found — try /plans')")
+            L.append("    if target != user.id and not market_svc.role_require(user.id, 'staff'):")
+            L.append("        await message.reply_text('❌ منح اشتراك لمستخدم آخر — للأدمن فقط')")
+            L.append("        return")
+            L.append("    # Self-subscribe still requires payment rails in production; free grant = staff only")
+            L.append("    if not market_svc.role_require(user.id, 'staff'):")
+            L.append("        await message.reply_text('اشترك عبر /buy أو /pay — المنح المجاني متوقف')")
+            L.append("        return")
+            L.append("    ok_g = market_svc.grant_sub(target, plan_id, actor_id=user.id)")
+            L.append("    await message.reply_text((f'Subscription granted plan={plan_id}') if ok_g else 'Plan not found or unauthorized')")
     elif method == "revoke" and svc == "subscriptions":
         need_args(1)
         L += [
@@ -508,13 +523,16 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
     elif method == "draw_winner":
         need_args(1)
         L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح — للأدمن فقط')",
+            "        return",
             "    try:",
             "        cid = int(context.args[0])",
             "    except ValueError:",
             f"        await message.reply_text({fail!r})",
             "        return",
-            "    w = market_svc.draw_winner(cid)",
-            "    await message.reply_text(f'Winner user_id={w}' if w else 'No entries')",
+            "    w = market_svc.draw_winner(cid, actor_id=user.id)",
+            "    await message.reply_text(f'Winner user_id={w}' if w else 'No entries / unauthorized')",
         ]
     # ── growth / referrals ────────────────────────────────────────────
     elif method in {"my_code", "invite_link", "rewards_info", "stats", "achievements", "streak"}:
@@ -716,7 +734,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             f"        await message.reply_text({fail!r})",
             "        return",
             "    role = context.args[2] if len(context.args) > 2 else 'member'",
-            "    await message.reply_text(market_svc.saas_add_member(tid, uid, role))",
+            "    await message.reply_text(market_svc.saas_add_member(tid, uid, role, actor_id=user.id))",
         ]
     elif method in {"saas_info", "tenant_info"}:
         need_args(1)
@@ -749,12 +767,27 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    await message.reply_text(market_svc.invoice_pay(iid, user.id))",
         ]
     elif method in {"analytics_overview", "analytics_revenue", "dashboard", "stats"} and svc in {"analytics", "admin", "shop"}:
-        L.append("    await message.reply_text(market_svc.analytics_dashboard())")
+        L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ Analytics — للأدمن فقط')",
+            "        return",
+            "    await message.reply_text(market_svc.analytics_dashboard(admin_id=user.id))",
+        ]
     elif method in {"audit_tail", "audit_log"}:
-        L.append("    await message.reply_text(market_svc.audit_tail(20))")
+        L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح')",
+            "        return",
+            "    await message.reply_text(market_svc.audit_tail(20))",
+        ]
     elif method in {"broadcast_segment"}:
-        L.append("    rule = context.args[0] if context.args else 'all'")
-        L.append("    await message.reply_text(market_svc.broadcast_segment_count(rule))")
+        L += [
+            "    if not market_svc.role_require(user.id, 'staff'):",
+            "        await message.reply_text('❌ غير مصرح')",
+            "        return",
+            "    rule = context.args[0] if context.args else 'all'",
+            "    await message.reply_text(market_svc.broadcast_segment_count(rule))",
+        ]
     else:
         if svc in {"analytics", "admin", "notify"}:
             L += [
