@@ -1,0 +1,122 @@
+version: "3.1"
+
+# Maestro platform assistant — smart guided chat (Free + Pro).
+# Generation engine stays outside this domain (telegram_bot_engine).
+
+intents:
+  - greet
+  - goodbye
+  - affirm
+  - deny
+  - bot_challenge
+  - ask_help
+  - ask_capabilities
+  - ask_plan
+  - ask_pricing
+  - ask_how_to_generate
+  - describe_bot_idea
+  - ask_limitations
+  - ask_support
+  - out_of_scope
+  - nlu_fallback
+
+entities:
+  - bot_type
+  - plan_name
+
+slots:
+  plan_id:
+    type: text
+    influence_conversation: true
+    mappings:
+      - type: custom
+  last_bot_idea:
+    type: text
+    influence_conversation: false
+    mappings:
+      - type: custom
+
+responses:
+  utter_greet:
+    - text: "مرحباً بك في Maestro 👋\nأنا هنا لمساعدتك في بناء وإدارة مشاريع البوتات بكل سهولة وذكاء.\nاكتب وصف البوت اللي تحتاجه، أو اسألني عن الخطط والمميزات."
+    - text: "أهلاً! أنا مساعد Maestro.\nأقدر أوجّهك خطوة بخطوة — من الفكرة لحد ما يبقى عندك بوت جاهز (حسب خطتك)."
+
+  utter_goodbye:
+    - text: "إلى اللقاء! لو احتجتني اكتب /start أو أي سؤال."
+    - text: "حاضر، موجود لما ترجع 👋"
+
+  utter_iamabot:
+    - text: "أنا مساعد Maestro — إطار حوار مدرَّب (Rasa) داخل المنصة، مش مجرد ردود ثابتة."
+
+  utter_help:
+    - text: |
+        أقدر أساعدك في:
+        • شرح إزاي توصف بوتك عشان يتولد صح
+        • الخطط (Free / Starter / Growth) وحدود كل خطة
+        • إيه المتاح وإيه اللي لسه مش مدعوم
+        • توجيهك للخطوة الجاية
+
+        أوامر سريعة: /plan · /help · /start
+
+  utter_capabilities:
+    - text: |
+        Maestro بيساعدك تولّد بوتات تيليجرام من وصف طبيعي.
+        أنا (الشات) بفهم قصدك وأوجّهك.
+        التوليد الفعلي للمحركات بيتم عبر محرك المنصة حسب صلاحيات خطتك.
+
+  utter_plan_info:
+    - text: |
+        الخطط المتاحة:
+        • Free — شات ذكي + توليد محدود + معاينة حية قصيرة (بدون استضافة 24/7)
+        • Starter ($8/شهر) — استضافة بوت واحد + دفع/Webhooks
+        • Growth ($30/شهر) — حتى 5 بوتات + قواعد بيانات وتحليلات
+
+        اكتب /plan لعرض خطتك الحالية.
+
+  utter_pricing:
+    - text: "Free مجاني · Starter بـ 8$ شهرياً · Growth بـ 30$ شهرياً. التفاصيل: /plan"
+
+  utter_how_to_generate:
+    - text: |
+        عشان تولّد بوت:
+        1) اكتب وصف واضح (الأوامر، الجمهور، المميزات)
+        2) مثال: «بوت متجر فيه قائمة منتجات وطلب وتأكيد»
+        3) المنصة تولّد المشروع حسب خطتك
+
+        كل ما الوصف أدق، النتيجة أحسن.
+
+  utter_ask_clarify_idea:
+    - text: "ممتاز — حابب البوت يعمل إيه بالظبط؟ (أوامر، جمهور، مثال سيناريو)"
+    - text: "وضّح لي أكتر: هل فيه دفع؟ أدمن؟ ردود تلقائية؟"
+
+  utter_limitations:
+    - text: |
+        بصراحة:
+        • التوليد والاستضافة محدودين حسب الخطة
+        • بعض المميزات المتقدمة للخطط الأعلى فقط
+        • لو طلبت حاجة برة النطاق، هقولك بوضوح بدل ما ألف
+
+  utter_support:
+    - text: "للدعم على الخطط المدفوعة: capability7maestro7bot@gmail.com\nأو اكتب سؤالك هنا وأوجّهك."
+
+  utter_out_of_scope:
+    - text: "الطلب ده برا نطاق Maestro حالياً. أقدر أساعدك في بوتات تيليجرام والخطط والتوجيه."
+
+  utter_default:
+    - text: "مش متأكد إنى فهمت قصدك. جرّب تصيغها تاني، أو اكتب /help."
+    - text: "ممكن توضّح؟ مثال: «عايز أعرف الخطط» أو «عايز أعمل بوت دعم عملاء»."
+
+  utter_affirm:
+    - text: "تمام."
+  utter_deny:
+    - text: "حاضر، مش هنكمل الخطوة دي."
+
+actions:
+  - action_default_fallback
+  - action_session_start
+  - action_report_plan
+  - action_note_bot_idea
+
+session_config:
+  session_expiration_time: 60
+  carry_over_slots_to_new_session: true
