@@ -9,22 +9,23 @@ from b2b_platform.tenants import get_tenant_store
 
 
 async def create_tenant(request: web.Request) -> web.Response:
-    """Bootstrap a tenant (protected by PLATFORM_ADMIN_TOKEN if set)."""
+    """Bootstrap a tenant — always requires PLATFORM_ADMIN_TOKEN (no open provisioning)."""
     import os
 
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if not admin:
-        # When the public API surface is enabled, refuse open tenant creation
-        # so callers cannot self-provision enterprise without an admin token.
-        if (os.getenv("ENABLE_API") or "").strip() in {"1", "true", "yes"}:
-            raise web.HTTPForbidden(
-                text='{"error":"admin_token_required"}',
-                content_type="application/json",
-            )
-    elif (request.headers.get("X-Admin-Token") or "").strip() != admin:
-        raise web.HTTPUnauthorized(text='{"error":"admin_required"}', content_type="application/json")
+        # Fail closed: never allow public tenant creation without an admin secret.
+        raise web.HTTPForbidden(
+            text='{"error":"admin_token_required","detail":"set PLATFORM_ADMIN_TOKEN"}',
+            content_type="application/json",
+        )
+    if (request.headers.get("X-Admin-Token") or "").strip() != admin:
+        raise web.HTTPUnauthorized(
+            text='{"error":"admin_required"}', content_type="application/json"
+        )
     body = await request.json()
     name = str(body.get("name") or "Tenant").strip()
+    # Only admin may assign plans; unknown → free. Still no self-service enterprise.
     plan_id = str(body.get("plan_id") or "free").lower()
     if plan_id not in PLANS:
         plan_id = "free"
@@ -56,6 +57,7 @@ async def me(request: web.Request) -> web.Response:
 
 
 async def update_white_label(request: web.Request) -> web.Response:
+    """Update brand fields only — never plan_id / active (billing owns those)."""
     tenant = require_tenant(request)
     plan = get_plan(tenant.plan_id)
     if not plan.white_label and plan.id not in ("business", "enterprise"):
@@ -64,7 +66,19 @@ async def update_white_label(request: web.Request) -> web.Response:
             content_type="application/json",
         )
     body = await request.json()
-    updated = get_tenant_store().update_white_label(tenant.tenant_id, **body)
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text='{"error":"invalid_body"}', content_type="application/json")
+    # Strict allow-list — blocks privilege escalation via plan_id / active / metadata
+    allowed = {
+        "brand_name",
+        "brand_logo_url",
+        "primary_color",
+        "support_email",
+        "custom_domain",
+        "name",
+    }
+    fields = {k: body[k] for k in allowed if k in body}
+    updated = get_tenant_store().update_white_label(tenant.tenant_id, **fields)
     return web.json_response({"ok": True, "tenant": updated.public_dict() if updated else None})
 
 

@@ -7,7 +7,7 @@ import logging
 from aiohttp import web
 
 from api.auth import require_tenant
-from api.security import validate_tenant_project_path
+from api.security import stable_tenant_uid, validate_tenant_project_path
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
 from telegram_bot_engine.services.hosting import get_hosting_service
@@ -16,7 +16,7 @@ logger = logging.getLogger("api.hosts")
 
 
 def _tenant_user_id(tenant_id: str) -> int:
-    return abs(hash(tenant_id)) % (10**9)
+    return stable_tenant_uid(tenant_id)
 
 
 async def host_start(request: web.Request) -> web.Response:

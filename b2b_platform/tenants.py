@@ -191,17 +191,22 @@ class TenantStore:
             return self._by_id.get(tenant_id)
 
     def update_white_label(self, tenant_id: str, **fields: Any) -> Tenant | None:
+        """Brand/name fields only. Plan/active changes go through billing.apply_plan."""
         def _do():
             cur = self._by_id.get(tenant_id)
             if not cur:
                 return None
-            for k in ("brand_name", "brand_logo_url", "primary_color", "support_email", "custom_domain", "name"):
+            for k in (
+                "brand_name",
+                "brand_logo_url",
+                "primary_color",
+                "support_email",
+                "custom_domain",
+                "name",
+            ):
                 if k in fields and fields[k] is not None:
                     setattr(cur, k, str(fields[k])[:300])
-            if "plan_id" in fields and fields["plan_id"]:
-                cur.plan_id = str(fields["plan_id"]).lower()
-            if "active" in fields:
-                cur.active = bool(fields["active"])
+            # Intentionally ignore plan_id / active / metadata / api_key from callers
             return cur
         return self._mutate(_do)
 

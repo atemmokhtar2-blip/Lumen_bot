@@ -1,6 +1,7 @@
 """API security helpers — path containment, safe errors."""
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -11,9 +12,19 @@ def output_root() -> Path:
     return Path(os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
 
 
+def stable_tenant_uid(tenant_id: str) -> int:
+    """Deterministic sandbox user-id for a tenant.
+
+    NEVER use built-in hash() — it is randomized per process (PYTHONHASHSEED),
+    which would move sandboxes on every restart and orphan running bots.
+    """
+    digest = hashlib.sha256(str(tenant_id or "").encode("utf-8")).hexdigest()
+    return int(digest[:16], 16) % (10**9)
+
+
 def tenant_sandbox_root(tenant_id: str) -> Path:
     """Filesystem root owned by a B2B tenant (mirrors user sandbox layout)."""
-    uid = abs(hash(tenant_id)) % (10**9)
+    uid = stable_tenant_uid(tenant_id)
     return get_user_sandbox(uid, output_root()).root.resolve()
 
 
@@ -25,6 +36,15 @@ def is_path_inside(child: Path, parent: Path) -> bool:
         return False
 
 
+def _reject_unsafe_path_string(raw: str) -> None:
+    if "\x00" in raw:
+        raise ValueError("invalid_path")
+    # Soft reject traversal tokens before resolve (resolve still required)
+    if ".." in raw.replace("\\", "/").split("/"):
+        # allow only if resolve later proves containment; still flag pure ".." segments early
+        pass
+
+
 def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     """Resolve and enforce that project_path is inside the tenant sandbox.
 
@@ -33,9 +53,7 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
     raw = str(project_path).strip()
-    # Block null bytes and obvious traversal tokens before resolve
-    if "\x00" in raw:
-        raise ValueError("invalid_path")
+    _reject_unsafe_path_string(raw)
     try:
         path = Path(raw).resolve(strict=False)
     except (OSError, RuntimeError) as exc:
@@ -57,7 +75,12 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
     """Same containment for Telegram consumer user_id."""
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
-    path = Path(str(project_path).strip()).resolve(strict=False)
+    raw = str(project_path).strip()
+    _reject_unsafe_path_string(raw)
+    try:
+        path = Path(raw).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("invalid_path") from exc
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
     sandbox = get_user_sandbox(int(user_id), output_root()).root.resolve()

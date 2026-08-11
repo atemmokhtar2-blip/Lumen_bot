@@ -33,28 +33,6 @@ def _cors_origin_for(request: web.Request) -> str | None:
     return None
 
 
-def _cors_origin_for(request: web.Request) -> str | None:
-    """Return an allowed Origin or None (no ACAO header → browser blocks).
-
-    Default is DENY (empty). Set API_CORS_ORIGIN to a comma-separated allowlist
-    of exact origins, e.g. https://app.example.com,https://admin.example.com
-    Never defaults to *.
-    """
-    raw = (os.getenv("API_CORS_ORIGIN") or "").strip()
-    if not raw or raw == "*":
-        # Explicit * only if operator sets API_CORS_ALLOW_WILDCARD=1 (discouraged)
-        if raw == "*" and (os.getenv("API_CORS_ALLOW_WILDCARD") or "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }:
-            return "*"
-        return None
-    allowed = {o.strip() for o in raw.split(",") if o.strip()}
-    origin = (request.headers.get("Origin") or "").strip()
-    if origin and origin in allowed:
-        return origin
-    return None
-
-
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":

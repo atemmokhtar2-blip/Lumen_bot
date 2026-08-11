@@ -323,8 +323,10 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
 
         description = str(job.input.get("description") or "").strip()
         base = os.getenv("OUTPUT_DIR", "/tmp/generated")
+        from api.security import stable_tenant_uid
+
         work = get_user_sandbox(
-            abs(hash(job.tenant_id)) % (10**9), base
+            stable_tenant_uid(job.tenant_id), base
         ).new_project_dir(label="api")
         runner.store.update(job.job_id, progress=0.15, message="generating")
         result = generate_bot(description, str(work))
