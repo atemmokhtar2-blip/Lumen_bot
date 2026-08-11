@@ -76,6 +76,12 @@ def register_pack(
         CAPABILITIES[pc.key] = _to_capability(pc)
         _OVERLAY_KEYS.add(pc.key)
         registered.append(pc.key)
+        # Ensure command id mapping for BuilderSession.to_spec
+        try:
+            from ....spec_core.builder import DEFAULT_COMMANDS
+            DEFAULT_COMMANDS.setdefault(pc.key, pc.key.replace("_", "")[:32])
+        except Exception:
+            pass
         for kw in pc.keywords:
             k = (kw or "").strip().lower()
             if not k:

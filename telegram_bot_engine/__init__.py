@@ -666,13 +666,19 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 except Exception:
                     sess = None
             if sess is not None and hasattr(sess, "selected"):
-                # When preferred_keys provided under strict, rebuild selection from
-                # strict locked set UNION detection keys (never drop user menu)
-                if preferred_keys and strict and explicit_feats:
-                    base = set(sess.selected) if sess.selected else {"start", "help"}
-                    for k in list(explicit_feats) + list(keys) + ["start", "help", "lang"]:
+                # Authoritative pack from detection/synthesis:
+                # preferred_keys from Telegram/API replace the fat preset selection
+                # to avoid duplicate_trigger collisions from unrelated market caps.
+                if preferred_keys:
+                    base = {"start", "help"}
+                    for k in list(preferred_keys) + list(keys):
                         if isinstance(k, str) and k in _CAPS_DET:
                             base.add(k)
+                    # Keep strict user menu items if any
+                    if strict and explicit_feats:
+                        for k in explicit_feats:
+                            if isinstance(k, str) and k in _CAPS_DET:
+                                base.add(k)
                     sess.selected = base
                 else:
                     for k in keys:
@@ -681,13 +687,20 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                                 sess.selected.add(k)
                             except Exception:
                                 pass
-                    if preferred_keys:
-                        for k in preferred_keys:
-                            if isinstance(k, str) and k in _CAPS_DET:
-                                try:
-                                    sess.selected.add(k)
-                                except Exception:
-                                    pass
+                # Deduplicate by command trigger id (keep first key)
+                try:
+                    from .spec_core.builder import DEFAULT_COMMANDS as _DC
+                except Exception:
+                    _DC = {}
+                seen_cmds: set[str] = set()
+                deduped: set[str] = set()
+                for k in sorted(sess.selected):
+                    cmd = _DC.get(k, k.replace("_", "")) if isinstance(_DC, dict) else k.replace("_", "")
+                    if cmd in seen_cmds and k not in {"start", "help"}:
+                        continue
+                    seen_cmds.add(cmd)
+                    deduped.add(k)
+                sess.selected = deduped
                 if hasattr(sess, "to_spec"):
                     spec = sess.to_spec()
                     _stamp_style_on_spec(spec, style)
@@ -700,7 +713,6 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             if detection_meta:
                 layers_meta.update(detection_meta)
         elif keys:
-            # Record what detection wanted even if not applied (strict path)
             layers_meta["detection_preferred_keys_skipped_strict"] = [
                 k for k in keys if k not in {"start", "help"}
             ]
