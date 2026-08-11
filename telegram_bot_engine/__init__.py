@@ -517,6 +517,13 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     )
     from .spec_core.pipeline import build_from_spec
 
+    # Phase 4: ensure capability packs overlay is loaded before detection/codegen
+    try:
+        from .services.capability_detection.packs import ensure_packs_loaded
+        ensure_packs_loaded()
+    except Exception:
+        pass
+
     # ── Layers 1–6 ─────────────────────────────────────────────────────────
     intel: dict = {
         "lu": None,

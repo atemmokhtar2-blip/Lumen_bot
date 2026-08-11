@@ -1,4 +1,12 @@
-"""Capability packs — extensible registry units."""
+"""Capability packs — extensible registry units with emit contract."""
+from .emit_contract import (
+    KNOWN_METHODS,
+    KNOWN_SERVICES,
+    EmitAssessment,
+    assess_capability,
+    assess_pack_capabilities,
+    known_service_method_pairs,
+)
 from .loader import (
     ensure_packs_loaded,
     keyword_hits,
@@ -7,6 +15,12 @@ from .loader import (
     loaded_packs,
     overlay_keys,
     register_pack,
+)
+from .pipeline import (
+    approve_and_register,
+    draft_pack_from_research,
+    draft_packs_from_open_gaps,
+    resolve_gap_with_pack,
 )
 from .schema import CapabilityPack, PackCapability, validate_pack
 
@@ -21,4 +35,14 @@ __all__ = [
     "loaded_packs",
     "keyword_hits",
     "ensure_packs_loaded",
+    "KNOWN_SERVICES",
+    "KNOWN_METHODS",
+    "EmitAssessment",
+    "assess_capability",
+    "assess_pack_capabilities",
+    "known_service_method_pairs",
+    "draft_pack_from_research",
+    "draft_packs_from_open_gaps",
+    "approve_and_register",
+    "resolve_gap_with_pack",
 ]

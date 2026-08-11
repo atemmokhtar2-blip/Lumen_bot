@@ -85,12 +85,28 @@ def register_pack(
                 _KEYWORD_INDEX[k].append(pc.key)
 
     _LOADED_PACKS[pack.id] = pack
+
+    # Inject keywords into capability_extractor patterns (expandable detection)
+    emit_notes: list[str] = []
+    try:
+        from .emit_contract import assess_pack_capabilities
+        for a in assess_pack_capabilities(pack.capabilities):
+            if not a.safe:
+                emit_notes.append(f"{a.key}:{a.level}")
+    except Exception:
+        pass
+    try:
+        _inject_extractor_keywords(pack)
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "pack_id": pack.id,
         "version": pack.version,
         "registered": registered,
         "skipped_existing": skipped,
+        "emit_warnings": emit_notes,
     }
 
 
@@ -163,6 +179,41 @@ def keyword_hits(text: str) -> list[str]:
                     seen.add(k)
                     out.append(k)
     return out
+
+
+
+def _inject_extractor_keywords(pack: CapabilityPack) -> int:
+    """Add pack keywords into capability_extractor._PATTERNS (dict[str, tuple[str,...]])."""
+    try:
+        from ....spec_core import capability_extractor as ce
+    except Exception:
+        return 0
+    patterns = getattr(ce, "_PATTERNS", None)
+    if not isinstance(patterns, dict):
+        return 0
+    added = 0
+    for pc in pack.capabilities:
+        if not pc.key or not pc.keywords:
+            continue
+        kws = tuple(
+            str(kw).strip()
+            for kw in pc.keywords
+            if str(kw).strip() and len(str(kw).strip()) >= 2
+        )
+        if not kws:
+            continue
+        if pc.key in patterns:
+            # merge unique keywords
+            prev = patterns[pc.key]
+            if isinstance(prev, tuple):
+                merged = tuple(dict.fromkeys(list(prev) + list(kws)))
+            else:
+                merged = kws
+            patterns[pc.key] = merged
+        else:
+            patterns[pc.key] = kws
+        added += 1
+    return added
 
 
 def ensure_packs_loaded() -> dict[str, Any]:
