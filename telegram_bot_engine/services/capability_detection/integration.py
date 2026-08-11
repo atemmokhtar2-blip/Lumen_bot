@@ -145,6 +145,26 @@ def telegram_preflight(request: str) -> dict[str, Any]:
                     msg += "\n(لن يُفعَّل تلقائياً — يحتاج موافقة + emit-safe pack)"
         except Exception:
             pass
+        # Phase 7: mention if a learned draft already exists for this gap
+        try:
+            from .learning_loop import load_learned_kb, list_draft_packs
+            _phrases = {(g.phrase or "").strip() for g in (report.gaps or [])}
+            _learned = load_learned_kb()
+            _hit = next(
+                (
+                    e for e in _learned
+                    if _phrases & set(e.phrases) or any(
+                        p and p in (e.title or "") for p in _phrases
+                    )
+                ),
+                None,
+            )
+            if _hit:
+                msg += f"\n\n📦 مسودة تعلّم جاهزة: {_hit.id} — استخدم promote_learned_entry لتركيبها."
+            elif list_draft_packs():
+                msg += f"\n\n📦 يوجد {len(list_draft_packs())} مسودة pack في مجلد التعلم."
+        except Exception:
+            pass
         return {
             "should_block": True,
             "user_message": msg,

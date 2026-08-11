@@ -40,6 +40,13 @@ from .packs import (
     resolve_gap_with_pack,
     validate_pack,
 )
+from .pack_promotion import (
+    install_pack,
+    promote_draft_file,
+    promote_latest_drafts,
+    promote_learned_entry,
+    promotion_status,
+)
 from .learning_loop import (
     LearnedKBEntry,
     bootstrap_learned_kb_into_runtime,
@@ -125,4 +132,9 @@ __all__ = [
     "run_learning_cycle",
     "bootstrap_learned_kb_into_runtime",
     "maybe_auto_learn",
+    "install_pack",
+    "promote_draft_file",
+    "promote_latest_drafts",
+    "promote_learned_entry",
+    "promotion_status",
 ]
