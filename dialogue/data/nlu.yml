@@ -1,0 +1,180 @@
+version: "3.1"
+nlu:
+- intent: greet
+  examples: |
+    - مرحبا
+    - مرحب
+    - أهلا
+    - أهلاً
+    - السلام عليكم
+    - سلام
+    - صباح الخير
+    - مساء الخير
+    - hi
+    - hello
+    - hey
+    - good morning
+    - هلو
+    - ازيك
+    - إزيك
+    - عامل ايه
+    - مرحبا بك
+    - أهلا Maestro
+    - يا Maestro
+
+- intent: goodbye
+  examples: |
+    - باي
+    - مع السلامة
+    - إلى اللقاء
+    - أشوفك
+    - bye
+    - goodbye
+    - see you
+    - خلاص شكرا
+    - تمام شكرا باي
+    - هكتفي كده
+
+- intent: affirm
+  examples: |
+    - نعم
+    - أيوه
+    - ايوه
+    - صح
+    - تمام
+    - موافق
+    - يلا
+    - ok
+    - okay
+    - yes
+    - yep
+    - أكيد
+    - بالطبع
+
+- intent: deny
+  examples: |
+    - لا
+    - لأ
+    - مش عايز
+    - مش موافق
+    - no
+    - nope
+    - cancel
+    - إلغاء
+    - بلاش
+
+- intent: bot_challenge
+  examples: |
+    - أنت بوت؟
+    - انت روبوت
+    - are you a bot
+    - are you human
+    - مين أنت
+    - ما أنت
+    - عرفني بنفسك
+    - who are you
+
+- intent: ask_help
+  examples: |
+    - مساعدة
+    - ساعدني
+    - help
+    - /help
+    - مش عارف أبدأ
+    - إزاي أستخدمك
+    - كيف أستخدم البوت
+    - عايز مساعدة
+    - وضّح لي
+    - اشرح لي
+
+- intent: ask_capabilities
+  examples: |
+    - تقدر تعمل إيه
+    - إيه قدراتك
+    - what can you do
+    - ايه اللي تقدر عليه
+    - مميزاتك إيه
+    - الخدمات بتاعتك
+    - أقدر أعمل بيك إيه
+    - شو بتقدر تسوي
+
+- intent: ask_plan
+  examples: |
+    - خطتي إيه
+    - ما هي خطتي
+    - /plan
+    - /خطة
+    - عايز أشوف الخطة
+    - اشتراكي
+    - my plan
+    - show plan
+    - الخطة الحالية
+    - أنا على أنهي خطة
+
+- intent: ask_pricing
+  examples: |
+    - الأسعار
+    - بكام الخطة
+    - pricing
+    - price
+    - كام الاشتراك
+    - أسعار الخطط
+    - free ولا pro
+    - الفرق بين الخطط
+    - عايز أرقى الخطة
+    - upgrade
+
+- intent: ask_how_to_generate
+  examples: |
+    - إزاي أولد بوت
+    - كيف أنشئ بوت
+    - how to generate a bot
+    - عايز أتعلم التوليد
+    - خطوات عمل بوت
+    - ابدأ منين
+    - إزاي أكتب الوصف
+    - كيف أوصف البوت
+    - علمني أولد
+
+- intent: describe_bot_idea
+  examples: |
+    - عايز بوت [متجر](bot_type)
+    - عايز أعمل بوت [دعم عملاء](bot_type)
+    - بوت [تذاكر](bot_type)
+    - بوت فيه أوامر وأزرار
+    - اعمل لي بوت تيليجرام
+    - أولد بوت لإدارة جروب
+    - بوت [حجوزات](bot_type)
+    - I want a [shop](bot_type) bot
+    - create a [support](bot_type) bot
+    - بوت يرد على الأسئلة الشائعة
+    - بوت فيه قائمة منتجات وطلب
+    - فكرة بوت: نظام نقاط للأعضاء
+
+- intent: ask_limitations
+  examples: |
+    - إيه اللي مش بتقدر عليه
+    - القيود إيه
+    - limitations
+    - فيه حدود
+    - مش هتقدر تعمل إيه
+    - الصراحة إيه الممنوع
+
+- intent: ask_support
+  examples: |
+    - دعم فني
+    - support
+    - تواصل
+    - إيميل الدعم
+    - مشكلة عندي
+    - contact support
+    - عايز أكلم حد
+
+- intent: out_of_scope
+  examples: |
+    - وصفة طبيخ
+    - سعر الدولار
+    - طقس بكرة
+    - اكتب لي كود جافا
+    - حل واجب رياضيات
+    - من فاز بالمباراة

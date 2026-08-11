@@ -1,0 +1,31 @@
+version: "3.1"
+rules:
+- rule: greet always
+  steps:
+  - intent: greet
+  - action: utter_greet
+
+- rule: goodbye always
+  steps:
+  - intent: goodbye
+  - action: utter_goodbye
+
+- rule: fallback
+  steps:
+  - intent: nlu_fallback
+  - action: action_default_fallback
+
+- rule: help always
+  steps:
+  - intent: ask_help
+  - action: utter_help
+
+- rule: plan always
+  steps:
+  - intent: ask_plan
+  - action: action_report_plan
+
+- rule: session start
+  conversation_start: true
+  steps:
+  - action: action_session_start
