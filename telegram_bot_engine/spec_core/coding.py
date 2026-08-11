@@ -128,6 +128,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
 
     # Phase 11: optional production backends for translate / OCR / schedule
     req_lines = ["python-telegram-bot==21.6", "python-dotenv>=1.0.0"]
+    opt_req: list[str] = []
     env_lines = ["TELEGRAM_BOT_TOKEN=", "ADMIN_IDS="]
     readme_extra: list[str] = []
     feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
@@ -145,40 +146,57 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         or any(str(k).startswith("scaffold_schedule") for k in feat_keys)
     )
     if needs_translate:
-        req_lines += [
-            "# optional translate backends:",
-            "# deep-translator>=1.11.4",
-        ]
+        opt_req.append("deep-translator>=1.11.4")
         env_lines += [
             "TRANSLATE_BACKEND=echo",
             "TRANSLATE_TARGET=ar",
             "TRANSLATE_API_URL=http://localhost:5000",
+            "TRANSLATE_API_KEY=",
             "TRANSLATE_TIMEOUT=8",
         ]
-        readme_extra.append(
-            "- Translate: set TRANSLATE_BACKEND=deep-translator|libre and install optional deps"
-        )
-    if needs_ocr:
-        req_lines += [
-            "# optional OCR:",
-            "# pytesseract>=0.3.10",
-            "# Pillow>=10.0.0",
+        readme_extra += [
+            "### Translate",
+            "```bash",
+            "pip install -r requirements-optional.txt",
+            "# or: pip install deep-translator",
+            "```",
+            "Set `TRANSLATE_BACKEND=deep-translator` or `libre`.",
+            "For LibreTranslate: `TRANSLATE_API_URL` + optional `TRANSLATE_API_KEY`.",
+            "Check status: `/translate status`",
         ]
+    if needs_ocr:
+        opt_req += ["pytesseract>=0.3.10", "Pillow>=10.0.0"]
         env_lines += [
             "OCR_ENABLED=1",
             "OCR_LANG=eng+ara",
         ]
-        readme_extra.append(
-            "- OCR: install Tesseract system package + pip install pytesseract Pillow"
-        )
+        readme_extra += [
+            "### OCR",
+            "```bash",
+            "pip install pytesseract Pillow",
+            "# system: apt install tesseract-ocr tesseract-ocr-ara",
+            "```",
+            "Env: `OCR_ENABLED=1`, `OCR_LANG=eng+ara`",
+        ]
     if needs_sched:
         env_lines += [
-            "# Schedule notes are durable in SQLite; enable JobQueue in host process for firing",
+            "# Schedule: durable SQLite rows; wire PTB JobQueue at deploy to auto-fire",
         ]
-        readme_extra.append(
-            "- Schedule: /schedule stores reminders; wire JobQueue at deploy time for auto-fire"
-        )
+        readme_extra += [
+            "### Schedule",
+            "`/schedule` stores reminders in SQLite. Attach JobQueue in host process to fire them.",
+        ]
     files["requirements.txt"] = "\n".join(req_lines) + "\n"
+    if opt_req:
+        files["requirements-optional.txt"] = (
+            "# Optional production backends — install when ready\n"
+            + "\n".join(opt_req)
+            + "\n"
+        )
+        # keep comments in main requirements pointing to optional file
+        files["requirements.txt"] += (
+            "# Optional backends: pip install -r requirements-optional.txt\n"
+        )
     files[".env.example"] = "\n".join(env_lines) + "\n"
     if readme_extra:
         base_readme = files.get("README.md") or ""
@@ -188,6 +206,39 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
             + "\n".join(readme_extra)
             + "\n"
         )
+    # Augment config.py with backend settings helpers
+    if needs_translate or needs_ocr:
+        cfg = files.get("app/config.py") or ""
+        if "backend_env_snapshot" not in cfg:
+            cfg += (
+                "\n\n# --- Phase 11 optional backends ---\n"
+                "def backend_env_snapshot() -> dict[str, str]:\n"
+                "    keys = [\n"
+                "        \"TRANSLATE_BACKEND\", \"TRANSLATE_TARGET\", \"TRANSLATE_API_URL\",\n"
+                "        \"TRANSLATE_API_KEY\", \"TRANSLATE_TIMEOUT\",\n"
+                "        \"OCR_ENABLED\", \"OCR_LANG\",\n"
+                "    ]\n"
+                "    out: dict[str, str] = {}\n"
+                "    for k in keys:\n"
+                "        v = (os.getenv(k) or \"\").strip()\n"
+                "        if k.endswith(\"KEY\") and v:\n"
+                "            out[k] = \"***\"\n"
+                "        else:\n"
+                "            out[k] = v\n"
+                "    return out\n"
+            )
+            files["app/config.py"] = cfg
+    # bootstrap optional install hint
+    boot = files.get("bootstrap.sh") or ""
+    if opt_req and "requirements-optional" not in boot:
+        boot = boot.replace(
+            "pip install -q -r requirements.txt",
+            "pip install -q -r requirements.txt\n"
+            "if [ \"${INSTALL_OPTIONAL:-}\" = \"1\" ] && [ -f requirements-optional.txt ]; then\n"
+            "  pip install -q -r requirements-optional.txt\n"
+            "fi",
+        )
+        files["bootstrap.sh"] = boot
     if "README.md" not in files:
         files["README.md"] = "# Generated bot\n\nRun: chmod +x bootstrap.sh && ./bootstrap.sh\n"
     return files

@@ -518,6 +518,35 @@ _DELETE_M = frozenset({
 
 # ----- Phase 8 scaffolds (deterministic; configure via env in production) -----
 
+
+def backend_status() -> str:
+    """Report which optional backends are configured and importable."""
+    import os as _os
+    lines = ["🔧 حالة الـ backends"]
+    # translate
+    tb = (_os.getenv("TRANSLATE_BACKEND") or "echo").strip().lower()
+    lines.append(f"TRANSLATE_BACKEND={tb}")
+    if tb in {"deep-translator", "deep_translator", "google"}:
+        try:
+            import deep_translator  # type: ignore  # noqa: F401
+            lines.append("  deep-translator: available")
+        except Exception as exc:
+            lines.append(f"  deep-translator: MISSING ({type(exc).__name__})")
+    if tb in {"libre", "libretranslate"}:
+        lines.append(f"  TRANSLATE_API_URL={(_os.getenv('TRANSLATE_API_URL') or '')[:60]}")
+        lines.append(f"  TRANSLATE_API_KEY={'set' if (_os.getenv('TRANSLATE_API_KEY') or '').strip() else 'unset'}")
+    # ocr
+    ocr_on = (_os.getenv("OCR_ENABLED") or "1").strip().lower() not in {"0", "false", "no"}
+    lines.append(f"OCR_ENABLED={1 if ocr_on else 0} lang={_os.getenv('OCR_LANG') or 'eng+ara'}")
+    try:
+        import pytesseract  # type: ignore  # noqa: F401
+        from PIL import Image  # type: ignore  # noqa: F401
+        lines.append("  pytesseract+Pillow: available")
+    except Exception as exc:
+        lines.append(f"  pytesseract+Pillow: MISSING ({type(exc).__name__})")
+    return "\n".join(lines)
+
+
 def translate_text(user_id: int, text: str = "") -> str:
     """Translation helper with optional production backends.
 
@@ -536,9 +565,12 @@ def translate_text(user_id: int, text: str = "") -> str:
             "🌐 الترجمة\n"
             "الاستخدام: /translate مرحبا بك\n"
             "أو: /translate en:hello world\n"
+            "الحالة: /translate status\n"
             "BACKENDS: echo | deep-translator | libre\n"
-            "TRANSLATE_BACKEND=...  TRANSLATE_API_URL=http://localhost:5000"
+            "TRANSLATE_BACKEND=...  TRANSLATE_API_URL=...  TRANSLATE_API_KEY=..."
         )
+    if text.lower() in {"status", "حالة", "backends", "health"}:
+        return backend_status()
     target = (_os.getenv("TRANSLATE_TARGET") or "ar").strip().lower() or "ar"
     payload = text
     if ":" in text[:8]:
@@ -568,10 +600,16 @@ def translate_text(user_id: int, text: str = "") -> str:
             body = _json.dumps({
                 "q": payload, "source": "auto", "target": target, "format": "text",
             }).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+            api_key = (_os.getenv("TRANSLATE_API_KEY") or "").strip()
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+                # common alternate header used by some LibreTranslate hosts
+                headers["api-key"] = api_key
             req = _urlreq.Request(
                 api + "/translate",
                 data=body,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
             with _urlreq.urlopen(req, timeout=float(_os.getenv("TRANSLATE_TIMEOUT") or "8")) as resp:
