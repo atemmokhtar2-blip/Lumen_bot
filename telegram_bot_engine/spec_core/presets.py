@@ -1200,6 +1200,14 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
         if intent.should_ask and intent.questions:
             tip = " | ask: " + " / ".join(intent.questions[:2])
             s.set_description((s.description or "") + tip)
+        try:
+            from .language_understanding import suggest as _suggest
+            rep = _suggest(request or "", intent=intent, lu=lu, selected_features=list(s.selected) if hasattr(s, "selected") else None)
+            top = [x.feature for x in (rep.build or [])[:3]]
+            if top:
+                s.set_description((s.description or "") + " | suggest: " + ",".join(top))
+        except Exception:
+            pass
     except Exception:
         pass
 

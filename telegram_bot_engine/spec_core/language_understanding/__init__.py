@@ -21,6 +21,7 @@ from .intent_analysis import (
     analyze_intent,
     detect_language,
 )
+from .suggestion_engine import Suggestion, SuggestionReport, suggest, suggest_for_spec_features
 from .memory_engine import (
     MemoryEngine,
     SessionMemory,
@@ -54,4 +55,8 @@ __all__ = [
     "SessionMemory",
     "UserProfile",
     "get_memory_engine",
+    "suggest",
+    "suggest_for_spec_features",
+    "Suggestion",
+    "SuggestionReport",
 ]
