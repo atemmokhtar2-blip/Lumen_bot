@@ -63,3 +63,4 @@ data/*.sqlite3*
 
 # Rasa trained models are large; ship via CI/artifact or force-add when ready
 # dialogue/models/*.tar.gz
+dialogue/.rasa/

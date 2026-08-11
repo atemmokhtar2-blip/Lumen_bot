@@ -53,13 +53,6 @@ stories:
   - intent: ask_plan
   - action: action_report_plan
 
-- story: affirm after clarify
-  steps:
-  - intent: describe_bot_idea
-  - action: action_note_bot_idea
-  - action: utter_ask_clarify_idea
-  - intent: affirm
-  - action: utter_how_to_generate
 
 - story: deny path
   steps:
@@ -75,3 +68,8 @@ stories:
   steps:
   - intent: ask_plan
   - action: action_report_plan
+
+- story: simple affirm
+  steps:
+  - intent: affirm
+  - action: utter_affirm
