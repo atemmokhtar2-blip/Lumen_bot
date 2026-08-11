@@ -21,7 +21,24 @@ def _tenant_user_id(tenant_id: str) -> int:
 
 async def host_start(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    body = await request.json()
+    cl = request.headers.get("Content-Length")
+    if cl and cl.isdigit() and int(cl) > 65536:
+        raise web.HTTPRequestEntityTooLarge(
+            text='{"error":"payload_too_large"}',
+            content_type="application/json",
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_json"}',
+            content_type="application/json",
+        )
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(
+            text='{"error":"body_must_be_object"}',
+            content_type="application/json",
+        )
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
 

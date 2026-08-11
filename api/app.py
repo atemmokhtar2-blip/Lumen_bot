@@ -10,6 +10,18 @@ from api.routes import billing, dashboard, generate, health, hosts, jobs, tenant
 
 logger = logging.getLogger("ai_agent_7h_api")
 
+# B2B API is multi-tenant by nature: require Docker isolation unless operator overrides.
+# Set TBE_MULTI_TENANT=0 explicitly only for single-tenant local debugging.
+if "TBE_MULTI_TENANT" not in os.environ:
+    os.environ["TBE_MULTI_TENANT"] = "1"
+if "TBE_REQUIRE_DOCKER" not in os.environ:
+    os.environ["TBE_REQUIRE_DOCKER"] = "1"
+if "TBE_ALLOW_LOCAL_PROCESS" not in os.environ:
+    os.environ["TBE_ALLOW_LOCAL_PROCESS"] = "0"
+if "TBE_PIP_WHEELS_ONLY" not in os.environ:
+    os.environ["TBE_PIP_WHEELS_ONLY"] = "1"
+
+
 
 def _cors_origin_for(request: web.Request) -> str | None:
     """Return an allowed Origin or None (no ACAO header → browser blocks).
