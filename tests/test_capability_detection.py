@@ -199,7 +199,8 @@ def test_broadcast_group():
 def test_translate_no_noise_keys():
     rep = detect_capabilities("بوت يترجم من عربي لانجليزي تلقائي لكل رسالة")
     keys = [k for k in rep.matched_keys() if k not in ("start", "help", "lang")]
-    # Phase 8: scaffold_translate is expected; still no unrelated noise
-    assert "scaffold_translate" in keys or rep.status == DetectionStatus.GAP
+    assert "scaffold_translate" in keys
+    assert rep.status in (DetectionStatus.EXISTS, DetectionStatus.COMPOSABLE)
+    assert not rep.gaps  # covered by scaffold
     noise = [k for k in keys if k not in {"scaffold_translate", "lang"}]
     assert not any(k.startswith("clinic") or k.startswith("grp_") for k in noise)

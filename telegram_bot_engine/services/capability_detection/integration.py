@@ -207,12 +207,25 @@ def telegram_preflight(request: str) -> dict[str, Any]:
         }
 
     soft_parts: list[str] = []
+    _scaffold_feats = [f for f in _real_feats if f.startswith("scaffold_") or f.startswith("pack_learned_")]
     if report.status == DetectionStatus.GAP and _real_feats:
-        soft_parts.append(
-            "⚠️ جزء من طلبك غير مدعوم بالكامل؛ سأبني الجزء المتاح من القوالب."
-        )
-        for g in report.gaps[:3]:
-            soft_parts.append(f"• غير متاح: {g.phrase} — {g.reason}")
+        if _scaffold_feats and not report.gaps:
+            soft_parts.append(
+                "🔧 سيتم تفعيل قدرات scaffold: " + "، ".join(_scaffold_feats[:8])
+            )
+        elif _scaffold_feats and report.gaps:
+            soft_parts.append(
+                "⚠️ جزء غير مكتمل؛ سيتم بناء scaffold + المتاح من القوالب."
+            )
+            soft_parts.append("Scaffold: " + "، ".join(_scaffold_feats[:6]))
+            for g in report.gaps[:3]:
+                soft_parts.append(f"• غير متاح: {g.phrase} — {g.reason}")
+        else:
+            soft_parts.append(
+                "⚠️ جزء من طلبك غير مدعوم بالكامل؛ سأبني الجزء المتاح من القوالب."
+            )
+            for g in report.gaps[:3]:
+                soft_parts.append(f"• غير متاح: {g.phrase} — {g.reason}")
         soft_parts.append(
             "المدعوم: " + "، ".join(_real_feats[:10]) + ("…" if len(_real_feats) > 10 else "")
         )

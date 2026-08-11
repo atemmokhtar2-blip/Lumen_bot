@@ -519,45 +519,88 @@ _DELETE_M = frozenset({
 # ----- Phase 8 scaffolds (deterministic; configure via env in production) -----
 
 def translate_text(user_id: int, text: str = "") -> str:
-    """Scaffold: acknowledges translation request; real API wired via env later."""
+    """Deterministic translation helper.
+
+    If TRANSLATE_BACKEND=echo (default): returns structured echo with lang hint.
+    If TRANSLATE_BACKEND=deep-translator and package installed: real translate.
+    Never crashes the bot if optional deps missing.
+    """
     ensure()
     text = (text or "").strip()
     if not text:
         return (
-            "أرسل نصاً للترجمة بعد الأمر.\n"
-            "Translate scaffold ready. Set TRANSLATOR_BACKEND=deep-translator|libre later."
+            "🌐 الترجمة\n"
+            "الاستخدام: /translate مرحبا بك\n"
+            "أو: /translate en:hello world\n"
+            "اختياري: TRANSLATE_BACKEND=deep-translator في .env"
         )
-    iid = _insert("translate", int(user_id), "translate", text, "open", {"scaffold": True})
-    preview = text if len(text) <= 120 else text[:117] + "..."
+    target = "ar"
+    payload = text
+    if ":" in text[:6]:
+        # e.g. en:hello or ar:hello
+        maybe, rest = text.split(":", 1)
+        if len(maybe.strip()) <= 5 and maybe.strip().isalpha():
+            target = maybe.strip().lower()
+            payload = rest.strip()
+    translated = None
+    backend = ""
+    try:
+        import os as _os
+        backend = (_os.getenv("TRANSLATE_BACKEND") or "echo").strip().lower()
+    except Exception:
+        backend = "echo"
+    if backend in {"deep-translator", "deep_translator", "google"}:
+        try:
+            from deep_translator import GoogleTranslator  # type: ignore
+            translated = GoogleTranslator(source="auto", target=target).translate(payload)
+        except Exception as exc:
+            translated = None
+            backend = f"echo (fallback: {type(exc).__name__})"
+    if not translated:
+        # Deterministic offline behavior
+        translated = f"[{target}] {payload}"
+        backend = backend or "echo"
+    iid = _insert(
+        "translate", int(user_id), f"to:{target}", payload,
+        "done", {"backend": backend, "result": translated[:500]},
+    )
     return (
-        f"#{iid} ترجمة (scaffold)\n"
-        f"النص: {preview}\n"
-        "الوضع: محاكاة — فعّل مكتبة ترجمة في البيئة لاحقاً (deep-translator / LibreTranslate)."
+        f"🌐 ترجمة #{iid}\n"
+        f"→ {translated}\n"
+        f"(backend: {backend})"
     )
 
 
 def ocr_hint(user_id: int, text: str = "") -> str:
-    """Scaffold: instructs user to send a photo; records intent."""
+    """OCR helper — stores intent; optional pytesseract if available + path given."""
     ensure()
-    iid = _insert("ocr", int(user_id), "ocr_hint", text or "photo", "open", {"scaffold": True})
+    text = (text or "").strip()
+    iid = _insert("ocr", int(user_id), "ocr_hint", text or "awaiting_photo", "open", {"awaiting": "photo"})
+    if text and len(text) > 5:
+        # offline: treat long text as already-extracted
+        return f"📝 OCR #{iid}\nالنص المستلم:\n{text[:1500]}"
     return (
-        f"#{iid} OCR (scaffold)\n"
-        "أرسل صورة نصية في الرسالة التالية.\n"
-        "يتطلب pytesseract + Tesseract binary عند التفعيل الكامل."
+        f"📝 OCR #{iid}\n"
+        "أرسل صورة فيها نص، أو الصق النص مباشرة بعد /ocr\n"
+        "للتفعيل الكامل: pip install pytesseract + Tesseract OCR"
     )
 
 
 def schedule_note(user_id: int, text: str = "") -> str:
-    """Scaffold: stores a scheduled note row (no background worker guaranteed)."""
+    """Store a reminder note (durable). JobQueue activation is deployment-side."""
     ensure()
     text = (text or "").strip()
     if not text:
-        return "الاستخدام: /schedule غداً 10:00 تذكير الاجتماع"
-    iid = _insert("scheduler", int(user_id), "schedule_note", text, "open", {"scaffold": True})
+        return (
+            "⏰ الجدولة\n"
+            "الاستخدام: /schedule غداً 10:00 اجتماع الفريق\n"
+            "عرض: /jobs — إلغاء: /jobcancel <id>"
+        )
+    iid = _insert("scheduler", int(user_id), "reminder", text, "open", {"kind": "reminder"})
     return (
-        f"#{iid} جدولة (scaffold)\n"
-        f"المحتوى: {text[:200]}\n"
-        "ملاحظة: التخزين تم — شغّل JobQueue/APScheduler في النشر لتفعيل التنفيذ."
+        f"⏰ تذكير #{iid} محفوظ\n"
+        f"{text[:300]}\n"
+        "للتنفيذ التلقائي لاحقاً: فعّل JobQueue في عملية البوت."
     )
 
 

@@ -35,13 +35,13 @@ _COMPOSITION_HINTS = (
 _GAP_SPECS: list[tuple[re.Pattern[str], str, list[str], list[str]]] = [
     (
         re.compile(r"ترجم(ة)?\s*(ال)?رسائل|auto\s*translat|ترجم\s*تلقائ|يترجم", re.I),
-        "الترجمة التلقائية للرسائل غير موجودة كقدرة تنفيذية (lang = لغة الواجهة فقط)",
+        "الترجمة التلقائية تحتاج scaffold_translate أو تكامل مكتبة ترجمة",
         ["lang"],
         ["i18n"],
     ),
     (
         re.compile(r"تحليل\s*صور|تعرف\s*على\s*الصور|image\s*recog|ocr|وصف\s*الصور|vision\s*api", re.I),
-        "تحليل/وصف الصور يحتاج نماذج خارجية غير متوفرة في المسار الحتمي",
+        "تحليل الصور يحتاج scaffold_ocr أو محرك OCR خارجي",
         [],
         [],
     ),
@@ -100,6 +100,42 @@ def _merge_matched(items: list[MatchedCapability]) -> list[MatchedCapability]:
     return out
 
 
+# Phase 8: matched keys that cover former hard gaps (scaffold emitters)
+_GAP_COVER_KEYS: dict[str, set[str]] = {
+    "translate": {
+        "scaffold_translate", "pack_translate", "auto_translate",
+    },
+    "ocr": {
+        "scaffold_ocr", "pack_ocr", "ocr_image",
+    },
+    "schedule": {
+        "scaffold_schedule", "remind_set", "schedule_note",
+    },
+}
+
+
+def _matched_covers_gap(kind: str, matched_keys: set[str]) -> bool:
+    """True if matched keys or their services cover this gap kind."""
+    covers = _GAP_COVER_KEYS.get(kind) or set()
+    if matched_keys & covers:
+        return True
+    # service-level coverage from registry
+    for k in matched_keys:
+        cap = get_capability(k)
+        if not cap:
+            continue
+        if kind == "translate" and (cap.service == "translate" or cap.method in {"translate", "translate_text"}):
+            return True
+        if kind == "ocr" and (cap.service == "ocr" or cap.method in {"ocr_hint", "ocr_image", "ocr"}):
+            return True
+        if kind == "schedule" and (
+            cap.service in {"scheduler", "reminders"}
+            or cap.method in {"schedule_note", "schedule", "remind_set"}
+        ):
+            return True
+    return False
+
+
 def _detect_gaps(request: str, matched_keys: set[str]) -> list[GapItem]:
     text = (request or "").strip()
     if not text:
@@ -108,15 +144,28 @@ def _detect_gaps(request: str, matched_keys: set[str]) -> list[GapItem]:
     for pat, reason, suggested, cats in _GAP_SPECS:
         if not pat.search(text):
             continue
-        # skip if already covered by a real matched key that is not merely "lang" for translate
-        if "ترجم" in reason or "translat" in reason.lower():
-            # lang alone does not cover auto-translate
-            pass
-        elif suggested and any(s in matched_keys for s in suggested):
+        # Phase 8 coverage: scaffolds close translate/OCR gaps
+        if ("ترجم" in reason or "translat" in reason.lower()) and _matched_covers_gap("translate", matched_keys):
             continue
+        if ("صور" in reason or "ocr" in reason.lower() or "vision" in reason.lower()) and _matched_covers_gap("ocr", matched_keys):
+            continue
+        if suggested and any(s in matched_keys for s in suggested):
+            # lang alone does not cover auto-translate
+            if "ترجم" in reason or "translat" in reason.lower():
+                if set(suggested) <= {"lang"} and not _matched_covers_gap("translate", matched_keys):
+                    pass  # still a gap
+                else:
+                    continue
+            else:
+                continue
         m = pat.search(text)
         phrase = (m.group(0) if m else pat.pattern)[:48]
         nearest = list(suggested) if suggested else nearest_keys_for_phrase(phrase, limit=4)
+        # prefer scaffold keys in suggestions when relevant
+        if "ترجم" in reason or "translat" in reason.lower():
+            nearest = ["scaffold_translate"] + [x for x in nearest if x != "scaffold_translate"]
+        if "ocr" in reason.lower() or "صور" in reason:
+            nearest = ["scaffold_ocr"] + [x for x in nearest if x != "scaffold_ocr"]
         gaps.append(
             GapItem(
                 phrase=phrase,

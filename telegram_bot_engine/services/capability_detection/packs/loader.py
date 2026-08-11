@@ -76,10 +76,26 @@ def register_pack(
         CAPABILITIES[pc.key] = _to_capability(pc)
         _OVERLAY_KEYS.add(pc.key)
         registered.append(pc.key)
-        # Ensure command id mapping for BuilderSession.to_spec
+        # Ensure friendly command ids for BuilderSession.to_spec
         try:
             from ....spec_core.builder import DEFAULT_COMMANDS
-            DEFAULT_COMMANDS.setdefault(pc.key, pc.key.replace("_", "")[:32])
+            _METHOD_CMD = {
+                "translate": "translate",
+                "translate_toggle": "tr_toggle",
+                "ocr_hint": "ocr",
+                "ocr_image": "ocr",
+                "schedule_note": "schedule",
+                "job_list": "jobs",
+                "job_cancel": "jobcancel",
+                "echo": "echo",
+                "announce": "announce",
+            }
+            cmd = _METHOD_CMD.get(pc.method) or pc.key.replace("_", "")[:32]
+            # Prefer short method-based commands for scaffolds
+            if pc.key.startswith("scaffold_") or pc.key.startswith("pack_learned_"):
+                DEFAULT_COMMANDS[pc.key] = cmd
+            else:
+                DEFAULT_COMMANDS.setdefault(pc.key, cmd)
         except Exception:
             pass
         for kw in pc.keywords:
