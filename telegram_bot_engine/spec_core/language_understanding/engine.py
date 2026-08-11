@@ -31,6 +31,13 @@ DOMAIN_TO_PRESET: dict[str, str] = {
     "saas": "saas",
     "security": "security_ops",
     "iot": "iot",
+    "blockchain": "blockchain",
+    "devops": "devops",
+    "ai_ml": "ai_assist",
+    "gaming": "gaming",
+    "healthcare": "clinic",
+    "finance": "finance",
+    "logistics": "logistics",
     "tasks": "tasks",
     "notes": "notes",
     "growth": "growth",
@@ -41,6 +48,7 @@ DOMAIN_TO_PRESET: dict[str, str] = {
     "events": "events",
     "fitness": "fitness",
     "clinic": "clinic",
+    "moderation": "group_admin",
     "commerce_pro": "commerce_pro",
 }
 
@@ -176,14 +184,35 @@ def _complexity(entities: ExtractedEntities, domains: list[DomainSignal], tokens
 
 def _feature_hints(entities: ExtractedEntities, domains: list[DomainSignal]) -> list[str]:
     hints: list[str] = []
-    doms = {d.domain for d in domains if d.score >= 1.0}
+    if not domains:
+        doms = set()
+    else:
+        top = domains[0].score
+        # keep domains within 55% of top score (or score>=2.5) to avoid weak bleed
+        doms = {
+            d.domain
+            for d in domains
+            if d.score >= 1.0 and (d.score >= top * 0.55 or d.score >= 2.5 or d is domains[0])
+        }
 
     def add(*keys: str) -> None:
         for k in keys:
             if k not in hints:
                 hints.append(k)
 
-    if "shop" in doms or "marketplace" in doms or entities.category or entities.product:
+    # ── Commerce (only when commerce domains actually ranked) ─
+    non_commerce = {
+        "security", "education", "iot", "blockchain", "devops", "ai_ml",
+        "gaming", "tickets", "crm", "saas", "moderation", "clinic",
+        "healthcare", "finance", "logistics", "jobs", "fitness", "tasks", "notes",
+    }
+    commerce_hit = bool(doms & {"shop", "marketplace", "restaurant", "delivery", "payments"})
+    # product/category only counts as commerce if not a non-commerce category label
+    cat = (entities.category or "")
+    product_is_commerce = bool(entities.product or cat) and cat not in {
+        "أمن سيبراني", "دورات",
+    } and not (doms & non_commerce and not commerce_hit)
+    if commerce_hit or (product_is_commerce and not (doms & non_commerce)):
         add("shop_catalog", "cart_view", "cart_checkout", "shop_add_item", "shop_orders")
         if entities.wants_discounts:
             add("coupon_apply", "coupon_create")
@@ -191,12 +220,10 @@ def _feature_hints(entities: ExtractedEntities, domains: list[DomainSignal]) -> 
             add("shipping_set", "order_track")
         if entities.wants_reviews:
             add("review_add")
-        if entities.wants_inventory:
-            add("shop_add_item")  # stock via add/admin
         pays = set(entities.payment_methods)
-        if pays & {"vodafone_cash", "fawry", "orange_cash", "etisalat_cash", "instapay", "wallet"}:
+        if pays & {"vodafone_cash", "fawry", "orange_cash", "instapay", "wallet"}:
             add("wallet_balance", "wallet_topup", "vodafone_cash", "pay_methods")
-        if pays & {"visa", "telegram_payments", "apple_pay", "google_pay"}:
+        if pays & {"visa", "telegram_payments"}:
             add("shop_buy", "payment_history", "pay_methods", "invoice_preview")
         if "cod" in pays:
             add("pay_methods", "order_track")
@@ -206,21 +233,93 @@ def _feature_hints(entities: ExtractedEntities, domains: list[DomainSignal]) -> 
             add("product_search", "wishlist_add", "wishlist_view", "review_add")
     if "marketplace" in doms:
         add("listing_create", "listing_search", "listing_mine")
+
+    # ── Security / Cyber ──────────────────────────────────────
+    if "security" in doms or entities.security_checks or entities.target_domain:
+        add("sec_domain_overview", "sec_dns_check", "sec_tls_check", "sec_tips")
+        checks = set(entities.security_checks)
+        if "dns" in checks or "mx" in checks:
+            add("sec_dns_check", "sec_mx_check")
+        if "spf" in checks or "dmarc" in checks:
+            add("sec_dns_check")
+        if "tls" in checks:
+            add("sec_tls_check")
+        if "headers" in checks:
+            add("sec_headers_check")
+        if "phishing" in checks:
+            add("sec_tips")
+        if "whois" in checks:
+            add("sec_domain_overview")
+        add("sec_list_reports", "sec_checklist")
+
+    # ── Support / tickets ─────────────────────────────────────
     if "tickets" in doms:
-        add("ticket_open", "ticket_my", "ticket_list", "ticket_status")
+        add("ticket_open", "ticket_my", "ticket_list", "ticket_status", "ticket_reply")
+
+    # ── Booking / clinic / restaurant ─────────────────────────
     if "booking" in doms or "clinic" in doms:
-        add("table_book") if "restaurant" in doms else add("ticket_open")
+        add("ticket_open", "ticket_my")  # appointment-style capture
     if "restaurant" in doms:
         add("menu_view", "menu_order", "order_status", "table_book")
+
+    # ── Education ─────────────────────────────────────────────
+    if "education" in doms:
+        add("course_list", "course_enroll", "lesson_list", "quiz_start", "progress_view")
+        if entities.course_topic:
+            add("course_list")
+
+    # ── CRM / SaaS / growth ───────────────────────────────────
+    if "crm" in doms:
+        add("lead_capture", "lead_list", "pipeline_board", "deal_create", "followup_set")
+    if "saas" in doms:
+        add("plans", "subscribe", "my_sub", "analytics_overview", "admin_users")
     if "subscriptions" in doms:
         add("plans", "subscribe", "my_sub")
     if "points" in doms:
         add("balance", "leaderboard", "daily_checkin")
-    if "education" in doms:
-        add("course_list", "course_enroll", "quiz_start")
-    if "security" in doms:
-        add("sec_dns_check", "sec_tls_check", "sec_domain_overview")
+    if "growth" in doms:
+        add("referral_code", "referral_invite", "referral_stats")
+    if "contests" in doms:
+        add("contests", "join_contest", "draw_winner")
+
+    # ── IoT / Blockchain / DevOps / AI / Gaming ───────────────
+    if "iot" in doms:
+        add("sec_http_check", "note_add", "task_add")  # device notes + alerts
+        if "mqtt" in (entities.tech_stack or []):
+            add("note_add")
+    if "blockchain" in doms:
+        add("wallet_balance", "note_add")
+    if "devops" in doms:
+        add("status_cmd", "note_add", "task_add") if False else add("note_add", "task_add")
+        if "docker" in (entities.tech_stack or []):
+            add("note_add")
+    if "ai_ml" in doms:
+        add("note_add", "faq_show")
+    if "gaming" in doms:
+        add("leaderboard", "balance", "contests", "join_contest")
+
+    # ── Healthcare / finance / logistics / jobs / fitness ─────
+    if "healthcare" in doms or "clinic" in doms:
+        add("ticket_open", "ticket_my", "ticket_list")
+    if "finance" in doms:
+        add("invoice_preview", "payment_history", "wallet_balance")
+    if "logistics" in doms:
+        add("order_track", "shipping_set", "shop_orders")
+    if "jobs" in doms:
+        add("job_list", "job_apply", "job_my_apps")
+    if "fitness" in doms:
+        add("daily_checkin", "streak_status", "balance")
+    if "events" in doms:
+        add("contests", "join_contest")
+    if "moderation" in doms:
+        add("rules", "my_id")
+    if "tasks" in doms:
+        add("task_add", "task_list")
+    if "notes" in doms:
+        add("note_add", "note_list")
+
     return hints
+
 
 
 def _suggested_questions(
@@ -232,33 +331,60 @@ def _suggested_questions(
     qs: list[str] = []
     if not primary or is_ambiguous:
         if skill == "expert":
-            qs.append("حدّد الـ vertical الأساسي: shop / support / booking / saas / security؟")
+            qs.append("حدّد الـ vertical: shop / security / support / booking / saas / iot / education؟")
         else:
-            qs.append("عايز البوت يعمل إيه بالظبط؟ (متجر / دعم / حجوزات / تعليم / مطعم…)")
+            qs.append("عايز البوت يعمل إيه؟ (متجر / أمن سيبراني / دعم / حجوزات / تعليم / مطعم / IoT…)")
         return qs[:4]
 
     if primary in {"shop", "marketplace"}:
         if not entities.product and not entities.category:
-            qs.append(
-                "هتبيع إيه؟ (ملابس / أحذية / إلكترونيات / أكل…)"
-                if skill != "expert"
-                else "حدّد catalog domain + SKU model (physical/digital)؟"
-            )
+            qs.append("هتبيع إيه؟ (ملابس / أحذية / إلكترونيات…)" if skill != "expert" else "Catalog domain + physical/digital SKUs؟")
         if not entities.payment_methods:
-            qs.append("طرق الدفع؟ (فيزا / فودافون كاش / فوري / محفظة / عند الاستلام)")
+            qs.append("طرق الدفع؟ (فيزا / فودافون / فوري / COD)")
         if not entities.wants_delivery:
             qs.append("محتاج توصيل وتتبع شحنات؟")
-        if not entities.wants_discounts:
-            qs.append("كوبونات وخصومات؟")
-        if primary == "marketplace" and skill != "beginner":
-            qs.append("هتدعم تعدد بائعين + عمولة؟")
+    elif primary == "security":
+        if not entities.target_domain and not entities.target_url:
+            qs.append("فحص على دومين معيّن؟ اكتب المثال: example.com")
+        if not entities.security_checks:
+            qs.append("أي فحوصات؟ DNS / TLS / Headers / Phishing awareness / Incident reports")
+        qs.append("التقارير للمستخدم ولا للإدمن فقط؟")
     elif primary == "tickets":
         qs.append("التذاكر لعملاء خارجيين ولا فريق داخلي؟")
+        qs.append("محتاج أولويات (low/normal/high) وSLA؟")
     elif primary in {"booking", "clinic"}:
         qs.append("الحجز لمواعيد / طاولات / خدمات؟ ومدة الجلسة؟")
     elif primary == "restaurant":
-        qs.append("طلب منيو + توصيل، ولا حجز طاولات كمان؟")
+        qs.append("منيو + طلبات، ولا كمان حجز طاولات وتوصيل؟")
+    elif primary == "education":
+        if not entities.course_topic:
+            qs.append("الكورسات عن إيه؟ وعايز اختبارات/شهادات؟")
+        else:
+            qs.append("تتبع تقدّم الطلاب وواجبات؟")
+    elif primary == "crm":
+        qs.append("مراحل الـ pipeline؟ (جديد → تواصل → صفقة…)")
+    elif primary == "saas":
+        qs.append("خطط الاشتراك؟ وعايز لوحة أدمن وتحليلات؟")
+    elif primary == "iot":
+        qs.append("الأجهزة تتصل بإيه؟ MQTT / HTTP / Telegram alerts؟")
+    elif primary == "blockchain":
+        qs.append("متابعة محفظة / تنبيهات أسعار / NFT gallery؟")
+    elif primary == "devops":
+        qs.append("تنبيهات deploy / حالة الخدمات / ربط webhook؟")
+    elif primary == "gaming":
+        qs.append("لوحة متصدرين، بطولات، ولا اقتصاد نقاط داخل اللعبة؟")
+    elif primary == "moderation":
+        qs.append("أوامر المشرفين: حظر / كتم / تحذير / فلتر كلمات؟")
+    elif primary == "jobs":
+        qs.append("نشر وظائف + تقديم، ولا متابعة مرشحين فقط؟")
+    elif primary == "finance":
+        qs.append("فواتير ومصروفات، ولا محفظة داخلية؟")
+    elif primary == "logistics":
+        qs.append("تتبع شحنات، أسطول، ولا إدارة مستودع؟")
+    elif primary == "fitness":
+        qs.append("تمارين يومية، سعرات، ولا اشتراكات جيم؟")
     return qs[:4]
+
 
 
 def understand(text: str) -> LanguageUnderstandingResult:
@@ -333,21 +459,40 @@ def understand(text: str) -> LanguageUnderstandingResult:
 
     entities = extract_entities(original)
 
-    # 5) entity-driven domain boosts
+    # 5) entity-driven domain boosts (all verticals)
     if entities.product or entities.category:
-        bump("shop", 2.5, "entity_product", entities.category or entities.product or "")
+        if entities.category == "أمن سيبراني" or entities.security_checks:
+            bump("security", 3.0, "entity_sec_cat", entities.category or "sec")
+        elif entities.category == "دورات" or entities.course_topic:
+            bump("education", 2.8, "entity_edu", entities.course_topic or "course")
+        else:
+            bump("shop", 2.5, "entity_product", entities.category or entities.product or "")
     if entities.payment_methods:
         bump("payments", 2.0, "entity_pay", ",".join(entities.payment_methods[:3]))
-        bump("shop", 1.2, "entity_pay_shop", "pay")
+        # only drag shop if commerce signals exist
+        if entities.product or entities.category or entities.wants_delivery or entities.wants_discounts:
+            bump("shop", 1.2, "entity_pay_shop", "pay")
     if entities.wants_delivery:
         bump("delivery", 1.5, "entity_delivery", "delivery")
-        # delivery alone must not beat shop when selling
-        bump("shop", 0.8, "entity_delivery_shop", "ship")
+        if entities.product or entities.category:
+            bump("shop", 0.8, "entity_delivery_shop", "ship")
     if entities.brand_analogy in {"amazon", "noon", "jumia"}:
         bump("marketplace", 3.0, "brand_analogy", entities.brand_analogy)
         bump("shop", 2.0, "brand_analogy_shop", entities.brand_analogy)
     if entities.wants_discounts:
         bump("shop", 1.0, "entity_discount", "coupon")
+    if entities.security_checks or entities.target_domain or entities.target_url or entities.target_ip:
+        bump("security", 3.5, "entity_sec", ",".join(entities.security_checks[:4]) or (entities.target_domain or "host"))
+    if entities.course_topic:
+        bump("education", 2.5, "entity_course", entities.course_topic)
+    if entities.tech_stack:
+        for tech in entities.tech_stack:
+            if tech in {"docker", "kubernetes", "nginx"}:
+                bump("devops", 2.2, "entity_tech", tech)
+            if tech in {"mqtt", "arduino", "esp32"}:
+                bump("iot", 2.5, "entity_tech", tech)
+            if tech in {"postgres", "redis"}:
+                bump("saas", 1.2, "entity_tech", tech)
 
     # Commerce gravity: selling verbs / product → shop owns delivery/payments
     sell = any(
@@ -357,12 +502,25 @@ def understand(text: str) -> LanguageUnderstandingResult:
             "shop", "store", "catalog", "cart", "ecommerce", "ملابس", "احذية", "احذيه",
         )
     )
-    if sell and "shop" in scores:
+    if sell and "shop" in scores and "security" not in scores:
         scores["shop"].score += 2.5
         if "delivery" in scores:
             scores["delivery"].score *= 0.55
         if "payments" in scores and scores["payments"].score > scores["shop"].score:
             scores["shop"].score = max(scores["shop"].score, scores["payments"].score * 0.9)
+
+    # Strong vertical lock: security / iot / devops / education beat weak shop bleed
+    for lock_dom, min_score in (
+        ("security", 3.0), ("iot", 2.5), ("devops", 2.5), ("education", 2.5),
+        ("blockchain", 2.5), ("gaming", 2.5), ("moderation", 2.5), ("crm", 2.5),
+        ("contests", 2.5), ("tickets", 2.5), ("clinic", 2.5), ("restaurant", 2.5),
+        ("saas", 2.5), ("ai_ml", 2.5), ("jobs", 2.5), ("fitness", 2.5),
+    ):
+        if lock_dom in scores and scores[lock_dom].score >= min_score:
+            if "shop" in scores and scores["shop"].score < scores[lock_dom].score:
+                scores["shop"].score *= 0.35
+            if "marketplace" in scores and scores["marketplace"].score < scores[lock_dom].score:
+                scores["marketplace"].score *= 0.35
 
     ranked = sorted(scores.values(), key=lambda d: d.score, reverse=True)
     for d in ranked:
@@ -385,8 +543,19 @@ def understand(text: str) -> LanguageUnderstandingResult:
         is_ambiguous = True
         reason = "لم يتضح نوع البوت من النص"
     elif len(ranked) >= 2 and ranked[1].score >= 1.5 and abs(ranked[0].score - ranked[1].score) < 0.7:
-        if {ranked[0].domain, ranked[1].domain} <= {"shop", "delivery", "payments"}:
-            pass  # commerce cluster — not ambiguous
+        cluster_ok = [
+            {"shop", "delivery", "payments", "marketplace"},
+            {"clinic", "booking", "healthcare"},
+            {"restaurant", "delivery", "shop"},
+            {"security"},
+            {"education", "saas"},
+            {"iot", "devops"},
+            {"gaming", "points", "contests"},
+            {"tickets", "crm"},
+        ]
+        top2 = {ranked[0].domain, ranked[1].domain}
+        if any(top2 <= c or top2 & c == top2 for c in cluster_ok):
+            pass  # related cluster — not ambiguous
         else:
             is_ambiguous = True
             reason = f"تعارض بين {ranked[0].domain} و {ranked[1].domain}"

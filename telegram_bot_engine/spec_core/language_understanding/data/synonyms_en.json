@@ -8,12 +8,7 @@
     "cart",
     "products",
     "merchandise",
-    "boutique",
-    "outlet",
-    "amazon-like",
-    "mini amazon",
-    "online store",
-    "webshop"
+    "boutique"
   ],
   "marketplace": [
     "marketplace",
@@ -27,22 +22,24 @@
     "food",
     "menu",
     "cafe",
-    "delivery food",
-    "kitchen"
+    "kitchen",
+    "food delivery"
   ],
   "booking": [
     "booking",
     "appointment",
     "reservation",
     "schedule",
-    "slots"
+    "slots",
+    "calendar"
   ],
   "tickets": [
     "support",
     "ticket",
     "helpdesk",
     "complaint",
-    "customer care"
+    "customer care",
+    "service desk"
   ],
   "wallet": [
     "wallet",
@@ -58,19 +55,14 @@
     "checkout",
     "invoice",
     "cod",
-    "cash on delivery",
     "fawry",
-    "vodafone cash",
-    "orange cash",
-    "apple pay",
     "gateway"
   ],
   "delivery": [
     "delivery",
     "shipping",
     "courier",
-    "tracking",
-    "free shipping"
+    "tracking"
   ],
   "education": [
     "education",
@@ -78,52 +70,151 @@
     "lesson",
     "quiz",
     "school",
-    "lms"
+    "lms",
+    "student",
+    "homework",
+    "certificate"
   ],
   "crm": [
     "crm",
     "leads",
     "pipeline",
-    "sales"
+    "sales",
+    "deal",
+    "contact management"
   ],
   "saas": [
     "saas",
     "platform",
     "workspace",
-    "tenant"
+    "tenant",
+    "admin panel",
+    "subscription software",
+    "b2b"
   ],
   "security": [
     "security",
     "cyber",
+    "cybersecurity",
     "dns",
     "tls",
-    "scan",
-    "phishing"
+    "ssl",
+    "spf",
+    "dmarc",
+    "mx",
+    "phishing",
+    "domain scan",
+    "website scan",
+    "headers",
+    "incident",
+    "soc",
+    "vulnerability",
+    "firewall",
+    "malware",
+    "password",
+    "2fa",
+    "mfa",
+    "whois",
+    "blacklist",
+    "pentest",
+    "hardening"
   ],
   "iot": [
     "iot",
     "sensors",
     "smart home",
-    "mqtt"
+    "mqtt",
+    "arduino",
+    "esp32",
+    "device telemetry"
+  ],
+  "blockchain": [
+    "blockchain",
+    "crypto",
+    "bitcoin",
+    "ethereum",
+    "nft",
+    "web3",
+    "smart contract",
+    "token"
+  ],
+  "devops": [
+    "devops",
+    "docker",
+    "kubernetes",
+    "ci/cd",
+    "deploy",
+    "container",
+    "terraform",
+    "monitoring"
+  ],
+  "ai_ml": [
+    "ai",
+    "machine learning",
+    "ml",
+    "model",
+    "dataset",
+    "llm",
+    "prediction",
+    "training"
+  ],
+  "gaming": [
+    "gaming",
+    "game",
+    "leaderboard",
+    "tournament",
+    "xp",
+    "level",
+    "match"
+  ],
+  "healthcare": [
+    "healthcare",
+    "clinic",
+    "doctor",
+    "patient",
+    "medical",
+    "hospital",
+    "pharmacy"
+  ],
+  "finance": [
+    "finance",
+    "accounting",
+    "ledger",
+    "budget",
+    "expense",
+    "revenue",
+    "tax"
+  ],
+  "logistics": [
+    "logistics",
+    "warehouse",
+    "fleet",
+    "driver",
+    "route",
+    "shipment"
   ],
   "tasks": [
     "tasks",
     "todo",
-    "reminders"
+    "reminders",
+    "task manager"
   ],
   "notes": [
     "notes",
-    "memo"
+    "memo",
+    "notebook"
   ],
   "growth": [
     "referral",
     "affiliate",
-    "invite"
+    "invite",
+    "growth loop"
   ],
   "points": [
     "points",
     "loyalty",
-    "rewards"
+    "rewards",
+    "gamification points"
   ],
   "subscriptions": [
     "subscription",
@@ -134,27 +225,40 @@
   "contests": [
     "contest",
     "giveaway",
-    "raffle"
+    "raffle",
+    "draw"
   ],
   "jobs": [
     "jobs",
     "recruitment",
     "hiring",
-    "cv"
+    "cv",
+    "applicant"
   ],
   "events": [
     "events",
-    "tickets sale"
+    "event tickets",
+    "concert"
   ],
   "fitness": [
     "gym",
     "fitness",
-    "workout"
+    "workout",
+    "calories"
   ],
   "clinic": [
     "clinic",
     "doctor",
-    "patients"
+    "patients",
+    "checkup"
+  ],
+  "moderation": [
+    "moderation",
+    "ban",
+    "mute",
+    "warn",
+    "group admin",
+    "antispam"
   ],
   "bot": [
     "bot",
