@@ -179,12 +179,16 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
             "Env: `OCR_ENABLED=1`, `OCR_LANG=eng+ara`",
         ]
     if needs_sched:
+        # PTB JobQueue extra (APScheduler)
+        opt_req.append("python-telegram-bot[job-queue]==21.6")
         env_lines += [
-            "# Schedule: durable SQLite rows; wire PTB JobQueue at deploy to auto-fire",
+            "SCHEDULE_ENABLED=1",
         ]
         readme_extra += [
             "### Schedule",
-            "`/schedule in 5m text` stores due_ts; generated main JobQueue polls every 60s.",
+            "`/schedule in 5m text` stores due_ts + chat_id.",
+            "main.py polls JobQueue every 60s when SCHEDULE_ENABLED=1.",
+            "Requires: pip install 'python-telegram-bot[job-queue]==21.6'",
         ]
     files["requirements.txt"] = "\n".join(req_lines) + "\n"
     if opt_req:

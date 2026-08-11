@@ -1304,7 +1304,8 @@ def _emit_handlers(spec: BotSpec) -> str:
             else:
                 lines.append(
                     "    result = generic_svc.schedule_note(user.id, "
-                    "' '.join(context.args) if context.args else '')"
+                    "' '.join(context.args) if context.args else '', "
+                    "chat_id=(chat.id if chat else user.id))"
                 )
             lines.append("    await message.reply_text(result)")
         else:
@@ -1981,15 +1982,18 @@ def _emit_main(spec: BotSpec) -> str:
         sched_job_block = '''
 async def _fire_due_reminders(context) -> None:
     try:
+        import os as _os
+        if (_os.getenv("SCHEDULE_ENABLED") or "1").strip().lower() in {"0", "false", "no"}:
+            return
         from app.services import generic as generic_svc
         due = generic_svc.list_due_reminders()
         for item in due:
-            uid = int(item.get("user_id") or 0)
+            chat_id = int(item.get("chat_id") or item.get("user_id") or 0)
             body = str(item.get("body") or "")
             iid = item.get("id")
-            if uid and body:
+            if chat_id and body:
                 try:
-                    await context.bot.send_message(chat_id=uid, text=f"⏰ تذكير #{iid}\\n{body[:500]}")
+                    await context.bot.send_message(chat_id=chat_id, text=f"⏰ تذكير #{iid}\\n{body[:500]}")
                 except Exception:
                     pass
             if iid is not None:

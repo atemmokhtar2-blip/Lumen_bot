@@ -724,7 +724,7 @@ def _parse_due_seconds(text: str) -> tuple[int, str]:
     return 3600, t
 
 
-def schedule_note(user_id: int, text: str = "") -> str:
+def schedule_note(user_id: int, text: str = "", chat_id: int | None = None) -> str:
     """Store a reminder with due timestamp; JobQueue fires open rows when due."""
     ensure()
     import time as _time
@@ -739,12 +739,17 @@ def schedule_note(user_id: int, text: str = "") -> str:
         )
     sec, body = _parse_due_seconds(text)
     due_ts = int(_time.time()) + int(sec)
-    meta = {"kind": "reminder", "due_ts": due_ts, "delay_sec": sec}
+    meta = {
+        "kind": "reminder",
+        "due_ts": due_ts,
+        "delay_sec": sec,
+        "chat_id": int(chat_id) if chat_id else int(user_id),
+    }
     iid = _insert("scheduler", int(user_id), "reminder", body, "open", meta)
     return (
         f"⏰ تذكير #{iid} بعد {sec} ث\n"
         f"{body[:300]}\n"
-        "سيُرسل تلقائياً إذا كان JobQueue مفعّلاً في main.py."
+        "سيُرسل تلقائياً عبر JobQueue (SCHEDULE_ENABLED=1)."
     )
 
 
@@ -766,6 +771,7 @@ def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]
             due.append({
                 "id": r["id"],
                 "user_id": r["user_id"],
+                "chat_id": int(meta.get("chat_id") or r["user_id"] or 0),
                 "body": r["body"],
                 "due_ts": due_ts,
             })
