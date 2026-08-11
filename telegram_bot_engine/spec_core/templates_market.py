@@ -6,9 +6,31 @@ No fake payment success; balances cannot go negative via debit helpers.
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from app.db import connect, init_db
+
+# ── Simple per-process rate limit (sensitive ops) ─────────────────────────
+_RATE: dict[str, float] = {}
+_RATE_LOCK = threading.Lock()
+
+
+def _rate_allow(key: str, min_interval_sec: float = 0.4) -> bool:
+    """Return False if the same key hit too recently."""
+    now = time.monotonic()
+    with _RATE_LOCK:
+        last = _RATE.get(key, 0.0)
+        if now - last < min_interval_sec:
+            return False
+        _RATE[key] = now
+        # opportunistic prune
+        if len(_RATE) > 5000:
+            cutoff = now - 60
+            for k in [k for k, t in _RATE.items() if t < cutoff]:
+                _RATE.pop(k, None)
+        return True
 
 
 def ensure() -> None:
@@ -362,6 +384,8 @@ def points_credit(
     delta = int(delta)
     if delta == 0:
         return points_balance(user_id)
+    if not _rate_allow(f"points_credit:{int(user_id)}", 0.25):
+        return points_balance(user_id)
     # Large or free grants must be staff-authorized
     if delta > 0 and (reason or "").startswith("admin"):
         if not actor_id or not role_require(int(actor_id), "staff"):
@@ -563,6 +587,8 @@ def wallet_add(user_id: int, amount: int) -> int:
     amount = int(amount)
     if amount <= 0:
         return wallet_balance(user_id)
+    if not _rate_allow(f"wallet_add:{int(user_id)}", 0.25):
+        return wallet_balance(user_id)
     with connect() as conn:
         conn.execute(
             "INSERT INTO wallets (user_id, balance) VALUES (?,?) "
@@ -747,6 +773,8 @@ def apply_coupon(code: str, user_id: int = 0) -> int:
     ensure()
     code = (code or "").strip().upper()
     if not code:
+        return 0
+    if user_id and not _rate_allow(f"apply_coupon:{int(user_id)}", 1.0):
         return 0
     with connect() as conn:
         row = conn.execute(
@@ -973,13 +1001,35 @@ def fulfill_successful_payment(user_id: int, payload: str, telegram_charge_id: s
         return "Payment user mismatch — contact support."
     if order["status"] == "paid":
         return f"Order #{oid} already paid."
-    if mark_paid(oid, telegram_charge_id or ""):
-        ensure()
+    if (order["status"] or "") != "pending":
+        return f"Order #{oid} not payable (status={order['status']})."
+    charge = (telegram_charge_id or "").strip()
+    if not charge:
+        return "Missing telegram_payment_charge_id — refuse fulfill."
+    # Reject replay of same charge id
+    ensure()
+    with connect() as conn:
+        try:
+            dup = conn.execute(
+                "SELECT id FROM payments WHERE provider_charge_id=? LIMIT 1",
+                (charge[:200],),
+            ).fetchone()
+            if dup:
+                return "Charge already recorded."
+        except Exception:
+            pass
+    if mark_paid(oid, charge):
         with connect() as conn:
-            conn.execute(
-                "UPDATE products SET stock = CASE WHEN stock>0 THEN stock-1 ELSE 0 END WHERE id=?",
-                (int(order["product_id"]),),
-            )
+            # Decrement stock only if product_id present
+            try:
+                pid = int(order.get("product_id") or 0)
+                if pid:
+                    conn.execute(
+                        "UPDATE products SET stock = CASE WHEN stock>0 THEN stock-1 ELSE 0 END WHERE id=?",
+                        (pid,),
+                    )
+            except Exception:
+                pass
             conn.execute(
                 "INSERT INTO payments (user_id, order_id, amount_cents, currency, provider_charge_id, payload) "
                 "VALUES (?,?,?,?,?,?)",
@@ -988,7 +1038,7 @@ def fulfill_successful_payment(user_id: int, payload: str, telegram_charge_id: s
                     oid,
                     int(order["amount_cents"]),
                     order.get("currency") or "USD",
-                    (telegram_charge_id or "")[:200],
+                    charge[:200],
                     (payload or "")[:200],
                 ),
             )
@@ -1522,34 +1572,61 @@ def affiliate_register(user_id: int, parent_code: str = "") -> str:
 def affiliate_credit_for_order(order_id: int) -> str:
     """2-level affiliate: direct 10%, parent of affiliate 2%."""
     enterprise_ensure()
-    with connect() as conn:
-        o = conn.execute("SELECT id, user_id, amount_cents, status FROM orders WHERE id=?", (int(order_id),)).fetchone()
-        if not o or (o["status"] or "") not in {"paid", "processing", "shipped", "delivered"}:
-            return "Order not eligible"
-        # buyer referral: find who referred this user via referrals table if any
-        ref = conn.execute(
-            "SELECT referrer_id FROM referrals WHERE referred_id=? LIMIT 1", (int(o["user_id"]),)
-        ).fetchone()
-        if not ref:
-            return "No referrer"
-        aff_id = int(ref["referrer_id"])
-        total = int(o["amount_cents"] or 0)
-        direct = int(total * 0.10)
-        conn.execute(
-            "INSERT INTO affiliate_earnings (affiliate_id, from_user, order_id, amount_cents, status) VALUES (?,?,?,?, 'pending')",
-            (aff_id, int(o["user_id"]), int(order_id), direct),
-        )
-        # level 2
-        parent = conn.execute("SELECT parent_id FROM affiliates WHERE user_id=?", (aff_id,)).fetchone()
-        lvl2 = 0
-        if parent and int(parent["parent_id"] or 0):
-            lvl2 = int(total * 0.02)
+    try:
+        with connect() as conn:
+            o = conn.execute(
+                "SELECT id, user_id, amount_cents, status FROM orders WHERE id=?",
+                (int(order_id),),
+            ).fetchone()
+            if not o or (o["status"] or "") not in {
+                "paid",
+                "processing",
+                "shipped",
+                "delivered",
+            }:
+                return "Order not eligible"
+            # Idempotent: skip if already credited for this order
+            try:
+                prior = conn.execute(
+                    "SELECT id FROM affiliate_earnings WHERE order_id=? LIMIT 1",
+                    (int(order_id),),
+                ).fetchone()
+                if prior:
+                    return "Already credited"
+            except Exception:
+                return "Affiliate tables not ready"
+            try:
+                ref = conn.execute(
+                    "SELECT referrer_id FROM referrals WHERE referred_id=? LIMIT 1",
+                    (int(o["user_id"]),),
+                ).fetchone()
+            except Exception:
+                return "Referrals table not ready"
+            if not ref:
+                return "No referrer"
+            aff_id = int(ref["referrer_id"])
+            total = int(o["amount_cents"] or 0)
+            direct = int(total * 0.10)
             conn.execute(
-                "INSERT INTO affiliate_earnings (affiliate_id, from_user, order_id, amount_cents, status) VALUES (?,?,?,?, 'pending')",
-                (int(parent["parent_id"]), int(o["user_id"]), int(order_id), lvl2),
+                "INSERT INTO affiliate_earnings (affiliate_id, from_user, order_id, amount_cents, status) "
+                "VALUES (?,?,?,?, 'pending')",
+                (aff_id, int(o["user_id"]), int(order_id), direct),
             )
-        conn.commit()
-    return f"Affiliate credited: L1={direct} cents" + (f" L2={lvl2} cents" if lvl2 else "")
+            parent = conn.execute(
+                "SELECT parent_id FROM affiliates WHERE user_id=?", (aff_id,)
+            ).fetchone()
+            lvl2 = 0
+            if parent and int(parent["parent_id"] or 0):
+                lvl2 = int(total * 0.02)
+                conn.execute(
+                    "INSERT INTO affiliate_earnings (affiliate_id, from_user, order_id, amount_cents, status) "
+                    "VALUES (?,?,?,?, 'pending')",
+                    (int(parent["parent_id"]), int(o["user_id"]), int(order_id), lvl2),
+                )
+            conn.commit()
+        return f"Affiliate credited: L1={direct} cents" + (f" L2={lvl2} cents" if lvl2 else "")
+    except Exception:
+        return "Affiliate credit failed"
 
 
 def affiliate_stats(user_id: int) -> str:
