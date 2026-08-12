@@ -94,21 +94,38 @@ async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> No
 
 
 def make_zip_from_path(project_path: str | Path) -> Path | None:
-    """Create a zip of the generated project. Returns zip path or None."""
-    project_path = Path(project_path)
-    if not project_path.exists():
+    """Create a clean, safe ZIP containing only deliverable project files."""
+    project_path = Path(project_path).resolve()
+    if not project_path.is_dir():
         return None
 
     zip_path = project_path.parent / f"{project_path.name}.zip"
+    excluded_dirs = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
+    excluded_names = {".env", ".env.local", ".env.production", "secrets.json"}
+    tmp_zip = zip_path.with_suffix(".zip.tmp")
     try:
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, _, files in os.walk(project_path):
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            for root, dirs, files in os.walk(project_path):
+                dirs[:] = [d for d in dirs if d not in excluded_dirs and not d.startswith(".")]
                 for name in files:
-                    full = Path(root) / name
-                    arc = full.relative_to(project_path)
-                    zf.write(full, arc)
+                    full = (Path(root) / name).resolve()
+                    if name in excluded_names or name.endswith((".pyc", ".pyo", ".log")):
+                        continue
+                    if full == zip_path or not full.is_file():
+                        continue
+                    try:
+                        arc = full.relative_to(project_path)
+                    except ValueError:
+                        logger.warning("Skipping path outside project: %s", full)
+                        continue
+                    zf.write(full, arc.as_posix())
+        os.replace(tmp_zip, zip_path)
         return zip_path
     except Exception as e:
+        try:
+            tmp_zip.unlink(missing_ok=True)
+        except Exception:
+            pass
         logger.exception("Failed to create zip: %s", e)
         return None
 

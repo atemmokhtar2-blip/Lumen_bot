@@ -4,12 +4,54 @@ Copied into generated projects as app/services/generic.py.
 """
 from __future__ import annotations
 
+import ast
 import json
+import operator
 import re
 from datetime import datetime, timezone
 from typing import Any
 
 from app.db import connect, init_db
+
+
+_CALC_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _safe_calc(expression: str) -> str:
+    """Evaluate only a small arithmetic AST; never execute arbitrary Python."""
+    if len(expression) > 200:
+        raise ValueError("expression too long")
+    tree = ast.parse(expression, mode="eval")
+    nodes = list(ast.walk(tree))
+    if len(nodes) > 40:
+        raise ValueError("expression too complex")
+
+    def visit(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
+            left, right = visit(node.left), visit(node.right)
+            if abs(left) > 10**12 or abs(right) > 10**12:
+                raise ValueError("number too large")
+            return _CALC_OPS[type(node.op)](left, right)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
+            return _CALC_OPS[type(node.op)](visit(node.operand))
+        raise ValueError("unsupported expression")
+
+    result = visit(tree)
+    if abs(result) > 10**12:
+        raise ValueError("result too large")
+    return str(result)
 
 _ENSURED = False
 
@@ -1386,7 +1428,7 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
             try:
                 # safe tiny eval: digits and + - * / ( )
                 expr = "".join(ch for ch in payload if ch in "0123456789+-*/().% ")
-                return str(eval(expr, {"__builtins__": {}}, {})) if expr else "Usage: calc <expr>"
+                return _safe_calc(expr) if expr else "Usage: calc <expr>"
             except Exception:
                 return "Invalid expression"
         if m in {"privacy", "terms"}:

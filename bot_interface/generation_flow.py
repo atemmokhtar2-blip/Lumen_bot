@@ -150,12 +150,26 @@ async def deliver_generation_result(
         await message.reply_text("لم يُنشأ مشروع جاهز. جرّب وصفاً أوضح.")
         return
 
-    # Zip delivery
+    # Mandatory pre-delivery gate: never send a project before deterministic verification.
+    try:
+        from telegram_bot_engine.services.anti_hallucination import run_anti_hallucination_gate
+        _ah = run_anti_hallucination_gate(project_path, user_request=request or "")
+        ah = _ah.to_dict()
+        ready = bool(_ah.ready_for_token)
+        if not ready:
+            await message.reply_text(_ah.to_user_text(lang="ar")[:GENERATION_STATUS_PREVIEW_LIMIT])
+            return
+    except Exception:
+        logger.exception("mandatory pre-delivery verification failed")
+        await message.reply_text("❌ تعذر إكمال فحص المشروع قبل التسليم؛ لم يتم إرسال ملف غير متحقق منه.")
+        return
+
+    # Zip delivery, only after the pre-delivery gate passes.
     try:
         zip_path = make_zip_from_path(project_path)
         if zip_path and zip_path.exists():
             size_mb = zip_path.stat().st_size / (1024 * 1024)
-            if size_mb < ZIP_MAX_MB:
+            if size_mb <= ZIP_MAX_MB:
                 await message.reply_document(
                     document=zip_path.open("rb"),
                     filename=zip_path.name,

@@ -270,6 +270,47 @@ def _extract_command_handlers(src: str) -> list[str]:
     )
 
 
+def _local_import_findings(root: Path, files: list[Path]) -> list[Finding]:
+    """Validate local imports statically without importing or executing generated code."""
+    findings: list[Finding] = []
+    known_top = {p.name for p in root.iterdir() if p.is_dir()}
+    for py in files:
+        try:
+            tree = ast.parse(_read(py), filename=str(py))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level != 0 or not node.module:
+                continue
+            parts = node.module.split(".")
+            if parts[0] not in known_top:
+                continue
+            mod_file = root.joinpath(*parts).with_suffix(".py")
+            mod_init = root.joinpath(*parts, "__init__.py")
+            if not mod_file.is_file() and not mod_init.is_file():
+                findings.append(Finding("error", "local_import_module_missing", f"الاستيراد المحلي `{node.module}` غير موجود", f"Local import module missing: {node.module}"))
+                continue
+            target = mod_file if mod_file.is_file() else mod_init
+            try:
+                target_tree = ast.parse(_read(target), filename=str(target))
+                defined = {n.name for n in target_tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+                for n in target_tree.body:
+                    if isinstance(n, ast.Assign):
+                        defined.update(t.id for t in n.targets if isinstance(t, ast.Name))
+                    elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+                        defined.add(n.target.id)
+            except SyntaxError:
+                continue
+            for alias in node.names:
+                if alias.name == "*" or alias.name in defined:
+                    continue
+                submodule = target.parent / alias.name
+                if submodule.with_suffix(".py").is_file() or (submodule / "__init__.py").is_file():
+                    continue
+                findings.append(Finding("error", "local_import_symbol_missing", f"الاسم `{alias.name}` غير موجود في `{node.module}`", f"Imported symbol {alias.name} missing from {node.module}"))
+    return findings
+
+
 def _load_spec_features(root: Path) -> list[str]:
     """Features claimed by written artifacts (spec / contract / manifest)."""
     claimed: list[str] = []
@@ -393,6 +434,21 @@ def run_anti_hallucination_gate(
                 )
             )
 
+    for finding in _local_import_findings(root, files):
+        rep.errors.append(finding)
+    if any(f.code.startswith("local_import_") for f in rep.errors):
+        rep.ok = False
+        rep.structure_ok = False
+
+    # Reject symlinks that escape the generated project directory.
+    for py in files:
+        try:
+            py.resolve().relative_to(root.resolve())
+        except ValueError:
+            rep.ok = False
+            rep.structure_ok = False
+            rep.errors.append(Finding("error", "path_escape", f"ملف خارج مجلد المشروع: `{py}`", f"Project file escapes root: {py}"))
+
     # ── 2. Entry point + Application ────────────────────────────────────
     entry = _find_entry(root)
     if entry is None:
@@ -496,11 +552,10 @@ def run_anti_hallucination_gate(
                     f"Command /{cmd} registered but handler name unclear",
                 )
             )
-            # still count as verified if command is registered and main looks real
-            if "CommandHandler" in main_src and rep.syntax_ok:
-                rep.verified_commands.append(cmd)
-            else:
-                rep.claimed_but_missing.append(cmd)
+            rep.claimed_but_missing.append(cmd)
+            rep.errors.append(Finding("error", "missing_handler", f"الأمر `/{cmd}` مسجّل بدون handler قابل للتتبع", f"Command /{cmd} has no traceable handler"))
+            rep.ok = False
+            rep.fidelity_ok = False
             continue
 
         if matched in rep.stub_handlers:
