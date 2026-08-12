@@ -145,28 +145,46 @@ def smart_clone(
     depth: Optional[int] = 1,
     url_override: Optional[str] = None,
 ) -> CloneResult:
+    from telegram_bot_engine.services.secure_exec import (
+        clean_child_environ,
+        run_git,
+        validate_git_https_url,
+    )
+
     url = url_override or extract_repo_url(text)
     if not url:
         return CloneResult(ok=False, message="لم يتم العثور على رابط مستودع صالح")
 
+    try:
+        url = validate_git_https_url(url)
+    except ValueError as exc:
+        return CloneResult(ok=False, message=f"رابط المستودع مرفوض أمنياً: {exc}")
+
     tok = token or extract_token(text)
+    # Inject token only into a validated HTTPS URL (never from user-supplied userinfo)
     auth_url = _inject_token(url, tok)
 
-    dest = Path(dest_dir)
+    dest = Path(dest_dir).resolve()
     dest.mkdir(parents=True, exist_ok=True)
     name = Path(urlparse(url).path).stem or "repo"
-    target = dest / name
+    # Prevent path escape via weird repo names
+    name = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:80] or "repo"
+    target = (dest / name).resolve()
+    try:
+        target.relative_to(dest)
+    except ValueError:
+        return CloneResult(ok=False, message="مسار الاستنساخ خارج الوجهة المسموحة")
+
     if target.exists():
-        # Try to refresh existing clone (best effort)
+        # Try to refresh existing clone (best effort) with scrubbed env
         try:
-            subprocess.run(
+            run_git(
                 ["git", "-C", str(target), "fetch", "--depth", "1", "origin"],
-                capture_output=True, text=True, timeout=60, check=False,
-                env={**dict(**__import__("os").environ), "GIT_TERMINAL_PROMPT": "0"},
+                timeout=60,
             )
-            subprocess.run(
+            run_git(
                 ["git", "-C", str(target), "reset", "--hard", "origin/HEAD"],
-                capture_output=True, text=True, timeout=30, check=False,
+                timeout=30,
             )
         except Exception:
             pass
@@ -184,24 +202,11 @@ def smart_clone(
         "--filter=blob:none",  # partial clone for speed when supported
     ]
     if depth and depth > 0:
-        cmd += ["--depth", str(depth)]
+        cmd += ["--depth", str(int(depth))]
     cmd += [auth_url, str(target)]
 
-    env = {
-        **dict(**__import__("os").environ),
-        "GIT_TERMINAL_PROMPT": "0",
-        "GCM_INTERACTIVE": "never",
-    }
-
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-            env=env,
-        )
+        proc = run_git(cmd, timeout=180)
     except subprocess.TimeoutExpired:
         return CloneResult(ok=False, url=url, message="انتهت مهلة الـ clone")
     except Exception as e:

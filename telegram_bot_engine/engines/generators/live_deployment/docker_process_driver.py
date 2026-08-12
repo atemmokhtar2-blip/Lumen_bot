@@ -50,6 +50,22 @@ _TIMEOUT_PULL = int(os.environ.get("TBE_DOCKER_PULL_TIMEOUT", "120"))
 _RUN_AS_USER = os.environ.get("TBE_DOCKER_USER", "65534:65534")
 
 
+
+def _assert_sandbox_mount_path(project_path: Path) -> Path:
+    """Refuse to bind-mount anything outside OUTPUT_DIR/users (host escape)."""
+    path = project_path.resolve()
+    if not path.is_dir():
+        raise ValueError("project_path_not_a_directory")
+    out = Path(os.environ.get("OUTPUT_DIR") or "/tmp/generated").resolve()
+    try:
+        path.relative_to(out)
+    except ValueError as exc:
+        raise ValueError("project_path_outside_output_dir") from exc
+    if "users" not in path.parts:
+        raise ValueError("project_path_must_be_under_users_sandbox")
+    return path
+
+
 def docker_available() -> bool:
     """Return True if docker CLI is present and the daemon responds."""
     if not shutil.which("docker"):
@@ -136,12 +152,13 @@ class DockerProcessDriver(DeploymentProvider):
                 status=DEPLOY_FAILED,
                 message="invalid_path_characters",
             )
-        path = Path(raw).resolve()
-        if not path.is_dir():
+        try:
+            path = _assert_sandbox_mount_path(Path(raw))
+        except ValueError as exc:
             return DeploymentStatus(
                 provider=self.name,
                 status=DEPLOY_FAILED,
-                message="Project path not found",
+                message=f"Project path rejected: {exc}",
             )
 
         if not docker_available():
@@ -230,6 +247,7 @@ class DockerProcessDriver(DeploymentProvider):
             "--security-opt", "no-new-privileges:true",
             "--cap-drop", "ALL",
             "--read-only",
+            "--ipc", "none",
             # Writable spaces only where needed (deps + temp)
             # /tmp must allow exec for pip wheels / native extensions during install
             "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=96m",
@@ -250,7 +268,6 @@ class DockerProcessDriver(DeploymentProvider):
             "-e", "PYTHONPATH=/tmp/deps",
             "-e", f"BOT_TOKEN={bot_token}",
             "-e", f"TELEGRAM_BOT_TOKEN={bot_token}",
-            "-e", f"TOKEN={bot_token}",
             self._image,
             "sh", "-c", install_and_run,
         ]

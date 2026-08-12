@@ -375,26 +375,30 @@ class GitExecutor:
             return STATUS_FAILED, f"path does not exist: {path}"
 
         timeout = int(raw.get("timeout", 120))
-        env = os.environ.copy()
-        # Avoid interactive prompts
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        env["GIT_ASKPASS"] = "echo"
+        # Environment is scrubbed inside run() — do not inherit platform secrets.
 
         def run(cmd: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+            from telegram_bot_engine.services.secure_exec import clean_child_environ
             return subprocess.run(
                 cmd,
                 cwd=str(cwd or path),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env=env,
+                env=clean_child_environ(),
                 check=False,
+                shell=False,
             )
 
         try:
             if op == OP_CLONE:
+                from telegram_bot_engine.services.secure_exec import validate_git_https_url
                 url = str(raw.get("url") or raw.get("repo_url") or repo_path)
-                target = Path(raw.get("target_dir") or path)
+                try:
+                    url = validate_git_https_url(url)
+                except ValueError as exc:
+                    return STATUS_FAILED, f"clone rejected: {exc}"
+                target = Path(raw.get("target_dir") or path).resolve()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 r = run(["git", "clone", "--depth", "1", url, str(target)], cwd=target.parent)
                 if r.returncode != 0:
