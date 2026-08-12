@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 import atexit
+import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+logger = logging.getLogger("ai_agent_7h_bot")
+
 _LOCK_FH = None
 _MONGO_CLIENT = None
 _MONGO_COLLECTION = None
 _MONGO_OWNER = ""
+_MONGO_RENEW_STOP: threading.Event | None = None
 
 
 def _resolve_mongo_db(client):
@@ -27,8 +32,38 @@ def _resolve_mongo_db(client):
     try:
         return client.get_default_database()
     except Exception:
-        # URI has no /dbname — same default as mongo_users.py
         return client["ai_agent_7h"]
+
+
+def _lease_seconds() -> int:
+    try:
+        return max(30, int(os.getenv("TBE_POLL_LEASE_SEC") or "90"))
+    except ValueError:
+        return 90
+
+
+def _start_mongo_renewer(coll, owner: str, lease_sec: int) -> None:
+    """Keep the distributed lease alive until process exit."""
+    global _MONGO_RENEW_STOP
+    if _MONGO_RENEW_STOP is not None:
+        _MONGO_RENEW_STOP.set()
+    stop = threading.Event()
+    _MONGO_RENEW_STOP = stop
+    interval = max(10.0, lease_sec / 3.0)
+
+    def _loop() -> None:
+        while not stop.wait(interval):
+            try:
+                now = datetime.now(timezone.utc)
+                coll.update_one(
+                    {"_id": "telegram_polling", "owner": owner},
+                    {"$set": {"expires_at": now + timedelta(seconds=lease_sec), "renewed_at": now}},
+                )
+            except Exception as exc:
+                logger.warning("mongo poll lease renew failed: %s", exc)
+
+    th = threading.Thread(target=_loop, name="mongo-poll-lease", daemon=True)
+    th.start()
 
 
 def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
@@ -43,13 +78,11 @@ def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
     except ImportError as exc:
         raise SystemExit("MONGODB_URI is configured but pymongo is missing") from exc
     try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=3000)
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
         coll = _resolve_mongo_db(client)["ai_agent_runtime_locks"]
     except (ConfigurationError, PyMongoError, Exception) as exc:
-        # Misconfigured URI must not crash the whole bot — fall back to file lock
-        import logging
-        logging.getLogger("ai_agent_7h_bot").warning(
+        logger.warning(
             "Mongo polling lock unavailable (%s: %s) — using local file lock",
             type(exc).__name__,
             exc,
@@ -59,41 +92,105 @@ def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
         except Exception:
             pass
         return None
-    coll.create_index("expires_at", expireAfterSeconds=0)
-    owner = f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
+
+    try:
+        # TTL cleanup of expired leases (safe if index already exists)
+        coll.create_index("expires_at", expireAfterSeconds=0)
+    except Exception:
+        pass
+
+    owner = f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+    lease_sec = _lease_seconds()
     deadline = time.monotonic() + max(5.0, float(wait_seconds))
+    forced = False
+
     while True:
         now = datetime.now(timezone.utc)
-        lease = now + timedelta(hours=2)
+        lease_until = now + timedelta(seconds=lease_sec)
         try:
+            # Take lock if missing, expired, already ours, or force after wait
+            filt: dict = {"_id": "telegram_polling"}
+            if not forced:
+                filt = {
+                    "_id": "telegram_polling",
+                    "$or": [
+                        {"expires_at": {"$lte": now}},
+                        {"expires_at": {"$exists": False}},
+                        {"owner": owner},
+                    ],
+                }
             doc = coll.find_one_and_update(
-                {"_id": "telegram_polling", "$or": [{"expires_at": {"$lte": now}}, {"owner": owner}]},
-                {"$set": {"owner": owner, "expires_at": lease}},
+                filt,
+                {
+                    "$set": {
+                        "owner": owner,
+                        "expires_at": lease_until,
+                        "acquired_at": now,
+                    }
+                },
                 upsert=True,
                 return_document=ReturnDocument.AFTER,
             )
             if doc and doc.get("owner") == owner:
                 _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER = client, coll, owner
-                lock_path = Path(f"mongodb://telegram_polling/{owner}")
+                _start_mongo_renewer(coll, owner, lease_sec)
+
                 def _release_mongo() -> None:
-                    global _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER
+                    global _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER, _MONGO_RENEW_STOP
                     try:
+                        if _MONGO_RENEW_STOP is not None:
+                            _MONGO_RENEW_STOP.set()
                         if _MONGO_COLLECTION is not None and _MONGO_OWNER:
-                            _MONGO_COLLECTION.delete_one({"_id": "telegram_polling", "owner": _MONGO_OWNER})
+                            _MONGO_COLLECTION.delete_one(
+                                {"_id": "telegram_polling", "owner": _MONGO_OWNER}
+                            )
                         if _MONGO_CLIENT is not None:
                             _MONGO_CLIENT.close()
                     finally:
                         _MONGO_CLIENT = _MONGO_COLLECTION = None
                         _MONGO_OWNER = ""
+                        _MONGO_RENEW_STOP = None
+
                 atexit.register(_release_mongo)
-                return lock_path
+                logger.info(
+                    "Acquired distributed Telegram polling lease (owner=%s lease=%ss force=%s)",
+                    owner,
+                    lease_sec,
+                    forced,
+                )
+                return Path(f"mongodb://telegram_polling/{owner}")
         except DuplicateKeyError:
             pass
-        if time.monotonic() >= deadline:
-            client.close()
-            raise SystemExit("Another bot replica owns the distributed Telegram polling lease")
-        time.sleep(1.0)
+        except Exception as exc:
+            logger.warning("mongo lock attempt failed: %s", exc)
 
+        if time.monotonic() >= deadline:
+            # Railway single-replica rolling deploys: previous instance often dies
+            # without releasing a long lease. After waiting, take over once.
+            if not forced:
+                existing = None
+                try:
+                    existing = coll.find_one({"_id": "telegram_polling"})
+                except Exception:
+                    existing = None
+                logger.warning(
+                    "Polling lease busy (%s) — forcing takeover after %.0fs wait",
+                    (existing or {}).get("owner"),
+                    wait_seconds,
+                )
+                forced = True
+                # one more immediate attempt with force
+                continue
+            try:
+                client.close()
+            except Exception:
+                pass
+            raise SystemExit(
+                "Another bot replica owns the distributed Telegram polling lease "
+                "(set replicas=1; lease auto-expires in ~"
+                f"{lease_sec}s and renews while the owner is alive)"
+            )
+        time.sleep(1.0)
 
 
 def acquire_bot_singleton(
@@ -111,7 +208,9 @@ def acquire_bot_singleton(
     if distributed is not None:
         return distributed
     if os.getenv("TBE_MULTI_REPLICA", "0").strip().lower() in {"1", "true", "yes", "on"} and os.getenv("TBE_ALLOW_LOCAL_SINGLETON", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        raise SystemExit("TBE_MULTI_REPLICA requires MONGODB_URI/MONGO_URI for a cross-host polling lease")
+        raise SystemExit(
+            "TBE_MULTI_REPLICA requires MONGODB_URI/MONGO_URI for a cross-host polling lease"
+        )
     base = Path(lock_dir or os.getenv("OUTPUT_DIR") or "/tmp")
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -127,7 +226,6 @@ def acquire_bot_singleton(
             import fcntl
 
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            # acquired
             fh.seek(0)
             fh.truncate()
             fh.write(f"{os.getpid()}\n{time.time()}\n")
@@ -155,7 +253,6 @@ def acquire_bot_singleton(
             atexit.register(_release)
             return lock_path
         except BlockingIOError:
-            last_err = "lock_held"
             try:
                 fh.close()
             except Exception:
@@ -169,7 +266,6 @@ def acquire_bot_singleton(
             time.sleep(1.0)
             continue
         except ImportError:
-            # no fcntl — pid-file best effort
             try:
                 old = lock_path.read_text(encoding="utf-8").strip().splitlines()
                 old_pid = int(old[0]) if old and old[0].isdigit() else None
