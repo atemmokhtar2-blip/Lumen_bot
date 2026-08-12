@@ -62,7 +62,7 @@ def section(title: str) -> None:
     print("=" * 64)
 
 
-def test_intent() -> bool:
+def check_intent() -> bool:
     section("1) INTENT / PRESET")
     intents = classify_intent(COMPLEX_SPEC)
     print(f"intents top5: {[(i.domain, round(i.score, 1)) for i in intents[:5]]}")
@@ -77,7 +77,7 @@ def test_intent() -> bool:
     return ok
 
 
-def test_generation() -> tuple[bool, Path | None]:
+def check_generation() -> tuple[bool, Path | None]:
     section("2) FULL GENERATION")
     tmp = tempfile.mkdtemp(prefix="brutal_gen_")
     result = generate_bot(COMPLEX_SPEC, work_dir=tmp)
@@ -154,7 +154,7 @@ def test_generation() -> tuple[bool, Path | None]:
     return ok, root
 
 
-def test_simple() -> bool:
+def check_simple() -> bool:
     section("3) SIMPLE SPECS")
     ok = True
     for spec, expected in SIMPLE_SPECS:
@@ -169,7 +169,7 @@ def test_simple() -> bool:
     return ok
 
 
-def test_syntax(project: Path | None) -> bool:
+def check_syntax(project: Path | None) -> bool:
     section("4) SYNTAX")
     if project is None:
         tmp = tempfile.mkdtemp()
@@ -192,7 +192,7 @@ def test_syntax(project: Path | None) -> bool:
     return ok
 
 
-def test_adversarial() -> bool:
+def check_adversarial() -> bool:
     section("5) ADVERSARIAL / HACKING")
     ok = True
 
@@ -238,7 +238,7 @@ def test_adversarial() -> bool:
     return ok
 
 
-def test_handler_count(project: Path | None) -> bool:
+def check_handler_count(project: Path | None) -> bool:
     section("6) HANDLER / COMMAND DENSITY")
     if not project:
         print("skip")
@@ -258,13 +258,13 @@ def test_handler_count(project: Path | None) -> bool:
 def main() -> int:
     print("🚀 BRUTAL FINAL ENGINE TEST")
     results = {}
-    results["intent"] = test_intent()
-    gen_ok, project = test_generation()
+    results["intent"] = check_intent()
+    gen_ok, project = check_generation()
     results["generation"] = gen_ok
-    results["simple"] = test_simple()
-    results["syntax"] = test_syntax(project)
-    results["adversarial"] = test_adversarial()
-    results["density"] = test_handler_count(project)
+    results["simple"] = check_simple()
+    results["syntax"] = check_syntax(project)
+    results["adversarial"] = check_adversarial()
+    results["density"] = check_handler_count(project)
 
     section("SUMMARY")
     all_ok = True

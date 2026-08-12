@@ -55,12 +55,17 @@ def _emit_flow_engine() -> str:
     return path.read_text(encoding="utf-8")
 
 def _emit_market() -> str:
-    path = Path(__file__).resolve().parent / "templates_market.py"
+    path = Path(__file__).resolve().parent / "runtime" / "market_runtime.py"
     return path.read_text(encoding="utf-8")
 
 
 def _emit_generic_runtime() -> str:
-    path = Path(__file__).resolve().parent / "templates_generic.py"
+    path = Path(__file__).resolve().parent / "runtime" / "generic_runtime.py"
+    return path.read_text(encoding="utf-8")
+
+
+def _emit_generic_runtime_data() -> str:
+    path = Path(__file__).resolve().parents[2] / "data" / "templates" / "generic_runtime.json"
     return path.read_text(encoding="utf-8")
 
 
@@ -80,8 +85,16 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "README.md": f"# {spec.bot.name}\n\nZero-AI generated Telegram bot.\n\n1. cp .env.example .env\n2. Set TELEGRAM_BOT_TOKEN\n3. pip install -r requirements.txt\n4. python main.py\n",
     }
     files["app/services/__init__.py"] = ""
-    # Optional services based on plan
+    # Editable runtime data ships beside generic.py so generated projects are self-contained.
+    files["app/services/generic_runtime.json"] = _emit_generic_runtime_data()
+    # Runtime contract: handlers, routers, and service templates share these
+    # modules across capability branches. Emitting them conditionally caused
+    # real generated projects to fail the import gate (missing flow/market/db).
     svc_set = set(services)
+    files["app/services/market.py"] = _emit_market()
+    files["app/flow_engine.py"] = _emit_flow_engine()
+    files["app/services/tickets.py"] = _emit_tickets()
+    files["app/services/generic.py"] = _emit_generic_runtime()
     if "moderation" in svc_set or "admin" in svc_set:
         files["app/services/moderation.py"] = _emit_moderation()
     if "tasks" in svc_set:
@@ -115,12 +128,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "shop", "payments", "subscriptions", "points", "contests", "cart",
         "growth", "wallet", "i18n", "creator",
     } & svc_set:
-        files["app/services/market.py"] = _emit_market()
         need_flow = True
     if need_flow:
-        files["app/flow_engine.py"] = _emit_flow_engine()
-        # Every flow path references these services at completion time. Emit both
-        # dependencies together so runtime imports cannot become blind imports.
+        # Shared runtime files were emitted above; keep this branch only for
+        # documenting the dependency contract and future optional expansion.
         files.setdefault("app/services/tickets.py", _emit_tickets())
         files.setdefault("app/services/market.py", _emit_market())
     if spec.storage.type == "sqlite" or len(spec.features) > 2 or (

@@ -88,12 +88,9 @@ def _emit_models(spec: BotSpec) -> str:
 
 
 def _emit_db(spec: BotSpec) -> str:
-    need = spec.storage.type == "sqlite" or any(
-        (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate", "payments", "subscriptions", "points", "contests", "cart", "growth", "wallet", "creator", "i18n", "analytics", "compliance", "forms", "events", "jobs", "marketplace", "restaurant", "support", "admin", "notify"})  # type: ignore[union-attr]
-        for f in spec.features
-    )
-    if not need:
-        return ""
+    # The generated runtime contract always exposes connect()/init_db().
+    # Conditional emission created projects whose generic/market handlers
+    # imported an empty app.db and failed before delivery.
     return '''"""SQLite helpers."""
 from __future__ import annotations
 

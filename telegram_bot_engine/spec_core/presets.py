@@ -5,13 +5,34 @@ without going through the button builder or any LLM.
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Iterable
 
 from .acceptance_packs import tests_for_preset
 from .builder import BuilderSession
 from .schema import BotSpec
 from .seed_packs import seed_for_preset
+
+
+def _load_preset_data() -> dict[str, object]:
+    candidates = [
+        Path(__file__).resolve().parents[2] / "data" / "preset_keywords.json",
+        Path(__file__).with_name("preset_keywords.json"),
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                value = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    return value
+        except (OSError, ValueError, TypeError):
+            continue
+    return {}
+
+
+_PRESET_DATA = _load_preset_data()
 
 
 def _pack_from_prefixes(
@@ -88,180 +109,36 @@ def _pack_limit_for(intensity: str, *, primary: bool) -> int:
 
 
 # keyword packs (Arabic + English), lowercase match
-_GROUP_KEYS = (
-    "اداره مجموعات",
-    "إدارة مجموعات",
-    "ادارة مجموعات",
-    "إدارة جروب",
-    "ادارة جروب",
-    "إدارة مجموعة",
-    "مشرف",
-    "moderation",
-    "group management",
-    "group admin",
-    "admin bot",
-    "حظر",
-    "كتم",
-    "طرد",
-    "ترحيب",
-)
-_TASK_KEYS = (
-    "مهام",
-    "task",
-    "todo",
-    "to-do",
-)
-_SUPPORT_KEYS = (
-    "تذاكر",
-    "دعم",
-    "support",
-    "ticket",
-    "helpdesk",
-)
-_NOTES_KEYS = (
-    "ملاحظات",
-    "notes",
-)
-_SHOP_KEYS = (
-    "متجر", "shop", "store", "منتجات", "ecommerce", "مدفوعات", "دفع",
-    "payment", "payments", "invoice", "شراء", "سلة", "cart", "كوبون",
-    "coupon", "refund", "أمنيات", "wishlist", "order", "تبرع", "donation",
-    "خيرية", "صيدلية", "pharmacy",
-    # Arabic commerce synonyms (intent blindness fix)
-    "بيع", "ببيع", "ابيع", "مبيعات", "ملابس", "احذية", "أحذية", "الكترونيات",
-    "إلكترونيات", "سلع", "بضاعة", "محل", "دكان", "كتالوج", "catalog",
-    "product", "products", "checkout", "طلب", "طلبات",
-)
-_SUB_KEYS = (
-    "اشتراك", "اشتراكات", "عضوية", "subscription", "subscribe", "vip",
-    "monthly", "plan", "plans",
-)
-_POINTS_KEYS = (
-    "نقاط", "رصيد", "points", "coins", "xp", "leaderboard", "لوحة متصدرين",
-    "ولاء", "loyalty",
-)
-_CONTEST_KEYS = (
-    "مسابقة", "مسابقات", "contest", "giveaway", "raffle", "سحب", "tournament",
-)
-_I18N_KEYS = (
-    "ترجمة", "واجهة", "i18n", "multi-language", "multilingual", "global",
-    "عالمي", "bilingual", "عربي انجليزي",
-)
-_BOOK_KEYS = ("حجز", "booking", "موعد", "appointment")
-_HR_KEYS = ("موارد بشرية", "hr", "إجازة", "حضور", "checkin")
-_SECURITY_KEYS = (
-    "امن", "أمن", "سيبراني", "security", "cyber", "cybersecurity", "cyberguard",
-    "phishing", "تصيد", "تصيّد", "بلاغ", "incident", "soc", "توعية",
-    "dns", "tls", "ssl", "spf", "dmarc", "mx records", "certificate", "شهادة",
-    "domain scan", "website scan", "فحص أمني", "فحص dns", "فحص الموقع",
-    "security headers", "رؤوس", "vulnerability", "ثغرة", "pentest",
-    "password", "كلمة المرور", "نصائح أمان", "domain scanner",
-)
+_GROUP_KEYS = tuple(_PRESET_DATA.get("_GROUP_KEYS", ()))
+_TASK_KEYS = tuple(_PRESET_DATA.get("_TASK_KEYS", ()))
+_SUPPORT_KEYS = tuple(_PRESET_DATA.get("_SUPPORT_KEYS", ()))
+_NOTES_KEYS = tuple(_PRESET_DATA.get("_NOTES_KEYS", ()))
+_SHOP_KEYS = tuple(_PRESET_DATA.get("_SHOP_KEYS", ()))
+_SUB_KEYS = tuple(_PRESET_DATA.get("_SUB_KEYS", ()))
+_POINTS_KEYS = tuple(_PRESET_DATA.get("_POINTS_KEYS", ()))
+_CONTEST_KEYS = tuple(_PRESET_DATA.get("_CONTEST_KEYS", ()))
+_I18N_KEYS = tuple(_PRESET_DATA.get("_I18N_KEYS", ()))
+_BOOK_KEYS = tuple(_PRESET_DATA.get("_BOOK_KEYS", ()))
+_HR_KEYS = tuple(_PRESET_DATA.get("_HR_KEYS", ()))
+_SECURITY_KEYS = tuple(_PRESET_DATA.get("_SECURITY_KEYS", ()))
 
-_GROUP_CAPS = (
-    "start",
-    "help",
-    "rules",
-    "announce",
-    "user_ban",
-    "user_unban",
-    "user_mute",
-    "user_unmute",
-    "user_kick",
-    "user_warn",
-    "user_promote",
-    "user_demote",
-    "pin_message",
-    "delete_message",
-    "welcome_set",
-    "welcome_toggle",
-    "welcome_show",
-    "welcome_test",
-    "my_id",
-)
-_TASK_CAPS = ("start", "help", "task_add", "task_list", "task_done", "task_delete", "task_clear")
-_SUPPORT_CAPS = (
-    "start",
-    "help",
-    "ticket_open",
-    "ticket_my",
-    "ticket_list",
-    "ticket_reply",
-    "ticket_close",
-    "ticket_status",
-)
-_NOTES_CAPS = ("start", "help", "note_add", "note_list", "note_delete")
-_SECURITY_CAPS = (
-    "start", "help", "lang",
-    "sec_report_phish", "sec_report_incident", "sec_checklist", "sec_tips",
-    "sec_list_reports", "sec_close_report", "sec_password_tips",
-    "sec_dns_check", "sec_mx_check", "sec_tls_check", "sec_http_check",
-    "sec_headers_check", "sec_domain_overview",
-    "project_create", "project_list", "project_view", "project_search",
-    "report_create", "report_list", "report_export",
-    "note_add", "note_list", "task_add", "task_list",
-    "ticket_open", "ticket_list", "ticket_status",
-    "rules", "my_id",
-)
-_SHOP_CAPS = (
-    "start", "help", "shop_catalog", "shop_add_item", "shop_buy", "shop_orders",
-    "shop_my_orders", "cart_add", "cart_view", "cart_checkout", "product_search",
-    "product_info", "coupon_apply", "wishlist_add", "wishlist_view", "review_add",
-    "shipping_set", "digital_deliver", "coupon_apply", "coupon_create",
-    "order_track", "order_cancel",
-    # Payment surface — visible to end users
-    "wallet_balance", "wallet_topup", "wallet_history",
-    "payment_history", "invoice_preview",
-    "vodafone_cash", "pay_methods",
-    "lang", "privacy_policy", "terms_of_service",
-)
-_SUB_CAPS = (
-    "start", "help", "plans", "subscribe", "my_sub", "grant_sub", "revoke_sub",
-    "lang", "referral_code", "daily_checkin",
-)
-_POINTS_CAPS = (
-    "start", "help", "balance", "leaderboard", "grant_points", "points_history",
-    "redeem_points", "daily_checkin", "streak_status", "achievement_list", "lang",
-)
-_CONTEST_CAPS = (
-    "start", "help", "contests", "join_contest", "my_entries",
-    "new_contest", "end_contest", "draw_winner", "lang", "referral_invite",
-)
-_GROWTH_CAPS = (
-    "start", "help", "referral_code", "referral_invite", "referral_stats",
-    "referral_claim", "referral_rewards", "daily_checkin", "streak_status",
-    "achievement_list", "lang",
-)
-_CRM_CAPS = (
-    "start", "help", "lead_capture", "lead_list", "lead_status", "pipeline_board",
-    "deal_create", "customer_profile", "followup_set", "lang",
-)
-_SUPPORT_PRO_CAPS = (
-    "start", "help", "ticket_open", "ticket_my", "ticket_list", "ticket_reply",
-    "ticket_close", "ticket_status", "ticket_priority", "ticket_assign",
-    "kb_search", "kb_article", "csat_rate", "lang",
-)
-_EDU_CAPS = (
-    "start", "help", "course_list", "course_enroll", "lesson_list", "lesson_open",
-    "progress_view", "quiz_start", "quiz_score", "homework_submit",
-    "certificate_issue", "lang",
-)
-_RESTAURANT_CAPS = (
-    "start", "help", "menu_view", "menu_order", "order_status", "table_book", "lang",
-)
-_JOBS_CAPS = (
-    "start", "help", "job_list", "job_apply", "job_my_apps", "job_post", "lang",
-)
-_MARKETPLACE_CAPS = (
-    "start", "help", "listing_create", "listing_search", "listing_contact",
-    "listing_mine", "lang",
-)
-_SAAS_CAPS = (
-    "start", "help", "plans", "subscribe", "my_sub", "analytics_overview",
-    "analytics_users", "analytics_revenue", "admin_users", "webhook_set",
-    "data_export_me", "data_delete_me", "privacy_policy", "terms_of_service",
-    "lang", "maintenance_mode",
-)
+_GROUP_CAPS = tuple(_PRESET_DATA.get("_GROUP_CAPS", ()))
+_TASK_CAPS = tuple(_PRESET_DATA.get("_TASK_CAPS", ()))
+_SUPPORT_CAPS = tuple(_PRESET_DATA.get("_SUPPORT_CAPS", ()))
+_NOTES_CAPS = tuple(_PRESET_DATA.get("_NOTES_CAPS", ()))
+_SECURITY_CAPS = tuple(_PRESET_DATA.get("_SECURITY_CAPS", ()))
+_SHOP_CAPS = tuple(_PRESET_DATA.get("_SHOP_CAPS", ()))
+_SUB_CAPS = tuple(_PRESET_DATA.get("_SUB_CAPS", ()))
+_POINTS_CAPS = tuple(_PRESET_DATA.get("_POINTS_CAPS", ()))
+_CONTEST_CAPS = tuple(_PRESET_DATA.get("_CONTEST_CAPS", ()))
+_GROWTH_CAPS = tuple(_PRESET_DATA.get("_GROWTH_CAPS", ()))
+_CRM_CAPS = tuple(_PRESET_DATA.get("_CRM_CAPS", ()))
+_SUPPORT_PRO_CAPS = tuple(_PRESET_DATA.get("_SUPPORT_PRO_CAPS", ()))
+_EDU_CAPS = tuple(_PRESET_DATA.get("_EDU_CAPS", ()))
+_RESTAURANT_CAPS = tuple(_PRESET_DATA.get("_RESTAURANT_CAPS", ()))
+_JOBS_CAPS = tuple(_PRESET_DATA.get("_JOBS_CAPS", ()))
+_MARKETPLACE_CAPS = tuple(_PRESET_DATA.get("_MARKETPLACE_CAPS", ()))
+_SAAS_CAPS = tuple(_PRESET_DATA.get("_SAAS_CAPS", ()))
 
 
 def _saas_pack(*, limit: int = 72) -> tuple[str, ...]:
@@ -311,23 +188,11 @@ def _finance_pack(*, limit: int = 72) -> tuple[str, ...]:
         extra=("start", "help", "wallet_balance", "wallet_topup", "lang"),
     )
 
-_COMMUNITY_CAPS = (
-    "start", "help", "profile_set", "profile_view", "feed_view", "post_create",
-    "post_like", "report_content", "mod_queue", "lang",
-)
-_EVENTS_CAPS = (
-    "start", "help", "event_list", "event_rsvp", "event_create", "event_attendees", "lang",
-)
-_WALLET_CAPS = (
-    "start", "help", "wallet_balance", "wallet_topup", "wallet_transfer",
-    "wallet_history", "lang",
-)
+_COMMUNITY_CAPS = tuple(_PRESET_DATA.get("_COMMUNITY_CAPS", ()))
+_EVENTS_CAPS = tuple(_PRESET_DATA.get("_EVENTS_CAPS", ()))
+_WALLET_CAPS = tuple(_PRESET_DATA.get("_WALLET_CAPS", ()))
 # Creator monetization (digital content + tips + membership gate)
-_CREATOR_CAPS = (
-    "start", "help", "content_list", "content_unlock", "content_upload",
-    "tip_creator", "membership_gate", "plans", "subscribe", "my_sub",
-    "shop_buy", "referral_invite", "lang", "privacy_policy", "terms_of_service",
-)
+_CREATOR_CAPS = tuple(_PRESET_DATA.get("_CREATOR_CAPS", ()))
 # All-in-one commerce pro — densest market pack for launch day
 _COMMERCE_PRO_CAPS = tuple(dict.fromkeys(
     list(_SHOP_CAPS)
@@ -342,175 +207,49 @@ _COMMERCE_PRO_CAPS = tuple(dict.fromkeys(
     ]
 ))
 
-_CREATOR_KEYS = (
-    "منشئ", "creator", "محتوى مدفوع", "paid content", "إكرامية", "tip",
-    "عضوية محتوى", "fan", "patreon",
-)
-_COMMERCE_PRO_KEYS = (
-    # Explicit suite names
-    "commerce pro", "commerce suite", "متجر كامل", "متجر متكامل", "متجر احترافي",
-    "متجر شامل", "full ecommerce", "ecommerce full", "all-in-one shop",
-    "منصة تجارة", "commerce platform", "complete shop", "عالمي متكامل",
-    # Catalog / cart / coupons
-    "كتالوج", "catalog", "سلة", "سلة مشتريات", "كوبون", "كوبونات", "خصم", "خصومات",
-    "عروض", "فلاش", "checkout", "إتمام شراء", "مخزون",
-    # Orders / invoices / payments / refunds
-    "فواتير", "فاتورة", "مدفوعات", "مدفوعات تيليجرام", "telegram payments",
-    "تتبع طلب", "إلغاء طلب", "الغاء طلب", "استرجاع", "استرداد", "refund",
-    "order track", "order cancel", "invoice",
-    # Subscriptions lifecycle
-    "تجربة مجانية", "تجربه مجانيه", "تجديد", "إهداء اشتراك", "اهداء اشتراك",
-    "trial", "renew", "gift subscription", "اشتراكات وخطط",
-    # Points / loyalty / levels
-    "لوحة متصدرين", "تحويل نقاط", "مستويات", "مستوى", "leaderboard", "levels",
-    # Wallet
-    "محفظة رصيد", "شحن رصيد", "شحن محفظة",
-    # Growth / streaks / daily
-    "روابط دعوة", "تسجيل يومي", "سلاسل", "سلسلة", "streak", "daily check",
-    # Contests
-    "سحب فائزين", "مسابقات وسحب",
-    # Analytics / broadcast
-    "تحليلات", "إيرادات", "ايرادات", "إذاعة", "اذاعة", "شرائح", "broadcast",
-    "segment", "analytics revenue",
-    # Support / KB / admin
-    "قاعدة معرفة", "وضع صيانة", "صيانة", "maintenance mode", "knowledge base",
-    "privacy", "شروط", "تصدير بياناتي", "حذف بياناتي",
-)
+_CREATOR_KEYS = tuple(_PRESET_DATA.get("_CREATOR_KEYS", ()))
+_COMMERCE_PRO_KEYS = tuple(_PRESET_DATA.get("_COMMERCE_PRO_KEYS", ()))
 
-_GROWTH_KEYS = (
-    "إحالة", "احالة", "إحالات", "احالات", "referral", "referrals", "invite", "دعوة",
-    "check-in", "checkin", "daily reward", "نمو", "growth", "affiliate",
-)
-_CRM_KEYS = (
-    "crm", "مبيعات", "sales", "pipeline", "عملاء محتملين", "leads", "صفقة",
-)
-_EDU_KEYS = (
-    "دورة", "كورس", "course", "تعليم", "education", "درس", "اختبار", "quiz",
-    "شهادة", "certificate",
-)
-_RESTAURANT_KEYS = (
-    "مطعم", "restaurant", "قائمة طعام", "menu", "طلب طعام", "food order",
-    "طاولة",
-)
-_JOBS_KEYS = ("وظيفة", "وظائف", "job", "jobs", "توظيف", "hiring", "career")
-_MARKETPLACE_KEYS = (
-    "سوق", "إعلان", "اعلان", "marketplace", "classified", "بيع وشراء",
-    "بائعين", "vendors", "vendor", "متعدد البائعين", "multi-vendor",
-    "escrow", "ضمان", "مزايدة", "storefront", "عمولة", "commission",
-    "سوق إلكتروني", "classifieds",
-)
-_SAAS_KEYS = (
-    "saas", "ساس", "لوحة تحكم", "analytics", "تحليلات", "webhook", "api token",
-    "اشتراك برمجي", "مقعد", "seats", "seat", "tenant", "مستأجر", "workspace",
-    "مساحة عمل", "rbac", "صلاحيات", "feature flag", "sso", "تجربة مجانية",
-    "trial", "quota", "حصة استخدام", "b2b", "اشتراك برمجيات",
-)
-_LOGISTICS_KEYS = (
-    "لوجستيات", "logistics", "شحن", "shipping", "أسطول", "fleet", "مندوب",
-    "courier", "مستودع", "warehouse", "تتبع شحنة", "tracking",
-    "توصيل", "delivery network", "بيان شحن", "manifest", "حاوية", "container",
-    "مسار توصيل", "route planning", "إثبات تسليم", "pod",
-)
-_FINANCE_KEYS = (
-    "مالية", "finance", "محاسبة", "accounting", "دفتر", "ledger", "خزينة",
-    "treasury", "تسوية", "settlement", "مطابقة", "reconciliation", "ذمم",
-    "kyc", "aml", "قرض", "loan", "ائتمان", "credit", "فاتورة مالية",
-    "receivable", "payable", "fx", "صرف عملات", "رسوم", "fees",
-)
-_COMMUNITY_KEYS = (
-    "مجتمع", "community", "سوشيال", "social feed", "منشورات",
-)
-_EVENTS_KEYS = ("فعالية", "فعاليات", "event", "events", "rsvp", "مؤتمر")
-_WALLET_KEYS = ("محفظة", "wallet", "credits", "رصيد محفظة", "شحن رصيد")
-_SUPPORT_PRO_KEYS = ("دعم فني", "knowledge base", "قاعدة معرفة", "csat", "sla")
+_GROWTH_KEYS = tuple(_PRESET_DATA.get("_GROWTH_KEYS", ()))
+_CRM_KEYS = tuple(_PRESET_DATA.get("_CRM_KEYS", ()))
+_EDU_KEYS = tuple(_PRESET_DATA.get("_EDU_KEYS", ()))
+_RESTAURANT_KEYS = tuple(_PRESET_DATA.get("_RESTAURANT_KEYS", ()))
+_JOBS_KEYS = tuple(_PRESET_DATA.get("_JOBS_KEYS", ()))
+_MARKETPLACE_KEYS = tuple(_PRESET_DATA.get("_MARKETPLACE_KEYS", ()))
+_SAAS_KEYS = tuple(_PRESET_DATA.get("_SAAS_KEYS", ()))
+_LOGISTICS_KEYS = tuple(_PRESET_DATA.get("_LOGISTICS_KEYS", ()))
+_FINANCE_KEYS = tuple(_PRESET_DATA.get("_FINANCE_KEYS", ()))
+_COMMUNITY_KEYS = tuple(_PRESET_DATA.get("_COMMUNITY_KEYS", ()))
+_EVENTS_KEYS = tuple(_PRESET_DATA.get("_EVENTS_KEYS", ()))
+_WALLET_KEYS = tuple(_PRESET_DATA.get("_WALLET_KEYS", ()))
+_SUPPORT_PRO_KEYS = tuple(_PRESET_DATA.get("_SUPPORT_PRO_KEYS", ()))
 
 
 
-_FITNESS_CAPS = (
-    "start", "help", "gym_book", "gym_schedule", "gym_checkin", "gym_membership",
-    "plans", "subscribe", "my_sub", "lang",
-)
-_REALESTATE_CAPS = (
-    "start", "help", "property_list", "property_search", "property_inquiry",
-    "property_add", "lang",
-)
-_CLINIC_CAPS = (
-    "start", "help", "clinic_book", "clinic_slots", "clinic_cancel", "clinic_my", "lang",
-)
-_AUCTION_CAPS = (
-    "start", "help", "auction_list", "auction_bid", "auction_create", "auction_my_bids", "lang",
-)
-_DELIVERY_CAPS = (
-    "start", "help", "delivery_track", "delivery_status", "delivery_create", "lang",
-)
+_FITNESS_CAPS = tuple(_PRESET_DATA.get("_FITNESS_CAPS", ()))
+_REALESTATE_CAPS = tuple(_PRESET_DATA.get("_REALESTATE_CAPS", ()))
+_CLINIC_CAPS = tuple(_PRESET_DATA.get("_CLINIC_CAPS", ()))
+_AUCTION_CAPS = tuple(_PRESET_DATA.get("_AUCTION_CAPS", ()))
+_DELIVERY_CAPS = tuple(_PRESET_DATA.get("_DELIVERY_CAPS", ()))
 
-_FITNESS_KEYS = (
-    "جيم", "صالة", "fitness", "gym", "workout", "حصة رياضية", "نادي رياضي",
-)
-_REALESTATE_KEYS = (
-    "عقار", "عقارات", "real estate", "realestate", "property", "شقة", "فيلا",
-)
-_CLINIC_KEYS = (
-    "عيادة", "clinic", "طبيب", "doctor", "موعد طبي", "مستشفى",
-)
-_AUCTION_KEYS = ("مزاد", "مزادات", "auction", "bid", "مزايدة")
-_DELIVERY_KEYS = ("شحنة", "تتبع شحنة", "delivery", "shipping track", "لوجستيك")
+_FITNESS_KEYS = tuple(_PRESET_DATA.get("_FITNESS_KEYS", ()))
+_REALESTATE_KEYS = tuple(_PRESET_DATA.get("_REALESTATE_KEYS", ()))
+_CLINIC_KEYS = tuple(_PRESET_DATA.get("_CLINIC_KEYS", ()))
+_AUCTION_KEYS = tuple(_PRESET_DATA.get("_AUCTION_KEYS", ()))
+_DELIVERY_KEYS = tuple(_PRESET_DATA.get("_DELIVERY_KEYS", ()))
 
 # Modern verticals (zero-AI keyword packs)
-_IOT_KEYS = (
-    "iot", "إنترنت الأشياء", "انترنت الاشياء", "أجهزة ذكية", "اجهزة ذكية",
-    "smart devices", "smart home", "sensors", "حساسات", "مستشعرات", "mqtt",
-    "arduino", "esp32", "raspberry", "أتمتة منزلية", "اتمتة منزلية", "telemetry",
-)
-_BLOCKCHAIN_KEYS = (
-    "blockchain", "بلوك تشين", "بلوكتشين", "crypto", "عملة رقمية", "bitcoin",
-    "بيتكوين", "ethereum", "إيثريوم", "smart contract", "عقد ذكي", "nft",
-    "defi", "web3", "token",
-)
-_AI_KEYS = (
-    "ذكاء اصطناعي", "الذكاء الاصطناعي", "machine learning", "تعلم آلي",
-    "chatgpt", "openai", "gpt", "llm", "neural", "تعلم عميق", "deep learning",
-    "nlp", "تحليل المشاعر", "sentiment",
-)
-_DEVOPS_KEYS = (
-    "devops", "docker", "حاوية", "kubernetes", "k8s", "ci/cd", "cicd",
-    "deployment", "نشر", "aws", "azure", "terraform", "helm", "pipeline",
-)
-_GAMING_KEYS = (
-    "game", "لعبة", "ألعاب", "العاب", "multiplayer", "tournament", "بطولة",
-    "achievement", "إنجاز", "انجاز", "leaderboard", "مباراة",
-)
+_IOT_KEYS = tuple(_PRESET_DATA.get("_IOT_KEYS", ()))
+_BLOCKCHAIN_KEYS = tuple(_PRESET_DATA.get("_BLOCKCHAIN_KEYS", ()))
+_AI_KEYS = tuple(_PRESET_DATA.get("_AI_KEYS", ()))
+_DEVOPS_KEYS = tuple(_PRESET_DATA.get("_DEVOPS_KEYS", ()))
+_GAMING_KEYS = tuple(_PRESET_DATA.get("_GAMING_KEYS", ()))
 
-_IOT_CAPS = (
-    "start", "help", "lang",
-    "device_list", "device_create", "device_view", "device_search",
-    "sensor_list", "sensor_create", "sensor_view", "sensor_search",
-    "note_add", "note_list", "task_add", "task_list", "ticket_open",
-    "project_list", "project_create", "my_id",
-)
-_BLOCKCHAIN_CAPS = (
-    "start", "help", "lang",
-    "wallet_balance", "wallet_history", "wallet_transfer", "wallet_topup",
-    "note_add", "ticket_open", "ticket_list", "rules", "my_id",
-)
-_AI_CAPS = (
-    "start", "help", "lang",
-    "note_add", "note_list", "task_add", "task_list",
-    "ticket_open", "project_create", "project_list", "my_id",
-)
-_DEVOPS_CAPS = (
-    "start", "help", "lang",
-    "deploy_list", "deploy_create", "deploy_view", "deploy_search",
-    "env_list", "secret_list", "log_list",
-    "task_add", "task_list", "note_add", "note_list", "ticket_open",
-    "project_create", "project_list", "my_id",
-)
-_GAMING_CAPS = (
-    "start", "help", "lang",
-    "leaderboard", "contests", "join_contest", "my_entries",
-    "balance", "points_history", "achievement_list",
-    "daily_checkin", "streak_status",
-)
+_IOT_CAPS = tuple(_PRESET_DATA.get("_IOT_CAPS", ()))
+_BLOCKCHAIN_CAPS = tuple(_PRESET_DATA.get("_BLOCKCHAIN_CAPS", ()))
+_AI_CAPS = tuple(_PRESET_DATA.get("_AI_CAPS", ()))
+_DEVOPS_CAPS = tuple(_PRESET_DATA.get("_DEVOPS_CAPS", ()))
+_GAMING_CAPS = tuple(_PRESET_DATA.get("_GAMING_CAPS", ()))
 
 
 def _norm(text: str) -> str:
