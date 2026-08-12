@@ -1,288 +1,298 @@
 version: "3.1"
 nlu:
-- intent: greet
+- intent: project_identity
   examples: |
-    - مرحبا
-    - مرحب
-    - مرحباً
-    - أهلا
-    - أهلاً
-    - أهلا وسهلا
-    - السلام عليكم
-    - سلام عليكم
-    - سلام
-    - صباح الخير
-    - مساء الخير
-    - تصبح على خير
-    - hi
-    - hello
-    - hey
-    - hey there
-    - good morning
-    - good evening
-    - good afternoon
-    - هلو
-    - هاي
-    - ازيك
-    - إزيك
-    - عامل ايه
-    - أخبارك إيه
-    - مرحبا Maestro
-    - أهلا Maestro
-    - يا Maestro مساء الخير
-    - السلام عليكم ورحمة الله
-
-- intent: goodbye
-  examples: |
-    - باي
-    - باي باي
-    - مع السلامة
-    - مع السلامه
-    - إلى اللقاء
-    - الي اللقاء
-    - أشوفك
-    - اشوفك بعدين
-    - bye
-    - goodbye
-    - see you
-    - see you later
-    - خلاص شكرا
-    - تمام شكرا باي
-    - هكتفي كده
-    - شكرا وباي
-    - إلى اللقاء يا Maestro
-
-- intent: affirm
-  examples: |
-    - نعم
-    - أيوه
-    - ايوه
-    - آه
-    - اه
-    - صح
-    - تمام
-    - تمام كده
-    - تمام جدا
-    - خلاص تمام
-    - طيب تمام
-    - موافق
-    - موافق جدا
-    - يلا
-    - يلا بينا
-    - يلا نكمل
-    - ok
-    - okay
-    - ok thanks
-    - yes
-    - yep
-    - yeah
-    - أكيد
-    - بالتأكيد
-    - بالطبع
-    - ماشي
-    - ماشي تمام
-    - حاضر
-    - حاضر يا باشا
-    - براحتك
-    - اوك
-    - أوك
-    - اوكي
-    - حسنًا
-    - حسنا
-    - طيب
-    - طيب يا معلم
-
-- intent: deny
-  examples: |
-    - لا
-    - لأ
-    - لا شكرا
-    - مش عايز
-    - مش موافق
-    - no
-    - nope
-    - no thanks
-    - cancel
-    - إلغاء
-    - الغاء
-    - بلاش
-    - مش دلوقتي
-    - وقف
-
-- intent: bot_challenge
-  examples: |
-    - أنت بوت؟
-    - انت بوت
-    - أنت روبوت
-    - are you a bot
-    - are you a robot
-    - are you human
-    - مين أنت
-    - من أنت
-    - ما أنت
+    - إيه هو Maestro؟
+    - ما هو المشروع ده؟
     - عرفني بنفسك
-    - who are you
-    - what are you
-    - أنت ذكاء اصطناعي؟
+    - المشروع بتاعكم بيعمل إيه؟
+    - أنت تابع لمين؟
+    - إيه فكرة المنصة؟
+    - هو ده بوت ولا منصة؟
+    - ممكن تشرح لي Maestro؟
+    - what is Maestro?
+    - what is this project?
+    - tell me about yourself
+    - ما هو مشروع Maestro بالتحديد؟
+    - إيه الهدف الأساسي من المشروع؟
 
-- intent: ask_help
+- intent: project_capabilities
   examples: |
-    - مساعدة
-    - مساعده
-    - ساعدني
-    - عايز مساعدة
-    - help
-    - help me
-    - /help
-    - مش عارف أبدأ
-    - مش عارف ابدأ منين
-    - إزاي أستخدمك
-    - كيف أستخدم البوت
-    - كيف أستخدم المنصة
-    - وضّح لي
-    - وضح لي الاستخدام
-    - اشرح لي
-    - اشرحلي
-    - دليل الاستخدام
-    - عايز أفهم النظام
+    - تقدر تعمل إيه؟
+    - إيه الخدمات اللي بتقدمها المنصة؟
+    - إيه اللي أقدر أعمله هنا؟
+    - هل تقدر تنشئ بوت تيليجرام؟
+    - هل المنصة بتولد مشاريع؟
+    - أقدر أعمل إيه من خلال Maestro؟
+    - إيه إمكانيات المشروع؟
+    - هل في توليد وتنزيل للمشروع؟
+    - إيه المميزات الموجودة؟
+    - what can the platform do?
+    - what features do you have?
+    - can you generate a Telegram bot?
+    - هل المنصة فيها معاينة واستضافة؟
+    - هل يوجد API أو webhooks؟
 
-- intent: ask_capabilities
+- intent: project_workflow
   examples: |
-    - تقدر تعمل إيه
-    - تقدر تعمل ايه
-    - إيه قدراتك
-    - ايه قدراتك
-    - what can you do
-    - what do you do
-    - ايه اللي تقدر عليه
-    - مميزاتك إيه
-    - مميزاتك ايه
-    - الخدمات بتاعتك
-    - أقدر أعمل بيك إيه
-    - شو بتقدر تسوي
-    - قدرات المنصة
-    - إيه خدمات Maestro
+    - المشروع بيشتغل إزاي من أول الفكرة؟
+    - إزاي أستخدم المنصة؟
+    - إيه خطوات إنشاء البوت؟
+    - اشرح لي دورة العمل في المشروع
+    - من وصف الفكرة لحد تشغيل البوت بيحصل إيه؟
+    - إزاي التوليد والمعاينة والاستضافة مرتبطين؟
+    - كيف تعمل المنصة؟
+    - what is the workflow?
+    - how does the project work?
+    - اشرح لي طريقة تشغيل Maestro
+    - إزاي أبدأ مشروع جديد؟
 
-- intent: ask_plan
+- intent: ask_current_plan
   examples: |
-    - خطتي إيه
-    - خطتي ايه
-    - ما هي خطتي
-    - /plan
-    - /خطة
-    - عايز أشوف الخطة
-    - عايز اشوف خطتي
-    - اشتراكي
-    - اشتراكي إيه
-    - my plan
-    - show plan
-    - show my plan
-    - الخطة الحالية
-    - أنا على أنهي خطة
-    - انا على انهي خطه
-    - وضح خطتي
-    - حالة الاشتراك
+    - إيه خطتي الحالية؟
+    - أنا مشترك على أنهي خطة؟
+    - ما هي خطتي؟
+    - اعرفني الباقة بتاعتي
+    - حسابي على Free ولا Starter ولا Growth؟
+    - أنا على خطة [المجاني](plan_name)؟
+    - خطتي [Starter](plan_name) إيه تفاصيلها؟
+    - هل اشتراكي [Growth](plan_name)؟
+    - what is my current plan?
+    - which plan am I on?
+    - tell me my subscription plan
+    - عايز أعرف اشتراكي الحالي
+    - الخطة الحالية لحسابي إيه؟
 
-- intent: ask_pricing
+- intent: ask_plan_details
   examples: |
-    - الأسعار
-    - الاسعار
-    - بكام الخطة
-    - بكام الخطط
-    - pricing
-    - prices
-    - price list
-    - كام الاشتراك
-    - أسعار الخطط
-    - اسعار الخطط
-    - free ولا pro
-    - الفرق بين الخطط
-    - عايز أرقى الخطة
-    - عايز ارقي
-    - upgrade
-    - upgrade plan
-    - كام ال starter
-    - كام ال growth
-    - الاشتراك الشهري
-    - فيه خصم سنوي؟
+    - تفاصيل خطة [Free](plan_name) إيه؟
+    - مميزات خطة [Starter](plan_name)؟
+    - خطة [Growth](plan_name) بتقدم إيه؟
+    - إيه سعر الخطة؟
+    - كام توليد مسموح لي؟
+    - الخطة تسمح بكام بوت مستضاف؟
+    - حد الرسائل الشهري كام؟
+    - سرعة الـ API في الخطة إيه؟
+    - هل الخطة فيها دومين مخصص؟
+    - هل فيها white label؟
+    - what is included in the [Free](plan_name) plan?
+    - how many generations does [Starter](plan_name) include?
+    - تفاصيل الباقة اللي عندي
 
-- intent: ask_how_to_generate
+- intent: ask_plan_comparison
   examples: |
-    - إزاي أولد بوت
-    - ازاي اولد بوت
-    - كيف أنشئ بوت
-    - كيف انشئ بوت
-    - how to generate a bot
-    - how to create a bot
-    - عايز أتعلم التوليد
-    - خطوات عمل بوت
-    - ابدأ منين
-    - ابدا منين
-    - إزاي أكتب الوصف
-    - ازاي اوصف البوت
-    - كيف أوصف البوت
-    - علمني أولد
-    - علمني اعمل بوت
-    - طريقة التوليد
-    - إزاي يشتغل التوليد
+    - إيه الفرق بين Free وStarter؟
+    - قارن لي الخطط
+    - أنهي خطة أفضل للمشروع بتاعي؟
+    - الفرق بين Starter وGrowth إيه؟
+    - هل Growth أحسن من Starter؟
+    - إيه الفرق في التوليد والاستضافة بين الباقات؟
+    - compare the plans
+    - which plan should I choose?
+    - عايز مقارنة كاملة بين الخطط
+    - إيه مميزات كل خطة مقارنة بالتانية؟
 
-- intent: describe_bot_idea
+- intent: ask_plan_limits
   examples: |
-    - عايز بوت [متجر](bot_type)
-    - عايز أعمل بوت [دعم عملاء](bot_type)
-    - بوت [تذاكر](bot_type)
-    - بوت فيه أوامر وأزرار
-    - اعمل لي بوت تيليجرام
-    - أولد بوت لإدارة جروب
-    - بوت [حجوزات](bot_type)
-    - I want a [shop](bot_type) bot
-    - create a [support](bot_type) bot
-    - بوت يرد على الأسئلة الشائعة
-    - بوت فيه قائمة منتجات وطلب
-    - فكرة بوت: نظام نقاط للأعضاء
-    - عايز بوت اشتراكات
-    - بوت يبعت تنبيهات يومية
-    - generate a telegram bot for faq
-    - بوت متجر إلكتروني بسيط
-    - بوت حجوزات عيادات
-    - بوت شكاوى واقتراحات
+    - حدود خطتي إيه؟
+    - فاضل لي كام توليد؟
+    - الخطة المجانية فيها إيه؟
+    - هل في حد للرسائل؟
+    - هل أقدر أستضيف بوت 24 ساعة؟
+    - المعاينة مدتها كام؟
+    - هل العلامة المائية موجودة؟
+    - إيه اللي مش متاح في الخطة؟
+    - what are my plan limits?
+    - how many bots can I host?
+    - هل عندي access للـ API؟
 
-- intent: ask_limitations
+- intent: ask_hosting
   examples: |
-    - إيه اللي مش بتقدر عليه
-    - ايه اللي مش بتقدر عليه
-    - القيود إيه
-    - القيود ايه
-    - limitations
-    - what are the limits
-    - فيه حدود
-    - مش هتقدر تعمل إيه
-    - الصراحة إيه الممنوع
-    - حدود الخطة المجانية
-    - في قيود على التوليد؟
+    - هل في استضافة 24/7؟
+    - البوت هيفضل شغال طول الوقت؟
+    - كام بوت أقدر أستضيف؟
+    - إيه خطط الاستضافة؟
+    - هل الاستضافة متاحة في الخطة المجانية؟
+    - managed hosting موجود؟
+    - does the platform provide hosting?
+    - هل البوت بيتوقف بعد المعاينة؟
 
-- intent: ask_support
+- intent: ask_preview
   examples: |
-    - دعم فني
-    - عايز دعم
-    - support
-    - technical support
-    - تواصل
-    - إيميل الدعم
-    - ايميل الدعم
-    - مشكلة عندي
-    - contact support
-    - عايز أكلم حد
-    - رقم الدعم
-    - كيف أتواصل معكم
+    - المعاينة الحية بتستمر قد إيه؟
+    - أقدر أجرب البوت قبل التنزيل؟
+    - live preview مدته كام؟
+    - هل في preview للمشروع؟
+    - what is the live preview duration?
+    - المعاينة متاحة على كل الخطط؟
 
-- intent: out_of_scope
+- intent: ask_generation
   examples: |
-    - وصفة طبيخ
-    - سعر الدولار النهاردة
-    - طقس بكرة
-    - اكتب لي كود جافا
-    - حل واجب رياضيات
-    - من فاز بالمباراة
-    - نكتة
-    - غنّي لي
+    - أقدر أولد كام مشروع؟
+    - حدود التوليد الشهري إيه؟
+    - إزاي أطلب توليد بوت؟
+    - هل أقدر أنزل المشروع كملف zip؟
+    - generation quota كام؟
+    - how many generations are included?
+    - هل التوليد متاح في الخطة المجانية؟
+
+- intent: ask_billing_support
+  examples: |
+    - محتاج مساعدة في الاشتراك
+    - أتواصل مع الدعم إزاي؟
+    - عندي مشكلة في الدفع
+    - أقدر أرقّي خطتي إزاي؟
+    - هل يوجد دعم أولوية؟
+    - what is the support email?
+    - how do I upgrade my plan?
+    - محتاج دعم بخصوص الباقة
+
+- intent: ask_project_component
+  examples: |
+    - إيه دور Rasa في المشروع؟
+    - البوت بيتعامل مع Telegram إزاي؟
+    - إيه وظيفة Railway؟
+    - Mongo بيستخدم في إيه؟
+    - إيه هو dialogue engine؟
+    - إيه الفرق بين الـ API والـ bot؟
+    - المشروع بيخزن بيانات المستخدم فين؟
+    - what is the role of Rasa?
+    - how does Telegram polling work?
+    - إيه مكونات المشروع الأساسية؟
+    - اشرح لي جزء الاستضافة
+
+- intent: project_identity
+  examples: |
+    - ممكن أعرف أنت مين؟
+    - احكيلي عن المشروع
+    - المنصة دي بتاعة إيه
+    - Maestro معناها إيه هنا
+    - إيه المنتج الأساسي عندكم
+    - هل Maestro أداة لبناء البوتات؟
+    - هل المشروع SaaS؟
+    - I want to understand the project
+    - give me an overview of Maestro
+
+- intent: project_capabilities
+  examples: |
+    - هل تقدر تبني بوت من وصف بسيط؟
+    - هل أقدر أعمل بوت من غير برمجة؟
+    - هل بتدعم Telegram bots؟
+    - هل يوجد تنزيل للكود؟
+    - هل أقدر أعاين المشروع أونلاين؟
+    - هل عندكم managed hosting؟
+    - هل المنصة تدعم الدفع والويب هوكس؟
+    - إيه الحاجات اللي أقدر أفعّلها في البوت؟
+    - list the platform capabilities
+
+- intent: project_workflow
+  examples: |
+    - أبدأ منين في Maestro؟
+    - اشرح خطوات الشغل بالتفصيل
+    - أكتب فكرة البوت وبعدها إيه؟
+    - إزاي المشروع بيحوّل الوصف لبوت؟
+    - إيه اللي بيحصل بعد التوليد؟
+    - هل أقدر أجرّب قبل ما أنشر؟
+    - what happens after generation?
+    - explain the end to end flow
+
+- intent: ask_current_plan
+  examples: |
+    - ممكن تقول لي اشتراكي الحالي؟
+    - حسابي تابع لأنهي باقة؟
+    - أنا مشترك في إيه دلوقتي؟
+    - عايز أعرف الخطة المرتبطة بحسابي
+    - قولي اسم خطتي الحالية
+    - أنا على انهي plan؟
+    - current subscription please
+    - show my account plan
+    - هل ممكن تجيب الباقة من حسابي؟
+    - ما هي الباقة المسجلة عندي؟
+
+- intent: ask_plan_details
+  examples: |
+    - اشرح باقة [Free](plan_name)
+    - عايز كل تفاصيل [Starter](plan_name)
+    - [Growth](plan_name) فيها إيه؟
+    - ماهي خصائص الباقة؟
+    - كم سعر الاشتراك الشهري؟
+    - هل يوجد سعر سنوي؟
+    - عدد البوتات في الباقة كام؟
+    - كم رسالة يسمح بها الاشتراك؟
+    - هل يوجد custom domain؟
+    - هل يوجد white label في الباقة؟
+    - تفاصيل الخطة من فضلك
+    - show plan information
+
+- intent: ask_plan_comparison
+  examples: |
+    - اعمل مقارنة بين الباقات
+    - رتب الخطط من الأقل للأعلى
+    - إيه أنسب باقة لعدد كبير من المستخدمين؟
+    - مين أقوى Starter ولا Growth؟
+    - مقارنة الأسعار والحدود
+    - الفرق في الاستضافة بين الخطط
+    - compare Free Starter Growth
+    - what changes when I upgrade?
+
+- intent: ask_plan_limits
+  examples: |
+    - كام عملية توليد متاحة لي؟
+    - هل وصلت للحد الشهري؟
+    - هل أقدر أرسل رسائل كتير؟
+    - أقصى عدد لبوتاتي المستضافة كام؟
+    - هل المعاينة محدودة بالوقت؟
+    - ما هو حد سرعة الـ API؟
+    - هل في قيود على الخطة؟
+    - tell me my quotas
+    - what limits apply to my account?
+
+- intent: ask_hosting
+  examples: |
+    - استضافة البوت بتكون فين؟
+    - هل البوت متاح بدون ما أشغل جهازي؟
+    - هل يمكن تشغيل أكثر من بوت؟
+    - هل الاستضافة مدفوعة؟
+    - هل يوجد hosting دائم؟
+    - does my subscription include hosting?
+    - explain managed hosting
+
+- intent: ask_preview
+  examples: |
+    - أقدر أشوف البوت قبل النشر؟
+    - هل التجربة المؤقتة مجانية؟
+    - وقت الـ live preview كام؟
+    - كيف أفتح رابط المعاينة؟
+    - preview بتشتغل على أنهي خطة؟
+    - can I test the generated bot?
+
+- intent: ask_generation
+  examples: |
+    - عايز أبدأ توليد مشروع
+    - من فضلك ولّد البوت
+    - هل أستطيع توليد مشروع جديد هذا الشهر؟
+    - كيف أحسب استهلاك التوليد؟
+    - هل يمكن إعادة التوليد؟
+    - generation quota meaning
+    - export the generated project
+
+- intent: ask_billing_support
+  examples: |
+    - أغير الخطة منين؟
+    - عايز ألغي الاشتراك
+    - الدفع لم يكتمل
+    - الفاتورة فيها مشكلة
+    - أحتاج مساعدة في الباقة
+    - فين أرسل مشكلة الحساب؟
+    - contact billing support
+
+- intent: ask_project_component
+  examples: |
+    - هل Rasa مسؤول عن فهم كلامي؟
+    - Telegram بيتصل بالسيرفر إزاي؟
+    - MongoDB بيحفظ إيه؟
+    - Railway بتستخدم في نشر المشروع؟
+    - ما وظيفة الـ dialogue runtime؟
+    - إيه علاقة الـ API بالبوت؟
+    - explain the project architecture
+    - where is user plan data stored?

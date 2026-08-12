@@ -23,7 +23,18 @@ intents:
   - ask_about_starter
   - ask_about_growth
   - out_of_scope
-  - nlu_fallback
+  - project_identity
+  - project_capabilities
+  - project_workflow
+  - ask_current_plan
+  - ask_plan_details
+  - ask_plan_comparison
+  - ask_plan_limits
+  - ask_hosting
+  - ask_preview
+  - ask_generation
+  - ask_billing_support
+  - ask_project_component
 
 entities:
   - bot_type

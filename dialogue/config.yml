@@ -20,14 +20,4 @@ pipeline:
     threshold: 0.35
     ambiguity_threshold: 0.1
 
-policies:
-  - name: MemoizationPolicy
-    max_history: 5
-  - name: RulePolicy
-    core_fallback_threshold: 0.35
-    core_fallback_action_name: "action_default_fallback"
-    enable_fallback_prediction: true
-  - name: TEDPolicy
-    max_history: 5
-    epochs: 30
-    constrain_similarities: true
+# NLU-only by design: no Core policies, rules, or stories.

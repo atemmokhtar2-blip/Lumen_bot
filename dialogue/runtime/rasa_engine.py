@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import DialogueEngine, DialogueRequest, DialogueResponse
+from .dynamic_answers import answer_for_intent
 
 logger = logging.getLogger(__name__)
 
@@ -66,30 +67,36 @@ class RasaEngine:
         if agent is None:
             return None
         try:
-            messages = await agent.handle_text(
-                request.text.strip(),
-                sender_id=str(request.sender_id),
-            )
+            parsed = await agent.parse_message(request.text.strip())
         except Exception:
-            logger.exception("RasaEngine handle_text failed")
+            logger.exception("RasaEngine parse_message failed")
             return None
-        if not messages:
-            return None
-        parts: list[str] = []
-        intent = ""
-        conf = 0.0
-        for m in messages:
-            if not isinstance(m, dict):
-                continue
-            if m.get("text"):
-                parts.append(str(m["text"]))
-        if not parts:
+
+        intent_data = parsed.get("intent") or {}
+        intent = str(intent_data.get("name") or "")
+        confidence = float(intent_data.get("confidence") or 0.0)
+        entities = parsed.get("entities") or []
+        requested_plan = next(
+            (
+                str(entity.get("value"))
+                for entity in entities
+                if isinstance(entity, dict) and entity.get("entity") == "plan_name"
+            ),
+            None,
+        )
+        response_text = answer_for_intent(
+            intent,
+            sender_id=str(request.sender_id),
+            fallback_plan_id=request.plan_id,
+            requested_plan_id=requested_plan,
+        )
+        if not response_text:
             return None
         return DialogueResponse(
-            text="\n".join(parts),
-            intent=intent or "rasa",
-            confidence=conf or 0.7,
+            text=response_text,
+            intent=intent,
+            confidence=confidence,
             engine=self.name,
-            slots={"plan_id": request.plan_id},
+            slots={"plan_id": request.plan_id, "resolved_intent": intent},
             handled=True,
         )
