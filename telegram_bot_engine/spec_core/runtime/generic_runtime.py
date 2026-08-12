@@ -16,16 +16,24 @@ from app.db import connect, init_db
 
 
 def _load_runtime_data() -> dict[str, Any]:
-    """Load editable runtime data beside the generated service module."""
+    """Load editable runtime data (method families, FAQ seed, ...).
+
+    Search order:
+    1. Beside this module (generated projects ship generic_runtime.json here)
+    2. Package data path (source tree, non-gitignored)
+    3. Repo root data/templates (local override)
+    """
+    here = Path(__file__).resolve()
     candidates = [
-        Path(__file__).with_name("generic_runtime.json"),
-        Path(__file__).resolve().parents[2] / "data" / "templates" / "generic_runtime.json",
+        here.with_name("generic_runtime.json"),
+        here.parents[2] / "data" / "templates" / "generic_runtime.json",  # telegram_bot_engine/data/...
+        here.parents[3] / "data" / "templates" / "generic_runtime.json",  # repo root /data/...
     ]
     for path in candidates:
         try:
             if path.is_file():
                 value = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(value, dict):
+                if isinstance(value, dict) and value:
                     return value
         except (OSError, ValueError, TypeError):
             continue

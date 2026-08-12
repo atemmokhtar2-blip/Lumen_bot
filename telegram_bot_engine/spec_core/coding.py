@@ -65,8 +65,19 @@ def _emit_generic_runtime() -> str:
 
 
 def _emit_generic_runtime_data() -> str:
-    path = Path(__file__).resolve().parents[2] / "data" / "templates" / "generic_runtime.json"
-    return path.read_text(encoding="utf-8")
+    """Return the generic runtime JSON catalog for generated projects."""
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[1] / "data" / "templates" / "generic_runtime.json",  # telegram_bot_engine/data/...
+        here.parents[2] / "data" / "templates" / "generic_runtime.json",  # repo root /data/...
+        here.parent / "runtime" / "generic_runtime.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+    raise FileNotFoundError(
+        "generic_runtime.json not found; expected under telegram_bot_engine/data/templates/"
+    )
 
 
 def generate_files(spec: BotSpec) -> dict[str, str]:
