@@ -701,7 +701,7 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     # Never ship fat runtimes unless the selected services truly need them
     feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
     needs_fat_market = bool(svc_set & _MARKET_SERVICES)
-    needs_fat_generic = bool(svc_set & {"translate", "ocr", "scheduler", "generic", "utils"})
+    needs_fat_generic = bool(svc_set & {"translate", "ocr", "scheduler"})
     needs_fat_flow = bool(svc_set & _FLOW_HINTS)
     needs_fat_tickets = bool(svc_set & {"tickets", "support"})
     if not needs_fat_market:
@@ -742,13 +742,26 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
             "        return f\"{item} is not available in this bot build\"\n"
             "    return _missing\n"
         )
-        if not needs_fat_generic:
-            g = root / "app" / "services" / "generic.py"
-            if g.is_file() and g.stat().st_size > 4000:
-                g.write_text(_MIN, encoding="utf-8")
-            gj = root / "app" / "services" / "generic_runtime.json"
-            if gj.is_file() and not needs_fat_generic:
-                gj.unlink(missing_ok=True)
+        # Always clamp fat generic unless translate/ocr/scheduler/generic/utils selected
+        g = root / "app" / "services" / "generic.py"
+        if g.is_file() and g.stat().st_size > 4000 and not needs_fat_generic:
+            g.write_text(_MIN, encoding="utf-8")
+        gj = root / "app" / "services" / "generic_runtime.json"
+        if gj.is_file() and not needs_fat_generic:
+            try:
+                gj.unlink()
+            except OSError:
+                pass
+        # If handlers do not reference generic at all, delete stubs too
+        handlers_src = ""
+        hp = root / "app" / "handlers.py"
+        if hp.is_file():
+            handlers_src = hp.read_text(encoding="utf-8")
+        if g.is_file() and "generic" not in handlers_src and not needs_fat_generic:
+            try:
+                g.unlink()
+            except OSError:
+                pass
         if not needs_fat_market:
             m = root / "app" / "services" / "market.py"
             if m.is_file() and m.stat().st_size > 4000:

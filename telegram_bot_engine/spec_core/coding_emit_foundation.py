@@ -104,245 +104,175 @@ def _emit_models(spec: BotSpec) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+
 def _emit_db(spec: BotSpec) -> str:
-    # The generated runtime contract always exposes connect()/init_db().
-    # Conditional emission created projects whose generic/market handlers
-    # imported an empty app.db and failed before delivery.
-    return '''"""SQLite helpers."""
-from __future__ import annotations
-
-import sqlite3
-from pathlib import Path
-
-_DB = Path(__file__).resolve().parent.parent / "data.sqlite3"
-
-
-def connect() -> sqlite3.Connection:
-    _DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB, check_same_thread=False, timeout=30)
-    conn.row_factory = sqlite3.Row
+    """Emit SQLite helpers sized to the selected services only."""
+    services: set[str] = set()
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        from .registry import get_capability
+
+        for f in spec.features or []:
+            cap = get_capability(getattr(f, "feature", ""))
+            if cap and getattr(cap, "service", None):
+                services.add(str(cap.service))
     except Exception:
         pass
-    return conn
 
+    need_tasks = "tasks" in services
+    need_notes = "notes" in services
+    need_welcome = "welcome" in services
+    need_tickets = bool(services & {"tickets", "support"})
+    need_security = "security" in services
+    need_market = bool(
+        services
+        & {
+            "shop",
+            "payments",
+            "subscriptions",
+            "points",
+            "contests",
+            "cart",
+            "growth",
+            "wallet",
+            "analytics",
+            "admin",
+        }
+    )
+    need_extras = bool(
+        services
+        & {
+            "utils",
+            "extras",
+            "clinic",
+            "jobs",
+            "edu",
+            "events",
+            "restaurant",
+            "auction",
+            "delivery",
+            "crm",
+            "booking",
+            "community",
+            "hr",
+            "marketplace",
+            "fitness",
+            "realestate",
+        }
+    )
 
-def init_db() -> None:
-    with connect() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                priority TEXT NOT NULL DEFAULT 'medium',
-                done INTEGER NOT NULL DEFAULT 0
-            )
-            """
+    table_sql: list[str] = [
+        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    ]
+    if need_tasks:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS tasks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, "
+            "description TEXT NOT NULL DEFAULT '', "
+            "priority TEXT NOT NULL DEFAULT 'medium', "
+            "done INTEGER NOT NULL DEFAULT 0)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                body TEXT NOT NULL
-            )
-            """
+    if need_notes:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS notes ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL, "
+            "body TEXT NOT NULL)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS welcome_settings (
-                chat_id INTEGER PRIMARY KEY,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                message TEXT NOT NULL DEFAULT ''
-            )
-            """
+    if need_welcome:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS welcome_settings ("
+            "chat_id INTEGER PRIMARY KEY, "
+            "enabled INTEGER NOT NULL DEFAULT 1, "
+            "message TEXT NOT NULL DEFAULT '')"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL DEFAULT 0,
-                subject TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+    if need_tickets:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS tickets ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL, "
+            "chat_id INTEGER NOT NULL DEFAULT 0, "
+            "subject TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'open', "
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ticket_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticket_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL DEFAULT 0,
-                body TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS ticket_messages ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ticket_id INTEGER NOT NULL, "
+            "user_id INTEGER NOT NULL, "
+            "is_staff INTEGER NOT NULL DEFAULT 0, "
+            "body TEXT NOT NULL, "
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS security_reports (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                kind TEXT NOT NULL,
-                body TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+    if need_security:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS security_reports ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL, "
+            "kind TEXT NOT NULL, "
+            "body TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'open', "
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS extras_kv (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL DEFAULT 0,
-                kind TEXT NOT NULL,
-                body TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+    if need_extras:
+        table_sql.append(
+            "CREATE TABLE IF NOT EXISTS extras_kv ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL DEFAULT 0, "
+            "kind TEXT NOT NULL, "
+            "body TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'open', "
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                price_cents INTEGER NOT NULL DEFAULT 0,
-                currency TEXT NOT NULL DEFAULT 'USD',
-                stock INTEGER NOT NULL DEFAULT 100,
-                active INTEGER NOT NULL DEFAULT 1
-            )
-            """
+    if need_market:
+        table_sql.extend(
+            [
+                "CREATE TABLE IF NOT EXISTS products ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+                "price_cents INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'USD', "
+                "stock INTEGER NOT NULL DEFAULT 100, active INTEGER NOT NULL DEFAULT 1)",
+                "CREATE TABLE IF NOT EXISTS orders ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                "product_id INTEGER NOT NULL DEFAULT 0, amount_cents INTEGER NOT NULL DEFAULT 0, "
+                "currency TEXT NOT NULL DEFAULT 'USD', status TEXT NOT NULL DEFAULT 'pending', "
+                "payload TEXT NOT NULL DEFAULT '', charge_id TEXT NOT NULL DEFAULT '', "
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS cart_items ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                "product_id INTEGER NOT NULL, qty INTEGER NOT NULL DEFAULT 1, "
+                "UNIQUE(user_id, product_id))",
+                "CREATE TABLE IF NOT EXISTS point_ledger ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                "delta INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', "
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            ]
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                product_id INTEGER NOT NULL DEFAULT 0,
-                amount_cents INTEGER NOT NULL DEFAULT 0,
-                currency TEXT NOT NULL DEFAULT 'USD',
-                status TEXT NOT NULL DEFAULT 'pending',
-                payload TEXT NOT NULL DEFAULT '',
-                charge_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                price_cents INTEGER NOT NULL DEFAULT 0,
-                duration_days INTEGER NOT NULL DEFAULT 30,
-                active INTEGER NOT NULL DEFAULT 1
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                plan_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                starts_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                ends_at TEXT NOT NULL DEFAULT ''
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS point_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                delta INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                winner_user_id INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS contest_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contest_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                UNIQUE(contest_id, user_id)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS wallets (
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS referrals (
-                user_id INTEGER PRIMARY KEY,
-                code TEXT NOT NULL UNIQUE,
-                invited_by INTEGER NOT NULL DEFAULT 0,
-                rewards INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_lang (
-                user_id INTEGER PRIMARY KEY,
-                lang TEXT NOT NULL DEFAULT 'en'
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                order_id INTEGER NOT NULL DEFAULT 0,
-                amount_cents INTEGER NOT NULL DEFAULT 0,
-                currency TEXT NOT NULL DEFAULT 'USD',
-                provider_charge_id TEXT NOT NULL DEFAULT '',
-                payload TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cart_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                product_id INTEGER NOT NULL,
-                qty INTEGER NOT NULL DEFAULT 1,
-                UNIQUE(user_id, product_id)
-            )
-            """
-        )
-        conn.commit()
-'''
 
+    exec_lines = []
+    for sql in table_sql:
+        exec_lines.append(f"        conn.execute({sql!r})")
+    body = "\n".join(exec_lines)
 
+    return (
+        '"""SQLite helpers — schema matches selected bot services only."""\n'
+        "from __future__ import annotations\n\n"
+        "import sqlite3\n"
+        "from pathlib import Path\n\n"
+        "_DB = Path(__file__).resolve().parent.parent / \"data.sqlite3\"\n\n\n"
+        "def connect() -> sqlite3.Connection:\n"
+        "    _DB.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    conn = sqlite3.connect(_DB, check_same_thread=False, timeout=30)\n"
+        "    conn.row_factory = sqlite3.Row\n"
+        "    try:\n"
+        "        conn.execute(\"PRAGMA journal_mode=WAL\")\n"
+        "        conn.execute(\"PRAGMA synchronous=NORMAL\")\n"
+        "    except sqlite3.Error:\n"
+        "        pass\n"
+        "    return conn\n\n\n"
+        "def init_db() -> None:\n"
+        "    with connect() as conn:\n"
+        + body
+        + "\n        conn.commit()\n"
+    )

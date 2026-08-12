@@ -1516,86 +1516,46 @@ def _emit_handlers(spec: BotSpec) -> str:
             "    # Guaranteed final response: ordinary text must never disappear silently.",
             "    await message.reply_text('تم استلام رسالتك: ' + message.text[:200])",
             "",
-            "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-            "    message = update.effective_message",
-            "    user = update.effective_user",
             *(
                 [
+                    "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+                    "    message = update.effective_message",
+                    "    user = update.effective_user",
+                    "    if message is None or user is None or not message.photo:",
+                    "        return",
+                    "    awaiting = context.user_data.get('awaiting')",
                     "    try:",
-                    "        from app.flow_engine import handle_photo as _flow_photo",
-                    "        if await _flow_photo(update, context):",
-                    "            return",
-                    "    except Exception as _photo_flow_exc:",
+                    "        from app.services import generic as generic_svc",
+                    "        caption = (message.caption or '').strip()",
+                    "        photo = message.photo[-1]",
+                    "        path = ''",
+                    "        try:",
+                    "            tg_file = await context.bot.get_file(photo.file_id)",
+                    "            path = f'/tmp/ocr_{user.id}_{photo.file_id}.jpg'",
+                    "            await tg_file.download_to_drive(path)",
+                    "        except Exception as _dl_exc:",
+                    "            import logging as _logging",
+                    "            _logging.getLogger(__name__).debug('ocr download: %s', _dl_exc)",
+                    "            path = ''",
+                    "        if path and hasattr(generic_svc, 'ocr_from_image'):",
+                    "            result = generic_svc.ocr_from_image(user.id, path, caption)",
+                    "        else:",
+                    "            result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
+                    "        if awaiting == 'ocr_photo':",
+                    "            context.user_data.pop('awaiting', None)",
+                    "        await message.reply_text(result)",
+                    "    except Exception as _ocr_exc:",
                     "        import logging as _logging",
-                    "        _logging.getLogger(__name__).debug('flow photo: %s', _photo_flow_exc)",
+                    "        _logging.getLogger(__name__).warning('ocr failed: %s', _ocr_exc)",
+                    "        await message.reply_text('تم استلام الصورة. OCR غير متاح حالياً.')",
+                    "",
                 ]
-                if (need_market or need_tickets or need_ocr)
+                if need_ocr
                 else []
             ),
-            "    # Phase 9: OCR path when user sends a photo (or after /ocr awaiting)",
-            "    if message is not None and user is not None and message.photo:",
-            "        awaiting = context.user_data.get('awaiting')",
-            "        try:",
-            "            from app.services import generic as generic_svc",
-            "            caption = (message.caption or '').strip()",
-            "            photo = message.photo[-1]",
-            "            path = ''",
-            "            try:",
-            "                tg_file = await context.bot.get_file(photo.file_id)",
-            "                path = f'/tmp/ocr_{user.id}_{photo.file_id}.jpg'",
-            "                await tg_file.download_to_drive(path)",
-            "            except Exception:",
-            "                path = ''",
-            "            if path and hasattr(generic_svc, 'ocr_from_image'):",
-            "                result = generic_svc.ocr_from_image(user.id, path, caption)",
-            "            else:",
-            "                result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
-            "            if awaiting == 'ocr_photo':",
-            "                context.user_data.pop('awaiting', None)",
-            "            await message.reply_text(result)",
-            "        except Exception:",
-            "            await message.reply_text('تم استلام الصورة. استخدم /ocr أو فعّل pytesseract.')",
-            "",
-            "",
-        ]
-        if need_voice:
-            lines += [
-            "async def voice_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
-            "    message = update.effective_message",
-            "    user = update.effective_user",
-            "    if message is None or user is None:",
-            "        return",
-            "    try:",
-            "        from app.services import generic as generic_svc",
-            "        voice = message.voice or message.audio",
-            "        if voice is None:",
-            "            return",
-            "        path = ''",
-            "        try:",
-            "            tg_file = await context.bot.get_file(voice.file_id)",
-            "            ext = 'ogg' if message.voice else 'mp3'",
-            "            path = f'/tmp/voice_{user.id}_{voice.file_id[:24]}.{ext}'",
-            "            await tg_file.download_to_drive(path)",
-            "        except Exception:",
-            "            path = ''",
-            "        duration = int(getattr(voice, 'duration', 0) or 0)",
-            "        if hasattr(generic_svc, 'voice_from_file'):",
-            "            result = generic_svc.voice_from_file(user.id, path, voice.file_id, duration)",
-            "        else:",
-            "            result = generic_svc.voice_intake(user.id, f'file:{voice.file_id}')",
-            "        await message.reply_text(result)",
-            "    except Exception:",
-            "        await message.reply_text('تم استلام الصوت. استخدم /voice أو أعد المحاولة.')",
-            "",
-            "",
-            ]
-        lines += [
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
-            "    try:",
-            "        from app.flow_engine import clear_flow",
-            "        clear_flow(context)",
-            "    except Exception:",
+            "    if getattr(context, 'user_data', None) is not None:",
             "        context.user_data.pop('awaiting', None)",
             "        context.user_data.pop('flow', None)",
             "    if message is not None:",
@@ -1798,7 +1758,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("    if query is None:")
     lines.append("        return")
     lines.append("    data = query.data or ''")
-    if need_market or need_tickets or need_tasks or need_notes:
+    if need_market or need_tickets:
         lines.append("    # Flow engine callbacks (choice / confirm / cancel / back)")
         lines.append("    if data.startswith('flow:'):")
         lines.append("        try:")
@@ -2069,7 +2029,9 @@ def _emit_main(spec: BotSpec) -> str:
         for f in spec.features
     )
     if need_tasks or need_notes or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice:
-        imports_handlers += ", text_router, photo_router, cancel_handler"
+        imports_handlers += ", text_router, cancel_handler"
+        if need_ocr:
+            imports_handlers += ", photo_router"
     if need_voice:
         if "voice_router" not in imports_handlers:
             imports_handlers += ", voice_router"
@@ -2104,8 +2066,9 @@ def _emit_main(spec: BotSpec) -> str:
         text_handler = (
             "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
             "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
-            "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
         )
+        if need_ocr:
+            text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
     else:
         text_handler = ""
     if need_voice:
