@@ -14,11 +14,12 @@ def _msg(feat: Feature, kind: str, default: str) -> str:
 
 
 def _emit_config() -> str:
-    return '''"""Runtime settings."""
+    return '''"""Runtime settings — loaded once from environment / .env."""
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from dotenv import load_dotenv
 
@@ -43,17 +44,33 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
+        # Accept ADMIN_IDS as alias of ADMIN_USER_IDS (common user typo)
+        admins = os.getenv("ADMIN_USER_IDS") or os.getenv("ADMIN_IDS") or ""
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
         return cls(
-            telegram_bot_token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip(),
+            telegram_bot_token=token,
             payment_provider_token=(os.getenv("PAYMENT_PROVIDER_TOKEN") or "").strip(),
-            admin_user_ids=_parse_ids(os.getenv("ADMIN_USER_IDS") or ""),
+            admin_user_ids=_parse_ids(admins),
             default_currency=(os.getenv("DEFAULT_CURRENCY") or "USD").strip().upper() or "USD",
         )
 
+    def require_token(self) -> str:
+        """Return token or raise a clear configuration error (never log the secret)."""
+        if not self.telegram_bot_token or ":" not in self.telegram_bot_token:
+            raise RuntimeError(
+                "TELEGRAM_BOT_TOKEN is missing or invalid. "
+                "Copy .env.example → .env and set a BotFather token."
+            )
+        return self.telegram_bot_token
+
     def is_admin(self, user_id: int) -> bool:
-        return int(user_id) in self.admin_user_ids
+        try:
+            return int(user_id) in self.admin_user_ids
+        except (TypeError, ValueError):
+            return False
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.load()
 '''

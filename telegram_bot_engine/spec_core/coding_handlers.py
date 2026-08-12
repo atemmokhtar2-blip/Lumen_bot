@@ -2196,12 +2196,12 @@ async def _post_init(app: Application) -> None:
 
 def build_application() -> Application:
     settings = get_settings()
-    if not settings.telegram_bot_token:
-        raise SystemExit("Set TELEGRAM_BOT_TOKEN in .env")
+    token = settings.require_token()
     app = (
         Application.builder()
-        .token(settings.telegram_bot_token)
+        .token(token)
         .post_init(_post_init)
+        .concurrent_updates(True)
         .build()
     )
 {reg_text}
@@ -2210,8 +2210,9 @@ def build_application() -> Application:
 
 
 def main() -> None:
-    logger.info("starting bot")
-    build_application().run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("starting bot name=%s", {spec.bot.name!r})
+    application = build_application()
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

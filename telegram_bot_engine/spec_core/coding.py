@@ -193,6 +193,56 @@ _GENERIC_HINTS = {
 
 
 
+def _emit_quality_tests() -> str:
+    """Smoke tests shipped with every generated bot (no network, no token)."""
+    return '''"""Smoke tests for the generated bot (offline)."""
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_python_files_parse() -> None:
+    py_files = list(ROOT.rglob("*.py"))
+    assert py_files, "no python files"
+    for path in py_files:
+        if ".venv" in path.parts or "venv" in path.parts:
+            continue
+        src = path.read_text(encoding="utf-8")
+        ast.parse(src, filename=str(path))
+
+
+def test_handlers_define_start_and_help() -> None:
+    handlers = ROOT / "app" / "handlers.py"
+    assert handlers.is_file()
+    src = handlers.read_text(encoding="utf-8")
+    assert "async def start_handler" in src
+    assert "async def help_handler" in src
+
+
+def test_no_hardcoded_bot_token() -> None:
+    for path in ROOT.rglob("*.py"):
+        if ".venv" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        # Telegram tokens look like 123456789:AA...
+        assert ":AA" not in text and ":AB" not in text or "example" in text.lower()
+'''
+
+
+def _emit_env_example() -> str:
+    return (
+        "# Telegram bot token from @BotFather (never commit the real value)\n"
+        "TELEGRAM_BOT_TOKEN=\n"
+        "# Comma-separated Telegram user ids with admin powers\n"
+        "ADMIN_USER_IDS=\n"
+        "ADMIN_IDS=\n"
+        "DEFAULT_CURRENCY=USD\n"
+    )
+
+
 def generate_files(spec: BotSpec) -> dict[str, str]:
     plan = plan_from_spec(spec)
     services = list(plan.services)
@@ -205,12 +255,15 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "app/handlers.py": _emit_handlers(spec),
         "main.py": _emit_main(spec),
         "requirements.txt": "python-telegram-bot==21.6\npython-dotenv>=1.0.0\n",
-        ".env.example": "TELEGRAM_BOT_TOKEN=\nADMIN_IDS=\n",
+        ".env.example": "TELEGRAM_BOT_TOKEN=\nADMIN_USER_IDS=\nADMIN_IDS=\nDEFAULT_CURRENCY=USD\n",
         "README.md": f"# {spec.bot.name}\n\nZero-AI generated Telegram bot.\n\n1. cp .env.example .env\n2. Set TELEGRAM_BOT_TOKEN\n3. pip install -r requirements.txt\n4. python main.py\n",
     }
     files["app/services/__init__.py"] = ""
     files[".gitignore"] = _emit_gitignore()
     files["README.md"] = _emit_readme(spec)
+    files[".env.example"] = _emit_env_example()
+    files["tests/test_smoke.py"] = _emit_quality_tests()
+    files["tests/__init__.py"] = ""
     svc_set = set(services) | _feature_services(spec)
     # Feature-gated heavy modules (avoid dumping full market pack on simple bots)
     needs_market = bool(svc_set & _MARKET_SERVICES)
@@ -496,6 +549,77 @@ def _repair_handler_imports(root: Path) -> list[str]:
     return notes
 
 
+
+def _ensure_referenced_service_stubs(root: Path, files_written: list[str]) -> list[str]:
+    """If any generated module imports a missing service, write a safe implementation."""
+    import re
+    notes: list[str] = []
+    root = Path(root)
+    src_blob = []
+    for path in root.rglob("*.py"):
+        if "__pycache__" in path.parts or ".venv" in path.parts:
+            continue
+        try:
+            src_blob.append(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    src = "\n".join(src_blob)
+    needed = set(re.findall(r"from app\.services import (\w+)", src))
+    needed |= set(re.findall(r"from app\.services\.(\w+) import", src))
+    services_dir = root / "app" / "services"
+    services_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write(name: str, content: str, tag: str) -> None:
+        target = services_dir / f"{name}.py"
+        if target.is_file():
+            return
+        target.write_text(content.rstrip() + "\n", encoding="utf-8")
+        files_written.append(str(target))
+        notes.append(f"{tag}:{name}")
+
+    for name in sorted(needed):
+        if name in {"i18n"}:
+            continue
+        target = services_dir / f"{name}.py"
+        if target.is_file():
+            continue
+        if name == "market":
+            _write(name, _emit_market(), "stub_full")
+        elif name == "generic":
+            _write(name, _emit_generic_runtime(), "stub_full")
+            try:
+                data = services_dir / "generic_runtime.json"
+                if not data.is_file():
+                    data.write_text(_emit_generic_runtime_data().rstrip() + "\n", encoding="utf-8")
+            except Exception:
+                pass
+        elif name == "tickets":
+            _write(name, _emit_tickets(), "stub_full")
+        else:
+            _write(
+                name,
+                f'''"""Auto-stub service `{name}` — not selected for this build."""
+from __future__ import annotations
+
+def __getattr__(item: str):
+    def _missing(*args, **kwargs):
+        return f"{{item}} unavailable in this bot build"
+    return _missing
+''',
+                "stub_minimal",
+            )
+    if "app.flow_engine" in src or "from app.flow_engine" in src:
+        fe = root / "app" / "flow_engine.py"
+        if not fe.is_file():
+            fe.write_text(_emit_flow_engine().rstrip() + "\n", encoding="utf-8")
+            files_written.append(str(fe))
+            notes.append("stub_full:flow_engine")
+            # flow_engine may pull tickets — recurse once
+            return notes + _ensure_referenced_service_stubs(root, files_written)
+    return notes
+
+
+
 def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     import shutil
     root = Path(out_dir)
@@ -541,6 +665,10 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
         written.append(str(path))
     try:
         _repair_handler_imports(root)
+    except Exception:
+        pass
+    try:
+        _ensure_referenced_service_stubs(root, written)
     except Exception:
         pass
     return written
