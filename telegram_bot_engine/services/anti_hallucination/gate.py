@@ -353,8 +353,8 @@ def _runtime_import_findings(root: Path) -> list[Finding]:
     code = "import importlib\n" + "\n".join(
         f"importlib.import_module({name!r})" for name in dict.fromkeys(modules)
     )
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+    from telegram_bot_engine.services.secure_exec import clean_child_environ
+    env = clean_child_environ({"PYTHONPATH": str(root)})
     try:
         proc = subprocess.run(
             [sys.executable, "-c", code],

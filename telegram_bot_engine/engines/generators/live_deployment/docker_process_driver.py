@@ -199,6 +199,34 @@ class DockerProcessDriver(DeploymentProvider):
         self._stop_by_project(str(path))
 
         # Ensure image is present (pull if needed, best-effort)
+        # Sanitize requirements.txt on host before container installs it
+        try:
+            req = path / "requirements.txt"
+            if req.is_file():
+                from telegram_bot_engine.services.requirements_policy import sanitize_requirements_text
+                cleaned, _warns = sanitize_requirements_text(
+                    req.read_text(encoding="utf-8", errors="ignore")
+                )
+                req.write_text(cleaned, encoding="utf-8")
+        except Exception as _req_exc:
+            _log.warning("requirements sanitize failed: %s", _req_exc)
+
+        # Multi-tenant: refuse default bridge — operator must set egress-limited network
+        try:
+            from telegram_bot_engine.services.isolation_policy import is_multi_tenant
+            if is_multi_tenant() and not (os.environ.get("TBE_DOCKER_NETWORK") or "").strip():
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message=(
+                        "TBE_DOCKER_NETWORK must be set in multi-tenant mode "
+                        "(egress-limited docker network required; default bridge refused)"
+                    ),
+                )
+        except Exception:
+            pass
+
         pull_err = self._ensure_image()
         if pull_err:
             return DeploymentStatus(

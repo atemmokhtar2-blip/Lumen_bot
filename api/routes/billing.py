@@ -134,15 +134,24 @@ async def stripe_webhook(request: web.Request) -> web.Response:
 
 
 async def dev_activate(request: web.Request) -> web.Response:
-    """Dev-only: activate a plan without Stripe when STRIPE_SECRET_KEY is unset."""
+    """Dev-only plan activation — hard-gated; never free privilege escalation in SaaS."""
     import os
-    if stripe_configured() and (os.getenv("ALLOW_DEV_BILLING") or "").strip() not in {"1", "true", "yes"}:
-        raise web.HTTPForbidden(text='{"error":"dev_activate_disabled_when_stripe_live"}', content_type="application/json")
+    from telegram_bot_engine.services.isolation_policy import is_dev_environment, is_multi_tenant
+
+    allow = (os.getenv("ALLOW_DEV_BILLING") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if not allow:
+        raise web.HTTPForbidden(
+            text='{"error":"dev_activate_disabled","detail":"set ALLOW_DEV_BILLING=1 only in trusted dev"}',
+            content_type="application/json",
+        )
+    # Multi-tenant or non-dev: require platform admin token always
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-    if admin and (request.headers.get("X-Admin-Token") or "").strip() != admin:
-        # also allow tenant self-activate in pure dev
-        if (os.getenv("ALLOW_DEV_BILLING") or "").strip() not in {"1", "true", "yes"}:
-            raise web.HTTPUnauthorized(text='{"error":"admin_or_dev_required"}', content_type="application/json")
+    if is_multi_tenant() or not is_dev_environment() or stripe_configured():
+        if not admin or (request.headers.get("X-Admin-Token") or "").strip() != admin:
+            raise web.HTTPUnauthorized(
+                text='{"error":"admin_required_for_dev_activate"}',
+                content_type="application/json",
+            )
     tenant = require_tenant(request)
     body = await request.json()
     plan_id = str(body.get("plan_id") or "pro").lower()
