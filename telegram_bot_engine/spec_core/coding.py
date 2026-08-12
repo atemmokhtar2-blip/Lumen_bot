@@ -80,6 +80,119 @@ def _emit_generic_runtime_data() -> str:
     )
 
 
+
+def _emit_i18n_service() -> str:
+    """Minimal language preference store — no market pack required."""
+    return '''"""Lightweight per-user language preferences."""
+from __future__ import annotations
+
+from typing import Dict
+
+_LANG: Dict[int, str] = {}
+
+
+def get_lang(user_id: int) -> str:
+    return _LANG.get(int(user_id), "ar")
+
+
+def set_lang(user_id: str | int, lang: str) -> str:
+    code = (lang or "ar").strip().lower()[:2] or "ar"
+    if code not in {"ar", "en"}:
+        code = "ar"
+    _LANG[int(user_id)] = code
+    return code
+'''
+
+
+def _emit_gitignore() -> str:
+    return """# Generated Telegram bot
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+.tbe_bot_token
+.deploy_*.log
+"""
+
+
+def _emit_readme(spec: BotSpec) -> str:
+    name = getattr(spec.bot, "name", None) or "telegram-bot"
+    cmds = []
+    for f in spec.features:
+        if getattr(getattr(f, "trigger", None), "type", None) == "command":
+            cid = getattr(f.trigger, "id", "") or ""
+            if cid:
+                cmds.append(f"- `/{cid}` — {getattr(f, 'feature', cid)}")
+    cmd_block = "\n".join(cmds) if cmds else "- `/start`\n- `/help`"
+    return f"""# {name}
+
+Professional Telegram bot generated without AI codegen templates dumping.
+
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+cp .env.example .env
+# Set TELEGRAM_BOT_TOKEN in .env
+python main.py
+```
+
+## Commands
+
+{cmd_block}
+
+## Structure
+
+- `main.py` — application entry (python-telegram-bot v21)
+- `app/handlers.py` — command handlers
+- `app/keyboards.py` — inline keyboards
+- `app/config.py` — settings from environment
+
+## Security
+
+- Never commit `.env` or bot tokens
+- Rotate tokens if exposed
+"""
+
+
+def _feature_services(spec: BotSpec) -> set[str]:
+    try:
+        from .registry import get_capability
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for f in spec.features:
+        try:
+            cap = get_capability(f.feature)
+            if cap and getattr(cap, "service", None):
+                out.add(cap.service)
+        except Exception:
+            continue
+    return out
+
+
+_MARKET_SERVICES = {
+    "shop", "payments", "subscriptions", "points", "contests",
+    "cart", "growth", "wallet", "analytics", "admin",
+}
+_FLOW_HINTS = {
+    "shop", "payments", "cart", "wallet", "booking", "tickets", "crm",
+}
+_GENERIC_HINTS = {
+    "generic", "booking", "crm", "community", "edu", "hr", "marketplace",
+    "fitness", "realestate", "restaurant", "auction", "delivery",
+}
+
+
+
 def generate_files(spec: BotSpec) -> dict[str, str]:
     plan = plan_from_spec(spec)
     services = list(plan.services)
@@ -96,16 +209,42 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "README.md": f"# {spec.bot.name}\n\nZero-AI generated Telegram bot.\n\n1. cp .env.example .env\n2. Set TELEGRAM_BOT_TOKEN\n3. pip install -r requirements.txt\n4. python main.py\n",
     }
     files["app/services/__init__.py"] = ""
-    # Editable runtime data ships beside generic.py so generated projects are self-contained.
-    files["app/services/generic_runtime.json"] = _emit_generic_runtime_data()
-    # Runtime contract: handlers, routers, and service templates share these
-    # modules across capability branches. Emitting them conditionally caused
-    # real generated projects to fail the import gate (missing flow/market/db).
-    svc_set = set(services)
-    files["app/services/market.py"] = _emit_market()
-    files["app/flow_engine.py"] = _emit_flow_engine()
-    files["app/services/tickets.py"] = _emit_tickets()
-    files["app/services/generic.py"] = _emit_generic_runtime()
+    files[".gitignore"] = _emit_gitignore()
+    files["README.md"] = _emit_readme(spec)
+    svc_set = set(services) | _feature_services(spec)
+    # Feature-gated heavy modules (avoid dumping full market pack on simple bots)
+    needs_market = bool(svc_set & _MARKET_SERVICES)
+    needs_flow = bool(svc_set & _FLOW_HINTS) or needs_market
+    needs_generic = bool(svc_set & _GENERIC_HINTS)
+    needs_tickets = "tickets" in svc_set or "support" in svc_set
+    needs_lang = any(
+        (getattr(f, "feature", "") in {"lang", "language", "set_language"})
+        or (getattr(getattr(f, "trigger", None), "id", "") == "lang")
+        for f in spec.features
+    )
+    if needs_lang or not needs_market:
+        files["app/services/i18n.py"] = _emit_i18n_service()
+    if needs_market:
+        files["app/services/market.py"] = _emit_market()
+    if needs_flow:
+        files["app/flow_engine.py"] = _emit_flow_engine()
+    if needs_tickets:
+        files["app/services/tickets.py"] = _emit_tickets()
+    feat_keys_early = {getattr(f, "feature", "") for f in (spec.features or [])}
+    only_basic_early = feat_keys_early <= {
+        "start", "help", "about", "lang", "language", "explicit_command", "",
+    }
+    if needs_generic and not only_basic_early:
+        files["app/services/generic.py"] = _emit_generic_runtime()
+        try:
+            files["app/services/generic_runtime.json"] = _emit_generic_runtime_data()
+        except FileNotFoundError:
+            pass
+    # db only when storage or services need persistence
+    if spec.storage.type == "none" and not (needs_market or needs_tickets or needs_generic or needs_flow):
+        # keep a minimal models module; db can stay for future but prefer slim —
+        # still emit db for import safety only if handlers reference it
+        pass
     if "moderation" in svc_set or "admin" in svc_set:
         files["app/services/moderation.py"] = _emit_moderation()
     if "tasks" in svc_set:
@@ -124,31 +263,36 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "utils", "extras", "clinic", "jobs", "edu", "events", "restaurant", "auction",
         "delivery", "crm", "booking", "community", "hr", "marketplace", "fitness",
         "realestate", "shop", "cart", "wallet", "points", "growth", "subscriptions",
-        "payments", "contests", "i18n", "analytics", "admin", "gate",
+        "payments", "contests", "analytics", "admin", "gate",
     )):
         files["app/services/extras.py"] = _emit_extras()
-    need_flow = bool(
+    # Late safety: only attach heavy runtimes when services truly need them
+    late_flow = bool(
         {
             "shop", "payments", "subscriptions", "points", "contests", "cart",
-            "growth", "wallet", "i18n", "creator", "tickets", "tasks", "notes",
-            "support",
+            "growth", "wallet", "creator", "tickets", "tasks", "notes", "support",
         }
         & svc_set
     )
-    if {
-        "shop", "payments", "subscriptions", "points", "contests", "cart",
-        "growth", "wallet", "i18n", "creator",
-    } & svc_set:
-        need_flow = True
-    if need_flow:
-        # Shared runtime files were emitted above; keep this branch only for
-        # documenting the dependency contract and future optional expansion.
-        files.setdefault("app/services/tickets.py", _emit_tickets())
-        files.setdefault("app/services/market.py", _emit_market())
-    if spec.storage.type == "sqlite" or len(spec.features) > 2 or (
-        {"translate", "ocr", "scheduler", "generic", "utils"} & svc_set
+    if late_flow:
+        files.setdefault("app/flow_engine.py", _emit_flow_engine())
+        if {"shop", "payments", "subscriptions", "points", "contests", "cart",
+            "growth", "wallet", "creator"} & svc_set:
+            files.setdefault("app/services/market.py", _emit_market())
+        if {"tickets", "support"} & svc_set:
+            files.setdefault("app/services/tickets.py", _emit_tickets())
+    # generic only for real generic/utility backends — NOT merely because feature count > 2
+    if ({"translate", "ocr", "scheduler", "utils"} & svc_set) or (
+        "generic" in svc_set and not only_basic_early
     ):
         files["app/services/generic.py"] = _emit_generic_runtime()
+        try:
+            files.setdefault(
+                "app/services/generic_runtime.json",
+                _emit_generic_runtime_data(),
+            )
+        except FileNotFoundError:
+            pass
     files.setdefault("bootstrap.sh", _emit_bootstrap_sh())
 
     # Phase 11: optional production backends for translate / OCR / schedule
@@ -353,10 +497,44 @@ def _repair_handler_imports(root: Path) -> list[str]:
 
 
 def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
+    import shutil
     root = Path(out_dir)
+    if root.exists():
+        for child in list(root.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
     root.mkdir(parents=True, exist_ok=True)
+    files = generate_files(spec)
+    feat_services = _feature_services(spec)
+    try:
+        plan_svcs = set(plan_from_spec(spec).services)
+    except Exception:
+        plan_svcs = set()
+    svc_set = feat_services | plan_svcs
+    # Simple bots: core + optional i18n/about (explicit_command) must not ship fat runtimes
+    simple = not (svc_set - {"core", "i18n", "generic"})
+    if simple:
+        feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
+        only_basic = feat_keys <= {
+            "start", "help", "about", "lang", "language", "explicit_command", "",
+        }
+        if only_basic:
+            for heavy in (
+                "app/services/market.py",
+                "app/services/generic.py",
+                "app/services/generic_runtime.json",
+                "app/services/tickets.py",
+                "app/services/extras.py",
+                "app/flow_engine.py",
+            ):
+                files.pop(heavy, None)
     written: list[str] = []
-    for rel, content in generate_files(spec).items():
+    for rel, content in files.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content.rstrip() + "\n", encoding="utf-8")

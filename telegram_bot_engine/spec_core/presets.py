@@ -373,7 +373,10 @@ def score_presets(request: str) -> list[tuple[str, float]]:
         "contests": any(k in text_l for k in ("مسابقة", "مسابقات", "سحب", "contest", "giveaway", "raffle")),
         "analytics": any(k in text_l for k in ("تحليلات", "إيرادات", "ايرادات", "إذاعة", "اذاعة", "شرائح", "broadcast", "segment", "analytics")),
         "support": any(k in text_l for k in ("تذكرة", "تذاكر", "دعم", "قاعدة معرفة", "ticket", "knowledge")),
-        "i18n": any(k in text_l for k in ("ترجمة", "عربي", "انجليزي", "إنجليزي", "/lang", "i18n", "multilingual", "عالمي")),
+        "i18n": any(k in text_l for k in (
+            "ترجمة", "تعدد لغات", "متعدد اللغات", "عربي وانجليزي", "انجليزي وعربي",
+            "/lang", "i18n", "multilingual", "language pack", "تبديل اللغة",
+        )),
         "admin": any(k in text_l for k in ("أدمن", "ادمن", "صيانة", "مخزون", "admin", "maintenance")),
     }
     pillar_count = sum(1 for v in pillars.values() if v)
@@ -471,6 +474,8 @@ def score_presets(request: str) -> list[tuple[str, float]]:
 
 def detect_preset(request: str) -> str | None:
     """Return best preset id or None (uses ranked multi-intent scoring)."""
+    if _is_minimal_command_bot_request(request):
+        return "echo_basic"
     ranked = score_presets(request)
     if not ranked:
         return None
@@ -866,12 +871,53 @@ _DEFAULT_CAPS = tuple(dict.fromkeys(
 ))
 
 
+
+def _is_minimal_command_bot_request(request: str) -> bool:
+    """True when user only asks for a basic start/help/about bot (no vertical)."""
+    t = _norm(request or "")
+    if not t:
+        return False
+    vertical = (
+        "متجر", "shop", "store", "ecommerce", "سلة", "cart", "طلب", "طلبات",
+        "محفظة", "wallet", "دفع", "payment", "اشتراك", "subscription",
+        "نقاط", "points", "تذكرة", "تذاكر", "support", "ticket",
+        "مهام", "tasks", "ملاحظات", "notes", "مجموعة", "group", "حظر", "كتم",
+        "حجز", "booking", "عيادة", "مطعم", "توصيل", "delivery", "saas",
+        "marketplace", "لوجست", "finance", "محاسبة",
+    )
+    if any(v in t for v in vertical):
+        return False
+    basic = (
+        "/start", "start", "ترحيب", "/help", "help", "مساعدة",
+        "/about", "about", "اوامر", "أوامر", "بوت بسيط", "بوت تيليجرام",
+        "telegram bot", "simple bot", "basic bot",
+    )
+    return any(b in t for b in basic)
+
+
 def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     """Always-on high-quality pack when the user asks for a bot.
 
     Uses multi-intent scoring, dynamic capability extraction, and multi-domain
     composition when several domains match.
     """
+    # Minimal start/help/about requests must NOT expand into commerce_pro packs.
+    if _is_minimal_command_bot_request(request):
+        s = session_for_preset("echo_basic", user_id=user_id, bot_name="basic_bot")
+        # Optional /about when explicitly mentioned
+        rt = _norm(request or "")
+        if any(x in rt for x in ("/about", "about", "عن البوت", "حول")):
+            try:
+                s.selected.add("about")
+            except Exception:
+                pass
+        if any(x in rt for x in ("/lang", "lang", "لغة", "اللغة")) and "عربي وانجليزي" in rt:
+            try:
+                s.selected.add("lang")
+            except Exception:
+                pass
+        return s.to_spec()
+
     # Dynamic composer handles cybersecurity / multi-domain extraction first
     try:
         from .domain_detector import detect as _detect_domains

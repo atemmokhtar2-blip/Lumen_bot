@@ -546,12 +546,14 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
         ]
     # ── i18n ──────────────────────────────────────────────────────────
     elif method in {"set_language", "auto_detect"}:
+        # Prefer lightweight i18n module (no full market pack)
+        L = ["    from app.services import i18n as lang_svc"]
         L.append("    if context.args:")
         L.append("        lang = context.args[0].lower()[:2]")
         L.append("    else:")
-        L.append("        cur = market_svc.get_lang(user.id) if hasattr(market_svc, 'get_lang') else 'en'")
+        L.append("        cur = lang_svc.get_lang(user.id)")
         L.append("        lang = 'ar' if str(cur).startswith('en') else 'en'")
-        L.append("    new_lang = market_svc.set_lang(user.id, lang)")
+        L.append("    new_lang = lang_svc.set_lang(user.id, lang)")
         L.append("    if new_lang.startswith('ar'):")
         L.append("        await message.reply_text('تم تغيير اللغة إلى العربية 🇸🇦 — أعد /start لتحديث القائمة')")
         L.append("    else:")
@@ -788,19 +790,24 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
                 "    )",
             ]
         else:
-            L.append("    from app.services import generic as generic_svc")
             if method == "explicit_command":
-                command_id = str(getattr(getattr(cap, "trigger", None), "id", "command"))
-                L.append(
-                    f"    result = generic_svc.explicit_command(user.id, {command_id!r}, "
-                    "' '.join(context.args) if context.args else '')"
+                command_id = str(
+                    getattr(getattr(cap, "trigger", None), "id", None)
+                    or getattr(cap, "id", None)
+                    or "command"
                 )
+                L.append(f"    _cmd = {command_id!r}")
+                L.append("    if _cmd in {'about', 'info'}:")
+                L.append("        await message.reply_text('بوت تيليجرام جاهز. استخدم /help لعرض الأوامر.')")
+                L.append("    else:")
+                L.append("        await message.reply_text(f'أمر /{_cmd} — جاهز.')")
             else:
+                L.append("    from app.services import generic as generic_svc")
                 L.append(
                     f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
                     "' '.join(context.args) if context.args else '')"
                 )
-            L.append("    await message.reply_text(result)")
+                L.append("    await message.reply_text(result)")
     return L
 
 
@@ -859,7 +866,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_market = any(
         _svc(f) in {
             'shop', 'payments', 'subscriptions', 'points', 'contests',
-            'cart', 'growth', 'wallet', 'i18n', 'analytics', 'admin',
+            'cart', 'growth', 'wallet', 'analytics', 'admin',
         }
         for f in spec.features
     )
@@ -921,17 +928,6 @@ def _emit_handlers(spec: BotSpec) -> str:
         "    if message is None:",
         "        return",
         f"    text = {welcome!r}",
-        "    # Deep-link: /start ref_CODE or /start CODE → claim referral once",
-        "    if user is not None and context.args:",
-        "        raw = (context.args[0] or '').strip()",
-        "        code = raw[4:] if raw.lower().startswith('ref_') else raw",
-        "        if code:",
-        "            try:",
-        "                from app.services import market as market_svc",
-        "                if market_svc.claim_referral(user.id, code):",
-        "                    text = text + '\\nReferral applied.'",
-        "            except Exception:",
-        "                pass",
         "    kb = main_keyboard()",
         "    await message.reply_text(text, reply_markup=kb)",
         "",
@@ -1369,21 +1365,22 @@ def _emit_handlers(spec: BotSpec) -> str:
                 )
             lines.append("    await message.reply_text(result)")
         else:
-            # Durable generic executor — preserve explicit user command identity.
-            # Losing the trigger here collapses every custom command into one
-            # shared /generic path and makes generated bots functionally wrong.
-            lines.append("    from app.services import generic as generic_svc")
+            # Prefer lightweight handlers for simple explicit commands (e.g. /about).
+            # Only pull the fat generic runtime for non-trivial service methods.
             if cap.method == "explicit_command":
-                lines.append(
-                    f"    result = generic_svc.explicit_command(user.id, {feat.trigger.id!r}, "
-                    "' '.join(context.args) if context.args else '')"
-                )
+                tid = (feat.trigger.id or "command").replace("'", "")
+                lines.append(f"    _cmd = {tid!r}")
+                lines.append("    if _cmd in {'about', 'info'}:")
+                lines.append("        await message.reply_text('بوت تيليجرام جاهز. استخدم /help لعرض الأوامر.')")
+                lines.append("    else:")
+                lines.append("        await message.reply_text(f'أمر /{_cmd} — جاهز.')")
             else:
+                lines.append("    from app.services import generic as generic_svc")
                 lines.append(
                     f"    result = generic_svc.act({cap.service!r}, {cap.method!r}, user.id, "
                     "' '.join(context.args) if context.args else '')"
                 )
-            lines.append("    await message.reply_text(result)")
+                lines.append("    await message.reply_text(result)")
         lines.append("")
         lines.append("")
 
@@ -1780,14 +1777,15 @@ def _emit_handlers(spec: BotSpec) -> str:
     lines.append("    if query is None:")
     lines.append("        return")
     lines.append("    data = query.data or ''")
-    lines.append("    # Flow engine callbacks (choice / confirm / cancel / back)")
-    lines.append("    if data.startswith('flow:'):")
-    lines.append("        try:")
-    lines.append("            from app.flow_engine import handle_callback as _flow_cb")
-    lines.append("            if await _flow_cb(update, context):")
-    lines.append("                return")
-    lines.append("        except Exception:")
-    lines.append("            pass")
+    if need_market or need_tickets or need_tasks or need_notes:
+        lines.append("    # Flow engine callbacks (choice / confirm / cancel / back)")
+        lines.append("    if data.startswith('flow:'):")
+        lines.append("        try:")
+        lines.append("            from app.flow_engine import handle_callback as _flow_cb")
+        lines.append("            if await _flow_cb(update, context):")
+        lines.append("                return")
+        lines.append("        except Exception:")
+        lines.append("            pass")
     lines.append("    await query.answer()")
     lines.append("    if data.startswith('cmd:'):")
     lines.append("        cmd = (data[4:] or '').strip().lower().replace('-', '_').replace('.', '')")
@@ -2042,7 +2040,7 @@ def _emit_main(spec: BotSpec) -> str:
     need_market = any(
         (get_capability(f.feature) and get_capability(f.feature).service in {
             "shop", "payments", "subscriptions", "points", "contests",
-            "cart", "growth", "wallet", "i18n", "analytics", "admin",
+            "cart", "growth", "wallet", "analytics", "admin",
         })  # type: ignore
         for f in spec.features
     )
