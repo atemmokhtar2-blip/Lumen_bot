@@ -732,12 +732,21 @@ def _faq_load_custom() -> list[tuple[str, str, int]]:
     rows = _list("content", user_id=None, status="open", limit=100)
     out: list[tuple[str, str, int]] = []
     for r in rows:
-        title = (r.get("title") or "")
+        # sqlite3.Row supports key access, not dict.get(). Keep this path
+        # compatible with generated apps and custom row factories.
+        try:
+            title = (r["title"] or "")
+            body = (r["body"] or "")
+            row_id = int(r["id"])
+        except (KeyError, IndexError, TypeError):
+            title = (getattr(r, "get", lambda *_: "")("title") or "")
+            body = (getattr(r, "get", lambda *_: "")("body") or "")
+            row_id = int(getattr(r, "get", lambda *_: 0)("id") or 0)
         if title.startswith("faq:"):
             q = title[4:].strip()
-            a = (r.get("body") or "").strip()
-            if q and a:
-                out.append((q, a, int(r["id"])))
+            a = body.strip()
+            if q and a and row_id:
+                out.append((q, a, row_id))
     return out
 
 
@@ -1292,6 +1301,26 @@ def job_cancel(user_id: int, text: str = "") -> str:
 
 
 
+def explicit_command(user_id: int, command: str, text: str = "") -> str:
+    """Execute a user-declared command with durable, command-scoped storage.
+
+    This is a real fallback for commands not yet mapped to a specialist: it
+    never pretends that an unsupported domain operation happened. It records
+    submitted data, supports `/command list`, and tells the user exactly what
+    input is required when no payload was supplied.
+    """
+    ensure()
+    cmd = re.sub(r"[^a-z0-9_]+", "", (command or "command").lower())[:40] or "command"
+    payload = (text or "").strip()[:2000]
+    service = f"cmd_{cmd}"[:40]
+    if payload.lower() in {"list", "all", "history", "سجل", "قائمة"}:
+        return _fmt(_list(service, user_id=user_id, status=None, limit=30), f"لا توجد بيانات مسجلة للأمر /{cmd} بعد.")
+    if not payload:
+        return f"أرسل البيانات المطلوبة بعد /{cmd}. مثال: /{cmd} بيانات الطلب\nولعرض ما سجلته: /{cmd} list"
+    iid = _insert(service, int(user_id), payload[:120], payload, "open", {"command": cmd, "kind": "explicit_command"})
+    return f"تم تنفيذ /{cmd} وتسجيل الطلب #{iid}. لعرض السجل أرسل /{cmd} list"
+
+
 def act(service: str, method: str, user_id: int, text: str = "") -> str:
     """Execute any capability with durable SQLite side-effects.
 
@@ -1305,6 +1334,11 @@ def act(service: str, method: str, user_id: int, text: str = "") -> str:
     text = (text or "").strip()[:2000]
     m, svc, uid = method.lower(), service.lower(), int(user_id)
 
+
+    # Explicit user-declared commands have a command-aware durable path in
+    # generated handlers; keep a safe fallback for direct service calls.
+    if m == "explicit_command":
+        return explicit_command(uid, svc, text)
 
     # Phase 8 / 14 specialized scaffolds
     if m in {"voice_from_file"}:

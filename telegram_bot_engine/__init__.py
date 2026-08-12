@@ -927,6 +927,9 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         meta["anti_hallucination"] = ah_dict
         meta["verified_commands"] = list(ah_report.verified_commands)
         meta["stub_handlers"] = list(ah_report.stub_handlers)
+        # Expose the gate's actual syntax verdict in the public generation
+        # contract; callers must never infer it from ready_for_token.
+        meta["syntax_ok"] = bool(getattr(ah_report, "syntax_ok", False))
         meta["ready_for_token"] = bool(ah_report.ready_for_token)
     except Exception as exc:
         meta["anti_hallucination_error"] = str(exc)[:300]
@@ -993,6 +996,7 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 "services": result.plan_services,
                 # ready_for_token already set from gate (or False on gate error)
                 "ready_for_token": bool(meta.get("ready_for_token", False)),
+                "syntax_ok": bool(meta.get("syntax_ok", False)),
             }
         )
         # Phase 10: capability diagnostics + optional strict smoke gate

@@ -51,7 +51,7 @@ def init_db():
 )
 sys.path.insert(0, str(_TMP))
 
-from telegram_bot_engine.spec_core.registry import CAPABILITIES  # noqa: E402
+from telegram_bot_engine.spec_core.registry import CAPABILITIES, load_scale_capabilities  # noqa: E402
 from telegram_bot_engine.spec_core import templates_generic as g  # noqa: E402
 
 # Reset ensure cache if re-imported
@@ -60,6 +60,9 @@ g._ENSURED = False
 
 @pytest.fixture(scope="module")
 def all_caps():
+    # Production loading is intentionally lazy for generation latency; the
+    # scale suite opts into the large catalog explicitly.
+    load_scale_capabilities(target=30_000)
     assert len(CAPABILITIES) >= 30_000, f"expected ~30k got {len(CAPABILITIES)}"
     return list(CAPABILITIES.values())
 

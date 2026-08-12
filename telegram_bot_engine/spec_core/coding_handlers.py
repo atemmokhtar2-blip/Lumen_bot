@@ -789,10 +789,17 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             ]
         else:
             L.append("    from app.services import generic as generic_svc")
-            L.append(
-                f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
-                "' '.join(context.args) if context.args else '')"
-            )
+            if method == "explicit_command":
+                command_id = str(getattr(getattr(cap, "trigger", None), "id", "command"))
+                L.append(
+                    f"    result = generic_svc.explicit_command(user.id, {command_id!r}, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            else:
+                L.append(
+                    f"    result = generic_svc.act({svc!r}, {method!r}, user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
             L.append("    await message.reply_text(result)")
     return L
 
@@ -1362,12 +1369,20 @@ def _emit_handlers(spec: BotSpec) -> str:
                 )
             lines.append("    await message.reply_text(result)")
         else:
-            # Durable generic executor — no empty success stubs
+            # Durable generic executor — preserve explicit user command identity.
+            # Losing the trigger here collapses every custom command into one
+            # shared /generic path and makes generated bots functionally wrong.
             lines.append("    from app.services import generic as generic_svc")
-            lines.append(
-                f"    result = generic_svc.act({cap.service!r}, {cap.method!r}, user.id, "
-                "' '.join(context.args) if context.args else '')"
-            )
+            if cap.method == "explicit_command":
+                lines.append(
+                    f"    result = generic_svc.explicit_command(user.id, {feat.trigger.id!r}, "
+                    "' '.join(context.args) if context.args else '')"
+                )
+            else:
+                lines.append(
+                    f"    result = generic_svc.act({cap.service!r}, {cap.method!r}, user.id, "
+                    "' '.join(context.args) if context.args else '')"
+                )
             lines.append("    await message.reply_text(result)")
         lines.append("")
         lines.append("")
