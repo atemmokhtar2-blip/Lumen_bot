@@ -4,9 +4,65 @@ from __future__ import annotations
 import atexit
 import os
 import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _LOCK_FH = None
+_MONGO_CLIENT = None
+_MONGO_COLLECTION = None
+_MONGO_OWNER = ""
+
+
+def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
+    """Acquire a cross-host lease when Mongo is configured; return None if unused."""
+    global _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER
+    uri = (os.getenv("MONGODB_URI") or os.getenv("MONGO_URI") or "").strip()
+    if not uri:
+        return None
+    try:
+        from pymongo import MongoClient, ReturnDocument
+        from pymongo.errors import DuplicateKeyError
+    except ImportError as exc:
+        raise SystemExit("MONGODB_URI is configured but pymongo is missing") from exc
+    client = MongoClient(uri, serverSelectionTimeoutMS=3000)
+    client.admin.command("ping")
+    coll = client.get_default_database()["ai_agent_runtime_locks"]
+    coll.create_index("expires_at", expireAfterSeconds=0)
+    owner = f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
+    deadline = time.monotonic() + max(5.0, float(wait_seconds))
+    while True:
+        now = datetime.now(timezone.utc)
+        lease = now + timedelta(hours=2)
+        try:
+            doc = coll.find_one_and_update(
+                {"_id": "telegram_polling", "$or": [{"expires_at": {"$lte": now}}, {"owner": owner}]},
+                {"$set": {"owner": owner, "expires_at": lease}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            if doc and doc.get("owner") == owner:
+                _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER = client, coll, owner
+                lock_path = Path(f"mongodb://telegram_polling/{owner}")
+                def _release_mongo() -> None:
+                    global _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER
+                    try:
+                        if _MONGO_COLLECTION is not None and _MONGO_OWNER:
+                            _MONGO_COLLECTION.delete_one({"_id": "telegram_polling", "owner": _MONGO_OWNER})
+                        if _MONGO_CLIENT is not None:
+                            _MONGO_CLIENT.close()
+                    finally:
+                        _MONGO_CLIENT = _MONGO_COLLECTION = None
+                        _MONGO_OWNER = ""
+                atexit.register(_release_mongo)
+                return lock_path
+        except DuplicateKeyError:
+            pass
+        if time.monotonic() >= deadline:
+            client.close()
+            raise SystemExit("Another bot replica owns the distributed Telegram polling lease")
+        time.sleep(1.0)
+
 
 
 def acquire_bot_singleton(
@@ -20,6 +76,11 @@ def acquire_bot_singleton(
     instead of exiting immediately — that was leaving the bot dead.
     """
     global _LOCK_FH
+    distributed = _try_acquire_mongo_lock(wait_seconds=wait_seconds)
+    if distributed is not None:
+        return distributed
+    if os.getenv("TBE_MULTI_REPLICA", "0").strip().lower() in {"1", "true", "yes", "on"} and os.getenv("TBE_ALLOW_LOCAL_SINGLETON", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        raise SystemExit("TBE_MULTI_REPLICA requires MONGODB_URI/MONGO_URI for a cross-host polling lease")
     base = Path(lock_dir or os.getenv("OUTPUT_DIR") or "/tmp")
     try:
         base.mkdir(parents=True, exist_ok=True)

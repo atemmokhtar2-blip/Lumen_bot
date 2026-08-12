@@ -13,6 +13,12 @@ from typing import Any, Callable
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+# Explicit generated dependencies. coding.py emits these modules whenever this
+# flow engine is emitted; importing them here makes missing dependencies fail at
+# startup/sandbox validation instead of becoming hidden runtime imports.
+from app.services import market as market_svc
+from app.services import tickets as tickets_svc
+
 # ── Flow definitions (declarative) ──────────────────────────────────────────
 
 FLOW_TIMEOUT_SEC = 15 * 60  # 15 minutes idle
@@ -537,8 +543,6 @@ async def _execute(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> str:
     if name == "add_product":
-        from app.services import market as market_svc
-
         title = str(data.get("title") or "Item")
         price_cents = int(data.get("price") or 0)
         category = str(data.get("category") or "other")
@@ -558,8 +562,6 @@ async def _execute(
         return f"✅ تم إضافة المنتج #{pid}\n{title} — {price_cents/100:.2f}"
 
     if name == "open_ticket":
-        from app.services import tickets as tickets_svc
-
         chat = update.effective_chat
         subject = str(data.get("subject") or "ticket")
         body = str(data.get("body") or "")
@@ -570,8 +572,6 @@ async def _execute(
         return f"✅ تم فتح التذكرة #{tid}"
 
     if name == "wallet_topup":
-        from app.services import market as market_svc
-
         # Free top-up disabled — redirect to real payment rails
         amt = int(data.get("amount") or 0)
         bal = market_svc.wallet_balance(user_id)
@@ -582,8 +582,6 @@ async def _execute(
         )
 
     if name == "vodafone_cash":
-        from app.services import market as market_svc
-
         amount_cents = int(data.get("amount") or 0)
         ref = str(data.get("reference") or "").strip()
         photo = str(data.get("screenshot") or data.get("photo_file_id") or "")
@@ -609,7 +607,6 @@ async def _execute(
             await start_flow(update, context, "vodafone_cash")
             return "➡️ أكمل بيانات فودافون كاش"
         if method in ("رصيد المحفظة", "wallet"):
-            from app.services import market as market_svc
             bal = market_svc.wallet_balance(user_id)
             return f"رصيد محفظتك: {bal}\nادفع من السلة بـ /cartcheckout بعد تفعيل الخصم من المحفظة."
         return (
@@ -618,8 +615,6 @@ async def _execute(
         )
 
     if name == "coupon":
-
-        from app.services import market as market_svc
 
         code = str(data.get("code") or "")
         return market_svc.coupon_apply_code(user_id, code, 0)

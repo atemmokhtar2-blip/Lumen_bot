@@ -2072,16 +2072,17 @@ def run_bot_project(
         )
 
     import os as _os
-    # Multi-tenant / production: require Docker by default when TBE_MULTI_TENANT=1
-    # or TBE_REQUIRE_DOCKER=1. Local fallback only for explicit single-tenant dev.
+    # Docker is preferred, but must not be implicitly required merely because
+    # the service is multi-tenant. An operator may explicitly require it with
+    # TBE_REQUIRE_DOCKER=1; otherwise the isolated local runner is the fallback.
     multi = (_os.environ.get("TBE_MULTI_TENANT") or "0").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    _req_default = "1" if multi else "0"
+    _req_default = "0"
     require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
         "1", "true", "yes", "on",
     }
-    _allow_default = "0" if require_docker else "1"
+    _allow_default = "1"
     allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or _allow_default).strip().lower() not in {
         "0", "false", "no", "off",
     }
