@@ -57,9 +57,14 @@ async def handle_turn(
 
 def runtime_status() -> dict[str, Any]:
     eng = get_dialogue_engine()
-    return {
+    st = {
         "DIALOGUE_ENABLED": dialogue_runtime_enabled(),
         "rasa_available": _rasa.available(),
         "active_engine": eng.name if eng else None,
         "rule_engine": "disabled",
     }
+    try:
+        st.update(_rasa.status())
+    except Exception:
+        pass
+    return st
