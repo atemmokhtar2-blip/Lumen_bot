@@ -19,6 +19,7 @@ from typing import Any
 
 from ...schemas.error_contract import ErrorContract
 from .state_lock import atomic_write_text, exclusive_state_lock
+from .state_store import HostingStateStore
 
 
 @dataclass
@@ -75,28 +76,42 @@ class HostingService:
         self.output_root = base
         self.state_dir = base / "hosting"
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.state_file = self.state_dir / "instances.json"
+        self.state_file = self.state_dir / "instances.json"  # legacy JSON (migrated once)
+        self._store = HostingStateStore(self.state_dir / "instances.sqlite3")
         self._instances: dict[str, HostInstance] = {}
         self._load()
 
     def _lock_path(self) -> Path:
         return self.state_dir / "instances.lock"
 
+    def _inst_from_row(self, row: dict) -> HostInstance:
+        return HostInstance(**{
+            k: v for k, v in row.items()
+            if k in HostInstance.__dataclass_fields__
+        })
+
     def _load_unlocked(self) -> None:
-        """Reload registry from disk (caller must hold exclusive_state_lock)."""
-        if not self.state_file.exists():
-            self._instances = {}
-            return
+        """Reload registry from SQLite (source of truth); migrate legacy JSON once."""
         try:
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
-            loaded: dict[str, HostInstance] = {}
-            for row in data.get("instances", []):
-                inst = HostInstance(**{
-                    k: v for k, v in row.items()
-                    if k in HostInstance.__dataclass_fields__
-                })
-                loaded[inst.instance_id] = inst
-            self._instances = loaded
+            rows = self._store.list_all()
+            if not rows and self.state_file.exists():
+                # one-time migration from legacy JSON
+                try:
+                    data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                    for row in data.get("instances", []):
+                        inst = self._inst_from_row(row)
+                        self._store.upsert(asdict(inst))
+                    rows = self._store.list_all()
+                    # archive legacy file
+                    try:
+                        self.state_file.rename(self.state_file.with_suffix(".json.migrated"))
+                    except Exception:
+                        pass
+                except Exception:
+                    rows = []
+            self._instances = {
+                r["instance_id"]: self._inst_from_row(r) for r in rows
+            }
         except Exception:
             self._instances = {}
 
@@ -108,15 +123,9 @@ class HostingService:
             self._instances = {}
 
     def _save_unlocked(self) -> None:
-        """Persist registry (caller must hold exclusive_state_lock)."""
-        payload = {
-            "instances": [asdict(i) for i in self._instances.values()],
-            "updated_at": time.time(),
-        }
-        atomic_write_text(
-            self.state_file,
-            json.dumps(payload, ensure_ascii=False, indent=2),
-        )
+        """Persist each instance to SQLite (transactional source of truth)."""
+        for inst in self._instances.values():
+            self._store.upsert(asdict(inst))
 
     def _save(self) -> None:
         with exclusive_state_lock(self._lock_path()):
@@ -198,18 +207,12 @@ class HostingService:
                 ),
             )
 
-        # Isolation: Docker required in SaaS (local only with explicit opt-in)
+        # Isolation: central fail-closed policy (Docker required in multi-tenant)
         try:
-            from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
-                DockerProcessDriver,
-                docker_available,
-            )
-            from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
-                LocalProcessDriver,
-            )
             from telegram_bot_engine.engines.generators.live_deployment.token_validator import (
                 TokenValidator,
             )
+            from telegram_bot_engine.services.isolation_policy import select_process_driver
         except Exception as e:
             return HostResult(ok=False, message=f"تعذر تحميل محرك الاستضافة: {e}")
 
@@ -219,33 +222,18 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        # Fail closed: Docker required unless explicitly opted into local dev hosting.
-        # TBE_ALLOW_LOCAL_PROCESS=1 is the only way to run unisolated local processes.
-        env_name = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
-        multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        is_dev = env_name in {"dev", "development", "local", "test"}
-        _req_default = "0" if is_dev and not multi else "1"
-        require_docker = (os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        if docker_available():
-            driver = DockerProcessDriver()
-        elif require_docker and not allow_local:
+        try:
+            driver, _decision = select_process_driver()
+        except RuntimeError as exc:
             return HostResult(
                 ok=False,
-                message="Docker مطلوب لاستضافة آمنة وغير متاح على هذا الخادم",
+                message=f"عزل الاستضافة مرفوض: {exc}",
             )
-        else:
-            driver = LocalProcessDriver()
+
+        # Token surface: prefer sealed token file; avoid scattering raw token keys
         env = {
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
-            "TOKEN": bot_token,
         }
         status = driver.deploy(
             str(path),

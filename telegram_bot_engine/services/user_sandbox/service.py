@@ -323,13 +323,16 @@ def clean_child_env(
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["TBE_SANDBOX"] = "1"
     env["TBE_ISOLATED"] = "1"
-    # Minimal token surface: only the two keys generated bots commonly read
-    if token:
-        env["BOT_TOKEN"] = token
-        env["TELEGRAM_BOT_TOKEN"] = token
+    file_only = (os.getenv("TBE_TOKEN_FILE_ONLY") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     if token_file:
         env["BOT_TOKEN_FILE"] = str(token_file)
         env["TELEGRAM_BOT_TOKEN_FILE"] = str(token_file)
+    # Prefer sealed file; only inject raw env tokens when not file-only mode
+    if token and not file_only:
+        env["BOT_TOKEN"] = token
+        env["TELEGRAM_BOT_TOKEN"] = token
     if extra:
         # Never allow extra to inject platform secrets back in
         blocked = {

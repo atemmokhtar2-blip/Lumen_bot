@@ -42,34 +42,15 @@ _log = logging.getLogger("engine.live_deployment")
 
 
 def _select_primary_provider():
-    """Select runtime isolation driver.
-
-    Prefer Docker when the daemon is available. If not:
-      - default allow LocalProcessDriver (hosts without Docker, e.g. Railway)
-      - set TBE_REQUIRE_DOCKER=1 to refuse local entirely (strict SaaS)
-    """
-    require_on = (os.environ.get("TBE_REQUIRE_DOCKER") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
-    prefer_on = (os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
-
-    if docker_available() and prefer_on:
-        _log.info("Live deployment primary provider: Docker")
-        return DockerProcessDriver()
-
-    if require_on and not allow_local:
-        _log.error("Docker required but unavailable — refusing LocalProcessDriver")
-        raise RuntimeError(
-            "docker_required_but_unavailable: install Docker or unset TBE_REQUIRE_DOCKER"
-        )
-
-    _log.warning("Live deployment using LocalProcessDriver (Docker unavailable)")
-    return LocalProcessDriver()
+    """Select runtime isolation driver via central isolation policy (fail-closed)."""
+    from telegram_bot_engine.services.isolation_policy import select_process_driver
+    try:
+        driver, decision = select_process_driver()
+    except RuntimeError as exc:
+        _log.error("Isolation policy blocked deployment provider: %s", exc)
+        raise
+    _log.info("Live deployment provider=%s (%s)", getattr(driver, "name", type(driver).__name__), decision.reason)
+    return driver
 
 
 class LiveDeploymentEngine(BaseEngine):

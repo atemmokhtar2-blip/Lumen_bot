@@ -91,6 +91,10 @@ class LocalProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
+        # Root gate: refuse to run untrusted code without explicit local-dev opt-in
+        from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
+        assert_local_process_allowed()
+
         path = Path(project_path).resolve()
         if not path.is_dir():
             return DeploymentStatus(
