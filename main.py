@@ -96,6 +96,26 @@ def main() -> None:
     # ── Single poller only (prevents 409 Conflict on getUpdates) ──
     from bot_interface.singleton import acquire_bot_singleton, clear_telegram_webhook
 
+    # Railway / multi-replica: only replica 0 may poll Telegram
+    replica = (
+        os.getenv("RAILWAY_REPLICA_ID")
+        or os.getenv("RAILWAY_REPLICA")
+        or os.getenv("REPLICA_ID")
+        or "0"
+    ).strip()
+    if replica not in {"0", ""}:
+        logger.error(
+            "Non-primary replica (id=%s) — skipping Telegram polling. "
+            "Set service replicas=1 on Railway.",
+            replica,
+        )
+        # Keep process alive for health if needed
+        if (os.getenv("ENABLE_API") or "1").strip().lower() not in {"0", "false", "no", "off"}:
+            _start_b2b_api_process(PORT)
+        else:
+            start_health_server(PORT)
+        return
+
     try:
         lock_path = acquire_bot_singleton(OUTPUT_DIR)
         logger.info("Polling singleton acquired (%s)", lock_path)
@@ -103,11 +123,27 @@ def main() -> None:
         logger.error("%s", e)
         raise
 
-    # Clear any leftover webhook so polling is exclusive
-    if clear_telegram_webhook(TELEGRAM_BOT_TOKEN):
-        logger.info("Telegram webhook cleared (polling mode)")
-    else:
-        logger.warning("Could not clear webhook (continuing; may still work)")
+    def _force_exclusive_polling(token: str) -> None:
+        """Clear webhook twice with pause so no other getUpdates stays active."""
+        clear_telegram_webhook(token)
+        import time as _t
+        _t.sleep(2.0)
+        clear_telegram_webhook(token)
+        _t.sleep(1.0)
+
+    _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
+    logger.info("Telegram webhook cleared (exclusive polling mode)")
+
+    # Confirm dialogue model is on disk (Rasa path)
+    try:
+        from pathlib import Path as _Path
+        _models = list((_Path(__file__).resolve().parent / "dialogue" / "models").glob("*.tar.gz"))
+        if _models:
+            logger.info("Dialogue model ready: %s (%.1f MB)", _models[0].name, _models[0].stat().st_size / 1e6)
+        else:
+            logger.warning("No dialogue/models/*.tar.gz — DIALOGUE_ENABLED will be inert until model ships")
+    except Exception:
+        pass
 
     logger.info("Starting AI Agent 7h Bot (consumer)...")
     allowed_repr = (
@@ -135,7 +171,6 @@ def main() -> None:
                 target=_start_b2b_api_thread, args=(PORT,), daemon=True, name="b2b-api"
             ).start()
         else:
-            # Default: separate process — avoids set_wakeup_fd / signal errors
             multiprocessing.Process(
                 target=_start_b2b_api_process,
                 args=(PORT,),
@@ -145,24 +180,6 @@ def main() -> None:
             logger.info("B2B API process started on port %s", PORT)
     else:
         threading.Thread(target=start_health_server, args=(PORT,), daemon=True).start()
-
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CommandHandler("lang", lang_cmd))
-    app.add_handler(CommandHandler("language", lang_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(
-        MessageHandler(
-            ~filters.TEXT & ~filters.COMMAND & ~filters.StatusUpdate.ALL,
-            handle_non_text,
-        )
-    )
-    app.add_error_handler(error_handler)
-
-    logger.info("Telegram bot is running (polling)...")
 
     def _wire(application: Application) -> None:
         application.add_handler(CommandHandler("start", start_cmd))
@@ -182,22 +199,23 @@ def main() -> None:
         application.add_error_handler(error_handler)
 
     # Retry loop: 409 Conflict during rolling deploy must NOT leave the bot dead.
-    # PTB often stops the Application on Conflict without raising to main().
-    max_cycles = int(os.getenv("POLL_RESTART_MAX", "30") or "30")
+    max_cycles = int(os.getenv("POLL_RESTART_MAX", "40") or "40")
     import time as _time
 
     for cycle in range(1, max_cycles + 1):
         try:
-            clear_telegram_webhook(TELEGRAM_BOT_TOKEN)
-            if cycle > 1:
-                app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-                _wire(app)
+            _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
+            # Always build a fresh Application — avoids "start_polling never awaited"
+            # after a previous cycle stopped mid-flight.
+            app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            _wire(app)
             logger.info("Polling cycle %s/%s starting…", cycle, max_cycles)
             app.run_polling(
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=True,
+                bootstrap_retries=3,
+                close_loop=False,
             )
-            # run_polling returned — usually Conflict/stop, not a clean SIGTERM
             logger.warning(
                 "run_polling returned (cycle=%s). Re-clearing webhook and restarting…",
                 cycle,
@@ -207,15 +225,23 @@ def main() -> None:
         except KeyboardInterrupt:
             raise
         except Exception as e:
+            err = str(e)
+            is_conflict = "Conflict" in type(e).__name__ or "Conflict" in err or "409" in err
             logger.error(
-                "Polling exception (%s): %s — cycle %s/%s",
+                "Polling exception (%s): %s — cycle %s/%s%s",
                 type(e).__name__,
-                str(e)[:200],
+                err[:200],
                 cycle,
                 max_cycles,
+                " [Telegram Conflict — another getUpdates active]" if is_conflict else "",
             )
+            if is_conflict:
+                # Longer pause so the other instance can die during rolling deploy
+                _time.sleep(min(5.0 + cycle * 2.0, 30.0))
+                _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
+                continue
         _time.sleep(min(2.0 + cycle, 12.0))
-        clear_telegram_webhook(TELEGRAM_BOT_TOKEN)
+        _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
 
     logger.error("Exhausted poll restart cycles — exiting")
     raise SystemExit(2)
