@@ -17,15 +17,22 @@ from .seed_packs import seed_for_preset
 
 
 def _load_preset_data() -> dict[str, object]:
+    """Load keyword/caps catalogs from JSON (data lives outside this module).
+
+    Search order prefers non-gitignored package paths so the catalog survives
+    normal checkouts. Root ``/data`` remains a supported override for local ops.
+    """
+    here = Path(__file__).resolve()
     candidates = [
-        Path(__file__).resolve().parents[2] / "data" / "preset_keywords.json",
-        Path(__file__).with_name("preset_keywords.json"),
+        here.parents[1] / "data" / "preset_keywords.json",          # telegram_bot_engine/data/
+        here.parents[2] / "data" / "preset_keywords.json",          # repo root /data/ (may be gitignored)
+        here.with_name("preset_keywords.json"),                     # beside this module
     ]
     for candidate in candidates:
         try:
             if candidate.is_file():
                 value = json.loads(candidate.read_text(encoding="utf-8"))
-                if isinstance(value, dict):
+                if isinstance(value, dict) and value:
                     return value
         except (OSError, ValueError, TypeError):
             continue
