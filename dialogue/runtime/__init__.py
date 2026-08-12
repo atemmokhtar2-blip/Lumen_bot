@@ -1,9 +1,6 @@
-"""Maestro dialogue runtime — Phase 0 solid foundation.
+"""Maestro dialogue runtime.
 
-Engines (in priority order when enabled):
-  1. RasaEngine — if DIALOGUE_ENABLED and a trained model exists
-  2. RuleEngine — always available, no extra deps (smart guided chat)
-
+The runtime uses the trained NLU model and live project/account data only.
 Generation never runs from here.
 """
 from .contract import DialogueRequest, DialogueResponse, DialogueEngine
