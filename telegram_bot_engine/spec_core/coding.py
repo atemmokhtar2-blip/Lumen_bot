@@ -118,8 +118,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         need_flow = True
     if need_flow:
         files["app/flow_engine.py"] = _emit_flow_engine()
-        # Flow engine references tickets in open_ticket — always emit module
+        # Every flow path references these services at completion time. Emit both
+        # dependencies together so runtime imports cannot become blind imports.
         files.setdefault("app/services/tickets.py", _emit_tickets())
+        files.setdefault("app/services/market.py", _emit_market())
     if spec.storage.type == "sqlite" or len(spec.features) > 2 or (
         {"translate", "ocr", "scheduler", "generic", "utils"} & svc_set
     ):

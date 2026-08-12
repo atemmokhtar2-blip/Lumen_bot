@@ -130,6 +130,34 @@ def make_zip_from_path(project_path: str | Path) -> Path | None:
         return None
 
 
+def split_file_for_telegram(path: str | Path, max_mb: float = 45.0) -> list[Path]:
+    """Return one file or deterministic numbered parts below Telegram's upload limit."""
+    source = Path(path).resolve()
+    if not source.is_file():
+        return []
+    limit = max(1, int(max_mb * 1024 * 1024))
+    if source.stat().st_size <= limit:
+        return [source]
+    parts: list[Path] = []
+    try:
+        with source.open("rb") as src:
+            index = 1
+            while True:
+                chunk = src.read(limit)
+                if not chunk:
+                    break
+                part = source.with_name(f"{source.name}.part{index:03d}")
+                part.write_bytes(chunk)
+                parts.append(part)
+                index += 1
+        return parts
+    except Exception:
+        for part in parts:
+            part.unlink(missing_ok=True)
+        logger.exception("Failed to split large delivery file: %s", source)
+        return []
+
+
 def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_keys=None):
     """Synchronous call into the generation engine (runs in a thread).
 

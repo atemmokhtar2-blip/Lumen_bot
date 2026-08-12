@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import GENERATION_STATUS_PREVIEW_LIMIT, ZIP_MAX_MB, OUTPUT_DIR
-from .helpers import escape_md, make_zip_from_path
+from .helpers import escape_md, make_zip_from_path, split_file_for_telegram
 from .session_store import get_session_store
 
 logger = logging.getLogger("ai_agent_7h_bot.generation_flow")
@@ -30,6 +30,7 @@ async def deliver_generation_result(
 
     ok_stages = sum(1 for s in stages if getattr(s, "success", False))
     total_stages = len(stages)
+    pipeline_warnings: list[str] = []
     summary_lines = [
         f"{'✅' if success else '⚠️'} *نتيجة التوليد*",
         f"• النجاح: {'نعم' if success else 'جزئي / فشل'}",
@@ -87,8 +88,9 @@ async def deliver_generation_result(
             menu = list((baked or {}).get("menu_preview") or getattr(nav, "menu_preview", None) or [])[:6]
             if menu:
                 summary_lines.insert(2, "القائمة:" + chr(10) + chr(10).join(menu))
-    except Exception:
+    except Exception as exc:
         logger.exception("stage4 narrative failed")
+        pipeline_warnings.append("تعذر إنشاء الشرح الذكي للنتيجة؛ تم الاحتفاظ بالكود للتحقق المستقل.")
     # L1–L6 snapshot (so the user sees the intelligence path is active)
     layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
     if layers and not layers.get("layers_error"):
@@ -136,8 +138,13 @@ async def deliver_generation_result(
                 summary_lines.append("• هنتجنب: " + ", ".join(tw["avoid_features"][:4]))
             if tw.get("prefer_features"):
                 summary_lines.append("• مُفضّل عالميًا: " + ", ".join(tw["prefer_features"][:4]))
-    except Exception:
+    except Exception as exc:
         logger.exception("stage5 mini metrics failed")
+        pipeline_warnings.append("تعذر تسجيل مؤشرات A/B لهذه المحاولة؛ لم يؤثر ذلك على فحص الكود.")
+
+    if pipeline_warnings:
+        summary_lines.append("• تحذيرات المراحل:")
+        summary_lines.extend("  – " + w for w in pipeline_warnings)
 
     try:
         await status_msg.edit_text(
@@ -170,15 +177,33 @@ async def deliver_generation_result(
         if zip_path and zip_path.exists():
             size_mb = zip_path.stat().st_size / (1024 * 1024)
             if size_mb <= ZIP_MAX_MB:
-                await message.reply_document(
-                    document=zip_path.open("rb"),
-                    filename=zip_path.name,
-                    caption="📦 المشروع المُولَّد (zip)",
-                )
+                with zip_path.open("rb") as document:
+                    await message.reply_document(
+                        document=document,
+                        filename=zip_path.name,
+                        caption="📦 المشروع المُولَّد (zip)",
+                    )
             else:
-                await message.reply_text(
-                    f"📦 تم إنشاء المشروع لكن حجم الـ zip كبير ({size_mb:.1f} MB)."
-                )
+                parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
+                if not parts:
+                    await message.reply_text(
+                        f"❌ تعذر تقسيم ملف المشروع الكبير ({size_mb:.1f} MB)، ولم يتم إسقاط التسليم."
+                    )
+                else:
+                    total = len(parts)
+                    await message.reply_text(
+                        f"📦 المشروع أكبر من رسالة واحدة ({size_mb:.1f} MB)، سأرسل {total} أجزاء مرقمة. "
+                        "نزّلها كلها وادمجها بالترتيب: cat project.zip.part* > project.zip"
+                    )
+                    for index, part in enumerate(parts, 1):
+                        with part.open("rb") as document:
+                            await message.reply_document(
+                                document=document,
+                                filename=part.name,
+                                caption=f"📦 الجزء {index}/{total}",
+                            )
+                    for part in parts:
+                        part.unlink(missing_ok=True)
         else:
             await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
     except Exception:
