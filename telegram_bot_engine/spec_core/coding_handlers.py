@@ -899,26 +899,27 @@ def _emit_handlers(spec: BotSpec) -> str:
 
     lines: list[str] = imports + ["", ""]
 
-    # i18n for generated user-facing strings
-    if lang.startswith("en"):
-        _i18n = {
-            "usage_cart_add": "Usage: /cartadd <product_id> [qty]",
-            "insufficient_balance": "Insufficient balance",
-            "order_cancelled": "Order cancelled",
-            "invalid_number": "Invalid number",
-            "product_added": "Product added",
-            "coming_soon": "This feature is coming soon.",
-        }
-    else:
-        _i18n = {
-            "usage_cart_add": "الاستخدام: /cartadd <معرف_المنتج> [الكمية]",
-            "insufficient_balance": "الرصيد غير كافٍ",
-            "order_cancelled": "تم إلغاء الطلب",
-            "invalid_number": "رقم غير صالح",
-            "product_added": "تمت إضافة المنتج",
-            "coming_soon": "هذه الميزة قريباً.",
-        }
-    lines += [f"_I18N = {_i18n!r}", "def t(key: str) -> str:", "    return _I18N.get(key, key)", "", ""]
+    # i18n helper only when commerce strings are used
+    if need_market:
+        if lang.startswith("en"):
+            _i18n = {
+                "usage_cart_add": "Usage: /cartadd <product_id> [qty]",
+                "insufficient_balance": "Insufficient balance",
+                "order_cancelled": "Order cancelled",
+                "invalid_number": "Invalid number",
+                "product_added": "Product added",
+                "coming_soon": "This feature is coming soon.",
+            }
+        else:
+            _i18n = {
+                "usage_cart_add": "الاستخدام: /cartadd <معرف_المنتج> [الكمية]",
+                "insufficient_balance": "الرصيد غير كافٍ",
+                "order_cancelled": "تم إلغاء الطلب",
+                "invalid_number": "رقم غير صالح",
+                "product_added": "تمت إضافة المنتج",
+                "coming_soon": "هذه الميزة قريباً.",
+            }
+        lines += [f"_I18N = {_i18n!r}", "def t(key: str) -> str:", "    return _I18N.get(key, key)", "", ""]
 
     # start / help always useful
     lines += [
@@ -1393,50 +1394,63 @@ def _emit_handlers(spec: BotSpec) -> str:
             "    chat = update.effective_chat",
             "    if message is None or user is None:",
             "        return",
-            "    # Dynamic multi-step flow engine (wizard)",
-            "    try:",
-            "        from app.flow_engine import handle_text as _flow_text, active_flow",
-            "        if active_flow(context) or context.user_data.get('flow'):",
-            "            if message.text and await _flow_text(update, context):",
-            "                return",
-            "    except Exception:",
-            "        pass",
+            *(
+                [
+                    "    # Dynamic multi-step flow engine (wizard)",
+                    "    try:",
+                    "        from app.flow_engine import handle_text as _flow_text, active_flow",
+                    "        if active_flow(context) or context.user_data.get('flow'):",
+                    "            if message.text and await _flow_text(update, context):",
+                    "                return",
+                    "    except Exception as _flow_exc:",
+                    "        import logging as _logging",
+                    "        _logging.getLogger(__name__).debug('flow text: %s', _flow_exc)",
+                ]
+                if (need_market or need_tickets)
+                else []
+            ),
             "    if not message.text:",
             "        return",
             "    awaiting = context.user_data.get('awaiting')",
-            "    if isinstance(awaiting, str) and awaiting.startswith('mkt_'):",
-            "        text = (message.text or '').strip()",
-            "        context.user_data.pop('awaiting', None)",
-            "        from app.services import market as market_svc",
-            "        key = awaiting[4:]",
-            "        if key in ('coupon_apply', 'apply_coupon', 'redeem_gift'):",
-            "            await message.reply_text(market_svc.coupon_apply_code(user.id, text, 0))",
-            "            return",
-            "        if key in ('wallet_topup', 'topup'):",
-            "            await message.reply_text(",
-            "                '⚠️ الشحن المجاني متوقف. استخدم /buy أو /vfcash'",
-            "            )",
-            "            return",
-            "        if 'transfer' in key:",
-            "            parts = text.split()",
-            "            if len(parts) < 2:",
-            "                await message.reply_text('الصيغة: user_id amount')",
-            "                return",
-            "            try:",
-            "                to_uid, amt = int(parts[0]), int(parts[1])",
-            "                if amt <= 0:",
-            "                    await message.reply_text('مبلغ غير صالح')",
-            "                    return",
-            "                if not market_svc.wallet_debit(user.id, amt, note='transfer_out'):",
-            "                    await message.reply_text('رصيد غير كافٍ')",
-            "                    return",
-            "                bal = market_svc.wallet_add(to_uid, amt)",
-            "                await message.reply_text('تم التحويل. رصيد المستلم: ' + str(bal))",
-            "            except Exception:",
-            "                await message.reply_text('صيغة غير صحيحة')",
-            "            return",
-            "        await message.reply_text('تم: ' + text[:100])",
-            "        return",
+            *(
+                [
+                    "    if isinstance(awaiting, str) and awaiting.startswith('mkt_'):",
+                    "        text = (message.text or '').strip()",
+                    "        context.user_data.pop('awaiting', None)",
+                    "        from app.services import market as market_svc",
+                    "        key = awaiting[4:]",
+                    "        if key in ('coupon_apply', 'apply_coupon', 'redeem_gift'):",
+                    "            await message.reply_text(market_svc.coupon_apply_code(user.id, text, 0))",
+                    "            return",
+                    "        if key in ('wallet_topup', 'topup'):",
+                    "            await message.reply_text(",
+                    "                '⚠️ الشحن المجاني متوقف. استخدم /buy أو /vfcash'",
+                    "            )",
+                    "            return",
+                    "        if 'transfer' in key:",
+                    "            parts = text.split()",
+                    "            if len(parts) < 2:",
+                    "                await message.reply_text('الصيغة: user_id amount')",
+                    "                return",
+                    "            try:",
+                    "                to_uid, amt = int(parts[0]), int(parts[1])",
+                    "                if amt <= 0:",
+                    "                    await message.reply_text('مبلغ غير صالح')",
+                    "                    return",
+                    "                if not market_svc.wallet_debit(user.id, amt, note='transfer_out'):",
+                    "                    await message.reply_text('رصيد غير كافٍ')",
+                    "                    return",
+                    "                bal = market_svc.wallet_add(to_uid, amt)",
+                    "                await message.reply_text('تم التحويل. رصيد المستلم: ' + str(bal))",
+                    "            except (TypeError, ValueError):",
+                    "                await message.reply_text('صيغة غير صحيحة')",
+                    "            return",
+                    "        await message.reply_text('تم: ' + text[:100])",
+                    "        return",
+                ]
+                if need_market
+                else []
+            ),
             # Optional services — only when imported (need_* flags)
             *(
                 [
@@ -1505,12 +1519,19 @@ def _emit_handlers(spec: BotSpec) -> str:
             "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
             "    user = update.effective_user",
-            "    try:",
-            "        from app.flow_engine import handle_photo as _flow_photo",
-            "        if await _flow_photo(update, context):",
-            "            return",
-            "    except Exception:",
-            "        pass",
+            *(
+                [
+                    "    try:",
+                    "        from app.flow_engine import handle_photo as _flow_photo",
+                    "        if await _flow_photo(update, context):",
+                    "            return",
+                    "    except Exception as _photo_flow_exc:",
+                    "        import logging as _logging",
+                    "        _logging.getLogger(__name__).debug('flow photo: %s', _photo_flow_exc)",
+                ]
+                if (need_market or need_tickets or need_ocr)
+                else []
+            ),
             "    # Phase 9: OCR path when user sends a photo (or after /ocr awaiting)",
             "    if message is not None and user is not None and message.photo:",
             "        awaiting = context.user_data.get('awaiting')",
@@ -1808,12 +1829,15 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("            'lang': help_handler,")
     lines.append("        }")
     lines.append("        _ALIASES = {")
-    lines.append("            'shop': 'shopcatalog', 'catalog': 'shopcatalog', 'cart': 'cartview',")
-    lines.append("            'orders': 'shopmyorders', 'myorders': 'shopmyorders',")
-    lines.append("            'wallet': 'walletbalance', 'support': 'ticketopen', 'ticket': 'ticketopen',")
-    lines.append("            'coupon': 'couponapply', 'language': 'lang', 'buy': 'shopbuy',")
-    lines.append("            'plans': 'plans', 'sub': 'plans', 'subs': 'plans', 'leaderboard': 'leaderboard',")
-    lines.append("            'points': 'pointsbalance', 'balance': 'walletbalance',")
+    lines.append("            'language': 'lang',")
+    if need_market:
+        lines.append("            'shop': 'shopcatalog', 'catalog': 'shopcatalog', 'cart': 'cartview',")
+        lines.append("            'orders': 'shopmyorders', 'myorders': 'shopmyorders',")
+        lines.append("            'wallet': 'walletbalance', 'coupon': 'couponapply', 'buy': 'shopbuy',")
+        lines.append("            'plans': 'plans', 'sub': 'plans', 'subs': 'plans', 'leaderboard': 'leaderboard',")
+        lines.append("            'points': 'pointsbalance', 'balance': 'walletbalance',")
+    if need_tickets:
+        lines.append("            'support': 'ticketopen', 'ticket': 'ticketopen',")
     lines.append("        }")
     lines.append("        fn = _CMD_MAP.get(cmd) or _CMD_MAP.get(cmd_compact)")
     lines.append("        if fn is None:")

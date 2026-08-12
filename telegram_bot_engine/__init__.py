@@ -789,6 +789,11 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as _explicit_exc:
         layers_meta["explicit_command_error"] = f"{type(_explicit_exc).__name__}:{str(_explicit_exc)[:160]}"
 
+    try:
+        from .spec_core.presets import sanitize_spec_for_request as _sanitize_spec
+        spec = _sanitize_spec(spec, request or "")
+    except Exception:
+        pass
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
     # Stage-4: bake narrative into metadata for delivery

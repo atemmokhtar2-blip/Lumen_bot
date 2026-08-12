@@ -185,6 +185,7 @@ _MARKET_SERVICES = {
 }
 _FLOW_HINTS = {
     "shop", "payments", "cart", "wallet", "booking", "tickets", "crm",
+    # notes/tasks use simple awaiting flags — not the full flow_engine pack
 }
 _GENERIC_HINTS = {
     "generic", "booking", "crm", "community", "edu", "hr", "marketplace",
@@ -243,6 +244,33 @@ def _emit_env_example() -> str:
     )
 
 
+
+def _emit_db_slim() -> str:
+    """Tiny SQLite helper for bots that do not need the commerce schema."""
+    return '''"""Minimal database helpers."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+_DB = Path(__file__).resolve().parent.parent / "bot_data.sqlite3"
+
+
+def connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_DB))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    _DB.parent.mkdir(parents=True, exist_ok=True)
+    with connect() as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        conn.commit()
+'''
+
 def generate_files(spec: BotSpec) -> dict[str, str]:
     plan = plan_from_spec(spec)
     services = list(plan.services)
@@ -287,6 +315,8 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     only_basic_early = feat_keys_early <= {
         "start", "help", "about", "lang", "language", "explicit_command", "",
     }
+    if only_basic_early:
+        files["app/db.py"] = _emit_db_slim()
     if needs_generic and not only_basic_early:
         files["app/services/generic.py"] = _emit_generic_runtime()
         try:
@@ -323,7 +353,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     late_flow = bool(
         {
             "shop", "payments", "subscriptions", "points", "contests", "cart",
-            "growth", "wallet", "creator", "tickets", "tasks", "notes", "support",
+            "growth", "wallet", "creator", "tickets", "support",
         }
         & svc_set
     )
@@ -583,18 +613,22 @@ def _ensure_referenced_service_stubs(root: Path, files_written: list[str]) -> li
         target = services_dir / f"{name}.py"
         if target.is_file():
             continue
-        if name == "market":
-            _write(name, _emit_market(), "stub_full")
-        elif name == "generic":
-            _write(name, _emit_generic_runtime(), "stub_full")
-            try:
-                data = services_dir / "generic_runtime.json"
-                if not data.is_file():
-                    data.write_text(_emit_generic_runtime_data().rstrip() + "\n", encoding="utf-8")
-            except Exception:
-                pass
-        elif name == "tickets":
-            _write(name, _emit_tickets(), "stub_full")
+        if name in {"market", "generic", "tickets", "tasks", "notes", "moderation", "welcome", "security", "content", "extras"}:
+            _write(
+                name,
+                (
+                    f'''"""Minimal service stub for `{name}` — generated for import safety."""
+from __future__ import annotations
+from typing import Any
+
+def __getattr__(item: str) -> Any:
+    def _missing(*args: Any, **kwargs: Any) -> str:
+        return f"{{item}} is not available in this bot build"
+    return _missing
+'''
+                ),
+                "stub_minimal",
+            )
         else:
             _write(
                 name,
@@ -611,11 +645,35 @@ def __getattr__(item: str):
     if "app.flow_engine" in src or "from app.flow_engine" in src:
         fe = root / "app" / "flow_engine.py"
         if not fe.is_file():
-            fe.write_text(_emit_flow_engine().rstrip() + "\n", encoding="utf-8")
+            fe.write_text(
+                '''"""Minimal flow engine stub — multi-step flows not enabled for this bot."""
+from __future__ import annotations
+from typing import Any
+
+def active_flow(context: Any) -> bool:
+    return bool(getattr(context, "user_data", {}) and context.user_data.get("flow"))
+
+async def handle_text(update: Any, context: Any) -> bool:
+    return False
+
+async def handle_photo(update: Any, context: Any) -> bool:
+    return False
+
+async def handle_callback(update: Any, context: Any) -> bool:
+    return False
+
+def start_flow(*args: Any, **kwargs: Any) -> None:
+    return None
+
+def clear_flow(context: Any) -> None:
+    if getattr(context, "user_data", None) is not None:
+        context.user_data.pop("flow", None)
+'''.rstrip()
+                + "\n",
+                encoding="utf-8",
+            )
             files_written.append(str(fe))
-            notes.append("stub_full:flow_engine")
-            # flow_engine may pull tickets — recurse once
-            return notes + _ensure_referenced_service_stubs(root, files_written)
+            notes.append("stub_minimal:flow_engine")
     return notes
 
 
@@ -640,23 +698,25 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     except Exception:
         plan_svcs = set()
     svc_set = feat_services | plan_svcs
-    # Simple bots: core + optional i18n/about (explicit_command) must not ship fat runtimes
-    simple = not (svc_set - {"core", "i18n", "generic"})
-    if simple:
-        feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
-        only_basic = feat_keys <= {
-            "start", "help", "about", "lang", "language", "explicit_command", "",
-        }
-        if only_basic:
-            for heavy in (
-                "app/services/market.py",
-                "app/services/generic.py",
-                "app/services/generic_runtime.json",
-                "app/services/tickets.py",
-                "app/services/extras.py",
-                "app/flow_engine.py",
-            ):
-                files.pop(heavy, None)
+    # Never ship fat runtimes unless the selected services truly need them
+    feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
+    needs_fat_market = bool(svc_set & _MARKET_SERVICES)
+    needs_fat_generic = bool(svc_set & {"translate", "ocr", "scheduler", "generic", "utils"})
+    needs_fat_flow = bool(svc_set & _FLOW_HINTS)
+    needs_fat_tickets = bool(svc_set & {"tickets", "support"})
+    if not needs_fat_market:
+        files.pop("app/services/market.py", None)
+    if not needs_fat_generic:
+        files.pop("app/services/generic.py", None)
+        files.pop("app/services/generic_runtime.json", None)
+    if not needs_fat_flow:
+        files.pop("app/flow_engine.py", None)
+    if not needs_fat_tickets:
+        files.pop("app/services/tickets.py", None)
+    if not (svc_set & {"utils", "extras", "clinic", "jobs", "edu", "events", "restaurant",
+                        "auction", "delivery", "crm", "booking", "community", "hr",
+                        "marketplace", "fitness", "realestate", "shop", "cart", "wallet"}):
+        files.pop("app/services/extras.py", None)
     written: list[str] = []
     for rel, content in files.items():
         path = root / rel
@@ -669,6 +729,58 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
         pass
     try:
         _ensure_referenced_service_stubs(root, written)
+    except Exception:
+        pass
+    # Hard guard: never leave accidental fat packs on non-commerce bots
+    try:
+        _MIN = (
+            '"""Minimal import-safe stub."""\n'
+            "from __future__ import annotations\n"
+            "from typing import Any\n\n"
+            "def __getattr__(item: str) -> Any:\n"
+            "    def _missing(*args: Any, **kwargs: Any) -> str:\n"
+            "        return f\"{item} is not available in this bot build\"\n"
+            "    return _missing\n"
+        )
+        if not needs_fat_generic:
+            g = root / "app" / "services" / "generic.py"
+            if g.is_file() and g.stat().st_size > 4000:
+                g.write_text(_MIN, encoding="utf-8")
+            gj = root / "app" / "services" / "generic_runtime.json"
+            if gj.is_file() and not needs_fat_generic:
+                gj.unlink(missing_ok=True)
+        if not needs_fat_market:
+            m = root / "app" / "services" / "market.py"
+            if m.is_file() and m.stat().st_size > 4000:
+                m.write_text(_MIN, encoding="utf-8")
+        if not needs_fat_flow:
+            fe = root / "app" / "flow_engine.py"
+            if fe.is_file() and fe.stat().st_size > 4000:
+                fe.write_text(
+                    '''"""Minimal flow engine stub."""
+from __future__ import annotations
+from typing import Any
+
+def active_flow(context: Any) -> bool:
+    return False
+
+async def handle_text(update: Any, context: Any) -> bool:
+    return False
+
+async def handle_photo(update: Any, context: Any) -> bool:
+    return False
+
+async def handle_callback(update: Any, context: Any) -> bool:
+    return False
+
+def start_flow(*args: Any, **kwargs: Any) -> None:
+    return None
+
+def clear_flow(context: Any) -> None:
+    return None
+''',
+                    encoding="utf-8",
+                )
     except Exception:
         pass
     return written

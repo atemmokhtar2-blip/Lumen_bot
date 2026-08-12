@@ -895,6 +895,52 @@ def _is_minimal_command_bot_request(request: str) -> bool:
     return any(b in t for b in basic)
 
 
+
+def sanitize_spec_for_request(spec: "BotSpec", request: str) -> "BotSpec":
+    """Remove cross-domain feature bleed (e.g. قائمة → restaurant while user asked tasks)."""
+    req_n = _norm(request or "")
+    if not req_n or spec is None:
+        return spec
+    taskish = any(k in req_n for k in ("مهام", "مهمة", "task", "todo", "to-do"))
+    restaurantish = any(
+        k in req_n
+        for k in ("مطعم", "طاولة", "حجز طاولة", "restaurant", "طلبات المطعم")
+    )
+    if taskish and not restaurantish and getattr(spec, "features", None):
+        keep = []
+        for f in list(spec.features):
+            key = str(getattr(f, "feature", "") or "")
+            if key.startswith(("menu_", "table_", "order_")) or key in {
+                "menu_order", "menu_view", "table_book", "order_status",
+                "form_start", "deep_link_start", "smart_help",
+            }:
+                continue
+            if key.startswith("form_") and "form" not in req_n and "نموذج" not in req_n:
+                continue
+            keep.append(f)
+        # Ensure core task commands remain
+        have = {str(getattr(f, "feature", "")) for f in keep}
+        from .schema import Feature, Trigger, Action, Messages
+        for must in ("start", "help", "task_add", "task_list"):
+            if must not in have:
+                try:
+                    keep.append(
+                        Feature(
+                            id=must,
+                            feature=must,
+                            trigger=Trigger("command", must.replace("task_", "") if must.startswith("task_") else must),
+                            action=Action("core", must),
+                            messages=Messages(),
+                        )
+                    )
+                except Exception:
+                    pass
+        spec.features = keep
+        if getattr(spec, "bot", None) is not None and not restaurantish:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {"market_bot", "custom_bot", "my_bot"}:
+                spec.bot.name = "tasks_bot"
+    return spec
+
 def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     """Always-on high-quality pack when the user asks for a bot.
 
@@ -1021,8 +1067,40 @@ def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
     except Exception:
         pass
 
-    if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot"}:
-        s.set_name("market_bot")
+    # Disambiguate Arabic "قائمة" (list vs restaurant menu) when tasks are primary
+    try:
+        req_n = _norm(request or "")
+        taskish = any(k in req_n for k in ("مهام", "مهمة", "task", "todo", "to-do"))
+        restaurantish = any(
+            k in req_n
+            for k in ("مطعم", "طاولة", "حجز طاولة", "restaurant", "menu order", "طلبات المطعم")
+        )
+        if taskish and not restaurantish and hasattr(s, "selected"):
+            drop = {
+                k
+                for k in list(s.selected)
+                if str(k).startswith(
+                    ("menu_", "table_", "order_", "restaurant", "form_")
+                )
+                or str(k) in {
+                    "menu_order", "menu_view", "table_book", "order_status",
+                    "form_start", "deep_link_start", "smart_help",
+                }
+            }
+            s.selected -= drop
+            s.selected.update({"start", "help", "task_add", "task_list"})
+    except Exception:
+        pass
+
+    if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot", "market_bot"}:
+        # Prefer intent-based name
+        req_n = _norm(request or "")
+        if any(k in req_n for k in ("مهام", "مهمة", "task")):
+            s.set_name("tasks_bot")
+        elif any(k in req_n for k in ("متجر", "shop", "store")):
+            s.set_name("market_bot")
+        else:
+            s.set_name("basic_bot")
     return s.to_spec()
 
 
@@ -1238,4 +1316,4 @@ def spec_from_request(request: str, *, user_id: int = 0) -> BotSpec | None:
     return session_for_preset(preset, user_id=user_id).to_spec()
 
 
-__all__ = ["detect_preset", "detect_preset_stack", "score_presets", "compose_session", "session_for_preset", "spec_from_request", "is_bot_request", "default_spec_from_request"]
+__all__ = ["detect_preset", "detect_preset_stack", "score_presets", "compose_session", "session_for_preset", "spec_from_request", "is_bot_request", "default_spec_from_request", "sanitize_spec_for_request"]
