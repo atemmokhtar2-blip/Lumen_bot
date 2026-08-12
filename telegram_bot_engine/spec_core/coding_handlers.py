@@ -732,6 +732,25 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "        return",
             "    await message.reply_text(market_svc.invoice_pay(iid, user.id))",
         ]
+    elif method == "lead_capture" and svc == "crm":
+        L += [
+            "    raw = ' '.join(context.args).strip()",
+            "    if not raw:",
+            "        await message.reply_text('أرسل بيانات العميل بهذا الشكل: الاسم | البريد | الهاتف')",
+            "        return",
+            "    from app.services import extras as extras_svc",
+            "    lead_id = extras_svc.lead_capture(user.id, raw)",
+            "    await message.reply_text(f'تم حفظ العميل المحتمل #{lead_id}')",
+        ]
+    elif method == "lead_list" and svc == "crm":
+        L += [
+            "    from app.services import extras as extras_svc",
+            "    rows = extras_svc.lead_list()",
+            "    if not rows:",
+            "        await message.reply_text('لا يوجد عملاء مسجلون')",
+            "        return",
+            "    await message.reply_text('\\n'.join(f\"#{r.get('id')} {r.get('text', '')}\" for r in rows))",
+        ]
     elif method in {"analytics_overview", "analytics_revenue", "dashboard", "stats"} and svc in {"analytics", "admin", "shop"}:
         L += [
             "    if not market_svc.role_require(user.id, 'staff'):",

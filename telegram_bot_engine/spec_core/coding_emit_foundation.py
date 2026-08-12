@@ -59,6 +59,34 @@ def get_settings() -> Settings:
 '''
 
 
+def _emit_models(spec: BotSpec) -> str:
+    """Emit a stable, dependency-free model contract for generated projects."""
+    lines = [
+        '"""Generated domain models; persistence remains in app.db services."""',
+        "from __future__ import annotations",
+        "from dataclasses import dataclass",
+        "",
+    ]
+    entities = list(getattr(spec, "entities", None) or [])
+    if not entities:
+        entities = []
+    for entity in entities:
+        raw_name = str(getattr(entity, "name", "Entity") or "Entity")
+        name = "".join(ch for ch in raw_name.title() if ch.isalnum()) or "Entity"
+        lines += ["@dataclass", f"class {name}:", "    id: int | None = None"]
+        for field in list(getattr(entity, "fields", None) or []):
+            field_name = "".join(ch for ch in str(getattr(field, "name", "field")) if ch.isalnum() or ch == "_")
+            if not field_name or field_name[0].isdigit() or field_name == "id":
+                continue
+            field_type = str(getattr(field, "type", "str") or "str")
+            py_type = {"int": "int", "float": "float", "bool": "bool"}.get(field_type, "str")
+            lines.append(f"    {field_name}: {py_type} | None = None")
+        lines.append("")
+    if not entities:
+        lines += ["@dataclass", "class User:", "    id: int | None = None", "    name: str | None = None", ""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _emit_db(spec: BotSpec) -> str:
     need = spec.storage.type == "sqlite" or any(
         (get_capability(f.feature) and get_capability(f.feature).service in {"tasks", "notes", "welcome", "tickets", "security", "shop", "booking", "crm", "reminders", "community", "edu", "hr", "utils", "gate", "payments", "subscriptions", "points", "contests", "cart", "growth", "wallet", "creator", "i18n", "analytics", "compliance", "forms", "events", "jobs", "marketplace", "restaurant", "support", "admin", "notify"})  # type: ignore[union-attr]

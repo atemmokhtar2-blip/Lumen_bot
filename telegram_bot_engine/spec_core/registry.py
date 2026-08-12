@@ -50,6 +50,7 @@ _add(
     _c("settings", "core", "settings", "إعدادات المستخدم", "User settings", cat="core"),
     _c("language", "core", "language", "تغيير اللغة", "Change language", cat="core"),
     _c("cancel", "core", "cancel", "إلغاء العملية الحالية", "Cancel flow", cat="core"),
+    _c("explicit_command", "generic", "explicit_command", "أمر مخصص صريح من طلب المستخدم", "Explicit user command", cat="custom"),
 )
 
 # ── content / community ───────────────────────────────────────────────

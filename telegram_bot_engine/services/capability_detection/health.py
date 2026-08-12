@@ -237,7 +237,16 @@ def smoke_generated_project(
                 rf"CommandHandler\(\s*['\"]({re.escape(cmd)}|{re.escape(key)})['\"]",
                 re.I,
             )
-            if pat.search(main_src) or f"'{cmd}'" in main_src or f'"{cmd}"' in main_src:
+            # A capability may intentionally expose one or more user-facing aliases
+            # (e.g. lead_capture -> /register and /new_client). In that case the
+            # capability id is not the Telegram command. Accept only a real
+            # CommandHandler whose callback is the expected handler, never a bare
+            # occurrence of the command string elsewhere in main.py.
+            handler_pat = re.compile(
+                rf"CommandHandler\(\s*['\"][^'\"]+['\"]\s*,\s*handle_{re.escape(key)}\b",
+                re.I,
+            )
+            if pat.search(main_src) or handler_pat.search(main_src):
                 _ok(f"command_registered:{cmd}")
             else:
                 # non-critical if handler exists (alias path)

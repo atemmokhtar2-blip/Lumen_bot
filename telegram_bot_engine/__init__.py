@@ -732,6 +732,63 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         except Exception:
             pass
 
+    # Contract boundary: every slash command explicitly written by the user must
+    # survive intelligence/capability layers and become a real generated handler.
+    # The intelligence layer may add capabilities, but it must never erase user
+    # commands or replace them with unrelated learned/preset actions.
+    try:
+        import re as _re
+        from .spec_core.schema import Action as _Action, Feature as _Feature, Messages as _Messages, Trigger as _Trigger
+        from .spec_core.registry import CAPABILITIES as _CAPS_EXPLICIT
+        from .spec_core.builder import DEFAULT_COMMANDS as _DEFAULT_COMMANDS
+        explicit_ids = []
+        seen_explicit = set()
+        for _m in _re.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
+            _cid = _m.group(1).lower()
+            if _cid not in seen_explicit:
+                explicit_ids.append(_cid)
+                seen_explicit.add(_cid)
+        # Common user-facing aliases map to real capabilities; unknown commands
+        # remain explicit generic handlers (never silently dropped).
+        alias_to_feature = {
+            "register": "lead_capture", "new_client": "lead_capture", "my_clients": "lead_list",
+            "stats": "analytics_revenue", "all_tasks": "task_list",
+            "new_task": "task_add", "add_task": "task_add", "my_tasks": "task_list",
+            "list_tasks": "task_list", "complete_task": "task_done", "done_task": "task_done",
+            "delete_task": "task_delete", "new_ticket": "ticket_open", "my_tickets": "ticket_my",
+        }
+        existing_triggers = {
+            str(getattr(getattr(_f, "trigger", None), "id", "")).lower()
+            for _f in getattr(spec, "features", [])
+        }
+        for _cid in explicit_ids:
+            if _cid in {"start", "help"} or _cid in existing_triggers:
+                continue
+            _feature_key = alias_to_feature.get(_cid)
+            if _feature_key in _CAPS_EXPLICIT:
+                _cap = _CAPS_EXPLICIT[_feature_key]
+                _service, _method = _cap.service, _cap.method
+                _feature_id = _feature_key
+            else:
+                _service, _method = "generic", "explicit_command"
+                _feature_key = "explicit_command"
+                _feature_id = "explicit_" + _cid
+            spec.features.append(_Feature(
+                id=_feature_id,
+                feature=_feature_key,
+                actor="user",
+                trigger=_Trigger(type="command", id=_cid),
+                action=_Action(service=_service, method=_method),
+                messages=_Messages(prompt=f"/{_cid}", success="تم تنفيذ الأمر"),
+                success={"message": "تم تنفيذ الأمر"},
+                failure={"message": "تعذر تنفيذ الأمر"},
+            ))
+            existing_triggers.add(_cid)
+        if explicit_ids:
+            layers_meta["explicit_user_commands"] = explicit_ids
+    except Exception as _explicit_exc:
+        layers_meta["explicit_command_error"] = f"{type(_explicit_exc).__name__}:{str(_explicit_exc)[:160]}"
+
     result = build_from_spec(spec, project_dir)
     elapsed = _time.perf_counter() - t0
     # Stage-4: bake narrative into metadata for delivery
