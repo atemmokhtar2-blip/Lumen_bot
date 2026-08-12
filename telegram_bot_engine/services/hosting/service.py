@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ...schemas.error_contract import ErrorContract
+from .state_lock import atomic_write_text, exclusive_state_lock
 
 
 @dataclass
@@ -70,36 +71,56 @@ class HostingService:
     """Owner-scoped hosting manager."""
 
     def __init__(self, state_dir: str | Path | None = None) -> None:
-        base = Path(state_dir or os.getenv("OUTPUT_DIR", "/tmp/generated"))
+        base = Path(state_dir or os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
+        self.output_root = base
         self.state_dir = base / "hosting"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.state_dir / "instances.json"
         self._instances: dict[str, HostInstance] = {}
         self._load()
 
-    def _load(self) -> None:
+    def _lock_path(self) -> Path:
+        return self.state_dir / "instances.lock"
+
+    def _load_unlocked(self) -> None:
+        """Reload registry from disk (caller must hold exclusive_state_lock)."""
         if not self.state_file.exists():
+            self._instances = {}
             return
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            loaded: dict[str, HostInstance] = {}
             for row in data.get("instances", []):
                 inst = HostInstance(**{
                     k: v for k, v in row.items()
                     if k in HostInstance.__dataclass_fields__
                 })
-                self._instances[inst.instance_id] = inst
+                loaded[inst.instance_id] = inst
+            self._instances = loaded
         except Exception:
             self._instances = {}
 
-    def _save(self) -> None:
+    def _load(self) -> None:
+        try:
+            with exclusive_state_lock(self._lock_path()):
+                self._load_unlocked()
+        except Exception:
+            self._instances = {}
+
+    def _save_unlocked(self) -> None:
+        """Persist registry (caller must hold exclusive_state_lock)."""
         payload = {
             "instances": [asdict(i) for i in self._instances.values()],
             "updated_at": time.time(),
         }
-        self.state_file.write_text(
+        atomic_write_text(
+            self.state_file,
             json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
+
+    def _save(self) -> None:
+        with exclusive_state_lock(self._lock_path()):
+            self._save_unlocked()
 
     def list_for_user(self, user_id: int) -> list[HostInstance]:
         return [i for i in self._instances.values() if i.user_id == user_id]
@@ -124,26 +145,39 @@ class HostingService:
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
-        # Containment: must live under OUTPUT_DIR (never host system paths)
+        # Containment: must live under THIS user's sandbox (IDOR root fix).
+        # API layer already checks tenant sandbox; HostService enforces the same
+        # invariant so internal callers cannot host another tenant's tree.
         try:
-            out_root = Path(os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
-            path.relative_to(out_root)
+            from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+            sandbox = get_user_sandbox(int(user_id), self.output_root)
+            if not sandbox.is_under_sandbox(path):
+                return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
         except Exception:
             return HostResult(ok=False, message="مسار المشروع خارج مساحة العزل")
 
-        # Stop existing instance for same path+user OR same token (409 Conflict)
         import hashlib
         token_norm = (bot_token or "").strip()
         token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""
-        for inst in list(self.list_for_user(user_id)):
-            same_path = Path(inst.project_path).resolve() == path and inst.status == "running"
-            same_token = (
-                inst.status == "running"
-                and token_fp
-                and (getattr(inst, "token_fp", "") or "") == token_fp
-            )
-            if same_path or same_token:
-                self.stop(instance_id=inst.instance_id, user_id=user_id)
+
+        # Stop existing instance for same path+user OR same token under exclusive lock
+        # (closes TOCTOU race between concurrent start requests).
+        to_stop: list[str] = []
+        with exclusive_state_lock(self._lock_path()):
+            self._load_unlocked()
+            for inst in list(self._instances.values()):
+                if inst.user_id != user_id:
+                    continue
+                same_path = Path(inst.project_path).resolve() == path and inst.status == "running"
+                same_token = (
+                    inst.status == "running"
+                    and token_fp
+                    and (getattr(inst, "token_fp", "") or "") == token_fp
+                )
+                if same_path or same_token:
+                    to_stop.append(inst.instance_id)
+        for iid in to_stop:
+            self.stop(instance_id=iid, user_id=user_id)
 
         # Clear webhook so the hosted bot can poll exclusively
         try:
@@ -185,16 +219,19 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        multi = (os.environ.get("TBE_MULTI_TENANT") or "0").strip().lower() in {
+        # Fail closed: Docker required unless explicitly opted into local dev hosting.
+        # TBE_ALLOW_LOCAL_PROCESS=1 is the only way to run unisolated local processes.
+        env_name = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+        multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
             "1", "true", "yes", "on",
         }
-        _req_default = "1" if multi else "0"
+        is_dev = env_name in {"dev", "development", "local", "test"}
+        _req_default = "0" if is_dev and not multi else "1"
         require_docker = (os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
             "1", "true", "yes", "on",
         }
-        _allow_default = "0" if require_docker else "1"
-        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or _allow_default).strip().lower() not in {
-            "0", "false", "no", "off",
+        allow_local = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower() in {
+            "1", "true", "yes", "on",
         }
         if docker_available():
             driver = DockerProcessDriver()

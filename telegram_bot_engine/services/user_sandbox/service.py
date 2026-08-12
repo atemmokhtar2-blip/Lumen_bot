@@ -200,6 +200,65 @@ def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSa
     return UserSandbox(user_id=uid, root=root).ensure()
 
 
+
+def _platform_secret() -> bytes:
+    """Derive a stable key material from platform secrets (never commit raw keys)."""
+    import hashlib
+    raw = (
+        (os.getenv("TBE_TOKEN_SECRET") or "").strip()
+        or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+        or (os.getenv("SECRET_KEY") or "").strip()
+        or (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+        or "tbe-dev-insecure-token-key"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).digest()
+
+
+def _seal_token(token: str) -> str:
+    """Encrypt token for at-rest storage. Falls back to plaintext prefix if crypto unavailable."""
+    token = (token or "").strip()
+    if not token:
+        return ""
+    try:
+        # Pure-stdlib seal: XOR stream from SHA256(key||counter) + hmac tag
+        import hashlib
+        import hmac
+        import base64
+        key = _platform_secret()
+        out = bytearray()
+        data = token.encode("utf-8")
+        for i, b in enumerate(data):
+            block = hashlib.sha256(key + i.to_bytes(4, "big")).digest()
+            out.append(b ^ block[i % 32])
+        tag = hmac.new(key, bytes(out), hashlib.sha256).digest()[:16]
+        return "enc1:" + base64.urlsafe_b64encode(tag + bytes(out)).decode("ascii")
+    except Exception:
+        return token
+
+
+def _unseal_token(blob: str) -> str:
+    blob = (blob or "").strip()
+    if not blob.startswith("enc1:"):
+        return blob
+    try:
+        import hashlib
+        import hmac
+        import base64
+        key = _platform_secret()
+        raw = base64.urlsafe_b64decode(blob[5:].encode("ascii"))
+        tag, data = raw[:16], raw[16:]
+        expect = hmac.new(key, data, hashlib.sha256).digest()[:16]
+        if not hmac.compare_digest(tag, expect):
+            return ""
+        out = bytearray()
+        for i, b in enumerate(data):
+            block = hashlib.sha256(key + i.to_bytes(4, "big")).digest()
+            out.append(b ^ block[i % 32])
+        return out.decode("utf-8")
+    except Exception:
+        return ""
+
+
 def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:
     """Write bot token to a 0600 file inside the project; return path or None.
 
@@ -211,8 +270,12 @@ def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:
         return None
     root = Path(project_dir).resolve()
     path = root / ".tbe_bot_token"
+    # Prefer not writing tokens to disk at all in multi-tenant prod
+    if (os.getenv("TBE_DISABLE_TOKEN_FILE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
     try:
-        path.write_text(token, encoding="utf-8")
+        sealed = _seal_token(token)
+        path.write_text(sealed, encoding="utf-8")
         try:
             os.chmod(path, 0o600)
         except Exception:
@@ -220,6 +283,17 @@ def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:
         return path
     except Exception:
         return None
+
+
+def read_token_file(project_dir: str | Path) -> str:
+    """Read and unseal a token previously written by write_token_file."""
+    path = Path(project_dir).resolve() / ".tbe_bot_token"
+    try:
+        if not path.is_file():
+            return ""
+        return _unseal_token(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
 
 
 def clean_child_env(

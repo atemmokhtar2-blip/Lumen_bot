@@ -30,32 +30,39 @@ _RUNNING: Dict[str, dict] = {}
 
 
 def _apply_resource_limits() -> None:
-    """Apply conservative resource limits to the child process (best-effort).
+    """Apply strict resource limits to the child process (best-effort).
 
-    This is NOT a full sandbox (no seccomp / network / filesystem isolation).
-    Prefer the Docker driver whenever possible. These limits only reduce
-    damage from runaway or malicious generated code: CPU time, address
-    space, open files, and process count.
+    LocalProcessDriver is a **dev fallback only**. Prefer Docker
+    (memory/cpu/pids/cgroup isolation). These rlimits reduce damage from
+    runaway or malicious generated code (infinite loops, fork bombs):
+    CPU time, address space, open files, process count, and file size.
     """
     try:
         import resource
-        # CPU: 5 minutes hard limit
-        resource.setrlimit(resource.RLIMIT_CPU, (300, 300))
-        # Address space ~256 MiB (may be ignored on some platforms)
+        # CPU wall-ish: 120s hard (prevents pure spin loops monopolizing a core forever)
+        cpu = int(os.environ.get("TBE_LOCAL_RLIMIT_CPU", "120"))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        # Address space ~128 MiB default
+        mem = int(os.environ.get("TBE_LOCAL_RLIMIT_AS_MB", "128")) * 1024 * 1024
         try:
-            resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
         except (ValueError, OSError):
             pass
         # Open files
-        resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
-        # Max processes / threads
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        # Max processes/threads — low to blunt fork bombs
         try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (24, 24))
+            resource.setrlimit(resource.RLIMIT_NPROC, (16, 16))
         except (ValueError, OSError):
             pass
         # Core dumps off
         try:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        except (ValueError, OSError):
+            pass
+        # Max file size written by the child (~32 MiB)
+        try:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
         except (ValueError, OSError):
             pass
     except Exception as exc:
