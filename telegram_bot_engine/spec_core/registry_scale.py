@@ -965,7 +965,8 @@ def expand_scale_capabilities(*, target: int = 30000) -> int:
 
 
 
-# Auto-expand on import toward 30k complex-systems target
-_ADDED = expand_scale_capabilities(target=30000)
+# Deliberately no import-time expansion. The primary registry loads this module
+# only through load_scale_capabilities() when a caller explicitly requests it.
+_ADDED = 0
 
 __all__ = ["expand_scale_capabilities", "VERTICALS", "_ADDED"]

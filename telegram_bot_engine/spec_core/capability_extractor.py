@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from .registry import CAPABILITIES
+from .language_understanding.normalize import normalize_text, apply_dialect_map
 
 _PATTERNS: dict[str, tuple[str, ...]] = {
     # security
@@ -299,12 +300,15 @@ _DOMAIN_CAP_HINTS: dict[str, tuple[str, ...]] = {
 
 
 def _norm(text: str) -> str:
-    return (text or "").lower()
+    raw = (text or "").lower()
+    # Use the shared Arabic normalizer so Egyptian, Levantine, Gulf and
+    # orthographic variants reach the same capability keys.
+    return normalize_text(apply_dialect_map(raw))
 
 
 def extract(text: str) -> list[str]:
     t = _norm(text)
-    # Fold teh-marbuta so dialect/normalization stays aligned with patterns
+    # Keep a folded variant for patterns that use ه/ة interchangeably.
     t_fold = t.replace("ة", "ه")
     out: list[str] = []
     seen: set[str] = set()
@@ -316,8 +320,9 @@ def extract(text: str) -> list[str]:
 
     for key, keywords in _PATTERNS.items():
         for kw in keywords:
-            kw_fold = kw.lower().replace("ة", "ه")
-            if kw.lower() in t or kw_fold in t_fold:
+            kw_norm = _norm(kw)
+            kw_fold = kw_norm.replace("ة", "ه")
+            if kw_norm in t or kw_fold in t_fold:
                 add(key)
                 break
 

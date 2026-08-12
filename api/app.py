@@ -1,6 +1,7 @@
 """aiohttp application factory — B2B API + health."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 
@@ -86,12 +87,18 @@ async def error_middleware(request: web.Request, handler):
 
 
 def _client_ip(request: web.Request) -> str:
-    # Prefer first X-Forwarded-For hop when behind a trusted proxy
-    xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    if xff:
-        return xff[:64]
-    peer = request.remote or "unknown"
-    return str(peer)[:64]
+    """Return a stable client key without trusting spoofed forwarding headers."""
+    peer = str(request.remote or "unknown").strip()
+    trusted = {
+        item.strip()
+        for item in (os.getenv("TRUSTED_PROXY_IPS") or "").split(",")
+        if item.strip()
+    }
+    if peer in trusted:
+        xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if xff:
+            return xff[:64]
+    return peer[:64]
 
 
 @web.middleware
@@ -107,6 +114,19 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
         if limit > 0:
             ip = _client_ip(request)
             key = f"ip:{ip}"
+            # Authenticated tenants get a tenant bucket as well as the IP
+            # bucket, preventing a shared proxy from collapsing all users.
+            try:
+                tenant = getattr(request, "tenant", None)
+                if tenant and getattr(tenant, "tenant_id", None):
+                    key = f"tenant:{tenant.tenant_id}"
+                else:
+                    auth = (request.headers.get("Authorization") or "").strip()
+                    if auth:
+                        digest = hashlib.sha256(auth.encode("utf-8")).hexdigest()[:32]
+                        key = f"auth:{digest}"
+            except Exception:
+                pass
             lim = get_rate_limiter()
             if not lim.allow(key, limit=limit, window_sec=60.0):
                 retry = lim.seconds_until_allow(key, limit=limit, window_sec=60.0)

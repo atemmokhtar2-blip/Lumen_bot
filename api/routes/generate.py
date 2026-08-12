@@ -12,7 +12,7 @@ from b2b_platform.rate_limit import get_rate_limiter
 from b2b_platform.tenants import get_tenant_store
 
 # Hard caps against memory DoS (env-overridable)
-_MAX_DESCRIPTION = int(os.getenv("GENERATE_MAX_DESCRIPTION_CHARS") or "8000")
+_MAX_DESCRIPTION = int(os.getenv("GENERATE_MAX_DESCRIPTION_CHARS") or "20000")
 _MAX_BODY_BYTES = int(os.getenv("GENERATE_MAX_BODY_BYTES") or "65536")  # 64 KiB
 _GEN_RPM = int(os.getenv("GENERATE_RPM") or "10")  # per-tenant generate RPM
 

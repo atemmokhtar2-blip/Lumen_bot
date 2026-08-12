@@ -172,45 +172,57 @@ async def deliver_generation_result(
         return
 
     # Zip delivery, only after the pre-delivery gate passes.
+    delivery_ok = False
     try:
         zip_path = make_zip_from_path(project_path)
-        if zip_path and zip_path.exists():
-            size_mb = zip_path.stat().st_size / (1024 * 1024)
-            if size_mb <= ZIP_MAX_MB:
-                with zip_path.open("rb") as document:
+        if not zip_path or not zip_path.exists():
+            await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
+            return
+        size_mb = zip_path.stat().st_size / (1024 * 1024)
+        if size_mb <= ZIP_MAX_MB:
+            with zip_path.open("rb") as document:
+                await message.reply_document(
+                    document=document,
+                    filename=zip_path.name,
+                    caption="📦 المشروع المُولَّد (zip)",
+                )
+            delivery_ok = True
+        else:
+            parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
+            if not parts:
+                await message.reply_text(
+                    f"❌ تعذر تقسيم ملف المشروع الكبير ({size_mb:.1f} MB)، ولم يكتمل التسليم."
+                )
+                return
+            total = len(parts)
+            await message.reply_text(
+                f"📦 المشروع أكبر من رسالة واحدة ({size_mb:.1f} MB)، سأرسل {total} أجزاء مرقمة. "
+                "نزّلها كلها وادمجها بالترتيب: cat project.zip.part* > project.zip"
+            )
+            for index, part in enumerate(parts, 1):
+                with part.open("rb") as document:
                     await message.reply_document(
                         document=document,
-                        filename=zip_path.name,
-                        caption="📦 المشروع المُولَّد (zip)",
+                        filename=part.name,
+                        caption=f"📦 الجزء {index}/{total}",
                     )
-            else:
-                parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
-                if not parts:
-                    await message.reply_text(
-                        f"❌ تعذر تقسيم ملف المشروع الكبير ({size_mb:.1f} MB)، ولم يتم إسقاط التسليم."
-                    )
-                else:
-                    total = len(parts)
-                    await message.reply_text(
-                        f"📦 المشروع أكبر من رسالة واحدة ({size_mb:.1f} MB)، سأرسل {total} أجزاء مرقمة. "
-                        "نزّلها كلها وادمجها بالترتيب: cat project.zip.part* > project.zip"
-                    )
-                    for index, part in enumerate(parts, 1):
-                        with part.open("rb") as document:
-                            await message.reply_document(
-                                document=document,
-                                filename=part.name,
-                                caption=f"📦 الجزء {index}/{total}",
-                            )
-                    for part in parts:
-                        part.unlink(missing_ok=True)
-        else:
-            await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
-    except Exception:
+            for part in parts:
+                part.unlink(missing_ok=True)
+            delivery_ok = True
+    except Exception as exc:
         logger.exception("zip delivery failed")
+        await message.reply_text(
+            "❌ فشل تسليم ملف المشروع بعد نجاح التوليد. لم يتم اعتبار البوت جاهزاً للتشغيل."
+        )
+        return
 
-    ready = bool(success) and bool(meta.get("ready_for_token", False))
-    ah = meta.get("anti_hallucination") or {}
+    # The mandatory gate above is authoritative. Do not overwrite its result
+    # with stale/missing metadata from an older generation result shape.
+    if not delivery_ok:
+        await message.reply_text("❌ لم يكتمل تسليم ملف المشروع، لذلك لن يتم فتح مسار التشغيل.")
+        return
+    ready = bool(ready and success)
+    ah = ah or meta.get("anti_hallucination") or {}
 
     # Honest anti-hallucination summary
     try:
@@ -257,7 +269,11 @@ async def deliver_generation_result(
             if user:
                 get_session_store().save(int(user.id), context.user_data)
         except Exception:
-            pass
+            logger.exception("pending deployment session persistence failed")
+            await message.reply_text(
+                "⚠️ تم التحقق من المشروع، لكن تعذر حفظ جلسة التشغيل. أعد المحاولة قبل إرسال التوكن."
+            )
+            return
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
         await message.reply_text(
