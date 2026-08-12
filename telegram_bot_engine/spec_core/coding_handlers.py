@@ -952,6 +952,15 @@ def _emit_handlers(spec: BotSpec) -> str:
             continue
         if feat.feature in {"payment_precheckout", "payment_success"}:
             continue
+        # Never emit ghost capabilities that produce /explicitcommand style noise
+        if feat.feature in {"explicit_command", "deep_link_start", "smart_help", "form_start"}:
+            if feat.feature == "explicit_command" and str(feat.trigger.id or "") in {"about", "info"}:
+                pass  # allow about mapped as explicit_command with about trigger
+            else:
+                continue
+        trig = str(feat.trigger.id or "").lower().replace("-", "").replace("_", "")
+        if trig in {"explicitcommand", "deeplinkstart", "smarthelp", "formstart"}:
+            continue
         fname = f"handle_{feat.id}".replace("-", "_")
         if fname in emitted_fnames:
             continue
@@ -2048,9 +2057,12 @@ def _emit_main(spec: BotSpec) -> str:
     }
     uniq_cmds: list[tuple[str, str]] = []
     seen_c: set[str] = set()
+    _bad_cmds = {"explicitcommand", "deeplinkstart", "smarthelp", "formstart"}
     for c, d in commands:
         c2 = "".join(ch for ch in (c or "").lower().replace("-", "_") if ch.isalnum() or ch == "_")[:32]
         if not c2 or c2 in seen_c or not c2[0].isalpha():
+            continue
+        if c2.replace("_", "") in _bad_cmds:
             continue
         seen_c.add(c2)
         desc = (d or c2).replace("_", " ").strip()[:48] or c2

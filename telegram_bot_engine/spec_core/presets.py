@@ -897,48 +897,161 @@ def _is_minimal_command_bot_request(request: str) -> bool:
 
 
 def sanitize_spec_for_request(spec: "BotSpec", request: str) -> "BotSpec":
-    """Remove cross-domain feature bleed (e.g. قائمة → restaurant while user asked tasks)."""
+    """Remove cross-domain bleed + junk features; ensure core intents are complete."""
     req_n = _norm(request or "")
     if not req_n or spec is None:
         return spec
-    taskish = any(k in req_n for k in ("مهام", "مهمة", "task", "todo", "to-do"))
+
+    from .schema import Feature, Trigger, Action, Messages
+
+    def _feat(key: str, cmd: str | None = None) -> Feature:
+        c = cmd or key.replace("task_", "").replace("note_", "").replace("ticket_", "")
+        return Feature(
+            id=key,
+            feature=key,
+            trigger=Trigger("command", c),
+            action=Action("core", key),
+            messages=Messages(),
+        )
+
+    # Global junk — never ship unless user explicitly asked
+    JUNK = {
+        "explicit_command",
+        "deep_link_start",
+        "smart_help",
+        "form_start",
+    }
+    explicit_junk_ask = any(
+        k in req_n for k in ("deep link", "ديپ لينك", "نموذج", "form start", "smart help")
+    )
+
+    # _norm folds ة→ه so match both forms for Arabic nouns
+    taskish = any(k in req_n for k in ("مهام", "مهمه", "مهمة", "task", "todo", "to-do"))
+    notesish = any(k in req_n for k in ("ملاحظات", "ملاحظه", "ملاحظة", "notes", "note "))
+    supportish = any(
+        k in req_n
+        for k in ("دعم", "تذكرة", "تذاكره", "تذاكر", "تذاكيري", "support", "ticket", "mytickets")
+    )
+    shopish = any(
+        k in req_n
+        for k in ("متجر", "سلة", "سله", "كتالوج", "shop", "store", "cart", "catalog")
+    )
     restaurantish = any(
         k in req_n
-        for k in ("مطعم", "طاولة", "حجز طاولة", "restaurant", "طلبات المطعم")
+        for k in ("مطعم", "طاولة", "طاوله", "حجز طاولة", "restaurant", "طلبات المطعم")
     )
-    if taskish and not restaurantish and getattr(spec, "features", None):
-        keep = []
-        for f in list(spec.features):
-            key = str(getattr(f, "feature", "") or "")
+
+    feats = list(getattr(spec, "features", None) or [])
+    keep: list = []
+    for f in feats:
+        key = str(getattr(f, "feature", "") or "")
+        trig = str(getattr(getattr(f, "trigger", None), "id", "") or "")
+        # Drop junk capabilities
+        if key in JUNK and not explicit_junk_ask:
+            continue
+        if trig in {"explicitcommand", "deeplinkstart", "smarthelp"} and not explicit_junk_ask:
+            continue
+        # Tasks primary: drop restaurant/menu bleed
+        if taskish and not restaurantish:
             if key.startswith(("menu_", "table_", "order_")) or key in {
                 "menu_order", "menu_view", "table_book", "order_status",
-                "form_start", "deep_link_start", "smart_help",
             }:
                 continue
-            if key.startswith("form_") and "form" not in req_n and "نموذج" not in req_n:
+        # Notes primary (without tasks keywords): drop task_* bleed
+        if notesish and not taskish:
+            if key.startswith("task_"):
                 continue
-            keep.append(f)
-        # Ensure core task commands remain
-        have = {str(getattr(f, "feature", "")) for f in keep}
-        from .schema import Feature, Trigger, Action, Messages
-        for must in ("start", "help", "task_add", "task_list"):
-            if must not in have:
-                try:
-                    keep.append(
-                        Feature(
-                            id=must,
-                            feature=must,
-                            trigger=Trigger("command", must.replace("task_", "") if must.startswith("task_") else must),
-                            action=Action("core", must),
-                            messages=Messages(),
-                        )
-                    )
-                except Exception:
-                    pass
-        spec.features = keep
-        if getattr(spec, "bot", None) is not None and not restaurantish:
-            if not getattr(spec.bot, "name", None) or spec.bot.name in {"market_bot", "custom_bot", "my_bot"}:
+        # Tasks primary without notes keywords: drop note_* bleed
+        if taskish and not notesish:
+            if key.startswith("note_"):
+                continue
+        keep.append(f)
+
+    have = {str(getattr(f, "feature", "")) for f in keep}
+
+    def _ensure(keys: list[str]) -> None:
+        nonlocal keep, have
+        for k in keys:
+            if k not in have:
+                cmd = {
+                    "task_add": "add",
+                    "task_list": "list",
+                    "task_done": "done",
+                    "task_delete": "delete",
+                    "task_clear": "clear",
+                    "note_add": "note",
+                    "note_list": "notes",
+                    "note_delete": "delnote",
+                    "ticket_open": "ticket",
+                    "ticket_my": "mytickets",
+                    "shop_catalog": "shop",
+                    "cart_view": "cart",
+                    "cart_add": "cartadd",
+                    "start": "start",
+                    "help": "help",
+                    "about": "about",
+                }.get(k, k.replace("_", ""))
+                keep.append(_feat(k, cmd))
+                have.add(k)
+
+    _ensure(["start", "help"])
+
+    if taskish:
+        _ensure(["task_add", "task_list"])
+        if any(k in req_n for k in ("حذف", "delete", "مسح")):
+            _ensure(["task_delete", "task_clear"])
+        if any(k in req_n for k in ("تم", "done", "إنهاء", "انهاء")):
+            _ensure(["task_done"])
+        if getattr(spec, "bot", None) is not None:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
                 spec.bot.name = "tasks_bot"
+
+    if notesish:
+        _ensure(["note_add", "note_list"])
+        if getattr(spec, "bot", None) is not None and not taskish:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "notes_bot"
+
+    if supportish:
+        _ensure(["ticket_open", "ticket_my"])
+        if getattr(spec, "bot", None) is not None and not shopish:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "support_bot"
+
+    if shopish:
+        _ensure(["shop_catalog"])
+        if any(k in req_n for k in ("سلة", "سله", "cart", "اضافه للسله", "إضافة للسلة")):
+            _ensure(["cart_view", "cart_add"])
+        if getattr(spec, "bot", None) is not None:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "shop_bot"
+
+    # about when asked
+    if any(k in req_n for k in ("/about", "about", "عن البوت", "حول")):
+        _ensure(["about"])
+
+    # Support phrasing: تذاكري / my tickets
+    if supportish and any(k in req_n for k in ("تذاكري", "تذاكره", "mytickets", "my tickets", "تذاكري")):
+        _ensure(["ticket_my"])
+
+    # Dedup by feature key (keep first)
+    seen: set[str] = set()
+    deduped = []
+    for f in keep:
+        key = str(getattr(f, "feature", "") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(f)
+    spec.features = deduped
     return spec
 
 def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
