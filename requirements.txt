@@ -8,5 +8,5 @@ curl_cffi>=0.6.0
 aiohttp>=3.9.0
 
 # Optional: faster fuzzy matching for Layer-1 LU
-# rapidfuzz>=3.5.0
+rapidfuzz>=3.5.0
 pymongo>=4.6.0

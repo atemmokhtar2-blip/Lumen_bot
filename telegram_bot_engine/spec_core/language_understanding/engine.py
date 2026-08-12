@@ -387,6 +387,7 @@ def _suggested_questions(
 
 
 
+@lru_cache(maxsize=512)
 def understand(text: str) -> LanguageUnderstandingResult:
     original = text or ""
     normalized = normalize_text(original)

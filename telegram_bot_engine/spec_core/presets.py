@@ -615,7 +615,9 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     # Count independent commerce pillars present in the request text.
     text_l = (request or "").lower()
     pillars = {
-        "shop": any(k in text_l for k in ("متجر", "كتالوج", "catalog", "منتجات", "سلة", "كوبون", "shop", "store", "cart")),
+        "shop": any(k in text_l for k in ("متجر", "shop", "store", "ecommerce")),
+        "catalog": any(k in text_l for k in ("كتالوج", "catalog", "منتجات", "product", "products")),
+        "cart": any(k in text_l for k in ("سلة", "cart", "checkout", "إتمام شراء")),
         "orders": any(k in text_l for k in ("طلب", "طلبات", "تتبع", "إلغاء", "الغاء", "استرجاع", "استرداد", "order", "refund", "فاتورة", "فواتير")),
         "payments": any(k in text_l for k in ("دفع", "مدفوعات", "payment", "invoice", "فواتير")),
         "subs": any(k in text_l for k in ("اشتراك", "اشتراكات", "خطة", "خطط", "تجربة مجانية", "تجديد", "إهداء", "subscription", "trial", "renew")),
@@ -644,6 +646,14 @@ def score_presets(request: str) -> list[tuple[str, float]]:
     elif commerce_hits >= 3 and scores.get("subscriptions", 0) > 0:
         scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 2.0 * commerce_hits
 
+    # A multi-pillar commerce request must not lose to the raw shop keyword score.
+    # The composite signal is deliberately authoritative once catalog/cart/orders/
+    # payment pillars are independently present.
+    if scores.get("shop", 0.0) > 0 and pillar_count >= 3:
+        scores["commerce_pro"] = max(
+            scores.get("commerce_pro", 0.0),
+            scores["shop"] + 0.25,
+        )
 
     try:
         from .arabic_intent_engine import classify_intent, DOMAIN_TO_PRESET
@@ -700,6 +710,14 @@ def score_presets(request: str) -> list[tuple[str, float]]:
                 scores["shop"] = scores.get("shop", 0.0) + 1.0
     except Exception:
         pass
+
+    # Apply the composite decision after every domain/LU boost so a later raw
+    # shop score cannot undo an already proven multi-pillar commerce request.
+    if scores.get("shop", 0.0) > 0 and pillar_count >= 3:
+        scores["commerce_pro"] = max(
+            scores.get("commerce_pro", 0.0),
+            scores["shop"] + 0.25,
+        )
 
     ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
     return ranked
