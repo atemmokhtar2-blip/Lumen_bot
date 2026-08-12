@@ -96,26 +96,6 @@ def main() -> None:
     # ── Single poller only (prevents 409 Conflict on getUpdates) ──
     from bot_interface.singleton import acquire_bot_singleton, clear_telegram_webhook
 
-    # Railway / multi-replica: only replica 0 may poll Telegram
-    replica = (
-        os.getenv("RAILWAY_REPLICA_ID")
-        or os.getenv("RAILWAY_REPLICA")
-        or os.getenv("REPLICA_ID")
-        or "0"
-    ).strip()
-    if replica not in {"0", ""}:
-        logger.error(
-            "Non-primary replica (id=%s) — skipping Telegram polling. "
-            "Set service replicas=1 on Railway.",
-            replica,
-        )
-        # Keep process alive for health if needed
-        if (os.getenv("ENABLE_API") or "1").strip().lower() not in {"0", "false", "no", "off"}:
-            _start_b2b_api_process(PORT)
-        else:
-            start_health_server(PORT)
-        return
-
     try:
         lock_path = acquire_bot_singleton(OUTPUT_DIR)
         logger.info("Polling singleton acquired (%s)", lock_path)
