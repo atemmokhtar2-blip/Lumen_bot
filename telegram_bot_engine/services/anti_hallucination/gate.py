@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -332,6 +335,44 @@ def _local_import_findings(root: Path, files: list[Path]) -> list[Finding]:
     return findings
 
 
+def _runtime_import_findings(root: Path) -> list[Finding]:
+    """Import generated local modules in an isolated, network-free subprocess."""
+    modules = []
+    for rel in ("app/handlers.py", "app/flow_engine.py"):
+        if (root / rel).is_file():
+            modules.append(rel[:-3].replace("/", "."))
+    services = root / "app" / "services"
+    if services.is_dir():
+        modules.extend(
+            f"app.services.{p.stem}"
+            for p in services.glob("*.py")
+            if p.name != "__init__.py"
+        )
+    if not modules:
+        return []
+    code = "import importlib\n" + "\n".join(
+        f"importlib.import_module({name!r})" for name in dict.fromkeys(modules)
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return [Finding("error", "runtime_import_timeout", "انتهى وقت فحص استيراد ملفات البوت", "Generated module import smoke test timed out")]
+    if proc.returncode:
+        evidence = (proc.stderr or proc.stdout or "").strip()[-1200:]
+        return [Finding("error", "runtime_import_error", "فشل استيراد أحد ملفات البوت المولد قبل التسليم", "Generated module import smoke test failed", evidence)]
+    return []
+
+
 def _load_spec_features(root: Path) -> list[str]:
     """Features claimed by written artifacts (spec / contract / manifest)."""
     claimed: list[str] = []
@@ -457,7 +498,9 @@ def run_anti_hallucination_gate(
 
     for finding in _local_import_findings(root, files):
         rep.errors.append(finding)
-    if any(f.code.startswith("local_import_") for f in rep.errors):
+    for finding in _runtime_import_findings(root):
+        rep.errors.append(finding)
+    if any(f.code.startswith("local_import_") or f.code.startswith("runtime_import_") for f in rep.errors):
         rep.ok = False
         rep.structure_ok = False
 
