@@ -14,6 +14,23 @@ _MONGO_COLLECTION = None
 _MONGO_OWNER = ""
 
 
+def _resolve_mongo_db(client):
+    """Pick DB name without requiring it in the URI path (Railway-safe)."""
+    name = (
+        os.getenv("MONGODB_DB")
+        or os.getenv("MONGO_DB")
+        or os.getenv("MONGODB_DATABASE")
+        or ""
+    ).strip()
+    if name:
+        return client[name]
+    try:
+        return client.get_default_database()
+    except Exception:
+        # URI has no /dbname — same default as mongo_users.py
+        return client["ai_agent_7h"]
+
+
 def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
     """Acquire a cross-host lease when Mongo is configured; return None if unused."""
     global _MONGO_CLIENT, _MONGO_COLLECTION, _MONGO_OWNER
@@ -22,12 +39,26 @@ def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
         return None
     try:
         from pymongo import MongoClient, ReturnDocument
-        from pymongo.errors import DuplicateKeyError
+        from pymongo.errors import DuplicateKeyError, ConfigurationError, PyMongoError
     except ImportError as exc:
         raise SystemExit("MONGODB_URI is configured but pymongo is missing") from exc
-    client = MongoClient(uri, serverSelectionTimeoutMS=3000)
-    client.admin.command("ping")
-    coll = client.get_default_database()["ai_agent_runtime_locks"]
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=3000)
+        client.admin.command("ping")
+        coll = _resolve_mongo_db(client)["ai_agent_runtime_locks"]
+    except (ConfigurationError, PyMongoError, Exception) as exc:
+        # Misconfigured URI must not crash the whole bot — fall back to file lock
+        import logging
+        logging.getLogger("ai_agent_7h_bot").warning(
+            "Mongo polling lock unavailable (%s: %s) — using local file lock",
+            type(exc).__name__,
+            exc,
+        )
+        try:
+            client.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return None
     coll.create_index("expires_at", expireAfterSeconds=0)
     owner = f"{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
     deadline = time.monotonic() + max(5.0, float(wait_seconds))
