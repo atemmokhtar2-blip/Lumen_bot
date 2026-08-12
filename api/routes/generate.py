@@ -97,13 +97,26 @@ async def generate(request: web.Request) -> web.Response:
 
     brand = tenant.brand_name or tenant.name
     if wait:
-        # Dev/sync path: block this request only (still on dedicated pool via future)
-        import time
+        # Sync wait is dev-only. Never block the aiohttp event loop with time.sleep.
+        import asyncio
+        from telegram_bot_engine.services.isolation_policy import is_multi_tenant, is_dev_environment
 
-        deadline = time.time() + float(
+        if is_multi_tenant() and not is_dev_environment():
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": "sync_wait_disabled",
+                    "detail": "wait=true is disabled in multi-tenant production; poll /v1/jobs/{id}",
+                    "job_id": job.job_id,
+                    "poll_url": f"/v1/jobs/{job.job_id}",
+                },
+                status=400,
+            )
+
+        deadline = asyncio.get_event_loop().time() + float(
             os.getenv("JOB_SYNC_WAIT_SECONDS") or "300"
         )
-        while time.time() < deadline:
+        while asyncio.get_event_loop().time() < deadline:
             cur = runner.store.get(job.job_id)
             if cur and cur.status in ("succeeded", "failed", "cancelled"):
                 payload = cur.public_dict()
@@ -112,7 +125,7 @@ async def generate(request: web.Request) -> web.Response:
                 if cur.status == "failed":
                     status = 500
                 return web.json_response(payload, status=status)
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
         return web.json_response(
             {"ok": False, "error": "sync_wait_timeout", "job_id": job.job_id},
             status=504,

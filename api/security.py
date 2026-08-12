@@ -29,8 +29,24 @@ def tenant_sandbox_root(tenant_id: str) -> Path:
 
 
 def is_path_inside(child: Path, parent: Path) -> bool:
+    """True if child is under parent after resolve; rejects symlink escapes."""
     try:
-        child.resolve().relative_to(parent.resolve())
+        c = child.resolve()
+        p = parent.resolve()
+        c.relative_to(p)
+        # Reject if any path component is a symlink pointing outside parent
+        cur = Path(c.anchor) if c.anchor else Path("/")
+        for part in c.parts[1:]:
+            cur = cur / part
+            try:
+                if cur.is_symlink():
+                    target = cur.resolve()
+                    target.relative_to(p)
+            except (ValueError, OSError):
+                return False
+            # Stop walking at the final path
+            if cur == c:
+                break
         return True
     except (ValueError, OSError):
         return False
@@ -62,12 +78,19 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
 
+    # Symlink project roots are forbidden (TOCTOU / path swap)
+    try:
+        if Path(raw).is_symlink() or path.is_symlink():
+            raise ValueError("project_path_symlink_forbidden")
+    except ValueError:
+        raise
+    except OSError:
+        pass
+
     sandbox = tenant_sandbox_root(tenant_id)
-    # Also accept any path under OUTPUT_DIR/users/<shard>/<uid>/ for this tenant only
     if is_path_inside(path, sandbox):
         return path
 
-    # Hard deny everything else (including /etc, other tenants, host app code)
     raise ValueError("project_path_outside_sandbox")
 
 

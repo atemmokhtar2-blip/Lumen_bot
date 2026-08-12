@@ -162,6 +162,11 @@ class HostingService:
             sandbox = get_user_sandbox(int(user_id), self.output_root)
             if not sandbox.is_under_sandbox(path):
                 return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
+            try:
+                from telegram_bot_engine.services.disk_quota import enforce_user_quota
+                enforce_user_quota(sandbox.root)
+            except RuntimeError as exc:
+                return HostResult(ok=False, message=f"حصة التخزين ممتلئة: {exc}")
         except Exception:
             return HostResult(ok=False, message="مسار المشروع خارج مساحة العزل")
 
@@ -430,9 +435,11 @@ class HostingService:
         root = Path(inst.project_path)
         try:
             for p in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
-                run_log = p.read_text(encoding="utf-8", errors="ignore")[-8000:]
+                from bot_interface.sanitize import sanitize_log_text
+                run_log = sanitize_log_text(p.read_text(encoding="utf-8", errors="ignore")[-8000:])
             for p in sorted(root.glob(".deploy_*.install.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
-                install_log = p.read_text(encoding="utf-8", errors="ignore")[-5000:]
+                from bot_interface.sanitize import sanitize_log_text as _slog
+                install_log = _slog(p.read_text(encoding="utf-8", errors="ignore")[-5000:])
         except Exception:
             pass
         contract = analyze_logs(

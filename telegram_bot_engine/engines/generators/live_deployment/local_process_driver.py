@@ -372,6 +372,19 @@ class LocalProcessDriver(DeploymentProvider):
         max_rounds: int = 2,
     ) -> DeploymentStatus:
         """Error Intelligence decides packages → pip install → restart process."""
+        # Auto-heal pip install is OFF by default (package injection / log poisoning).
+        # Enable only in trusted dev with TBE_ALLOW_AUTO_HEAL=1.
+        import os as _os
+        if (_os.environ.get("TBE_ALLOW_AUTO_HEAL") or "0").strip().lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=dep_id,
+                status=DEPLOY_FAILED,
+                message="auto-heal disabled (set TBE_ALLOW_AUTO_HEAL=1 only in trusted dev)",
+            )
+
         from telegram_bot_engine.services.error_intelligence import analyze_logs
         from telegram_bot_engine.services.live_runner.service import (
             _ensure_runtime,

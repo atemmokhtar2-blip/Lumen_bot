@@ -60,6 +60,13 @@ class UserSandbox:
         return self
 
     def new_project_dir(self, label: str = "bot") -> Path:
+        try:
+            from telegram_bot_engine.services.disk_quota import enforce_user_quota
+            enforce_user_quota(self.root)
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
         self.ensure()
         stamp = time.strftime("%Y%m%d_%H%M%S")
         name = f"{_safe_segment(label, 'bot')}_{stamp}"

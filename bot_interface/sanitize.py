@@ -57,4 +57,20 @@ def assert_safe_fs_path(path: str) -> str:
     return p
 
 
-__all__ = ["sanitize_error", "sanitize_for_storage", "assert_safe_fs_path"]
+__all__ = ["sanitize_error", "sanitize_for_storage", "assert_safe_fs_path", "sanitize_log_text"]
+
+
+def sanitize_log_text(text: str, *, max_len: int = 4000) -> str:
+    """Strip secrets and HTML/JS-looking payloads from logs shown to users/admins."""
+    import re
+    s = (text or "")
+    # Redact token-like and key-like values
+    s = re.sub(r"(?i)(bot[_-]?token|api[_-]?key|secret|password|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", s)
+    s = re.sub(r"\b\d{8,12}:[A-Za-z0-9_-]{20,}\b", "[REDACTED_BOT_TOKEN]", s)
+    s = re.sub(r"\b(sk_live_|sk_test_|ghp_|github_pat_|glpat-)[A-Za-z0-9_-]+", "[REDACTED_SECRET]", s)
+    # Neutralize HTML/script for admin UI
+    s = s.replace("<", "&lt;").replace(">", "&gt;")
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", s)
+    if len(s) > max_len:
+        s = s[: max_len - 1] + "…"
+    return s

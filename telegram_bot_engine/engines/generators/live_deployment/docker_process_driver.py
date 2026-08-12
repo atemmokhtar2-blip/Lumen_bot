@@ -216,7 +216,7 @@ class DockerProcessDriver(DeploymentProvider):
             "cd /app; "
             "mkdir -p /tmp/deps; "
             "if [ -f requirements.txt ]; then "
-            "  pip install --no-cache-dir -q --target /tmp/deps -r requirements.txt || true; "
+            "  pip install --no-cache-dir -q --only-binary=:all: --target /tmp/deps -r requirements.txt || true; "
             "fi; "
             "export PYTHONPATH=/tmp/deps:${PYTHONPATH:-}; "
             f"exec python -u {rel_entry}"
@@ -252,8 +252,8 @@ class DockerProcessDriver(DeploymentProvider):
             # /tmp must allow exec for pip wheels / native extensions during install
             "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=96m",
             "--tmpfs", "/var/tmp:rw,noexec,nosuid,nodev,size=16m",
-            # Network: allow outbound (Telegram API) but no published ports
-            "--network", "bridge",
+            # Network: no published ports. Prefer custom egress-limited network.
+            "--network", (os.environ.get("TBE_DOCKER_NETWORK") or "bridge"),
             # Mount ONLY this user's project directory (sandbox path)
             "-v", f"{path}:/app:rw",
             "-w", "/app",
@@ -264,6 +264,8 @@ class DockerProcessDriver(DeploymentProvider):
             "-e", "PYTHONDONTWRITEBYTECODE=1",
             "-e", "TBE_SANDBOX=docker",
             "-e", "TBE_ISOLATED=1",
+            "-e", "AWS_EC2_METADATA_DISABLED=true",
+            "-e", "NO_PROXY=169.254.169.254,metadata,metadata.google.internal",
             "-e", "HOME=/tmp",
             "-e", "PYTHONPATH=/tmp/deps",
             "-e", f"BOT_TOKEN={bot_token}",
@@ -295,36 +297,24 @@ class DockerProcessDriver(DeploymentProvider):
                 message=f"docker run failed: {type(e).__name__}: {e}",
             )
 
-        # If --user caused failure (image has no matching uid), retry without it
+        # NEVER fall back to root. Non-root is mandatory isolation.
         if proc.returncode != 0 and "--user" in cmd:
             err_txt = ((proc.stderr or "") + (proc.stdout or "")).lower()
             if any(k in err_txt for k in ("unable to find user", "unknown user", "no such user", "invalid user")):
-                _log.info("Docker --user %s failed; retrying without non-root user", _RUN_AS_USER)
-                cleaned: List[str] = []
-                skip_next = False
-                for c in cmd:
-                    if skip_next:
-                        skip_next = False
-                        continue
-                    if c == "--user":
-                        skip_next = True
-                        continue
-                    cleaned.append(c)
-                try:
-                    proc = subprocess.run(
-                        cleaned,
-                        capture_output=True,
-                        text=True,
-                        timeout=60,
-                        check=False,
-                    )
-                except Exception as e:
-                    return DeploymentStatus(
-                        provider=self.name,
-                        deployment_id=dep_id,
-                        status=DEPLOY_FAILED,
-                        message=f"docker run (fallback) failed: {type(e).__name__}: {e}",
-                    )
+                _log.error(
+                    "Docker --user %s unavailable in image; refusing root fallback",
+                    _RUN_AS_USER,
+                )
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message=(
+                        f"Image lacks non-root user {_RUN_AS_USER}; "
+                        "refusing to run container as root. "
+                        "Set TBE_DOCKER_IMAGE to an image with that uid/gid."
+                    ),
+                )
 
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or "").strip()[:400]
