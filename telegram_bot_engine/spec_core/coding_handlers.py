@@ -1468,6 +1468,8 @@ def _emit_handlers(spec: BotSpec) -> str:
                 else []
             ),
             "",
+            "    # Guaranteed final response: ordinary text must never disappear silently.",
+            "    await message.reply_text('تم استلام رسالتك: ' + message.text[:200])",
             "",
             "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",

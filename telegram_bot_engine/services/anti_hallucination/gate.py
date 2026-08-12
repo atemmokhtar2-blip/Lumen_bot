@@ -270,6 +270,27 @@ def _extract_command_handlers(src: str) -> list[str]:
     )
 
 
+def _extract_command_bindings(src: str) -> list[tuple[str, str]]:
+    """Read CommandHandler(command, handler) bindings from Python AST."""
+    bindings: list[tuple[str, str]] = []
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return bindings
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+        if name != "CommandHandler" or len(node.args) < 2:
+            continue
+        command, handler = node.args[0], node.args[1]
+        if isinstance(command, ast.Constant) and isinstance(command.value, str):
+            if isinstance(handler, ast.Name):
+                bindings.append((command.value, handler.id))
+    return bindings
+
+
 def _local_import_findings(root: Path, files: list[Path]) -> list[Finding]:
     """Validate local imports statically without importing or executing generated code."""
     findings: list[Finding] = []
@@ -504,7 +525,10 @@ def run_anti_hallucination_gate(
             all_handler_src += "\n" + _read(p)
 
     handlers = _extract_async_handlers(all_handler_src)
-    commands = _extract_command_handlers(main_src + "\n" + all_handler_src)
+    combined_src = main_src + "\n" + all_handler_src
+    bindings = _extract_command_bindings(combined_src)
+    binding_map = {cmd: handler for cmd, handler in bindings}
+    commands = [cmd for cmd, _ in bindings] or _extract_command_handlers(combined_src)
     # de-dupe preserve order
     seen_cmd: set[str] = set()
     commands = [c for c in commands if not (c in seen_cmd or seen_cmd.add(c))]
@@ -536,11 +560,14 @@ def run_anti_hallucination_gate(
             f"{cmd}_cmd",
             f"cmd_{cmd}",
         )
-        matched = None
-        for cand in candidates:
-            if cand in handlers:
-                matched = cand
-                break
+        matched = binding_map.get(cmd)
+        if matched not in handlers:
+            matched = None
+        if matched is None:
+            for cand in candidates:
+                if cand in handlers:
+                    matched = cand
+                    break
         if matched is None:
             # soft: CommandHandler may point to a shared function
             # only error if we have zero evidence
@@ -722,6 +749,7 @@ def run_anti_hallucination_gate(
     rep.metadata = {
         "entry": str(entry.relative_to(root)) if entry else None,
         "commands_registered": commands,
+        "command_bindings": bindings,
         "user_request_preview": (user_request or "")[:200],
         "claimed_features": claimed_norm[:40],
     }
