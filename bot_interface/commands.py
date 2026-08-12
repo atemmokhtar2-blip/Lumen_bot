@@ -126,6 +126,20 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("Usage: /lang ar | /lang en")
 
 
+async def unknown_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply instead of silently dropping an unregistered slash command."""
+    message = update.effective_message
+    if not message:
+        return
+    user = update.effective_user
+    if not is_allowed(user.id if user else None):
+        await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
+        return
+    await message.reply_text(
+        "الأمر غير معروف. استخدم /help لعرض الأوامر المتاحة."
+    )
+
+
 async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Voice/photo/sticker/document — never silent."""
     message = update.effective_message

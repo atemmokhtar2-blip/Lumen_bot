@@ -37,7 +37,7 @@ from bot_interface import (
     error_handler,
     start_health_server,
 )
-from bot_interface.commands import handle_non_text
+from bot_interface.commands import handle_non_text, unknown_cmd
 
 
 def _start_b2b_api_process(port: int) -> None:
@@ -167,6 +167,8 @@ def main() -> None:
         application.add_handler(CommandHandler("status", status_cmd))
         application.add_handler(CommandHandler("lang", lang_cmd))
         application.add_handler(CommandHandler("language", lang_cmd))
+        # Never leave an unknown slash command without a Telegram response.
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
         application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
         )
