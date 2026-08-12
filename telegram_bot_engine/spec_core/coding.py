@@ -33,7 +33,7 @@ python main.py
 from pathlib import Path
 from typing import Any
 
-from .coding_emit_foundation import _emit_config, _emit_db
+from .coding_emit_foundation import _emit_config, _emit_db, _emit_models
 from .coding_emit_services import (
     _emit_content,
     _emit_extras,
@@ -71,6 +71,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         "app/__init__.py": "",
         "app/config.py": _emit_config(),
         "app/db.py": _emit_db(spec),
+        "app/models.py": _emit_models(spec),
         "app/keyboards.py": _emit_keyboards(spec),
         "app/handlers.py": _emit_handlers(spec),
         "main.py": _emit_main(spec),
