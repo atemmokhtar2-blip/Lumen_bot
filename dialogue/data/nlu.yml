@@ -62,7 +62,31 @@ nlu:
     - tell me my subscription plan
     - عايز أعرف اشتراكي الحالي
     - الخطة الحالية لحسابي إيه؟
-
+    - أنا على أي باقة دلوقتي؟
+    - ممكن تعرفني أنا مشترك في أنهي خطة؟
+    - الخطة اللي مفعلة عندي اسمها إيه؟
+    - حسابي الحالي تبع Free ولا Starter؟
+    - هل أنا على الباقة المجانية؟
+    - إيه اسم الاشتراك الموجود على حسابي؟
+    - وريني الخطة المسجلة لحسابي
+    - عايز أعرف أنا على أنهي اشتراك
+    - ما هو الاشتراك الفعال عندي الآن؟
+    - إيه الباقة الحالية بتاعتي؟
+    - ممكن تقول لي نوع خطتي؟
+    - أنا مشترك في خطة إيه حاليًا؟
+    - حسابي مربوط بأي باقة؟
+    - هل تقدر تعرف خطتي من الحساب؟
+    - عايز أتحقق من خطتي الحالية
+    - قول لي أنا على Free ولا Growth
+    - ما الخطة المرتبطة بهذا الحساب؟
+    - إيه subscription بتاعي؟
+    - current plan for my account
+    - which subscription is active for me?
+    - show me the plan linked to my account
+    - what is my active subscription?
+    - am I on the free plan?
+    - tell me which package I currently have
+    - identify my current account plan
 - intent: ask_plan_details
   examples: |
     - تفاصيل خطة [Free](plan_name) إيه؟
@@ -78,7 +102,31 @@ nlu:
     - what is included in the [Free](plan_name) plan?
     - how many generations does [Starter](plan_name) include?
     - تفاصيل الباقة اللي عندي
-
+    - اشرح لي تفاصيل الخطة الحالية
+    - اشرح لي تفاصيل الباقة الحالية
+    - إيه تفاصيل الباقة اللي أنا عليها؟
+    - عايز أعرف كل مميزات خطتي
+    - ممكن تعرض مواصفات اشتراكي؟
+    - الخطة بتاعتي بتديني إيه؟
+    - ما الخدمات الموجودة في الباقة؟
+    - ماذا تشمل الخطة الحالية؟
+    - كام توليد ورسالة في الباقة؟
+    - اعرض لي تفاصيل اشتراكي كاملة
+    - ما مميزات الاشتراك الحالي؟
+    - إيه اللي آخده مقابل الاشتراك؟
+    - هل ممكن توضح مكونات الخطة؟
+    - تفاصيل الباقة اللي عندي لو سمحت
+    - عايز أعرف حدود ومميزات الباقة
+    - الباقة الحالية فيها إيه بالضبط؟
+    - اعرفني الخطة دي بتشمل إيه
+    - ممكن تفاصيل Free؟
+    - ما الذي تتضمنه باقتي؟
+    - أريد معرفة مزايا خطتي الحالية
+    - what does my current plan include?
+    - explain all details of my subscription
+    - show the features and quotas in my plan
+    - give me the full package details
+    - what do I get with my current package?
 - intent: ask_plan_comparison
   examples: |
     - إيه الفرق بين Free وStarter؟
@@ -105,7 +153,31 @@ nlu:
     - what are my plan limits?
     - how many bots can I host?
     - هل عندي access للـ API؟
-
+    - إيه حدود الخطة بتاعتي؟
+    - كم عملية توليد متبقية لي؟
+    - فاضل كام رسالة في حسابي؟
+    - كم رسالة باقيين عندي؟
+    - إيه هو عدد الرسائل اللي باقي؟
+    - كم التوليدات المتبقية هذا الشهر؟
+    - هل استهلكت الحد الشهري؟
+    - اعرفني المتبقي من حصتي
+    - كام quota فاضلة عندي؟
+    - هل وصلت لحد التوليد؟
+    - كم مشروع أقدر أولده كمان؟
+    - كم رسالة أقدر أرسل قبل انتهاء الحد؟
+    - ما المتاح لي من الاستخدام؟
+    - عايز أعرف استهلاكي والمتبقي
+    - كم تبقى من رصيد التوليد؟
+    - هل ما زال عندي توليد مجاني؟
+    - حدود الرسائل في حسابي كام؟
+    - ما الحد الأقصى للاستخدام عندي؟
+    - كم مرة أستطيع التوليد هذا الشهر؟
+    - هل خلصت رسائلي الشهرية؟
+    - how many messages do I have left?
+    - how many generations remain on my account?
+    - show my remaining quota
+    - what is left in my monthly allowance?
+    - did I reach my monthly generation limit?
 - intent: ask_hosting
   examples: |
     - هل في استضافة 24/7؟
@@ -135,7 +207,26 @@ nlu:
     - generation quota كام؟
     - how many generations are included?
     - هل التوليد متاح في الخطة المجانية؟
-
+    - فاضل لي كام توليد هذا الشهر؟
+    - كم مشروع جديد أقدر أعمله؟
+    - ما عدد التوليدات المتاحة؟
+    - هل أقدر أولد مشروع تاني؟
+    - هل رصيد التوليد خلص؟
+    - إيه استهلاك التوليد عندي؟
+    - كم generation متبقي؟
+    - هل التوليد متاح لي الآن؟
+    - ممكن أعرف حصة التوليد؟
+    - أقدر أطلب كام بوت الشهر ده؟
+    - هل يمكنني توليد بوت آخر؟
+    - ما الحد الشهري لإنشاء المشاريع؟
+    - كم مرة يسمح لي النظام بالتوليد؟
+    - عايز أعرف رصيد المشاريع
+    - هل يوجد توليد مجاني متبقي؟
+    - how many projects can I generate this month?
+    - can I generate another project?
+    - how much generation quota remains?
+    - is generation still available for my account?
+    - show my generation allowance
 - intent: ask_billing_support
   examples: |
     - محتاج مساعدة في الاشتراك
@@ -208,7 +299,31 @@ nlu:
     - show my account plan
     - هل ممكن تجيب الباقة من حسابي؟
     - ما هي الباقة المسجلة عندي؟
-
+    - أنا على أي باقة دلوقتي؟
+    - ممكن تعرفني أنا مشترك في أنهي خطة؟
+    - الخطة اللي مفعلة عندي اسمها إيه؟
+    - حسابي الحالي تبع Free ولا Starter؟
+    - هل أنا على الباقة المجانية؟
+    - إيه اسم الاشتراك الموجود على حسابي؟
+    - وريني الخطة المسجلة لحسابي
+    - عايز أعرف أنا على أنهي اشتراك
+    - ما هو الاشتراك الفعال عندي الآن؟
+    - إيه الباقة الحالية بتاعتي؟
+    - ممكن تقول لي نوع خطتي؟
+    - أنا مشترك في خطة إيه حاليًا؟
+    - حسابي مربوط بأي باقة؟
+    - هل تقدر تعرف خطتي من الحساب؟
+    - عايز أتحقق من خطتي الحالية
+    - قول لي أنا على Free ولا Growth
+    - ما الخطة المرتبطة بهذا الحساب؟
+    - إيه subscription بتاعي؟
+    - current plan for my account
+    - which subscription is active for me?
+    - show me the plan linked to my account
+    - what is my active subscription?
+    - am I on the free plan?
+    - tell me which package I currently have
+    - identify my current account plan
 - intent: ask_plan_details
   examples: |
     - اشرح باقة [Free](plan_name)
@@ -223,7 +338,31 @@ nlu:
     - هل يوجد white label في الباقة؟
     - تفاصيل الخطة من فضلك
     - show plan information
-
+    - اشرح لي تفاصيل الخطة الحالية
+    - اشرح لي تفاصيل الباقة الحالية
+    - إيه تفاصيل الباقة اللي أنا عليها؟
+    - عايز أعرف كل مميزات خطتي
+    - ممكن تعرض مواصفات اشتراكي؟
+    - الخطة بتاعتي بتديني إيه؟
+    - ما الخدمات الموجودة في الباقة؟
+    - ماذا تشمل الخطة الحالية؟
+    - كام توليد ورسالة في الباقة؟
+    - اعرض لي تفاصيل اشتراكي كاملة
+    - ما مميزات الاشتراك الحالي؟
+    - إيه اللي آخده مقابل الاشتراك؟
+    - هل ممكن توضح مكونات الخطة؟
+    - تفاصيل الباقة اللي عندي لو سمحت
+    - عايز أعرف حدود ومميزات الباقة
+    - الباقة الحالية فيها إيه بالضبط؟
+    - اعرفني الخطة دي بتشمل إيه
+    - ممكن تفاصيل Free؟
+    - ما الذي تتضمنه باقتي؟
+    - أريد معرفة مزايا خطتي الحالية
+    - what does my current plan include?
+    - explain all details of my subscription
+    - show the features and quotas in my plan
+    - give me the full package details
+    - what do I get with my current package?
 - intent: ask_plan_comparison
   examples: |
     - اعمل مقارنة بين الباقات
@@ -246,7 +385,31 @@ nlu:
     - هل في قيود على الخطة؟
     - tell me my quotas
     - what limits apply to my account?
-
+    - إيه حدود الخطة بتاعتي؟
+    - كم عملية توليد متبقية لي؟
+    - فاضل كام رسالة في حسابي؟
+    - كم رسالة باقيين عندي؟
+    - إيه هو عدد الرسائل اللي باقي؟
+    - كم التوليدات المتبقية هذا الشهر؟
+    - هل استهلكت الحد الشهري؟
+    - اعرفني المتبقي من حصتي
+    - كام quota فاضلة عندي؟
+    - هل وصلت لحد التوليد؟
+    - كم مشروع أقدر أولده كمان؟
+    - كم رسالة أقدر أرسل قبل انتهاء الحد؟
+    - ما المتاح لي من الاستخدام؟
+    - عايز أعرف استهلاكي والمتبقي
+    - كم تبقى من رصيد التوليد؟
+    - هل ما زال عندي توليد مجاني؟
+    - حدود الرسائل في حسابي كام؟
+    - ما الحد الأقصى للاستخدام عندي؟
+    - كم مرة أستطيع التوليد هذا الشهر؟
+    - هل خلصت رسائلي الشهرية؟
+    - how many messages do I have left?
+    - how many generations remain on my account?
+    - show my remaining quota
+    - what is left in my monthly allowance?
+    - did I reach my monthly generation limit?
 - intent: ask_hosting
   examples: |
     - استضافة البوت بتكون فين؟
@@ -275,7 +438,26 @@ nlu:
     - هل يمكن إعادة التوليد؟
     - generation quota meaning
     - export the generated project
-
+    - فاضل لي كام توليد هذا الشهر؟
+    - كم مشروع جديد أقدر أعمله؟
+    - ما عدد التوليدات المتاحة؟
+    - هل أقدر أولد مشروع تاني؟
+    - هل رصيد التوليد خلص؟
+    - إيه استهلاك التوليد عندي؟
+    - كم generation متبقي؟
+    - هل التوليد متاح لي الآن؟
+    - ممكن أعرف حصة التوليد؟
+    - أقدر أطلب كام بوت الشهر ده؟
+    - هل يمكنني توليد بوت آخر؟
+    - ما الحد الشهري لإنشاء المشاريع؟
+    - كم مرة يسمح لي النظام بالتوليد؟
+    - عايز أعرف رصيد المشاريع
+    - هل يوجد توليد مجاني متبقي؟
+    - how many projects can I generate this month?
+    - can I generate another project?
+    - how much generation quota remains?
+    - is generation still available for my account?
+    - show my generation allowance
 - intent: ask_billing_support
   examples: |
     - أغير الخطة منين؟
