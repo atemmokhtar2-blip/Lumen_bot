@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config.settings import Settings
+from .engines.audio import AudioPreprocessingEngine
 from .engines.local_ai import FasterWhisperSpeechEngine, IdentityTranslationEngine, ArgosTranslationEngine, LocalModelError, SpeechEngine, TranslationEngine
 from .engines.media import MediaIntakeEngine, MediaError
 from .engines.render import RenderEngine
@@ -20,6 +21,7 @@ class VideoTranslationPipeline:
     def __init__(self, settings: Settings, *, speech_engine: SpeechEngine | None = None, translation_engine: TranslationEngine | None = None, progress: Callable[[JobRecord, str], None] | None = None):
         self.settings = settings.ensure()
         self.media = MediaIntakeEngine(settings)
+        self.audio = AudioPreprocessingEngine(settings)
         self.speech = speech_engine
         self.translation = translation_engine
         self.render = RenderEngine(settings)
@@ -54,8 +56,12 @@ class VideoTranslationPipeline:
             audio = root / "audio" / "speech.wav"
             self._set(job, JobStatus.AUDIO_EXTRACTION, 0.12, "extracting audio")
             self.media.extract_audio(original, audio)
+            self._set(job, JobStatus.AUDIO_PREPROCESSING, 0.22, "analyzing and optionally normalizing audio")
+            analysis = self.audio.analyze(audio)
+            speech_audio = self.audio.preprocess(audio, root / "audio" / "speech_normalized.wav", analysis)
+            job.metadata["audio_analysis"] = analysis.__dict__
             self._set(job, JobStatus.TRANSCRIBING, 0.28, "running local speech recognition")
-            language, lang_conf, segments, words, speakers = self._speech_engine().transcribe(audio)
+            language, lang_conf, segments, words, speakers = self._speech_engine().transcribe(speech_audio)
             raw = " ".join(segment.text for segment in segments).strip()
             clean = " ".join(raw.split())
             quality = self._quality(segments, words, lang_conf, metadata.duration)
