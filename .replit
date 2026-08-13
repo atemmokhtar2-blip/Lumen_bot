@@ -1,0 +1,30 @@
+modules = ["python-3.12"]
+
+[nix]
+channel = "stable-25_05"
+
+[agent]
+expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Run Tests"
+
+[[workflows.workflow]]
+name = "Run Tests"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PYTHONPATH=. python -m pytest tests/test_manager_pytest.py -q && PYTHONPATH=. python tests/verify_12_engines.py"
+
+[workflows.workflow.metadata]
+outputType = "console"

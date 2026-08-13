@@ -1,0 +1,310 @@
+{
+  "shop": {
+    "primary": [
+      "متجر",
+      "محل",
+      "shop",
+      "store",
+      "منتجات",
+      "سلة",
+      "بيع",
+      "يبيع",
+      "ecommerce"
+    ],
+    "secondary": [
+      "كوبون",
+      "خصم",
+      "كتالوج",
+      "طلب"
+    ]
+  },
+  "marketplace": {
+    "primary": [
+      "marketplace",
+      "بائعين",
+      "متعدد البائعين",
+      "زي امازون"
+    ],
+    "secondary": [
+      "نون",
+      "jumia",
+      "عمولة"
+    ]
+  },
+  "payments": {
+    "primary": [
+      "دفع",
+      "فيزا",
+      "payment",
+      "مدفوعات",
+      "فوري",
+      "فودافون"
+    ],
+    "secondary": [
+      "محفظة",
+      "invoice",
+      "كاش",
+      "cod"
+    ]
+  },
+  "delivery": {
+    "primary": [
+      "توصيل",
+      "شحن",
+      "delivery",
+      "shipping"
+    ],
+    "secondary": [
+      "تتبع",
+      "مندوب"
+    ]
+  },
+  "tickets": {
+    "primary": [
+      "دعم",
+      "تذكرة",
+      "support",
+      "helpdesk",
+      "شكوى"
+    ],
+    "secondary": [
+      "بلاغ",
+      "خدمة عملاء"
+    ]
+  },
+  "booking": {
+    "primary": [
+      "حجز",
+      "موعد",
+      "booking",
+      "appointment"
+    ],
+    "secondary": [
+      "جدول",
+      "reservation"
+    ]
+  },
+  "education": {
+    "primary": [
+      "تعليم",
+      "كورس",
+      "دورة",
+      "course",
+      "quiz",
+      "lms"
+    ],
+    "secondary": [
+      "طالب",
+      "شهادة",
+      "واجب"
+    ]
+  },
+  "crm": {
+    "primary": [
+      "crm",
+      "leads",
+      "مبيعات",
+      "pipeline",
+      "صفقات"
+    ],
+    "secondary": [
+      "عميل",
+      "متابعة"
+    ]
+  },
+  "saas": {
+    "primary": [
+      "saas",
+      "منصة",
+      "workspace",
+      "tenant",
+      "api"
+    ],
+    "secondary": [
+      "webhook",
+      "admin panel"
+    ]
+  },
+  "security": {
+    "primary": [
+      "سيبراني",
+      "cyber",
+      "cybersecurity",
+      "أمن",
+      "فحص أمني",
+      "dns",
+      "tls",
+      "phishing",
+      "تصيد",
+      "ثغرة"
+    ],
+    "secondary": [
+      "spf",
+      "dmarc",
+      "mx",
+      "headers",
+      "incident",
+      "whois",
+      "2fa",
+      "firewall",
+      "malware"
+    ]
+  },
+  "iot": {
+    "primary": [
+      "iot",
+      "حساسات",
+      "mqtt",
+      "smart home",
+      "إنترنت الأشياء"
+    ],
+    "secondary": [
+      "arduino",
+      "esp32",
+      "sensor"
+    ]
+  },
+  "blockchain": {
+    "primary": [
+      "blockchain",
+      "crypto",
+      "nft",
+      "web3",
+      "بلوك"
+    ],
+    "secondary": [
+      "bitcoin",
+      "ethereum",
+      "token"
+    ]
+  },
+  "devops": {
+    "primary": [
+      "devops",
+      "docker",
+      "kubernetes",
+      "ci/cd",
+      "deploy"
+    ],
+    "secondary": [
+      "terraform",
+      "nginx",
+      "monitoring"
+    ]
+  },
+  "ai_ml": {
+    "primary": [
+      "ذكاء اصطناعي",
+      "machine learning",
+      "ml",
+      "ai",
+      "llm"
+    ],
+    "secondary": [
+      "model",
+      "dataset",
+      "prediction"
+    ]
+  },
+  "gaming": {
+    "primary": [
+      "لعبة",
+      "gaming",
+      "game",
+      "بطولة",
+      "leaderboard"
+    ],
+    "secondary": [
+      "xp",
+      "tournament",
+      "مباراة"
+    ]
+  },
+  "healthcare": {
+    "primary": [
+      "صحة",
+      "مستشفى",
+      "healthcare",
+      "طبي"
+    ],
+    "secondary": [
+      "دواء",
+      "مريض"
+    ]
+  },
+  "finance": {
+    "primary": [
+      "محاسبة",
+      "مالية",
+      "finance",
+      "accounting"
+    ],
+    "secondary": [
+      "ميزانية",
+      "مصروفات"
+    ]
+  },
+  "logistics": {
+    "primary": [
+      "لوجستيات",
+      "مستودع",
+      "logistics",
+      "warehouse"
+    ],
+    "secondary": [
+      "أسطول",
+      "سائق"
+    ]
+  },
+  "moderation": {
+    "primary": [
+      "إدارة مجموعة",
+      "حظر",
+      "كتم",
+      "moderation",
+      "ban",
+      "mute"
+    ],
+    "secondary": [
+      "مشرف",
+      "anti spam"
+    ]
+  },
+  "clinic": {
+    "primary": [
+      "عيادة",
+      "طبيب",
+      "clinic",
+      "كشف"
+    ],
+    "secondary": [
+      "مرضى",
+      "موعد طبي"
+    ]
+  },
+  "jobs": {
+    "primary": [
+      "وظائف",
+      "توظيف",
+      "jobs",
+      "hiring",
+      "cv"
+    ],
+    "secondary": [
+      "مرشح",
+      "سيرة"
+    ]
+  },
+  "fitness": {
+    "primary": [
+      "جيم",
+      "تمارين",
+      "fitness",
+      "workout"
+    ],
+    "secondary": [
+      "رياضة",
+      "كالوري"
+    ]
+  }
+}

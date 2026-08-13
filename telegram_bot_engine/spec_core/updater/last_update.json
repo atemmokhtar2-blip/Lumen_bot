@@ -1,0 +1,42 @@
+{
+  "updated_at": "2026-08-09T20:12:47Z",
+  "changed": true,
+  "recommended_requirements": [
+    "python-telegram-bot>=22.8,<23",
+    "python-dotenv>=1.2.2"
+  ],
+  "telegram_api_hints": [
+    "recent_bot_api_versions:10.2,10.1,10.0",
+    "docs_mention_chat_member",
+    "docs_mention_reactions"
+  ],
+  "ptb_hints": [
+    "release:v22.8:v22.8",
+    "release:v22.7:",
+    "release:v22.6:",
+    "release:v22.5:",
+    "release:v22.4:"
+  ],
+  "packages": [
+    {
+      "name": "python-telegram-bot",
+      "latest": "22.8",
+      "error": ""
+    },
+    {
+      "name": "python-dotenv",
+      "latest": "1.2.2",
+      "error": ""
+    },
+    {
+      "name": "httpx",
+      "latest": "0.28.1",
+      "error": ""
+    },
+    {
+      "name": "aiohttp",
+      "latest": "3.14.3",
+      "error": ""
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "fitness_bot",
+    "language": "mixed",
+    "description": "Gym bot: schedule, book sessions, membership, check-in"
+  },
+  "actors": ["user", "admin"],
+  "storage": {
+    "type": "sqlite",
+    "entities": ["GymSession", "GymMembership", "Plan", "Subscription"]
+  },
+  "start_buttons": [
+    {"label": "📅 Schedule", "callback_id": "fitness.schedule"},
+    {"label": "🏋️ Book", "callback_id": "fitness.book"},
+    {"label": "⭐ Membership", "callback_id": "sub.plans"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {"id": "start", "feature": "start", "trigger": {"type": "command", "id": "start"}, "action": {"service": "core", "method": "start"}},
+    {"id": "help", "feature": "help", "trigger": {"type": "command", "id": "help"}, "action": {"service": "core", "method": "help"}},
+    {"id": "gym_schedule", "feature": "gym_schedule", "trigger": {"type": "command", "id": "schedule"}, "action": {"service": "fitness", "method": "schedule"}},
+    {"id": "gym_book", "feature": "gym_book", "trigger": {"type": "command", "id": "book"}, "action": {"service": "fitness", "method": "book_session"}},
+    {"id": "gym_checkin", "feature": "gym_checkin", "trigger": {"type": "command", "id": "checkin"}, "action": {"service": "fitness", "method": "gym_checkin"}},
+    {"id": "plans", "feature": "plans", "trigger": {"type": "command", "id": "plans"}, "action": {"service": "subscriptions", "method": "list_plans"}},
+    {"id": "subscribe", "feature": "subscribe", "trigger": {"type": "command", "id": "subscribe"}, "action": {"service": "subscriptions", "method": "subscribe"}},
+    {"id": "lang", "feature": "lang", "trigger": {"type": "command", "id": "lang"}, "action": {"service": "i18n", "method": "set_language"}}
+  ],
+  "tech": {
+    "database": "sqlite",
+    "subscriptions": true,
+    "i18n": true
+  },
+  "hard_constraints": [
+    "Membership gates optional via is_sub_active",
+    "Booking stored in SQLite",
+    "i18n via /lang en|ar"
+  ]
+}

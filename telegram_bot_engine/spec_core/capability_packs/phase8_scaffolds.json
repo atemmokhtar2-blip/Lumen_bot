@@ -1,0 +1,47 @@
+{
+  "id": "phase8_scaffolds",
+  "version": "1.1.0",
+  "name": "Phase 8 capability scaffolds",
+  "description": "Translate / OCR / Schedule — deterministic emitters with optional backends",
+  "source": "local",
+  "enabled": true,
+  "capabilities": [
+    {
+      "key": "scaffold_translate",
+      "service": "translate",
+      "method": "translate",
+      "description_ar": "ترجمة نص عبر /translate",
+      "description_en": "Translate text via /translate",
+      "category": "utils",
+      "default_actor": "user",
+      "keywords": [
+        "ترجمة تلقائية", "يترجم", "translate messages", "auto translate",
+        "ترجمة الرسائل", "ترجم", "ترجمة"
+      ]
+    },
+    {
+      "key": "scaffold_ocr",
+      "service": "ocr",
+      "method": "ocr_hint",
+      "description_ar": "استخراج نص عبر /ocr",
+      "description_en": "Extract text via /ocr",
+      "category": "utils",
+      "default_actor": "user",
+      "keywords": [
+        "ocr", "قراءة صور", "استخراج نص", "تحليل صور", "اقرأ الصورة", "قراءة من صورة"
+      ]
+    },
+    {
+      "key": "scaffold_schedule",
+      "service": "scheduler",
+      "method": "schedule_note",
+      "description_ar": "تذكير مجدول عبر /schedule",
+      "description_en": "Schedule reminder via /schedule",
+      "category": "reminders",
+      "default_actor": "user",
+      "keywords": [
+        "جدولة", "تذكير تلقائي", "schedule job", "كل يوم تذكير", "تذكير مجدول", "مجدول"
+      ]
+    }
+  ]
+}

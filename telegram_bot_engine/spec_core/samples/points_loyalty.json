@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "points_loyalty_bot",
+    "language": "mixed",
+    "description": "Loyalty points for end-users: balance, ledger, leaderboard, redeem, admin grant"
+  },
+  "actors": ["user", "admin"],
+  "storage": {
+    "type": "sqlite",
+    "entities": ["PointLedger", "UserBalance"]
+  },
+  "start_buttons": [
+    {"label": "💎 Balance", "callback_id": "points.balance"},
+    {"label": "🏆 Leaderboard", "callback_id": "points.leaderboard"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {
+      "id": "start",
+      "feature": "start",
+      "trigger": {"type": "command", "id": "start"},
+      "action": {"service": "core", "method": "start"},
+      "messages": {"success": "Earn and redeem points. Check /balance and /leaderboard."}
+    },
+    {
+      "id": "help",
+      "feature": "help",
+      "trigger": {"type": "command", "id": "help"},
+      "action": {"service": "core", "method": "help"}
+    },
+    {
+      "id": "balance",
+      "feature": "balance",
+      "trigger": {"type": "command", "id": "balance"},
+      "action": {"service": "points", "method": "balance"}
+    },
+    {
+      "id": "balance_cb",
+      "feature": "balance",
+      "trigger": {"type": "callback", "id": "points.balance"},
+      "action": {"service": "points", "method": "balance"}
+    },
+    {
+      "id": "leaderboard",
+      "feature": "leaderboard",
+      "trigger": {"type": "command", "id": "leaderboard"},
+      "action": {"service": "points", "method": "leaderboard"}
+    },
+    {
+      "id": "leaderboard_cb",
+      "feature": "leaderboard",
+      "trigger": {"type": "callback", "id": "points.leaderboard"},
+      "action": {"service": "points", "method": "leaderboard"}
+    },
+    {
+      "id": "points_history",
+      "feature": "points_history",
+      "trigger": {"type": "command", "id": "pointshistory"},
+      "action": {"service": "points", "method": "history"}
+    },
+    {
+      "id": "redeem_points",
+      "feature": "redeem_points",
+      "trigger": {"type": "command", "id": "redeem"},
+      "action": {"service": "points", "method": "redeem"},
+      "messages": {
+        "prompt": "Send amount and reward code",
+        "failure": "Insufficient balance"
+      }
+    },
+    {
+      "id": "grant_points",
+      "feature": "grant_points",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "grantpoints"},
+      "action": {"service": "points", "method": "grant"}
+    },
+    {
+      "id": "debit_points",
+      "feature": "debit_points",
+      "actor": "admin",
+      "trigger": {"type": "command", "id": "debitpoints"},
+      "action": {"service": "points", "method": "debit"}
+    },
+    {
+      "id": "lang",
+      "feature": "lang",
+      "trigger": {"type": "command", "id": "lang"},
+      "action": {"service": "i18n", "method": "set_language"}
+    }
+  ],
+  "tech": {
+    "database": "sqlite",
+    "points": true,
+    "i18n": true
+  },
+  "hard_constraints": [
+    "All balance changes go through PointLedger",
+    "Debit refuses negative balances",
+    "Leaderboard top N from UserBalance"
+  ]
+}

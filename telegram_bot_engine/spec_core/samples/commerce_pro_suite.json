@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "commerce_pro_bot",
+    "language": "mixed",
+    "description": "Launch-ready global commerce suite for end-users: shop, cart, Telegram Payments, subscriptions, points, wallet, referrals, analytics"
+  },
+  "actors": ["user", "admin", "owner"],
+  "storage": {
+    "type": "sqlite",
+    "entities": [
+      "Product", "Order", "Payment", "Coupon", "CartItem",
+      "Plan", "Subscription",
+      "PointLedger", "UserBalance",
+      "Wallet", "WalletTxn",
+      "Referral", "Checkin"
+    ]
+  },
+  "start_buttons": [
+    {"label": "🛒 Shop", "callback_id": "shop.catalog"},
+    {"label": "🛍 Cart", "callback_id": "cart.view"},
+    {"label": "⭐ Plans", "callback_id": "sub.plans"},
+    {"label": "💎 Points", "callback_id": "points.balance"},
+    {"label": "👛 Wallet", "callback_id": "wallet.balance"},
+    {"label": "🔗 Invite", "callback_id": "growth.invite"},
+    {"label": "🌐 Language", "callback_id": "i18n.lang"}
+  ],
+  "features": [
+    {"id": "start", "feature": "start", "trigger": {"type": "command", "id": "start"}, "action": {"service": "core", "method": "start"}},
+    {"id": "help", "feature": "help", "trigger": {"type": "command", "id": "help"}, "action": {"service": "core", "method": "help"}},
+    {"id": "shop_catalog", "feature": "shop_catalog", "trigger": {"type": "command", "id": "shop"}, "action": {"service": "shop", "method": "catalog"}},
+    {"id": "cart_view", "feature": "cart_view", "trigger": {"type": "command", "id": "cart"}, "action": {"service": "cart", "method": "view"}},
+    {"id": "cart_checkout", "feature": "cart_checkout", "trigger": {"type": "command", "id": "checkout"}, "action": {"service": "cart", "method": "checkout"}},
+    {"id": "shop_buy", "feature": "shop_buy", "trigger": {"type": "command", "id": "buy"}, "action": {"service": "shop", "method": "send_invoice"}},
+    {"id": "coupon_apply", "feature": "coupon_apply", "trigger": {"type": "command", "id": "coupon"}, "action": {"service": "shop", "method": "coupon_apply"}},
+    {"id": "plans", "feature": "plans", "trigger": {"type": "command", "id": "plans"}, "action": {"service": "subscriptions", "method": "list_plans"}},
+    {"id": "subscribe", "feature": "subscribe", "trigger": {"type": "command", "id": "subscribe"}, "action": {"service": "subscriptions", "method": "subscribe"}},
+    {"id": "my_sub", "feature": "my_sub", "trigger": {"type": "command", "id": "mysub"}, "action": {"service": "subscriptions", "method": "my_subscription"}},
+    {"id": "balance", "feature": "balance", "trigger": {"type": "command", "id": "balance"}, "action": {"service": "points", "method": "balance"}},
+    {"id": "leaderboard", "feature": "leaderboard", "trigger": {"type": "command", "id": "leaderboard"}, "action": {"service": "points", "method": "leaderboard"}},
+    {"id": "wallet_balance", "feature": "wallet_balance", "trigger": {"type": "command", "id": "wallet"}, "action": {"service": "wallet", "method": "balance"}},
+    {"id": "wallet_topup", "feature": "wallet_topup", "trigger": {"type": "command", "id": "topup"}, "action": {"service": "wallet", "method": "topup"}},
+    {"id": "referral_invite", "feature": "referral_invite", "trigger": {"type": "command", "id": "invite"}, "action": {"service": "growth", "method": "invite_link"}},
+    {"id": "daily_checkin", "feature": "daily_checkin", "trigger": {"type": "command", "id": "checkin"}, "action": {"service": "growth", "method": "daily_checkin"}},
+    {"id": "payment_precheckout", "feature": "payment_precheckout", "trigger": {"type": "message", "id": "pre_checkout"}, "action": {"service": "payments", "method": "pre_checkout"}},
+    {"id": "payment_success", "feature": "payment_success", "trigger": {"type": "message", "id": "successful_payment"}, "action": {"service": "payments", "method": "successful_payment"}},
+    {"id": "analytics_overview", "feature": "analytics_overview", "actor": "admin", "trigger": {"type": "command", "id": "analytics"}, "action": {"service": "analytics", "method": "overview"}},
+    {"id": "lang", "feature": "lang", "trigger": {"type": "command", "id": "lang"}, "action": {"service": "i18n", "method": "set_language"}},
+    {"id": "privacy_policy", "feature": "privacy_policy", "trigger": {"type": "command", "id": "privacy"}, "action": {"service": "compliance", "method": "privacy"}},
+    {"id": "terms_of_service", "feature": "terms_of_service", "trigger": {"type": "command", "id": "terms"}, "action": {"service": "compliance", "method": "terms"}}
+  ],
+  "tech": {
+    "database": "sqlite",
+    "payments": true,
+    "subscriptions": true,
+    "points": true,
+    "i18n": true,
+    "admin_panel": true,
+    "state_management": true
+  },
+  "hard_constraints": [
+    "Telegram Payments only — no fake paid status",
+    "Cart checkout creates Order then sendInvoice",
+    "Coupons validated before invoice amount",
+    "Subscription gated features use is_active",
+    "Points and wallet never go negative without explicit admin force",
+    "i18n via t() for all user-facing strings; /lang en|ar",
+    "PAYMENT_PROVIDER_TOKEN and TELEGRAM_BOT_TOKEN from env"
+  ]
+}
