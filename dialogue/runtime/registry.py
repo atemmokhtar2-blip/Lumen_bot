@@ -26,7 +26,10 @@ def _flag(name: str, default: str = "0") -> bool:
 
 
 def dialogue_runtime_enabled() -> bool:
-    return _flag("DIALOGUE_ENABLED", "0")
+    # Dialogue is safe by default: the bridge explicitly defers generation-like
+    # requests, while FAQ/account questions must not silently fall into legacy.
+    # Set DIALOGUE_ENABLED=0 only when an operator intentionally disables it.
+    return _flag("DIALOGUE_ENABLED", "1")
 
 
 def get_dialogue_engine():

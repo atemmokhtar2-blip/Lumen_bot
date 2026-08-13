@@ -36,7 +36,7 @@ class RasaEngine:
     def available(self) -> bool:
         if self._broken:
             return False
-        flag = (os.getenv("DIALOGUE_ENABLED") or "0").strip().lower() in {
+        flag = (os.getenv("DIALOGUE_ENABLED") or "1").strip().lower() in {
             "1", "true", "yes", "on",
         }
         if not flag:
