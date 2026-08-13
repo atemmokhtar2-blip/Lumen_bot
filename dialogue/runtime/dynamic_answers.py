@@ -39,14 +39,45 @@ def _limit(value: Any, unlimited_text: str = "غير محدود") -> str:
 
 
 def _plan_text(plan: dict[str, Any]) -> str:
+    hosted = "غير متاح" if int(plan.get("hosted_bots") or 0) <= 0 else str(plan["hosted_bots"])
     return (
         f"الخطة الحالية: {plan['name_ar']} ({plan['name']})\n"
         f"التوليد الشهري: {_limit(plan['generations_per_month'])}\n"
-        f"البوتات المستضافة: {_limit(plan['hosted_bots'])}\n"
+        f"البوتات المستضافة: {hosted}\n"
         f"الرسائل الشهرية: {_limit(plan['messages_per_month'])}\n"
         f"المعاينة الحية: {plan['live_preview_minutes']} دقيقة\n"
         f"حد API: {plan['api_rpm']} طلب/دقيقة\n"
         f"مستوى المحرك: {plan['engine_tier']}"
+    )
+
+
+def _plan_limits_text(sender_id: str, plan_id: str, plan: dict[str, Any]) -> str:
+    """Return plan limits plus current monthly usage for this account."""
+    tenant = _tenant_for(sender_id)
+    if not tenant:
+        return (
+            "لم أجد سجل حساب مرتبطًا بهذا المستخدم، لذلك لا أستطيع حساب المتبقي بدقة.\n"
+            + _plan_text(plan)
+        )
+
+    try:
+        from b2b_platform.metering import get_metering
+        usage = get_metering().snapshot(str(tenant.tenant_id))
+        used = max(0, int(usage.get("generations", 0) or 0))
+    except Exception:
+        used = 0
+
+    limit = int(plan.get("generations_per_month") or 0)
+    remaining = "غير محدود" if limit <= 0 else str(max(0, limit - used))
+    quota = "غير محدود" if limit <= 0 else str(limit)
+    return (
+        f"الخطة: {plan['name_ar']} ({plan['name']})\n"
+        f"التوليد المستخدم هذا الشهر: {used}\n"
+        f"إجمالي الحد الشهري: {quota}\n"
+        f"المتبقي: {remaining}\n"
+        f"الرسائل الشهرية: {_limit(plan['messages_per_month'])}\n"
+        f"الاستضافة 24/7: {'غير متاحة' if int(plan.get('hosted_bots') or 0) <= 0 else str(plan['hosted_bots']) + ' بوت'}\n"
+        f"المعاينة الحية: {plan['live_preview_minutes']} دقيقة"
     )
 
 
@@ -100,6 +131,8 @@ def answer_for_intent(
         return _compare_text()
     if intent in {"ask_current_plan", "ask_plan_details", "ask_plan_limits"}:
         _plan_id, current = resolve_plan(sender_id, fallback_plan_id)
+        if intent == "ask_plan_limits" and current:
+            return _plan_limits_text(sender_id, _plan_id, current)
         if intent == "ask_plan_details" and requested_plan_id:
             try:
                 selected = normalize_plan_id(requested_plan_id)

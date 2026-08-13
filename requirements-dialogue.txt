@@ -9,3 +9,5 @@ numpy<1.25
 setuptools==70.3.0
 # Rasa imports sklearn during Agent.load.
 scikit-learn==1.2.2
+# Rasa 3.6.21 imports LegacyVersion, removed from packaging>=22.
+packaging==21.3
