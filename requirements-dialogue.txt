@@ -8,7 +8,9 @@ numpy<1.25
 # APScheduler used by Rasa 3.6 imports pkg_resources.
 setuptools==70.3.0
 # Rasa imports sklearn during Agent.load.
-scikit-learn==1.2.2
+scikit-learn==1.1.3
+# Rasa 3.6.21 on Python 3.10 requires scipy>=1.10,<1.11.
+scipy==1.10.1
 # Rasa 3.6.21 imports LegacyVersion, removed from packaging>=22.
 packaging==21.3
 # Keep the TensorFlow graph runtime identical across training and Railway inference.
