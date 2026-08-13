@@ -161,7 +161,23 @@ def main() -> None:
     else:
         threading.Thread(target=start_health_server, args=(PORT,), daemon=True).start()
 
+    async def _log_bot_identity(application: Application) -> None:
+        """Verify the Telegram token identity without logging the token itself."""
+        me = await application.bot.get_me()
+        logger.info("Telegram bot identity: id=%s username=@%s", me.id, me.username or "(none)")
+
+    async def _trace_update(update: Update, _context) -> None:
+        """Trace update arrival without logging user text or personal content."""
+        chat = update.effective_chat
+        logger.info(
+            "Telegram update received: update_id=%s chat_id=%s kind=%s",
+            update.update_id,
+            chat.id if chat else "(none)",
+            type(update.effective_message).__name__ if update.effective_message else "(none)",
+        )
+
     def _wire(application: Application) -> None:
+        application.add_handler(MessageHandler(filters.ALL, _trace_update), group=-100)
         application.add_handler(CommandHandler("start", start_cmd))
         application.add_handler(CommandHandler("help", help_cmd))
         application.add_handler(CommandHandler("status", status_cmd))
@@ -189,7 +205,12 @@ def main() -> None:
             _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
             # Always build a fresh Application — avoids "start_polling never awaited"
             # after a previous cycle stopped mid-flight.
-            app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            app = (
+                Application.builder()
+                .token(TELEGRAM_BOT_TOKEN)
+                .post_init(_log_bot_identity)
+                .build()
+            )
             _wire(app)
             logger.info("Polling cycle %s/%s starting…", cycle, max_cycles)
             app.run_polling(
