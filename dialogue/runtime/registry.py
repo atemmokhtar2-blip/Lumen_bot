@@ -1,7 +1,9 @@
-"""Dialogue engine selection — Rasa only (no rule-based fake intelligence).
+"""Dialogue engine selection.
 
-DIALOGUE_ENABLED=1 + models/*.tar.gz → Rasa Agent
-Otherwise → None (Telegram keeps legacy path; no phrase-memory bot)
+DIALOGUE_ENABLED=1:
+  1) Rasa Agent if model loads and TF inference works
+  2) else lightweight FAQ engine (domain/nlu keywords, no TensorFlow)
+Otherwise → None (Telegram legacy generation path only)
 """
 from __future__ import annotations
 
@@ -10,11 +12,13 @@ import os
 from typing import Any
 
 from .contract import DialogueRequest, DialogueResponse
+from .faq_engine import FaqEngine
 from .rasa_engine import RasaEngine
 
 logger = logging.getLogger(__name__)
 
 _rasa = RasaEngine()
+_faq = FaqEngine()
 
 
 def _flag(name: str, default: str = "0") -> bool:
@@ -22,14 +26,16 @@ def _flag(name: str, default: str = "0") -> bool:
 
 
 def dialogue_runtime_enabled() -> bool:
-    """True only when Rasa dialogue is intentionally enabled."""
     return _flag("DIALOGUE_ENABLED", "0")
 
 
 def get_dialogue_engine():
-    if dialogue_runtime_enabled() and _rasa.available():
+    """Preferred engine for status display (Rasa if healthy else FAQ)."""
+    if not dialogue_runtime_enabled():
+        return None
+    if _rasa.available():
         return _rasa
-    return None
+    return _faq
 
 
 async def handle_turn(
@@ -39,8 +45,7 @@ async def handle_turn(
     plan_id: str = "free",
     metadata: dict[str, Any] | None = None,
 ) -> DialogueResponse | None:
-    engine = get_dialogue_engine()
-    if engine is None:
+    if not dialogue_runtime_enabled():
         return None
     req = DialogueRequest(
         text=text or "",
@@ -48,10 +53,19 @@ async def handle_turn(
         plan_id=plan_id or "free",
         metadata=dict(metadata or {}),
     )
+    # Try Rasa first when it claims availability
+    if _rasa.available():
+        try:
+            resp = await _rasa.handle(req)
+            if resp is not None and resp.handled and (resp.text or "").strip():
+                return resp
+        except Exception:
+            logger.exception("Rasa dialogue failed — trying FAQ")
+    # FAQ always available when dialogue is enabled
     try:
-        return await engine.handle(req)
+        return await _faq.handle(req)
     except Exception:
-        logger.exception("Rasa dialogue failed")
+        logger.exception("FAQ dialogue failed")
         return None
 
 
@@ -61,10 +75,14 @@ def runtime_status() -> dict[str, Any]:
         "DIALOGUE_ENABLED": dialogue_runtime_enabled(),
         "rasa_available": _rasa.available(),
         "active_engine": eng.name if eng else None,
-        "rule_engine": "disabled",
+        "faq_fallback": True,
     }
     try:
         st.update(_rasa.status())
+    except Exception:
+        pass
+    try:
+        st.update(_faq.status())
     except Exception:
         pass
     return st
