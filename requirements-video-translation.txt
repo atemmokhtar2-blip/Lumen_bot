@@ -1,0 +1,11 @@
+# Core bot/media dependencies
+python-telegram-bot>=21.0,<22
+pydantic>=2.5,<3
+
+# Optional local speech recognition; install only when a local model is available
+# faster-whisper>=1.0
+
+# Optional local translation; install Argos language packages locally
+# argostranslate>=1.9
+
+# System dependency required at runtime: ffmpeg and ffprobe
