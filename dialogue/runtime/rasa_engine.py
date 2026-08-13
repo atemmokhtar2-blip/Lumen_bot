@@ -31,7 +31,9 @@ class RasaEngine:
         self._load_error: str | None = None
         self._broken = False
         self._fail_count = 0
-        self._max_fails = int(os.getenv("RASA_MAX_FAILS") or "3")
+        # TensorFlow graph failures are not safe to retry repeatedly on Railway;
+        # switch to the deterministic FAQ fallback after the first parse failure.
+        self._max_fails = int(os.getenv("RASA_MAX_FAILS") or "1")
 
     def available(self) -> bool:
         if self._broken:
