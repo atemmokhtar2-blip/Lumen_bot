@@ -43,8 +43,11 @@ class RasaEngine:
         }
         if not flag:
             return False
-        # Optional hard disable of TF path while keeping FAQ
-        if (os.getenv("RASA_TF_DISABLED") or "0").strip().lower() in {"1", "true", "yes", "on"}:
+        # TensorFlow DIET inference is currently incompatible with the Railway
+        # runtime (TFT_OPTIONAL/TFT_PRODUCT InvalidArgumentError). Keep the
+        # deterministic FAQ path as the safe default; opt in only after the
+        # runtime/model pair has been verified with RASA_TF_DISABLED=0.
+        if (os.getenv("RASA_TF_DISABLED") or "1").strip().lower() in {"1", "true", "yes", "on"}:
             return False
         return self._latest_model() is not None
 
