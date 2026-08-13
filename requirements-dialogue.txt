@@ -1,4 +1,11 @@
 # Isolated dialogue stack (install when training / enabling Rasa).
 # Keep separate from main requirements.txt to avoid host dependency conflicts.
-rasa>=3.6,<3.7
-rasa-sdk>=3.6,<3.7
+rasa==3.6.21
+rasa-sdk==3.6.2
+# Explicit pins required by the Rasa 3.6 / Python 3.10 runtime.
+dask==2022.10.2
+numpy<1.25
+# APScheduler used by Rasa 3.6 imports pkg_resources.
+setuptools==70.3.0
+# Rasa imports sklearn during Agent.load.
+scikit-learn==1.2.2
