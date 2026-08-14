@@ -216,6 +216,36 @@ class HostingService:
         token_norm = (bot_token or "").strip()
         token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""
 
+        # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
+        scale = (os.environ.get("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
+        multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+        if scale or (os.environ.get("TBE_FORCE_QUEUE") or "0").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                from telegram_bot_engine.services.hosting.deploy_queue import get_deploy_queue
+                from telegram_bot_engine.services.hosting.capacity import estimate_nodes_for, local_node_capacity
+                job = get_deploy_queue().enqueue(
+                    user_id=int(user_id),
+                    project_path=str(path),
+                    bot_token=token_norm,
+                    meta={"bot_username": bot_username or ""},
+                )
+                plan = estimate_nodes_for(20_000)
+                return HostResult(
+                    ok=True,
+                    message=(
+                        f"تمت إضافة مهمة الاستضافة للطابور.\n"
+                        f"job_id: `{job.job_id}`\n"
+                        f"الحالة: queued — العمال (workers) سيلتقطونها.\n"
+                        f"لتشغيل عامل على هذه العقدة:\n"
+                        f"`python -m telegram_bot_engine.services.hosting.worker`\n"
+                        f"تخطيط 20k: ~{plan['nodes_required']} عقدة × {plan['bots_per_node']} بوت "
+                        f"(حد العقدة {local_node_capacity().max_bots})."
+                    ),
+                    instance_id=job.job_id,
+                )
+            except Exception as qexc:
+                return HostResult(ok=False, message=f"فشل إدخال الطابور: {type(qexc).__name__}: {qexc}")
+
         # Stop existing instance for same path+user OR same token under exclusive lock
         # (closes TOCTOU race between concurrent start requests).
         to_stop: list[str] = []
