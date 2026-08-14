@@ -170,6 +170,48 @@ class HostingService:
         except Exception:
             return HostResult(ok=False, message="مسار المشروع خارج مساحة العزل")
 
+
+        # ── Production / scale foundation gates ──────────────────────────
+        try:
+            from telegram_bot_engine.services.isolation_policy import (
+                decide_isolation,
+                is_dev_environment,
+            )
+            decision = decide_isolation()
+            if decision.require_docker:
+                from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                    docker_available,
+                )
+                if not docker_available():
+                    return HostResult(
+                        ok=False,
+                        message=(
+                            "الاستضافة تتطلب Docker على هذه العقدة. "
+                            "LocalProcess غير مسموح في وضع الإنتاج/متعدد المستأجرين."
+                        ),
+                    )
+            if not is_dev_environment():
+                db = (os.environ.get("TBE_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip()
+                require_db = (os.environ.get("TBE_REQUIRE_DATABASE_URL") or "1").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }
+                if require_db and not db:
+                    return HostResult(
+                        ok=False,
+                        message=(
+                            "في الإنتاج يجب ضبط TBE_DATABASE_URL (PostgreSQL) "
+                            "لحالة الاستضافة القابلة للتوسع. "
+                            "أو اضبط TBE_REQUIRE_DATABASE_URL=0 للتطوير فقط."
+                        ),
+                    )
+                if decision.require_docker and not (os.environ.get("TBE_DOCKER_NETWORK") or "").strip():
+                    return HostResult(
+                        ok=False,
+                        message="TBE_DOCKER_NETWORK مطلوب في الإنتاج (شبكة محدودة الخروج).",
+                    )
+        except Exception as gate_exc:
+            return HostResult(ok=False, message=f"فشل بوابة الاستضافة: {gate_exc}")
+
         import hashlib
         token_norm = (bot_token or "").strip()
         token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""

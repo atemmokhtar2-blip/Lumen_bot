@@ -13,7 +13,8 @@ Each user's bot runs in its own container with:
   - labels for cleanup and ownership tracking
 
 This layer protects the main generator bot from any generated user code.
-Falls back gracefully when Docker is unavailable (local driver with limits).
+Production path: build immutable image + run without host source bind-mount.
+LocalProcessDriver is never used as a silent fallback from this module.
 """
 
 from __future__ import annotations
@@ -198,12 +199,11 @@ class DockerProcessDriver(DeploymentProvider):
         # Stop any previous container for the same project path
         self._stop_by_project(str(path))
 
-        # Ensure image is present (pull if needed, best-effort)
-        # Sanitize requirements.txt on host before container installs it
+        # --- Immutable image build (no host source bind-mount at runtime) ---
         try:
+            from telegram_bot_engine.services.requirements_policy import sanitize_requirements_text
             req = path / "requirements.txt"
             if req.is_file():
-                from telegram_bot_engine.services.requirements_policy import sanitize_requirements_text
                 cleaned, _warns = sanitize_requirements_text(
                     req.read_text(encoding="utf-8", errors="ignore")
                 )
@@ -227,79 +227,60 @@ class DockerProcessDriver(DeploymentProvider):
         except Exception:
             pass
 
-        pull_err = self._ensure_image()
-        if pull_err:
+        from telegram_bot_engine.services.bot_image_builder import build_image
+        ok_img, image_tag, build_log = build_image(
+            path, user_id=user_seg, entry=entry.name, timeout=int(os.environ.get("TBE_DOCKER_BUILD_TIMEOUT", "600")),
+        )
+        if not ok_img:
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
-                message=f"Docker image pull failed: {pull_err}",
+                message=f"image build failed: {image_tag} | {(build_log or '')[-300:]}",
             )
+        self._image = image_tag  # run THIS bot's image, not a shared base
 
-        rel_entry = entry.relative_to(path).as_posix()
-        # Install deps into /tmp/deps (writable tmpfs) so rootfs can stay read-only.
-        # Project is mounted at /app.
-        install_and_run = (
-            "set -e; "
-            "cd /app; "
-            "mkdir -p /tmp/deps; "
-            "if [ -f requirements.txt ]; then "
-            "  pip install --no-cache-dir -q --only-binary=:all: --target /tmp/deps -r requirements.txt || true; "
-            "fi; "
-            "export PYTHONPATH=/tmp/deps:${PYTHONPATH:-}; "
-            f"exec python -u {rel_entry}"
-        )
-
+        # Runtime: image-only (code baked in). No bind-mount of user source.
+        # Writable tmp only; read-only rootfs.
+        net = (os.environ.get("TBE_DOCKER_NETWORK") or "").strip() or "bridge"
         cmd = [
             "docker", "run",
             "-d",
             "--name", cname,
             "--label", f"tbe.project={path}",
             "--label", f"tbe.user={user_seg}",
+            "--label", f"tbe.image={image_tag}",
             "--label", "tbe.managed=1",
-            "--label", "tbe.isolation=strong",
-            # Never auto-restart a potentially malicious / broken bot
+            "--label", "tbe.isolation=image",
             "--restart", "no",
-            # Resource limits (tight defaults protect the host)
             f"--memory={_MEMORY}",
-            f"--memory-swap={_MEMORY}",  # no extra swap
+            f"--memory-swap={_MEMORY}",
             f"--cpus={_CPUS}",
             f"--pids-limit={_PIDS}",
             "--ulimit", "nproc=32:32",
             "--ulimit", "nofile=128:128",
-            # Log size limit so runaway logging cannot fill disk
             "--log-driver", "json-file",
             "--log-opt", "max-size=2m",
             "--log-opt", "max-file=2",
-            # Security hardening
             "--security-opt", "no-new-privileges:true",
             "--cap-drop", "ALL",
             "--read-only",
             "--ipc", "none",
-            # Writable spaces only where needed (deps + temp)
-            # /tmp must allow exec for pip wheels / native extensions during install
-            "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=96m",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
             "--tmpfs", "/var/tmp:rw,noexec,nosuid,nodev,size=16m",
-            # Network: no published ports. Prefer custom egress-limited network.
-            "--network", (os.environ.get("TBE_DOCKER_NETWORK") or "bridge"),
-            # Mount ONLY this user's project directory (sandbox path)
-            "-v", f"{path}:/app:rw",
+            "--network", net,
             "-w", "/app",
-            # Run as non-root when possible (best-effort; some images lack the uid)
-            "--user", _RUN_AS_USER,
-            # Minimal env — never pass host AI keys or host bot token
+            "--user", "10001:10001",
             "-e", "PYTHONUNBUFFERED=1",
             "-e", "PYTHONDONTWRITEBYTECODE=1",
-            "-e", "TBE_SANDBOX=docker",
+            "-e", "TBE_SANDBOX=docker-image",
             "-e", "TBE_ISOLATED=1",
             "-e", "AWS_EC2_METADATA_DISABLED=true",
             "-e", "NO_PROXY=169.254.169.254,metadata,metadata.google.internal",
             "-e", "HOME=/tmp",
-            "-e", "PYTHONPATH=/tmp/deps",
             "-e", f"BOT_TOKEN={bot_token}",
             "-e", f"TELEGRAM_BOT_TOKEN={bot_token}",
-            self._image,
-            "sh", "-c", install_and_run,
+            image_tag,
         ]
 
         try:
@@ -329,18 +310,14 @@ class DockerProcessDriver(DeploymentProvider):
         if proc.returncode != 0 and "--user" in cmd:
             err_txt = ((proc.stderr or "") + (proc.stdout or "")).lower()
             if any(k in err_txt for k in ("unable to find user", "unknown user", "no such user", "invalid user")):
-                _log.error(
-                    "Docker --user %s unavailable in image; refusing root fallback",
-                    _RUN_AS_USER,
-                )
+                _log.error("Docker non-root user 10001 unavailable; refusing root fallback")
                 return DeploymentStatus(
                     provider=self.name,
                     deployment_id=dep_id,
                     status=DEPLOY_FAILED,
                     message=(
-                        f"Image lacks non-root user {_RUN_AS_USER}; "
-                        "refusing to run container as root. "
-                        "Set TBE_DOCKER_IMAGE to an image with that uid/gid."
+                        "Image lacks non-root user 10001; refusing to run as root. "
+                        "Image build should create botuser (uid 10001)."
                     ),
                 )
 
@@ -382,6 +359,20 @@ class DockerProcessDriver(DeploymentProvider):
             "started_at": time.time(),
         }
 
+        try:
+            from telegram_bot_engine.services.deployment_registry import get_deployment_registry
+            get_deployment_registry().upsert({
+                "deployment_id": dep_id,
+                "user_id": int(user_seg) if str(user_seg).isdigit() else 0,
+                "container_name": cname,
+                "container_id": container_id,
+                "image_tag": getattr(self, "_image", ""),
+                "project_path": str(path),
+                "status": "running",
+            })
+        except Exception as _reg_exc:
+            _log.warning("deployment registry upsert failed: %s", _reg_exc)
+
         return DeploymentStatus(
             provider=self.name,
             deployment_id=dep_id,
@@ -393,6 +384,21 @@ class DockerProcessDriver(DeploymentProvider):
     def status(self, deployment_id: str) -> DeploymentStatus:
         info = _RUNNING.get(deployment_id)
         if not info:
+            try:
+                from telegram_bot_engine.services.deployment_registry import get_deployment_registry
+                rec = get_deployment_registry().get(deployment_id)
+                if rec:
+                    info = {
+                        "container": rec.get("container_name") or "",
+                        "container_id": rec.get("container_id") or "",
+                        "project_path": rec.get("project_path") or "",
+                        "image": rec.get("image_tag") or "",
+                    }
+                    if info["container"]:
+                        _RUNNING[deployment_id] = info
+            except Exception:
+                info = None
+        if not info or not info.get("container"):
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=deployment_id,

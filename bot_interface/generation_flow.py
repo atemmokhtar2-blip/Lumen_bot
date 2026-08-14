@@ -424,6 +424,13 @@ async def deliver_generation_result(
         await message.reply_text("❌ تعذر إكمال فحص المشروع قبل التسليم؛ لم يتم إرسال ملف غير متحقق منه.")
         return
 
+    # Ensure every delivered project has a production Dockerfile (image deploy path)
+    try:
+        from telegram_bot_engine.services.bot_image_builder import write_dockerfile
+        write_dockerfile(Path(project_path))
+    except Exception:
+        logger.exception("dockerfile emit failed")
+
     # Pre-delivery 10s smoke test — code must load before we ship a zip.
     try:
         await message.reply_text("🧪 جاري اختبار المشروع ~10 ثوانٍ قبل التسليم...")
