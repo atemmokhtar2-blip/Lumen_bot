@@ -54,13 +54,22 @@ data/*.sqlite3*
 data/*.sqlite3*
 
 # local memory DB (not Rasa training data)
-/data/
+/data/**
+!/data/.gitkeep
 !dialogue/data/
 !dialogue/data/**
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
 
-# Rasa trained models are large; ship via CI/artifact or force-add when ready
-# dialogue/models/*.tar.gz
+# Rasa trained models are large; train via scripts/train_dialogue.sh or DIALOGUE_TRAIN_ON_START=1
+dialogue/models/*.tar.gz
 dialogue/.rasa/
+
+# Local audit / agent artifacts
+artifacts/
+audit_*/
+.ah_import_stub/
+*.bak
+*.orig
+*.tmp

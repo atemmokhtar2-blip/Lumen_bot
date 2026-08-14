@@ -14,7 +14,7 @@ Or SSH/one-off:
 
 ```bash
 bash scripts/train_dialogue.sh
-# restarts bot after models/maestro-dialogue.tar.gz exists
+# restarts bot after models/maestro-nlu.tar.gz exists
 ```
 
 ## Data
@@ -22,7 +22,7 @@ bash scripts/train_dialogue.sh
 - `data/nlu.yml` + `data/nlu_platform.yml` — intents & examples  
 - `data/stories.yml` + `data/rules.yml` — dialogue paths  
 - `domain.yml` — responses (platform knowledge)  
-- `models/*.tar.gz` — trained artifact
+- `models/*.tar.gz` — trained artifact (not committed; generate with `scripts/train_dialogue.sh` or `DIALOGUE_TRAIN_ON_START=1`)
 
 ## Architecture
 
