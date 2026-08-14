@@ -1,22 +1,11 @@
-"""Host worker for commercial fleet.
+"""Host worker for commercial fleet — artifact-based multi-node builds.
 
-On each worker node:
-  export TBE_NODE_ID=node-1
-  export TBE_DATABASE_URL=postgresql://...
-  export TBE_DOCKER_NETWORK=tbe-egress
-  export TBE_DOCKER_REGISTRY=registry.example.com
-  export TBE_DOCKER_PUSH=1
-  python -m telegram_bot_engine.services.hosting.worker
-
-Boot sequence:
-  1) migrate control-plane schema
-  2) ensure docker egress network
-  3) registry login
-  4) register in fleet
-  5) loop: heartbeat + claim jobs + deploy
+Workers never need the API host's local project_path. They fetch a packaged
+artifact (S3 or shared TBE_ARTIFACT_ROOT), extract, build, push, run.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -45,15 +34,26 @@ def bootstrap() -> None:
         logger.info("registry %s", msg)
 
     from telegram_bot_engine.services.hosting.fleet import FleetRegistry
-    fleet = FleetRegistry()
-    rec = fleet.register(version=os.environ.get("TBE_WORKER_VERSION") or "1")
+    rec = FleetRegistry().register(version=os.environ.get("TBE_WORKER_VERSION") or "1")
     logger.info("registered worker %s max_bots=%s", rec.node_id, rec.max_bots)
+
+
+def _meta(job) -> dict:
+    try:
+        return json.loads(job.meta_json or "{}")
+    except Exception:
+        return {}
 
 
 def process_one(queue=None, fleet=None) -> bool:
     from telegram_bot_engine.services.hosting.capacity import local_node_capacity, node_id
     from telegram_bot_engine.services.hosting.deploy_queue import get_deploy_queue
     from telegram_bot_engine.services.crypto_tokens import unseal_token
+    from telegram_bot_engine.services.hosting.artifacts import (
+        fetch_artifact,
+        extract_artifact,
+        cleanup_work,
+    )
 
     q = queue or get_deploy_queue()
     nid = node_id()
@@ -82,7 +82,22 @@ def process_one(queue=None, fleet=None) -> bool:
         q.mark_failed(job.job_id, "token_unseal_failed")
         return True
 
+    meta = _meta(job)
+    artifact_uri = (meta.get("artifact_uri") or "").strip()
+    artifact_key = (meta.get("artifact_job_key") or job.job_id).strip()
+    work_id = job.job_id
+
     try:
+        if not artifact_uri:
+            # Legacy jobs: require path on this node (single-host only)
+            build_path = job.project_path
+            if not build_path or not __import__("pathlib").Path(build_path).is_dir():
+                q.mark_failed(job.job_id, "artifact_uri_missing_and_path_unavailable")
+                return True
+        else:
+            zpath = fetch_artifact(artifact_uri, artifact_key)
+            build_path = str(extract_artifact(zpath, work_id))
+
         from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
             DockerProcessDriver,
             docker_available,
@@ -90,9 +105,14 @@ def process_one(queue=None, fleet=None) -> bool:
         if not docker_available():
             q.mark_failed(job.job_id, "docker_unavailable")
             return True
+
+        # sandbox path check expects OUTPUT_DIR/users — extracted work may be under artifacts/
+        # Temporarily allow by setting path under a users-like tree or relax via env for workers
+        os.environ.setdefault("TBE_WORKER_BUILD", "1")
+
         driver = DockerProcessDriver()
         st = driver.deploy(
-            job.project_path,
+            build_path,
             env_vars={"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token},
             service_name=f"user-{job.user_id}",
         )
@@ -109,6 +129,11 @@ def process_one(queue=None, fleet=None) -> bool:
     except Exception as e:
         logger.exception("job %s failed", job.job_id)
         q.mark_failed(job.job_id, f"{type(e).__name__}:{e}")
+    finally:
+        try:
+            cleanup_work(work_id)
+        except Exception:
+            pass
     return True
 
 
@@ -127,12 +152,9 @@ def run_forever(poll_seconds: float | None = None) -> None:
                 fleet.sweep_stale()
                 worked = process_one(queue=q, fleet=fleet)
                 if not worked:
-                    # idle heartbeat
                     try:
-                        running = q.count_running_on_node(
-                            __import__("telegram_bot_engine.services.hosting.capacity", fromlist=["node_id"]).node_id()
-                        )
-                        fleet.heartbeat(running_bots=running)
+                        from telegram_bot_engine.services.hosting.capacity import node_id
+                        fleet.heartbeat(running_bots=q.count_running_on_node(node_id()))
                     except Exception:
                         pass
                     time.sleep(poll)

@@ -38,3 +38,19 @@ python -m telegram_bot_engine.services.hosting.worker
 ```bash
 docker compose -f deploy/commercial/docker-compose.yml up -d
 ```
+
+
+## Artifacts (required for multi-node)
+At enqueue the API packages source (no secrets) into an artifact.
+Workers download it — they do **not** need the API disk.
+
+```bash
+# Shared NFS/EFS across API + workers (simple)
+export TBE_ARTIFACT_ROOT=/mnt/tbe-artifacts
+
+# Or S3/R2
+export TBE_S3_BUCKET=...
+export TBE_S3_ENDPOINT=...
+export TBE_S3_ACCESS_KEY=...
+export TBE_S3_SECRET_KEY=...
+```

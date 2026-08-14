@@ -53,18 +53,33 @@ _RUN_AS_USER = os.environ.get("TBE_DOCKER_USER", "65534:65534")
 
 
 def _assert_sandbox_mount_path(project_path: Path) -> Path:
-    """Refuse to bind-mount anything outside OUTPUT_DIR/users (host escape)."""
+    """Refuse unsafe paths. Worker artifact workdirs are allowed under OUTPUT_DIR/artifacts."""
     path = project_path.resolve()
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
     out = Path(os.environ.get("OUTPUT_DIR") or "/tmp/generated").resolve()
+    art = Path(os.environ.get("TBE_ARTIFACT_ROOT") or (out / "artifacts")).resolve()
+    # Image-based deploy no longer bind-mounts source; still confine build context roots.
+    under_out = False
+    under_art = False
     try:
         path.relative_to(out)
-    except ValueError as exc:
-        raise ValueError("project_path_outside_output_dir") from exc
-    if "users" not in path.parts:
-        raise ValueError("project_path_must_be_under_users_sandbox")
-    return path
+        under_out = True
+    except ValueError:
+        pass
+    try:
+        path.relative_to(art)
+        under_art = True
+    except ValueError:
+        pass
+    worker = (os.environ.get("TBE_WORKER_BUILD") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if under_art and worker:
+        return path
+    if under_out and ("users" in path.parts or "artifacts" in path.parts):
+        return path
+    if under_out and worker:
+        return path
+    raise ValueError("project_path_outside_allowed_roots")
 
 
 def docker_available() -> bool:

@@ -82,6 +82,12 @@ def evaluate_market_gate() -> GateResult:
     if not _on("TBE_DOCKER_PUSH", "0"):
         missing.append("TBE_DOCKER_PUSH=1")
 
+    # Multi-node source portability
+    has_s3 = bool((os.environ.get("TBE_S3_BUCKET") or "").strip())
+    has_art = bool((os.environ.get("TBE_ARTIFACT_ROOT") or "").strip())
+    if not has_s3 and not has_art:
+        missing.append("TBE_ARTIFACT_ROOT (NFS مشترك) أو TBE_S3_BUCKET (أرشيف المصدر لكل العمال)")
+
     if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
         missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
 

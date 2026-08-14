@@ -243,11 +243,22 @@ class HostingService:
                     running_u = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
                 if running_u >= max_bots:
                     return HostResult(ok=False, message=f"وصلت للحد الأقصى ({max_bots}) بوت مستضاف لحسابك.")
+                # Portable artifact so ANY worker node can build (not only this host's disk)
+                from telegram_bot_engine.services.hosting.artifacts import package_project, publish_artifact
+                import uuid as _uuid
+                pre_id = f"job_{_uuid.uuid4().hex}"
+                zip_path, digest = package_project(path, pre_id)
+                artifact_uri = publish_artifact(zip_path, pre_id)
                 job = q.enqueue(
                     user_id=int(user_id),
                     project_path=str(path),
                     bot_token=token_norm,
-                    meta={"bot_username": bot_username or ""},
+                    meta={
+                        "bot_username": bot_username or "",
+                        "artifact_uri": artifact_uri,
+                        "artifact_sha256": digest,
+                        "artifact_job_key": pre_id,
+                    },
                 )
                 plan = estimate_nodes_for(20_000)
                 return HostResult(
