@@ -174,3 +174,21 @@ class HostingStateStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+
+def get_host_state_store(sqlite_path: str | Path | None = None):
+    """Factory: Postgres when DATABASE_URL is postgres, else SQLite HostingStateStore."""
+    try:
+        from telegram_bot_engine.services.hosting.pg_state_store import (
+            PgHostStateStore,
+            is_postgres_url,
+        )
+        if is_postgres_url():
+            return PgHostStateStore()
+    except Exception as exc:
+        import logging
+        logging.getLogger("tbe.hosting").warning("postgres state unavailable: %s", exc)
+    path = Path(sqlite_path) if sqlite_path else None
+    if path is None:
+        raise TypeError("sqlite_path required when not using Postgres")
+    return HostingStateStore(path)

@@ -19,7 +19,7 @@ from typing import Any
 
 from ...schemas.error_contract import ErrorContract
 from .state_lock import atomic_write_text, exclusive_state_lock
-from .state_store import HostingStateStore
+from .state_store import HostingStateStore, get_host_state_store
 
 
 @dataclass
@@ -77,7 +77,7 @@ class HostingService:
         self.state_dir = base / "hosting"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.state_dir / "instances.json"  # legacy JSON (migrated once)
-        self._store = HostingStateStore(self.state_dir / "instances.sqlite3")
+        self._store = get_host_state_store(self.state_dir / "instances.sqlite3")
         self._instances: dict[str, HostInstance] = {}
         self._load()
 
@@ -404,25 +404,54 @@ class HostingService:
         )
 
     def _is_alive(self, inst: HostInstance) -> bool:
-        if not inst.pid:
-            # ask driver if possible
+        """Liveness: Docker inspect for container deploys; PID only for legacy local."""
+        dep = (inst.deployment_id or "").strip()
+        # Docker deployments (preferred path)
+        if dep.startswith("docker-") or (inst.pid is None and dep):
+            try:
+                from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                    DockerProcessDriver,
+                    docker_available,
+                )
+                if docker_available():
+                    st = DockerProcessDriver().status(dep)
+                    return str(getattr(st, "status", "")).lower() == "running"
+            except Exception:
+                pass
+            # Fallback: docker inspect by deployment id / container name label
+            try:
+                import subprocess
+                # registry may map dep_id → container name
+                from telegram_bot_engine.engines.generators.live_deployment import docker_process_driver as dpd
+                info = getattr(dpd, "_RUNNING", {}).get(dep) or {}
+                cname = info.get("container") or info.get("name") or ""
+                if cname:
+                    r = subprocess.run(
+                        ["docker", "inspect", "-f", "{{.State.Running}}", cname],
+                        capture_output=True, text=True, timeout=5, check=False,
+                    )
+                    return (r.stdout or "").strip().lower() == "true"
+            except Exception:
+                return False
+            return False
+        # Legacy local subprocess path (dev only)
+        if inst.pid:
             try:
                 from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
                     LocalProcessDriver,
                 )
                 driver = LocalProcessDriver()
-                if inst.deployment_id and hasattr(driver, "status"):
-                    st = driver.status(inst.deployment_id)
-                    s = getattr(st, "status", "") or ""
-                    return "run" in s.lower()
+                st = driver.status(dep or f"local-{inst.pid}")
+                return str(getattr(st, "status", "")).lower() == "running"
             except Exception:
-                return inst.status == "running"
-            return inst.status == "running"
-        try:
-            os.kill(inst.pid, 0)
-            return True
-        except OSError:
-            return False
+                try:
+                    import os
+                    os.kill(int(inst.pid), 0)
+                    return True
+                except Exception:
+                    return False
+        return False
+
 
     def _diagnose_instance(self, inst: HostInstance) -> ErrorContract | None:
         try:

@@ -222,48 +222,14 @@ def _platform_secret() -> bytes:
 
 
 def _seal_token(token: str) -> str:
-    """Encrypt token for at-rest storage. Falls back to plaintext prefix if crypto unavailable."""
-    token = (token or "").strip()
-    if not token:
-        return ""
-    try:
-        # Pure-stdlib seal: XOR stream from SHA256(key||counter) + hmac tag
-        import hashlib
-        import hmac
-        import base64
-        key = _platform_secret()
-        out = bytearray()
-        data = token.encode("utf-8")
-        for i, b in enumerate(data):
-            block = hashlib.sha256(key + i.to_bytes(4, "big")).digest()
-            out.append(b ^ block[i % 32])
-        tag = hmac.new(key, bytes(out), hashlib.sha256).digest()[:16]
-        return "enc1:" + base64.urlsafe_b64encode(tag + bytes(out)).decode("ascii")
-    except Exception:
-        return token
+    """Encrypt token for at-rest storage (Fernet enc2; legacy enc1 readable)."""
+    from telegram_bot_engine.services.crypto_tokens import seal_token
+    return seal_token(token)
 
 
 def _unseal_token(blob: str) -> str:
-    blob = (blob or "").strip()
-    if not blob.startswith("enc1:"):
-        return blob
-    try:
-        import hashlib
-        import hmac
-        import base64
-        key = _platform_secret()
-        raw = base64.urlsafe_b64decode(blob[5:].encode("ascii"))
-        tag, data = raw[:16], raw[16:]
-        expect = hmac.new(key, data, hashlib.sha256).digest()[:16]
-        if not hmac.compare_digest(tag, expect):
-            return ""
-        out = bytearray()
-        for i, b in enumerate(data):
-            block = hashlib.sha256(key + i.to_bytes(4, "big")).digest()
-            out.append(b ^ block[i % 32])
-        return out.decode("utf-8")
-    except Exception:
-        return ""
+    from telegram_bot_engine.services.crypto_tokens import unseal_token
+    return unseal_token(blob)
 
 
 def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:

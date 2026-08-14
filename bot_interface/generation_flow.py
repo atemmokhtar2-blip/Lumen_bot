@@ -485,6 +485,19 @@ async def deliver_generation_result(
         if size_mb <= ZIP_MAX_MB:
             await _send_doc(zip_path, "📦 المشروع المُولَّد (zip)")
             delivery_ok = True
+            try:
+                from telegram_bot_engine.services.object_storage import (
+                    enabled as _s3_on,
+                    project_archive_key,
+                    upload_file as _s3_upload,
+                )
+                if _s3_on() and user is not None:
+                    key = project_archive_key(int(user.id), Path(project_path).name)
+                    uri = _s3_upload(zip_path, key)
+                    if uri:
+                        logger.info("project archive uploaded %s", uri)
+            except Exception:
+                logger.exception("optional S3 archive upload failed")
         else:
             parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
             if not parts:
