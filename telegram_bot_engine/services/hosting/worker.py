@@ -33,6 +33,8 @@ def process_one(queue=None) -> bool:
         return False
 
     q.update(job.job_id, status="building")
+    if hasattr(q, "heartbeat"):
+        q.heartbeat(job.job_id)
     token = unseal_token(job.sealed_token)
     if not token:
         q.mark_failed(job.job_id, "token_unseal_failed")

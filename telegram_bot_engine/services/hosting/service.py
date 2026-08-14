@@ -212,8 +212,19 @@ class HostingService:
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة الاستضافة: {gate_exc}")
 
+
+        # Commercial market gate — refuse to sell weak hosting
+        try:
+            from telegram_bot_engine.services.hosting.market_gate import evaluate_market_gate
+            gate = evaluate_market_gate()
+            if not gate.ok:
+                return HostResult(ok=False, message=gate.message_ar())
+        except Exception as gate_exc:
+            return HostResult(ok=False, message=f"فشل بوابة السوق: {gate_exc}")
+
         import hashlib
         token_norm = (bot_token or "").strip()
+
         token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""
 
         # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
@@ -223,7 +234,16 @@ class HostingService:
             try:
                 from telegram_bot_engine.services.hosting.deploy_queue import get_deploy_queue
                 from telegram_bot_engine.services.hosting.capacity import estimate_nodes_for, local_node_capacity
-                job = get_deploy_queue().enqueue(
+                q = get_deploy_queue()
+                max_bots = int((os.environ.get("TBE_MAX_BOTS_PER_USER") or "50").strip() or "50")
+                running_u = 0
+                if hasattr(q, "count_running_for_user"):
+                    running_u = int(q.count_running_for_user(int(user_id)))
+                else:
+                    running_u = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
+                if running_u >= max_bots:
+                    return HostResult(ok=False, message=f"وصلت للحد الأقصى ({max_bots}) بوت مستضاف لحسابك.")
+                job = q.enqueue(
                     user_id=int(user_id),
                     project_path=str(path),
                     bot_token=token_norm,

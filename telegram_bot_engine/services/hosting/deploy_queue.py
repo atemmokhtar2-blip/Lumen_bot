@@ -232,12 +232,29 @@ class DeployQueue:
             ).fetchone()
         return int(row["n"] if row else 0)
 
+    def count_running_for_user(self, user_id: int) -> int:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COUNT(*) AS n FROM deploy_jobs WHERE status='running' AND user_id=?",
+                (int(user_id),),
+            ).fetchone()
+        return int(row["n"] if row else 0)
+
 
 _Q: DeployQueue | None = None
 
 
-def get_deploy_queue() -> DeployQueue:
+def get_deploy_queue():
+    """Prefer Postgres queue when DSN present (commercial scale)."""
     global _Q
+    try:
+        from telegram_bot_engine.services.hosting.pg_deploy_queue import PgDeployQueue, available as pg_available
+        if pg_available():
+            if _Q is None or not isinstance(_Q, PgDeployQueue):
+                _Q = PgDeployQueue()
+            return _Q
+    except Exception as exc:
+        logger.warning("postgres deploy queue unavailable: %s", exc)
     if _Q is None:
         _Q = DeployQueue()
     return _Q
