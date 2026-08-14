@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .coding_emit_foundation import _emit_config, _emit_db, _emit_models
-from .coding_emit_services import _emit_reminders_service, _emit_booking_service, _emit_clinic_service, _emit_lean_generic_service, _emit_lean_named_service, _emit_content, _emit_extras, _emit_moderation, _emit_notes, _emit_security, _emit_tasks, _emit_tickets, _emit_welcome
+from .coding_emit_services import _emit_reminders_service, _emit_booking_service, _emit_clinic_service, _emit_lean_generic_service, _emit_lean_named_service, _emit_content, _emit_extras, _emit_moderation, _emit_notes, _emit_security, _emit_tasks, _emit_tickets, _emit_welcome, _emit_pubg
 from .coding_handlers import _emit_handlers, _emit_keyboards, _emit_main
 from .planning import plan_from_spec
 from .schema import BotSpec
@@ -321,6 +321,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         pass
     if "moderation" in svc_set or "admin" in svc_set:
         files["app/services/moderation.py"] = _emit_moderation()
+    if "pubg" in svc_set or any(
+        str(getattr(f, "feature", "")).startswith("pubg_") for f in (spec.features or [])
+    ):
+        files["app/services/pubg.py"] = _emit_pubg()
     if "tasks" in svc_set:
         files["app/services/tasks.py"] = _emit_tasks()
     if "notes" in svc_set:
@@ -735,6 +739,28 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
         files["app/services/clinic.py"] = _emit_clinic_service()
     if not needs_fat_flow:
         files.pop("app/flow_engine.py", None)
+    # Handlers may still import flow_engine for optional multi-step paths —
+    # always keep a minimal working module so import validation never fails.
+    handlers_src = files.get("app/handlers.py") or ""
+    if ("app.flow_engine" in handlers_src or "from app.flow_engine" in handlers_src) and "app/flow_engine.py" not in files:
+        files["app/flow_engine.py"] = (
+            '"""Minimal flow engine — multi-step flows not enabled for this bot."""\n'
+            "from __future__ import annotations\n\n"
+            "from typing import Any\n\n\n"
+            "def active_flow(context: Any) -> bool:\n"
+            '    return bool(getattr(context, "user_data", {}) and context.user_data.get("flow"))\n\n\n'
+            "async def handle_text(update: Any, context: Any) -> bool:\n"
+            "    return False\n\n\n"
+            "async def handle_photo(update: Any, context: Any) -> bool:\n"
+            "    return False\n\n\n"
+            "async def handle_callback(update: Any, context: Any) -> bool:\n"
+            "    return False\n\n\n"
+            "def start_flow(*args: Any, **kwargs: Any) -> None:\n"
+            "    return None\n\n\n"
+            "def clear_flow(context: Any) -> None:\n"
+            "    if getattr(context, \"user_data\", None) is not None:\n"
+            '        context.user_data.pop("flow", None)\n'
+        )
     if not needs_fat_tickets:
         files.pop("app/services/tickets.py", None)
     if not (svc_set & {"utils", "extras", "clinic", "jobs", "edu", "events", "restaurant",

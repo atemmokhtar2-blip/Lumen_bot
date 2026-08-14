@@ -423,10 +423,23 @@ def _filter_for_decision(keys: list[str], decision: object | None) -> list[str]:
         return keys
     primary = getattr(decision, "primary", None)
     if primary == "group_moderation":
-        allow_p = ("user_", "welcome_", "delete_", "purge", "pin_", "lock_", "unlock_", "rules", "start", "help", "lang")
+        allow_exact = {
+            "start", "help", "lang", "rules", "purge", "delete_message",
+            "clear_warnings", "list_warnings", "admin_log", "set_forbidden",
+            "del_forbidden", "list_forbidden", "set_protection", "set_max_warns",
+            "set_owner", "set_role", "admin_set_role", "admin_dashboard",
+            "maintenance_mode", "slowmode_info", "unlock_chat", "goodbye_set",
+            "pubg_register", "pubg_players", "pubg_team", "pubg_teams",
+            "pubg_match", "pubg_top", "pubg_stats", "pubg_tournament",
+        }
+        allow_p = (
+            "user_", "welcome_", "delete_", "purge", "pin_", "lock_", "unlock_",
+            "rules", "start", "help", "lang", "admin_", "set_", "list_", "clear_",
+            "pubg_", "goodbye_", "slowmode",
+        )
         out = []
         for k in keys:
-            if k in {"start", "help", "lang", "rules", "purge", "delete_message"} or any(str(k).startswith(p) for p in ("user_", "welcome_", "pin_", "lock_")):
+            if k in allow_exact or any(str(k).startswith(p) for p in allow_p):
                 out.append(k)
         return out
     if primary not in {"tasks", "projects"}:
@@ -475,8 +488,16 @@ _LEAN_PRESET_CORE: dict[str, tuple[str, ...]] = {
     "group_management": (
         "start", "help", "rules",
         "user_ban", "user_unban", "user_mute", "user_unmute", "user_kick", "user_warn",
-        "user_info", "delete_message", "purge",
-        "welcome_set", "welcome_toggle",
+        "user_unwarn", "clear_warnings", "list_warnings",
+        "user_info", "user_promote", "user_demote",
+        "delete_message", "purge", "pin_message",
+        "lock_chat", "unlock_chat", "slowmode_info",
+        "welcome_set", "welcome_toggle", "welcome_show", "goodbye_set",
+        "admin_log", "set_forbidden", "del_forbidden", "list_forbidden",
+        "set_protection", "set_max_warns", "set_owner", "set_role",
+        "admin_set_role", "admin_dashboard", "maintenance_mode",
+        "pubg_register", "pubg_players", "pubg_team", "pubg_teams",
+        "pubg_match", "pubg_top", "pubg_stats", "pubg_tournament",
     ),
 
     "support_tickets": ("start", "help", "ticket_open", "ticket_status", "ticket_list"),

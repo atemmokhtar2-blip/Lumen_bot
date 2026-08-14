@@ -48,7 +48,9 @@ def plan_from_spec(spec: BotSpec) -> PlanResult:
     ]
     if "moderation" in services:
         files.append(PlannedFile("app/services/moderation.py", "moderation service"))
-    if "tasks" in services or "notes" in services or "welcome" in services or "tickets" in services or "security" in services or spec.storage.type == "sqlite":
+    if "pubg" in services:
+        files.append(PlannedFile("app/services/pubg.py", "PUBG / group gaming service"))
+    if "tasks" in services or "notes" in services or "welcome" in services or "tickets" in services or "security" in services or "pubg" in services or "moderation" in services or spec.storage.type == "sqlite":
         files.append(PlannedFile("app/db.py", "sqlite helpers"))
     if "tasks" in services:
         files.append(PlannedFile("app/services/tasks.py", "tasks service"))

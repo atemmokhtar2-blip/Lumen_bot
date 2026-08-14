@@ -952,6 +952,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_welcome = any(_svc(f) == "welcome" for f in spec.features)
     need_tickets = any(_svc(f) == "tickets" for f in spec.features)
     need_security = any(_svc(f) == "security" for f in spec.features)
+    need_pubg = any(_svc(f) == "pubg" for f in spec.features)
     need_ocr = any(
         _svc(f) == "ocr"
         or (getattr(get_capability(f.feature), "method", None) in {"ocr_hint", "ocr_image", "ocr"})
@@ -998,6 +999,8 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import tickets as tickets_svc")
     if need_security:
         imports.append("from app.services import security as security_svc")
+    if need_pubg:
+        imports.append("from app.services import pubg as pubg_svc")
     if need_extras:
         imports.append("from app.services import extras as extras_svc")
 
@@ -1093,17 +1096,42 @@ def _emit_handlers(spec: BotSpec) -> str:
             continue
 
         if cap.service == "moderation":
-            if cap.method in {"pin_message", "delete_message"}:
+            if cap.method in {"pin_message", "delete_message", "purge"}:
                 lines.append("    if chat is None or message.reply_to_message is None:")
                 lines.append(f"        await message.reply_text({fail!r})")
                 lines.append("        return")
                 lines.append("    try:")
                 lines.append("        mid = message.reply_to_message.message_id")
-                if cap.method == "pin_message":
-                    lines.append("        await moderation_svc.pin_message(context, chat.id, mid)")
-                else:
-                    lines.append("        await moderation_svc.delete_message(context, chat.id, mid)")
+                lines.append(f"        await moderation_svc.{cap.method}(context, chat.id, mid)")
                 lines.append(f"        await message.reply_text({ok!r})")
+                lines.append("    except Exception:")
+                lines.append(f"        await message.reply_text({fail!r})")
+            elif cap.method in {
+                "list_log", "list_forbidden", "set_protection", "set_max_warns",
+                "slowmode_info", "add_forbidden", "remove_forbidden",
+            }:
+                lines.append("    if chat is None:")
+                lines.append(f"        await message.reply_text({fail!r})")
+                lines.append("        return")
+                lines.append("    try:")
+                if cap.method == "list_log":
+                    lines.append("        await message.reply_text(moderation_svc.list_log(chat.id))")
+                elif cap.method == "list_forbidden":
+                    lines.append("        words = moderation_svc.list_forbidden(chat.id)")
+                    lines.append("        await message.reply_text('\\n'.join(words) if words else 'لا كلمات ممنوعة')")
+                elif cap.method == "set_protection":
+                    lines.append("        await message.reply_text(moderation_svc.set_protection(chat.id))")
+                elif cap.method == "set_max_warns":
+                    lines.append("        n = int(context.args[0]) if context.args else 3")
+                    lines.append("        await message.reply_text(moderation_svc.set_max_warns(chat.id, n))")
+                elif cap.method == "add_forbidden":
+                    lines.append("        w = ' '.join(context.args) if context.args else ''")
+                    lines.append("        await message.reply_text(moderation_svc.add_forbidden(chat.id, w))")
+                elif cap.method == "remove_forbidden":
+                    lines.append("        w = ' '.join(context.args) if context.args else ''")
+                    lines.append("        await message.reply_text(moderation_svc.remove_forbidden(chat.id, w))")
+                else:
+                    lines.append("        await message.reply_text(moderation_svc.slowmode_info())")
                 lines.append("    except Exception:")
                 lines.append(f"        await message.reply_text({fail!r})")
             else:
@@ -1130,13 +1158,67 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "warn_user": "warn_user",
                 }
                 if cap.method == "user_info":
-                    lines.append("        await message.reply_text(f'user_id={target_id}')" )
+                    lines.append("        await message.reply_text(moderation_svc.user_info(target_id, chat.id))")
+                    lines.append("        return")
+                if cap.method == "unwarn_user":
+                    lines.append("        await message.reply_text(moderation_svc.unwarn_user(chat.id, target_id))")
+                    lines.append("        return")
+                if cap.method == "clear_warnings":
+                    lines.append("        await message.reply_text(moderation_svc.clear_warnings(chat.id, target_id))")
+                    lines.append("        return")
+                if cap.method == "get_warns":
+                    lines.append("        n = moderation_svc.get_warns(chat.id, target_id)")
+                    lines.append("        await message.reply_text(f'تحذيرات {target_id}: {n}')")
+                    lines.append("        return")
+                if cap.method == "set_owner":
+                    lines.append("        await message.reply_text(moderation_svc.set_owner(chat.id, target_id))")
+                    lines.append("        return")
+                if cap.method == "set_role":
+                    lines.append("        role = context.args[1] if context.args and len(context.args) > 1 else 'moderator'")
+                    lines.append("        await message.reply_text(moderation_svc.set_role(chat.id, target_id, role))")
                     lines.append("        return")
                 m = method_map.get(cap.method, "warn_user")
-                lines.append(f"        await moderation_svc.{m}(context, chat.id, target_id)")
-                lines.append(f"        await message.reply_text({ok!r})")
+                if m == "warn_user":
+                    lines.append("        msg = await moderation_svc.warn_user(context, chat.id, target_id, admin_id=user.id)")
+                    lines.append("        await message.reply_text(msg)")
+                else:
+                    lines.append(f"        await moderation_svc.{m}(context, chat.id, target_id)")
+                    lines.append(f"        await message.reply_text({ok!r})")
                 lines.append("    except Exception:")
                 lines.append(f"        await message.reply_text({fail!r})")
+
+        elif cap.service == "pubg":
+            lines.append("    if chat is None:")
+            lines.append(f"        await message.reply_text({fail!r})")
+            lines.append("        return")
+            lines.append("    args = context.args or []")
+            lines.append("    try:")
+            lines.append(f"        _m = {cap.method!r}")
+            lines.append("        if _m == 'register_player':")
+            lines.append("            ign = ' '.join(args) if args else ''")
+            lines.append("            await message.reply_text(pubg_svc.register_player(chat.id, user.id, ign))")
+            lines.append("        elif _m == 'list_players':")
+            lines.append("            await message.reply_text(pubg_svc.list_players(chat.id))")
+            lines.append("        elif _m == 'set_team':")
+            lines.append("            team = ' '.join(args) if args else ''")
+            lines.append("            await message.reply_text(pubg_svc.set_team(chat.id, user.id, team))")
+            lines.append("        elif _m == 'list_teams':")
+            lines.append("            await message.reply_text(pubg_svc.list_teams(chat.id))")
+            lines.append("        elif _m == 'record_match':")
+            lines.append("            note = ' '.join(args) if args else ''")
+            lines.append("            await message.reply_text(pubg_svc.record_match(chat.id, user.id, note=note))")
+            lines.append("        elif _m == 'top_players':")
+            lines.append("            await message.reply_text(pubg_svc.top_players(chat.id))")
+            lines.append("        elif _m == 'player_stats':")
+            lines.append("            uid = int(args[0]) if args and str(args[0]).isdigit() else user.id")
+            lines.append("            await message.reply_text(pubg_svc.player_stats(chat.id, uid))")
+            lines.append("        elif _m == 'create_tournament':")
+            lines.append("            title = ' '.join(args) if args else 'Tournament'")
+            lines.append("            await message.reply_text(pubg_svc.create_tournament(chat.id, user.id, title))")
+            lines.append("        else:")
+            lines.append(f"            await message.reply_text({ok!r})")
+            lines.append("    except Exception:")
+            lines.append(f"        await message.reply_text({fail!r})")
 
         elif cap.service == "tasks":
             if cap.method == "add_task":

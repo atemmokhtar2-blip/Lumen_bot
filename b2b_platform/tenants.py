@@ -17,20 +17,34 @@ def _new_api_key(prefix: str = "sk_live") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
 
 
+def _is_dev_environment() -> bool:
+    """True only for explicit local/dev/test environments."""
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
+
+
 def _key_pepper() -> bytes:
     """Server-side pepper for API key hashes.
 
-    Prefer dedicated API_KEY_PEPPER. Fall back to PLATFORM_ADMIN_TOKEN only so
-    existing single-node deploys keep a non-empty pepper without a new secret.
-    Never use a hardcoded production pepper.
+    Prefer dedicated API_KEY_PEPPER. Fall back to PLATFORM_ADMIN_TOKEN /
+    TBE_TOKEN_SECRET so existing single-node deploys keep a non-empty pepper
+    without a new secret.
+
+    A hardcoded pepper is allowed ONLY in explicit dev environments.
+    Production / unset ENVIRONMENT must set API_KEY_PEPPER (or an equivalent).
     """
-    import os
     for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
         v = (os.getenv(name) or "").strip()
         if v:
             return v.encode("utf-8")
-    # Dev-only fallback — production MUST set API_KEY_PEPPER
-    return b"ai_agent_7h_dev_only_pepper_change_me"
+    if _is_dev_environment():
+        # Local/dev only — never used when ENVIRONMENT is unset or production
+        return b"ai_agent_7h_dev_only_pepper_change_me"
+    raise RuntimeError(
+        "API_KEY_PEPPER is required outside dev. "
+        "Set API_KEY_PEPPER (preferred) or PLATFORM_ADMIN_TOKEN / TBE_TOKEN_SECRET. "
+        "For local testing set ENVIRONMENT=dev|local|test."
+    )
 
 
 def _hash_key(raw: str) -> str:

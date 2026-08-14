@@ -350,11 +350,37 @@ def _runtime_import_findings(root: Path) -> list[Finding]:
         )
     if not modules:
         return []
+    # Smoke-import generated modules. If python-telegram-bot is not installed in
+    # the host env, inject a minimal stub so we still catch *local* import errors.
+    stub_dir = root / ".ah_import_stub"
+    try:
+        import telegram  # noqa: F401
+        stub_needed = False
+    except Exception:
+        stub_needed = True
+    if stub_needed:
+        stub_dir.mkdir(parents=True, exist_ok=True)
+        (stub_dir / "telegram").mkdir(exist_ok=True)
+        (stub_dir / "telegram" / "__init__.py").write_text(
+            "class Update: pass\nclass ChatPermissions:\n    def __init__(self, **kwargs): pass\n",
+            encoding="utf-8",
+        )
+        (stub_dir / "telegram" / "ext.py").write_text(
+            "class ContextTypes:\n    DEFAULT_TYPE = object\n"
+            "class Application: pass\nclass CommandHandler:\n    def __init__(self, *a, **k): pass\n"
+            "class MessageHandler:\n    def __init__(self, *a, **k): pass\n"
+            "class CallbackQueryHandler:\n    def __init__(self, *a, **k): pass\n"
+            "class filters:\n    TEXT = None\n    COMMAND = None\n",
+            encoding="utf-8",
+        )
     code = "import importlib\n" + "\n".join(
         f"importlib.import_module({name!r})" for name in dict.fromkeys(modules)
     )
     from telegram_bot_engine.services.secure_exec import clean_child_environ
-    env = clean_child_environ({"PYTHONPATH": str(root)})
+    pp = str(root)
+    if stub_needed:
+        pp = str(stub_dir) + ":" + pp
+    env = clean_child_environ({"PYTHONPATH": pp})
     try:
         proc = subprocess.run(
             [sys.executable, "-c", code],
