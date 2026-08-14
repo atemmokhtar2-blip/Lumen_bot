@@ -242,69 +242,126 @@ class DockerProcessDriver(DeploymentProvider):
 
         # Runtime: image-only (code baked in). No bind-mount of user source.
         # Writable tmp only; read-only rootfs.
-        net = (os.environ.get("TBE_DOCKER_NETWORK") or "").strip() or "bridge"
-        cmd = [
-            "docker", "run",
-            "-d",
-            "--name", cname,
-            "--label", f"tbe.project={path}",
-            "--label", f"tbe.user={user_seg}",
-            "--label", f"tbe.image={image_tag}",
-            "--label", "tbe.managed=1",
-            "--label", "tbe.isolation=image",
-            "--restart", "no",
-            f"--memory={_MEMORY}",
-            f"--memory-swap={_MEMORY}",
-            f"--cpus={_CPUS}",
-            f"--pids-limit={_PIDS}",
-            "--ulimit", "nproc=32:32",
-            "--ulimit", "nofile=128:128",
-            "--log-driver", "json-file",
-            "--log-opt", "max-size=2m",
-            "--log-opt", "max-file=2",
-            "--security-opt", "no-new-privileges:true",
-            "--cap-drop", "ALL",
-            "--read-only",
-            "--ipc", "none",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
-            "--tmpfs", "/var/tmp:rw,noexec,nosuid,nodev,size=16m",
-            "--network", net,
-            "-w", "/app",
-            "--user", "10001:10001",
-            "-e", "PYTHONUNBUFFERED=1",
-            "-e", "PYTHONDONTWRITEBYTECODE=1",
-            "-e", "TBE_SANDBOX=docker-image",
-            "-e", "TBE_ISOLATED=1",
-            "-e", "AWS_EC2_METADATA_DISABLED=true",
-            "-e", "NO_PROXY=169.254.169.254,metadata,metadata.google.internal",
-            "-e", "HOME=/tmp",
-            "-e", f"BOT_TOKEN={bot_token}",
-            "-e", f"TELEGRAM_BOT_TOKEN={bot_token}",
-            image_tag,
-        ]
-
+        net = (os.environ.get("TBE_DOCKER_NETWORK") or "").strip()
+        if not net:
+            # Fail closed — never silently use default bridge in this path
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=dep_id,
+                status=DEPLOY_FAILED,
+                message="TBE_DOCKER_NETWORK is required (egress-limited network)",
+            )
         try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
+            from telegram_bot_engine.services.bot_image_builder import validate_image_tag
+            image_tag = validate_image_tag(image_tag)
+        except Exception as _tag_exc:
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
-                message="docker run timed out",
+                message=f"invalid image tag: {_tag_exc}",
             )
-        except Exception as e:
-            return DeploymentStatus(
-                provider=self.name,
-                deployment_id=dep_id,
-                status=DEPLOY_FAILED,
-                message=f"docker run failed: {type(e).__name__}: {e}",
+
+        # Token via ephemeral env-file (not argv); file removed after docker run
+        import tempfile
+        env_file_path = None
+        try:
+            # Token validation: Telegram form digits:secret
+            import re as _re
+            if not _re.fullmatch(r"\d{6,12}:[A-Za-z0-9_-]{30,}", bot_token.strip()):
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message="bot token format rejected",
+                )
+            ef = tempfile.NamedTemporaryFile(
+                mode="w",
+                prefix="tbe_env_",
+                suffix=".env",
+                delete=False,
+                encoding="utf-8",
             )
+            env_file_path = ef.name
+            # Only bot token keys — nothing from host environ
+            ef.write(f"BOT_TOKEN={bot_token.strip()}\n")
+            ef.write(f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n")
+            ef.write("PYTHONUNBUFFERED=1\n")
+            ef.write("PYTHONDONTWRITEBYTECODE=1\n")
+            ef.write("TBE_SANDBOX=docker-image\n")
+            ef.write("TBE_ISOLATED=1\n")
+            ef.write("AWS_EC2_METADATA_DISABLED=true\n")
+            ef.write("HOME=/tmp\n")
+            ef.close()
+            try:
+                os.chmod(env_file_path, 0o600)
+            except Exception:
+                pass
+
+            cmd = [
+                "docker", "run",
+                "-d",
+                "--name", cname,
+                "--label", f"tbe.user={user_seg}",
+                "--label", "tbe.managed=1",
+                "--label", "tbe.isolation=image",
+                "--restart", "no",
+                f"--memory={_MEMORY}",
+                f"--memory-swap={_MEMORY}",
+                f"--cpus={_CPUS}",
+                f"--pids-limit={_PIDS}",
+                "--ulimit", "nproc=32:32",
+                "--ulimit", "nofile=128:128",
+                "--log-driver", "json-file",
+                "--log-opt", "max-size=2m",
+                "--log-opt", "max-file=2",
+                "--security-opt", "no-new-privileges:true",
+                "--cap-drop", "ALL",
+                "--read-only",
+                "--ipc", "none",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
+                "--tmpfs", "/var/tmp:rw,noexec,nosuid,nodev,size=16m",
+                "--network", net,
+                "-w", "/app",
+                "--user", "10001:10001",
+                "--env-file", env_file_path,
+                image_tag,
+            ]
+
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message="docker run timed out",
+                )
+            except Exception as e:
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message=f"docker run failed: {type(e).__name__}: {e}",
+                )
+        finally:
+            if env_file_path:
+                try:
+                    # best-effort shred content then unlink
+                    with open(env_file_path, "w", encoding="utf-8") as _wf:
+                        _wf.write("\0" * 64)
+                    os.unlink(env_file_path)
+                except Exception:
+                    pass
+
+        # NOTE: proc is assigned inside try; if env setup failed we returned early
+
 
         # NEVER fall back to root. Non-root is mandatory isolation.
         if proc.returncode != 0 and "--user" in cmd:

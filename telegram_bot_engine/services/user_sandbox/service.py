@@ -209,13 +209,12 @@ def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSa
 
 
 def _platform_secret() -> bytes:
-    """Derive a stable key material from platform secrets (never commit raw keys)."""
+    """Legacy helper — prefer crypto_tokens. Never use TELEGRAM_BOT_TOKEN as key."""
     import hashlib
     raw = (
         (os.getenv("TBE_TOKEN_SECRET") or "").strip()
         or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
         or (os.getenv("SECRET_KEY") or "").strip()
-        or (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
         or "tbe-dev-insecure-token-key"
     )
     return hashlib.sha256(raw.encode("utf-8")).digest()

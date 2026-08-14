@@ -5,7 +5,7 @@ Legacy ``enc1:`` XOR seals remain readable for migration only — new writes use
 
 Environment:
   TBE_TOKEN_SECRET   preferred key material (required in production)
-  PLATFORM_ADMIN_TOKEN / SECRET_KEY / TELEGRAM_BOT_TOKEN  fallbacks (dev only)
+  PLATFORM_ADMIN_TOKEN / SECRET_KEY fallbacks (dev only; never TELEGRAM_BOT_TOKEN)
 """
 from __future__ import annotations
 
@@ -22,11 +22,15 @@ _ENC1 = "enc1:"
 
 
 def _raw_secret_material() -> bytes:
+    """Key material for sealing user bot tokens.
+
+    NEVER derive from TELEGRAM_BOT_TOKEN (platform token) — that couples
+    host compromise of the bot token to every sealed user token.
+    """
     raw = (
         (os.getenv("TBE_TOKEN_SECRET") or "").strip()
         or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
         or (os.getenv("SECRET_KEY") or "").strip()
-        or (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     )
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
     if not raw:
@@ -36,6 +40,8 @@ def _raw_secret_material() -> bytes:
             )
         raw = "tbe-dev-insecure-token-key"
         logger.warning("using insecure default TBE token seal key (dev only)")
+    if len(raw) < 16 and env in {"production", "prod", "staging"}:
+        raise RuntimeError("TBE_TOKEN_SECRET too short (min 16 chars in production)")
     return raw.encode("utf-8")
 
 
