@@ -1,9 +1,19 @@
-"""Host worker: claims deploy jobs and runs image-based Docker deploys.
+"""Host worker for commercial fleet.
 
-Run as a separate process on each node:
+On each worker node:
+  export TBE_NODE_ID=node-1
+  export TBE_DATABASE_URL=postgresql://...
+  export TBE_DOCKER_NETWORK=tbe-egress
+  export TBE_DOCKER_REGISTRY=registry.example.com
+  export TBE_DOCKER_PUSH=1
   python -m telegram_bot_engine.services.hosting.worker
 
-Many workers across many nodes = path to 20k hosted bots.
+Boot sequence:
+  1) migrate control-plane schema
+  2) ensure docker egress network
+  3) registry login
+  4) register in fleet
+  5) loop: heartbeat + claim jobs + deploy
 """
 from __future__ import annotations
 
@@ -14,8 +24,33 @@ import time
 logger = logging.getLogger("tbe.hosting.worker")
 
 
-def process_one(queue=None) -> bool:
-    """Claim and process a single job. Returns True if a job was handled."""
+def bootstrap() -> None:
+    from telegram_bot_engine.services.hosting.pg_control_plane import migrate, is_postgres
+    if not is_postgres():
+        raise RuntimeError("Worker requires TBE_DATABASE_URL=postgresql://...")
+    migrate()
+
+    from telegram_bot_engine.services.hosting.network import ensure_network, telegram_egress_hint
+    ok, msg = ensure_network()
+    if not ok:
+        raise RuntimeError(f"network_setup_failed:{msg}")
+    logger.info("network %s", msg)
+    logger.info(telegram_egress_hint())
+
+    from telegram_bot_engine.services.hosting.registry import docker_login, registry_host
+    if registry_host():
+        ok, msg = docker_login()
+        if not ok:
+            raise RuntimeError(f"registry_login_failed:{msg}")
+        logger.info("registry %s", msg)
+
+    from telegram_bot_engine.services.hosting.fleet import FleetRegistry
+    fleet = FleetRegistry()
+    rec = fleet.register(version=os.environ.get("TBE_WORKER_VERSION") or "1")
+    logger.info("registered worker %s max_bots=%s", rec.node_id, rec.max_bots)
+
+
+def process_one(queue=None, fleet=None) -> bool:
     from telegram_bot_engine.services.hosting.capacity import local_node_capacity, node_id
     from telegram_bot_engine.services.hosting.deploy_queue import get_deploy_queue
     from telegram_bot_engine.services.crypto_tokens import unseal_token
@@ -23,6 +58,12 @@ def process_one(queue=None) -> bool:
     q = queue or get_deploy_queue()
     nid = node_id()
     running = q.count_running_on_node(nid)
+    if fleet is not None:
+        try:
+            fleet.heartbeat(running_bots=running)
+        except Exception:
+            logger.exception("fleet heartbeat failed")
+
     cap = local_node_capacity(running=running)
     if not cap.can_accept:
         logger.info("node %s at capacity running=%s max=%s", nid, running, cap.max_bots)
@@ -35,6 +76,7 @@ def process_one(queue=None) -> bool:
     q.update(job.job_id, status="building")
     if hasattr(q, "heartbeat"):
         q.heartbeat(job.job_id)
+
     token = unseal_token(job.sealed_token)
     if not token:
         q.mark_failed(job.job_id, "token_unseal_failed")
@@ -59,14 +101,8 @@ def process_one(queue=None) -> bool:
             q.mark_running(
                 job.job_id,
                 deployment_id=getattr(st, "deployment_id", "") or "",
-                image_tag=getattr(st, "service_id", "") or "",
+                image_tag=str(getattr(st, "service_id", "") or ""),
             )
-            # Best-effort: register in host service store if available
-            try:
-                from telegram_bot_engine.services.hosting.service import get_hosting_service
-                # HostingService.start already used for sync path; worker updates queue only
-            except Exception:
-                pass
             logger.info("job %s running dep=%s", job.job_id, getattr(st, "deployment_id", ""))
         else:
             q.mark_failed(job.job_id, getattr(st, "message", "deploy_failed")[:500])
@@ -79,18 +115,36 @@ def process_one(queue=None) -> bool:
 def run_forever(poll_seconds: float | None = None) -> None:
     poll = float(poll_seconds or os.environ.get("TBE_WORKER_POLL_SECONDS") or 2)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    logger.info("host worker starting node=%s", os.environ.get("TBE_NODE_ID") or "")
-    while True:
-        try:
-            worked = process_one()
-            if not worked:
+    bootstrap()
+    from telegram_bot_engine.services.hosting.fleet import FleetRegistry
+    from telegram_bot_engine.services.hosting.deploy_queue import get_deploy_queue
+    fleet = FleetRegistry()
+    q = get_deploy_queue()
+    logger.info("worker loop node=%s", os.environ.get("TBE_NODE_ID") or "")
+    try:
+        while True:
+            try:
+                fleet.sweep_stale()
+                worked = process_one(queue=q, fleet=fleet)
+                if not worked:
+                    # idle heartbeat
+                    try:
+                        running = q.count_running_on_node(
+                            __import__("telegram_bot_engine.services.hosting.capacity", fromlist=["node_id"]).node_id()
+                        )
+                        fleet.heartbeat(running_bots=running)
+                    except Exception:
+                        pass
+                    time.sleep(poll)
+            except Exception:
+                logger.exception("worker loop error")
                 time.sleep(poll)
-        except KeyboardInterrupt:
-            logger.info("worker stop")
-            break
+    except KeyboardInterrupt:
+        logger.info("worker shutting down")
+        try:
+            fleet.mark_offline()
         except Exception:
-            logger.exception("worker loop error")
-            time.sleep(poll)
+            pass
 
 
 if __name__ == "__main__":
