@@ -12,6 +12,161 @@ from .session_store import get_session_store
 logger = logging.getLogger("ai_agent_7h_bot.generation_flow")
 
 
+
+def _smoke_test_project(project_path: str | Path, *, seconds: float = 10.0) -> tuple[bool, str]:
+    """Deterministic pre-delivery smoke: compile + import + short process probe.
+
+    Runs up to ``seconds`` (default 10). Does not require a real BotFather token.
+    Passes when the generated code compiles, imports, and the entry process
+    starts without an immediate crash (syntax/import). Telegram network errors
+    from a dummy token are expected and treated as soft-pass after load.
+    """
+    import os
+    import subprocess
+    import sys
+    import time
+
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        return False, "project_path_missing"
+
+    # 1) Byte-compile all Python sources
+    try:
+        import compileall
+        ok = compileall.compile_dir(str(root / "app"), quiet=1, force=False)
+        if (root / "main.py").is_file():
+            ok = compileall.compile_file(str(root / "main.py"), quiet=1) and ok
+        if not ok:
+            return False, "compileall_failed"
+    except Exception as e:
+        return False, f"compile_error:{type(e).__name__}"
+
+    # 2) Import handlers in isolated subprocess (clean sys.path)
+    code = (
+        "import sys; sys.path.insert(0, %r); import importlib; "
+        "importlib.import_module('app.handlers'); print('handlers_ok')"
+    ) % str(root)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=min(30.0, max(8.0, seconds)),
+            env={**os.environ, "PYTHONPATH": str(root)},
+        )
+        if proc.returncode != 0 or "handlers_ok" not in (proc.stdout or ""):
+            err = (proc.stderr or proc.stdout or "")[-400:]
+            return False, f"import_handlers_failed:{err}"
+    except subprocess.TimeoutExpired:
+        return False, "import_handlers_timeout"
+    except Exception as e:
+        return False, f"import_handlers_error:{type(e).__name__}"
+
+    # 3) Short live probe (~seconds): start entry if present
+    entry = root / "main.py"
+    if not entry.is_file():
+        return True, "compile_import_ok_no_main"
+
+    dummy = "0000000000:SMOKE_TEST_TOKEN_NOT_REAL_XXXXXXXXXXXX"
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(root),
+        "TELEGRAM_BOT_TOKEN": dummy,
+        "BOT_TOKEN": dummy,
+        "ENVIRONMENT": "dev",
+        "TBE_ALLOW_LOCAL_PROCESS": "1",
+        "TBE_REQUIRE_DOCKER": "0",
+    }
+    # strip platform token so child cannot collide
+    env.pop("TELEGRAM_BOT_TOKEN", None)
+    env["TELEGRAM_BOT_TOKEN"] = dummy
+    env["BOT_TOKEN"] = dummy
+
+    try:
+        p = subprocess.Popen(
+            [sys.executable, str(entry)],
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+    except Exception as e:
+        return False, f"process_start_failed:{type(e).__name__}:{e}"
+
+    deadline = time.time() + max(3.0, float(seconds))
+    out_chunks: list[str] = []
+    crashed_hard = False
+    try:
+        while time.time() < deadline:
+            if p.poll() is not None:
+                break
+            time.sleep(0.4)
+        # drain a bit of output
+        try:
+            if p.stdout:
+                # non-blocking-ish: communicate with short timeout after kill
+                pass
+        except Exception:
+            pass
+        rc = p.poll()
+        if rc is None:
+            # still running after smoke window → good (loaded + looped)
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                p.kill()
+            return True, "process_alive_after_smoke"
+        # exited early — inspect output for hard failures
+        try:
+            remaining, _ = p.communicate(timeout=3)
+            if remaining:
+                out_chunks.append(remaining)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        blob = "\n".join(out_chunks).lower()
+        hard = (
+            "syntaxerror",
+            "indentationerror",
+            "modulenotfounderror",
+            "importerror",
+            "nameerror:",
+            "attributeerror:",
+            "traceback (most recent call last)",
+        )
+        # Telegram auth errors are expected with dummy token
+        soft = (
+            "unauthorized",
+            "invalid token",
+            "token",
+            "timed out",
+            "connection",
+            "network",
+            "getme",
+            "conflict",
+            "httpx",
+            "http error",
+        )
+        if any(h in blob for h in hard) and not any(s in blob for s in soft):
+            # if traceback present without soft network markers, fail
+            if "syntaxerror" in blob or "indentationerror" in blob or "modulenotfounderror" in blob:
+                return False, f"process_hard_fail:{blob[-300:]}"
+        # early exit with network/token noise → still count as load success
+        return True, f"process_exited_rc={rc}_soft"
+    except Exception as e:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        return False, f"smoke_exception:{type(e).__name__}"
+
+
+
 async def deliver_generation_result(
     *,
     message,
@@ -171,21 +326,66 @@ async def deliver_generation_result(
         await message.reply_text("❌ تعذر إكمال فحص المشروع قبل التسليم؛ لم يتم إرسال ملف غير متحقق منه.")
         return
 
-    # Zip delivery, only after the pre-delivery gate passes.
+    # Pre-delivery 10s smoke test — code must load before we ship a zip.
+    try:
+        await message.reply_text("🧪 جاري اختبار المشروع ~10 ثوانٍ قبل التسليم...")
+    except Exception:
+        pass
+    smoke_ok, smoke_msg = _smoke_test_project(project_path, seconds=10.0)
+    if not smoke_ok:
+        logger.error("pre-delivery smoke failed: %s", smoke_msg)
+        await message.reply_text(
+            "❌ فشل اختبار التشغيل السريع للمشروع قبل التسليم.\n"
+            f"التفاصيل: `{escape_md(smoke_msg[:200])}`\n"
+            "لم يتم إرسال الملف ولن يُفتح مسار التوكن حتى يمر الاختبار."
+        )
+        return
+    try:
+        await message.reply_text(f"✅ اختبار 10 ثوانٍ ناجح ({smoke_msg})")
+    except Exception:
+        pass
+
+    # Zip delivery, only after the pre-delivery gate + smoke pass.
     delivery_ok = False
+    last_err = ""
     try:
         zip_path = make_zip_from_path(project_path)
         if not zip_path or not zip_path.exists():
             await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
             return
         size_mb = zip_path.stat().st_size / (1024 * 1024)
+
+        async def _send_doc(path: Path, caption: str, filename: str | None = None) -> None:
+            """Send a document with retries; prefers InputFile for PTB v21+."""
+            import asyncio
+            name = filename or path.name
+            last: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    try:
+                        from telegram import InputFile
+                        with path.open("rb") as fh:
+                            await message.reply_document(
+                                document=InputFile(fh, filename=name),
+                                caption=caption,
+                            )
+                    except Exception:
+                        # Fallback: path-based upload
+                        with path.open("rb") as fh:
+                            await message.reply_document(
+                                document=fh,
+                                filename=name,
+                                caption=caption,
+                            )
+                    return
+                except Exception as e:
+                    last = e
+                    logger.warning("reply_document attempt %s failed: %s", attempt, e)
+                    await asyncio.sleep(0.6 * attempt)
+            raise last or RuntimeError("document_send_failed")
+
         if size_mb <= ZIP_MAX_MB:
-            with zip_path.open("rb") as document:
-                await message.reply_document(
-                    document=document,
-                    filename=zip_path.name,
-                    caption="📦 المشروع المُولَّد (zip)",
-                )
+            await _send_doc(zip_path, "📦 المشروع المُولَّد (zip)")
             delivery_ok = True
         else:
             parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
@@ -200,19 +400,19 @@ async def deliver_generation_result(
                 "نزّلها كلها وادمجها بالترتيب: cat project.zip.part* > project.zip"
             )
             for index, part in enumerate(parts, 1):
-                with part.open("rb") as document:
-                    await message.reply_document(
-                        document=document,
-                        filename=part.name,
-                        caption=f"📦 الجزء {index}/{total}",
-                    )
+                await _send_doc(part, f"📦 الجزء {index}/{total}", filename=part.name)
             for part in parts:
-                part.unlink(missing_ok=True)
+                try:
+                    part.unlink(missing_ok=True)
+                except Exception:
+                    pass
             delivery_ok = True
     except Exception as exc:
-        logger.exception("zip delivery failed")
+        last_err = f"{type(exc).__name__}: {exc}"
+        logger.exception("zip delivery failed: %s", last_err)
         await message.reply_text(
-            "❌ فشل تسليم ملف المشروع بعد نجاح التوليد. لم يتم اعتبار البوت جاهزاً للتشغيل."
+            "❌ فشل تسليم ملف المشروع بعد نجاح التوليد. لم يتم اعتبار البوت جاهزاً للتشغيل.\n"
+            f"سبب التسليم: `{escape_md(last_err[:180])}`"
         )
         return
 

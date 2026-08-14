@@ -100,6 +100,11 @@ def make_zip_from_path(project_path: str | Path) -> Path | None:
         return None
 
     zip_path = project_path.parent / f"{project_path.name}.zip"
+    try:
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.exception("zip parent mkdir failed")
+        return None
     excluded_dirs = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
     excluded_names = {".env", ".env.local", ".env.production", "secrets.json"}
     tmp_zip = zip_path.with_suffix(".zip.tmp")
