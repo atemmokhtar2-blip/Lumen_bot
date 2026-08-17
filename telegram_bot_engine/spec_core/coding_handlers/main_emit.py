@@ -214,7 +214,7 @@ def _emit_main(spec: BotSpec) -> str:
         )
         if need_mod:
             text_handler += "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_abuse_filter), group=0)"
-        if need_ocr:
+        if need_ocr or need_market:
             text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
     else:
         text_handler = ""

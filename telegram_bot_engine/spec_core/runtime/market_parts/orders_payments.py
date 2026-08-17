@@ -114,20 +114,39 @@ def place_order(user_id: int, text: str) -> int:
         if not prod:
             conn.rollback()
             return 0
-        cur = conn.execute(
-            "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
-            "VALUES (?,?,?,?,?,?)",
-            (
-                user_id,
-                pid,
-                int(prod["price_cents"]),
-                prod["currency"],
-                "pending",
-                f"order:{user_id}:{pid}",
-            ),
+        try:
+            cur = conn.execute(
+                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload, stock_reserved) "
+                "VALUES (?,?,?,?,?,?,1)",
+                (
+                    user_id,
+                    pid,
+                    int(prod["price_cents"]),
+                    prod["currency"],
+                    "pending",
+                    f"order:{user_id}:{pid}",
+                ),
+            )
+        except Exception:
+            cur = conn.execute(
+                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    user_id,
+                    pid,
+                    int(prod["price_cents"]),
+                    prod["currency"],
+                    "pending",
+                    f"order:{user_id}:{pid}",
+                ),
+            )
+        oid = int(cur.lastrowid)
+        conn.execute(
+            "UPDATE orders SET payload=? WHERE id=?",
+            (f"order:{oid}", oid),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        return oid
 
 
 def list_orders(
@@ -287,16 +306,7 @@ def fulfill_successful_payment(user_id: int, payload: str, telegram_charge_id: s
             pass
     if mark_paid(oid, charge):
         with connect() as conn:
-            # Decrement stock only if product_id present
-            try:
-                pid = int(order.get("product_id") or 0)
-                if pid:
-                    conn.execute(
-                        "UPDATE products SET stock = CASE WHEN stock>0 THEN stock-1 ELSE 0 END WHERE id=?",
-                        (pid,),
-                    )
-            except Exception:
-                pass
+            # Stock was reserved at place_order — do NOT decrement again (idempotent fulfill)
             conn.execute(
                 "INSERT INTO payments (user_id, order_id, amount_cents, currency, provider_charge_id, payload) "
                 "VALUES (?,?,?,?,?,?)",

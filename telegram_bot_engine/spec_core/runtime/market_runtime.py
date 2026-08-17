@@ -337,20 +337,39 @@ def place_order(user_id: int, text: str) -> int:
         if not prod:
             conn.rollback()
             return 0
-        cur = conn.execute(
-            "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
-            "VALUES (?,?,?,?,?,?)",
-            (
-                user_id,
-                pid,
-                int(prod["price_cents"]),
-                prod["currency"],
-                "pending",
-                f"order:{user_id}:{pid}",
-            ),
+        try:
+            cur = conn.execute(
+                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload, stock_reserved) "
+                "VALUES (?,?,?,?,?,?,1)",
+                (
+                    user_id,
+                    pid,
+                    int(prod["price_cents"]),
+                    prod["currency"],
+                    "pending",
+                    f"order:{user_id}:{pid}",
+                ),
+            )
+        except Exception:
+            cur = conn.execute(
+                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    user_id,
+                    pid,
+                    int(prod["price_cents"]),
+                    prod["currency"],
+                    "pending",
+                    f"order:{user_id}:{pid}",
+                ),
+            )
+        oid = int(cur.lastrowid)
+        conn.execute(
+            "UPDATE orders SET payload=? WHERE id=?",
+            (f"order:{oid}", oid),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        return oid
 
 
 def list_orders(
@@ -510,16 +529,7 @@ def fulfill_successful_payment(user_id: int, payload: str, telegram_charge_id: s
             pass
     if mark_paid(oid, charge):
         with connect() as conn:
-            # Decrement stock only if product_id present
-            try:
-                pid = int(order.get("product_id") or 0)
-                if pid:
-                    conn.execute(
-                        "UPDATE products SET stock = CASE WHEN stock>0 THEN stock-1 ELSE 0 END WHERE id=?",
-                        (pid,),
-                    )
-            except Exception:
-                pass
+            # Stock was reserved at place_order — do NOT decrement again (idempotent fulfill)
             conn.execute(
                 "INSERT INTO payments (user_id, order_id, amount_cents, currency, provider_charge_id, payload) "
                 "VALUES (?,?,?,?,?,?)",
@@ -1472,6 +1482,8 @@ def _audit(actor_id: int, action: str, entity: str = "", entity_id: int = 0, det
 def order_set_status(order_id: int, status: str, actor_id: int = 0, note: str = "") -> str:
     """Order state machine: pending→paid→processing→shipped→delivered|refunded|cancelled."""
     enterprise_ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return "❌ غير مصرح — للموظفين/الأدمن فقط"
     allowed = {
         "pending": {"paid", "cancelled"},
         "open": {"paid", "cancelled"},
@@ -1496,6 +1508,28 @@ def order_set_status(order_id: int, status: str, actor_id: int = 0, note: str = 
             "INSERT INTO order_events (order_id, status, note, actor_id) VALUES (?,?,?,?)",
             (int(order_id), status, note[:200], int(actor_id)),
         )
+        # Restore reserved stock on cancel/refund (stock was reserved at place_order)
+        if status in {"cancelled", "refunded"} and cur not in {"cancelled", "refunded"}:
+            try:
+                o = conn.execute(
+                    "SELECT product_id, stock_reserved FROM orders WHERE id=?",
+                    (int(order_id),),
+                ).fetchone()
+                if o and int(o["product_id"] or 0) and int(o["stock_reserved"] or 1):
+                    conn.execute(
+                        "UPDATE products SET stock = stock + 1 WHERE id=?",
+                        (int(o["product_id"]),),
+                    )
+                    conn.execute(
+                        "UPDATE orders SET stock_reserved=0 WHERE id=?",
+                        (int(order_id),),
+                    )
+                    conn.execute(
+                        "INSERT INTO stock_moves (product_id, delta, reason, actor_id) VALUES (?,?,?,?)",
+                        (int(o["product_id"]), 1, f"restore_{status}_order_{order_id}", int(actor_id)),
+                    )
+            except Exception:
+                pass
         conn.commit()
     _audit(actor_id, "order_status", "order", order_id, f"{cur}->{status}")
     return f"Order #{order_id}: {cur} → {status}"
@@ -1519,6 +1553,8 @@ def order_timeline(order_id: int) -> str:
 
 def stock_adjust(product_id: int, delta: int, actor_id: int = 0, reason: str = "") -> str:
     enterprise_ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return "❌ غير مصرح — للموظفين/الأدمن فقط"
     with connect() as conn:
         row = conn.execute("SELECT id, title, stock FROM products WHERE id=?", (int(product_id),)).fetchone()
         if not row:
@@ -1910,11 +1946,15 @@ def role_grant(actor_id: int, user_id: int, role: str) -> str:
 
 def role_of(user_id: int) -> str:
     enterprise_ensure()
-    # Bootstrap: ADMIN_IDS from env are always admin
+    # Bootstrap: ADMIN_IDS and ADMIN_USER_IDS (config.py) are always admin
     try:
         import os as _os
 
-        raw = (_os.getenv("ADMIN_IDS") or "").strip()
+        raw = (
+            (_os.getenv("ADMIN_IDS") or "")
+            + ","
+            + (_os.getenv("ADMIN_USER_IDS") or "")
+        ).strip()
         if raw:
             admins = {int(x) for x in raw.replace(";", ",").split(",") if x.strip().isdigit()}
             if int(user_id) in admins:

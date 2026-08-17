@@ -855,7 +855,7 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "        from app.services import market as market_svc",
                     "        key = awaiting[4:]",
                     "        if key in ('coupon_apply', 'apply_coupon', 'redeem_gift'):",
-                    "            await message.reply_text(market_svc.coupon_apply_code(user.id, text, 0))",
+                    "            await message.reply_text(market_svc.apply_coupon(text.strip(), user.id) if hasattr(market_svc, 'apply_coupon') else market_svc.coupon_apply_code(user.id, text.strip(), 0))",
                     "            return",
                     "        if key in ('wallet_topup', 'topup'):",
                     "            await message.reply_text(",
