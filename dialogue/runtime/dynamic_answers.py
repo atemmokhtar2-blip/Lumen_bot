@@ -87,13 +87,34 @@ def _project_text(intent: str) -> str:
     return ""
 
 
+def _usage_text(metadata: dict[str, Any] | None) -> str:
+    live = dict((metadata or {}).get("live_context") or {})
+    usage = dict(live.get("usage") or {})
+    plan = dict(live.get("plan") or {})
+    if not usage or not plan:
+        return "لا أستطيع قراءة استخدام حسابك الآن من المصدر الحي. أعد المحاولة بعد لحظات."
+    messages_remaining = usage.get("messages_remaining")
+    generations_remaining = usage.get("generations_remaining")
+    msg = "غير محدود" if messages_remaining is None else str(messages_remaining)
+    gen = "غير محدود" if generations_remaining is None else str(generations_remaining)
+    return (
+        f"حسب بيانات حسابك الحالية في خطة {plan.get('name_ar', plan.get('name', 'الحالية'))}:\n"
+        f"الرسائل المتبقية هذا الشهر: {msg}\n"
+        f"التوليدات المتبقية هذا الشهر: {gen}\n"
+        f"عدد الحروف التي قرأتها الخدمة في هذه الفترة: {int(usage.get('characters_used') or 0)}."
+    )
+
+
 def answer_for_intent(
     intent: str,
     *,
     sender_id: str,
     fallback_plan_id: str | None,
     requested_plan_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> str | None:
+    if intent in {"ask_usage", "ask_remaining", "ask_message_limit", "ask_character_usage"}:
+        return _usage_text(metadata)
     if intent in {"project_identity", "project_capabilities", "project_workflow", "ask_project_component"}:
         return _project_text(intent)
     if intent == "ask_plan_comparison":

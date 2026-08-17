@@ -61,6 +61,9 @@ class FaqEngine:
             "ask_help": ["مساعدة", "help", "ساعدني", "ازاي ابدأ", "إزاي أبدأ"],
             "ask_pricing": ["السعر", "الاسعار", "الأسعار", "pricing", "كام السعر", "التكلفة"],
             "ask_current_plan": ["خطتي", "ما هي خطتي", "باقتي", "my plan", "current plan"],
+            "ask_usage": ["استهلاكي", "استخدامي", "المتبقي", "كم رسالة باقي", "كم رساله باقي", "كم حرف باقي", "باقي لي كم رسالة وكم حرف", "الحد المتبقي", "usage", "remaining"],
+            "ask_message_limit": ["حد الرسائل", "عدد الرسائل", "رسائلي", "messages limit"],
+            "ask_character_usage": ["عدد الحروف", "الحروف المستخدمة", "characters used"],
             "ask_plan_comparison": ["مقارنة الخطط", "الفرق بين الخطط", "compare plans", "الخطط"],
             "how_platform_works": ["ازاي المنصة بتشتغل", "إزاي المنصة بتشتغل", "كيف تعمل", "how it works"],
             "ask_about_hosting": ["استضافة", "hosting", "استضافه"],
@@ -112,6 +115,7 @@ class FaqEngine:
             intent,
             sender_id=str(request.sender_id),
             fallback_plan_id=request.plan_id,
+            metadata=request.metadata,
         )
         if not text:
             return None

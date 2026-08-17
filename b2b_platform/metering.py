@@ -21,6 +21,8 @@ class UsageBucket:
     host_starts: int = 0
     host_minutes: float = 0.0
     bytes_out: int = 0
+    messages: int = 0
+    characters: int = 0
     extra: dict[str, int] = field(default_factory=dict)
 
 
@@ -67,6 +69,8 @@ class MeteringService:
         host_starts: int = 0,
         host_minutes: float = 0.0,
         bytes_out: int = 0,
+        messages: int = 0,
+        characters: int = 0,
         event: str = "",
     ) -> UsageBucket:
         period = self._period()
@@ -78,6 +82,8 @@ class MeteringService:
             b.host_starts += int(host_starts)
             b.host_minutes += float(host_minutes)
             b.bytes_out += int(bytes_out)
+            b.messages += int(messages)
+            b.characters += int(characters)
             if event:
                 b.extra[event] = int(b.extra.get(event, 0)) + 1
             self._save_unlocked(path, b)

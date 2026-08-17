@@ -145,10 +145,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     plan_id = resolve_user_plan(user_id=int(user.id) if user else 0)
                 except Exception:
                     plan_id = "free"
+                _metadata = {}
+                try:
+                    from b2b_platform.metering import get_metering
+                    from b2b_platform.tenants import get_tenant_store
+                    _tenant = get_tenant_store().get_by_telegram(int(user.id) if user else 0)
+                    _tenant_id = str(getattr(_tenant, "tenant_id", "") or getattr(_tenant, "id", "") or "")
+                    if _tenant_id:
+                        get_metering().record(
+                            _tenant_id,
+                            messages=1,
+                            characters=len(request),
+                            event="dialogue_message",
+                        )
+                    from dialogue.runtime.live_context import build_live_context
+                    _metadata["live_context"] = build_live_context(
+                        str(int(user.id) if user else 0),
+                        fallback_plan_id=plan_id,
+                    )
+                except Exception:
+                    logger.exception("live dialogue context unavailable")
                 _dlg = await handle_dialogue(
                     request,
                     sender_id=str(int(user.id) if user else 0),
                     plan_id=plan_id,
+                    metadata=_metadata,
                 )
                 if _dlg:
                     await message.reply_text(_dlg)
