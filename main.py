@@ -82,19 +82,6 @@ def _start_b2b_api_thread(port: int) -> None:
 
 
 def main() -> None:
-    # Optional one-shot Rasa train (never crash the bot if train/pip fails)
-    try:
-        import runpy
-        from pathlib import Path as _P
-        runpy.run_path(
-            str(_P(__file__).resolve().parent / "scripts" / "ensure_dialogue_model.py"),
-            run_name="ensure_dialogue_model",
-        )
-    except SystemExit:
-        pass
-    except Exception:
-        pass
-
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN is not set. "
@@ -122,17 +109,6 @@ def main() -> None:
 
     _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
     logger.info("Telegram webhook cleared (exclusive polling mode)")
-
-    # Confirm dialogue model is on disk (Rasa path)
-    try:
-        from pathlib import Path as _Path
-        _models = list((_Path(__file__).resolve().parent / "dialogue" / "models").glob("*.tar.gz"))
-        if _models:
-            logger.info("Dialogue model ready: %s (%.1f MB)", _models[0].name, _models[0].stat().st_size / 1e6)
-        else:
-            logger.warning("No dialogue/models/*.tar.gz — DIALOGUE_ENABLED will be inert until model ships")
-    except Exception:
-        pass
 
     logger.info("Starting AI Agent 7h Bot (consumer)...")
     allowed_repr = (

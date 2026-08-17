@@ -134,49 +134,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
 
-    # Phase 0: Rasa dialogue bridge (opt-in). Never blocks legacy if disabled/no model.
-    if not request.startswith("/"):
-        try:
-            from ..dialogue_bridge import dialogue_enabled, handle_dialogue
-            if dialogue_enabled():
-                plan_id = None
-                try:
-                    from b2b_platform.plan_gate import resolve_user_plan
-                    plan_id = resolve_user_plan(user_id=int(user.id) if user else 0)
-                except Exception:
-                    plan_id = "free"
-                _metadata = {}
-                try:
-                    from b2b_platform.metering import get_metering
-                    from b2b_platform.tenants import get_tenant_store
-                    _tenant = get_tenant_store().get_by_telegram(int(user.id) if user else 0)
-                    _tenant_id = str(getattr(_tenant, "tenant_id", "") or getattr(_tenant, "id", "") or "")
-                    if _tenant_id:
-                        get_metering().record(
-                            _tenant_id,
-                            messages=1,
-                            characters=len(request),
-                            event="dialogue_message",
-                        )
-                    from dialogue.runtime.live_context import build_live_context
-                    _metadata["live_context"] = build_live_context(
-                        str(int(user.id) if user else 0),
-                        fallback_plan_id=plan_id,
-                    )
-                except Exception:
-                    logger.exception("live dialogue context unavailable")
-                _dlg = await handle_dialogue(
-                    request,
-                    sender_id=str(int(user.id) if user else 0),
-                    plan_id=plan_id,
-                    metadata=_metadata,
-                )
-                if _dlg:
-                    await message.reply_text(_dlg)
-                    return
-        except Exception:
-            logger.exception("dialogue bridge error — continuing legacy path")
-
     if request.startswith("/"):
         return
     # Very short non-spec confirmations

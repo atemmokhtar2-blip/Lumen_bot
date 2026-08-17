@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ["python310", "gcc"]
-
-[variables]
-NIXPACKS_PYTHON_VERSION = "3.10"

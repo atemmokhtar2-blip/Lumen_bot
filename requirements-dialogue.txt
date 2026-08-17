@@ -1,4 +1,0 @@
-# Isolated dialogue stack (install when training / enabling Rasa).
-# Keep separate from main requirements.txt to avoid host dependency conflicts.
-rasa>=3.6,<3.7
-rasa-sdk>=3.6,<3.7

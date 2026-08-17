@@ -9,8 +9,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-dialogue.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-dialogue.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
