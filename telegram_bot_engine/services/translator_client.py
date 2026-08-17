@@ -29,11 +29,23 @@ def _enabled() -> bool:
 
 
 def _base_url() -> str:
-    """Normalize Railway values accidentally copied with the health path."""
+    """Normalize a Railway variable copied with an endpoint suffix."""
     base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
-    for suffix in ("/health", "/health/"):
-        if base.endswith(suffix.rstrip("/")):
-            base = base[: -len(suffix.rstrip("/"))].rstrip("/")
+    suffixes = (
+        "/health/v1/chat",
+        "/v1/chat",
+        "/health/v1",
+        "/health",
+        "/v1",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if base.endswith(suffix):
+                base = base[: -len(suffix)].rstrip("/")
+                changed = True
+                break
     return base
 
 
