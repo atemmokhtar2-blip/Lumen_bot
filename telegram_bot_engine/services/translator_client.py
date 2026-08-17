@@ -77,11 +77,19 @@ def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None
         )
         response.raise_for_status()
         body = response.json()
+        logger.info(
+            "standalone chat response status=%s ok=%s answered=%s source=%s answer_len=%s",
+            response.status_code,
+            body.get("ok") if isinstance(body, dict) else None,
+            body.get("answered") if isinstance(body, dict) else None,
+            body.get("source") if isinstance(body, dict) else None,
+            len(str(body.get("answer") or "")) if isinstance(body, dict) else 0,
+        )
         if not isinstance(body, dict) or not body.get("ok"):
             return None
         if not isinstance(body.get("answer"), str) or not body["answer"].strip():
             return None
         return body
     except Exception as exc:
-        logger.warning("standalone chat unavailable; continuing generation path: %s", exc)
+        logger.exception("standalone chat unavailable; continuing generation path: %s", exc)
         return None

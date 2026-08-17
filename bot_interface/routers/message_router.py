@@ -135,6 +135,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if not request.startswith("/"):
+        # State questions must never fall through to the legacy bot-description help.
+        # If the live service is unavailable, return an explicit service error instead.
+        _state_question = any(
+            token in request.lower()
+            for token in (
+                "خطة", "الباقة", "اشتراكي", "رسالة", "رسائل", "حرف", "حروف",
+                "توليد", "توليدات", "استهلاك", "استخدمت", "المتبقي", "باقي",
+                "plan", "subscription", "message", "messages", "character", "usage",
+                "remaining", "quota",
+            )
+        )
         try:
             from ..live_user_context import build_live_user_context
             from b2b_platform.metering import get_metering
@@ -160,6 +171,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 return
         except Exception:
             logger.exception("live model chat unavailable; continuing generation path")
+
+        if _state_question:
+            await message.reply_text(
+                "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
+            )
+            return
 
     if request.startswith("/"):
         return
