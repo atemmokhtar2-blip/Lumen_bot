@@ -173,6 +173,7 @@ class RasaEngine:
             sender_id=str(request.sender_id),
             fallback_plan_id=request.plan_id,
             requested_plan_id=requested_plan,
+            metadata=request.metadata,
         )
         if not response_text:
             return None
