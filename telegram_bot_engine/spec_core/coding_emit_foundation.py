@@ -307,7 +307,7 @@ def _emit_db(spec: BotSpec) -> str:
                 "user_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL DEFAULT 0)",
                 "CREATE TABLE IF NOT EXISTS wallet_ledger ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
-                "delta INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', "
+                "amount INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', "
                 "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS plans ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
@@ -339,9 +339,10 @@ def _emit_db(spec: BotSpec) -> str:
                 "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS coupons ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE, "
-                "percent INTEGER NOT NULL DEFAULT 0, max_uses INTEGER NOT NULL DEFAULT 0, "
-                "uses INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, "
-                "created_by INTEGER NOT NULL DEFAULT 0)",
+                "percent_off REAL NOT NULL DEFAULT 0, amount_off_cents INTEGER NOT NULL DEFAULT 0, "
+                "max_uses INTEGER NOT NULL DEFAULT 100, used INTEGER NOT NULL DEFAULT 0, "
+                "active INTEGER NOT NULL DEFAULT 1, expires_at TEXT, "
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS coupon_redemptions ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, coupon_id INTEGER NOT NULL, "
                 "user_id INTEGER NOT NULL, order_id INTEGER NOT NULL DEFAULT 0, "
@@ -370,6 +371,18 @@ def _emit_db(spec: BotSpec) -> str:
                 "CREATE TABLE IF NOT EXISTS wishlist ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
                 "product_id INTEGER NOT NULL, UNIQUE(user_id, product_id))",
+                "CREATE TABLE IF NOT EXISTS referrals ("
+                "user_id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, "
+                "invited_by INTEGER NOT NULL DEFAULT 0, rewards INTEGER NOT NULL DEFAULT 0)",
+                "CREATE TABLE IF NOT EXISTS user_lang ("
+                "user_id INTEGER PRIMARY KEY, lang TEXT NOT NULL DEFAULT 'ar')",
+                "CREATE TABLE IF NOT EXISTS saas_tenants ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+                "owner_id INTEGER NOT NULL DEFAULT 0, "
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS vendors ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL UNIQUE, "
+                "name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active')",
             ]
         )
 

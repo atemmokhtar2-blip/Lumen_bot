@@ -165,16 +165,23 @@ def wallet_history(user_id: int, limit: int = 20) -> str:
             )
             """
         )
-        rows = conn.execute(
-            "SELECT amount, note, created_at FROM wallet_ledger WHERE user_id=? "
-            "ORDER BY id DESC LIMIT ?",
-            (user_id, int(limit)),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT amount AS amt, note, created_at FROM wallet_ledger WHERE user_id=? "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT delta AS amt, note, created_at FROM wallet_ledger WHERE user_id=? "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, int(limit)),
+            ).fetchall()
     if not rows:
         return f"الرصيد: {bal}\nلا حركات بعد."
     lines = [f"الرصيد: {bal}", "آخر الحركات:"]
     for r in rows:
-        lines.append(f"• {r['created_at']}: {r['amount']} — {r['note'] or ''}")
+        lines.append(f"• {r['created_at']}: {r['amt']} — {r['note'] or ''}")
     return "\n".join(lines)
 
 

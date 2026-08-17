@@ -1101,21 +1101,40 @@ def wallet_history(user_id: int, limit: int = 20) -> str:
             )
             """
         )
-        rows = conn.execute(
-            "SELECT amount, note, created_at FROM wallet_ledger WHERE user_id=? "
-            "ORDER BY id DESC LIMIT ?",
-            (user_id, int(limit)),
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                "SELECT amount AS amt, note, created_at FROM wallet_ledger WHERE user_id=? "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, int(limit)),
+            ).fetchall()
+        except Exception:
+            rows = conn.execute(
+                "SELECT delta AS amt, note, created_at FROM wallet_ledger WHERE user_id=? "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, int(limit)),
+            ).fetchall()
     if not rows:
         return f"الرصيد: {bal}\nلا حركات بعد."
     lines = [f"الرصيد: {bal}", "آخر الحركات:"]
     for r in rows:
-        lines.append(f"• {r['created_at']}: {r['amount']} — {r['note'] or ''}")
+        lines.append(f"• {r['created_at']}: {r['amt']} — {r['note'] or ''}")
     return "\n".join(lines)
 
 
 def referral_code(user_id: int) -> str:
     ensure()
+    with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                invited_by INTEGER NOT NULL DEFAULT 0,
+                rewards INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.commit()
     with connect() as conn:
         row = conn.execute(
             "SELECT code FROM referrals WHERE user_id=?", (user_id,)
@@ -1875,7 +1894,13 @@ def analytics_dashboard(admin_id: int = 0) -> str:
             except Exception:
                 subs = 0
         low = conn.execute("SELECT COUNT(*) c FROM products WHERE active=1 AND stock<=5").fetchone()["c"]
-        coupons_used = conn.execute("SELECT COALESCE(SUM(used),0) s FROM coupons").fetchone()["s"]
+        try:
+            coupons_used = conn.execute("SELECT COALESCE(SUM(used),0) s FROM coupons").fetchone()["s"]
+        except Exception:
+            try:
+                coupons_used = conn.execute("SELECT COALESCE(SUM(uses),0) s FROM coupons").fetchone()["s"]
+            except Exception:
+                coupons_used = 0
         tenants = conn.execute("SELECT COUNT(*) c FROM saas_tenants").fetchone()["c"]
         vendors = conn.execute("SELECT COUNT(*) c FROM vendors").fetchone()["c"]
     return (

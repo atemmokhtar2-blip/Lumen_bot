@@ -1,6 +1,18 @@
 def referral_code(user_id: int) -> str:
     ensure()
     with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,
+                invited_by INTEGER NOT NULL DEFAULT 0,
+                rewards INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.commit()
+    with connect() as conn:
         row = conn.execute(
             "SELECT code FROM referrals WHERE user_id=?", (user_id,)
         ).fetchone()

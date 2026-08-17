@@ -525,7 +525,13 @@ def analytics_dashboard(admin_id: int = 0) -> str:
             except Exception:
                 subs = 0
         low = conn.execute("SELECT COUNT(*) c FROM products WHERE active=1 AND stock<=5").fetchone()["c"]
-        coupons_used = conn.execute("SELECT COALESCE(SUM(used),0) s FROM coupons").fetchone()["s"]
+        try:
+            coupons_used = conn.execute("SELECT COALESCE(SUM(used),0) s FROM coupons").fetchone()["s"]
+        except Exception:
+            try:
+                coupons_used = conn.execute("SELECT COALESCE(SUM(uses),0) s FROM coupons").fetchone()["s"]
+            except Exception:
+                coupons_used = 0
         tenants = conn.execute("SELECT COUNT(*) c FROM saas_tenants").fetchone()["c"]
         vendors = conn.execute("SELECT COUNT(*) c FROM vendors").fetchone()["c"]
     return (
