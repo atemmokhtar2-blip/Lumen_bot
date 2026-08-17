@@ -8,7 +8,7 @@ from ..schema import BotSpec, Feature
 def _emit_requirements() -> str:
     return (
         "python-telegram-bot>=22.8,<23\n"
-        "python-dotenv>=1.2.2\n"
+        "python-dotenv>=1.2.2\nsentry-sdk>=2.0.0\n"
     )
 
 
@@ -16,7 +16,7 @@ def _emit_env() -> str:
     return (
         "TELEGRAM_BOT_TOKEN=\n"
         "PAYMENT_PROVIDER_TOKEN=\n"
-        "ADMIN_USER_IDS=\n"
+        "ADMIN_USER_IDS=\nSENTRY_DSN=\nSENTRY_ENVIRONMENT=production\n"
         "DEFAULT_CURRENCY=USD\n"
     )
 

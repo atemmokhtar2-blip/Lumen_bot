@@ -11,6 +11,13 @@ from .session_store import get_session_store
 
 logger = logging.getLogger("ai_agent_7h_bot.generation_flow")
 
+def _sentry_capture(**tags):
+    try:
+        from telegram_bot_engine.services.sentry_ops import capture_message
+        capture_message(tags.get('msg') or 'generation_issue', level='error', **{k: v for k, v in tags.items() if k != 'msg'})
+    except Exception:
+        pass
+
 
 
 def _smoke_test_project(project_path: str | Path, *, seconds: float = 10.0) -> tuple[bool, str]:
@@ -31,7 +38,7 @@ def _smoke_test_project(project_path: str | Path, *, seconds: float = 10.0) -> t
 
     root = Path(project_path).resolve()
     if not root.is_dir():
-        return False, "project_path_missing"
+        _sentry_capture(msg="smoke_project_path_missing"); return False, "project_path_missing"
     if not (root / "main.py").is_file():
         return False, "main_py_missing"
     if not (root / "app" / "handlers.py").is_file():

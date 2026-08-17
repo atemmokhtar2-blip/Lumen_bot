@@ -35,6 +35,7 @@ from typing import Any
 
 from .coding_emit_foundation import _emit_config, _emit_db, _emit_models
 from .coding_emit_services import _emit_reminders_service, _emit_booking_service, _emit_clinic_service, _emit_lean_generic_service, _emit_lean_named_service, _emit_content, _emit_extras, _emit_moderation, _emit_notes, _emit_security, _emit_tasks, _emit_tickets, _emit_welcome, _emit_pubg
+from .templates_sentry import emit_sentry_setup
 from .coding_handlers import _emit_handlers, _emit_keyboards, _emit_main
 from .planning import plan_from_spec
 from .schema import BotSpec
@@ -268,6 +269,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     files: dict[str, str] = {
         "app/__init__.py": "",
         "app/config.py": _emit_config(),
+        "app/sentry_setup.py": emit_sentry_setup(),
         "app/db.py": _emit_db(spec),
         "app/models.py": _emit_models(spec),
         "app/keyboards.py": _emit_keyboards(spec),
@@ -401,7 +403,7 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
 
 
     # Phase 11: optional production backends for translate / OCR / schedule
-    req_lines = ["python-telegram-bot==21.6", "python-dotenv>=1.0.0"]
+    req_lines = ["python-telegram-bot==21.6", "python-dotenv>=1.0.0", "sentry-sdk>=2.0.0"]
     opt_req: list[str] = []
     env_lines = ["TELEGRAM_BOT_TOKEN=", "ADMIN_IDS="]
     readme_extra: list[str] = []

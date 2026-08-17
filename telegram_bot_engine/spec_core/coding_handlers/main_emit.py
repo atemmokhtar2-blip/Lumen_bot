@@ -308,6 +308,7 @@ from telegram.ext import (
 
 from app.config import get_settings
 from app.handlers import {imports_handlers}
+from app.sentry_setup import init_sentry, ptb_error_handler
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -329,6 +330,7 @@ async def _post_init(app: Application) -> None:
 {sched_post_init}
 
 def build_application() -> Application:
+    init_sentry(bot_name={spec.bot.name!r})
     settings = get_settings()
     token = settings.require_token()
     app = (
@@ -340,6 +342,7 @@ def build_application() -> Application:
     )
 {reg_text}
     app.add_handler(CallbackQueryHandler(callback_router)){text_handler}{pay_handler}
+    app.add_error_handler(ptb_error_handler)
     return app
 
 

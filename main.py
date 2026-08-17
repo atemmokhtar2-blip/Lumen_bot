@@ -9,6 +9,15 @@ Modes:
 
 from __future__ import annotations
 
+# Observability — Sentry (strict: no-op without SENTRY_DSN)
+try:
+    from telegram_bot_engine.services.sentry_ops import init_sentry, capture_exception
+    init_sentry(service="capability-maestro-telegram")
+except Exception:
+    def capture_exception(*_a, **_k):  # type: ignore
+        return None
+
+
 import asyncio
 import multiprocessing
 import os

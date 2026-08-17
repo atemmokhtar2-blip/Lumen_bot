@@ -128,6 +128,11 @@ def process_one(queue=None, fleet=None) -> bool:
             q.mark_failed(job.job_id, getattr(st, "message", "deploy_failed")[:500])
     except Exception as e:
         logger.exception("job %s failed", job.job_id)
+        try:
+            from telegram_bot_engine.services.sentry_ops import capture_exception
+            capture_exception(e, job_id=job.job_id, user_id=job.user_id)
+        except Exception:
+            pass
         q.mark_failed(job.job_id, f"{type(e).__name__}:{e}")
     finally:
         try:
