@@ -134,6 +134,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
 
+    # Confirm a sensitive action previously planned by the standalone chat model.
+    _pending_chat_action = (context.user_data or {}).get("pending_chat_action") if context.user_data else None
+    if _pending_chat_action and request.strip().lower() in {"أكد", "اكد", "تأكيد", "موافق", "نعم", "confirm", "yes"}:
+        action = str(_pending_chat_action.get("name") or "")
+        original = str(_pending_chat_action.get("raw_text") or "")
+        if context.user_data is not None:
+            context.user_data.pop("pending_chat_action", None)
+        try:
+            if action == "clone_repo":
+                from .git_router import try_handle_git
+                if await try_handle_git(update, context, original, user, message):
+                    return
+            elif action in {"host_start", "host_stop", "host_status"}:
+                from .hosting_router import try_handle_hosting
+                if await try_handle_hosting(update, context, original, user, message):
+                    return
+            elif action == "repo_understand":
+                await message.reply_text("المستودع النشط موجود، لكن تنفيذ التحليل التفصيلي يحتاج مسار تطوير مخصص. اكتب: حلل المستودع النشط.")
+                return
+        except Exception:
+            logger.exception("confirmed chat action failed: %s", action)
+            await message.reply_text("تعذر تنفيذ العملية المؤكدة. راجع سجل الخدمة للتفاصيل.")
+            return
+        await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
+        return
+
     if not request.startswith("/"):
         # State questions must never fall through to the legacy bot-description help.
         # If the live service is unavailable, return an explicit service error instead.
@@ -162,11 +188,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     event="chat_message",
                 )
             live_context = build_live_user_context(telegram_user_id)
+            _active_repo = (context.user_data or {}).get("active_repo") if context.user_data else None
+            if isinstance(_active_repo, dict):
+                live_context["active_repo"] = {
+                    "path": str(_active_repo.get("path") or ""),
+                    "url": str(_active_repo.get("url") or ""),
+                }
             chat_result = chat_request(request, live_context)
             # Any non-empty answer from the model is authoritative for this turn,
             # including the safe "data unavailable" response. Do not fall through
             # to the legacy fixed help text when the model answered safely.
             if chat_result and str(chat_result.get("answer") or "").strip():
+                _action = chat_result.get("action")
+                if isinstance(_action, dict):
+                    _action_name = str(_action.get("name") or "")
+                    if _action.get("requires_confirmation"):
+                        if context.user_data is not None:
+                            context.user_data["pending_chat_action"] = {
+                                "name": _action_name,
+                                "raw_text": request,
+                            }
+                    elif _action_name == "host_status":
+                        # Read-only state is safe to execute immediately.
+                        from .hosting_router import try_handle_hosting
+                        if await try_handle_hosting(update, context, request, user, message):
+                            return
                 await message.reply_text(str(chat_result["answer"]))
                 return
         except Exception:
