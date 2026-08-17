@@ -15,9 +15,17 @@ logger = logging.getLogger(__name__)
 
 
 def _enabled() -> bool:
-    return (os.getenv("MAESTRO_TRANSLATOR_ENABLED") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    """Enable when explicitly requested, or when a translator URL is configured.
+
+    The URL is still required below, so an incomplete deployment remains a safe
+    no-op. This avoids silently falling back when Railway has only the URL set.
+    """
+    raw = (os.getenv("MAESTRO_TRANSLATOR_ENABLED") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    return bool((os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip())
 
 
 def translate_request(text: str) -> dict[str, Any] | None:
@@ -28,11 +36,12 @@ def translate_request(text: str) -> dict[str, Any] | None:
     if not base:
         return None
     timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
+    connect_timeout = max(3.0, min(10.0, timeout))
     try:
         response = requests.post(
             f"{base}/v1/translate",
             json={"text": (text or "")[:20000]},
-            timeout=(1.5, timeout),
+            timeout=(connect_timeout, timeout),
         )
         response.raise_for_status()
         body = response.json()
@@ -59,11 +68,12 @@ def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None
     if not base:
         return None
     timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
+    connect_timeout = max(3.0, min(10.0, timeout))
     try:
         response = requests.post(
             f"{base}/v1/chat",
             json={"message": (message or "")[:20000], "context": context or {}},
-            timeout=(1.5, timeout),
+            timeout=(connect_timeout, timeout),
         )
         response.raise_for_status()
         body = response.json()
