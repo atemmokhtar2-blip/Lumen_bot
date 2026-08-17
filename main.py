@@ -217,6 +217,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import os as _os
+    if not (_os.getenv("TELEGRAM_BOT_TOKEN") or "").strip():
+        raise SystemExit(
+            "TELEGRAM_BOT_TOKEN is missing. Set it in Railway Variables, then redeploy."
+        )
     # Required on some platforms for multiprocessing spawn
     multiprocessing.freeze_support()
     main()

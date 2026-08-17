@@ -1,3 +1,4 @@
+# Railway production image — no Rasa, lightweight runtime only.
 FROM python:3.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -7,13 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc g++ \
-    && rm -rf /var/lib/apt/lists/*
-
+# No apt packages: all pinned deps ship manylinux wheels (faster, more reliable on Railway).
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# TELEGRAM_BOT_TOKEN must be set in Railway Variables.
 CMD ["python", "main.py"]

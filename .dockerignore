@@ -16,7 +16,10 @@ venv
 *.db
 *.log
 *.zip
-dialogue/models
+*.tar.gz
+dialogue/
+dialogue/**
+requirements-dialogue.txt
 **/.ah_import_stub
 .review-venv
 .tox
@@ -24,3 +27,6 @@ dist
 build
 *.egg-info
 .DS_Store
+tests/
+docs/
+deploy/commercial/
