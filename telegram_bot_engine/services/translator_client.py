@@ -28,11 +28,20 @@ def _enabled() -> bool:
     return bool((os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip())
 
 
+def _base_url() -> str:
+    """Normalize Railway values accidentally copied with the health path."""
+    base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
+    for suffix in ("/health", "/health/"):
+        if base.endswith(suffix.rstrip("/")):
+            base = base[: -len(suffix.rstrip("/"))].rstrip("/")
+    return base
+
+
 def translate_request(text: str) -> dict[str, Any] | None:
     """Return a validated translator payload, or None for safe fallback."""
     if not _enabled():
         return None
-    base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
+    base = _base_url()
     if not base:
         return None
     timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
@@ -64,7 +73,7 @@ def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None
     """Ask the standalone conversational layer using server-built user context."""
     if not _enabled():
         return None
-    base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
+    base = _base_url()
     if not base:
         return None
     timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
