@@ -161,8 +161,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if not request.startswith("/"):
-        # State questions must never fall through to the legacy bot-description help.
-        # If the live service is unavailable, return an explicit service error instead.
+        # Every natural-language message goes to the standalone chat model first.
+        # Keyword detection is only used to choose an outage message; it never
+        # decides whether the model gets the message.
         _state_question = any(
             token in request.lower()
             for token in (
@@ -223,6 +224,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
             )
             return
+        # Do not expose the legacy bot-description help when the model is down.
+        await message.reply_text("تعذر تشغيل طبقة المحادثة الآن. حاول مرة أخرى بعد قليل.")
+        return
 
     if request.startswith("/"):
         return
