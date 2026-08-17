@@ -306,8 +306,11 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     only_basic_early = feat_keys_early <= {
         "start", "help", "about", "lang", "language", "explicit_command", "",
     }
-    if only_basic_early:
+    if only_basic_early and not needs_market:
         files["app/db.py"] = _emit_db_slim()
+    elif needs_market:
+        # Always force full commerce schema when market is present
+        files["app/db.py"] = _emit_db(spec)
     if needs_generic and not only_basic_early:
         files["app/services/generic.py"] = _emit_generic_runtime()
         try:

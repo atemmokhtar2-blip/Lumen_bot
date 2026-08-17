@@ -148,8 +148,20 @@ def _emit_db(spec: BotSpec) -> str:
             "wallet",
             "analytics",
             "admin",
+            "market",
         }
     )
+    if not need_market:
+        _mkeys = (
+            "shop", "cart", "wallet", "order", "product", "coupon", "payment",
+            "invoice", "checkout", "wishlist", "review", "shipping", "stock",
+            "plan", "sub", "contest", "points", "balance", "catalog",
+        )
+        for feat in spec.features or []:
+            fk = str(getattr(feat, "feature", "") or "").lower()
+            if any(k in fk for k in _mkeys):
+                need_market = True
+                break
     need_extras = bool(
         services
         & {
