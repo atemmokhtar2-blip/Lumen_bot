@@ -183,6 +183,44 @@ def add_item_structured(
         return int(cur.lastrowid)
 
 
+def seed_demo_catalog() -> int:
+    """Insert a few demo products if catalog empty. Returns count added."""
+    ensure()
+    with connect() as conn:
+        n = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
+        if int(n) > 0:
+            return 0
+        demo = [
+            ("Starter Pack", 499, "USD", 50),
+            ("Pro Pack", 1499, "USD", 30),
+            ("VIP Access", 2999, "USD", 10),
+        ]
+        for title, price, cur, stock in demo:
+            conn.execute(
+                "INSERT INTO products (title, price_cents, currency, stock) VALUES (?,?,?,?)",
+                (title, price, cur, stock),
+            )
+        conn.commit()
+        return len(demo)
+
+
+def recommend_products(user_id: int = 0, limit: int = 5) -> str:
+    """Simple intelligent ranking: in-stock products by lowest id (stable demo rank)."""
+    ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, title, price_cents, currency, stock FROM products "
+            "WHERE active=1 AND stock>0 ORDER BY stock DESC, id ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    if not rows:
+        return catalog()
+    return "Recommended:\n" + "\n".join(
+        f"#{r['id']} {r['title']} — {r['price_cents']/100:.2f} {r['currency']}"
+        for r in rows
+    )
+
+
 def submit_vodafone_payment(
     user_id: int,
     *,
@@ -366,511 +404,6 @@ def mark_paid(order_id: int, charge_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def points_balance(user_id: int) -> int:
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(delta),0) AS b FROM point_ledger WHERE user_id=?",
-            (user_id,),
-        ).fetchone()
-    return int(row["b"] if row else 0)
-
-
-def points_credit(
-    user_id: int, delta: int, reason: str = "", actor_id: int = 0
-) -> int:
-    """Credit points. Positive grants from outside payment require staff actor."""
-    ensure()
-    delta = int(delta)
-    if delta == 0:
-        return points_balance(user_id)
-    if not _rate_allow(f"points_credit:{int(user_id)}", 0.25):
-        return points_balance(user_id)
-    # Large or free grants must be staff-authorized
-    if delta > 0 and (reason or "").startswith("admin"):
-        if not actor_id or not role_require(int(actor_id), "staff"):
-            return points_balance(user_id)
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
-            (user_id, delta, (reason or "")[:200]),
-        )
-        conn.commit()
-    return points_balance(user_id)
-
-
-def points_debit(user_id: int, amount: int, reason: str = "") -> bool:
-    """Atomic points debit — check + write in one transaction (no race)."""
-    amount = abs(int(amount))
-    if amount <= 0:
-        return True
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(delta),0) AS b FROM point_ledger WHERE user_id=?",
-            (user_id,),
-        ).fetchone()
-        bal = int(row["b"] if row else 0)
-        if bal < amount:
-            return False
-        conn.execute(
-            "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
-            (user_id, -amount, (reason or "debit")[:200]),
-        )
-        conn.commit()
-    return True
-
-
-def leaderboard(limit: int = 10) -> list[tuple[int, int]]:
-    ensure()
-    with connect() as conn:
-        rows = conn.execute(
-            "SELECT user_id, SUM(delta) AS b FROM point_ledger "
-            "GROUP BY user_id HAVING b>0 ORDER BY b DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [(int(r["user_id"]), int(r["b"])) for r in rows]
-
-
-def list_plans() -> list[dict]:
-    ensure()
-    with connect() as conn:
-        rows = conn.execute("SELECT * FROM plans WHERE active=1 ORDER BY id").fetchall()
-        if not rows:
-            conn.execute(
-                "INSERT INTO plans (name, price_cents, duration_days) VALUES "
-                "('Free',0,3650),('Pro',999,30)"
-            )
-            conn.commit()
-            rows = conn.execute("SELECT * FROM plans WHERE active=1 ORDER BY id").fetchall()
-    return [dict(r) for r in rows]
-
-
-def is_sub_active(user_id: int) -> bool:
-    ensure()
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM subscriptions WHERE user_id=? AND status='active' "
-            "ORDER BY id DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-    if not row:
-        return False
-    ends = row["ends_at"] or ""
-    return (not ends) or ends >= now
-
-
-def grant_sub(user_id: int, plan_id: int, actor_id: int = 0) -> bool:
-    """Grant subscription — staff/admin only (actor_id required)."""
-    ensure()
-    if not actor_id or not role_require(int(actor_id), "staff"):
-        return False
-    list_plans()  # ensure default Free/Pro plans exist
-    with connect() as conn:
-        plan = conn.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
-        if not plan:
-            return False
-        days = int(plan["duration_days"] or 30)
-        ends = (datetime.now(timezone.utc) + timedelta(days=days)).strftime(
-            "%Y-%m-%dT%H:%M:%S"
-        )
-        conn.execute(
-            "INSERT INTO subscriptions (user_id, plan_id, status, ends_at) "
-            "VALUES (?,?, 'active', ?)",
-            (user_id, plan_id, ends),
-        )
-        conn.commit()
-    try:
-        _audit(int(actor_id), "grant_sub", "subscription", int(user_id), str(plan_id))
-    except Exception:
-        pass
-    return True
-
-
-def my_subscription(user_id: int) -> str:
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT s.*, p.name AS plan_name FROM subscriptions s "
-            "LEFT JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? "
-            "ORDER BY s.id DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-    if not row:
-        return "No subscription"
-    return (
-        f"plan={row['plan_name'] or row['plan_id']} "
-        f"status={row['status']} ends={row['ends_at'] or '—'}"
-    )
-
-
-def list_contests() -> list[dict]:
-    ensure()
-    with connect() as conn:
-        return [
-            dict(r)
-            for r in conn.execute(
-                "SELECT * FROM contests WHERE status='open' ORDER BY id DESC LIMIT 20"
-            ).fetchall()
-        ]
-
-
-def create_contest(title: str) -> int:
-    ensure()
-    with connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO contests (title) VALUES (?)", ((title or "Contest")[:200],)
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def join_contest(user_id: int, contest_id: int) -> bool:
-    ensure()
-    with connect() as conn:
-        c = conn.execute(
-            "SELECT status FROM contests WHERE id=?", (contest_id,)
-        ).fetchone()
-        if not c or c["status"] != "open":
-            return False
-        try:
-            conn.execute(
-                "INSERT INTO contest_entries (contest_id, user_id) VALUES (?,?)",
-                (contest_id, user_id),
-            )
-            conn.commit()
-            return True
-        except Exception:
-            return False
-
-
-def draw_winner(contest_id: int, actor_id: int = 0) -> int:
-    """Random winner among entries — staff only."""
-    import random as _random
-
-    ensure()
-    if not actor_id or not role_require(int(actor_id), "staff"):
-        return 0
-    with connect() as conn:
-        rows = conn.execute(
-            "SELECT user_id FROM contest_entries WHERE contest_id=?",
-            (contest_id,),
-        ).fetchall()
-        if not rows:
-            return 0
-        winner = int(_random.choice([int(r["user_id"]) for r in rows]))
-        conn.execute(
-            "UPDATE contests SET status='closed', winner_user_id=? WHERE id=?",
-            (winner, contest_id),
-        )
-        conn.commit()
-        try:
-            _audit(int(actor_id), "draw_winner", "contest", int(contest_id), str(winner))
-        except Exception:
-            pass
-        return winner
-
-
-def wallet_balance(user_id: int) -> int:
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
-        ).fetchone()
-    return int(row["balance"]) if row else 0
-
-
-def wallet_add(user_id: int, amount: int) -> int:
-    """Credit only (amount must be > 0). For debits use wallet_debit."""
-    ensure()
-    amount = int(amount)
-    if amount <= 0:
-        return wallet_balance(user_id)
-    if not _rate_allow(f"wallet_add:{int(user_id)}", 0.25):
-        return wallet_balance(user_id)
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO wallets (user_id, balance) VALUES (?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET balance=balance+excluded.balance",
-            (user_id, amount),
-        )
-        try:
-            conn.execute(
-                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
-                (user_id, amount, "credit"),
-            )
-        except Exception:
-            pass
-        conn.commit()
-    return wallet_balance(user_id)
-
-
-def wallet_debit(user_id: int, amount: int, note: str = "debit") -> bool:
-    """Atomic debit — never allows negative balance."""
-    ensure()
-    amount = abs(int(amount))
-    if amount <= 0:
-        return True
-    with connect() as conn:
-        cur = conn.execute(
-            "UPDATE wallets SET balance = balance - ? "
-            "WHERE user_id=? AND balance >= ?",
-            (amount, user_id, amount),
-        )
-        if cur.rowcount != 1:
-            conn.rollback()
-            return False
-        try:
-            conn.execute(
-                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
-                (user_id, -amount, (note or "debit")[:200]),
-            )
-        except Exception:
-            pass
-        conn.commit()
-    return True
-
-
-def wallet_topup(user_id: int, amount: int) -> int:
-    """DISABLED free top-up. Use payment flows (Telegram invoice / Vodafone+admin).
-
-    Returns current balance unchanged. Admin credit: wallet_admin_credit.
-    """
-    # Intentionally does NOT credit — prevents free money
-    return wallet_balance(user_id)
-
-
-def wallet_admin_credit(admin_id: int, user_id: int, amount: int, note: str = "") -> int:
-    """Staff/admin only wallet credit (manual adjustment after verified payment)."""
-    ensure()
-    if not role_require(int(admin_id), "staff"):
-        return wallet_balance(user_id)
-    amount = int(amount)
-    if amount <= 0:
-        return wallet_balance(user_id)
-    bal = wallet_add(user_id, amount)
-    try:
-        _audit(int(admin_id), "wallet_admin_credit", "wallet", user_id, f"{amount}:{note}")
-    except Exception:
-        pass
-    return bal
-
-
-def wallet_history(user_id: int, limit: int = 20) -> str:
-    ensure()
-    bal = wallet_balance(user_id)
-    with connect() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS wallet_ledger (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                amount INTEGER NOT NULL,
-                note TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        rows = conn.execute(
-            "SELECT amount, note, created_at FROM wallet_ledger WHERE user_id=? "
-            "ORDER BY id DESC LIMIT ?",
-            (user_id, int(limit)),
-        ).fetchall()
-    if not rows:
-        return f"الرصيد: {bal}\nلا حركات بعد."
-    lines = [f"الرصيد: {bal}", "آخر الحركات:"]
-    for r in rows:
-        lines.append(f"• {r['created_at']}: {r['amount']} — {r['note'] or ''}")
-    return "\n".join(lines)
-
-
-def referral_code(user_id: int) -> str:
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT code FROM referrals WHERE user_id=?", (user_id,)
-        ).fetchone()
-        if row:
-            return str(row["code"])
-        code = f"R{user_id}{secrets.token_hex(2).upper()}"
-        conn.execute(
-            "INSERT INTO referrals (user_id, code) VALUES (?,?)", (user_id, code)
-        )
-        conn.commit()
-        return code
-
-
-def daily_checkin(user_id: int) -> str:
-    ensure()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT id FROM extras_kv WHERE user_id=? AND kind='checkin' AND body=? LIMIT 1",
-            (user_id, today),
-        ).fetchone()
-        if row:
-            return "Already checked in today"
-        conn.execute(
-            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
-            (user_id, "checkin", today),
-        )
-        conn.commit()
-    bal = points_credit(user_id, 1, "daily_checkin")
-    return f"Check-in OK. Points={bal}"
-
-
-def get_lang(user_id: int) -> str:
-    ensure()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT lang FROM user_lang WHERE user_id=?", (user_id,)
-        ).fetchone()
-    return (row["lang"] if row else "en") or "en"
-
-
-def set_lang(user_id: int, lang: str) -> str:
-    ensure()
-    lang = (lang or "en").strip().lower()[:5]
-    if lang not in {"en", "ar"}:
-        lang = "en"
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO user_lang (user_id, lang) VALUES (?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang",
-            (user_id, lang),
-        )
-        conn.commit()
-    return lang
-
-
-def create_coupon(code: str, percent: int, admin_id: int = 0) -> str:
-    """Admin-only legacy coupon create. Prefer coupon_create(admin_id, text)."""
-    ensure()
-    if admin_id and not role_require(int(admin_id), "staff"):
-        return ""
-    if not admin_id:
-        # Refuse anonymous create — security: no open coupon minting
-        return ""
-    code = (code or "").strip().upper()[:32]
-    percent = max(1, min(100, int(percent)))
-    if not code:
-        return ""
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (0, 'coupon', ?, 'open')",
-            (f"{code}|{percent}",),
-        )
-        conn.commit()
-    return code
-
-
-def apply_coupon(code: str, user_id: int = 0) -> int:
-    """Legacy percent lookup — one redemption per user when user_id set.
-
-    Prefer coupon_apply_code(user_id, code, order_id) for real checkout.
-    """
-    ensure()
-    code = (code or "").strip().upper()
-    if not code:
-        return 0
-    if user_id and not _rate_allow(f"apply_coupon:{int(user_id)}", 1.0):
-        return 0
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT id, body FROM extras_kv WHERE kind='coupon' AND status='open' AND body LIKE ?",
-            (f"{code}|%",),
-        ).fetchone()
-        if not row:
-            return 0
-        try:
-            pct = int(str(row["body"]).split("|", 1)[1])
-        except Exception:
-            return 0
-        if user_id:
-            # one-shot: mark redeemed for this user via extras_kv
-            prior = conn.execute(
-                "SELECT id FROM extras_kv WHERE kind='coupon_used' AND user_id=? AND body=? LIMIT 1",
-                (int(user_id), code),
-            ).fetchone()
-            if prior:
-                return 0
-            conn.execute(
-                "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
-                (int(user_id), "coupon_used", code),
-            )
-            conn.commit()
-        return pct
-
-
-def format_orders(items: list) -> str:
-    if not items:
-        return "No orders"
-    return "\n".join(
-        f"#{i.get('id')} user={i.get('user_id')} {i.get('status')} {i.get('amount_cents')}"
-        for i in items
-    )
-
-
-def recommend_products(user_id: int = 0, limit: int = 5) -> str:
-    """Simple intelligent ranking: in-stock products by lowest id (stable demo rank)."""
-    ensure()
-    with connect() as conn:
-        rows = conn.execute(
-            "SELECT id, title, price_cents, currency, stock FROM products "
-            "WHERE active=1 AND stock>0 ORDER BY stock DESC, id ASC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    if not rows:
-        return catalog()
-    return "Recommended:\n" + "\n".join(
-        f"#{r['id']} {r['title']} — {r['price_cents']/100:.2f} {r['currency']}"
-        for r in rows
-    )
-
-
-def claim_referral(user_id: int, code: str) -> bool:
-    """Attach user to referrer once; credit both sides. Idempotent."""
-    ensure()
-    code = (code or "").strip()
-    if not code:
-        return False
-    with connect() as conn:
-        owner = conn.execute(
-            "SELECT user_id FROM referrals WHERE code=?", (code,)
-        ).fetchone()
-        if not owner or int(owner["user_id"]) == user_id:
-            return False
-        mine = conn.execute(
-            "SELECT invited_by FROM referrals WHERE user_id=?", (user_id,)
-        ).fetchone()
-        if mine and int(mine["invited_by"] or 0) > 0:
-            return False
-        # ensure row for invitee
-        code_self = f"R{user_id}"
-        existing = conn.execute(
-            "SELECT code FROM referrals WHERE user_id=?", (user_id,)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE referrals SET invited_by=? WHERE user_id=? AND (invited_by IS NULL OR invited_by=0)",
-                (int(owner["user_id"]), user_id),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO referrals (user_id, code, invited_by) VALUES (?,?,?)",
-                (user_id, code_self, int(owner["user_id"])),
-            )
-        conn.execute(
-            "UPDATE referrals SET rewards = rewards + 1 WHERE user_id=?",
-            (int(owner["user_id"]),),
-        )
-        conn.commit()
-    points_credit(int(owner["user_id"]), 10, "referral")
-    points_credit(user_id, 5, "referral_join")
-    return True
-
-
 def cancel_order(user_id: int, order_id: int) -> bool:
     ensure()
     with connect() as conn:
@@ -894,56 +427,13 @@ def track_order(user_id: int, order_id: int) -> str:
     return f"#{row['id']} status={row['status']} amount={row['amount_cents']} {row['currency']}"
 
 
-def seed_demo_catalog() -> int:
-    """Insert a few demo products if catalog empty. Returns count added."""
-    ensure()
-    with connect() as conn:
-        n = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
-        if int(n) > 0:
-            return 0
-        demo = [
-            ("Starter Pack", 499, "USD", 50),
-            ("Pro Pack", 1499, "USD", 30),
-            ("VIP Access", 2999, "USD", 10),
-        ]
-        for title, price, cur, stock in demo:
-            conn.execute(
-                "INSERT INTO products (title, price_cents, currency, stock) VALUES (?,?,?,?)",
-                (title, price, cur, stock),
-            )
-        conn.commit()
-        return len(demo)
-
-
-def start_trial(user_id: int, days: int = 7) -> str:
-    """Grant a temporary trial subscription on plan #1 (or create Trial plan)."""
-    ensure()
-    days = max(1, min(30, int(days)))
-    with connect() as conn:
-        plan = conn.execute(
-            "SELECT id FROM plans WHERE name='Trial' AND active=1 LIMIT 1"
-        ).fetchone()
-        if not plan:
-            conn.execute(
-                "INSERT INTO plans (name, price_cents, duration_days) VALUES ('Trial', 0, ?)",
-                (days,),
-            )
-            conn.commit()
-            plan = conn.execute(
-                "SELECT id FROM plans WHERE name='Trial' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-        pid = int(plan["id"])
-    if grant_sub(user_id, pid):
-        return f"Trial active for {days} days"
-    return "Trial failed"
-
-
-def levels_for(user_id: int) -> str:
-    """Simple level from points: every 50 points = 1 level."""
-    bal = points_balance(user_id)
-    level = bal // 50
-    into = bal % 50
-    return f"Level {level} ({into}/50 to next) — points={bal}"
+def format_orders(items: list) -> str:
+    if not items:
+        return "No orders"
+    return "\n".join(
+        f"#{i.get('id')} user={i.get('user_id')} {i.get('status')} {i.get('amount_cents')}"
+        for i in items
+    )
 
 
 def get_order(order_id: int) -> dict | None:
@@ -1264,6 +754,590 @@ def review_add(user_id: int, text: str) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 
+def points_balance(user_id: int) -> int:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(delta),0) AS b FROM point_ledger WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    return int(row["b"] if row else 0)
+
+
+def points_credit(
+    user_id: int, delta: int, reason: str = "", actor_id: int = 0
+) -> int:
+    """Credit points. Positive grants from outside payment require staff actor."""
+    ensure()
+    delta = int(delta)
+    if delta == 0:
+        return points_balance(user_id)
+    if not _rate_allow(f"points_credit:{int(user_id)}", 0.25):
+        return points_balance(user_id)
+    # Large or free grants must be staff-authorized
+    if delta > 0 and (reason or "").startswith("admin"):
+        if not actor_id or not role_require(int(actor_id), "staff"):
+            return points_balance(user_id)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
+            (user_id, delta, (reason or "")[:200]),
+        )
+        conn.commit()
+    return points_balance(user_id)
+
+
+def points_debit(user_id: int, amount: int, reason: str = "") -> bool:
+    """Atomic points debit — check + write in one transaction (no race)."""
+    amount = abs(int(amount))
+    if amount <= 0:
+        return True
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(delta),0) AS b FROM point_ledger WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        bal = int(row["b"] if row else 0)
+        if bal < amount:
+            return False
+        conn.execute(
+            "INSERT INTO point_ledger (user_id, delta, reason) VALUES (?,?,?)",
+            (user_id, -amount, (reason or "debit")[:200]),
+        )
+        conn.commit()
+    return True
+
+
+def leaderboard(limit: int = 10) -> list[tuple[int, int]]:
+    ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id, SUM(delta) AS b FROM point_ledger "
+            "GROUP BY user_id HAVING b>0 ORDER BY b DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [(int(r["user_id"]), int(r["b"])) for r in rows]
+
+
+def list_plans() -> list[dict]:
+    ensure()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM plans WHERE active=1 ORDER BY id").fetchall()
+        if not rows:
+            conn.execute(
+                "INSERT INTO plans (name, price_cents, duration_days) VALUES "
+                "('Free',0,3650),('Pro',999,30)"
+            )
+            conn.commit()
+            rows = conn.execute("SELECT * FROM plans WHERE active=1 ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def is_sub_active(user_id: int) -> bool:
+    ensure()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM subscriptions WHERE user_id=? AND status='active' "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return False
+    ends = row["ends_at"] or ""
+    return (not ends) or ends >= now
+
+
+def grant_sub(user_id: int, plan_id: int, actor_id: int = 0) -> bool:
+    """Grant subscription — staff/admin only (actor_id required)."""
+    ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return False
+    list_plans()  # ensure default Free/Pro plans exist
+    with connect() as conn:
+        plan = conn.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
+        if not plan:
+            return False
+        days = int(plan["duration_days"] or 30)
+        ends = (datetime.now(timezone.utc) + timedelta(days=days)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        conn.execute(
+            "INSERT INTO subscriptions (user_id, plan_id, status, ends_at) "
+            "VALUES (?,?, 'active', ?)",
+            (user_id, plan_id, ends),
+        )
+        conn.commit()
+    try:
+        _audit(int(actor_id), "grant_sub", "subscription", int(user_id), str(plan_id))
+    except Exception:
+        pass
+    return True
+
+
+def my_subscription(user_id: int) -> str:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT s.*, p.name AS plan_name FROM subscriptions s "
+            "LEFT JOIN plans p ON p.id=s.plan_id WHERE s.user_id=? "
+            "ORDER BY s.id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return "No subscription"
+    return (
+        f"plan={row['plan_name'] or row['plan_id']} "
+        f"status={row['status']} ends={row['ends_at'] or '—'}"
+    )
+
+
+def start_trial(user_id: int, days: int = 7) -> str:
+    """Grant a temporary trial subscription on plan #1 (or create Trial plan)."""
+    ensure()
+    days = max(1, min(30, int(days)))
+    with connect() as conn:
+        plan = conn.execute(
+            "SELECT id FROM plans WHERE name='Trial' AND active=1 LIMIT 1"
+        ).fetchone()
+        if not plan:
+            conn.execute(
+                "INSERT INTO plans (name, price_cents, duration_days) VALUES ('Trial', 0, ?)",
+                (days,),
+            )
+            conn.commit()
+            plan = conn.execute(
+                "SELECT id FROM plans WHERE name='Trial' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        pid = int(plan["id"])
+    if grant_sub(user_id, pid):
+        return f"Trial active for {days} days"
+    return "Trial failed"
+
+
+def levels_for(user_id: int) -> str:
+    """Simple level from points: every 50 points = 1 level."""
+    bal = points_balance(user_id)
+    level = bal // 50
+    into = bal % 50
+    return f"Level {level} ({into}/50 to next) — points={bal}"
+
+
+def list_contests() -> list[dict]:
+    ensure()
+    with connect() as conn:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM contests WHERE status='open' ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+        ]
+
+
+def create_contest(title: str) -> int:
+    ensure()
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO contests (title) VALUES (?)", ((title or "Contest")[:200],)
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def join_contest(user_id: int, contest_id: int) -> bool:
+    ensure()
+    with connect() as conn:
+        c = conn.execute(
+            "SELECT status FROM contests WHERE id=?", (contest_id,)
+        ).fetchone()
+        if not c or c["status"] != "open":
+            return False
+        try:
+            conn.execute(
+                "INSERT INTO contest_entries (contest_id, user_id) VALUES (?,?)",
+                (contest_id, user_id),
+            )
+            conn.commit()
+            return True
+        except Exception:
+            return False
+
+
+def draw_winner(contest_id: int, actor_id: int = 0) -> int:
+    """Random winner among entries — staff only."""
+    import random as _random
+
+    ensure()
+    if not actor_id or not role_require(int(actor_id), "staff"):
+        return 0
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM contest_entries WHERE contest_id=?",
+            (contest_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+        winner = int(_random.choice([int(r["user_id"]) for r in rows]))
+        conn.execute(
+            "UPDATE contests SET status='closed', winner_user_id=? WHERE id=?",
+            (winner, contest_id),
+        )
+        conn.commit()
+        try:
+            _audit(int(actor_id), "draw_winner", "contest", int(contest_id), str(winner))
+        except Exception:
+            pass
+        return winner
+
+
+def wallet_balance(user_id: int) -> int:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT balance FROM wallets WHERE user_id=?", (user_id,)
+        ).fetchone()
+    return int(row["balance"]) if row else 0
+
+
+def wallet_add(user_id: int, amount: int) -> int:
+    """Credit only (amount must be > 0). For debits use wallet_debit."""
+    ensure()
+    amount = int(amount)
+    if amount <= 0:
+        return wallet_balance(user_id)
+    if not _rate_allow(f"wallet_add:{int(user_id)}", 0.25):
+        return wallet_balance(user_id)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO wallets (user_id, balance) VALUES (?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET balance=balance+excluded.balance",
+            (user_id, amount),
+        )
+        try:
+            conn.execute(
+                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
+                (user_id, amount, "credit"),
+            )
+        except Exception:
+            pass
+        conn.commit()
+    return wallet_balance(user_id)
+
+
+def wallet_debit(user_id: int, amount: int, note: str = "debit") -> bool:
+    """Atomic debit — never allows negative balance."""
+    ensure()
+    amount = abs(int(amount))
+    if amount <= 0:
+        return True
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE wallets SET balance = balance - ? "
+            "WHERE user_id=? AND balance >= ?",
+            (amount, user_id, amount),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+        try:
+            conn.execute(
+                "INSERT INTO wallet_ledger (user_id, amount, note) VALUES (?,?,?)",
+                (user_id, -amount, (note or "debit")[:200]),
+            )
+        except Exception:
+            pass
+        conn.commit()
+    return True
+
+
+def wallet_topup(user_id: int, amount: int) -> int:
+    """DISABLED free top-up. Use payment flows (Telegram invoice / Vodafone+admin).
+
+    Returns current balance unchanged. Admin credit: wallet_admin_credit.
+    """
+    # Intentionally does NOT credit — prevents free money
+    return wallet_balance(user_id)
+
+
+def wallet_admin_credit(admin_id: int, user_id: int, amount: int, note: str = "") -> int:
+    """Staff/admin only wallet credit (manual adjustment after verified payment)."""
+    ensure()
+    if not role_require(int(admin_id), "staff"):
+        return wallet_balance(user_id)
+    amount = int(amount)
+    if amount <= 0:
+        return wallet_balance(user_id)
+    bal = wallet_add(user_id, amount)
+    try:
+        _audit(int(admin_id), "wallet_admin_credit", "wallet", user_id, f"{amount}:{note}")
+    except Exception:
+        pass
+    return bal
+
+
+def wallet_history(user_id: int, limit: int = 20) -> str:
+    ensure()
+    bal = wallet_balance(user_id)
+    with connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wallet_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                note TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        rows = conn.execute(
+            "SELECT amount, note, created_at FROM wallet_ledger WHERE user_id=? "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, int(limit)),
+        ).fetchall()
+    if not rows:
+        return f"الرصيد: {bal}\nلا حركات بعد."
+    lines = [f"الرصيد: {bal}", "آخر الحركات:"]
+    for r in rows:
+        lines.append(f"• {r['created_at']}: {r['amount']} — {r['note'] or ''}")
+    return "\n".join(lines)
+
+
+def referral_code(user_id: int) -> str:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT code FROM referrals WHERE user_id=?", (user_id,)
+        ).fetchone()
+        if row:
+            return str(row["code"])
+        code = f"R{user_id}{secrets.token_hex(2).upper()}"
+        conn.execute(
+            "INSERT INTO referrals (user_id, code) VALUES (?,?)", (user_id, code)
+        )
+        conn.commit()
+        return code
+
+
+def daily_checkin(user_id: int) -> str:
+    ensure()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM extras_kv WHERE user_id=? AND kind='checkin' AND body=? LIMIT 1",
+            (user_id, today),
+        ).fetchone()
+        if row:
+            return "Already checked in today"
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+            (user_id, "checkin", today),
+        )
+        conn.commit()
+    bal = points_credit(user_id, 1, "daily_checkin")
+    return f"Check-in OK. Points={bal}"
+
+
+def get_lang(user_id: int) -> str:
+    ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT lang FROM user_lang WHERE user_id=?", (user_id,)
+        ).fetchone()
+    return (row["lang"] if row else "en") or "en"
+
+
+def set_lang(user_id: int, lang: str) -> str:
+    ensure()
+    lang = (lang or "en").strip().lower()[:5]
+    if lang not in {"en", "ar"}:
+        lang = "en"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO user_lang (user_id, lang) VALUES (?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang",
+            (user_id, lang),
+        )
+        conn.commit()
+    return lang
+
+
+def create_coupon(code: str, percent: int, admin_id: int = 0) -> str:
+    """Admin-only legacy coupon create. Prefer coupon_create(admin_id, text)."""
+    ensure()
+    if admin_id and not role_require(int(admin_id), "staff"):
+        return ""
+    if not admin_id:
+        # Refuse anonymous create — security: no open coupon minting
+        return ""
+    code = (code or "").strip().upper()[:32]
+    percent = max(1, min(100, int(percent)))
+    if not code:
+        return ""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (0, 'coupon', ?, 'open')",
+            (f"{code}|{percent}",),
+        )
+        conn.commit()
+    return code
+
+
+def apply_coupon(code: str, user_id: int = 0) -> int:
+    """Legacy percent lookup — one redemption per user when user_id set.
+
+    Prefer coupon_apply_code(user_id, code, order_id) for real checkout.
+    """
+    ensure()
+    code = (code or "").strip().upper()
+    if not code:
+        return 0
+    if user_id and not _rate_allow(f"apply_coupon:{int(user_id)}", 1.0):
+        return 0
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, body FROM extras_kv WHERE kind='coupon' AND status='open' AND body LIKE ?",
+            (f"{code}|%",),
+        ).fetchone()
+        if not row:
+            return 0
+        try:
+            pct = int(str(row["body"]).split("|", 1)[1])
+        except Exception:
+            return 0
+        if user_id:
+            # one-shot: mark redeemed for this user via extras_kv
+            prior = conn.execute(
+                "SELECT id FROM extras_kv WHERE kind='coupon_used' AND user_id=? AND body=? LIMIT 1",
+                (int(user_id), code),
+            ).fetchone()
+            if prior:
+                return 0
+            conn.execute(
+                "INSERT INTO extras_kv (user_id, kind, body, status) VALUES (?,?,?, 'open')",
+                (int(user_id), "coupon_used", code),
+            )
+            conn.commit()
+        return pct
+
+
+def claim_referral(user_id: int, code: str) -> bool:
+    """Attach user to referrer once; credit both sides. Idempotent."""
+    ensure()
+    code = (code or "").strip()
+    if not code:
+        return False
+    with connect() as conn:
+        owner = conn.execute(
+            "SELECT user_id FROM referrals WHERE code=?", (code,)
+        ).fetchone()
+        if not owner or int(owner["user_id"]) == user_id:
+            return False
+        mine = conn.execute(
+            "SELECT invited_by FROM referrals WHERE user_id=?", (user_id,)
+        ).fetchone()
+        if mine and int(mine["invited_by"] or 0) > 0:
+            return False
+        # ensure row for invitee
+        code_self = f"R{user_id}"
+        existing = conn.execute(
+            "SELECT code FROM referrals WHERE user_id=?", (user_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE referrals SET invited_by=? WHERE user_id=? AND (invited_by IS NULL OR invited_by=0)",
+                (int(owner["user_id"]), user_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO referrals (user_id, code, invited_by) VALUES (?,?,?)",
+                (user_id, code_self, int(owner["user_id"])),
+            )
+        conn.execute(
+            "UPDATE referrals SET rewards = rewards + 1 WHERE user_id=?",
+            (int(owner["user_id"]),),
+        )
+        conn.commit()
+    points_credit(int(owner["user_id"]), 10, "referral")
+    points_credit(user_id, 5, "referral_join")
+    return True
+
+
+def coupon_create(admin_id: int, text: str) -> str:
+    """text: CODE|percent|max_uses  e.g. SAVE10|10|50 — staff/admin only."""
+    enterprise_ensure()
+    if not role_require(int(admin_id), "staff"):
+        return "❌ غير مصرح — صلاحيات إدارة مطلوبة"
+    parts = [p.strip() for p in (text or "").split("|")]
+    if not parts or not parts[0]:
+        return "Usage: CODE|percent|max_uses"
+    code = parts[0].upper()
+    percent = float(parts[1]) if len(parts) > 1 and parts[1] else 10.0
+    max_uses = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
+    try:
+        with connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO coupons (code, percent_off, max_uses) VALUES (?,?,?)",
+                (code, percent, max_uses),
+            )
+            conn.commit()
+            cid = int(cur.lastrowid)
+    except Exception:
+        return f"Coupon {code} already exists or invalid"
+    _audit(admin_id, "coupon_create", "coupon", cid, code)
+    return f"Coupon #{cid} {code} — {percent}% off, max {max_uses} uses"
+
+
+def coupon_apply_code(user_id: int, code: str, order_id: int = 0) -> str:
+    """Apply coupon once per user. Requires valid order ownership when order_id set."""
+    enterprise_ensure()
+    code = (code or "").strip().upper()
+    with connect() as conn:
+        c = conn.execute(
+            "SELECT * FROM coupons WHERE code=? AND active=1", (code,)
+        ).fetchone()
+        if not c:
+            return "Invalid or inactive coupon"
+        if int(c["used"]) >= int(c["max_uses"]):
+            return "Coupon exhausted"
+        # One redemption per user per coupon
+        prior = conn.execute(
+            "SELECT id FROM coupon_redemptions WHERE coupon_id=? AND user_id=? LIMIT 1",
+            (c["id"], int(user_id)),
+        ).fetchone()
+        if prior:
+            return "You already used this coupon"
+        if order_id:
+            o = conn.execute(
+                "SELECT amount_cents, user_id FROM orders WHERE id=?",
+                (int(order_id),),
+            ).fetchone()
+            if not o or int(o["user_id"]) != int(user_id):
+                return "Order not found"
+            # Atomic increment only if under max_uses
+            cur = conn.execute(
+                "UPDATE coupons SET used=used+1 WHERE id=? AND used < max_uses",
+                (c["id"],),
+            )
+            if cur.rowcount != 1:
+                return "Coupon exhausted"
+            off = int(int(o["amount_cents"]) * float(c["percent_off"]) / 100.0)
+            new_total = max(0, int(o["amount_cents"]) - off)
+            conn.execute(
+                "UPDATE orders SET amount_cents=? WHERE id=?",
+                (new_total, int(order_id)),
+            )
+            conn.execute(
+                "INSERT INTO coupon_redemptions (coupon_id, user_id, order_id) VALUES (?,?,?)",
+                (c["id"], int(user_id), int(order_id)),
+            )
+        else:
+            return "Provide a valid order_id to apply coupon"
+        conn.commit()
+    return f"Coupon {code} applied ({c['percent_off']}% off)"
+
+
 def enterprise_ensure() -> None:
     """Extra tables for complex production-like flows."""
     ensure()
@@ -1472,80 +1546,6 @@ def stock_low(threshold: int = 5) -> str:
     if not rows:
         return f"No products at or below stock {threshold}"
     return "Low stock:\n" + "\n".join(f"#{r['id']} {r['title']} stock={r['stock']}" for r in rows)
-
-
-def coupon_create(admin_id: int, text: str) -> str:
-    """text: CODE|percent|max_uses  e.g. SAVE10|10|50 — staff/admin only."""
-    enterprise_ensure()
-    if not role_require(int(admin_id), "staff"):
-        return "❌ غير مصرح — صلاحيات إدارة مطلوبة"
-    parts = [p.strip() for p in (text or "").split("|")]
-    if not parts or not parts[0]:
-        return "Usage: CODE|percent|max_uses"
-    code = parts[0].upper()
-    percent = float(parts[1]) if len(parts) > 1 and parts[1] else 10.0
-    max_uses = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 100
-    try:
-        with connect() as conn:
-            cur = conn.execute(
-                "INSERT INTO coupons (code, percent_off, max_uses) VALUES (?,?,?)",
-                (code, percent, max_uses),
-            )
-            conn.commit()
-            cid = int(cur.lastrowid)
-    except Exception:
-        return f"Coupon {code} already exists or invalid"
-    _audit(admin_id, "coupon_create", "coupon", cid, code)
-    return f"Coupon #{cid} {code} — {percent}% off, max {max_uses} uses"
-
-
-def coupon_apply_code(user_id: int, code: str, order_id: int = 0) -> str:
-    """Apply coupon once per user. Requires valid order ownership when order_id set."""
-    enterprise_ensure()
-    code = (code or "").strip().upper()
-    with connect() as conn:
-        c = conn.execute(
-            "SELECT * FROM coupons WHERE code=? AND active=1", (code,)
-        ).fetchone()
-        if not c:
-            return "Invalid or inactive coupon"
-        if int(c["used"]) >= int(c["max_uses"]):
-            return "Coupon exhausted"
-        # One redemption per user per coupon
-        prior = conn.execute(
-            "SELECT id FROM coupon_redemptions WHERE coupon_id=? AND user_id=? LIMIT 1",
-            (c["id"], int(user_id)),
-        ).fetchone()
-        if prior:
-            return "You already used this coupon"
-        if order_id:
-            o = conn.execute(
-                "SELECT amount_cents, user_id FROM orders WHERE id=?",
-                (int(order_id),),
-            ).fetchone()
-            if not o or int(o["user_id"]) != int(user_id):
-                return "Order not found"
-            # Atomic increment only if under max_uses
-            cur = conn.execute(
-                "UPDATE coupons SET used=used+1 WHERE id=? AND used < max_uses",
-                (c["id"],),
-            )
-            if cur.rowcount != 1:
-                return "Coupon exhausted"
-            off = int(int(o["amount_cents"]) * float(c["percent_off"]) / 100.0)
-            new_total = max(0, int(o["amount_cents"]) - off)
-            conn.execute(
-                "UPDATE orders SET amount_cents=? WHERE id=?",
-                (new_total, int(order_id)),
-            )
-            conn.execute(
-                "INSERT INTO coupon_redemptions (coupon_id, user_id, order_id) VALUES (?,?,?)",
-                (c["id"], int(user_id), int(order_id)),
-            )
-        else:
-            return "Provide a valid order_id to apply coupon"
-        conn.commit()
-    return f"Coupon {code} applied ({c['percent_off']}% off)"
 
 
 def affiliate_register(user_id: int, parent_code: str = "") -> str:
