@@ -49,3 +49,29 @@ def translate_request(text: str) -> dict[str, Any] | None:
     except Exception as exc:
         logger.warning("standalone translator unavailable; using spec_core fallback: %s", exc)
         return None
+
+
+def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None:
+    """Ask the standalone conversational layer using server-built user context."""
+    if not _enabled():
+        return None
+    base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
+    if not base:
+        return None
+    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
+    try:
+        response = requests.post(
+            f"{base}/v1/chat",
+            json={"message": (message or "")[:20000], "context": context or {}},
+            timeout=(1.5, timeout),
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or not body.get("ok"):
+            return None
+        if not isinstance(body.get("answer"), str) or not body["answer"].strip():
+            return None
+        return body
+    except Exception as exc:
+        logger.warning("standalone chat unavailable; continuing generation path: %s", exc)
+        return None

@@ -134,6 +134,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
 
+    if not request.startswith("/"):
+        try:
+            from ..live_user_context import build_live_user_context
+            from b2b_platform.metering import get_metering
+            from b2b_platform.tenants import get_tenant_store
+            from telegram_bot_engine.services.translator_client import chat_request
+
+            telegram_user_id = int(user.id) if user else 0
+            tenant = get_tenant_store().get_by_telegram(telegram_user_id) if telegram_user_id else None
+            if tenant is not None:
+                get_metering().record(
+                    str(tenant.tenant_id),
+                    messages=1,
+                    characters=len(request),
+                    event="chat_message",
+                )
+            live_context = build_live_user_context(telegram_user_id)
+            chat_result = chat_request(request, live_context)
+            if chat_result and chat_result.get("answered"):
+                await message.reply_text(str(chat_result.get("answer") or ""))
+                return
+        except Exception:
+            logger.exception("live model chat unavailable; continuing generation path")
+
     if request.startswith("/"):
         return
     # Very short non-spec confirmations
