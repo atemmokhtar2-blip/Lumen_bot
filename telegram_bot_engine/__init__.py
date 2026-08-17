@@ -169,8 +169,37 @@ def _run_intelligence_layers(
     try:
         from .spec_core.language_understanding.bot_spec_extract import extract_bot_brief
         _brief = extract_bot_brief(request or "")
+        _translator = None
+        try:
+            from .services.translator_client import translate_request
+            _translator = translate_request(request or "")
+        except Exception:
+            _translator = None
         _ent = getattr(lu, "entities", None)
         if _ent is not None and _brief is not None:
+            if isinstance(_translator, dict):
+                _model_features = [
+                    x for x in (_translator.get("features_requested") or [])
+                    if isinstance(x, str)
+                ]
+                if _model_features:
+                    _brief.features_requested = list(dict.fromkeys(
+                        _model_features + list(_brief.features_requested or [])
+                    ))
+                _model_flows = [
+                    x for x in (_translator.get("flows") or [])
+                    if isinstance(x, str)
+                ]
+                if _model_flows:
+                    _brief.flows = list(dict.fromkeys(
+                        _model_flows + list(_brief.flows or [])
+                    ))
+                if _translator.get("strict_spec"):
+                    _brief.strict = True
+                _raw_model = dict(getattr(_brief, "raw_snippets", None) or {})
+                _raw_model["translator_model"] = _translator.get("model", "standalone")
+                _raw_model["translator_confidence"] = _translator.get("confidence", 0.0)
+                _brief.raw_snippets = _raw_model
             if _brief.features_requested:
                 # merge brief features (prefer union, brief first for order)
                 merged = list(dict.fromkeys(
