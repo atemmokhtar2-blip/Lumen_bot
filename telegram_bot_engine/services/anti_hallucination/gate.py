@@ -362,15 +362,60 @@ def _runtime_import_findings(root: Path) -> list[Finding]:
         stub_dir.mkdir(parents=True, exist_ok=True)
         (stub_dir / "telegram").mkdir(exist_ok=True)
         (stub_dir / "telegram" / "__init__.py").write_text(
-            "class Update: pass\nclass ChatPermissions:\n    def __init__(self, **kwargs): pass\n",
+            "\n".join([
+                "class Update: pass",
+                "class Message: pass",
+                "class User: pass",
+                "class Chat: pass",
+                "class CallbackQuery: pass",
+                "class InlineKeyboardButton:",
+                "    def __init__(self, *a, **k): pass",
+                "class InlineKeyboardMarkup:",
+                "    def __init__(self, *a, **k): pass",
+                "class ReplyKeyboardMarkup:",
+                "    def __init__(self, *a, **k): pass",
+                "class KeyboardButton:",
+                "    def __init__(self, *a, **k): pass",
+                "class BotCommand:",
+                "    def __init__(self, *a, **k): pass",
+                "class ChatPermissions:",
+                "    def __init__(self, **kwargs): pass",
+                "class LabeledPrice:",
+                "    def __init__(self, *a, **k): pass",
+                "class SuccessfulPayment: pass",
+                "class PreCheckoutQuery: pass",
+            ]) + "\n",
             encoding="utf-8",
         )
         (stub_dir / "telegram" / "ext.py").write_text(
-            "class ContextTypes:\n    DEFAULT_TYPE = object\n"
-            "class Application: pass\nclass CommandHandler:\n    def __init__(self, *a, **k): pass\n"
-            "class MessageHandler:\n    def __init__(self, *a, **k): pass\n"
-            "class CallbackQueryHandler:\n    def __init__(self, *a, **k): pass\n"
-            "class filters:\n    TEXT = None\n    COMMAND = None\n",
+            "\n".join([
+                "class ContextTypes:",
+                "    DEFAULT_TYPE = object",
+                "class Application: pass",
+                "class ApplicationBuilder:",
+                "    def token(self, *a, **k): return self",
+                "    def post_init(self, *a, **k): return self",
+                "    def concurrent_updates(self, *a, **k): return self",
+                "    def build(self): return Application()",
+                "class CommandHandler:",
+                "    def __init__(self, *a, **k): pass",
+                "class MessageHandler:",
+                "    def __init__(self, *a, **k): pass",
+                "class CallbackQueryHandler:",
+                "    def __init__(self, *a, **k): pass",
+                "class ChatMemberHandler:",
+                "    def __init__(self, *a, **k): pass",
+                "    CHAT_MEMBER = 1",
+                "class PreCheckoutQueryHandler:",
+                "    def __init__(self, *a, **k): pass",
+                "class filters:",
+                "    TEXT = type('F', (), {'__and__': lambda self, o: self, '__invert__': lambda self: self})()",
+                "    COMMAND = type('F', (), {})()",
+                "    PHOTO = type('F', (), {})()",
+                "    VOICE = type('F', (), {'__or__': lambda self, o: self})()",
+                "    AUDIO = type('F', (), {})()",
+                "    SUCCESSFUL_PAYMENT = type('F', (), {})()",
+            ]) + "\n",
             encoding="utf-8",
         )
     code = "import importlib\n" + "\n".join(

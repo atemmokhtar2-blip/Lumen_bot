@@ -66,7 +66,28 @@ def fail(msg: str) -> None:
     raise SystemExit(2)
 
 try:
-    handlers_mod = importlib.import_module("app.handlers")
+    
+# market_schema_check — fail closed if market present without tables
+_mkt = ROOT / "app" / "services" / "market.py"
+if _mkt.is_file():
+    try:
+        from app.db import init_db, connect
+        init_db()
+        import app.services.market as _market
+        _market.wallet_balance(1)
+        _market.list_plans()
+        _market.role_of(1)
+        try:
+            import app.services.extras as _ex
+            if hasattr(_ex, "feedback"):
+                _ex.feedback(1, "smoke")
+        except Exception as _ex_e:
+            fail("extras_feedback:%s:%s" % (type(_ex_e).__name__, _ex_e))
+    except Exception as _mkt_e:
+        fail("market_schema:%s:%s" % (type(_mkt_e).__name__, _mkt_e))
+
+handlers_mod = importlib.import_module("app.handlers")
+
 except Exception as e:
     fail("import_handlers:%s:%s" % (type(e).__name__, e))
 

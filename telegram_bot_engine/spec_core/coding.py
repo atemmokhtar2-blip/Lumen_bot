@@ -374,7 +374,31 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
             )
         except FileNotFoundError:
             pass
+
     files.setdefault("bootstrap.sh", _emit_bootstrap_sh())
+
+    # ── HARD GATE: shop/market bots MUST ship full commerce schema ──
+    if "app/services/market.py" in files:
+        db_body = files.get("app/db.py") or ""
+        required = ("wallets", "plans", "extras_kv", "products", "orders", "payments")
+        if any(t not in db_body for t in required):
+            files["app/db.py"] = _emit_db(spec)
+            db_body = files["app/db.py"]
+        if any(t not in db_body for t in required):
+            # absolute fallback: append CREATE statements via market ensure path
+            files["app/db.py"] = _emit_db(spec)
+        mkt = files.get("app/services/market.py") or ""
+        if "CREATE TABLE IF NOT EXISTS wallets" not in mkt:
+            files["app/services/market.py"] = _emit_market()
+            mkt = files["app/services/market.py"]
+        if "CREATE TABLE IF NOT EXISTS wallets" not in mkt:
+            raise RuntimeError("market_schema_gate_failed: market.py missing wallets DDL")
+        if any(t not in files["app/db.py"] for t in required):
+            raise RuntimeError(
+                "market_schema_gate_failed: db.py missing "
+                + ",".join(t for t in required if t not in files["app/db.py"])
+            )
+
 
     # Phase 11: optional production backends for translate / OCR / schedule
     req_lines = ["python-telegram-bot==21.6", "python-dotenv>=1.0.0"]
