@@ -152,8 +152,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             live_context = build_live_user_context(telegram_user_id)
             chat_result = chat_request(request, live_context)
-            if chat_result and chat_result.get("answered"):
-                await message.reply_text(str(chat_result.get("answer") or ""))
+            # Any non-empty answer from the model is authoritative for this turn,
+            # including the safe "data unavailable" response. Do not fall through
+            # to the legacy fixed help text when the model answered safely.
+            if chat_result and str(chat_result.get("answer") or "").strip():
+                await message.reply_text(str(chat_result["answer"]))
                 return
         except Exception:
             logger.exception("live model chat unavailable; continuing generation path")
