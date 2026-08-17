@@ -1,7 +1,6 @@
 [build]
-builder = "NIXPACKS"
-# Python 3.10 required for rasa==3.6 (no wheels on 3.12)
-buildCommand = "pip install -r requirements.txt && pip install -r requirements-dialogue.txt"
+builder = "DOCKERFILE"
+# Dockerfile pins Python 3.10 and installs both runtime and dialogue dependencies.
 
 [deploy]
 startCommand = "python main.py"
