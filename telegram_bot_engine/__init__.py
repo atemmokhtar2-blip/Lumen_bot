@@ -172,7 +172,20 @@ def _run_intelligence_layers(
         _translator = None
         try:
             from .services.translator_client import translate_request
-            _translator = translate_request(request or "")
+            _translation_context = {
+                "request": request or "",
+                "user_id": int(user_id or 0),
+            }
+            if user_id:
+                try:
+                    from bot_interface.live_user_context import build_live_user_context
+                    _translation_context["server_facts"] = build_live_user_context(int(user_id))
+                except Exception:
+                    _translation_context["server_facts"] = {
+                        "data_available": False,
+                        "reason": "live_context_unavailable",
+                    }
+            _translator = translate_request(request or "", _translation_context)
         except Exception:
             _translator = None
         _ent = getattr(lu, "entities", None)

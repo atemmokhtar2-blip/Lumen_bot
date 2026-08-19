@@ -49,8 +49,28 @@ def _base_url() -> str:
     return base
 
 
-def translate_request(text: str) -> dict[str, Any] | None:
+def _gemini_enabled() -> bool:
+    raw = os.getenv("GEMINI_ENABLED")
+    if raw is not None:
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool((os.getenv("GEMINI_API_KEY") or "").strip())
+
+
+def translate_request(
+    text: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Return a validated translator payload, or None for safe fallback."""
+    if _gemini_enabled():
+        try:
+            from .gemini_client import translate
+            result = translate(text, context or {})
+            payload = result.get("translation") if isinstance(result, dict) else None
+            if isinstance(payload, dict):
+                return payload
+        except Exception as exc:
+            logger.warning("Gemini translation unavailable; using existing fallback: %s", exc)
+        return None
     if not _enabled():
         return None
     base = _base_url()
@@ -82,7 +102,14 @@ def translate_request(text: str) -> dict[str, Any] | None:
 
 
 def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask the standalone conversational layer using server-built user context."""
+    """Ask Gemini or the legacy standalone layer using server-built context."""
+    if _gemini_enabled():
+        try:
+            from .gemini_client import chat
+            return chat(message, context or {})
+        except Exception as exc:
+            logger.exception("Gemini chat unavailable; continuing generation path: %s", exc)
+        return None
     if not _enabled():
         return None
     base = _base_url()
