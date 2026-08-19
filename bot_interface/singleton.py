@@ -211,16 +211,103 @@ def acquire_bot_singleton(
         raise SystemExit(
             "TBE_MULTI_REPLICA requires MONGODB_URI/MONGO_URI for a cross-host polling lease"
         )
-    base = Path(lock_dir or os.getenv("OUTPUT_DIR") or "/tmp")
-    try:
-        base.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        base = Path("/tmp")
+    # Durable lock dir — never rely on /tmp alone (systemd tmpfiles.d wipes it)
+    base = Path(
+        lock_dir
+        or os.getenv("RUNTIME_LOCK_DIR")
+        or os.getenv("STATE_DIR")
+        or os.getenv("OUTPUT_DIR")
+        or ""
+    )
+    if not str(base):
+        # project-local fallback then /var/lib
+        for candidate in (
+            Path(__file__).resolve().parents[1] / ".runtime",
+            Path("/var/lib/capability_maestro"),
+            Path.home() / ".capability_maestro",
+        ):
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                base = candidate
+                break
+            except OSError:
+                continue
+        else:
+            base = Path("/tmp/capability_maestro")
+            base.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            base = Path.home() / ".capability_maestro"
+            base.mkdir(parents=True, exist_ok=True)
+
     lock_path = base / ".ai_agent_7h_bot.poll.lock"
     deadline = time.monotonic() + max(5.0, float(wait_seconds))
     last_err = ""
 
+    def _pid_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            # exists but not ours — treat as alive
+            return True
+        except OSError:
+            return False
+
+    def _read_lock_pid(path: Path) -> int | None:
+        try:
+            lines = path.read_text(encoding="utf-8").strip().splitlines()
+            if lines and lines[0].strip().isdigit():
+                return int(lines[0].strip())
+        except Exception:
+            return None
+        return None
+
+    def _break_stale_lock(path: Path) -> bool:
+        """If lock file names a dead PID, remove it so flock can be re-acquired.
+
+        Kernel releases flock on process death; residual lock *files* on some
+        filesystems or after unclean exits still confuse operators — clear them
+        when the recorded PID is gone.
+        """
+        pid = _read_lock_pid(path)
+        if pid is None:
+            try:
+                path.unlink(missing_ok=True)  # type: ignore[call-arg]
+            except TypeError:
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError:
+                    return False
+            except OSError:
+                return False
+            return True
+        if _pid_alive(pid):
+            return False
+        logger.warning("Stale poll lock: pid=%s is dead — removing %s", pid, path)
+        try:
+            path.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except TypeError:
+            try:
+                path.unlink()
+            except OSError:
+                return False
+        except OSError:
+            return False
+        return True
+
     while True:
+        # Proactively clear stale lock file before open/flock
+        if lock_path.exists():
+            _break_stale_lock(lock_path)
+
         fh = open(lock_path, "a+", encoding="utf-8")
         try:
             import fcntl
@@ -230,6 +317,10 @@ def acquire_bot_singleton(
             fh.truncate()
             fh.write(f"{os.getpid()}\n{time.time()}\n")
             fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
             _LOCK_FH = fh
 
             def _release() -> None:
@@ -257,33 +348,35 @@ def acquire_bot_singleton(
                 fh.close()
             except Exception:
                 pass
+            # Holder may have died between open and our flock attempt
+            if _break_stale_lock(lock_path):
+                continue
+            holder = _read_lock_pid(lock_path)
             if time.monotonic() >= deadline:
                 raise SystemExit(
                     "Another AI Agent 7h bot process is still polling "
-                    f"(lock={lock_path}). Set replicas=1 and restart once. "
-                    f"waited={wait_seconds:.0f}s"
+                    f"(lock={lock_path}, holder_pid={holder}). "
+                    f"Set replicas=1 and restart once. waited={wait_seconds:.0f}s"
                 )
             time.sleep(1.0)
             continue
         except ImportError:
+            # No fcntl (rare) — PID file only with liveness check
             try:
-                old = lock_path.read_text(encoding="utf-8").strip().splitlines()
-                old_pid = int(old[0]) if old and old[0].isdigit() else None
+                old_pid = _read_lock_pid(lock_path)
             except Exception:
                 old_pid = None
-            if old_pid and old_pid != os.getpid():
+            if old_pid and old_pid != os.getpid() and _pid_alive(old_pid):
                 try:
-                    os.kill(old_pid, 0)
-                    if time.monotonic() >= deadline:
-                        fh.close()
-                        raise SystemExit(
-                            f"Another bot process appears running (pid={old_pid})."
-                        )
                     fh.close()
-                    time.sleep(1.0)
-                    continue
-                except OSError:
+                except Exception:
                     pass
+                if time.monotonic() >= deadline:
+                    raise SystemExit(
+                        f"Another bot process appears running (pid={old_pid})."
+                    )
+                time.sleep(1.0)
+                continue
             fh.seek(0)
             fh.truncate()
             fh.write(f"{os.getpid()}\n{time.time()}\n")
@@ -299,6 +392,7 @@ def acquire_bot_singleton(
             if time.monotonic() >= deadline:
                 raise SystemExit(f"Could not acquire poll lock: {last_err}")
             time.sleep(1.0)
+
 
 
 def clear_telegram_webhook(token: str, timeout: float = 12.0) -> bool:

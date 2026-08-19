@@ -59,8 +59,12 @@ def _start_b2b_api_process(port: int) -> None:
     web.run_app(app, host="0.0.0.0", port=port, print=lambda *a, **k: None)
 
 
-def _start_b2b_api_thread(port: int) -> None:
-    """Fallback: AppRunner without signal handlers (safe inside a thread)."""
+def _start_b2b_api_thread(port: int, death_event=None) -> None:
+    """Fallback: AppRunner without signal handlers (safe inside a thread).
+
+    On any unhandled failure, signal death_event and terminate the process
+    (fail-fast): a platform without its API is partially down.
+    """
 
     async def _serve() -> None:
         from aiohttp import web
@@ -77,8 +81,16 @@ def _start_b2b_api_thread(port: int) -> None:
 
     try:
         asyncio.run(_serve())
+        logger.error("B2B API thread exited cleanly unexpectedly — fail-fast")
     except Exception:
-        logger.exception("B2B API thread failed")
+        logger.exception("B2B API thread failed — fail-fast")
+    if death_event is not None:
+        try:
+            death_event.set()
+        except Exception:
+            pass
+    # Hard stop: consumer bot alone is not a healthy ENABLE_API deployment
+    os._exit(1)
 
 
 
@@ -163,20 +175,49 @@ def main() -> None:
         "no",
         "off",
     }
+    api_death = threading.Event()
+    api_proc = None
     if enable_api:
         mode = (os.getenv("API_PROCESS_MODE") or "process").strip().lower()
         if mode in {"thread", "runner"}:
-            threading.Thread(
-                target=_start_b2b_api_thread, args=(PORT,), daemon=True, name="b2b-api"
-            ).start()
+            # Non-daemon so a silent death is visible; death still triggers os._exit
+            t = threading.Thread(
+                target=_start_b2b_api_thread,
+                args=(PORT, api_death),
+                daemon=False,
+                name="b2b-api",
+            )
+            t.start()
+            logger.info("B2B API thread started on port %s (fail-fast on death)", PORT)
         else:
-            multiprocessing.Process(
+            api_proc = multiprocessing.Process(
                 target=_start_b2b_api_process,
                 args=(PORT,),
-                daemon=True,
+                daemon=False,
                 name="b2b-api-process",
-            ).start()
-            logger.info("B2B API process started on port %s", PORT)
+            )
+            api_proc.start()
+            logger.info("B2B API process started on port %s pid=%s", PORT, api_proc.pid)
+
+        def _watch_api_worker() -> None:
+            import time
+            """Fail-fast if API process/thread dies while bot is still polling."""
+            while True:
+                if api_death.is_set():
+                    logger.error("B2B API death_event set — stopping main process")
+                    os._exit(1)
+                if api_proc is not None and not api_proc.is_alive():
+                    code = api_proc.exitcode
+                    logger.error(
+                        "B2B API process died (exitcode=%s) — stopping main process",
+                        code,
+                    )
+                    os._exit(1 if code else 1)
+                time.sleep(2.0)  # noqa: watchdog interval
+
+        threading.Thread(
+            target=_watch_api_worker, daemon=True, name="b2b-api-watchdog"
+        ).start()
     else:
         threading.Thread(target=start_health_server, args=(PORT,), daemon=True).start()
 

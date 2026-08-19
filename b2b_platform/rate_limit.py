@@ -18,6 +18,36 @@ from typing import Protocol
 
 logger = logging.getLogger("ai_agent_7h.rate_limit")
 
+def _durable_data_dir() -> Path:
+    """Never default durable rate-limit state to /tmp (systemd tmpfiles.d).
+
+    Order: STATE_DIR → DATA_DIR → OUTPUT_DIR → /var/lib/capability_maestro → ~/.capability_maestro
+    """
+    for key in ("STATE_DIR", "DATA_DIR", "OUTPUT_DIR"):
+        raw = (os.getenv(key) or "").strip()
+        if raw:
+            p = Path(raw)
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                return p
+            except OSError:
+                continue
+    for candidate in (
+        Path("/var/lib/capability_maestro"),
+        Path.home() / ".capability_maestro",
+        Path(__file__).resolve().parents[1] / ".runtime",
+    ):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    # Last resort still under home, not global /tmp
+    p = Path.home() / ".capability_maestro"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 
 class RateLimiterBackend(Protocol):
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool: ...
@@ -109,7 +139,7 @@ class SqliteRateLimiter:
     """Process-safe rate limiter backed by SQLite (shared across local workers)."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        base = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
+        base = _durable_data_dir()
         self.path = Path(db_path or (base / "platform" / "rate_limit.sqlite3"))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
