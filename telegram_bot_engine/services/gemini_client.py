@@ -89,9 +89,18 @@ def enabled() -> bool:
         return _truthy(raw)
     return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
+
+_MODEL_FALLBACKS = (
+    "gemini-flash-latest",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+)
+
+
 def model_name() -> str:
     # Default to a current flash model; override with GEMINI_MODEL if needed.
-    return (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-flash-latest").strip()
 
 
 def _api_key() -> str:
@@ -242,10 +251,9 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
     _experiment_delay()
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model_name()}:generateContent"
-    )
+    primary = model_name()
+    candidates = [primary] + [m for m in _MODEL_FALLBACKS if m != primary]
+    last_error: Exception | None = None
     payload = {
         "contents": [{"parts": [{"text": _prompt(mode, text, context)}]}],
         "generationConfig": {
@@ -254,26 +262,52 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
             "responseSchema": _RESPONSE_SCHEMA,
         },
     }
-    response = requests.post(
-        url,
-        params={"key": key},
-        json=payload,
-        timeout=_timeout(),
-        headers={"Content-Type": "application/json"},
-    )
-    if response.status_code >= 400:
-        # Surface Google error body (invalid key, model not found, quota) without the key
-        body_preview = (response.text or "")[:500]
-        logger.error(
-            "Gemini API HTTP %s model=%s body=%s",
-            response.status_code,
-            model_name(),
-            body_preview,
+    for model in candidates:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent"
         )
-        raise RuntimeError(
-            f"Gemini API HTTP {response.status_code}: {body_preview}"
-        )
-    return _normalize(_extract_json(response.json()))
+        try:
+            response = requests.post(
+                url,
+                params={"key": key},
+                json=payload,
+                timeout=_timeout(),
+                headers={"Content-Type": "application/json"},
+            )
+            if response.status_code in {404, 429, 503}:
+                logger.warning(
+                    "Gemini model %s unavailable (HTTP %s); trying fallback",
+                    model,
+                    response.status_code,
+                )
+                last_error = RuntimeError(
+                    f"Gemini model {model} HTTP {response.status_code}"
+                )
+                continue
+            if response.status_code >= 400:
+                body_preview = (response.text or "")[:500]
+                logger.error(
+                    "Gemini API HTTP %s model=%s body=%s",
+                    response.status_code,
+                    model,
+                    body_preview,
+                )
+                raise RuntimeError(
+                    f"Gemini API HTTP {response.status_code}: {body_preview}"
+                )
+            result = _normalize(_extract_json(response.json()))
+            if model != primary:
+                logger.info("Gemini served via fallback model=%s", model)
+            return result
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Gemini model %s failed: %s", model, exc)
+            continue
+    raise RuntimeError(f"Gemini generate failed for all models: {last_error}")
+
 
 
 def translate(text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
