@@ -87,7 +87,16 @@ class PipelineOrchestrator:
             clean = bool(self._config.get("output", "clean_before_build", True))
         if clean and work_dir.exists():
             import shutil
-            shutil.rmtree(work_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(work_dir)
+            except OSError as exc:
+                self._log.error(
+                    "Failed to clean work_dir before build",
+                    {"work_dir": str(work_dir), "error": f"{type(exc).__name__}: {exc}"},
+                )
+                raise RuntimeError(
+                    f"work_dir_cleanup_failed:{work_dir}:{type(exc).__name__}:{exc}"
+                ) from exc
         work_dir.mkdir(parents=True, exist_ok=True)
 
         context = GenerationContext(

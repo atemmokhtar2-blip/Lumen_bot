@@ -81,6 +81,38 @@ def _start_b2b_api_thread(port: int) -> None:
         logger.exception("B2B API thread failed")
 
 
+
+def _cleanup_application(app) -> None:
+    """Best-effort shutdown so restart cycles do not leak Application state."""
+    if app is None:
+        return
+    try:
+        import asyncio
+        loop = None
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop = None
+        except Exception:
+            loop = None
+        if loop is not None:
+            try:
+                loop.run_until_complete(app.shutdown())
+            except Exception:
+                pass
+            try:
+                loop.run_until_complete(app.updater.shutdown()) if getattr(app, "updater", None) else None
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        del app
+    except Exception:
+        pass
+    import gc
+    gc.collect()
+
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
@@ -171,6 +203,7 @@ def main() -> None:
     max_cycles = int(os.getenv("POLL_RESTART_MAX", "40") or "40")
     import time as _time
 
+    app = None  # per-cycle; cleaned after each pass
     for cycle in range(1, max_cycles + 1):
         try:
             _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
@@ -189,6 +222,8 @@ def main() -> None:
                 "run_polling returned (cycle=%s). Re-clearing webhook and restarting…",
                 cycle,
             )
+            _cleanup_application(app)
+            app = None
         except SystemExit:
             raise
         except KeyboardInterrupt:
@@ -207,6 +242,11 @@ def main() -> None:
             if is_conflict:
                 # Longer pause so the other instance can die during rolling deploy
                 _time.sleep(min(5.0 + cycle * 2.0, 30.0))
+                try:
+                    _cleanup_application(app)
+                except Exception:
+                    pass
+                app = None
                 _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
                 continue
         _time.sleep(min(2.0 + cycle, 12.0))

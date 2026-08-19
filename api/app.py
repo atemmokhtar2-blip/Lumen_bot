@@ -33,11 +33,16 @@ def _cors_origin_for(request: web.Request) -> str | None:
     """
     raw = (os.getenv("API_CORS_ORIGIN") or "").strip()
     if not raw or raw == "*":
-        # Explicit * only if operator sets API_CORS_ALLOW_WILDCARD=1 (discouraged)
-        if raw == "*" and (os.getenv("API_CORS_ALLOW_WILDCARD") or "").strip().lower() in {
+        # Wildcard CORS is forbidden outside explicit dev — prevents credentialed cross-origin abuse
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+        is_dev = env in {"dev", "development", "local", "test"}
+        wild = (os.getenv("API_CORS_ALLOW_WILDCARD") or "").strip().lower() in {
             "1", "true", "yes", "on",
-        }:
+        }
+        if raw == "*" and wild and is_dev:
             return "*"
+        if raw == "*" and wild and not is_dev:
+            logger.warning("API_CORS_ALLOW_WILDCARD ignored in production (fail-closed)")
         return None
     allowed = {o.strip() for o in raw.split(",") if o.strip()}
     origin = (request.headers.get("Origin") or "").strip()

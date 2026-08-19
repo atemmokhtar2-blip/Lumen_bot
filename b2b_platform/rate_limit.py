@@ -249,9 +249,19 @@ class RateLimiter:
         from .runtime_config import redis_url, is_dev
         url = redis_url()
         if url:
-            backend = RedisRateLimiter(url)  # fail hard if Redis down in prod
-            logger.info("rate_limit backend=redis")
-            return backend
+            try:
+                backend = RedisRateLimiter(url)
+                logger.info("rate_limit backend=redis")
+                return backend
+            except Exception as exc:
+                # Production: NEVER fall back to memory/sqlite (multi-worker DDoS hole)
+                if not is_dev():
+                    raise RuntimeError(
+                        f"Redis rate limiter unavailable in production: {type(exc).__name__}: {exc}. "
+                        "Refusing to start with local fallback."
+                    ) from exc
+                logger.warning("Redis rate limiter failed in dev (%s); using memory", exc)
+                return MemoryRateLimiter()
         if is_dev():
             try:
                 logger.info("rate_limit backend=sqlite (dev)")
@@ -259,7 +269,8 @@ class RateLimiter:
             except Exception:
                 return MemoryRateLimiter()
         raise RuntimeError(
-            "REDIS_URL is required for rate limiting outside ENVIRONMENT=dev"
+            "REDIS_URL is required for rate limiting outside ENVIRONMENT=dev. "
+            "No MemoryRateLimiter / SQLite fallback in production."
         )
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:

@@ -37,6 +37,16 @@ class ParseStage(BaseStage):
         self._registry = registry
 
     def execute(self, context: GenerationContext) -> StageResult:
+        # 0) Prompt injection / system-abuse guard (fail closed)
+        from ..prompt_guard import sanitize_generation_prompt
+        guard = sanitize_generation_prompt(getattr(context, "request", "") or "")
+        if not guard.ok:
+            return StageResult.failed(
+                self.name,
+                [f"prompt_injection_blocked:{','.join(guard.reasons[:8])}"],
+            )
+        context.request = guard.sanitized
+
         # 1) Analyzer first (priority 10) — deep request analysis
         analyzer = self._registry.get_engine("analyzer")
         if analyzer is not None:
