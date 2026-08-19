@@ -173,13 +173,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "remaining", "quota",
             )
         )
+        telegram_user_id = int(user.id) if user else 0
+        # Context is best-effort. A PostgreSQL/metering failure must not prevent
+        # Gemini from answering ordinary chat with an explicit data-unavailable
+        # context; the model must never receive invented plan or usage facts.
+        live_context = {
+            "identity_known": False,
+            "telegram_user_id": telegram_user_id,
+            "data_available": False,
+            "reason": "server_context_unavailable",
+        }
         try:
-            from ..live_user_context import build_live_user_context
             from b2b_platform.metering import get_metering
             from b2b_platform.tenants import get_tenant_store
-            from telegram_bot_engine.services.translator_client import chat_request
 
-            telegram_user_id = int(user.id) if user else 0
             tenant = get_tenant_store().get_by_telegram(telegram_user_id) if telegram_user_id else None
             if tenant is not None:
                 get_metering().record(
@@ -188,36 +195,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     characters=len(request),
                     event="chat_message",
                 )
+        except Exception:
+            logger.exception("live model metering unavailable; continuing with chat")
+
+        try:
+            from ..live_user_context import build_live_user_context
             live_context = build_live_user_context(telegram_user_id)
-            _active_repo = (context.user_data or {}).get("active_repo") if context.user_data else None
-            if isinstance(_active_repo, dict):
-                live_context["active_repo"] = {
-                    "path": str(_active_repo.get("path") or ""),
-                    "url": str(_active_repo.get("url") or ""),
-                }
+        except Exception:
+            logger.exception("live model context unavailable; using safe context")
+
+        _active_repo = (context.user_data or {}).get("active_repo") if context.user_data else None
+        if isinstance(_active_repo, dict):
+            live_context["active_repo"] = {
+                "path": str(_active_repo.get("path") or ""),
+                "url": str(_active_repo.get("url") or ""),
+            }
+
+        try:
+            from telegram_bot_engine.services.translator_client import chat_request
             chat_result = chat_request(request, live_context)
-            # Any non-empty answer from the model is authoritative for this turn,
-            # including the safe "data unavailable" response. Do not fall through
-            # to the legacy fixed help text when the model answered safely.
-            if chat_result and str(chat_result.get("answer") or "").strip():
-                _action = chat_result.get("action")
-                if isinstance(_action, dict):
-                    _action_name = str(_action.get("name") or "")
-                    if _action.get("requires_confirmation"):
-                        if context.user_data is not None:
-                            context.user_data["pending_chat_action"] = {
-                                "name": _action_name,
-                                "raw_text": request,
-                            }
-                    elif _action_name == "host_status":
-                        # Read-only state is safe to execute immediately.
-                        from .hosting_router import try_handle_hosting
-                        if await try_handle_hosting(update, context, request, user, message):
-                            return
-                await message.reply_text(str(chat_result["answer"]))
-                return
         except Exception:
             logger.exception("live model chat unavailable; continuing generation path")
+            chat_result = None
+
+        # Any non-empty answer from the model is authoritative for this turn,
+        # including the safe "data unavailable" response. Do not fall through
+        # to the legacy fixed help text when the model answered safely.
+        if chat_result and str(chat_result.get("answer") or "").strip():
+            _action = chat_result.get("action")
+            if isinstance(_action, dict):
+                _action_name = str(_action.get("name") or "")
+                if _action.get("requires_confirmation"):
+                    if context.user_data is not None:
+                        context.user_data["pending_chat_action"] = {
+                            "name": _action_name,
+                            "raw_text": request,
+                        }
+                elif _action_name == "host_status":
+                    # Read-only state is safe to execute immediately.
+                    from .hosting_router import try_handle_hosting
+                    if await try_handle_hosting(update, context, request, user, message):
+                        return
+            await message.reply_text(str(chat_result["answer"]))
+            return
+        logger.warning(
+            "chat_request returned no answer; GEMINI_API_KEY_present=%s GEMINI_ENABLED=%s GEMINI_MODEL=%s",
+            bool((os.getenv("GEMINI_API_KEY") or "").strip()),
+            os.getenv("GEMINI_ENABLED"),
+            os.getenv("GEMINI_MODEL") or "gemini-1.5-flash",
+        )
 
         if _state_question:
             await message.reply_text(
