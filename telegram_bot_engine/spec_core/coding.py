@@ -671,21 +671,30 @@ def _repair_handler_imports(root: Path) -> list[str]:
 
 def _ensure_referenced_service_stubs(root: Path, files_written: list[str]) -> list[str]:
     """If any generated module imports a missing service, write a safe implementation."""
-    import re
+    import ast as _ast
     from telegram_bot_engine.services.safe_fs import safe_write_under_root, safe_ident, UnsafePathError
     notes: list[str] = []
     root = Path(root)
-    src_blob = []
+    needed: set[str] = set()
     for path in root.rglob("*.py"):
         if "__pycache__" in path.parts or ".venv" in path.parts:
             continue
         try:
-            src_blob.append(path.read_text(encoding="utf-8"))
-        except OSError:
+            tree = _ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
             continue
-    src = "\n".join(src_blob)
-    needed = set(re.findall(r"from app\.services import (\w+)", src))
-    needed |= set(re.findall(r"from app\.services\.(\w+) import", src))
+        for node in _ast.walk(tree):
+            if not isinstance(node, _ast.ImportFrom):
+                continue
+            mod = node.module or ""
+            if mod == "app.services":
+                for alias in node.names:
+                    if alias.name and alias.name != "*":
+                        needed.add(alias.name)
+            elif mod.startswith("app.services."):
+                parts = mod.split(".")
+                if len(parts) >= 3 and parts[2]:
+                    needed.add(parts[2])
     services_dir = root / "app" / "services"
     services_dir.mkdir(parents=True, exist_ok=True)
 

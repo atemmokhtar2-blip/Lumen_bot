@@ -27,7 +27,15 @@ class UsageBucket:
 
 
 class MeteringService:
+    """File JSON metering — **dev only**. Production must use MongoMeteringService."""
+
     def __init__(self, root: str | Path | None = None) -> None:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(
+                "File-backed MeteringService cannot be constructed outside ENVIRONMENT=dev|local|test. "
+                "Use MONGODB_URI / MongoMeteringService."
+            )
         base = Path(root or os.getenv("OUTPUT_DIR", "/tmp/generated"))
         self.root = base / "platform" / "metering"
         self.root.mkdir(parents=True, exist_ok=True)

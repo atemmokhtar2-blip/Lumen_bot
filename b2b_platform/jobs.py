@@ -68,7 +68,15 @@ class Job:
 
 
 class JobStore:
+    """SQLite job store — **dev only**. Production must use RedisJobStore."""
+
     def __init__(self, db_path: str | Path | None = None) -> None:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(
+                "SQLite JobStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
+                "Set REDIS_URL for RedisJobStore."
+            )
         base = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
         self.path = Path(db_path or (base / "platform" / "jobs.sqlite3"))
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -332,6 +340,22 @@ class RedisJobStore:
         except Exception:
             return None
 
+
+    def enqueue_work(self, job_id: str) -> None:
+        """Push job id onto the durable work queue (multi-worker safe)."""
+        self._r.lpush(f"{self._prefix}queue", job_id)
+
+    def claim_work(self, *, timeout_sec: int = 5) -> str | None:
+        """Blocking claim of next job id (BRPOP). Returns job_id or None on timeout."""
+        item = self._r.brpop(f"{self._prefix}queue", timeout=max(1, int(timeout_sec)))
+        if not item:
+            return None
+        # brpop returns (key, value)
+        return item[1] if isinstance(item, (list, tuple)) else None
+
+    def queue_depth(self) -> int:
+        return int(self._r.llen(f"{self._prefix}queue") or 0)
+
     def cleanup_old_jobs(self, days: int = 7) -> int:
         # TTL on keys handles expiry; active set is pruned opportunistically
         return 0
@@ -472,8 +496,48 @@ class JobRunner:
                 self.store.cleanup_old_jobs(days=int(os.getenv("JOB_RETENTION_DAYS") or 7))
             except Exception:
                 pass
-        self._pool.submit(self._run, job.job_id)
+
+        # Durable queue path (Redis): push work item; workers claim via BRPOP.
+        # SQLite/dev path: inline thread pool (single-node only).
+        if hasattr(self.store, "enqueue_work"):
+            self.store.enqueue_work(job.job_id)
+            self._ensure_redis_workers()
+        else:
+            self._pool.submit(self._run, job.job_id)
         return job
+
+
+    def _ensure_redis_workers(self) -> None:
+        """Start in-process BRPOP workers once (or external-only when configured)."""
+        if getattr(self, "_redis_workers_started", False):
+            return
+        if (os.getenv("JOB_WORKER_EXTERNAL") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            self._redis_workers_started = True
+            return
+        n = max(1, int(os.getenv("JOB_MAX_WORKERS") or "2"))
+        for i in range(n):
+            self._pool.submit(self._redis_worker_loop, i)
+        self._redis_workers_started = True
+
+    def _redis_worker_loop(self, worker_id: int = 0) -> None:
+        import logging
+        log = logging.getLogger("b2b.jobs.worker")
+        log.info("redis job worker started id=%s", worker_id)
+        while True:
+            try:
+                if not hasattr(self.store, "claim_work"):
+                    return
+                job_id = self.store.claim_work(timeout_sec=5)
+                if not job_id:
+                    continue
+                self._run(job_id)
+            except Exception:
+                log.exception("redis worker id=%s error", worker_id)
+                time.sleep(1.0)
+
+    def run_worker_forever(self) -> None:
+        """Dedicated worker process entrypoint."""
+        self._redis_worker_loop(0)
 
     def _run(self, job_id: str) -> None:
         job = self.store.get(job_id)

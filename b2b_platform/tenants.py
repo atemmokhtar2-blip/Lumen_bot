@@ -100,9 +100,15 @@ class Tenant:
 
 
 class TenantStore:
-    """File-backed tenant registry (swap to Postgres later without API changes)."""
+    """File-backed tenant registry — **dev only**. Production must use MongoUserStore."""
 
     def __init__(self, root: str | Path | None = None) -> None:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(
+                "File-backed TenantStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
+                "Use MONGODB_URI / MongoUserStore."
+            )
         base = Path(root or os.getenv("OUTPUT_DIR", "/tmp/generated"))
         self.root = base / "platform" / "tenants"
         self.root.mkdir(parents=True, exist_ok=True)
