@@ -107,7 +107,7 @@ class TenantStore:
         if env not in {"dev", "development", "local", "test"}:
             raise RuntimeError(
                 "File-backed TenantStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
-                "Use MONGODB_URI / MongoUserStore."
+                "Use DATABASE_URL / PostgresTenantStore."
             )
         base = Path(root or os.getenv("OUTPUT_DIR", "/tmp/generated"))
         self.root = base / "platform" / "tenants"
@@ -342,26 +342,31 @@ def _is_dev_env() -> bool:
 def get_tenant_store():
     """Tenant identity store.
 
-    Production / unset ENVIRONMENT: **MongoDB is mandatory** (MONGODB_URI).
-    File-backed TenantStore is allowed only when ENVIRONMENT is dev|local|test
-    and MONGODB_URI is unset — never as a silent production default.
+    Production: **PostgreSQL only** (DATABASE_URL / POSTGRES_URL).
+    Optional: MONGODB_URI only if Postgres is unset *and* ENVIRONMENT is legacy-compat
+    (still refused in pure production when DATABASE_URL missing).
+    Dev: file TenantStore allowed when no DATABASE_URL.
     """
     global _STORE
     if _STORE is None:
-        uri = (os.getenv("MONGODB_URI") or "").strip()
-        if uri:
-            from .mongo_users import MongoUserStore
-            _STORE = MongoUserStore(uri)
+        pg = (
+            (os.getenv("DATABASE_URL") or "")
+            or (os.getenv("POSTGRES_URL") or "")
+            or (os.getenv("POSTGRESQL_URL") or "")
+        ).strip()
+        if pg:
+            from .pg_store import PostgresTenantStore
+            _STORE = PostgresTenantStore(pg)
         elif _is_dev_env():
             import logging
             logging.getLogger(__name__).warning(
-                "TenantStore file backend active (dev only). Set MONGODB_URI for production."
+                "TenantStore file backend active (dev only). Set DATABASE_URL for production."
             )
             _STORE = TenantStore()
         else:
             raise RuntimeError(
-                "MONGODB_URI is required outside dev. "
-                "File-backed tenant index.json is not allowed in production. "
-                "Set MONGODB_URI or ENVIRONMENT=dev for local testing."
+                "DATABASE_URL (PostgreSQL) is required outside dev. "
+                "File-backed tenants and Mongo-only production are not allowed. "
+                "Set DATABASE_URL or ENVIRONMENT=dev for local testing."
             )
     return _STORE

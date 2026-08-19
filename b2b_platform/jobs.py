@@ -497,8 +497,35 @@ class JobRunner:
             except Exception:
                 pass
 
-        # Durable queue path (Redis): push work item; workers claim via BRPOP.
-        # SQLite/dev path: inline thread pool (single-node only).
+        # Prefer RQ (real worker processes) when Redis is configured.
+        redis_url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+        use_rq = redis_url and (os.getenv("JOB_BACKEND") or "rq").strip().lower() in {"", "rq", "redis"}
+        if use_rq:
+            try:
+                from rq import Queue
+                from redis import Redis
+                qname = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
+                q = Queue(
+                    qname,
+                    connection=Redis.from_url(redis_url),
+                    default_timeout=int(os.getenv("RQ_JOB_TIMEOUT") or "600"),
+                )
+                q.enqueue(
+                    "b2b_platform.task_queue.execute_stored_job",
+                    job.job_id,
+                    job_id=job.job_id,
+                    failure_ttl=int(os.getenv("RQ_FAILURE_TTL") or "86400"),
+                    result_ttl=int(os.getenv("RQ_RESULT_TTL") or "86400"),
+                )
+                return job
+            except Exception as exc:
+                # Production must not silently fall back to in-process threads
+                env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+                if env not in {"dev", "development", "local", "test"}:
+                    raise RuntimeError(f"rq_enqueue_failed:{type(exc).__name__}:{exc}") from exc
+                logger.warning("RQ enqueue failed in dev (%s); using thread pool", exc)
+
+        # Dev / emergency: BRPOP list or thread pool
         if hasattr(self.store, "enqueue_work"):
             self.store.enqueue_work(job.job_id)
             self._ensure_redis_workers()

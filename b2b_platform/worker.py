@@ -1,0 +1,28 @@
+"""RQ worker process: python -m b2b_platform.worker"""
+from __future__ import annotations
+
+import logging
+import os
+import sys
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger("b2b.worker")
+
+
+def main() -> int:
+    url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+    if not url:
+        logger.error("REDIS_URL is required for workers")
+        return 2
+    from redis import Redis
+    from rq import Worker, Queue
+    name = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
+    conn = Redis.from_url(url)
+    queues = [Queue(name, connection=conn)]
+    logger.info("starting RQ worker queue=%s", name)
+    Worker(queues, connection=conn).work(with_scheduler=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

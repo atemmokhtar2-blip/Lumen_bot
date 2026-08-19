@@ -264,22 +264,33 @@ def _is_dev_env() -> bool:
     return env in {"dev", "development", "local", "test"}
 
 
+
 _METER = None
 
 
 def get_metering():
-    """Production: Mongo metering. Dev-only: file JSON without MONGODB_URI."""
+    """Production: PostgreSQL metering. Dev file only without DATABASE_URL."""
     global _METER
     if _METER is not None:
         return _METER
-    uri = (os.getenv("MONGODB_URI") or "").strip()
-    if uri:
-        _METER = MongoMeteringService(uri)
+    pg = (
+        (os.getenv("DATABASE_URL") or "")
+        or (os.getenv("POSTGRES_URL") or "")
+        or (os.getenv("POSTGRESQL_URL") or "")
+    ).strip()
+    if pg:
+        from .pg_store import PostgresMeteringService
+        _METER = PostgresMeteringService(pg)
         return _METER
-    if _is_dev_env():
+    mongo = (os.getenv("MONGODB_URI") or "").strip()
+    if mongo:
+        _METER = MongoMeteringService(mongo)
+        return _METER
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
         _METER = MeteringService()
         return _METER
     raise RuntimeError(
-        "MONGODB_URI is required for metering outside dev "
+        "DATABASE_URL is required for metering outside dev "
         "(file-backed metering is not multi-instance safe)."
     )
