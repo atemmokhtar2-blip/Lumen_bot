@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 
 # Load .env from project root (next to main.py), then cwd as fallback
 _ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_ROOT / ".env")
-load_dotenv()
+load_dotenv(_ROOT / ".env", override=False)
+load_dotenv(override=False)
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

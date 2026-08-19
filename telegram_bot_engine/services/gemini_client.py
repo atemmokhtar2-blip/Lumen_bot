@@ -80,16 +80,14 @@ def _truthy(value: str | None) -> bool:
 
 
 def enabled() -> bool:
-    """Gemini is on when a key exists, unless GEMINI_ENABLED explicitly disables it.
+    """On when a key exists, unless GEMINI_ENABLED is explicitly false.
 
-    Empty GEMINI_ENABLED (common on Railway when the var exists but is blank)
-    must NOT disable a valid key — only 0/false/no/off does.
+    Empty GEMINI_ENABLED must not disable a valid key.
     """
     raw = (os.getenv("GEMINI_ENABLED") or "").strip()
     if raw:
         return _truthy(raw)
     return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-
 
 def model_name() -> str:
     # Default to a current flash model; override with GEMINI_MODEL if needed.
@@ -97,13 +95,16 @@ def model_name() -> str:
 
 
 def _api_key() -> str:
-    # Accept either env name; strip quotes/newlines from panel paste mistakes.
-    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    if len(key) >= 2 and key[0] == key[-1] and key[0] in {'"', "'"}:
+    """Accept GEMINI_API_KEY or GOOGLE_API_KEY; strip paste artifacts."""
+    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "")
+    # strip BOM / zero-width / nbsp
+    key = key.replace("\ufeff", "").replace("\u200b", "").replace("\xa0", " ")
+    key = key.strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
         key = key[1:-1].strip()
+    if any(c in key for c in (chr(10), chr(13))):
+        key = next((ln.strip() for ln in key.splitlines() if ln.strip()), "")
     return key
-
-
 
 def status_snapshot() -> dict[str, Any]:
     """Safe diagnostics for logs (never includes the raw API key)."""

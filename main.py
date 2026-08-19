@@ -169,6 +169,23 @@ def main() -> None:
     logger.info("Telegram webhook cleared (exclusive polling mode)")
 
     logger.info("Starting AI Agent 7h Bot (consumer)...")
+
+    try:
+        from telegram_bot_engine.services.gemini_client import status_snapshot
+        _gs = status_snapshot()
+        logger.info(
+            "Gemini status at boot: enabled=%s key_present=%s key_len=%s model=%s",
+            _gs.get("enabled"),
+            _gs.get("key_present"),
+            _gs.get("key_len"),
+            _gs.get("model"),
+        )
+        if not _gs.get("key_present"):
+            logger.warning(
+                "GEMINI_API_KEY not visible to this process — set on the same Railway service and redeploy"
+            )
+    except Exception:
+        logger.exception("Gemini status probe failed at boot")
     allowed_repr = (
         sorted(ALLOWED_USER_IDS)
         if ALLOWED_USER_IDS
