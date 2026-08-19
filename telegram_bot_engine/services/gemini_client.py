@@ -24,6 +24,7 @@ _ALLOWED_ACTIONS = {
     "host_stop",
     "host_status",
     "repo_understand",
+    "generate_bot",
 }
 
 _KEY_ENV_NAMES = (
@@ -66,6 +67,7 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                 "confidence": {"type": "number"},
                 "clarification_needed": {"type": "boolean"},
                 "clarification_questions": {"type": "array", "items": {"type": "string"}},
+                "spec_request": {"type": "string"},
             },
             "required": [
                 "purpose",
@@ -76,6 +78,7 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                 "confidence",
                 "clarification_needed",
                 "clarification_questions",
+                "spec_request",
             ],
         },
     },
@@ -191,7 +194,14 @@ def _experiment_delay() -> None:
 
 
 def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
-    facts = json.dumps(context or {}, ensure_ascii=False, sort_keys=True)
+    context = dict(context or {})
+    if not context.get("spec_core_capabilities"):
+        try:
+            from telegram_bot_engine.spec_core.registry import CAPABILITIES
+            context["spec_core_capabilities"] = sorted(CAPABILITIES.keys())
+        except Exception:
+            context["spec_core_capabilities"] = []
+    facts = json.dumps(context, ensure_ascii=False, sort_keys=True)
     operation = (
         "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
     )
@@ -207,11 +217,18 @@ def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
 4. إذا كانت المعلومة المطلوبة غير موجودة، اجعل clarification_needed=true واسأل سؤالًا محددًا.
 5. لا تنفذ أي إجراء بنفسك. إذا طلب المستخدم إجراءً حساسًا، املأ action بالاسم المناسب واجعل requires_confirmation=true.
 6. أعد JSON مطابقًا للمخطط المطلوب، ولا تضف Markdown خارجه.
-7. features_requested وflows يجب أن تكونا مستخرجتين من طلب المستخدم، لا قائمة افتراضية.
-8. confidence رقم بين 0 و1.
+    7. features_requested يجب أن تحتوي فقط على مفاتيح capabilities الموجودة حرفيًا في SPEC_CORE_CAPABILITIES، وليس أسماء عامة أو مترادفات مخترعة.
+    8. flows يجب أن تكون مسارات مستخرجة من طلب المستخدم، وليست قائمة افتراضية.
+    9. confidence رقم بين 0 و1.
+    10. إذا لم يكتمل وصف البوت بعد، اجعل clarification_needed=true وspec_request فارغًا.
+    11. إذا اكتملت المواصفات أو قال المستخدم «ابدأ/نفّذ/ولّد» بعد اكتمالها، اجعل action.name="generate_bot"، وclarification_needed=false، واكتب spec_request كطلب واحد مستقل يفهمه spec_core ويحتوي على عبارة «بوت» أو «Telegram bot» وعلى features_requested الدقيقة فقط.
+    12. spec_request ليس ردًا للمستخدم؛ هو عقد داخلي لإرساله إلى spec_core.
 
 SERVER_CONTEXT:
 {facts}
+
+SPEC_CORE_CAPABILITIES:
+{json.dumps(context.get("spec_core_capabilities") or [], ensure_ascii=False)}
 
 USER_REQUEST:
 {text[:20000]}
@@ -270,6 +287,7 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
             "confidence": 0.0,
             "clarification_needed": False,
             "clarification_questions": [],
+            "spec_request": "",
         }
 
     def strings(name: str) -> list[str]:
@@ -292,6 +310,7 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
         "confidence": max(0.0, min(1.0, confidence)),
         "clarification_needed": bool(translation.get("clarification_needed")),
         "clarification_questions": strings("clarification_questions"),
+        "spec_request": str(translation.get("spec_request") or "").strip()[:20000],
     }
     return {
         "ok": True,
@@ -302,6 +321,39 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "translation": normalized_translation,
     }
+
+
+def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
+    """Return True only for an executable, non-ambiguous spec_core handoff."""
+    if not isinstance(translation, dict):
+        return False
+    if bool(translation.get("clarification_needed")):
+        return False
+    spec_request = str(translation.get("spec_request") or "").strip()
+    if len(spec_request) < 8:
+        return False
+    lowered = spec_request.lower()
+    if not any(token in lowered for token in ("بوت", "bot", "telegram")):
+        return False
+    features = translation.get("features_requested")
+    if not isinstance(features, list):
+        return False
+    try:
+        from telegram_bot_engine.spec_core.registry import CAPABILITIES
+        known = set(CAPABILITIES)
+    except Exception:
+        return False
+    normalized = [str(item).strip() for item in features if str(item).strip()]
+    if not normalized or any(item not in known for item in normalized):
+        return False
+    # A handoff with only core buttons is not enough to generate a bot.
+    if not any(item not in {"start", "help", "about", "ping", "lang", "language"} for item in normalized):
+        return False
+    try:
+        confidence = float(translation.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return confidence >= 0.60
 
 
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:

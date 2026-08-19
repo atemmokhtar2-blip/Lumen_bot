@@ -211,17 +211,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "url": str(_active_repo.get("url") or ""),
             }
 
+        chat_history = []
+        if context.user_data is not None:
+            try:
+                chat_history = list(context.user_data.get("chat_history") or [])[-12:]
+            except Exception:
+                chat_history = []
+        chat_context = dict(live_context)
+        chat_context["conversation_history"] = chat_history
         try:
             from telegram_bot_engine.services.translator_client import chat_request
-            chat_result = chat_request(request, live_context)
+            chat_result = chat_request(request, chat_context)
         except Exception:
             logger.exception("live model chat unavailable; continuing generation path")
             chat_result = None
 
+        # Keep a bounded, server-local conversation context so a final "ابدأ"
+        # can refer to the requirements collected in previous turns.
+        if context.user_data is not None:
+            try:
+                updated_history = chat_history + [{"role": "user", "content": request}]
+                if isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
+                    updated_history.append({"role": "assistant", "content": str(chat_result["answer"])})
+                context.user_data["chat_history"] = updated_history[-12:]
+            except Exception:
+                pass
+
+        # A completed Gemini translation is the only way the chat layer may
+        # enter generation. The original natural-language reply is not enough:
+        # spec_core must receive a validated request and real registry keys.
+        _translated_generation_request = ""
+        _translated_preferred_keys = []
+        if isinstance(chat_result, dict):
+            try:
+                from telegram_bot_engine.services.gemini_client import validate_spec_translation
+                _translation = chat_result.get("translation")
+                _action = chat_result.get("action") if isinstance(chat_result.get("action"), dict) else {}
+                if (
+                    str(_action.get("name") or "") == "generate_bot"
+                    and isinstance(_translation, dict)
+                    and validate_spec_translation(_translation)
+                ):
+                    _translated_generation_request = str(_translation.get("spec_request") or "").strip()
+                    _translated_preferred_keys = [
+                        str(key).strip()
+                        for key in (_translation.get("features_requested") or [])
+                        if str(key).strip()
+                    ]
+            except Exception:
+                logger.exception("validated Gemini-to-spec_core handoff failed")
+
+        if _translated_generation_request:
+            request = _translated_generation_request
+            if context.user_data is not None:
+                context.user_data["translated_spec_request"] = request
+                context.user_data["translated_preferred_keys"] = _translated_preferred_keys
+                context.user_data["skip_clarify_once"] = True
         # Any non-empty answer from the model is authoritative for this turn,
         # including the safe "data unavailable" response. Do not fall through
         # to the legacy fixed help text when the model answered safely.
-        if chat_result and str(chat_result.get("answer") or "").strip():
+        if not _translated_generation_request and chat_result and str(chat_result.get("answer") or "").strip():
             _action = chat_result.get("action")
             if isinstance(_action, dict):
                 _action_name = str(_action.get("name") or "")
@@ -885,7 +934,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         _pref_keys = None
         if context.user_data is not None:
-            _pref_keys = context.user_data.get("detection_preferred_keys")
+            _pref_keys = context.user_data.get("translated_preferred_keys")
+            if not _pref_keys:
+                _pref_keys = context.user_data.get("detection_preferred_keys")
         try:
             from b2b_platform.plan_gate import filter_preferred_keys
             _pref_keys = filter_preferred_keys(
