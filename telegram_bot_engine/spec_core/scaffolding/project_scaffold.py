@@ -67,7 +67,7 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
             except (ValueError, OSError):
                 continue
             if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child, ignore_errors=True)
+                shutil.rmtree(child)  # fail loud — ghost dirs poison next generate
             elif child.is_file() or child.is_symlink():
                 try:
                     child.unlink()

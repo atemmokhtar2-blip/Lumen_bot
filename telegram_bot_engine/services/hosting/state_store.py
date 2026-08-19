@@ -6,6 +6,8 @@ advisory locks around a JSON rewrite).
 """
 from __future__ import annotations
 
+import os
+
 import json
 import sqlite3
 import threading
@@ -36,9 +38,15 @@ CREATE INDEX IF NOT EXISTS idx_instances_token ON instances(token_fp);
 
 
 class HostingStateStore:
-    """Process-shared SQLite store with WAL and immediate transactions."""
+    """Process-shared SQLite store — **dev only**. Production must use PgHostStateStore."""
 
     def __init__(self, db_path: Path) -> None:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(
+                "SQLite HostingStateStore is forbidden outside ENVIRONMENT=dev. "
+                "Set DATABASE_URL (postgresql://...) for PgHostStateStore."
+            )
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
@@ -177,7 +185,9 @@ class HostingStateStore:
 
 
 def get_host_state_store(sqlite_path: str | Path | None = None):
-    """Factory: Postgres when DATABASE_URL is postgres, else SQLite HostingStateStore."""
+    """Production: Postgres only (fail-closed). Dev: SQLite allowed."""
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+    is_dev = env in {"dev", "development", "local", "test"}
     try:
         from telegram_bot_engine.services.hosting.pg_state_store import (
             PgHostStateStore,
@@ -186,9 +196,20 @@ def get_host_state_store(sqlite_path: str | Path | None = None):
         if is_postgres_url():
             return PgHostStateStore()
     except Exception as exc:
+        if not is_dev:
+            raise RuntimeError(
+                f"Postgres host state store required in production: {type(exc).__name__}: {exc}"
+            ) from exc
         import logging
-        logging.getLogger("tbe.hosting").warning("postgres state unavailable: %s", exc)
+        logging.getLogger("tbe.hosting").warning("postgres state unavailable in dev: %s", exc)
+    if not is_dev:
+        raise RuntimeError(
+            "DATABASE_URL (postgresql://...) is required for host state outside ENVIRONMENT=dev. "
+            "SQLite instances.sqlite3 is not multi-node safe."
+        )
     path = Path(sqlite_path) if sqlite_path else None
     if path is None:
         raise TypeError("sqlite_path required when not using Postgres")
+    import logging
+    logging.getLogger("tbe.hosting").warning("DEV ONLY: SQLite host state store")
     return HostingStateStore(path)
