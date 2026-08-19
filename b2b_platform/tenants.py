@@ -340,33 +340,22 @@ def _is_dev_env() -> bool:
 
 
 def get_tenant_store():
-    """Tenant identity store.
-
-    Production: **PostgreSQL only** (DATABASE_URL / POSTGRES_URL).
-    Optional: MONGODB_URI only if Postgres is unset *and* ENVIRONMENT is legacy-compat
-    (still refused in pure production when DATABASE_URL missing).
-    Dev: file TenantStore allowed when no DATABASE_URL.
-    """
+    """PostgreSQL in production; file TenantStore only in ENVIRONMENT=dev without DATABASE_URL."""
     global _STORE
-    if _STORE is None:
-        pg = (
-            (os.getenv("DATABASE_URL") or "")
-            or (os.getenv("POSTGRES_URL") or "")
-            or (os.getenv("POSTGRESQL_URL") or "")
-        ).strip()
-        if pg:
-            from .pg_store import PostgresTenantStore
-            _STORE = PostgresTenantStore(pg)
-        elif _is_dev_env():
-            import logging
-            logging.getLogger(__name__).warning(
-                "TenantStore file backend active (dev only). Set DATABASE_URL for production."
-            )
-            _STORE = TenantStore()
-        else:
-            raise RuntimeError(
-                "DATABASE_URL (PostgreSQL) is required outside dev. "
-                "File-backed tenants and Mongo-only production are not allowed. "
-                "Set DATABASE_URL or ENVIRONMENT=dev for local testing."
-            )
-    return _STORE
+    if _STORE is not None:
+        return _STORE
+    from .runtime_config import database_url, is_dev, require_production_data_plane
+    require_production_data_plane()
+    pg = database_url()
+    if pg:
+        from .pg_store import PostgresTenantStore
+        _STORE = PostgresTenantStore(pg)
+        return _STORE
+    if is_dev():
+        import logging
+        logging.getLogger(__name__).warning(
+            "DEV ONLY: file TenantStore. Set DATABASE_URL for production parity."
+        )
+        _STORE = TenantStore()
+        return _STORE
+    raise RuntimeError("DATABASE_URL is required (PostgreSQL).")

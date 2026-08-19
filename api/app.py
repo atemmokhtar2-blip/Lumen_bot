@@ -200,6 +200,9 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
+    from b2b_platform.runtime_config import require_production_data_plane, is_dev
+    if not is_dev():
+        require_production_data_plane()
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     app = web.Application(

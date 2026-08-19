@@ -388,30 +388,15 @@ def _is_dev_env() -> bool:
 
 
 def get_job_store(db_path: str | Path | None = None):
-    """Select durable job backend.
-
-    Production (ENVIRONMENT not dev/local/test): Redis is **mandatory**.
-    SQLite JobStore is refused outside explicit dev environments.
-    """
-    backend = (os.getenv("JOB_BACKEND") or "").strip().lower()
-    redis_url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
-
-    if _is_dev_env():
-        if backend == "redis" or (redis_url and backend != "sqlite"):
-            return RedisJobStore(redis_url)
+    """Redis job metadata store in production; SQLite only in explicit dev."""
+    from .runtime_config import redis_url, is_dev, require_production_data_plane
+    require_production_data_plane()
+    url = redis_url()
+    if url:
+        return RedisJobStore(url)
+    if is_dev():
         return JobStore(db_path)
-
-    # Production path — no SQLite
-    if not redis_url:
-        raise RuntimeError(
-            "Production job queue requires Redis. Set REDIS_URL or JOB_REDIS_URL. "
-            "SQLite is not allowed outside ENVIRONMENT=dev|local|test."
-        )
-    if backend == "sqlite":
-        raise RuntimeError(
-            "JOB_BACKEND=sqlite is refused outside dev. Unset JOB_BACKEND and set REDIS_URL."
-        )
-    return RedisJobStore(redis_url)
+    raise RuntimeError("REDIS_URL is required for the job store.")
 
 
 class JobRunner:
@@ -497,17 +482,16 @@ class JobRunner:
             except Exception:
                 pass
 
-        # Prefer RQ (real worker processes) when Redis is configured.
-        redis_url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
-        use_rq = redis_url and (os.getenv("JOB_BACKEND") or "rq").strip().lower() in {"", "rq", "redis"}
-        if use_rq:
+        from .runtime_config import redis_url as _redis_url, is_dev as _is_dev
+        rurl = _redis_url()
+        if rurl:
             try:
                 from rq import Queue
                 from redis import Redis
                 qname = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
                 q = Queue(
                     qname,
-                    connection=Redis.from_url(redis_url),
+                    connection=Redis.from_url(rurl),
                     default_timeout=int(os.getenv("RQ_JOB_TIMEOUT") or "600"),
                 )
                 q.enqueue(
@@ -519,18 +503,17 @@ class JobRunner:
                 )
                 return job
             except Exception as exc:
-                # Production must not silently fall back to in-process threads
-                env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-                if env not in {"dev", "development", "local", "test"}:
+                if not _is_dev():
                     raise RuntimeError(f"rq_enqueue_failed:{type(exc).__name__}:{exc}") from exc
-                logger.warning("RQ enqueue failed in dev (%s); using thread pool", exc)
+                logger.warning("RQ enqueue failed in dev (%s); thread pool fallback", exc)
 
-        # Dev / emergency: BRPOP list or thread pool
-        if hasattr(self.store, "enqueue_work"):
-            self.store.enqueue_work(job.job_id)
-            self._ensure_redis_workers()
-        else:
-            self._pool.submit(self._run, job.job_id)
+        if not _is_dev():
+            raise RuntimeError(
+                "Production jobs require REDIS_URL + RQ. "
+                "In-process ThreadPool and SQLite queues are disabled."
+            )
+        # DEV ONLY
+        self._pool.submit(self._run, job.job_id)
         return job
 
 

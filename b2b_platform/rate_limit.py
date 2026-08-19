@@ -246,30 +246,21 @@ class RateLimiter:
 
     @staticmethod
     def _select_backend() -> RateLimiterBackend:
-        url = (os.getenv("REDIS_URL") or "").strip()
+        from .runtime_config import redis_url, is_dev
+        url = redis_url()
         if url:
+            backend = RedisRateLimiter(url)  # fail hard if Redis down in prod
+            logger.info("rate_limit backend=redis")
+            return backend
+        if is_dev():
             try:
-                backend = RedisRateLimiter(url)
-                logger.info("rate_limit backend=redis url_host=%s", url.split("@")[-1][:64])
-                return backend
-            except Exception as exc:
-                logger.warning(
-                    "rate_limit redis unavailable (%s); falling back", exc
-                )
-        # Production prefers Redis; sqlite is dev/single-node only
-        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-        if env not in {"dev", "development", "local", "test"} and not url:
-            logger.warning(
-                "rate_limit: REDIS_URL unset outside dev — using memory limiter "
-                "(not shared across workers; set REDIS_URL for multi-instance)"
-            )
-            return MemoryRateLimiter()
-        try:
-            logger.info("rate_limit backend=sqlite")
-            return SqliteRateLimiter()
-        except Exception as exc:
-            logger.warning("rate_limit sqlite failed (%s); memory fallback", exc)
-            return MemoryRateLimiter()
+                logger.info("rate_limit backend=sqlite (dev)")
+                return SqliteRateLimiter()
+            except Exception:
+                return MemoryRateLimiter()
+        raise RuntimeError(
+            "REDIS_URL is required for rate limiting outside ENVIRONMENT=dev"
+        )
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
         return self._backend.allow(key, limit=limit, window_sec=window_sec)
