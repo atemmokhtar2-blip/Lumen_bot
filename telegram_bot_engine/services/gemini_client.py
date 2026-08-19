@@ -91,16 +91,17 @@ def enabled() -> bool:
 
 
 _MODEL_FALLBACKS = (
-    "gemini-flash-latest",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
 )
 
 
 def model_name() -> str:
     # Default to a current flash model; override with GEMINI_MODEL if needed.
-    return (os.getenv("GEMINI_MODEL") or "gemini-flash-latest").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 
 
 def _api_key() -> str:
@@ -246,66 +247,114 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call Gemini with model fallbacks — same path proven against live API keys.
+
+    Strategy:
+      1. Primary model from GEMINI_MODEL (default gemini-3.6-flash).
+      2. On 404/429/503 or parse failure → next model in _MODEL_FALLBACKS.
+      3. If structured JSON schema is rejected → retry once without responseSchema.
+    """
     key = _api_key()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
     _experiment_delay()
     primary = model_name()
-    candidates = [primary] + [m for m in _MODEL_FALLBACKS if m != primary]
+    candidates: list[str] = []
+    for name in [primary, *_MODEL_FALLBACKS]:
+        if name and name not in candidates:
+            candidates.append(name)
+
     last_error: Exception | None = None
-    payload = {
+    base_payload = {
         "contents": [{"parts": [{"text": _prompt(mode, text, context)}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "responseMimeType": "application/json",
-            "responseSchema": _RESPONSE_SCHEMA,
-        },
     }
+    schema_config = {
+        "temperature": 0.2,
+        "responseMimeType": "application/json",
+        "responseSchema": _RESPONSE_SCHEMA,
+    }
+    plain_config = {
+        "temperature": 0.2,
+        "responseMimeType": "application/json",
+    }
+
     for model in candidates:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent"
         )
-        try:
-            response = requests.post(
-                url,
-                params={"key": key},
-                json=payload,
-                timeout=_timeout(),
-                headers={"Content-Type": "application/json"},
-            )
+        for use_schema in (True, False):
+            payload = {
+                **base_payload,
+                "generationConfig": schema_config if use_schema else plain_config,
+            }
+            try:
+                response = requests.post(
+                    url,
+                    params={"key": key},
+                    json=payload,
+                    timeout=_timeout(),
+                    headers={"Content-Type": "application/json"},
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                logger.warning("Gemini network error model=%s: %s", model, exc)
+                break  # next model
+
             if response.status_code in {404, 429, 503}:
                 logger.warning(
-                    "Gemini model %s unavailable (HTTP %s); trying fallback",
+                    "Gemini model %s HTTP %s — fallback",
                     model,
                     response.status_code,
                 )
                 last_error = RuntimeError(
                     f"Gemini model {model} HTTP {response.status_code}"
                 )
-                continue
+                break  # next model
+
+            if response.status_code in {401, 403}:
+                body_preview = (response.text or "")[:400]
+                logger.error("Gemini auth/permission HTTP %s: %s", response.status_code, body_preview)
+                raise RuntimeError(
+                    f"Gemini API key rejected (HTTP {response.status_code}): {body_preview}"
+                )
+
             if response.status_code >= 400:
-                body_preview = (response.text or "")[:500]
-                logger.error(
-                    "Gemini API HTTP %s model=%s body=%s",
+                body_preview = (response.text or "")[:400]
+                logger.warning(
+                    "Gemini HTTP %s model=%s schema=%s body=%s",
                     response.status_code,
                     model,
+                    use_schema,
                     body_preview,
                 )
-                raise RuntimeError(
-                    f"Gemini API HTTP {response.status_code}: {body_preview}"
+                last_error = RuntimeError(
+                    f"Gemini HTTP {response.status_code}: {body_preview}"
                 )
-            result = _normalize(_extract_json(response.json()))
-            if model != primary:
-                logger.info("Gemini served via fallback model=%s", model)
+                # schema may be the problem — try without schema on same model
+                continue
+
+            try:
+                result = _normalize(_extract_json(response.json()))
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Gemini parse/normalize failed model=%s schema=%s: %s",
+                    model,
+                    use_schema,
+                    exc,
+                )
+                continue
+
+            if model != primary or not use_schema:
+                logger.info(
+                    "Gemini ok model=%s schema=%s",
+                    model,
+                    use_schema,
+                )
             return result
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            last_error = exc
-            logger.warning("Gemini model %s failed: %s", model, exc)
-            continue
+
     raise RuntimeError(f"Gemini generate failed for all models: {last_error}")
 
 
