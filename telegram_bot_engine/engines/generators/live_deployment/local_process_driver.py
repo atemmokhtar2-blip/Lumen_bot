@@ -81,6 +81,21 @@ def _find_entry_point(project_path: Path) -> Optional[Path]:
     return None
 
 
+
+def _local_process_allowed() -> bool:
+    """Local subprocess hosting is dev-only and opt-in."""
+    import os
+    flag = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return False
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+    # Even with the flag, refuse when multi-tenant unless explicitly overridden
+    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower()
+    if multi in {"1", "true", "yes", "on"} and env not in {"dev", "development", "local", "test"}:
+        return False
+    return True
+
+
 class LocalProcessDriver(DeploymentProvider):
     name = "local_process"
 
@@ -91,6 +106,16 @@ class LocalProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
+        if not _local_process_allowed():
+            return DeploymentStatus(
+                provider=self.name,
+                status=DEPLOY_FAILED,
+                message=(
+                    'LocalProcessDriver disabled. '
+                    'Production must use Docker '
+                    '(TBE_ALLOW_LOCAL_PROCESS only in ENVIRONMENT=dev).'
+                ),
+            )
         # Root gate: refuse to run untrusted code without explicit local-dev opt-in
         from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
         assert_local_process_allowed()

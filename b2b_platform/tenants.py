@@ -328,10 +328,17 @@ TenantStore.set_plan = set_plan  # type: ignore[attr-defined]
 _STORE = None
 
 
-def get_tenant_store():
-    """Return MongoDB user store when MONGODB_URI is set; else file-backed store.
+def _is_dev_env() -> bool:
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
 
-    User identity + plan_id live only in Mongo when configured.
+
+def get_tenant_store():
+    """Tenant identity store.
+
+    Production / unset ENVIRONMENT: **MongoDB is mandatory** (MONGODB_URI).
+    File-backed TenantStore is allowed only when ENVIRONMENT is dev|local|test
+    and MONGODB_URI is unset — never as a silent production default.
     """
     global _STORE
     if _STORE is None:
@@ -339,6 +346,16 @@ def get_tenant_store():
         if uri:
             from .mongo_users import MongoUserStore
             _STORE = MongoUserStore(uri)
-        else:
+        elif _is_dev_env():
+            import logging
+            logging.getLogger(__name__).warning(
+                "TenantStore file backend active (dev only). Set MONGODB_URI for production."
+            )
             _STORE = TenantStore()
+        else:
+            raise RuntimeError(
+                "MONGODB_URI is required outside dev. "
+                "File-backed tenant index.json is not allowed in production. "
+                "Set MONGODB_URI or ENVIRONMENT=dev for local testing."
+            )
     return _STORE

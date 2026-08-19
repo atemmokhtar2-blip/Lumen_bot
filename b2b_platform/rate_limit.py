@@ -188,6 +188,56 @@ class SqliteRateLimiter:
 
 # ── Public facade ────────────────────────────────────────────────────────────
 
+
+class MemoryRateLimiter:
+    """Process-local sliding window — always available emergency backend."""
+
+    def __init__(self) -> None:
+        self._hits: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
+        if limit <= 0:
+            return True
+        now = time.time()
+        cutoff = now - window_sec
+        with self._lock:
+            bucket = [ts for ts in self._hits.get(key, []) if ts >= cutoff]
+            if len(bucket) >= limit:
+                self._hits[key] = bucket
+                return False
+            bucket.append(now)
+            self._hits[key] = bucket
+            # opportunistic prune
+            if len(self._hits) > 20000:
+                stale = [k for k, v in self._hits.items() if not v or v[-1] < cutoff]
+                for k in stale[:5000]:
+                    self._hits.pop(k, None)
+            return True
+
+    def remaining(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
+        if limit <= 0:
+            return 10**9
+        now = time.time()
+        cutoff = now - window_sec
+        with self._lock:
+            bucket = [ts for ts in self._hits.get(key, []) if ts >= cutoff]
+            self._hits[key] = bucket
+            return max(0, limit - len(bucket))
+
+    def seconds_until_allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
+        if limit <= 0:
+            return 0
+        now = time.time()
+        cutoff = now - window_sec
+        with self._lock:
+            bucket = sorted(ts for ts in self._hits.get(key, []) if ts >= cutoff)
+            if len(bucket) < limit:
+                return 0
+            oldest = bucket[0]
+            return max(1, int(oldest + window_sec - now) + 1)
+
+
 class RateLimiter:
     """Facade: prefers Redis, falls back to SQLite without changing callers."""
 
@@ -204,10 +254,22 @@ class RateLimiter:
                 return backend
             except Exception as exc:
                 logger.warning(
-                    "rate_limit redis unavailable (%s); falling back to sqlite", exc
+                    "rate_limit redis unavailable (%s); falling back", exc
                 )
-        logger.info("rate_limit backend=sqlite")
-        return SqliteRateLimiter()
+        # Production prefers Redis; sqlite is dev/single-node only
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"} and not url:
+            logger.warning(
+                "rate_limit: REDIS_URL unset outside dev — using memory limiter "
+                "(not shared across workers; set REDIS_URL for multi-instance)"
+            )
+            return MemoryRateLimiter()
+        try:
+            logger.info("rate_limit backend=sqlite")
+            return SqliteRateLimiter()
+        except Exception as exc:
+            logger.warning("rate_limit sqlite failed (%s); memory fallback", exc)
+            return MemoryRateLimiter()
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
         return self._backend.allow(key, limit=limit, window_sec=window_sec)

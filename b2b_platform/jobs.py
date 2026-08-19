@@ -238,6 +238,161 @@ class JobStore:
             ).fetchone()
         return int(row[0]) if row else 0
 
+
+class RedisJobStore:
+    """Durable multi-worker job store on Redis (production backend).
+
+    Keys:
+      job:{id}   → JSON hash fields
+      jobs:active → set of non-terminal job ids
+      jobs:tenant:{tid} → list of recent job ids
+    """
+
+    def __init__(self, redis_url: str | None = None) -> None:
+        import redis
+        url = (redis_url or os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+        if not url:
+            raise ValueError("REDIS_URL required for RedisJobStore")
+        self._r = redis.Redis.from_url(url, decode_responses=True)
+        self._r.ping()
+        self._prefix = (os.getenv("JOB_REDIS_PREFIX") or "tbe:job:").strip() or "tbe:job:"
+
+    def _k(self, job_id: str) -> str:
+        return f"{self._prefix}{job_id}"
+
+    def create(self, job: Job) -> Job:
+        import json
+        key = self._k(job.job_id)
+        pipe = self._r.pipeline()
+        pipe.hset(
+            key,
+            mapping={
+                "job_id": job.job_id,
+                "tenant_id": job.tenant_id,
+                "kind": job.kind,
+                "status": job.status,
+                "created_at": str(job.created_at),
+                "started_at": str(job.started_at or 0),
+                "finished_at": str(job.finished_at or 0),
+                "progress": str(job.progress or 0),
+                "message": job.message or "",
+                "input_json": json.dumps(job.input or {}, ensure_ascii=False, default=str),
+                "result_json": json.dumps(job.result or {}, ensure_ascii=False, default=str),
+                "error": job.error or "",
+            },
+        )
+        pipe.sadd(f"{self._prefix}active", job.job_id)
+        pipe.lpush(f"{self._prefix}tenant:{job.tenant_id}", job.job_id)
+        pipe.ltrim(f"{self._prefix}tenant:{job.tenant_id}", 0, 99)
+        pipe.expire(key, int(os.getenv("JOB_REDIS_TTL_SEC") or str(7 * 86400)))
+        pipe.execute()
+        return job
+
+    def update(self, job_id: str, **fields: Any) -> None:
+        import json
+        key = self._k(job_id)
+        if not self._r.exists(key):
+            return
+        mapping: dict[str, str] = {}
+        for k, v in fields.items():
+            if k in {"input", "result"}:
+                mapping[f"{k}_json"] = json.dumps(v or {}, ensure_ascii=False, default=str)
+            elif k.endswith("_json"):
+                mapping[k] = json.dumps(v) if not isinstance(v, str) else v
+            else:
+                mapping[k] = str(v) if v is not None else ""
+        if mapping:
+            self._r.hset(key, mapping=mapping)
+        status = fields.get("status")
+        if status in TERMINAL:
+            self._r.srem(f"{self._prefix}active", job_id)
+        elif status in {STATUS_QUEUED, STATUS_RUNNING}:
+            self._r.sadd(f"{self._prefix}active", job_id)
+
+    def get(self, job_id: str) -> Job | None:
+        import json
+        data = self._r.hgetall(self._k(job_id))
+        if not data:
+            return None
+        try:
+            return Job(
+                job_id=data.get("job_id") or job_id,
+                tenant_id=data.get("tenant_id") or "",
+                kind=data.get("kind") or "",
+                status=data.get("status") or STATUS_QUEUED,
+                created_at=float(data.get("created_at") or 0),
+                started_at=float(data.get("started_at") or 0),
+                finished_at=float(data.get("finished_at") or 0),
+                progress=float(data.get("progress") or 0),
+                message=data.get("message") or "",
+                input=json.loads(data.get("input_json") or "{}"),
+                result=json.loads(data.get("result_json") or "{}"),
+                error=data.get("error") or "",
+            )
+        except Exception:
+            return None
+
+    def cleanup_old_jobs(self, days: int = 7) -> int:
+        # TTL on keys handles expiry; active set is pruned opportunistically
+        return 0
+
+    def list_for_tenant(self, tenant_id: str, *, limit: int = 20) -> list[Job]:
+        ids = self._r.lrange(f"{self._prefix}tenant:{tenant_id}", 0, max(0, limit - 1)) or []
+        out: list[Job] = []
+        for jid in ids:
+            job = self.get(jid)
+            if job:
+                out.append(job)
+        return out
+
+    def count_active(self, tenant_id: str | None = None) -> int:
+        if not tenant_id:
+            return int(self._r.scard(f"{self._prefix}active") or 0)
+        # approximate: scan tenant list for non-terminal
+        ids = self._r.lrange(f"{self._prefix}tenant:{tenant_id}", 0, 99) or []
+        n = 0
+        for jid in ids:
+            st = self._r.hget(self._k(jid), "status")
+            if st in {STATUS_QUEUED, STATUS_RUNNING}:
+                n += 1
+        return n
+
+
+def _is_dev_env() -> bool:
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
+
+
+def get_job_store(db_path: str | Path | None = None):
+    """Select durable job backend.
+
+    Production: Redis required (REDIS_URL or JOB_REDIS_URL) unless JOB_BACKEND=sqlite
+    is forced for emergency. Dev may use SQLite.
+    """
+    backend = (os.getenv("JOB_BACKEND") or "").strip().lower()
+    redis_url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+    if backend == "redis" or (not backend and redis_url and not _is_dev_env()):
+        if not redis_url:
+            raise RuntimeError(
+                "Redis job backend required: set REDIS_URL or JOB_REDIS_URL "
+                "(or JOB_BACKEND=sqlite only for emergency/dev)."
+            )
+        return RedisJobStore(redis_url)
+    if not _is_dev_env() and backend not in {"sqlite", "memory"} and not redis_url:
+        raise RuntimeError(
+            "Production job queue requires Redis. Set REDIS_URL (recommended) "
+            "or JOB_BACKEND=sqlite for single-node emergency only. "
+            "For local testing set ENVIRONMENT=dev."
+        )
+    if redis_url and backend != "sqlite":
+        try:
+            return RedisJobStore(redis_url)
+        except Exception:
+            if not _is_dev_env():
+                raise
+    return JobStore(db_path)
+
+
 class JobRunner:
     """Dedicated pool — never uses asyncio's default executor for heavy work.
 
@@ -248,8 +403,8 @@ class JobRunner:
       JOB_MAX_INPUT_BYTES      max serialized input_json size (default 65536)
     """
 
-    def __init__(self, store: JobStore | None = None) -> None:
-        self.store = store or JobStore()
+    def __init__(self, store=None) -> None:
+        self.store = store if store is not None else get_job_store()
         max_workers = int(os.getenv("JOB_MAX_WORKERS") or "2")
         self._pool = ThreadPoolExecutor(
             max_workers=max(1, max_workers),

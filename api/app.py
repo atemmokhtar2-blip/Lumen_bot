@@ -104,6 +104,32 @@ def _client_ip(request: web.Request) -> str:
     return peer[:64]
 
 
+
+@web.middleware
+async def body_size_guard_middleware(request: web.Request, handler):
+    """Reject clearly abusive size claims; rely on client_max_size for actual body.
+
+    Content-Length can be spoofed; aiohttp still enforces client_max_size when
+    reading the body. We only short-circuit obviously hostile declared sizes.
+    """
+    max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
+    cl = request.headers.get("Content-Length")
+    if cl is not None:
+        try:
+            n = int(cl)
+            if n < 0 or n > max_size:
+                return web.json_response(
+                    {"ok": False, "error": "payload_too_large"},
+                    status=413,
+                )
+        except ValueError:
+            return web.json_response(
+                {"ok": False, "error": "invalid_content_length"},
+                status=400,
+            )
+    return await handler(request)
+
+
 @web.middleware
 async def ip_rate_limit_middleware(request: web.Request, handler):
     """Global per-IP rate limit for public/auth endpoints (DoS / brute-force)."""
@@ -150,14 +176,26 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
                         headers={"Retry-After": str(retry)},
                     )
     except Exception:
-        logger.exception("ip_rate_limit_middleware failure")
-        # Fail CLOSED on non-health routes: a broken limiter must not become an
-        # open door under load. Health/ready stay reachable for orchestration.
-        if path not in ("/health", "/ready"):
-            return web.json_response(
-                {"ok": False, "error": "rate_limit_unavailable"},
-                status=503,
-            )
+        logger.exception("ip_rate_limit_middleware failure — emergency memory limiter")
+        # Do NOT 503 the whole API (that is itself a DoS vector). Fall back to a
+        # process-local memory limiter so abusive clients are still throttled while
+        # healthy traffic continues.
+        try:
+            from b2b_platform.rate_limit import MemoryRateLimiter
+            emergency = getattr(ip_rate_limit_middleware, "_emergency_limiter", None)
+            if emergency is None:
+                emergency = MemoryRateLimiter()
+                ip_rate_limit_middleware._emergency_limiter = emergency  # type: ignore[attr-defined]
+            ip = _client_ip(request)
+            limit = int(os.getenv("API_IP_RPM") or "60")
+            if limit > 0 and not emergency.allow(f"ip:{ip}", limit=limit, window_sec=60.0):
+                return web.json_response(
+                    {"ok": False, "error": "ip_rate_limited", "retry_after": 30},
+                    status=429,
+                    headers={"Retry-After": "30"},
+                )
+        except Exception:
+            logger.exception("emergency rate limiter failed; allowing request once")
     return await handler(request)
 
 
@@ -165,7 +203,7 @@ def create_app() -> web.Application:
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     app = web.Application(
-        middlewares=[error_middleware, ip_rate_limit_middleware, cors_middleware],
+        middlewares=[error_middleware, body_size_guard_middleware, ip_rate_limit_middleware, cors_middleware],
         client_max_size=max(4096, max_size),
     )
     app.router.add_get("/health", health.health)
