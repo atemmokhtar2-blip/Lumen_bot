@@ -80,20 +80,28 @@ def _truthy(value: str | None) -> bool:
 
 
 def enabled() -> bool:
-    raw = os.getenv("GEMINI_ENABLED")
-    if raw is not None:
+    """Gemini is on when a key exists, unless GEMINI_ENABLED explicitly disables it.
+
+    Empty GEMINI_ENABLED (common on Railway when the var exists but is blank)
+    must NOT disable a valid key — only 0/false/no/off does.
+    """
+    raw = (os.getenv("GEMINI_ENABLED") or "").strip()
+    if raw:
         return _truthy(raw)
-    return bool((os.getenv("GEMINI_API_KEY") or "").strip())
+    return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
 
 def model_name() -> str:
-    # Kept configurable so the requested legacy model can be changed without
-    # a code edit if Google retires or renames the endpoint.
-    return (os.getenv("GEMINI_MODEL") or "gemini-1.5-flash").strip()
+    # Default to a current flash model; override with GEMINI_MODEL if needed.
+    return (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
 
 
 def _api_key() -> str:
-    return (os.getenv("GEMINI_API_KEY") or "").strip()
+    # Accept either env name; strip quotes/newlines from panel paste mistakes.
+    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in {'"', "'"}:
+        key = key[1:-1].strip()
+    return key
 
 
 def _timeout() -> float:
@@ -169,7 +177,17 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
 
     translation = result.get("translation")
     if not isinstance(translation, dict):
-        raise ValueError("Gemini result has no translation object")
+        # Chat-only answers may omit translation; keep conversation alive
+        translation = {
+            "purpose": "",
+            "features_requested": [],
+            "flows": [],
+            "strict_spec": False,
+            "model": model_name(),
+            "confidence": 0.0,
+            "clarification_needed": False,
+            "clarification_questions": [],
+        }
 
     def strings(name: str) -> list[str]:
         value = translation.get(name) or []
@@ -226,8 +244,20 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
         params={"key": key},
         json=payload,
         timeout=_timeout(),
+        headers={"Content-Type": "application/json"},
     )
-    response.raise_for_status()
+    if response.status_code >= 400:
+        # Surface Google error body (invalid key, model not found, quota) without the key
+        body_preview = (response.text or "")[:500]
+        logger.error(
+            "Gemini API HTTP %s model=%s body=%s",
+            response.status_code,
+            model_name(),
+            body_preview,
+        )
+        raise RuntimeError(
+            f"Gemini API HTTP {response.status_code}: {body_preview}"
+        )
     return _normalize(_extract_json(response.json()))
 
 

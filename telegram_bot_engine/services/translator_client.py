@@ -50,10 +50,14 @@ def _base_url() -> str:
 
 
 def _gemini_enabled() -> bool:
-    raw = os.getenv("GEMINI_ENABLED")
-    if raw is not None:
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
-    return bool((os.getenv("GEMINI_API_KEY") or "").strip())
+    try:
+        from .gemini_client import enabled as gemini_enabled
+        return gemini_enabled()
+    except Exception:
+        raw = (os.getenv("GEMINI_ENABLED") or "").strip()
+        if raw:
+            return raw.lower() in {"1", "true", "yes", "on"}
+        return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
 
 def translate_request(
