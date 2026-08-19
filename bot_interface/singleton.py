@@ -340,6 +340,17 @@ def acquire_bot_singleton(
                         _LOCK_FH = None
                 except Exception:
                     pass
+                # Remove lock file on clean exit so restart never sees a ghost PID
+                try:
+                    lock_path.unlink(missing_ok=True)  # type: ignore[call-arg]
+                except TypeError:
+                    try:
+                        if lock_path.exists():
+                            lock_path.unlink()
+                    except OSError:
+                        pass
+                except OSError:
+                    pass
 
             atexit.register(_release)
             return lock_path

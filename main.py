@@ -212,6 +212,15 @@ def main() -> None:
             )
             api_proc.start()
             logger.info("B2B API process started on port %s pid=%s", PORT, api_proc.pid)
+            # Immediate fail-fast if child dies during boot (port bind / create_app)
+            import time as _boot_t
+            _boot_t.sleep(0.5)
+            if not api_proc.is_alive():
+                logger.error(
+                    "B2B API process died during startup (exitcode=%s) — aborting",
+                    api_proc.exitcode,
+                )
+                raise SystemExit(1)
 
         def _watch_api_worker() -> None:
             import time
