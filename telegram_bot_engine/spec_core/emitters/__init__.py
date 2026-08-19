@@ -1,12 +1,6 @@
-"""Coding Engine — thin facade over emitters / validators / scaffolding.
-
-Public API preserved for all existing imports:
-  generate_files, write_project, and private helpers used by tests/pipeline.
-"""
 from __future__ import annotations
 
-from .emitters import (
-    generate_files,
+from .project_emitters import (
     _emit_bootstrap_sh,
     _emit_flow_engine,
     _emit_market,
@@ -18,16 +12,11 @@ from .emitters import (
     _emit_quality_tests,
     _emit_env_example,
     _emit_db_slim,
+    generate_files,
 )
-from .validators import _repair_handler_imports, _ensure_referenced_service_stubs
-from .scaffolding import write_project, _feature_services
 
 __all__ = [
     "generate_files",
-    "write_project",
-    "_repair_handler_imports",
-    "_ensure_referenced_service_stubs",
-    "_feature_services",
     "_emit_bootstrap_sh",
     "_emit_flow_engine",
     "_emit_market",

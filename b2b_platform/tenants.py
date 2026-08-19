@@ -339,8 +339,13 @@ def _is_dev_env() -> bool:
     return env in {"dev", "development", "local", "test"}
 
 
-def get_tenant_store():
-    """PostgreSQL in production; file TenantStore only in ENVIRONMENT=dev without DATABASE_URL."""
+def get_tenant_store():  # -> TenantRepository
+    """Return a TenantRepository.
+
+    Production: PostgreSQL (PostgresTenantStore).
+    Dev without DATABASE_URL: file TenantStore only.
+    Callers must not depend on file locks or driver internals.
+    """
     global _STORE
     if _STORE is not None:
         return _STORE

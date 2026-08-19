@@ -64,7 +64,7 @@ def _database_url() -> str:
 
 
 class PostgresTenantStore:
-    """Relational tenant registry (PostgreSQL)."""
+    """PostgreSQL TenantRepository implementation (production)."""
 
     def __init__(self, dsn: str | None = None) -> None:
         try:
