@@ -238,11 +238,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         return
             await message.reply_text(str(chat_result["answer"]))
             return
+        # Diagnostics: never log the raw key.
+        try:
+            from telegram_bot_engine.services.gemini_client import status_snapshot
+            snap = status_snapshot()
+        except Exception:
+            snap = {
+                "enabled": False,
+                "key_present": bool(
+                    (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+                ),
+                "key_len": 0,
+                "model": os.getenv("GEMINI_MODEL") or "gemini-2.0-flash",
+                "gemini_enabled_env": os.getenv("GEMINI_ENABLED"),
+            }
         logger.warning(
-            "chat_request returned no answer; GEMINI_API_KEY_present=%s GEMINI_ENABLED=%s GEMINI_MODEL=%s",
-            bool((os.getenv("GEMINI_API_KEY") or "").strip()),
-            os.getenv("GEMINI_ENABLED"),
-            os.getenv("GEMINI_MODEL") or "gemini-1.5-flash",
+            "chat_request returned no answer; gemini_enabled=%s key_present=%s "
+            "key_len=%s model=%s GEMINI_ENABLED=%s",
+            snap.get("enabled"),
+            snap.get("key_present"),
+            snap.get("key_len"),
+            snap.get("model"),
+            snap.get("gemini_enabled_env"),
         )
 
         if _state_question:
@@ -250,8 +267,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
             )
             return
-        # Do not expose the legacy bot-description help when the model is down.
-        await message.reply_text("تعذر تشغيل طبقة المحادثة الآن. حاول مرة أخرى بعد قليل.")
+        if not snap.get("key_present"):
+            await message.reply_text('طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\nأضف GEMINI_API_KEY (أو GOOGLE_API_KEY) في Variables في Railway ثم أعد التشغيل.')
+            return
+        if snap.get("enabled") is False:
+            await message.reply_text(
+                "طبقة المحادثة معطّلة عبر GEMINI_ENABLED. احذف المتغير أو اضبطه على 1."
+            )
+            return
+        await message.reply_text(
+            "تعذر تشغيل طبقة المحادثة الآن (فشل استدعاء النموذج). حاول مرة أخرى بعد قليل."
+        )
         return
 
     if request.startswith("/"):

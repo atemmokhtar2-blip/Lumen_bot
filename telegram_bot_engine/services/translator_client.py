@@ -109,11 +109,21 @@ def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None
     """Ask Gemini or the legacy standalone layer using server-built context."""
     if _gemini_enabled():
         try:
-            from .gemini_client import chat
+            from .gemini_client import chat, status_snapshot
+            logger.info("Gemini chat path active %s", status_snapshot())
             return chat(message, context or {})
         except Exception as exc:
             logger.exception("Gemini chat unavailable; continuing generation path: %s", exc)
         return None
+    try:
+        from .gemini_client import status_snapshot
+        logger.warning("Gemini chat skipped %s", status_snapshot())
+    except Exception:
+        logger.warning(
+            "Gemini chat skipped; key_present=%s GEMINI_ENABLED=%s",
+            bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
+            os.getenv("GEMINI_ENABLED"),
+        )
     if not _enabled():
         return None
     base = _base_url()

@@ -104,6 +104,20 @@ def _api_key() -> str:
     return key
 
 
+
+def status_snapshot() -> dict[str, Any]:
+    """Safe diagnostics for logs (never includes the raw API key)."""
+    key = _api_key()
+    return {
+        "enabled": enabled(),
+        "key_present": bool(key),
+        "key_len": len(key),
+        "key_prefix": (key[:4] + "…") if len(key) >= 8 else ("set" if key else ""),
+        "model": model_name(),
+        "gemini_enabled_env": (os.getenv("GEMINI_ENABLED") if os.getenv("GEMINI_ENABLED") is not None else None),
+    }
+
+
 def _timeout() -> float:
     try:
         return max(10.0, float(os.getenv("GEMINI_TIMEOUT_SEC") or "45"))
