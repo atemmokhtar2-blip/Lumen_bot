@@ -140,6 +140,37 @@ def _extract_user_id(project_path: Path) -> str:
     return "anon"
 
 
+
+def _assert_docker_host_policy() -> None:
+    """Refuse insecure Docker API exposure patterns in multi-tenant production.
+
+    Operators must not point DOCKER_HOST at an open TCP daemon without TLS.
+    unix:///var/run/docker.sock is allowed only when TBE_ALLOW_DOCKER_SOCKET=1
+    is set explicitly (still requires host hardening / rootless docker).
+    """
+    import os
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
+        return
+    host = (os.getenv("DOCKER_HOST") or "").strip()
+    if host.startswith("tcp://") and "tls" not in host.lower():
+        # tcp without explicit TLS vars is dangerous
+        if not (os.getenv("DOCKER_TLS_VERIFY") or "").strip():
+            raise RuntimeError(
+                "DOCKER_HOST tcp:// without DOCKER_TLS_VERIFY is forbidden in production"
+            )
+    sock_ok = (os.getenv("TBE_ALLOW_DOCKER_SOCKET") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if (not host or host.startswith("unix://")) and not sock_ok:
+        # Default socket path is common; require explicit opt-in on multi-tenant hosts
+        multi = (os.getenv("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+        if multi:
+            # Soft warning path was too weak — require opt-in flag for multi-tenant
+            raise RuntimeError(
+                "Multi-tenant production requires TBE_ALLOW_DOCKER_SOCKET=1 "
+                "(acknowledge host docker.sock risk) or DOCKER_HOST with TLS"
+            )
+
+
 class DockerProcessDriver(DeploymentProvider):
     """Run generated bots inside isolated Docker containers (per user)."""
 

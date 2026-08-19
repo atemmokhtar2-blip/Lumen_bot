@@ -74,7 +74,15 @@ class DeployJob:
 
 
 class DeployQueue:
+    """SQLite deploy queue — **dev only**. Production must use PgDeployQueue."""
+
     def __init__(self, path: Path | None = None) -> None:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(
+                "SQLite DeployQueue is forbidden outside ENVIRONMENT=dev. "
+                "Set DATABASE_URL (postgresql://...) for PgDeployQueue."
+            )
         self.path = Path(path) if path else _db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
@@ -245,16 +253,28 @@ _Q: DeployQueue | None = None
 
 
 def get_deploy_queue():
-    """Prefer Postgres queue when DSN present (commercial scale)."""
+    """Production: Postgres only (fail-closed). Dev: SQLite allowed without DATABASE_URL."""
     global _Q
+    if _Q is not None:
+        return _Q
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+    is_dev = env in {"dev", "development", "local", "test"}
     try:
         from telegram_bot_engine.services.hosting.pg_deploy_queue import PgDeployQueue, available as pg_available
         if pg_available():
-            if _Q is None or not isinstance(_Q, PgDeployQueue):
-                _Q = PgDeployQueue()
+            _Q = PgDeployQueue()
             return _Q
     except Exception as exc:
-        logger.warning("postgres deploy queue unavailable: %s", exc)
-    if _Q is None:
+        if not is_dev:
+            raise RuntimeError(
+                f"Postgres deploy queue required in production: {type(exc).__name__}: {exc}"
+            ) from exc
+        logger.warning("postgres deploy queue unavailable in dev: %s", exc)
+    if is_dev:
+        logger.warning("DEV ONLY: SQLite deploy queue. Set DATABASE_URL for production.")
         _Q = DeployQueue()
-    return _Q
+        return _Q
+    raise RuntimeError(
+        "DATABASE_URL (postgresql://...) is required for deploy queue outside ENVIRONMENT=dev. "
+        "SQLite deploy_jobs.sqlite3 is not multi-node safe."
+    )

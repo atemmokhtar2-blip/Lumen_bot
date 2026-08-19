@@ -181,10 +181,18 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
                         headers={"Retry-After": str(retry)},
                     )
     except Exception:
-        logger.exception("ip_rate_limit_middleware failure — emergency memory limiter")
-        # Do NOT 503 the whole API (that is itself a DoS vector). Fall back to a
-        # process-local memory limiter so abusive clients are still throttled while
-        # healthy traffic continues.
+        logger.exception("ip_rate_limit_middleware failure")
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+        is_dev = env in {"dev", "development", "local", "test"}
+        if not is_dev:
+            # Production fail-closed for THIS request — never MemoryRateLimiter (multi-worker hole)
+            # and never allow the request through unthrottled.
+            return web.json_response(
+                {"ok": False, "error": "rate_limit_unavailable"},
+                status=503,
+                headers={"Retry-After": "5"},
+            )
+        # Dev only: process-local limiter
         try:
             from b2b_platform.rate_limit import MemoryRateLimiter
             emergency = getattr(ip_rate_limit_middleware, "_emergency_limiter", None)
@@ -200,7 +208,7 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
                     headers={"Retry-After": "30"},
                 )
         except Exception:
-            logger.exception("emergency rate limiter failed; allowing request once")
+            logger.exception("dev emergency rate limiter failed; allowing once")
     return await handler(request)
 
 
