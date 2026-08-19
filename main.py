@@ -174,11 +174,12 @@ def main() -> None:
         from telegram_bot_engine.services.gemini_client import status_snapshot
         _gs = status_snapshot()
         logger.info(
-            "Gemini status at boot: enabled=%s key_present=%s key_len=%s model=%s",
+            "Gemini status at boot: enabled=%s key_present=%s key_len=%s model=%s env_names=%s",
             _gs.get("enabled"),
             _gs.get("key_present"),
             _gs.get("key_len"),
             _gs.get("model"),
+            _gs.get("env_names_seen"),
         )
         if not _gs.get("key_present"):
             logger.warning(

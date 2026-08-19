@@ -1,9 +1,8 @@
 """Gemini-backed chat and translation client.
 
-The client is intentionally small and synchronous to match the existing
-translator_client contract. It uses the Gemini REST API through requests,
-keeps the API key in the environment, and validates the generated envelope
-before the bot can consume it.
+Uses the Gemini REST API via requests. Resolves the API key from several
+env names (and optional secret files) so Railway typos/spaces do not silently
+disable chat. Falls back across models on 404/429/503.
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -25,6 +25,23 @@ _ALLOWED_ACTIONS = {
     "host_status",
     "repo_understand",
 }
+
+_KEY_ENV_NAMES = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GENAI_API_KEY",
+    "GEMINI_KEY",
+    "GOOGLE_AI_API_KEY",
+)
+
+_MODEL_FALLBACKS = (
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+)
 
 _RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -42,22 +59,13 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "purpose": {"type": "string"},
-                "features_requested": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "flows": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
+                "features_requested": {"type": "array", "items": {"type": "string"}},
+                "flows": {"type": "array", "items": {"type": "string"}},
                 "strict_spec": {"type": "boolean"},
                 "model": {"type": "string"},
                 "confidence": {"type": "number"},
                 "clarification_needed": {"type": "boolean"},
-                "clarification_questions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
+                "clarification_questions": {"type": "array", "items": {"type": "string"}},
             },
             "required": [
                 "purpose",
@@ -79,53 +87,94 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def enabled() -> bool:
-    """On when a key exists, unless GEMINI_ENABLED is explicitly false.
-
-    Empty GEMINI_ENABLED must not disable a valid key.
-    """
-    raw = (os.getenv("GEMINI_ENABLED") or "").strip()
-    if raw:
-        return _truthy(raw)
-    return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-
-
-_MODEL_FALLBACKS = (
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-)
-
-
 def model_name() -> str:
-    # Default to a current flash model; override with GEMINI_MODEL if needed.
     return (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 
 
-def _api_key() -> str:
-    """Accept GEMINI_API_KEY or GOOGLE_API_KEY; strip paste artifacts."""
-    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "")
-    # strip BOM / zero-width / nbsp
-    key = key.replace("\ufeff", "").replace("\u200b", "").replace("\xa0", " ")
+def _normalize_secret(raw: str) -> str:
+    key = raw or ""
+    for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\xa0"):
+        key = key.replace(ch, "")
     key = key.strip()
-    if len(key) >= 2 and key[0] == key[-1] and key[0] in ("'", '"'):
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}:
         key = key[1:-1].strip()
     if any(c in key for c in (chr(10), chr(13))):
         key = next((ln.strip() for ln in key.splitlines() if ln.strip()), "")
+    low = key.lower()
+    if low in {"", "your_key", "changeme", "xxx", "null", "none", "undefined"}:
+        return ""
+    if key and set(key) <= {"*"}:
+        return ""
     return key
 
+
+def _read_key_file(path: str) -> str:
+    try:
+        p = Path(path)
+        if p.is_file():
+            return _normalize_secret(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as exc:
+        logger.warning("Gemini key file unreadable path=%s err=%s", path, type(exc).__name__)
+    return ""
+
+
+def _api_key() -> str:
+    """Resolve key from env (tolerant of name spaces/case) or secret file."""
+    for name in _KEY_ENV_NAMES:
+        val = _normalize_secret(os.getenv(name) or "")
+        if val:
+            return val
+    wanted = {n.upper() for n in _KEY_ENV_NAMES}
+    try:
+        for k, v in list(os.environ.items()):
+            if (k or "").strip().upper() in wanted:
+                val = _normalize_secret(v or "")
+                if val:
+                    logger.info("Gemini key resolved via env name %r", k)
+                    return val
+    except Exception:
+        logger.exception("Gemini env scan failed")
+    for path in (
+        (os.getenv("GEMINI_API_KEY_FILE") or "").strip(),
+        (os.getenv("GOOGLE_API_KEY_FILE") or "").strip(),
+        "/run/secrets/gemini_api_key",
+        "/run/secrets/GEMINI_API_KEY",
+    ):
+        if not path:
+            continue
+        val = _read_key_file(path)
+        if val:
+            logger.info("Gemini key resolved via file %s", path)
+            return val
+    return ""
+
+
+def enabled() -> bool:
+    raw = (os.getenv("GEMINI_ENABLED") or "").strip()
+    if raw:
+        return _truthy(raw)
+    return bool(_api_key())
+
+
 def status_snapshot() -> dict[str, Any]:
-    """Safe diagnostics for logs (never includes the raw API key)."""
+    """Safe diagnostics (never logs the raw key)."""
     key = _api_key()
+    present_names: list[str] = []
+    try:
+        for k in os.environ:
+            ku = (k or "").strip().upper()
+            if "GEMINI" in ku or ku in {n.upper() for n in _KEY_ENV_NAMES}:
+                present_names.append(k)
+    except Exception:
+        pass
     return {
         "enabled": enabled(),
         "key_present": bool(key),
         "key_len": len(key),
-        "key_prefix": (key[:4] + "…") if len(key) >= 8 else ("set" if key else ""),
+        "key_prefix": (key[:4] + "...") if len(key) >= 8 else ("set" if key else ""),
         "model": model_name(),
-        "gemini_enabled_env": (os.getenv("GEMINI_ENABLED") if os.getenv("GEMINI_ENABLED") is not None else None),
+        "gemini_enabled_env": os.getenv("GEMINI_ENABLED"),
+        "env_names_seen": present_names[:20],
     }
 
 
@@ -137,15 +186,15 @@ def _timeout() -> float:
 
 
 def _experiment_delay() -> None:
-    """Apply the requested two-second pause only during experiments."""
     if _truthy(os.getenv("GEMINI_EXPERIMENT_MODE")):
-        # Deliberate fixed delay required by the experiment instructions.
         time.sleep(2)
 
 
 def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
     facts = json.dumps(context or {}, ensure_ascii=False, sort_keys=True)
-    operation = "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
+    operation = (
+        "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
+    )
     return f"""
 أنت Maestro، مساعد هندسي للمشاريع والبوتات.
 المطور المعروف الوحيد هو حاتم. لا تدّعِ وجود فريق أو شركة أو مطور آخر.
@@ -177,7 +226,13 @@ def _extract_json(body: dict[str, Any]) -> dict[str, Any]:
     raw = "".join(str(part.get("text") or "") for part in parts)
     if not raw.strip():
         raise ValueError("Gemini response has empty text")
-    parsed = json.loads(raw)
+    # Tolerate markdown fences
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+    parsed = json.loads(cleaned)
     if not isinstance(parsed, dict):
         raise ValueError("Gemini response is not a JSON object")
     return parsed
@@ -186,7 +241,11 @@ def _extract_json(body: dict[str, Any]) -> dict[str, Any]:
 def _normalize(result: dict[str, Any]) -> dict[str, Any]:
     answer = result.get("answer")
     if not isinstance(answer, str) or not answer.strip():
-        raise ValueError("Gemini result has no answer")
+        # plain text fallback
+        if isinstance(result.get("text"), str) and result["text"].strip():
+            answer = result["text"]
+        else:
+            raise ValueError("Gemini result has no answer")
 
     action = result.get("action")
     if not isinstance(action, dict):
@@ -202,7 +261,6 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
 
     translation = result.get("translation")
     if not isinstance(translation, dict):
-        # Chat-only answers may omit translation; keep conversation alive
         translation = {
             "purpose": "",
             "features_requested": [],
@@ -247,13 +305,7 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Call Gemini with model fallbacks — same path proven against live API keys.
-
-    Strategy:
-      1. Primary model from GEMINI_MODEL (default gemini-3.6-flash).
-      2. On 404/429/503 or parse failure → next model in _MODEL_FALLBACKS.
-      3. If structured JSON schema is rejected → retry once without responseSchema.
-    """
+    """Call Gemini with model + schema fallbacks (production path)."""
     key = _api_key()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is not configured")
@@ -300,7 +352,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
             except requests.RequestException as exc:
                 last_error = exc
                 logger.warning("Gemini network error model=%s: %s", model, exc)
-                break  # next model
+                break
 
             if response.status_code in {404, 429, 503}:
                 logger.warning(
@@ -311,11 +363,13 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                 last_error = RuntimeError(
                     f"Gemini model {model} HTTP {response.status_code}"
                 )
-                break  # next model
+                break
 
             if response.status_code in {401, 403}:
                 body_preview = (response.text or "")[:400]
-                logger.error("Gemini auth/permission HTTP %s: %s", response.status_code, body_preview)
+                logger.error(
+                    "Gemini auth HTTP %s: %s", response.status_code, body_preview
+                )
                 raise RuntimeError(
                     f"Gemini API key rejected (HTTP {response.status_code}): {body_preview}"
                 )
@@ -332,7 +386,6 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                 last_error = RuntimeError(
                     f"Gemini HTTP {response.status_code}: {body_preview}"
                 )
-                # schema may be the problem — try without schema on same model
                 continue
 
             try:
@@ -340,7 +393,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "Gemini parse/normalize failed model=%s schema=%s: %s",
+                    "Gemini parse failed model=%s schema=%s: %s",
                     model,
                     use_schema,
                     exc,
@@ -348,15 +401,10 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                 continue
 
             if model != primary or not use_schema:
-                logger.info(
-                    "Gemini ok model=%s schema=%s",
-                    model,
-                    use_schema,
-                )
+                logger.info("Gemini ok model=%s schema=%s", model, use_schema)
             return result
 
     raise RuntimeError(f"Gemini generate failed for all models: {last_error}")
-
 
 
 def translate(text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -254,12 +254,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             }
         logger.warning(
             "chat_request returned no answer; gemini_enabled=%s key_present=%s "
-            "key_len=%s model=%s GEMINI_ENABLED=%s",
+            "key_len=%s model=%s GEMINI_ENABLED=%s env_names_seen=%s",
             snap.get("enabled"),
             snap.get("key_present"),
             snap.get("key_len"),
             snap.get("model"),
             snap.get("gemini_enabled_env"),
+            snap.get("env_names_seen"),
         )
 
         if _state_question:
@@ -267,6 +268,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
             )
             return
+        # Force re-resolve key at message time (not only boot)
+        try:
+            from telegram_bot_engine.services.gemini_client import _api_key, status_snapshot as _ss
+            snap = _ss()
+            if not snap.get("key_present") and _api_key():
+                snap["key_present"] = True
+                snap["key_len"] = len(_api_key())
+        except Exception:
+            logger.exception("gemini re-resolve failed")
         if not snap.get("key_present"):
             await message.reply_text('طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\nأضف GEMINI_API_KEY (أو GOOGLE_API_KEY) في Variables في Railway ثم أعد التشغيل.')
             return
