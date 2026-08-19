@@ -26,22 +26,6 @@ def _durable_data_dir() -> Path:
         p = Path.home() / ".capability_maestro"
         p.mkdir(parents=True, exist_ok=True)
         return p
-            except OSError:
-                continue
-    for candidate in (
-        Path("/var/lib/capability_maestro"),
-        Path.home() / ".capability_maestro",
-        Path(__file__).resolve().parents[1] / ".runtime",
-    ):
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except OSError:
-            continue
-    # Last resort still under home, not global /tmp
-    p = Path.home() / ".capability_maestro"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
 
 
 
