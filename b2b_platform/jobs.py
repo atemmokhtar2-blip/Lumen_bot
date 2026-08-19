@@ -366,31 +366,28 @@ def _is_dev_env() -> bool:
 def get_job_store(db_path: str | Path | None = None):
     """Select durable job backend.
 
-    Production: Redis required (REDIS_URL or JOB_REDIS_URL) unless JOB_BACKEND=sqlite
-    is forced for emergency. Dev may use SQLite.
+    Production (ENVIRONMENT not dev/local/test): Redis is **mandatory**.
+    SQLite JobStore is refused outside explicit dev environments.
     """
     backend = (os.getenv("JOB_BACKEND") or "").strip().lower()
     redis_url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
-    if backend == "redis" or (not backend and redis_url and not _is_dev_env()):
-        if not redis_url:
-            raise RuntimeError(
-                "Redis job backend required: set REDIS_URL or JOB_REDIS_URL "
-                "(or JOB_BACKEND=sqlite only for emergency/dev)."
-            )
-        return RedisJobStore(redis_url)
-    if not _is_dev_env() and backend not in {"sqlite", "memory"} and not redis_url:
-        raise RuntimeError(
-            "Production job queue requires Redis. Set REDIS_URL (recommended) "
-            "or JOB_BACKEND=sqlite for single-node emergency only. "
-            "For local testing set ENVIRONMENT=dev."
-        )
-    if redis_url and backend != "sqlite":
-        try:
+
+    if _is_dev_env():
+        if backend == "redis" or (redis_url and backend != "sqlite"):
             return RedisJobStore(redis_url)
-        except Exception:
-            if not _is_dev_env():
-                raise
-    return JobStore(db_path)
+        return JobStore(db_path)
+
+    # Production path — no SQLite
+    if not redis_url:
+        raise RuntimeError(
+            "Production job queue requires Redis. Set REDIS_URL or JOB_REDIS_URL. "
+            "SQLite is not allowed outside ENVIRONMENT=dev|local|test."
+        )
+    if backend == "sqlite":
+        raise RuntimeError(
+            "JOB_BACKEND=sqlite is refused outside dev. Unset JOB_BACKEND and set REDIS_URL."
+        )
+    return RedisJobStore(redis_url)
 
 
 class JobRunner:

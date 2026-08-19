@@ -37,13 +37,21 @@ async def generate(request: web.Request) -> web.Response:
             headers={"Retry-After": str(retry)},
         )
 
-    # Reject oversized bodies early (Content-Length when present)
+    # Body size: do not trust Content-Length alone (chunked transfer bypass).
+    # Read raw bytes with a hard cap, then parse JSON.
     cl = request.headers.get("Content-Length")
-    if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
-        raise web.HTTPRequestEntityTooLarge(
-            text='{"error":"payload_too_large"}',
-            content_type="application/json",
-        )
+    if cl is not None:
+        try:
+            if int(cl) > _MAX_BODY_BYTES:
+                raise web.HTTPRequestEntityTooLarge(
+                    text='{"error":"payload_too_large"}',
+                    content_type="application/json",
+                )
+        except ValueError:
+            raise web.HTTPBadRequest(
+                text='{"error":"invalid_content_length"}',
+                content_type="application/json",
+            )
 
     ok, reason = get_billing().enforce_generation(tenant.tenant_id)
     if not ok:
@@ -53,7 +61,20 @@ async def generate(request: web.Request) -> web.Response:
         )
 
     try:
-        body = await request.json()
+        raw = await request.content.read(_MAX_BODY_BYTES + 1)
+    except Exception:
+        raise web.HTTPBadRequest(
+            text='{"error":"body_read_failed"}',
+            content_type="application/json",
+        )
+    if len(raw) > _MAX_BODY_BYTES:
+        raise web.HTTPRequestEntityTooLarge(
+            text='{"error":"payload_too_large"}',
+            content_type="application/json",
+        )
+    try:
+        import json as _json
+        body = _json.loads(raw.decode("utf-8") or "{}")
     except Exception:
         raise web.HTTPBadRequest(
             text='{"error":"invalid_json"}',

@@ -126,11 +126,152 @@ class MeteringService:
         return get_rate_limiter().allow(f"api:{tenant_id}", limit=limit, window_sec=60.0)
 
 
-_METER: MeteringService | None = None
 
 
-def get_metering() -> MeteringService:
+class MongoMeteringService:
+    """Metering in MongoDB — safe for multi-instance production."""
+
+    def __init__(self, uri: str | None = None, *, db_name: str | None = None) -> None:
+        from pymongo import MongoClient, ASCENDING
+        self.uri = (uri or os.getenv("MONGODB_URI") or "").strip()
+        if not self.uri:
+            raise ValueError("MONGODB_URI required for MongoMeteringService")
+        self.db_name = (db_name or os.getenv("MONGODB_DB") or "ai_agent_7h").strip()
+        timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "8000")
+        self._client = MongoClient(
+            self.uri,
+            serverSelectionTimeoutMS=timeout,
+            connectTimeoutMS=timeout,
+            retryWrites=True,
+        )
+        self.col = self._client[self.db_name]["metering"]
+        try:
+            self.col.create_index(
+                [("tenant_id", ASCENDING), ("period", ASCENDING)],
+                unique=True,
+            )
+        except Exception:
+            pass
+
+    def _period(self) -> str:
+        return time.strftime("%Y-%m", time.gmtime())
+
+    def snapshot(self, tenant_id: str) -> dict[str, Any]:
+        period = self._period()
+        doc = self.col.find_one({"tenant_id": str(tenant_id), "period": period}) or {}
+        b = UsageBucket(tenant_id=str(tenant_id), period=period)
+        for k in UsageBucket.__dataclass_fields__:
+            if k in doc and k not in {"tenant_id", "period"}:
+                setattr(b, k, doc[k])
+        return dict(b.__dict__)
+
+    def record(
+        self,
+        tenant_id: str,
+        *,
+        generations: int = 0,
+        api_calls: int = 0,
+        host_starts: int = 0,
+        host_minutes: float = 0.0,
+        bytes_out: int = 0,
+        messages: int = 0,
+        characters: int = 0,
+        event: str = "",
+    ) -> UsageBucket:
+        period = self._period()
+        inc = {
+            "generations": int(generations),
+            "api_calls": int(api_calls),
+            "host_starts": int(host_starts),
+            "host_minutes": float(host_minutes),
+            "bytes_out": int(bytes_out),
+            "messages": int(messages),
+            "characters": int(characters),
+        }
+        if event:
+            inc[f"extra.{event}"] = 1
+        self.col.update_one(
+            {"tenant_id": str(tenant_id), "period": period},
+            {
+                "$setOnInsert": {"tenant_id": str(tenant_id), "period": period},
+                "$inc": {k: v for k, v in inc.items() if v},
+            },
+            upsert=True,
+        )
+        snap = self.snapshot(tenant_id)
+        return UsageBucket(**{k: snap[k] for k in UsageBucket.__dataclass_fields__ if k in snap})
+
+
+
+    def try_reserve_generation(self, tenant_id: str, limit: int) -> tuple[bool, str, int]:
+        """Atomic quota check + increment via find_one_and_update."""
+        period = self._period()
+        filt = {"tenant_id": str(tenant_id), "period": period}
+        if limit > 0:
+            filt_ok = {**filt, "generations": {"$lt": int(limit)}}
+            doc = self.col.find_one_and_update(
+                filt_ok,
+                {
+                    "$setOnInsert": {"tenant_id": str(tenant_id), "period": period},
+                    "$inc": {"generations": 1, "extra.generate": 1},
+                },
+                upsert=True,
+                return_document=__import__('pymongo').ReturnDocument.AFTER,
+            )
+            if doc is None:
+                # either exceeded or race — re-read
+                cur = self.col.find_one(filt) or {}
+                return False, f"generation_quota_exceeded:{limit}", int(cur.get("generations") or 0)
+            return True, "ok", int(doc.get("generations") or 0)
+        doc = self.col.find_one_and_update(
+            filt,
+            {
+                "$setOnInsert": {"tenant_id": str(tenant_id), "period": period},
+                "$inc": {"generations": 1, "extra.generate": 1},
+            },
+            upsert=True,
+            return_document=__import__('pymongo').ReturnDocument.AFTER,
+        )
+        return True, "ok", int((doc or {}).get("generations") or 0)
+
+    def try_reserve_host_start(self, tenant_id: str, limit: int) -> tuple[bool, str, int]:
+        period = self._period()
+        doc = self.col.find_one_and_update(
+            {"tenant_id": str(tenant_id), "period": period},
+            {
+                "$setOnInsert": {"tenant_id": str(tenant_id), "period": period},
+                "$inc": {"host_starts": 1, "extra.host_start": 1},
+            },
+            upsert=True,
+            return_document=__import__('pymongo').ReturnDocument.AFTER,
+        )
+        return True, "ok", int((doc or {}).get("host_starts") or 0)
+
+    def check_rpm(self, tenant_id: str, limit: int) -> bool:
+        return get_rate_limiter().allow(f"api:{tenant_id}", limit=limit, window_sec=60.0)
+
+
+def _is_dev_env() -> bool:
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
+
+
+_METER = None
+
+
+def get_metering():
+    """Production: Mongo metering. Dev-only: file JSON without MONGODB_URI."""
     global _METER
-    if _METER is None:
+    if _METER is not None:
+        return _METER
+    uri = (os.getenv("MONGODB_URI") or "").strip()
+    if uri:
+        _METER = MongoMeteringService(uri)
+        return _METER
+    if _is_dev_env():
         _METER = MeteringService()
-    return _METER
+        return _METER
+    raise RuntimeError(
+        "MONGODB_URI is required for metering outside dev "
+        "(file-backed metering is not multi-instance safe)."
+    )
