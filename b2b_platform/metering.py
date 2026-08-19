@@ -1,6 +1,17 @@
 """Usage metering — generations, API calls, host-minutes (process-safe)."""
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import json
 import os
 import time
@@ -36,7 +47,7 @@ class MeteringService:
                 "File-backed MeteringService cannot be constructed outside ENVIRONMENT=dev|local|test. "
                 "Use MONGODB_URI / MongoMeteringService."
             )
-        base = Path(root or os.getenv("OUTPUT_DIR", "/tmp/generated"))
+        base = Path(root or os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         self.root = base / "platform" / "metering"
         self.root.mkdir(parents=True, exist_ok=True)
 

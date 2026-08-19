@@ -50,13 +50,27 @@ from bot_interface.commands import handle_non_text, unknown_cmd
 
 
 def _start_b2b_api_process(port: int) -> None:
-    """Run B2B API in a dedicated process (aiohttp needs main-thread signals otherwise)."""
-    from aiohttp import web
-    from api.app import create_app
+    """Run B2B API in a dedicated process (aiohttp needs main-thread signals otherwise).
 
-    app = create_app()
-    print(f"[B2B API] listening on 0.0.0.0:{port}", flush=True)
-    web.run_app(app, host="0.0.0.0", port=port, print=lambda *a, **k: None)
+    Any crash or unexpected exit ends the child with non-zero status so the
+    parent watchdog fail-fasts the whole platform.
+    """
+    import sys
+    try:
+        from aiohttp import web
+        from api.app import create_app
+
+        app = create_app()
+        print(f"[B2B API] listening on 0.0.0.0:{port}", flush=True)
+        web.run_app(app, host="0.0.0.0", port=port, print=lambda *a, **k: None)
+        print("[B2B API] run_app returned unexpectedly", flush=True)
+        sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 def _start_b2b_api_thread(port: int, death_event=None) -> None:

@@ -1,6 +1,17 @@
 """SQLite-backed user session persistence (survives restarts, multi-worker safe)."""
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import json
 import os
 import sqlite3
@@ -12,7 +23,7 @@ from typing import Any
 
 class SessionStore:
     def __init__(self, path: str | Path | None = None) -> None:
-        root = Path(os.getenv("OUTPUT_DIR") or "/tmp/generated")
+        root = Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         root.mkdir(parents=True, exist_ok=True)
         self.path = Path(path or root / "sessions.sqlite3")
         self._lock = threading.Lock()

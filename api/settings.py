@@ -6,6 +6,17 @@ declared here. Callers should prefer `get_settings()` over scattered
 """
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 from functools import lru_cache
 from typing import List
 
@@ -46,7 +57,7 @@ class APISettings(BaseSettings):
     tbe_require_docker: bool = Field(default=True, alias="TBE_REQUIRE_DOCKER")
     tbe_allow_local_process: bool = Field(default=False, alias="TBE_ALLOW_LOCAL_PROCESS")
     tbe_docker_network: str = Field(default="", alias="TBE_DOCKER_NETWORK")
-    output_dir: str = Field(default="/tmp/generated", alias="OUTPUT_DIR")
+    output_dir: str = Field(default=_cm_default_output_dir(), alias="OUTPUT_DIR")
 
     # ── Trusted proxies (for real client IP) ──────────────────────────
     trusted_proxy_ips: str = Field(default="", alias="TRUSTED_PROXY_IPS")

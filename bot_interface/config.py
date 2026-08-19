@@ -61,7 +61,7 @@ else:
         "Set ALLOWED_USER_IDS or remove the lock for public access."
     )
 
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR") or __import__("b2b_platform.paths", fromlist=["default_output_dir"]).default_output_dir())
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PORT = int(os.getenv("PORT", "8080"))
 

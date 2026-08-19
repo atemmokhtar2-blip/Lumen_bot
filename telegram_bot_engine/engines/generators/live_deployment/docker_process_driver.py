@@ -19,6 +19,17 @@ LocalProcessDriver is never used as a silent fallback from this module.
 
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import logging
 import os
 import re
@@ -57,7 +68,7 @@ def _assert_sandbox_mount_path(project_path: Path) -> Path:
     path = project_path.resolve()
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
-    out = Path(os.environ.get("OUTPUT_DIR") or "/tmp/generated").resolve()
+    out = Path(os.environ.get("OUTPUT_DIR") or _cm_default_output_dir()).resolve()
     art = Path(os.environ.get("TBE_ARTIFACT_ROOT") or (out / "artifacts")).resolve()
     # Image-based deploy no longer bind-mounts source; still confine build context roots.
     under_out = False

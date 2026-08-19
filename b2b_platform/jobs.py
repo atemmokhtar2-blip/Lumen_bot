@@ -10,6 +10,17 @@ Optional: set JOB_BACKEND=redis later; this module stays the interface.
 """
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import json
 import logging
 import os
@@ -77,7 +88,7 @@ class JobStore:
                 "SQLite JobStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
                 "Set REDIS_URL for RedisJobStore."
             )
-        base = Path(os.getenv("OUTPUT_DIR", "/tmp/generated"))
+        base = Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         self.path = Path(db_path or (base / "platform" / "jobs.sqlite3"))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
@@ -666,7 +677,7 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
             preferred = filter_preferred_keys(preferred, tenant_id=job.tenant_id)
         except Exception:
             pass
-        base = os.getenv("OUTPUT_DIR", "/tmp/generated")
+        base = os.getenv("OUTPUT_DIR") or _cm_default_output_dir()
         from api.security import stable_tenant_uid
 
         uid = stable_tenant_uid(job.tenant_id)

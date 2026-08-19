@@ -1,6 +1,17 @@
 """Multi-tenant + white-label identity store."""
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import hashlib
 import json
 import os
@@ -109,7 +120,7 @@ class TenantStore:
                 "File-backed TenantStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
                 "Use DATABASE_URL / PostgresTenantStore."
             )
-        base = Path(root or os.getenv("OUTPUT_DIR", "/tmp/generated"))
+        base = Path(root or os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         self.root = base / "platform" / "tenants"
         self.root.mkdir(parents=True, exist_ok=True)
         self.index_path = self.root / "index.json"

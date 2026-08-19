@@ -1,6 +1,17 @@
 """API security helpers — path containment, safe errors."""
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import hashlib
 import os
 from pathlib import Path
@@ -9,7 +20,7 @@ from telegram_bot_engine.services.user_sandbox import get_user_sandbox, shard_fo
 
 
 def output_root() -> Path:
-    return Path(os.getenv("OUTPUT_DIR", "/tmp/generated")).resolve()
+    return Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir()).resolve()
 
 
 def stable_tenant_uid(tenant_id: str) -> int:

@@ -8,6 +8,17 @@ Job lifecycle: queued → claimed → building → running | failed | cancelled
 """
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import json
 import logging
 import os
@@ -45,7 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_user ON deploy_jobs(user_id);
 
 
 def _db_path() -> Path:
-    base = Path(os.environ.get("OUTPUT_DIR") or "/tmp/generated") / "hosting"
+    base = Path(os.environ.get("OUTPUT_DIR") or _cm_default_output_dir()) / "hosting"
     base.mkdir(parents=True, exist_ok=True)
     return base / "deploy_jobs.sqlite3"
 

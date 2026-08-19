@@ -7,6 +7,17 @@ Env:
 """
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import ast
 import json
 import os
@@ -17,7 +28,7 @@ from typing import Any
 
 
 def _data_dir() -> Path:
-    base = os.getenv("OUTPUT_DIR") or "/tmp/generated"
+    base = os.getenv("OUTPUT_DIR") or _cm_default_output_dir()
     p = Path(base) / "platform" / "health"
     p.mkdir(parents=True, exist_ok=True)
     return p

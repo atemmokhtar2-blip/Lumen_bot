@@ -19,17 +19,13 @@ from typing import Protocol
 logger = logging.getLogger("ai_agent_7h.rate_limit")
 
 def _durable_data_dir() -> Path:
-    """Never default durable rate-limit state to /tmp (systemd tmpfiles.d).
-
-    Order: STATE_DIR → DATA_DIR → OUTPUT_DIR → /var/lib/capability_maestro → ~/.capability_maestro
-    """
-    for key in ("STATE_DIR", "DATA_DIR", "OUTPUT_DIR"):
-        raw = (os.getenv(key) or "").strip()
-        if raw:
-            p = Path(raw)
-            try:
-                p.mkdir(parents=True, exist_ok=True)
-                return p
+    try:
+        from .paths import durable_data_dir
+        return durable_data_dir()
+    except Exception:
+        p = Path.home() / ".capability_maestro"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
             except OSError:
                 continue
     for candidate in (

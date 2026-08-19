@@ -1,6 +1,17 @@
 """Load capability packs from disk and register into the live registry."""
 from __future__ import annotations
 
+def _cm_default_output_dir() -> str:
+    try:
+        from b2b_platform.paths import default_output_dir
+        return default_output_dir()
+    except Exception:
+        from pathlib import Path as _P
+        p = _P.home() / '.capability_maestro'
+        p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+
 import json
 import logging
 import os
@@ -24,7 +35,7 @@ def _default_pack_dirs() -> list[Path]:
     here = Path(__file__).resolve()
     roots.append(here.parents[3] / "spec_core" / "capability_packs")
     # Runtime overlay under OUTPUT_DIR
-    out = os.getenv("OUTPUT_DIR") or "/tmp/generated"
+    out = os.getenv("OUTPUT_DIR") or _cm_default_output_dir()
     roots.append(Path(out) / "platform" / "capability_packs")
     # Explicit override
     extra = os.getenv("CAPABILITY_PACK_DIRS") or ""
