@@ -168,7 +168,25 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
 
     Passes user_id so L4 memory + L6 personalization apply per user.
     preferred_keys: optional capability keys from Phase-2 detection.
+
+    Experimental: when GROQ_CODEGEN_ENABLED=1, bypass spec_core and let Groq
+    emit the full project (engine remains installed for instant rollback).
     """
+    try:
+        from telegram_bot_engine.services.groq_codegen import (
+            groq_codegen_enabled,
+            generate_bot_via_groq,
+        )
+        if groq_codegen_enabled():
+            logger.info("GROQ_CODEGEN_ENABLED=1 — using experimental Groq direct codegen")
+            return generate_bot_via_groq(
+                request,
+                work_dir,
+                user_id=int(user_id or 0),
+            )
+    except Exception:
+        logger.exception("Groq codegen path failed to start; falling back to spec_core")
+
     from telegram_bot_engine import generate_bot
 
     return generate_bot(
