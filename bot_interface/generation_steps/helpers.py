@@ -174,8 +174,16 @@ for name, obj in sorted(vars(handlers_mod).items()):
 if not handler_fns:
     fail("no_async_handlers")
 
+# Payment lifecycle handlers need real Telegram payment objects — skip in smoke
+# (they are gated with null checks; invoking them without payload is not a quality signal).
+_SKIP_SMOKE = {
+    "pre_checkout_handler",
+    "successful_payment_handler",
+}
 priority, rest = [], []
 for name, fn in handler_fns:
+    if name in _SKIP_SMOKE:
+        continue
     low = name.lower()
     if "start" in low or "help" in low:
         priority.append((name, fn))
@@ -189,6 +197,11 @@ class Msg:
         self.text = text
         self.message_id = 1
         self.replies = []
+        # Payment handlers null-check these; missing attrs used to AttributeError
+        self.successful_payment = None
+        self.photo = None
+        self.document = None
+        self.caption = None
     async def reply_text(self, *a, **k):
         self.replies.append((a, k))
         return self
@@ -205,7 +218,9 @@ class Update:
         self.effective_user = SimpleNamespace(id=1, username="smoke", first_name="Smoke")
         self.effective_chat = SimpleNamespace(id=1, type="private")
         self.message = Msg(text)
+        self.effective_message = self.message
         self.callback_query = None
+        self.pre_checkout_query = None
 
 
 class Context:
@@ -246,9 +261,10 @@ async def main():
                     start_ok = True
                 continue
             low = err.lower()
+            # Soft only for transport/config noise — AttributeError/TypeError are real bugs
             soft = (
-                "network", "timeout", "token", "httpx", "aiohttp",
-                "cannot connect", "unauthorized", "attributeerror",
+                "network", "timeout", "httpx", "aiohttp",
+                "cannot connect", "unauthorized", "retryafter",
             )
             if any(s in low for s in soft):
                 continue
