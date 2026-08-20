@@ -1,7 +1,8 @@
-"""Optional client for the standalone Maestro translator service.
+"""Clients for the standalone Qwen spec translator and Gemini chat.
 
-Disabled by default. When unavailable, callers must continue through the
-existing deterministic spec_core path without changing its behavior.
+Qwen is the translation path when MAESTRO_TRANSLATOR_URL is configured.
+Gemini remains the chat-only path. Any unavailable external service returns
+None so the deterministic spec_core fallback remains authoritative.
 """
 from __future__ import annotations
 
@@ -15,11 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 def _enabled() -> bool:
-    """Enable when explicitly requested, or when a translator URL is configured.
-
-    The URL is still required below, so an incomplete deployment remains a safe
-    no-op. This avoids silently falling back when Railway has only the URL set.
-    """
     raw = (os.getenv("MAESTRO_TRANSLATOR_ENABLED") or "").strip().lower()
     if raw in {"0", "false", "no", "off"}:
         return False
@@ -29,7 +25,6 @@ def _enabled() -> bool:
 
 
 def _base_url() -> str:
-    """Normalize a Railway variable copied with an endpoint suffix."""
     base = (os.getenv("MAESTRO_TRANSLATOR_URL") or "").strip().rstrip("/")
     suffixes = (
         "/health/v1/chat",
@@ -49,6 +44,32 @@ def _base_url() -> str:
     return base
 
 
+def _headers() -> dict[str, str]:
+    token = (os.getenv("MAESTRO_TRANSLATOR_TOKEN") or "").strip()
+    if not token:
+        return {"Content-Type": "application/json"}
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-API-Key": token,
+    }
+
+
+def _timeout() -> tuple[float, float]:
+    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "20")
+    timeout = max(5.0, min(90.0, timeout))
+    return max(3.0, min(10.0, timeout)), timeout
+
+
+def _spec_core_capabilities() -> list[str]:
+    try:
+        from telegram_bot_engine.spec_core.registry import CAPABILITIES
+        return sorted(str(key) for key in CAPABILITIES.keys())
+    except Exception as exc:
+        logger.warning("spec_core capability list unavailable: %s", exc)
+        return []
+
+
 def _gemini_enabled() -> bool:
     try:
         from .gemini_client import enabled as gemini_enabled
@@ -64,94 +85,69 @@ def translate_request(
     text: str,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Return a validated translator payload, or None for safe fallback."""
-    if _gemini_enabled():
-        try:
-            from .gemini_client import translate
-            result = translate(text, context or {})
-            payload = result.get("translation") if isinstance(result, dict) else None
-            if isinstance(payload, dict):
-                return payload
-        except Exception as exc:
-            logger.warning("Gemini translation unavailable; using existing fallback: %s", exc)
-        return None
+    """Translate a user request to a validated spec_core translation via Qwen."""
+    context = context or {}
     if not _enabled():
         return None
     base = _base_url()
     if not base:
         return None
-    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
-    connect_timeout = max(3.0, min(10.0, timeout))
+    payload = {
+        "text": (text or "")[:20000],
+        "conversation_history": list(context.get("conversation_history") or [])[-12:],
+        "server_context": dict(context.get("server_facts") or context.get("server_context") or {}),
+        "spec_core_capabilities": _spec_core_capabilities(),
+    }
+    connect_timeout, read_timeout = _timeout()
     try:
         response = requests.post(
             f"{base}/v1/translate",
-            json={"text": (text or "")[:20000]},
-            timeout=(connect_timeout, timeout),
+            json=payload,
+            headers=_headers(),
+            timeout=(connect_timeout, read_timeout),
         )
         response.raise_for_status()
         body = response.json()
         translation = body.get("translation") if isinstance(body, dict) else None
         if not isinstance(translation, dict):
-            return None
+            raise ValueError("Qwen response missing translation")
         features = translation.get("features_requested")
         if not isinstance(features, list) or not all(isinstance(x, str) for x in features):
-            return None
+            raise ValueError("Qwen response has invalid features_requested")
         confidence = float(translation.get("confidence") or 0.0)
-        if confidence < float(os.getenv("MAESTRO_TRANSLATOR_MIN_CONFIDENCE") or "0.60"):
-            return None
+        minimum = float(os.getenv("MAESTRO_TRANSLATOR_MIN_CONFIDENCE") or "0.60")
+        clarification = bool(translation.get("clarification_needed"))
+        if not clarification and confidence < minimum:
+            raise ValueError(f"Qwen confidence below threshold: {confidence:.2f}")
+        if not clarification and not str(translation.get("spec_request") or "").strip():
+            raise ValueError("Qwen completed translation has no spec_request")
+        logger.info(
+            "Qwen translation ok status=%s source=%s model=%s features=%s clarification=%s",
+            response.status_code,
+            body.get("source") if isinstance(body, dict) else None,
+            body.get("model") if isinstance(body, dict) else None,
+            features,
+            clarification,
+        )
         return translation
     except Exception as exc:
-        logger.warning("standalone translator unavailable; using spec_core fallback: %s", exc)
+        logger.exception("Qwen translator unavailable; using deterministic spec_core fallback: %s", exc)
         return None
 
 
 def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask Gemini or the legacy standalone layer using server-built context."""
-    if _gemini_enabled():
-        try:
-            from .gemini_client import chat, status_snapshot
-            logger.info("Gemini chat path active %s", status_snapshot())
-            return chat(message, context or {})
-        except Exception as exc:
-            logger.exception("Gemini chat unavailable; continuing generation path: %s", exc)
-        return None
-    try:
-        from .gemini_client import status_snapshot
-        logger.warning("Gemini chat skipped %s", status_snapshot())
-    except Exception:
+    """Ask Gemini for chat only; Qwen is intentionally not a chat provider."""
+    if not _gemini_enabled():
         logger.warning(
             "Gemini chat skipped; key_present=%s GEMINI_ENABLED=%s",
             bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()),
             os.getenv("GEMINI_ENABLED"),
         )
-    if not _enabled():
         return None
-    base = _base_url()
-    if not base:
-        return None
-    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "4")
-    connect_timeout = max(3.0, min(10.0, timeout))
     try:
-        response = requests.post(
-            f"{base}/v1/chat",
-            json={"message": (message or "")[:20000], "context": context or {}},
-            timeout=(connect_timeout, timeout),
-        )
-        response.raise_for_status()
-        body = response.json()
-        logger.info(
-            "standalone chat response status=%s ok=%s answered=%s source=%s answer_len=%s",
-            response.status_code,
-            body.get("ok") if isinstance(body, dict) else None,
-            body.get("answered") if isinstance(body, dict) else None,
-            body.get("source") if isinstance(body, dict) else None,
-            len(str(body.get("answer") or "")) if isinstance(body, dict) else 0,
-        )
-        if not isinstance(body, dict) or not body.get("ok"):
-            return None
-        if not isinstance(body.get("answer"), str) or not body["answer"].strip():
-            return None
-        return body
+        from .gemini_client import chat, status_snapshot
+        logger.info("Gemini chat path active %s", status_snapshot())
+        return chat(message, context or {})
     except Exception as exc:
-        logger.exception("standalone chat unavailable; continuing generation path: %s", exc)
+        logger.exception("Gemini chat unavailable; continuing generation path: %s", exc)
         return None
