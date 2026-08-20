@@ -161,6 +161,8 @@ def _extract_purpose(text: str) -> str | None:
         (("حجز", "booking", "موعد", "عيادة"), "booking"),
         (("تعليمي", "كورس", "education", "course"), "education"),
         (("أمن", "security", "cyber"), "security"),
+        (("ترحيب", "ترحيب في المجموعات", "welcome", "group welcome", "رسالة ترحيب", "مجموعات"), "welcome"),
+        (("مهام", "todo", "tasks", "to-do", "قائمة مهام"), "tasks"),
     ]
     for keys, purpose in rules:
         if any(k in text or k in low or normalize_text(k) in norm for k in keys):
@@ -282,16 +284,24 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
     """Map extracted actions/flows → real registry keys only (no invented extras)."""
     feats: list[str] = ["start", "help", "lang"]
     mapping: dict[str, list[str]] = {
-        "products": ["shop_catalog"],  # one menu item = catalog only
+        "products": ["shop_catalog"],
         "product": ["shop_catalog"],
         "catalog": ["shop_catalog"],
         "shop": ["shop_catalog"],
-        "order": ["shop_catalog", "order_track"],  # /order listed by user
-        "orders": ["order_track"],
+        "order": ["shop_order"],
+        "orders": ["shop_orders"],
         "order_track": ["order_track"],
+        "add": ["task_add"],
+        "list": ["task_list"],
+        "done": ["task_done"],
+        "delete": ["task_delete"],
+        "clear": ["task_clear"],
+        "ticket": ["ticket_open"],
+        "tickets": ["ticket_list"],
+        "mytickets": ["ticket_my"],
         "payment_methods": ["pay_methods"],
         "shipping": ["shipping_set"],
-        "support": ["ticket_open"],  # support button opens ticket; staff list via flow
+        "support": ["ticket_open"],
         "faq": ["faq_list"],
         "cart": ["cart_view", "cart_add"],
         "my_orders": ["shop_my_orders"],
@@ -300,8 +310,10 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
         "points": ["points_balance"],
         "booking": ["book_slot"],
         "about": ["about"],
-        "pricing": ["pay_methods"],  # price list ≈ payment/pricing info
+        "pricing": ["pay_methods"],
         "home": ["start"],
+        "setwelcome": ["welcome_set"],
+        "welcome": ["welcome_set"],
     }
     for aid in brief.all_action_ids():
         if aid in {"start", "help", "lang"}:
@@ -356,10 +368,12 @@ def extract_bot_brief(text: str) -> BotBrief:
     if not real and brief.purpose:
         soft_defaults = True
         defaults = {
-            "shop": ["shop_catalog", "order_track", "pay_methods"],
+            "shop": ["shop_catalog", "shop_order", "pay_methods"],
             "support": ["ticket_open", "faq_list"],
             "booking": ["book_slot", "ticket_open"],
             "education": ["faq_list"],
+            "welcome": ["welcome_set", "welcome_show"],
+            "tasks": ["task_add", "task_list", "task_done"],
         }
         for f in defaults.get(brief.purpose) or []:
             if f not in brief.features_requested:

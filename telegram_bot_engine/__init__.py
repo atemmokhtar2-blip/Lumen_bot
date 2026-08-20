@@ -703,11 +703,21 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             except Exception:
                 pass
         if hasattr(spec, "bot") and hasattr(spec.bot, "description"):
+            # User-facing description only — never internal "Strict user brief" debug text
+            purpose = str(getattr(ent, "bot_purpose", None) or "").strip()
             menu = list(getattr(ent, "menu_ids", None) or [])
-            flows = list(getattr(ent, "flows", None) or [])
+            friendly_bits = []
+            if purpose:
+                friendly_bits.append(purpose)
+            if menu:
+                friendly_bits.append("قائمة: " + "، ".join(str(m) for m in menu[:6]))
+            cmds_hint = sorted(
+                f for f in locked if f not in {"start", "help", "lang"}
+            )
+            if cmds_hint:
+                friendly_bits.append("أوامر: " + "، ".join(cmds_hint[:8]))
             spec.bot.description = (
-                f"Strict user brief: {bot_name or 'bot'} | "
-                f"menu={','.join(menu[:8])} | flows={','.join(flows[:6])}"
+                " — ".join(friendly_bits) if friendly_bits else (bot_name or "Telegram bot")
             )[:500]
         _stamp_style_on_spec(spec, style)
         tag = f"strict:{(bot_name or 'bot')}"
@@ -926,15 +936,22 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             if _cid not in seen_explicit:
                 explicit_ids.append(_cid)
                 seen_explicit.add(_cid)
-        # Common user-facing aliases map to real capabilities; unknown commands
-        # remain explicit generic handlers (never silently dropped).
-        alias_to_feature = {
+        # Root: reverse DEFAULT_COMMANDS so /add→task_add, /list→task_list, etc.
+        # Manual aliases override; unknown commands stay explicit_command (never dropped).
+        alias_to_feature: dict[str, str] = {}
+        for _feat_key, _cmd_id in (_DEFAULT_COMMANDS or {}).items():
+            if isinstance(_cmd_id, str) and _cmd_id.strip():
+                alias_to_feature.setdefault(_cmd_id.strip().lower(), str(_feat_key))
+        alias_to_feature.update({
             "register": "lead_capture", "new_client": "lead_capture", "my_clients": "lead_list",
             "stats": "analytics_revenue", "all_tasks": "task_list",
             "new_task": "task_add", "add_task": "task_add", "my_tasks": "task_list",
             "list_tasks": "task_list", "complete_task": "task_done", "done_task": "task_done",
             "delete_task": "task_delete", "new_ticket": "ticket_open", "my_tickets": "ticket_my",
-        }
+            "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
+            "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
+            "about": "about", "ticket": "ticket_open",
+        })
         existing_triggers = {
             str(getattr(getattr(_f, "trigger", None), "id", "")).lower()
             for _f in getattr(spec, "features", [])
