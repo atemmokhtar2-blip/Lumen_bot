@@ -37,8 +37,11 @@ def _emit_main(spec: BotSpec) -> str:
     _alias_map = {
         "shop": "handle_shop_catalog",
         "catalog": "handle_shop_catalog",
+        "products": "handle_shop_catalog",
+        "product": "handle_shop_catalog",
         "cart": "handle_cart_view",
         "orders": "handle_shop_orders",
+        "order": "handle_shop_order",
         "points": "handle_balance",
         "sub": "handle_plans",
         "subs": "handle_plans",
@@ -53,12 +56,23 @@ def _emit_main(spec: BotSpec) -> str:
         for f in spec.features
         if f.feature not in ("start", "help") and f.trigger.type == "command"
     }
+    # Also index by generated handler name so aliases can target shop order handlers
+    for f in spec.features:
+        if f.feature in ("start", "help"):
+            continue
+        hname = f"handle_{f.id}".replace("-", "_")
+        feat_to_handler.setdefault(f.feature, hname)
+        if f.feature == "shop_catalog":
+            feat_to_handler.setdefault("shop_catalog", hname)
     # map alias to feature
     alias_feature = {
         "shop": "shop_catalog",
         "catalog": "shop_catalog",
+        "products": "shop_catalog",
+        "product": "shop_catalog",
         "cart": "cart_view",
         "orders": "shop_orders",
+        "order": "order_track",
         "points": "balance",
         "sub": "plans",
         "subs": "plans",

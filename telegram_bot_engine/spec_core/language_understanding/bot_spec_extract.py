@@ -107,6 +107,9 @@ _LABEL_TO_ID: list[tuple[tuple[str, ...], str, str]] = [
     (("الكوبونات", "coupon", "كوبون"), "coupons", "🏷️ كوبونات"),
     (("النقاط", "points", "نقاط"), "points", "⭐ النقاط"),
     (("الحجز", "booking", "موعد"), "booking", "📅 الحجز"),
+    (("الأسعار", "اسعار", "pricing", "prices", "price", "سعر"), "pricing", "💰 الأسعار"),
+    (("الرئيسية", "الرئيسيه", "home", "main"), "home", "🏠 الرئيسية"),
+    (("about", "عنا", "عن البوت"), "about", "ℹ️ عن البوت"),
     (("start", "ابدأ", "البداية"), "start", "▶️ ابدأ"),
     (("help", "مساعدة"), "help", "❓ مساعدة"),
 ]
@@ -280,6 +283,11 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
     feats: list[str] = ["start", "help", "lang"]
     mapping: dict[str, list[str]] = {
         "products": ["shop_catalog"],  # one menu item = catalog only
+        "product": ["shop_catalog"],
+        "catalog": ["shop_catalog"],
+        "shop": ["shop_catalog"],
+        "order": ["shop_catalog", "order_track"],  # /order listed by user
+        "orders": ["order_track"],
         "order_track": ["order_track"],
         "payment_methods": ["pay_methods"],
         "shipping": ["shipping_set"],
@@ -291,14 +299,20 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
         "coupons": ["coupon_apply"],
         "points": ["points_balance"],
         "booking": ["book_slot"],
-        "wallet": ["wallet_balance"],
+        "about": ["about"],
+        "pricing": ["pay_methods"],  # price list ≈ payment/pricing info
+        "home": ["start"],
     }
     for aid in brief.all_action_ids():
         if aid in {"start", "help", "lang"}:
             continue
-        for cap in mapping.get(aid, []):
-            if cap not in feats:
-                feats.append(cap)
+        mapped = mapping.get(aid)
+        if mapped:
+            for cap in mapped:
+                if cap not in feats:
+                    feats.append(cap)
+        elif aid == "about" and "about" not in feats:
+            feats.append("about")
     flow_map: dict[str, list[str]] = {
         "order_track_by_id": ["order_track"],
         "faq_auto_reply": ["faq_list"],
@@ -362,11 +376,12 @@ def extract_bot_brief(text: str) -> BotBrief:
                 )
         brief.constraints.append("soft_domain_defaults")
 
-    # Strict only from USER-explicit signals — never from soft defaults
+    # Strict only from USER-explicit signals — never from soft defaults.
+    # ≥2 slash commands (e.g. /start + /products) is enough to lock the plan.
     brief.strict = (
         (user_menu_n >= 2 and not soft_defaults)
         or ("strict_no_extra_commands" in brief.constraints)
-        or user_cmd_n >= 3
+        or user_cmd_n >= 2
         or (user_menu_n >= 1 and any(k in (raw or "") for k in ("فقط", "بس", "only")))
         or (user_menu_n >= 1 and any(k in (raw or "") for k in ("قائمة", "menu", "/start")))
     )

@@ -190,35 +190,74 @@ def _run_intelligence_layers(
             _translator = None
         _ent = getattr(lu, "entities", None)
         if _ent is not None and _brief is not None:
+            # Deterministic Stage-1 features (slash commands / menu labels) win over LLM.
+            _det_features = [
+                x for x in (getattr(_brief, "features_requested", None) or [])
+                if isinstance(x, str) and x.strip()
+            ]
+            _det_cmds = list(getattr(_brief, "commands", None) or [])
+            _det_menu = list(getattr(_brief, "menu_items", None) or [])
+            _user_explicit = bool(_det_cmds) or bool(_det_menu) or bool(
+                getattr(_brief, "strict", False)
+            )
+
             if isinstance(_translator, dict):
                 _model_features = [
-                    x for x in (_translator.get("features_requested") or [])
-                    if isinstance(x, str)
+                    x.strip()
+                    for x in (_translator.get("features_requested") or [])
+                    if isinstance(x, str) and x.strip()
                 ]
-                if _model_features:
-                    _brief.features_requested = list(dict.fromkeys(
-                        _model_features + list(_brief.features_requested or [])
-                    ))
+                # Drop hallucinated capability keys not in the registry.
+                try:
+                    from .spec_core.registry import CAPABILITIES
+
+                    _allowed = set(CAPABILITIES.keys()) | {
+                        "start", "help", "lang", "about", "cancel",
+                    }
+                    _model_features = [f for f in _model_features if f in _allowed]
+                except Exception:
+                    # Fail closed: ignore model features if registry unavailable
+                    _model_features = []
+
+                if _user_explicit and _det_features:
+                    # Authoritative: deterministic brief. Model may only add
+                    # start/help/lang/about — never moderation/shop noise.
+                    _safe_extra = {
+                        f for f in _model_features
+                        if f in {"start", "help", "lang", "about", "cancel"}
+                    }
+                    _brief.features_requested = list(
+                        dict.fromkeys(list(_det_features) + sorted(_safe_extra))
+                    )
+                elif _model_features:
+                    # Soft assist only when user did not list explicit actions
+                    _brief.features_requested = list(
+                        dict.fromkeys(list(_det_features) + _model_features)
+                    )
+
+                # Flows: keep deterministic first; model flows only if not strict
                 _model_flows = [
                     x for x in (_translator.get("flows") or [])
                     if isinstance(x, str)
                 ]
-                if _model_flows:
-                    _brief.flows = list(dict.fromkeys(
-                        _model_flows + list(_brief.flows or [])
-                    ))
-                if _translator.get("strict_spec"):
-                    _brief.strict = True
+                if _model_flows and not getattr(_brief, "strict", False):
+                    _brief.flows = list(
+                        dict.fromkeys(list(_brief.flows or []) + _model_flows)
+                    )
+                # Translator claiming strict is advisory only — Stage-1 owns strict
                 _raw_model = dict(getattr(_brief, "raw_snippets", None) or {})
                 _raw_model["translator_model"] = _translator.get("model", "standalone")
                 _raw_model["translator_confidence"] = _translator.get("confidence", 0.0)
+                _raw_model["translator_features_filtered"] = list(_model_features)[:20]
                 _brief.raw_snippets = _raw_model
             if _brief.features_requested:
-                # merge brief features (prefer union, brief first for order)
+                # Prefer deterministic brief order; never let fat entity plan lead
                 merged = list(dict.fromkeys(
                     list(_brief.features_requested)
                     + list(getattr(_ent, "features_requested", None) or [])
                 ))
+                if getattr(_brief, "strict", False) or _user_explicit:
+                    merged = list(_brief.features_requested)
                 _ent.features_requested = merged
             if _brief.bot_name:
                 _ent.bot_name = _brief.bot_name
@@ -226,18 +265,20 @@ def _run_intelligence_layers(
                 _ent.bot_purpose = _brief.purpose
             if _brief.menu_items:
                 _ent.menu_ids = [c.id for c in _brief.menu_items]
-            if _brief.strict:
+            if _brief.strict or _user_explicit:
                 _ent.strict_spec = True
             if _brief.flows:
                 _ent.flows = list(_brief.flows)
             raw = dict(getattr(_ent, "raw", None) or {})
             raw["bot_brief"] = _brief.to_dict()
             _ent.raw = raw
-            # Strict: REPLACE intent plan (never merge fat preset plan)
+            # Strict / explicit: REPLACE intent plan (never merge fat preset plan)
             if intent is not None and _brief.features_requested:
                 try:
-                    if _brief.strict:
-                        intent.feature_plan = list(dict.fromkeys(list(_brief.features_requested)))
+                    if getattr(_brief, "strict", False) or _user_explicit:
+                        intent.feature_plan = list(
+                            dict.fromkeys(list(_brief.features_requested))
+                        )
                     else:
                         plan = list(getattr(intent, "feature_plan", None) or [])
                         intent.feature_plan = list(
@@ -834,8 +875,10 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             pass
 
     # Phase C root seal: resolve_capabilities is last word on selected set
-    # (unless caller passed preferred_keys — intentional external authority).
-    if not preferred_keys:
+    # ONLY for open-ended requests. When Stage-1 strict + explicit features
+    # locked the plan, Phase C must NOT inflate with fat domain packs
+    # (tasks/remind/cart bleed was overwriting /products + /order).
+    if not preferred_keys and not (strict and explicit_feats):
         try:
             from .spec_core.capability_extractor import resolve_capabilities
             from .spec_core.domain_detector import decide as _domain_decide
@@ -861,6 +904,11 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             layers_meta["phase_c_resolve_error"] = (
                 f"{type(_pc_exc).__name__}:{str(_pc_exc)[:160]}"
             )
+    elif strict and explicit_feats:
+        layers_meta["phase_c_skipped_strict"] = True
+        layers_meta["strict_locked_features"] = sorted(
+            set(explicit_feats) | {"start", "help", "lang"}
+        )
 
     # Contract boundary: every slash command explicitly written by the user must
     # survive intelligence/capability layers and become a real generated handler.
