@@ -224,6 +224,36 @@ def fix_escaped_quotes_in_source(text: str) -> tuple[str, list[str]]:
     return text, notes
 
 
+
+def _fix_undefined_routers(text: str) -> tuple[str, list[str]]:
+    """Drop PHOTO/VOICE handler registration when the router function is not defined in-file."""
+    notes: list[str] = []
+    has_photo_def = "def photo_router" in text
+    has_voice_def = "def voice_router" in text
+    out_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if (not has_photo_def) and "photo_router" in line and (
+            "filters.PHOTO" in line or "MessageHandler" in line
+        ):
+            notes.append("removed_photo_router_handler")
+            continue
+        if (not has_photo_def) and "photo_router" in line and (
+            "from app.handlers import" in line or line.lstrip().startswith("from app.handlers")
+        ):
+            line2 = re.sub(r",\s*photo_router\b", "", line)
+            line2 = re.sub(r"\bphoto_router\s*,\s*", "", line2)
+            if line2 != line:
+                notes.append("stripped_photo_router_import")
+            line = line2
+        if (not has_voice_def) and "voice_router" in line and (
+            "filters.VOICE" in line or "filters.AUDIO" in line
+        ):
+            notes.append("removed_voice_router_handler")
+            continue
+        out_lines.append(line)
+    return "".join(out_lines), notes
+
+
 def repair_python_file(path: Path) -> list[str]:
     notes: list[str] = []
     try:
@@ -234,13 +264,16 @@ def repair_python_file(path: Path) -> list[str]:
     try:
         ast.parse(raw)
         fixed2, api_notes = _fix_ptb_api_misuse(raw)
-        if api_notes:
+        fixed3, router_notes = _fix_undefined_routers(fixed2)
+        notes = api_notes + router_notes
+        if notes:
             try:
-                ast.parse(fixed2)
-                path.write_text(fixed2, encoding="utf-8")
-                return api_notes + ["api_fixed_and_saved"]
+                ast.parse(fixed3)
+                if fixed3 != raw:
+                    path.write_text(fixed3, encoding="utf-8")
+                    return notes + ["api_or_router_fixed_and_saved"]
             except SyntaxError:
-                return api_notes + ["api_fix_broke_syntax"]
+                return notes + ["router_fix_broke_syntax"]
         return []
     except SyntaxError as e:
         notes.append(f"syntax_error_before:{e.msg}@line{e.lineno}")

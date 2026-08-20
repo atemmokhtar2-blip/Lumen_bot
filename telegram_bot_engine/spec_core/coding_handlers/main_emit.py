@@ -170,10 +170,9 @@ def _emit_main(spec: BotSpec) -> str:
         imports_handlers += ", text_router, cancel_handler"
     if need_mod:
         imports_handlers += ", anti_abuse_filter"
-        if need_ocr:
+    if need_ocr or need_market:
+        if "photo_router" not in imports_handlers:
             imports_handlers += ", photo_router"
-    if need_mod:
-        imports_handlers += ", anti_abuse_filter"
     if need_voice:
         if "voice_router" not in imports_handlers:
             imports_handlers += ", voice_router"

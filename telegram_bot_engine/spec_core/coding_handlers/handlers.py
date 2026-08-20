@@ -987,17 +987,17 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "        if path and hasattr(generic_svc, 'ocr_from_image'):",
                     "            result = generic_svc.ocr_from_image(user.id, path, caption)",
                     "        else:",
-                    "            result = generic_svc.ocr_hint(user.id, caption or 'photo_received')",
+                    "            result = getattr(generic_svc, 'ocr_hint', lambda *a, **k: 'تم استلام الصورة.')(user.id, caption or 'photo_received')",
                     "        if awaiting == 'ocr_photo':",
                     "            context.user_data.pop('awaiting', None)",
-                    "        await message.reply_text(result)",
+                    "        await message.reply_text(str(result))",
                     "    except Exception as _ocr_exc:",
                     "        import logging as _logging",
                     "        _logging.getLogger(__name__).warning('ocr failed: %s', _ocr_exc)",
-                    "        await message.reply_text('تم استلام الصورة. OCR غير متاح حالياً.')",
+                    "        await message.reply_text('تم استلام الصورة.')",
                     "",
                 ]
-                if need_ocr
+                if (need_ocr or need_market)
                 else []
             ),
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
