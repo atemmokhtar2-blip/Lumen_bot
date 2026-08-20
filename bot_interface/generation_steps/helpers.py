@@ -179,6 +179,7 @@ if not handler_fns:
 _SKIP_SMOKE = {
     "pre_checkout_handler",
     "successful_payment_handler",
+    "chat_member_handler",
 }
 priority, rest = [], []
 for name, fn in handler_fns:
@@ -221,6 +222,8 @@ class Update:
         self.effective_message = self.message
         self.callback_query = None
         self.pre_checkout_query = None
+        self.chat_member = None
+        self.my_chat_member = None
 
 
 class Context:

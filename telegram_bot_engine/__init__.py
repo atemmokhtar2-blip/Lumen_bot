@@ -1008,18 +1008,38 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as _gate_exc:
         layers_meta["acceptance_gate_error"] = f"{type(_gate_exc).__name__}:{str(_gate_exc)[:160]}"
 
-    # ── Final seal: preferred_keys from Groq/rules bridge win over presets ──
+    # ── Final seal: preferred_keys MERGE with user slash features — never erase them ──
     if preferred_keys:
         try:
+            import re as _re_seal
             from .spec_core.registry import CAPABILITIES as _CAPS_SEAL
             from .spec_core.schema import Feature as _Feature, Trigger as _Trigger, Action as _Action, Messages as _Messages
+            from .spec_core.builder import DEFAULT_COMMANDS as _DC_SEAL
             _ALIAS = {
                 "admin_ban_bot": "user_ban", "admin_unban_bot": "user_unban",
                 "ban": "user_ban", "kick": "user_kick", "mute": "user_mute",
                 "warn": "user_warn", "welcome": "welcome_set", "setwelcome": "welcome_set",
+                "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
+                "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
+                "add": "task_add", "list": "task_list", "done": "task_done",
+                "ticket": "ticket_open", "about": "about",
             }
+            # Reverse DEFAULT_COMMANDS for slash → feature
+            _cmd_to_feat: dict[str, str] = {}
+            for _fk, _cid in (_DC_SEAL or {}).items():
+                if isinstance(_cid, str) and _cid.strip():
+                    _cmd_to_feat.setdefault(_cid.strip().lower(), str(_fk))
+            _cmd_to_feat.update(_ALIAS)
+
+            # User-written /commands always enter the sealed set first
             sealed: list[str] = []
-            for _k in preferred_keys:
+            user_slash_feats: list[str] = []
+            for _m in _re_seal.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
+                _cid = _m.group(1).lower()
+                _feat = _cmd_to_feat.get(_cid)
+                if _feat and _feat in _CAPS_SEAL and _feat not in user_slash_feats:
+                    user_slash_feats.append(_feat)
+            for _k in user_slash_feats + list(preferred_keys or []):
                 if not isinstance(_k, str):
                     continue
                 _c = _ALIAS.get(_k.strip(), _k.strip())
@@ -1030,29 +1050,46 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                     sealed.insert(0, _core)
             if len(sealed) > 2 and hasattr(spec, "features"):
                 existing = {str(getattr(f, "feature", "")): f for f in (spec.features or [])}
+                # Preserve features tied to explicit user slash triggers
+                existing_by_trig = {
+                    str(getattr(getattr(f, "trigger", None), "id", "")).lower(): f
+                    for f in (spec.features or [])
+                }
                 new_feats = []
-                # keep start/help handlers from existing if present
                 for _c in sealed:
                     if _c in existing:
                         new_feats.append(existing[_c])
                         continue
+                    # keep trigger id from DEFAULT_COMMANDS when possible
+                    trig_id = (_DC_SEAL or {}).get(_c) or _c.replace("_", "")[:32]
+                    if isinstance(trig_id, str) and trig_id.lower() in existing_by_trig:
+                        new_feats.append(existing_by_trig[trig_id.lower()])
+                        continue
                     cap = _CAPS_SEAL.get(_c)
                     if not cap:
                         continue
-                    trig_id = _c.replace("_", "")[:32]
                     new_feats.append(_Feature(
                         id=_c,
                         feature=_c,
                         actor="user",
-                        trigger=_Trigger(type="command", id=trig_id),
+                        trigger=_Trigger(type="command", id=str(trig_id)),
                         action=_Action(service=getattr(cap, "service", "generic"), method=getattr(cap, "method", "act")),
                         messages=_Messages(prompt=f"/{trig_id}", success="تم"),
                         success={"message": "تم"},
                         failure={"message": "تعذر"},
                     ))
+                # Keep any remaining explicit_command features the contract added
+                sealed_set = set(sealed)
+                for f in (spec.features or []):
+                    fid = str(getattr(f, "feature", "") or "")
+                    if fid in sealed_set:
+                        continue
+                    if fid == "explicit_command" or str(getattr(f, "id", "")).startswith("explicit_"):
+                        new_feats.append(f)
                 if new_feats:
                     spec.features = new_feats
                     layers_meta["preferred_keys_final_seal"] = sealed
+                    layers_meta["user_slash_feats"] = user_slash_feats
                     layers_meta["bridge_final_seal"] = True
                     tag = "bridge:" + "+".join(k for k in sealed if k not in {"start", "help"})[:5]
         except Exception as _seal_exc:
