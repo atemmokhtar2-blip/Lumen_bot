@@ -216,6 +216,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
+    # ── Bot token MUST be handled before Gemini/generate paths ──
+    # Otherwise the token is treated as chat text ("ما الذي تود فعله بهذا الرمز؟").
+    if looks_like_bot_token(request) or looks_like_bot_token(normalize_bot_token(request)):
+        try:
+            from ..handlers.token_handler import try_handle_token
+            if await try_handle_token(update, context, request, user, message):
+                return
+        except Exception:
+            logger.exception("early token handler failed")
+
     if not request:
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
