@@ -45,12 +45,17 @@ from ..middlewares.mongo_sync import (
 
 def _looks_like_generation_request(text: str) -> bool:
     value = (text or "").strip().lower()
-    if not value or "بوت" not in value and "bot" not in value:
+    # Strip decorative quotes/punctuation that users often paste from chat UIs.
+    value = re.sub(r'["“”‘’«»٬،,]+', " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value:
+        return False
+    if "بوت" not in value and "bot" not in value:
         return False
     return bool(
         re.search(
-            r"(?:اعمل|عايز|أنشئ|انشئ|ابني|صمم|ولّد|ولد|generate|create).{0,60}(?:بوت|bot)"
-            r"|(?:بوت|bot).{0,60}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create)",
+            r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
+            r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
             value,
             re.IGNORECASE,
         )
@@ -165,13 +170,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Confirm a sensitive action previously planned by the standalone chat model.
     _pending_chat_action = (context.user_data or {}).get("pending_chat_action") if context.user_data else None
-    if _pending_chat_action and request.strip().lower() in {"أكد", "اكد", "تأكيد", "موافق", "نعم", "confirm", "yes"}:
+    _CONFIRM_WORDS = {
+        "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
+        "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "ولّد", "ولد",
+        "confirm", "yes", "ok", "start", "go", "generate",
+    }
+    if _pending_chat_action and request.strip().lower() in _CONFIRM_WORDS:
         action = str(_pending_chat_action.get("name") or "")
         original = str(_pending_chat_action.get("raw_text") or "")
         if context.user_data is not None:
             context.user_data.pop("pending_chat_action", None)
         try:
-            if action == "clone_repo":
+            if action in {"generate_bot", "translate_spec"}:
+                # Continue into the deterministic generation path using the
+                # original user requirements collected before confirmation.
+                if original.strip():
+                    request = original.strip()
+                    if context.user_data is not None:
+                        context.user_data["skip_clarify_once"] = True
+                # fall through (do not return)
+            elif action == "clone_repo":
                 from .git_router import try_handle_git
                 if await try_handle_git(update, context, original, user, message):
                     return
@@ -182,12 +200,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             elif action == "repo_understand":
                 await message.reply_text("المستودع النشط موجود، لكن تنفيذ التحليل التفصيلي يحتاج مسار تطوير مخصص. اكتب: حلل المستودع النشط.")
                 return
+            else:
+                await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
+                return
         except Exception:
             logger.exception("confirmed chat action failed: %s", action)
             await message.reply_text("تعذر تنفيذ العملية المؤكدة. راجع سجل الخدمة للتفاصيل.")
             return
-        await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
-        return
+        if action not in {"generate_bot", "translate_spec"}:
+            return
+
+    # Short confirmation after a prior generation-like user message in history:
+    # treat "ابدأ/ابدا/نعم" as "run the last bot request" even when Gemini is down.
+    if (
+        request.strip().lower() in _CONFIRM_WORDS
+        and context.user_data is not None
+        and not _looks_like_generation_request(request)
+    ):
+        prior = ""
+        for item in reversed(list(context.user_data.get("chat_history") or [])):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("role") or "") != "user":
+                continue
+            content = str(item.get("content") or "").strip()
+            if _looks_like_generation_request(content):
+                prior = content
+                break
+        if prior:
+            request = prior
+            context.user_data["skip_clarify_once"] = True
 
     if not request.startswith("/"):
         # Every natural-language message goes to the standalone chat model first.

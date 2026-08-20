@@ -39,11 +39,12 @@ _NUMBERED_KEY_ENV_NAMES = tuple(f"GEMINI_API_KEY_{idx}" for idx in range(1, 151)
 _KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 
 _MODEL_FALLBACKS = (
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
     "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-latest",
+    "gemini-1.5-flash",
 )
 
 _RESPONSE_SCHEMA: dict[str, Any] = {
@@ -93,7 +94,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def model_name() -> str:
-    return (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
 
 
 def _normalize_secret(raw: str) -> str:
@@ -225,9 +226,9 @@ def status_snapshot() -> dict[str, Any]:
 
 def _timeout() -> float:
     try:
-        return max(10.0, float(os.getenv("GEMINI_TIMEOUT_SEC") or "45"))
+        return max(8.0, min(30.0, float(os.getenv("GEMINI_TIMEOUT_SEC") or "18")))
     except ValueError:
-        return 45.0
+        return 18.0
 
 
 def _experiment_delay() -> None:
@@ -243,9 +244,13 @@ def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
     if not context.get("spec_core_capabilities"):
         try:
             from telegram_bot_engine.spec_core.registry import CAPABILITIES
-            context["spec_core_capabilities"] = sorted(CAPABILITIES.keys())
+            # Keep the chat prompt small for speed; full registry is used by
+            # the translator / spec_core path, not every chat turn.
+            context["spec_core_capabilities"] = sorted(CAPABILITIES.keys())[:80]
         except Exception:
             context["spec_core_capabilities"] = []
+    elif isinstance(context.get("spec_core_capabilities"), list):
+        context["spec_core_capabilities"] = list(context["spec_core_capabilities"])[:80]
     facts = json.dumps(context, ensure_ascii=False, sort_keys=True)
     operation = (
         "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
