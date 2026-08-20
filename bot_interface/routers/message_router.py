@@ -495,31 +495,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     result=result,
                 )
             except Exception:
-                logger.exception("deliver_generation_result failed; falling back to zip-only")
-                # Fallback: always try to send a zip so the user gets the bot
-                zip_path = make_zip_from_path(proj)
-                if zip_path and Path(zip_path).is_file():
-                    try:
-                        await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
-                    except Exception:
-                        pass
-                    try:
-                        with open(zip_path, "rb") as fh:
-                            await message.reply_document(
-                                document=fh,
-                                filename=Path(zip_path).name,
-                                caption="📦 مشروع البوت (ZIP). فك الضغط واتبع README.",
-                            )
-                    except Exception:
-                        logger.exception("zip upload failed")
-                        await message.reply_text(
-                            f"✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل.\nالمسار: `{escape_md(str(proj))}`"
-                        )
-                else:
+                logger.exception("deliver_generation_result failed; gated zip fallback")
+                # Root: never ship untested ZIP. Smoke must pass before any fallback send.
+                try:
+                    from bot_interface.generation_steps.helpers import _smoke_test_project
+                    smoke_ok, smoke_msg = _smoke_test_project(proj, seconds=8.0)
+                except Exception as _sm_exc:
+                    smoke_ok, smoke_msg = False, f"smoke_error:{type(_sm_exc).__name__}"
+                if not smoke_ok:
                     await message.reply_text(
-                        f"✅ المشروع اتولد.\nالمسار: `{escape_md(str(proj))}`\n"
-                        "تعذر إنشاء ZIP — راجع السجلات."
+                        "❌ التسليم الآمن فشل — لم يُرسل ZIP.\n"
+                        f"السبب: `{escape_md(str(smoke_msg)[:250])}`"
                     )
+                else:
+                    zip_path = make_zip_from_path(proj)
+                    if zip_path and Path(zip_path).is_file():
+                        try:
+                            await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
+                        except Exception:
+                            pass
+                        try:
+                            with open(zip_path, "rb") as fh:
+                                await message.reply_document(
+                                    document=fh,
+                                    filename=Path(zip_path).name,
+                                    caption="📦 مشروع البوت (ZIP). فك الضغط واتبع README.",
+                                )
+                        except Exception:
+                            logger.exception("zip upload failed")
+                            await message.reply_text(
+                                f"✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل.\nالمسار: `{escape_md(str(proj))}`"
+                            )
+                    else:
+                        await message.reply_text(
+                            f"✅ المشروع اتولد.\nالمسار: `{escape_md(str(proj))}`\n"
+                            "تعذر إنشاء ZIP — راجع السجلات."
+                        )
 
             try:
                 if success and project_path:
@@ -1586,9 +1597,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 result=result,
             )
         except Exception:
-            logger.exception("deliver_generation_result failed; zip fallback")
+            logger.exception("deliver_generation_result failed; gated zip fallback")
             proj = Path(str(getattr(result, "project_path", "") or ""))
-            if proj.is_dir():
+            if not proj.is_dir():
+                raise
+            try:
+                from bot_interface.generation_steps.helpers import _smoke_test_project
+                smoke_ok, smoke_msg = _smoke_test_project(proj, seconds=8.0)
+            except Exception as _sm_exc:
+                smoke_ok, smoke_msg = False, f"smoke_error:{type(_sm_exc).__name__}"
+            if not smoke_ok:
+                await message.reply_text(
+                    "❌ التسليم الآمن فشل — لم يُرسل ZIP.\n"
+                    f"السبب: `{escape_md(str(smoke_msg)[:250])}`"
+                )
+            else:
                 zip_path = make_zip_from_path(proj)
                 if zip_path and Path(zip_path).is_file():
                     try:
@@ -1607,8 +1630,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         await message.reply_text(f"✅ المشروع جاهز: `{escape_md(str(proj))}`")
                 else:
                     await message.reply_text(f"✅ المشروع جاهز: `{escape_md(str(proj))}`")
-            else:
-                raise
         try:
             if result and getattr(result, "success", False) and getattr(result, "project_path", None):
                 from ..generation_cache import get_generation_cache
