@@ -41,13 +41,8 @@ async def invoices(request: web.Request) -> web.Response:
 
 async def create_invoice(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    body = {}
-    if request.can_read_body:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-    plan_id = str((body or {}).get("plan_id") or tenant.plan_id)
+    body = await safe_json_body(request, required=False, max_bytes=65536)
+    plan_id = str(body.get("plan_id") or tenant.plan_id)
     inv = get_billing().create_monthly_invoice(tenant.tenant_id, plan_id=plan_id)
     if not inv:
         raise web.HTTPBadRequest(text='{"error":"invoice_failed"}', content_type="application/json")
@@ -104,15 +99,10 @@ async def checkout_cancel(request: web.Request) -> web.Response:
 async def portal(request: web.Request) -> web.Response:
     """Stripe Customer Billing Portal (manage subscription / payment methods)."""
     tenant = require_tenant(request)
-    body = {}
-    if request.can_read_body:
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
+    body = await safe_json_body(request, required=False, max_bytes=65536)
     result = get_billing().portal(
         tenant.tenant_id,
-        return_url=str((body or {}).get("return_url") or ""),
+        return_url=str(body.get("return_url") or ""),
     )
     status = 200 if result.get("ok") else 422
     return web.json_response(result, status=status)
@@ -145,7 +135,7 @@ async def dev_activate(request: web.Request) -> web.Response:
             text='{"error":"dev_activate_disabled","detail":"set ALLOW_DEV_BILLING=1 only in trusted dev"}',
             content_type="application/json",
         )
-    # Multi-tenant or non-dev: require platform admin token always
+    # Multi-tenant or non-dev: require platform admin token always (same root compare).
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if is_multi_tenant() or not is_dev_environment() or stripe_configured():
         if not admin or not admin_token_matches(

@@ -136,6 +136,54 @@ async def body_size_guard_middleware(request: web.Request, handler):
 
 
 @web.middleware
+async def json_body_middleware(request: web.Request, handler):
+    """Root JSON gate: parse once, reject bad JSON before any route runs.
+
+    Skips RAW_BODY_PATHS (Stripe webhook signature, generate size-cap path).
+    Stores request['json_body'] so safe_json_body / handlers share one parse.
+    Non-object JSON roots are rejected at the edge (400).
+    """
+    if request.method not in {"POST", "PUT", "PATCH"}:
+        return await handler(request)
+
+    from api.security import RAW_BODY_PATHS
+
+    path = request.path or ""
+    if path in RAW_BODY_PATHS:
+        return await handler(request)
+
+    # No body claimed → empty object (routes that require fields still 400 later)
+    cl = request.headers.get("Content-Length")
+    if (cl is None or cl == "0") and not request.can_read_body:
+        request["json_body"] = {}
+        request["json_body_parsed"] = True
+        return await handler(request)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"ok": False, "error": "invalid_json"},
+            status=400,
+        )
+
+    if body is None:
+        request["json_body"] = {}
+        request["json_body_parsed"] = True
+        return await handler(request)
+
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"ok": False, "error": "body_must_be_object"},
+            status=400,
+        )
+
+    request["json_body"] = body
+    request["json_body_parsed"] = True
+    return await handler(request)
+
+
+@web.middleware
 async def ip_rate_limit_middleware(request: web.Request, handler):
     """Global per-IP rate limit for public/auth endpoints (DoS / brute-force)."""
     path = request.path or ""
@@ -219,7 +267,13 @@ def create_app() -> web.Application:
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     app = web.Application(
-        middlewares=[error_middleware, body_size_guard_middleware, ip_rate_limit_middleware, cors_middleware],
+        middlewares=[
+            error_middleware,
+            body_size_guard_middleware,
+            json_body_middleware,
+            ip_rate_limit_middleware,
+            cors_middleware,
+        ],
         client_max_size=max(4096, max_size),
     )
     app.router.add_get("/health", health.health)

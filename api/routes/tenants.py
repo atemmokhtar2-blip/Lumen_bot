@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from api.auth import require_tenant
-from api.security import admin_token_matches, safe_json_body
+from api.auth import require_admin, require_tenant
+from api.security import safe_json_body
 from b2b_platform.plans import PLANS, get_plan, normalize_plan_id, public_plan_dict
 from b2b_platform.tenants import get_tenant_store
 
@@ -22,19 +22,7 @@ def _safe_telegram_id(value) -> int:
 
 async def create_tenant(request: web.Request) -> web.Response:
     """Bootstrap a tenant — always requires PLATFORM_ADMIN_TOKEN (no open provisioning)."""
-    import os
-
-    admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-    if not admin:
-        # Fail closed: never allow public tenant creation without an admin secret.
-        raise web.HTTPForbidden(
-            text='{"error":"admin_token_required","detail":"set PLATFORM_ADMIN_TOKEN"}',
-            content_type="application/json",
-        )
-    if not admin_token_matches(request.headers.get("X-Admin-Token") or "", admin):
-        raise web.HTTPUnauthorized(
-            text='{"error":"admin_required"}', content_type="application/json"
-        )
+    require_admin(request)
     body = await safe_json_body(request, max_bytes=65536)
     name = str(body.get("name") or "Tenant").strip()
     # Only admin may assign plans; unknown → free. Still no self-service enterprise.

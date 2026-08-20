@@ -135,6 +135,16 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
     return path
 
 
+# Paths that must keep a raw body stream (custom size caps / signature verify).
+# json_body_middleware MUST NOT consume these bodies.
+RAW_BODY_PATHS = frozenset(
+    {
+        "/v1/billing/webhook/stripe",
+        "/v1/generate",
+    }
+)
+
+
 async def safe_json_body(
     request,
     *,
@@ -143,14 +153,32 @@ async def safe_json_body(
 ) -> dict:
     """Parse JSON body safely: never raise unhandled errors to the client.
 
+    Root contract:
+    - Prefer request['json_body'] when json_body_middleware already parsed.
     - Invalid / non-object JSON → HTTP 400 with stable error code.
     - Empty body when required=False → {}.
-    - Oversized declared Content-Length → 413 (defense in depth; aiohttp
-      still enforces client_max_size when reading).
+    - Oversized declared Content-Length → 413 (defense in depth).
 
     Returns a dict only. Callers must not assume other JSON root types.
     """
     from aiohttp import web
+
+    # Middleware already parsed → single source of truth (body stream consumed once)
+    if request.get("json_body_parsed"):
+        body = request.get("json_body")
+        if body is None:
+            if not required:
+                return {}
+            raise web.HTTPBadRequest(
+                text='{"error":"invalid_json"}',
+                content_type="application/json",
+            )
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(
+                text='{"error":"body_must_be_object"}',
+                content_type="application/json",
+            )
+        return body
 
     cl = request.headers.get("Content-Length")
     if cl is not None:
@@ -167,12 +195,16 @@ async def safe_json_body(
             )
 
     if not required and not request.can_read_body:
+        request["json_body"] = {}
+        request["json_body_parsed"] = True
         return {}
 
     try:
         body = await request.json()
     except Exception:
         if not required:
+            request["json_body"] = {}
+            request["json_body_parsed"] = True
             return {}
         raise web.HTTPBadRequest(
             text='{"error":"invalid_json"}',
@@ -181,6 +213,8 @@ async def safe_json_body(
 
     if body is None:
         if not required:
+            request["json_body"] = {}
+            request["json_body_parsed"] = True
             return {}
         raise web.HTTPBadRequest(
             text='{"error":"invalid_json"}',
@@ -192,23 +226,26 @@ async def safe_json_body(
             text='{"error":"body_must_be_object"}',
             content_type="application/json",
         )
+    request["json_body"] = body
+    request["json_body_parsed"] = True
     return body
 
 
 def admin_token_matches(provided: str, expected: str) -> bool:
-    """Constant-time comparison for PLATFORM_ADMIN_TOKEN.
+    """Constant-time comparison for PLATFORM_ADMIN_TOKEN (root hardening).
 
-    Empty expected always fails (caller should fail-closed when unset).
+    Always compares fixed-size digests so neither presence nor length of the
+    provided token can leak via early-return timing. Empty expected fails closed.
     """
+    import hashlib
     import hmac
 
-    exp = (expected or "").strip()
-    got = (provided or "").strip()
-    if not exp or not got:
+    exp = (expected or "").strip().encode("utf-8")
+    got = (provided or "").strip().encode("utf-8")
+    if not exp:
         return False
-    if len(got) != len(exp):
-        # Still run compare_digest on equal-length buffers to avoid
-        # leaking length via early return timing alone when lengths match
-        # the common case; unequal length is an immediate reject.
-        return False
-    return hmac.compare_digest(got.encode("utf-8"), exp.encode("utf-8"))
+    # HMAC both sides under the expected secret as key → 32-byte digests always.
+    # Equal iff got == exp (collision probability negligible for admin secrets).
+    left = hmac.new(exp, got, hashlib.sha256).digest()
+    right = hmac.new(exp, exp, hashlib.sha256).digest()
+    return hmac.compare_digest(left, right)

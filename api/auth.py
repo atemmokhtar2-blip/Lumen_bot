@@ -1,8 +1,11 @@
 """API authentication helpers."""
 from __future__ import annotations
 
+import os
+
 from aiohttp import web
 
+from api.security import admin_token_matches
 from b2b_platform.tenants import Tenant, get_tenant_store
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
@@ -31,3 +34,23 @@ def require_tenant(request: web.Request) -> Tenant:
     get_metering().record(tenant.tenant_id, api_calls=1)
     request["tenant"] = tenant
     return tenant
+
+
+def require_admin(request: web.Request) -> None:
+    """Root gate for platform-admin operations (tenant bootstrap, etc.).
+
+    Fail-closed: missing PLATFORM_ADMIN_TOKEN → 403.
+    Wrong / missing X-Admin-Token → 401 (timing-safe compare).
+    """
+    admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+    if not admin:
+        raise web.HTTPForbidden(
+            text='{"error":"admin_token_required","detail":"set PLATFORM_ADMIN_TOKEN"}',
+            content_type="application/json",
+        )
+    provided = request.headers.get("X-Admin-Token") or ""
+    if not admin_token_matches(provided, admin):
+        raise web.HTTPUnauthorized(
+            text='{"error":"admin_required"}',
+            content_type="application/json",
+        )
