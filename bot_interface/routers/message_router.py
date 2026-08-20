@@ -62,6 +62,58 @@ def _looks_like_generation_request(text: str) -> bool:
     )
 
 
+_CONFIRM_ROOTS = {
+    "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
+    "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "انجز", "أنجز", "ولّد", "ولد",
+    "تمام", "حاضر", "ماشي", "يلاا",
+    "confirm", "yes", "ok", "start", "go", "generate", "done",
+}
+_CONFIRM_FILLER = {"و", "اللي", "على", "كده", "كدا", "بقوة", "فورا", "دلوقتي", "الآن", "الان", "يا", "رجاء", "please", "now"}
+
+
+def _is_confirm_phrase(text: str) -> bool:
+    """True for short go-ahead phrases like 'تمام ابدا وانجز' / 'ابدأ' / 'ok'."""
+    value = (text or "").strip().lower()
+    value = re.sub(r'["“”‘’«»٬،,!.?؟]+', " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value:
+        return False
+    if value in _CONFIRM_ROOTS:
+        return True
+    tokens = re.findall(r"[\w\u0600-\u06ff]+", value)
+    if not tokens or len(tokens) > 8:
+        return False
+    # Strip leading waw from tokens (وانجز → انجز)
+    norm = []
+    for t in tokens:
+        if t.startswith("و") and len(t) > 2 and t[1:] in _CONFIRM_ROOTS:
+            norm.append(t[1:])
+        else:
+            norm.append(t)
+    useful = [t for t in norm if t not in _CONFIRM_FILLER]
+    if not useful or len(useful) > 6:
+        return False
+    return all(t in _CONFIRM_ROOTS for t in useful) and any(t in _CONFIRM_ROOTS for t in useful)
+
+
+def _prior_bot_request(user_data: dict | None) -> str:
+    """Last generation-like user message from session history."""
+    if not user_data:
+        return ""
+    explicit = str(user_data.get("last_bot_request") or "").strip()
+    if explicit and _looks_like_generation_request(explicit):
+        return explicit
+    for item in reversed(list(user_data.get("chat_history") or [])):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("role") or "") != "user":
+            continue
+        content = str(item.get("content") or "").strip()
+        if _looks_like_generation_request(content):
+            return content
+    return ""
+
+
 def _qwen_rescue_translation(request: str, context: dict) -> dict | None:
     """Translate an explicit bot build when Gemini chat is unavailable."""
     if not _looks_like_generation_request(request):
@@ -168,27 +220,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
 
+    # Remember last explicit bot-build request for later "ابدأ / أنجز" turns.
+    if context.user_data is not None and _looks_like_generation_request(request):
+        context.user_data["last_bot_request"] = request
+
     # Confirm a sensitive action previously planned by the standalone chat model.
     _pending_chat_action = (context.user_data or {}).get("pending_chat_action") if context.user_data else None
-    _CONFIRM_WORDS = {
-        "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
-        "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "ولّد", "ولد",
-        "confirm", "yes", "ok", "start", "go", "generate",
-    }
-    if _pending_chat_action and request.strip().lower() in _CONFIRM_WORDS:
+    _confirm_now = _is_confirm_phrase(request)
+    if _pending_chat_action and _confirm_now:
         action = str(_pending_chat_action.get("name") or "")
         original = str(_pending_chat_action.get("raw_text") or "")
         if context.user_data is not None:
             context.user_data.pop("pending_chat_action", None)
         try:
-            if action in {"generate_bot", "translate_spec"}:
-                # Continue into the deterministic generation path using the
-                # original user requirements collected before confirmation.
+            if action in {"generate_bot", "translate_spec", ""}:
                 if original.strip():
                     request = original.strip()
-                    if context.user_data is not None:
-                        context.user_data["skip_clarify_once"] = True
-                # fall through (do not return)
+                else:
+                    prior = _prior_bot_request(context.user_data)
+                    if prior:
+                        request = prior
+                if context.user_data is not None:
+                    context.user_data["skip_clarify_once"] = True
+                    context.user_data["force_generate_once"] = True
+                # fall through into generation
             elif action == "clone_repo":
                 from .git_router import try_handle_git
                 if await try_handle_git(update, context, original, user, message):
@@ -201,35 +256,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await message.reply_text("المستودع النشط موجود، لكن تنفيذ التحليل التفصيلي يحتاج مسار تطوير مخصص. اكتب: حلل المستودع النشط.")
                 return
             else:
-                await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
-                return
+                # Unknown pending action + confirm → try bot generation from history
+                prior = _prior_bot_request(context.user_data)
+                if prior:
+                    request = prior
+                    if context.user_data is not None:
+                        context.user_data["skip_clarify_once"] = True
+                        context.user_data["force_generate_once"] = True
+                else:
+                    await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
+                    return
         except Exception:
             logger.exception("confirmed chat action failed: %s", action)
             await message.reply_text("تعذر تنفيذ العملية المؤكدة. راجع سجل الخدمة للتفاصيل.")
             return
-        if action not in {"generate_bot", "translate_spec"}:
+        if action not in {"generate_bot", "translate_spec", ""} and not (
+            context.user_data or {}
+        ).get("force_generate_once"):
             return
 
     # Short confirmation after a prior generation-like user message in history:
-    # treat "ابدأ/ابدا/نعم" as "run the last bot request" even when Gemini is down.
-    if (
-        request.strip().lower() in _CONFIRM_WORDS
-        and context.user_data is not None
-        and not _looks_like_generation_request(request)
-    ):
-        prior = ""
-        for item in reversed(list(context.user_data.get("chat_history") or [])):
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("role") or "") != "user":
-                continue
-            content = str(item.get("content") or "").strip()
-            if _looks_like_generation_request(content):
-                prior = content
-                break
+    # "تمام ابدا وانجز" must resume generation even when Gemini is down.
+    if _confirm_now and not _looks_like_generation_request(request):
+        prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
         if prior:
             request = prior
-            context.user_data["skip_clarify_once"] = True
+            if context.user_data is not None:
+                context.user_data["skip_clarify_once"] = True
+                context.user_data["force_generate_once"] = True
+            logger.info("Confirm phrase resumed prior bot request")
 
     if not request.startswith("/"):
         # Every natural-language message goes to the standalone chat model first.
@@ -399,26 +454,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["translated_preferred_keys"] = _translated_preferred_keys
                 context.user_data["translated_source"] = _translation_source
                 context.user_data["skip_clarify_once"] = True
-        # Any non-empty answer from the model is authoritative for this turn,
-        # including the safe "data unavailable" response. Do not fall through
-        # to the legacy fixed help text when the model answered safely.
-        if not _translated_generation_request and chat_result and str(chat_result.get("answer") or "").strip():
-            _action = chat_result.get("action")
+                context.user_data["force_generate_once"] = True
+
+        _force_generate = bool((context.user_data or {}).get("force_generate_once"))
+        _answer = str((chat_result or {}).get("answer") or "").strip() if isinstance(chat_result, dict) else ""
+        _action = (chat_result or {}).get("action") if isinstance(chat_result, dict) else None
+        _action_name = str((_action or {}).get("name") or "") if isinstance(_action, dict) else ""
+        if isinstance(_action, dict) and _action_name == "generate_bot" and not _action.get("requires_confirmation"):
+            _force_generate = True
+        # Gemini often *says* it will generate without setting action=generate_bot.
+        if _answer and re.search(
+            r"سأقوم.*?(?:توليد|ببناء|بتجهيز)|ابدأ(?: الآن)? في توليد|بدء التوليد|start(?:ing)? generat|will (?:now )?generat",
+            _answer,
+            re.I,
+        ):
+            _force_generate = True
+
+        if _force_generate and not _translated_generation_request:
+            # Ensure we generate the original bot request, not the confirm phrase.
+            prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
+            gen_src = prior if prior else (request if _looks_like_generation_request(request) else "")
+            if gen_src:
+                try:
+                    from telegram_bot_engine.services.translator_client import translate_request
+                    _tr = translate_request(gen_src, chat_context)
+                    if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
+                        request = str(_tr.get("spec_request")).strip()
+                        if context.user_data is not None:
+                            context.user_data["translated_spec_request"] = request
+                            context.user_data["translated_preferred_keys"] = list(
+                                _tr.get("features_requested") or []
+                            )
+                            context.user_data["translated_source"] = "groq_on_force_generate"
+                            context.user_data["skip_clarify_once"] = True
+                        _translated_generation_request = request
+                        logger.info(
+                            "Force-generate via Groq translation features=%s",
+                            _tr.get("features_requested"),
+                        )
+                    else:
+                        request = gen_src
+                        if context.user_data is not None:
+                            context.user_data["skip_clarify_once"] = True
+                        _translated_generation_request = gen_src
+                        logger.warning("Force-generate without Groq; using raw prior request")
+                except Exception:
+                    logger.exception("Force-generate Groq translation failed")
+                    request = gen_src
+                    _translated_generation_request = gen_src
+
+        # Chat answers that are NOT a generate-now signal stay as chat only.
+        if (
+            not _translated_generation_request
+            and not _force_generate
+            and chat_result
+            and _answer
+        ):
             if isinstance(_action, dict):
-                _action_name = str(_action.get("name") or "")
                 if _action.get("requires_confirmation"):
                     if context.user_data is not None:
+                        # Prefer last_bot_request so later "ابدأ" still has the real spec.
+                        raw_for_pending = _prior_bot_request(context.user_data) or request
                         context.user_data["pending_chat_action"] = {
-                            "name": _action_name,
-                            "raw_text": request,
+                            "name": _action_name or "generate_bot",
+                            "raw_text": raw_for_pending,
                         }
                 elif _action_name == "host_status":
-                    # Read-only state is safe to execute immediately.
                     from .hosting_router import try_handle_hosting
                     if await try_handle_hosting(update, context, request, user, message):
                         return
-            await message.reply_text(str(chat_result["answer"]))
+            await message.reply_text(_answer)
             return
+
+        if _force_generate and _answer and not _translated_generation_request:
+            # Still show the model message, then continue into generation below.
+            try:
+                await message.reply_text(_answer)
+            except Exception:
+                pass
         # Diagnostics: never log the raw key.
         try:
             from telegram_bot_engine.services.gemini_client import status_snapshot
@@ -444,7 +557,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             snap.get("env_names_seen"),
         )
 
-        _generation_like = _looks_like_generation_request(request)
+        _generation_like = (
+            _looks_like_generation_request(request)
+            or bool((context.user_data or {}).get("force_generate_once"))
+            or bool(_translated_generation_request)
+        )
         if _generation_like:
             # A model outage must not block an explicit bot build request. The
             # deterministic spec_core path can still parse and generate it.
@@ -861,6 +978,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if _clarify_done:
         _strong_bot_spec = True
         _ai_route_generate = True
+    if context.user_data is not None and context.user_data.pop("force_generate_once", False):
+        _strong_bot_spec = True
+        _ai_route_generate = True
+        logger.info("force_generate_once honored — entering generation pipeline")
     if not _ai_route_generate and not _strong_bot_spec:
         return
 
