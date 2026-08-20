@@ -286,6 +286,136 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["force_generate_once"] = True
             logger.info("Confirm phrase resumed prior bot request")
 
+
+    # ══════════════════════════════════════════════════════════════════
+    # GENERATE-NOW FAST PATH
+    # User confirmed (ابدأ / تمام ابدا وانجز / …) with a known bot request.
+    # Do not touch Gemini, L3, help gates, or feasibility soft-blocks.
+    # ══════════════════════════════════════════════════════════════════
+    if (context.user_data or {}).get("force_generate_once"):
+        gen_request = request
+        if not _looks_like_generation_request(gen_request):
+            prior = _prior_bot_request(context.user_data)
+            if prior:
+                gen_request = prior
+        if not gen_request.strip():
+            if context.user_data is not None:
+                context.user_data.pop("force_generate_once", None)
+            await message.reply_text(
+                "مفيش وصف بوت محفوظ. ابعت وصف البوت تاني (مثال: عايز بوت جروب يرحب ويحظر)."
+            )
+            return
+
+        preferred_keys = None
+        try:
+            from telegram_bot_engine.services.translator_client import translate_request
+            _tr = translate_request(
+                gen_request,
+                {
+                    "conversation_history": list((context.user_data or {}).get("chat_history") or [])[-8:],
+                    "server_facts": {"project": "Maestro"},
+                },
+            )
+            if isinstance(_tr, dict):
+                if str(_tr.get("spec_request") or "").strip():
+                    gen_request = str(_tr.get("spec_request")).strip()
+                preferred_keys = [
+                    str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
+                ] or None
+                logger.info(
+                    "generate-now Groq ok features=%s model=%s",
+                    preferred_keys,
+                    _tr.get("model"),
+                )
+            else:
+                logger.warning("generate-now: Groq unavailable; raw request will be used")
+        except Exception:
+            logger.exception("generate-now Groq failed; continuing with raw request")
+
+        if context.user_data is not None:
+            context.user_data.pop("force_generate_once", None)
+            context.user_data.pop("skip_clarify_once", None)
+            context.user_data["translated_spec_request"] = gen_request
+            if preferred_keys:
+                context.user_data["translated_preferred_keys"] = preferred_keys
+            context.user_data["translated_source"] = "generate_now_fastpath"
+
+        status_msg = await message.reply_text("⚙️ جاري توليد البوت الآن…")
+        try:
+            await context.bot.send_chat_action(
+                chat_id=message.chat_id, action=ChatAction.TYPING
+            )
+        except Exception:
+            pass
+
+        try:
+            from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+            uid = int(user.id) if user else 0
+            work_dir = get_user_sandbox(uid, OUTPUT_DIR).new_project_dir(label="gen")
+        except Exception:
+            work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
+
+        try:
+            try:
+                from b2b_platform.plan_gate import filter_preferred_keys
+                preferred_keys = filter_preferred_keys(
+                    list(preferred_keys) if preferred_keys else None,
+                    user_id=int(user.id) if user else 0,
+                )
+            except Exception:
+                pass
+
+            result = await run_with_heartbeat(
+                run_generation,
+                gen_request,
+                work_dir,
+                int(user.id) if user else 0,
+                status_msg=status_msg,
+                preferred_keys=preferred_keys,
+            )
+            if result is None:
+                await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
+                return
+            try:
+                if result and getattr(result, "success", False) and getattr(result, "project_path", None):
+                    from b2b_platform.plan_gate import apply_post_generation
+                    apply_post_generation(
+                        str(result.project_path),
+                        user_id=int(user.id) if user else 0,
+                    )
+            except Exception:
+                logger.exception("post-generation plan hooks failed")
+
+            from ..generation_flow import deliver_generation_result
+            await deliver_generation_result(
+                message=message,
+                status_msg=status_msg,
+                context=context,
+                user=user,
+                request=gen_request,
+                result=result,
+            )
+            try:
+                if result and getattr(result, "success", False) and getattr(result, "project_path", None):
+                    from ..generation_cache import get_generation_cache
+                    get_generation_cache().put(
+                        int(user.id) if user else 0,
+                        gen_request,
+                        {"project_path": str(result.project_path), "entry_point": "main.py"},
+                    )
+                _persist_session(user, context)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.exception("generate-now path failed")
+            err_text = escape_md(sanitize_error(str(e), max_len=400))
+            await safe_edit_text(
+                status_msg,
+                f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`",
+                use_markdown=True,
+            )
+        return
+
     _skip_chat_for_generate = bool(
         (context.user_data or {}).get("force_generate_once")
     )
