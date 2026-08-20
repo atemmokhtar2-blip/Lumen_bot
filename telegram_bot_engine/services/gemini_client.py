@@ -35,6 +35,8 @@ _KEY_ENV_NAMES = (
     "GEMINI_KEY",
     "GOOGLE_AI_API_KEY",
 )
+_NUMBERED_KEY_ENV_NAMES = tuple(f"GEMINI_API_KEY_{idx}" for idx in range(1, 151))
+_KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 
 _MODEL_FALLBACKS = (
     "gemini-3.6-flash",
@@ -121,47 +123,86 @@ def _read_key_file(path: str) -> str:
     return ""
 
 
-def _api_key() -> str:
-    """Resolve key from env (tolerant of name spaces/case) or secret file."""
-    for name in _KEY_ENV_NAMES:
+def _key_cooldown_seconds() -> float:
+    try:
+        return max(0.0, min(3600.0, float(os.getenv("GEMINI_KEY_COOLDOWN_SEC") or "60")))
+    except ValueError:
+        return 60.0
+
+
+def _key_failover_enabled() -> bool:
+    raw = (os.getenv("GEMINI_KEY_FAILOVER_ENABLED") or "").strip()
+    return _truthy(raw) if raw else True
+
+
+def _api_keys() -> list[tuple[str, str]]:
+    """Resolve ordered, deduplicated keys without exposing values in logs."""
+    names = _KEY_ENV_NAMES + _NUMBERED_KEY_ENV_NAMES
+    resolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name in names:
         val = _normalize_secret(os.getenv(name) or "")
-        if val:
-            return val
-    wanted = {n.upper() for n in _KEY_ENV_NAMES}
+        if val and val not in seen:
+            resolved.append((name, val))
+            seen.add(val)
+    wanted = {n.upper() for n in names}
     try:
         for k, v in list(os.environ.items()):
             if (k or "").strip().upper() in wanted:
                 val = _normalize_secret(v or "")
-                if val:
-                    logger.info("Gemini key resolved via env name %r", k)
-                    return val
+                if val and val not in seen:
+                    resolved.append((k, val))
+                    seen.add(val)
     except Exception:
         logger.exception("Gemini env scan failed")
-    for path in (
-        (os.getenv("GEMINI_API_KEY_FILE") or "").strip(),
-        (os.getenv("GOOGLE_API_KEY_FILE") or "").strip(),
-        "/run/secrets/gemini_api_key",
-        "/run/secrets/GEMINI_API_KEY",
-    ):
-        if not path:
-            continue
-        val = _read_key_file(path)
-        if val:
-            logger.info("Gemini key resolved via file %s", path)
-            return val
-    return ""
+    if not resolved:
+        for path in (
+            (os.getenv("GEMINI_API_KEY_FILE") or "").strip(),
+            (os.getenv("GOOGLE_API_KEY_FILE") or "").strip(),
+            "/run/secrets/gemini_api_key",
+            "/run/secrets/GEMINI_API_KEY",
+        ):
+            if not path:
+                continue
+            val = _read_key_file(path)
+            if val and val not in seen:
+                resolved.append((path, val))
+                seen.add(val)
+    return resolved
+
+
+def _api_key() -> str:
+    """Return the first available key for backward compatibility."""
+    keys = _api_keys()
+    return keys[0][1] if keys else ""
+
+
+def _available_api_keys() -> list[tuple[str, str]]:
+    keys = _api_keys()
+    if not _key_failover_enabled() or len(keys) <= 1:
+        return keys[:1]
+    now = time.monotonic()
+    available = [(source, key) for source, key in keys if _KEY_COOLDOWN_UNTIL.get(source, 0.0) <= now]
+    return available or keys[:1]
+
+
+def _cooldown_key(source: str) -> None:
+    cooldown = _key_cooldown_seconds()
+    if cooldown > 0:
+        _KEY_COOLDOWN_UNTIL[source] = time.monotonic() + cooldown
 
 
 def enabled() -> bool:
     raw = (os.getenv("GEMINI_ENABLED") or "").strip()
     if raw:
         return _truthy(raw)
-    return bool(_api_key())
+    return bool(_api_keys())
 
 
 def status_snapshot() -> dict[str, Any]:
     """Safe diagnostics (never logs the raw key)."""
-    key = _api_key()
+    keys = _api_keys()
+    key = keys[0][1] if keys else ""
     present_names: list[str] = []
     try:
         for k in os.environ:
@@ -173,6 +214,7 @@ def status_snapshot() -> dict[str, Any]:
     return {
         "enabled": enabled(),
         "key_present": bool(key),
+        "key_count": len(keys),
         "key_len": len(key),
         "key_prefix": (key[:4] + "...") if len(key) >= 8 else ("set" if key else ""),
         "model": model_name(),
@@ -357,9 +399,9 @@ def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
 
 
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Call Gemini with model + schema fallbacks (production path)."""
-    key = _api_key()
-    if not key:
+    """Call Gemini with model fallback and authorized-key failover."""
+    keys = _available_api_keys()
+    if not keys:
         raise RuntimeError("GEMINI_API_KEY is not configured")
 
     _experiment_delay()
@@ -383,80 +425,118 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
         "responseMimeType": "application/json",
     }
 
-    for model in candidates:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent"
-        )
-        for use_schema in (True, False):
-            payload = {
-                **base_payload,
-                "generationConfig": schema_config if use_schema else plain_config,
-            }
-            try:
-                response = requests.post(
-                    url,
-                    params={"key": key},
-                    json=payload,
-                    timeout=_timeout(),
-                    headers={"Content-Type": "application/json"},
-                )
-            except requests.RequestException as exc:
-                last_error = exc
-                logger.warning("Gemini network error model=%s: %s", model, exc)
+    for key_source, key in keys:
+        rotate_key = False
+        for model in candidates:
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent"
+            )
+            for use_schema in (True, False):
+                payload = {
+                    **base_payload,
+                    "generationConfig": schema_config if use_schema else plain_config,
+                }
+                try:
+                    response = requests.post(
+                        url,
+                        params={"key": key},
+                        json=payload,
+                        timeout=_timeout(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                except requests.RequestException as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Gemini network error source=%s model=%s: %s",
+                        key_source,
+                        model,
+                        exc,
+                    )
+                    _cooldown_key(key_source)
+                    rotate_key = True
+                    break
+
+                if response.status_code in {429, 503}:
+                    body_preview = (response.text or "")[:240]
+                    logger.warning(
+                        "Gemini source=%s model=%s HTTP %s — key cooldown and failover; body=%s",
+                        key_source,
+                        model,
+                        response.status_code,
+                        body_preview,
+                    )
+                    last_error = RuntimeError(
+                        f"Gemini source {key_source} HTTP {response.status_code}: {body_preview}"
+                    )
+                    _cooldown_key(key_source)
+                    rotate_key = True
+                    break
+
+                if response.status_code == 404:
+                    logger.warning(
+                        "Gemini source=%s model=%s HTTP 404 — model fallback",
+                        key_source,
+                        model,
+                    )
+                    last_error = RuntimeError(f"Gemini model {model} HTTP 404")
+                    break
+
+                if response.status_code in {401, 403}:
+                    body_preview = (response.text or "")[:240]
+                    logger.error(
+                        "Gemini source=%s auth HTTP %s; key cooldown and failover: %s",
+                        key_source,
+                        response.status_code,
+                        body_preview,
+                    )
+                    last_error = RuntimeError(
+                        f"Gemini source {key_source} auth HTTP {response.status_code}: {body_preview}"
+                    )
+                    _cooldown_key(key_source)
+                    rotate_key = True
+                    break
+
+                if response.status_code >= 400:
+                    body_preview = (response.text or "")[:400]
+                    logger.warning(
+                        "Gemini HTTP %s source=%s model=%s schema=%s body=%s",
+                        response.status_code,
+                        key_source,
+                        model,
+                        use_schema,
+                        body_preview,
+                    )
+                    last_error = RuntimeError(
+                        f"Gemini HTTP {response.status_code}: {body_preview}"
+                    )
+                    continue
+
+                try:
+                    result = _normalize(_extract_json(response.json()))
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Gemini parse failed source=%s model=%s schema=%s: %s",
+                        key_source,
+                        model,
+                        use_schema,
+                        exc,
+                    )
+                    continue
+
+                if model != primary or not use_schema or key_source != keys[0][0]:
+                    logger.info(
+                        "Gemini ok source=%s model=%s schema=%s",
+                        key_source,
+                        model,
+                        use_schema,
+                    )
+                return result
+            if rotate_key:
                 break
 
-            if response.status_code in {404, 429, 503}:
-                logger.warning(
-                    "Gemini model %s HTTP %s — fallback",
-                    model,
-                    response.status_code,
-                )
-                last_error = RuntimeError(
-                    f"Gemini model {model} HTTP {response.status_code}"
-                )
-                break
-
-            if response.status_code in {401, 403}:
-                body_preview = (response.text or "")[:400]
-                logger.error(
-                    "Gemini auth HTTP %s: %s", response.status_code, body_preview
-                )
-                raise RuntimeError(
-                    f"Gemini API key rejected (HTTP {response.status_code}): {body_preview}"
-                )
-
-            if response.status_code >= 400:
-                body_preview = (response.text or "")[:400]
-                logger.warning(
-                    "Gemini HTTP %s model=%s schema=%s body=%s",
-                    response.status_code,
-                    model,
-                    use_schema,
-                    body_preview,
-                )
-                last_error = RuntimeError(
-                    f"Gemini HTTP {response.status_code}: {body_preview}"
-                )
-                continue
-
-            try:
-                result = _normalize(_extract_json(response.json()))
-            except Exception as exc:
-                last_error = exc
-                logger.warning(
-                    "Gemini parse failed model=%s schema=%s: %s",
-                    model,
-                    use_schema,
-                    exc,
-                )
-                continue
-
-            if model != primary or not use_schema:
-                logger.info("Gemini ok model=%s schema=%s", model, use_schema)
-            return result
-
-    raise RuntimeError(f"Gemini generate failed for all models: {last_error}")
+    raise RuntimeError(f"Gemini generate failed for all authorized keys/models: {last_error}")
 
 
 def translate(text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
