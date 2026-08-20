@@ -136,7 +136,8 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
 
 
 # Paths that must keep a raw body stream (custom size caps / signature verify).
-# json_body_middleware MUST NOT consume these bodies.
+# json_body_middleware MUST NOT consume these bodies — they call
+# parse_json_object_bytes themselves after a capped read.
 RAW_BODY_PATHS = frozenset(
     {
         "/v1/billing/webhook/stripe",
@@ -145,87 +146,96 @@ RAW_BODY_PATHS = frozenset(
 )
 
 
+def parse_json_object_bytes(raw: bytes, *, empty_ok: bool = True) -> dict:
+    """Single root parser: raw request bytes → JSON object dict.
+
+    Never raises HTTP exceptions — callers map ValueError codes:
+      invalid_json | body_must_be_object
+
+    Empty / whitespace-only body → {} when empty_ok (POST without body is valid
+    for rotate_key, diagnose, portal, etc.).
+    """
+    import json
+
+    if raw is None or not raw.strip():
+        if empty_ok:
+            return {}
+        raise ValueError("invalid_json")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("invalid_json") from exc
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid_json") from exc
+    if body is None:
+        if empty_ok:
+            return {}
+        raise ValueError("invalid_json")
+    if not isinstance(body, dict):
+        raise ValueError("body_must_be_object")
+    return body
+
+
+async def read_capped_body(request, *, max_bytes: int) -> bytes:
+    """Read request body with a hard byte cap. Raises ValueError with stable codes."""
+    cl = request.headers.get("Content-Length")
+    if cl is not None:
+        try:
+            n = int(cl)
+        except ValueError as exc:
+            raise ValueError("invalid_content_length") from exc
+        if n < 0 or n > max_bytes:
+            raise ValueError("payload_too_large")
+    try:
+        raw = await request.content.read(max_bytes + 1)
+    except Exception as exc:
+        raise ValueError("body_read_failed") from exc
+    if len(raw) > max_bytes:
+        raise ValueError("payload_too_large")
+    return raw
+
+
 async def safe_json_body(
     request,
     *,
     required: bool = True,
     max_bytes: int = 65536,
 ) -> dict:
-    """Parse JSON body safely: never raise unhandled errors to the client.
+    """Parse JSON body safely via the single root parser.
 
     Root contract:
     - Prefer request['json_body'] when json_body_middleware already parsed.
+    - Otherwise read capped bytes + parse_json_object_bytes (never request.json()).
     - Invalid / non-object JSON → HTTP 400 with stable error code.
-    - Empty body when required=False → {}.
-    - Oversized declared Content-Length → 413 (defense in depth).
-
-    Returns a dict only. Callers must not assume other JSON root types.
+    - Empty body → {} (required flag only rejects missing *fields* at the route).
     """
     from aiohttp import web
 
-    # Middleware already parsed → single source of truth (body stream consumed once)
+    def _http_for(code: str):
+        if code == "payload_too_large":
+            return web.HTTPRequestEntityTooLarge(
+                text='{"error":"payload_too_large"}',
+                content_type="application/json",
+            )
+        return web.HTTPBadRequest(
+            text=f'{{"error":"{code}"}}',
+            content_type="application/json",
+        )
+
     if request.get("json_body_parsed"):
         body = request.get("json_body")
-        if body is None:
-            if not required:
-                return {}
-            raise web.HTTPBadRequest(
-                text='{"error":"invalid_json"}',
-                content_type="application/json",
-            )
-        if not isinstance(body, dict):
-            raise web.HTTPBadRequest(
-                text='{"error":"body_must_be_object"}',
-                content_type="application/json",
-            )
-        return body
-
-    cl = request.headers.get("Content-Length")
-    if cl is not None:
-        try:
-            if int(cl) > max_bytes:
-                raise web.HTTPRequestEntityTooLarge(
-                    text='{"error":"payload_too_large"}',
-                    content_type="application/json",
-                )
-        except ValueError:
-            raise web.HTTPBadRequest(
-                text='{"error":"invalid_content_length"}',
-                content_type="application/json",
-            )
-
-    if not required and not request.can_read_body:
-        request["json_body"] = {}
-        request["json_body_parsed"] = True
-        return {}
+        if isinstance(body, dict):
+            return body
+        raise _http_for("invalid_json")
 
     try:
-        body = await request.json()
-    except Exception:
-        if not required:
-            request["json_body"] = {}
-            request["json_body_parsed"] = True
-            return {}
-        raise web.HTTPBadRequest(
-            text='{"error":"invalid_json"}',
-            content_type="application/json",
-        )
+        raw = await read_capped_body(request, max_bytes=max_bytes)
+        body = parse_json_object_bytes(raw, empty_ok=True)
+    except ValueError as exc:
+        raise _http_for(str(exc) or "invalid_json") from exc
 
-    if body is None:
-        if not required:
-            request["json_body"] = {}
-            request["json_body_parsed"] = True
-            return {}
-        raise web.HTTPBadRequest(
-            text='{"error":"invalid_json"}',
-            content_type="application/json",
-        )
-
-    if not isinstance(body, dict):
-        raise web.HTTPBadRequest(
-            text='{"error":"body_must_be_object"}',
-            content_type="application/json",
-        )
     request["json_body"] = body
     request["json_body_parsed"] = True
     return body

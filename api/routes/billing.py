@@ -6,8 +6,8 @@ import logging
 
 from aiohttp import web
 
-from api.auth import require_tenant
-from api.security import admin_token_matches, safe_json_body
+from api.auth import require_admin, require_tenant
+from api.security import safe_json_body
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
 from b2b_platform.plans import get_plan
@@ -135,16 +135,9 @@ async def dev_activate(request: web.Request) -> web.Response:
             text='{"error":"dev_activate_disabled","detail":"set ALLOW_DEV_BILLING=1 only in trusted dev"}',
             content_type="application/json",
         )
-    # Multi-tenant or non-dev: require platform admin token always (same root compare).
-    admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+    # Multi-tenant or non-dev: same root admin gate as tenant bootstrap.
     if is_multi_tenant() or not is_dev_environment() or stripe_configured():
-        if not admin or not admin_token_matches(
-            request.headers.get("X-Admin-Token") or "", admin
-        ):
-            raise web.HTTPUnauthorized(
-                text='{"error":"admin_required_for_dev_activate"}',
-                content_type="application/json",
-            )
+        require_admin(request)
     tenant = require_tenant(request)
     body = await safe_json_body(request, max_bytes=65536)
     plan_id = str(body.get("plan_id") or "pro").lower()

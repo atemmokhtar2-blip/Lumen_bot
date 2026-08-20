@@ -137,46 +137,33 @@ async def body_size_guard_middleware(request: web.Request, handler):
 
 @web.middleware
 async def json_body_middleware(request: web.Request, handler):
-    """Root JSON gate: parse once, reject bad JSON before any route runs.
+    """Root JSON gate: bytes → parse_json_object_bytes before any route runs.
 
     Skips RAW_BODY_PATHS (Stripe webhook signature, generate size-cap path).
-    Stores request['json_body'] so safe_json_body / handlers share one parse.
-    Non-object JSON roots are rejected at the edge (400).
+    Empty body is valid → {}. Invalid JSON / non-object → 400 at the edge.
+    Never uses request.json(); single parser lives in api.security.
     """
     if request.method not in {"POST", "PUT", "PATCH"}:
         return await handler(request)
 
-    from api.security import RAW_BODY_PATHS
+    from api.security import (
+        RAW_BODY_PATHS,
+        parse_json_object_bytes,
+        read_capped_body,
+    )
 
     path = request.path or ""
     if path in RAW_BODY_PATHS:
         return await handler(request)
 
-    # No body claimed → empty object (routes that require fields still 400 later)
-    cl = request.headers.get("Content-Length")
-    if (cl is None or cl == "0") and not request.can_read_body:
-        request["json_body"] = {}
-        request["json_body_parsed"] = True
-        return await handler(request)
-
+    max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     try:
-        body = await request.json()
-    except Exception:
-        return web.json_response(
-            {"ok": False, "error": "invalid_json"},
-            status=400,
-        )
-
-    if body is None:
-        request["json_body"] = {}
-        request["json_body_parsed"] = True
-        return await handler(request)
-
-    if not isinstance(body, dict):
-        return web.json_response(
-            {"ok": False, "error": "body_must_be_object"},
-            status=400,
-        )
+        raw = await read_capped_body(request, max_bytes=max_size)
+        body = parse_json_object_bytes(raw, empty_ok=True)
+    except ValueError as exc:
+        code = str(exc) or "invalid_json"
+        status = 413 if code == "payload_too_large" else 400
+        return web.json_response({"ok": False, "error": code}, status=status)
 
     request["json_body"] = body
     request["json_body_parsed"] = True

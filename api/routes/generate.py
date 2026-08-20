@@ -37,22 +37,7 @@ async def generate(request: web.Request) -> web.Response:
             headers={"Retry-After": str(retry)},
         )
 
-    # Body size: do not trust Content-Length alone (chunked transfer bypass).
-    # Read raw bytes with a hard cap, then parse JSON.
-    cl = request.headers.get("Content-Length")
-    if cl is not None:
-        try:
-            if int(cl) > _MAX_BODY_BYTES:
-                raise web.HTTPRequestEntityTooLarge(
-                    text='{"error":"payload_too_large"}',
-                    content_type="application/json",
-                )
-        except ValueError:
-            raise web.HTTPBadRequest(
-                text='{"error":"invalid_content_length"}',
-                content_type="application/json",
-            )
-
+    # Body: RAW_BODY_PATHS — capped read + single root parser (no request.json()).
     ok, reason = get_billing().enforce_generation(tenant.tenant_id)
     if not ok:
         raise web.HTTPPaymentRequired(
@@ -60,30 +45,20 @@ async def generate(request: web.Request) -> web.Response:
             content_type="application/json",
         )
 
-    try:
-        raw = await request.content.read(_MAX_BODY_BYTES + 1)
-    except Exception:
-        raise web.HTTPBadRequest(
-            text='{"error":"body_read_failed"}',
-            content_type="application/json",
-        )
-    if len(raw) > _MAX_BODY_BYTES:
-        raise web.HTTPRequestEntityTooLarge(
-            text='{"error":"payload_too_large"}',
-            content_type="application/json",
-        )
-    try:
-        import json as _json
-        body = _json.loads(raw.decode("utf-8") or "{}")
-    except Exception:
-        raise web.HTTPBadRequest(
-            text='{"error":"invalid_json"}',
-            content_type="application/json",
-        )
+    from api.security import parse_json_object_bytes, read_capped_body
 
-    if not isinstance(body, dict):
+    try:
+        raw = await read_capped_body(request, max_bytes=_MAX_BODY_BYTES)
+        body = parse_json_object_bytes(raw, empty_ok=False)
+    except ValueError as exc:
+        code = str(exc) or "invalid_json"
+        if code == "payload_too_large":
+            raise web.HTTPRequestEntityTooLarge(
+                text='{"error":"payload_too_large"}',
+                content_type="application/json",
+            )
         raise web.HTTPBadRequest(
-            text='{"error":"body_must_be_object"}',
+            text=f'{{"error":"{code}"}}',
             content_type="application/json",
         )
 
