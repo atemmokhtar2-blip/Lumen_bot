@@ -286,7 +286,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["force_generate_once"] = True
             logger.info("Confirm phrase resumed prior bot request")
 
-    if not request.startswith("/"):
+    _skip_chat_for_generate = bool(
+        (context.user_data or {}).get("force_generate_once")
+    )
+    if _skip_chat_for_generate:
+        # User confirmed generation — skip Gemini entirely (slow / failing).
+        # Translate with Groq when possible, then fall through to spec_core.
+        logger.info("Skipping chat layer; force_generate_once active")
+        try:
+            from telegram_bot_engine.services.translator_client import translate_request
+            _hist = []
+            if context.user_data is not None:
+                _hist = list(context.user_data.get("chat_history") or [])[-8:]
+            _tr = translate_request(
+                request,
+                {"conversation_history": _hist, "server_facts": {"project": "Maestro"}},
+            )
+            if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
+                request = str(_tr.get("spec_request")).strip()
+                if context.user_data is not None:
+                    context.user_data["translated_spec_request"] = request
+                    context.user_data["translated_preferred_keys"] = [
+                        str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
+                    ]
+                    context.user_data["translated_source"] = "groq_confirm_fastpath"
+                    context.user_data["skip_clarify_once"] = True
+                logger.info(
+                    "Confirm fast-path Groq translation features=%s",
+                    _tr.get("features_requested"),
+                )
+            else:
+                logger.warning("Confirm fast-path: Groq returned no spec; using raw request")
+        except Exception:
+            logger.exception("Confirm fast-path Groq failed; continuing with raw request")
+        try:
+            await message.reply_text("جاري تجهيز البوت الآن…")
+        except Exception:
+            pass
+
+    if not request.startswith("/") and not _skip_chat_for_generate:
         # Every natural-language message goes to the standalone chat model first.
         # Keyword detection is only used to choose an outage message; it never
         # decides whether the model gets the message.
@@ -914,6 +952,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             re.search(r"اعمل\s*بوت|أن?شئ\s*بوت|عايز\s*بوت", request, re.I)
             or len(re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)) >= 2
         )
+    if not _is_bot_spec:
+        _is_bot_spec = bool(
+            (context.user_data or {}).get("force_generate_once")
+            or (context.user_data or {}).get("translated_spec_request")
+            or (context.user_data or {}).get("last_bot_request")
+            or _looks_like_generation_request(request)
+            or (
+                "bot" in request.lower()
+                and any(k in request for k in ("welcome_set", "user_ban", "telegram", "feature"))
+            )
+        )
     if (
         (not _is_bot_spec)
         and _rt_help
@@ -951,7 +1000,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Non-bot, non-hard messages: short deterministic help (no AI)
     # Exception: just finished L3 clarify → always continue to generate
-    if not _is_hard and not _is_bot_spec and not _clarify_done:
+    if (
+        not _is_hard
+        and not _is_bot_spec
+        and not _clarify_done
+        and not (context.user_data or {}).get("force_generate_once")
+    ):
         help_ar = (
             "أرسل وصفاً واضحاً للبوت الذي تريده، مثلاً:\n"
             "• بوت يرد على الرسائل\n"
