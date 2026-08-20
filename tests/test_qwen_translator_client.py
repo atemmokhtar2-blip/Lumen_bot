@@ -52,6 +52,11 @@ def main() -> None:
             {
                 "conversation_history": [{"role": "user", "content": "جروب إدارة"}],
                 "server_facts": {"plan": "free", "project": "Maestro"},
+                "gemini_understanding": {
+                    "purpose": "group moderation",
+                    "features_requested": ["welcome_set", "user_ban"],
+                    "source": "gemini",
+                },
             },
         )
     finally:
@@ -61,6 +66,7 @@ def main() -> None:
     assert captured["url"] == "https://qwen.example/v1/translate"
     assert captured["headers"]["Authorization"] == "Bearer test-service-token"
     assert captured["json"]["server_context"]["project"] == "Maestro"
+    assert captured["json"]["gemini_understanding"]["source"] == "gemini"
     assert "spec_core_capabilities" in captured["json"]
     print("qwen translator client: OK")
 

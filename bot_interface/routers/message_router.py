@@ -251,14 +251,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
 
-        # A completed Gemini translation is the only way the chat layer may
-        # enter generation. The original natural-language reply is not enough:
-        # spec_core must receive a validated request and real registry keys.
+        # Two-stage understanding pipeline:
+        # Gemini understands the user and produces a structured intent;
+        # Qwen translates that intent into the validated spec_core contract.
+        # The user sees only the final conversational/generation result.
         _translated_generation_request = ""
         _translated_preferred_keys = []
+        _translation_source = ""
         if isinstance(chat_result, dict):
             try:
                 from telegram_bot_engine.services.gemini_client import validate_spec_translation
+                from telegram_bot_engine.services.translator_client import translate_request
                 _translation = chat_result.get("translation")
                 _action = chat_result.get("action") if isinstance(chat_result.get("action"), dict) else {}
                 if (
@@ -266,20 +269,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     and isinstance(_translation, dict)
                     and validate_spec_translation(_translation)
                 ):
-                    _translated_generation_request = str(_translation.get("spec_request") or "").strip()
-                    _translated_preferred_keys = [
+                    _gemini_keys = [
                         str(key).strip()
                         for key in (_translation.get("features_requested") or [])
                         if str(key).strip()
                     ]
+                    _gemini_understanding = {
+                        "purpose": str(_translation.get("purpose") or ""),
+                        "features_requested": _gemini_keys,
+                        "flows": [
+                            str(flow).strip()
+                            for flow in (_translation.get("flows") or [])
+                            if str(flow).strip()
+                        ],
+                        "strict_spec": bool(_translation.get("strict_spec")),
+                        "confidence": float(_translation.get("confidence") or 0.0),
+                        "spec_request": str(_translation.get("spec_request") or ""),
+                        "source": "gemini",
+                    }
+                    _qwen_context = dict(chat_context)
+                    _qwen_context["server_facts"] = dict(live_context or {})
+                    _qwen_context["server_facts"]["gemini_understanding"] = _gemini_understanding
+                    _qwen_context["gemini_understanding"] = _gemini_understanding
+                    _qwen_translation = translate_request(request, _qwen_context)
+                    if isinstance(_qwen_translation, dict):
+                        _translated_generation_request = str(
+                            _qwen_translation.get("spec_request") or ""
+                        ).strip()
+                        _translated_preferred_keys = [
+                            str(key).strip()
+                            for key in (_qwen_translation.get("features_requested") or [])
+                            if str(key).strip()
+                        ]
+                        _translation_source = "qwen_after_gemini"
+                        logger.info(
+                            "Gemini understanding handed off to Qwen: features=%s",
+                            _translated_preferred_keys,
+                        )
+                    else:
+                        # Qwen is an enhancement, not a reason to block a valid
+                        # Gemini contract; keep the deterministic path available.
+                        _translated_generation_request = str(
+                            _translation.get("spec_request") or ""
+                        ).strip()
+                        _translated_preferred_keys = _gemini_keys
+                        _translation_source = "gemini_fallback_qwen_unavailable"
+                        logger.warning("Qwen handoff unavailable; using validated Gemini contract")
             except Exception:
-                logger.exception("validated Gemini-to-spec_core handoff failed")
+                logger.exception("Gemini-to-Qwen-to-spec_core handoff failed")
 
         if _translated_generation_request:
             request = _translated_generation_request
             if context.user_data is not None:
                 context.user_data["translated_spec_request"] = request
                 context.user_data["translated_preferred_keys"] = _translated_preferred_keys
+                context.user_data["translated_source"] = _translation_source
                 context.user_data["skip_clarify_once"] = True
         # Any non-empty answer from the model is authoritative for this turn,
         # including the safe "data unavailable" response. Do not fall through

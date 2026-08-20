@@ -96,6 +96,7 @@ def translate_request(
         "text": (text or "")[:20000],
         "conversation_history": list(context.get("conversation_history") or [])[-12:],
         "server_context": dict(context.get("server_facts") or context.get("server_context") or {}),
+        "gemini_understanding": dict(context.get("gemini_understanding") or {}),
         "spec_core_capabilities": _spec_core_capabilities(),
     }
     connect_timeout, read_timeout = _timeout()
