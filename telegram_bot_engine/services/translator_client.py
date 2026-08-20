@@ -23,8 +23,8 @@ _KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 # Models available on the current Groq free surface (verified against the key).
 # Prefer a compact model for JSON translation; fall back to larger ones.
 _DEFAULT_MODELS = (
-    "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
     "qwen/qwen3.6-27b",
     "allam-2-7b",
 )
@@ -145,6 +145,10 @@ def _build_messages(text: str, context: dict[str, Any], capabilities: list[str])
         "clarification_needed (boolean), clarification_questions (array of short strings), "
         "spec_request (string). "
         "features_requested MUST be keys that appear exactly in SPEC_CORE_CAPABILITIES. "
+        "For Arabic group bots that welcome members use welcome_set (NOT announce). "
+        "For ban/kick/mute/warn use user_ban, user_kick, user_mute, user_warn "
+        "(NOT admin_ban_bot unless the user asked for a ban-management admin panel). "
+        "Always include start and help when building a bot. "
         "If the user intent is complete, clarification_needed=false, strict_spec=true, "
         "and spec_request must mention the word bot/بوت and the chosen feature keys. "
         "If intent is incomplete, clarification_needed=true, spec_request=\"\", "
@@ -246,6 +250,72 @@ def _validate_translation(translation: dict[str, Any]) -> None:
         raise ValueError("Groq confidence below threshold")
 
 
+
+# Deterministic Arabic/English intent → capability keys (overrides weak LLM picks)
+_FEATURE_ALIASES = {
+    "admin_ban_bot": "user_ban",
+    "admin_unban_bot": "user_unban",
+    "ban": "user_ban",
+    "kick": "user_kick",
+    "mute": "user_mute",
+    "warn": "user_warn",
+    "welcome": "welcome_set",
+    "setwelcome": "welcome_set",
+}
+
+_AR_RULES: list[tuple[str, list[str]]] = [
+    # (regex, feature keys) — order matters, first matches accumulate
+    (r"يرحب|ترحيب|ترحيب.?بال|welcome", ["welcome_set", "welcome_show"]),
+    (r"يحظر|حظر|بان|ban(?!k)", ["user_ban"]),
+    (r"يطرد|طرد|kick", ["user_kick"]),
+    (r"يكتم|كتم|ميوت|mute", ["user_mute"]),
+    (r"ينذر|انذار|تحذير|warn", ["user_warn"]),
+    (r"قواعد|laws|rules", ["rules"]),
+    (r"يشتم|سب|إساء|مسيئ|insult|toxic|bad.?word|كلمات.?مسي", ["user_ban", "delete_message", "user_warn"]),
+    (r"يمسح|حذف.?رس|delete.?msg", ["delete_message"]),
+]
+
+
+def _rule_features_from_text(text: str, allowed: set[str]) -> list[str]:
+    """High-precision feature extraction for common bot intents (AR/EN)."""
+    import re
+    raw = (text or "").strip().lower()
+    if not raw:
+        return []
+    found: list[str] = []
+    for pattern, keys in _AR_RULES:
+        if re.search(pattern, raw, re.I):
+            for k in keys:
+                canon = _FEATURE_ALIASES.get(k, k)
+                if canon in allowed and canon not in found:
+                    found.append(canon)
+    # Always include start/help when we detected any group-moderation intent
+    if found:
+        for core in ("start", "help"):
+            if core in allowed and core not in found:
+                found.append(core)
+    return found[:8]
+
+
+def _canonicalize_features(features: list[str], allowed: set[str]) -> list[str]:
+    out: list[str] = []
+    for item in features or []:
+        key = _FEATURE_ALIASES.get(str(item).strip(), str(item).strip())
+        if key in allowed and key not in out:
+            out.append(key)
+    return out[:8]
+
+
+def _merge_features(rule: list[str], model: list[str], allowed: set[str]) -> list[str]:
+    """Prefer rule hits; keep valid model extras that are not conflicting aliases."""
+    merged = _canonicalize_features(list(rule) + list(model), allowed)
+    # If rules found welcome/ban family, drop weak echo-like noise if present
+    noise = {"echo", "announce", "lang", "my_id"}
+    if any(k in merged for k in ("welcome_set", "user_ban", "user_mute", "user_warn", "rules")):
+        merged = [k for k in merged if k not in noise] or merged
+    return merged[:8]
+
+
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Translate user text into a validated spec_core-oriented contract via Groq."""
     if not _enabled():
@@ -263,6 +333,7 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
             "rules", "lock_chat", "delete_message",
         ]
     cap_set = set(capabilities)
+    rule_features = _rule_features_from_text(text or "", cap_set)
     messages = _build_messages(text or "", context, capabilities)
     models = _models()
     last_error: Exception | None = None
@@ -310,13 +381,32 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
                 )
                 body = _extract_json(content)
                 translation = _normalize_translation(body, cap_set)
+                model_feats = _canonicalize_features(
+                    list(translation.get("features_requested") or []), cap_set
+                )
+                merged = _merge_features(rule_features, model_feats, cap_set)
+                if merged:
+                    translation["features_requested"] = merged
+                    # Clear false clarification when rules already know the intent
+                    if rule_features and len(rule_features) >= 2:
+                        translation["clarification_needed"] = False
+                        translation["clarification_questions"] = []
+                        translation["strict_spec"] = True
+                        if not str(translation.get("spec_request") or "").strip():
+                            translation["spec_request"] = (
+                                "Telegram bot with features: " + ", ".join(merged)
+                            )
+                        if float(translation.get("confidence") or 0) < 0.75:
+                            translation["confidence"] = 0.85
                 translation["model"] = str(payload.get("model") or model)
+                translation["rule_features"] = list(rule_features)
                 _validate_translation(translation)
                 logger.info(
-                    "Groq translation ok source=%s model=%s features=%s clarification=%s",
+                    "Groq translation ok source=%s model=%s features=%s rules=%s clarification=%s",
                     source,
                     translation.get("model"),
                     translation.get("features_requested"),
+                    rule_features,
                     translation.get("clarification_needed"),
                 )
                 return translation
@@ -328,6 +418,22 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
                 last_error = exc
                 logger.warning("Groq translate failed source=%s model=%s: %s", source, model, exc)
                 continue
+    if rule_features:
+        logger.warning(
+            "Groq unavailable (%s); using rule features=%s", last_error, rule_features
+        )
+        return {
+            "purpose": (text or "")[:160],
+            "features_requested": rule_features,
+            "flows": [],
+            "strict_spec": True,
+            "model": "rules_fallback",
+            "confidence": 0.8,
+            "clarification_needed": False,
+            "clarification_questions": [],
+            "spec_request": "Telegram bot with features: " + ", ".join(rule_features),
+            "rule_features": list(rule_features),
+        }
     logger.warning("Groq translator unavailable; using deterministic spec_core fallback: %s", last_error)
     return None
 
