@@ -49,10 +49,15 @@ def main() -> None:
         "GEMINI_API_KEY",
         "GEMINI_API_KEY_1",
         "GEMINI_API_KEY_2",
+        "GEMINI_API_KEY_3",
+        "GEMINI_API_KEY_20",
+        "GEMINI_API_KEY_150",
         "GEMINI_ENABLED",
         "GEMINI_MODEL",
         "GEMINI_KEY_FAILOVER_ENABLED",
         "GEMINI_KEY_COOLDOWN_SEC",
+        "GEMINI_EXPERIMENT_MODE",
+        "ENVIRONMENT",
     )
     old = {name: os.environ.get(name) for name in names}
     calls = []
@@ -61,6 +66,9 @@ def main() -> None:
         os.environ.pop("GEMINI_API_KEY", None)
         os.environ["GEMINI_API_KEY_1"] = "first-key-for-test"
         os.environ["GEMINI_API_KEY_2"] = "second-key-for-test"
+        for idx in range(3, 21):
+            os.environ[f"GEMINI_API_KEY_{idx}"] = f"pool-key-for-test-{idx}"
+        os.environ["GEMINI_API_KEY_150"] = "last-key-for-test"
         os.environ["GEMINI_ENABLED"] = "1"
         os.environ["GEMINI_MODEL"] = "gemini-3.5-flash-lite"
         os.environ["GEMINI_KEY_FAILOVER_ENABLED"] = "1"
@@ -82,10 +90,28 @@ def main() -> None:
         assert result["source"] == "gemini"
         assert calls == ["first-key-for-test", "second-key-for-test"]
         assert gemini_client._KEY_COOLDOWN_UNTIL.get("GEMINI_API_KEY_1", 0) > 0
+        sources = [source for source, _ in gemini_client._api_keys()]
+        assert sources[0] == "GEMINI_API_KEY_1"
+        assert "GEMINI_API_KEY_20" in sources
+        assert sources[-1] == "GEMINI_API_KEY_150"
         snapshot = gemini_client.status_snapshot()
-        assert snapshot["key_count"] == 2
+        assert snapshot["key_count"] == 21
         assert "first-key-for-test" not in str(snapshot)
         assert "second-key-for-test" not in str(snapshot)
+
+        sleep_calls = []
+        original_sleep = gemini_client.time.sleep
+        gemini_client.time.sleep = lambda seconds: sleep_calls.append(seconds)
+        try:
+            os.environ["GEMINI_EXPERIMENT_MODE"] = "1"
+            os.environ["ENVIRONMENT"] = "production"
+            gemini_client._experiment_delay()
+            assert sleep_calls == []
+            os.environ["ENVIRONMENT"] = "dev"
+            gemini_client._experiment_delay()
+            assert sleep_calls == [2]
+        finally:
+            gemini_client.time.sleep = original_sleep
         print("gemini key failover: OK")
     finally:
         gemini_client._KEY_COOLDOWN_UNTIL.clear()

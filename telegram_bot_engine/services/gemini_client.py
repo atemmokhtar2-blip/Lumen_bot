@@ -93,7 +93,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def model_name() -> str:
-    return (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite").strip()
 
 
 def _normalize_secret(raw: str) -> str:
@@ -231,6 +231,9 @@ def _timeout() -> float:
 
 
 def _experiment_delay() -> None:
+    environment = (os.getenv("ENVIRONMENT") or "").strip().lower()
+    if environment in {"production", "prod"}:
+        return
     if _truthy(os.getenv("GEMINI_EXPERIMENT_MODE")):
         time.sleep(2)
 
