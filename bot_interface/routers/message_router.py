@@ -43,6 +43,20 @@ from ..middlewares.mongo_sync import (
 )
 
 
+def _looks_like_generation_request(text: str) -> bool:
+    value = (text or "").strip().lower()
+    if not value or "بوت" not in value and "bot" not in value:
+        return False
+    return bool(
+        re.search(
+            r"(?:اعمل|عايز|أنشئ|انشئ|ابني|صمم|ولّد|ولد|generate|create).{0,60}(?:بوت|bot)"
+            r"|(?:بوت|bot).{0,60}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create)",
+            value,
+            re.IGNORECASE,
+        )
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.message
@@ -312,7 +326,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             snap.get("env_names_seen"),
         )
 
-        if _state_question:
+        _generation_like = _looks_like_generation_request(request)
+        if _generation_like:
+            # A model outage must not block an explicit bot build request. The
+            # deterministic spec_core path can still parse and generate it.
+            logger.warning(
+                "Gemini chat unavailable for generation request; continuing with spec_core fallback"
+            )
+        elif _state_question:
             await message.reply_text(
                 "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
             )
@@ -326,18 +347,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 snap["key_len"] = len(_api_key())
         except Exception:
             logger.exception("gemini re-resolve failed")
-        if not snap.get("key_present"):
+        if not _generation_like and not snap.get("key_present"):
             await message.reply_text('طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\nأضف GEMINI_API_KEY (أو GOOGLE_API_KEY) في Variables في Railway ثم أعد التشغيل.')
             return
-        if snap.get("enabled") is False:
+        if not _generation_like and snap.get("enabled") is False:
             await message.reply_text(
                 "طبقة المحادثة معطّلة عبر GEMINI_ENABLED. احذف المتغير أو اضبطه على 1."
             )
             return
-        await message.reply_text(
-            "تعذر تشغيل طبقة المحادثة الآن (فشل استدعاء النموذج). حاول مرة أخرى بعد قليل."
-        )
-        return
+        if _generation_like:
+            # Do not send the generic chat outage message for a build request;
+            # continue below so spec_core can perform deterministic generation.
+            pass
+        else:
+            await message.reply_text(
+                "تعذر تشغيل طبقة المحادثة الآن (فشل استدعاء النموذج). حاول مرة أخرى بعد قليل."
+            )
+            return
 
     if request.startswith("/"):
         return
