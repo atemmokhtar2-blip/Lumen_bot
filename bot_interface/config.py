@@ -61,8 +61,38 @@ else:
         "Set ALLOWED_USER_IDS or remove the lock for public access."
     )
 
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR") or __import__("b2b_platform.paths", fromlist=["default_output_dir"]).default_output_dir())
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _resolve_output_dir() -> Path:
+    candidates: list[Path] = []
+    env = (os.getenv("OUTPUT_DIR") or "").strip()
+    if env:
+        candidates.append(Path(env).expanduser())
+    try:
+        from b2b_platform.paths import default_output_dir
+        candidates.append(Path(default_output_dir()))
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            Path.home() / ".capability_maestro",
+            Path("/tmp") / "capability_maestro_output",
+            Path(__file__).resolve().parent.parent / ".runtime",
+        ]
+    )
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return cand.resolve()
+        except Exception as exc:
+            last_err = exc
+            continue
+    raise RuntimeError(f"no_writable_OUTPUT_DIR:{last_err}")
+
+
+OUTPUT_DIR = _resolve_output_dir()
 PORT = int(os.getenv("PORT", "8080"))
 
 

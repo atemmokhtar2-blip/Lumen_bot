@@ -287,6 +287,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.info("Confirm phrase resumed prior bot request")
 
 
+    
     # ══════════════════════════════════════════════════════════════════
     # GENERATE-NOW FAST PATH
     # User confirmed (ابدأ / تمام ابدا وانجز / …) with a known bot request.
@@ -327,8 +328,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     preferred_keys,
                     _tr.get("model"),
                 )
-            else:
-                logger.warning("generate-now: Groq unavailable; raw request will be used")
         except Exception:
             logger.exception("generate-now Groq failed; continuing with raw request")
 
@@ -348,12 +347,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             pass
 
+        # Durable writable workdir (Railway-safe)
+        work_dir: Path | None = None
         try:
+            out_root = Path(OUTPUT_DIR)
+            out_root.mkdir(parents=True, exist_ok=True)
             from telegram_bot_engine.services.user_sandbox import get_user_sandbox
             uid = int(user.id) if user else 0
-            work_dir = get_user_sandbox(uid, OUTPUT_DIR).new_project_dir(label="gen")
-        except Exception:
-            work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(OUTPUT_DIR)))
+            work_dir = get_user_sandbox(uid, out_root).new_project_dir(label="gen")
+        except Exception as sandbox_exc:
+            logger.exception("sandbox workdir failed: %s", sandbox_exc)
+            fallback = Path(OUTPUT_DIR) / "fallback_gen" / f"u{int(user.id) if user else 0}"
+            try:
+                fallback.mkdir(parents=True, exist_ok=True)
+                work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(fallback)))
+            except Exception:
+                work_dir = Path(tempfile.mkdtemp(prefix="botgen_maestro_"))
+                work_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             try:
@@ -376,36 +386,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if result is None:
                 await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
                 return
+
+            success = bool(getattr(result, "success", False))
+            project_path = getattr(result, "project_path", None)
+            errors = list(getattr(result, "errors", None) or [])
+
+            if not success or not project_path:
+                err_bits = ", ".join(str(e)[:80] for e in errors[:4]) or "unknown"
+                await safe_edit_text(
+                    status_msg,
+                    f"❌ فشل التوليد: {escape_md(err_bits)[:300]}",
+                )
+                return
+
+            proj = Path(str(project_path))
+            if not proj.is_dir():
+                await safe_edit_text(
+                    status_msg,
+                    "❌ التوليد انتهى بدون مجلد مشروع. أعد المحاولة.",
+                )
+                return
+
+            # Best-effort post hooks (must not block zip delivery)
             try:
-                if result and getattr(result, "success", False) and getattr(result, "project_path", None):
-                    from b2b_platform.plan_gate import apply_post_generation
-                    apply_post_generation(
-                        str(result.project_path),
-                        user_id=int(user.id) if user else 0,
-                    )
+                from b2b_platform.plan_gate import apply_post_generation
+                apply_post_generation(str(proj), user_id=int(user.id) if user else 0)
             except Exception:
                 logger.exception("post-generation plan hooks failed")
 
-            from ..generation_flow import deliver_generation_result
-            await deliver_generation_result(
-                message=message,
-                status_msg=status_msg,
-                context=context,
-                user=user,
-                request=gen_request,
-                result=result,
-            )
             try:
-                if result and getattr(result, "success", False) and getattr(result, "project_path", None):
+                from ..generation_flow import deliver_generation_result
+                await deliver_generation_result(
+                    message=message,
+                    status_msg=status_msg,
+                    context=context,
+                    user=user,
+                    request=gen_request,
+                    result=result,
+                )
+            except Exception:
+                logger.exception("deliver_generation_result failed; falling back to zip-only")
+                # Fallback: always try to send a zip so the user gets the bot
+                zip_path = make_zip_from_path(proj)
+                if zip_path and Path(zip_path).is_file():
+                    try:
+                        await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
+                    except Exception:
+                        pass
+                    try:
+                        with open(zip_path, "rb") as fh:
+                            await message.reply_document(
+                                document=fh,
+                                filename=Path(zip_path).name,
+                                caption="📦 مشروع البوت (ZIP). فك الضغط واتبع README.",
+                            )
+                    except Exception:
+                        logger.exception("zip upload failed")
+                        await message.reply_text(
+                            f"✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل.\nالمسار: `{escape_md(str(proj))}`"
+                        )
+                else:
+                    await message.reply_text(
+                        f"✅ المشروع اتولد.\nالمسار: `{escape_md(str(proj))}`\n"
+                        "تعذر إنشاء ZIP — راجع السجلات."
+                    )
+
+            try:
+                if success and project_path:
                     from ..generation_cache import get_generation_cache
                     get_generation_cache().put(
                         int(user.id) if user else 0,
                         gen_request,
-                        {"project_path": str(result.project_path), "entry_point": "main.py"},
+                        {"project_path": str(project_path), "entry_point": "main.py"},
                     )
                 _persist_session(user, context)
             except Exception:
                 pass
+        except FileNotFoundError as e:
+            logger.exception("generate-now FileNotFoundError")
+            missing = getattr(e, "filename", None) or (e.args[0] if e.args else "")
+            await safe_edit_text(
+                status_msg,
+                f"❌ ملف/مجلد مفقود أثناء التوليد.\n`{escape_md(str(missing)[:200])}`\n"
+                "تأكد أن OUTPUT_DIR قابل للكتابة على السيرفر.",
+            )
         except Exception as e:
             logger.exception("generate-now path failed")
             err_text = escape_md(sanitize_error(str(e), max_len=400))
