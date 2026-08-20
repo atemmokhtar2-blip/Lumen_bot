@@ -72,13 +72,24 @@ def _emit_main(spec: BotSpec) -> str:
         "product": "shop_catalog",
         "cart": "cart_view",
         "orders": "shop_orders",
-        "order": "order_track",
+        "order": "shop_order",  # place order (not track)
+        "book": "book_slot",
+        "booking": "book_slot",
+        "faq": "faq_show",
+        "balance": "wallet_balance",
+        "topup": "wallet_topup",
         "points": "balance",
         "sub": "plans",
         "subs": "plans",
         "invite": "referral_invite",
         "checkin": "daily_checkin",
         "wallet": "wallet_balance",
+        "ban": "user_ban",
+        "mute": "user_mute",
+        "warn": "user_warn",
+        "note": "note_add",
+        "notes": "note_list",
+        "broadcast": "broadcast_admin",
     }
     for alias, feat in alias_feature.items():
         if feat in feat_to_handler:

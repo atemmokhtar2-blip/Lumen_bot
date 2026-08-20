@@ -280,54 +280,58 @@ def _extract_constraints(text: str) -> list[str]:
     return constraints
 
 
+def _cmd_to_feature_map() -> dict[str, str]:
+    """Full reverse DEFAULT_COMMANDS + user-facing aliases → registry keys only."""
+    try:
+        from telegram_bot_engine.spec_core.builder import DEFAULT_COMMANDS
+        from telegram_bot_engine.spec_core.registry import CAPABILITIES
+    except Exception:
+        DEFAULT_COMMANDS, CAPABILITIES = {}, {}
+    caps = set(CAPABILITIES.keys()) if CAPABILITIES else set()
+    out: dict[str, str] = {}
+    for feat, cmd in (DEFAULT_COMMANDS or {}).items():
+        if not isinstance(cmd, str) or not cmd.strip():
+            continue
+        if caps and feat not in caps:
+            continue
+        out.setdefault(cmd.strip().lower(), str(feat))
+    aliases = {
+        "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
+        "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
+        "book": "book_slot", "booking": "book_slot",
+        "faq": "faq_show", "faqs": "faq_show",
+        "cart": "cart_view", "cartcheckout": "cart_checkout",
+        "balance": "wallet_balance", "topup": "wallet_topup",
+        "ticket": "ticket_open", "tickets": "ticket_list", "mytickets": "ticket_my",
+        "ban": "user_ban", "mute": "user_mute", "warn": "user_warn",
+        "unban": "user_unban", "kick": "user_kick",
+        "note": "note_add", "notes": "note_list", "broadcast": "broadcast_admin",
+        "plans": "plans", "subscribe": "subscribe", "about": "about",
+        "setwelcome": "welcome_set", "welcome": "welcome_set",
+        "add": "task_add", "list": "task_list", "done": "task_done",
+        "delete": "task_delete", "clear": "task_clear", "id": "my_id",
+    }
+    for cmd, feat in aliases.items():
+        if not caps or feat in caps:
+            out[cmd] = feat
+    return out
+
+
 def _features_from_brief(brief: BotBrief) -> list[str]:
     """Map extracted actions/flows → real registry keys only (no invented extras)."""
     feats: list[str] = ["start", "help", "lang"]
-    mapping: dict[str, list[str]] = {
-        "products": ["shop_catalog"],
-        "product": ["shop_catalog"],
-        "catalog": ["shop_catalog"],
-        "shop": ["shop_catalog"],
-        "order": ["shop_order"],
-        "orders": ["shop_orders"],
-        "order_track": ["order_track"],
-        "add": ["task_add"],
-        "list": ["task_list"],
-        "done": ["task_done"],
-        "delete": ["task_delete"],
-        "clear": ["task_clear"],
-        "ticket": ["ticket_open"],
-        "tickets": ["ticket_list"],
-        "mytickets": ["ticket_my"],
-        "payment_methods": ["pay_methods"],
-        "shipping": ["shipping_set"],
-        "support": ["ticket_open"],
-        "faq": ["faq_list"],
-        "cart": ["cart_view", "cart_add"],
-        "my_orders": ["shop_my_orders"],
-        "wallet": ["wallet_balance"],
-        "coupons": ["coupon_apply"],
-        "points": ["points_balance"],
-        "booking": ["book_slot"],
-        "about": ["about"],
-        "pricing": ["pay_methods"],
-        "home": ["start"],
-        "setwelcome": ["welcome_set"],
-        "welcome": ["welcome_set"],
-    }
+    mapping = _cmd_to_feature_map()
     for aid in brief.all_action_ids():
         if aid in {"start", "help", "lang"}:
             continue
-        mapped = mapping.get(aid)
-        if mapped:
-            for cap in mapped:
-                if cap not in feats:
-                    feats.append(cap)
+        cap = mapping.get(aid)
+        if cap and cap not in feats:
+            feats.append(cap)
         elif aid == "about" and "about" not in feats:
             feats.append("about")
     flow_map: dict[str, list[str]] = {
         "order_track_by_id": ["order_track"],
-        "faq_auto_reply": ["faq_list"],
+        "faq_auto_reply": ["faq_show"],
         "support_handoff": ["ticket_open"],
         "staff_support_panel": ["ticket_list", "ticket_reply", "ticket_close"],
         "save_conversations": ["note_add", "note_list"],
@@ -369,9 +373,9 @@ def extract_bot_brief(text: str) -> BotBrief:
         soft_defaults = True
         defaults = {
             "shop": ["shop_catalog", "shop_order", "pay_methods"],
-            "support": ["ticket_open", "faq_list"],
+            "support": ["ticket_open", "faq_show"],
             "booking": ["book_slot", "ticket_open"],
-            "education": ["faq_list"],
+            "education": ["faq_show"],
             "welcome": ["welcome_set", "welcome_show"],
             "tasks": ["task_add", "task_list", "task_done"],
         }

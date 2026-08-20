@@ -450,7 +450,7 @@ def learn_from_feedback_message(
                 # Soft-avoid experimental extras only (not core commerce/support verbs)
                 protect = {
                     "start", "help", "lang", "shop_catalog", "order_track",
-                    "pay_methods", "ticket_open", "faq_list", "product_info",
+                    "pay_methods", "ticket_open", "faq_show", "product_info",
                 }
                 avoid_feats = [f for f in last_feats if f not in protect][:24]
                 if not avoid_feats:

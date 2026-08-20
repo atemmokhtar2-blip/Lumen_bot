@@ -105,8 +105,36 @@ def _append_feature(spec: Any, key: str) -> bool:
     return True
 
 
-def _filter_features(spec: Any, deny_exact: set[str], deny_prefixes: tuple[str, ...]) -> list[str]:
+def _protected_features_from_request(request: str) -> set[str]:
+    """Features the user explicitly asked for via /slash — never strip these."""
+    import re
+    protected: set[str] = set()
+    try:
+        from telegram_bot_engine.spec_core.language_understanding.bot_spec_extract import (
+            _cmd_to_feature_map,
+        )
+        cmap = _cmd_to_feature_map()
+    except Exception:
+        cmap = {}
+    for m in re.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
+        cid = m.group(1).lower()
+        feat = cmap.get(cid)
+        if feat:
+            protected.add(feat)
+        elif cid not in {"start", "help", "cancel", "lang"}:
+            protected.add(cid)
+    return protected
+
+
+def _filter_features(
+    spec: Any,
+    deny_exact: set[str],
+    deny_prefixes: tuple[str, ...],
+    *,
+    protect: set[str] | None = None,
+) -> list[str]:
     stripped: list[str] = []
+    protect = protect or set()
     feats = list(getattr(spec, "features", None) or [])
     keep = []
     for f in feats:
@@ -114,11 +142,14 @@ def _filter_features(spec: Any, deny_exact: set[str], deny_prefixes: tuple[str, 
         if not fid:
             keep.append(f)
             continue
+        base = fid[:-3] if fid.endswith("_cb") else fid
+        # Root: user-written slash capabilities survive domain strip
+        if fid in protect or base in protect:
+            keep.append(f)
+            continue
         if fid in deny_exact or any(fid.startswith(p) for p in deny_prefixes):
             stripped.append(fid)
             continue
-        # callback clones share feature key
-        base = fid[:-3] if fid.endswith("_cb") else fid
         if base in deny_exact or any(base.startswith(p) for p in deny_prefixes):
             stripped.append(fid)
             continue
@@ -131,7 +162,6 @@ def _filter_features(spec: Any, deny_exact: set[str], deny_prefixes: tuple[str, 
     buttons = list(getattr(spec, "start_buttons", None) or [])
     if buttons and stripped:
         strip_set = set(stripped)
-        # drop buttons whose callback maps to stripped features (best-effort)
         try:
             spec.start_buttons = [
                 b for b in buttons
@@ -196,13 +226,15 @@ def accept_spec(
     injected: list[str] = []
     errors: list[str] = []
     warnings: list[str] = []
+    # Root: never strip features the user named with /slash commands
+    protect = _protected_features_from_request(request or "")
 
     primary = dec.primary
     conf = float(getattr(dec, "confidence", 0.0) or 0.0)
 
     # ── tasks / projects lock ──────────────────────────────────────────
     if primary in {"tasks", "projects"} and conf >= 0.45:
-        stripped.extend(_filter_features(spec, set(_TASKS_DENY_EXACT), _TASKS_DENY_PREFIXES))
+        stripped.extend(_filter_features(spec, set(_TASKS_DENY_EXACT), _TASKS_DENY_PREFIXES, protect=protect))
         if repair:
             for key in _TASKS_REQUIRE:
                 if key not in set(_feature_ids(spec)):
@@ -216,7 +248,7 @@ def accept_spec(
 
     # ── healthcare ─────────────────────────────────────────────────────
     elif primary == "healthcare" and conf >= 0.45:
-        stripped.extend(_filter_features(spec, set(_CLINIC_DENY_EXACT), _CLINIC_DENY_PREFIXES))
+        stripped.extend(_filter_features(spec, set(_CLINIC_DENY_EXACT), _CLINIC_DENY_PREFIXES, protect=protect))
         ids_after = set(_feature_ids(spec))
         if not any(
             i.startswith("clinic_") or i.startswith("book_") or i in {"book_slot"}
@@ -230,7 +262,7 @@ def accept_spec(
 
     # ── ecommerce ──────────────────────────────────────────────────────
     elif primary == "ecommerce" and conf >= 0.45:
-        stripped.extend(_filter_features(spec, set(_SHOP_DENY_EXACT), _SHOP_DENY_PREFIXES))
+        stripped.extend(_filter_features(spec, set(_SHOP_DENY_EXACT), _SHOP_DENY_PREFIXES, protect=protect))
         ids_after = set(_feature_ids(spec))
         if not any(i.startswith("shop_") or i.startswith("cart_") for i in ids_after):
             if repair and _append_feature(spec, "shop_catalog"):
@@ -242,13 +274,14 @@ def accept_spec(
     # ── generic: always strip absolute nonsense if domain blocked presets
     blocked = set(getattr(dec, "blocked_presets", None) or [])
     if "clinic" in blocked:
-        more = _filter_features(spec, set(_TASKS_DENY_EXACT) & {x for x in _TASKS_DENY_EXACT if "clinic" in x or x.startswith("clinic")}, ("clinic_", "patient_", "prescription_"))
+        more = _filter_features(spec, set(_TASKS_DENY_EXACT) & {x for x in _TASKS_DENY_EXACT if "clinic" in x or x.startswith("clinic")}, ("clinic_", "patient_", "prescription_"), protect=protect)
         stripped.extend(more)
     if "shop" in blocked or "commerce_pro" in blocked:
         more = _filter_features(
             spec,
             {"shop_catalog", "cart_view", "shop_buy", "shop_orders", "shop_my_orders", "shop_add_item"},
             ("shop_", "cart_", "mkt_"),
+            protect=protect,
         )
         stripped.extend(more)
     if "booking" in blocked:
@@ -256,6 +289,7 @@ def accept_spec(
             spec,
             {"book_slot", "book_list", "book_cancel", "book_admin_list"},
             ("book_",),
+            protect=protect,
         )
         stripped.extend(more)
 

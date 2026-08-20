@@ -92,7 +92,7 @@ _MENU_LABELS_AR = {
     "shop_catalog": "🛍️ المنتجات",
     "pay_methods": "💳 الدفع",
     "ticket_open": "📞 الدعم",
-    "faq_list": "❓ الأسئلة الشائعة",
+    "faq_show": "❓ الأسئلة الشائعة",
 }
 
 

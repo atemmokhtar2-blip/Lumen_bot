@@ -53,7 +53,7 @@ _FEATURE_ALIASES: dict[str, list[str]] = {
     "pay_methods": ["دفع", "payment", "طرق الدفع", "مدفوعات"],
     "shipping_set": ["شحن", "توصيل", "shipping", "delivery"],
     "ticket_open": ["دعم", "support", "تذكرة", "موظف", "tickets"],
-    "faq_list": ["faq", "أسئلة", "شائعة", "faqs"],
+    "faq_show": ["faq", "أسئلة", "شائعة", "faqs"],
     "wallet_balance": ["محفظة", "wallet"],
     "coupon_apply": ["كوبون", "coupon", "خصم"],
     "points_balance": ["نقاط", "points"],

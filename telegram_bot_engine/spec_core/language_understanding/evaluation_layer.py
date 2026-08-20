@@ -516,7 +516,7 @@ def apply_eval_to_features(
     strict: only DROP user/global avoid for non-core experimental features.
     non-strict: also ADD prefers.
     """
-    core = {"start", "help", "lang", "shop_catalog", "order_track", "pay_methods", "ticket_open", "faq_list"}
+    core = {"start", "help", "lang", "shop_catalog", "order_track", "pay_methods", "ticket_open", "faq_show"}
     out = list(dict.fromkeys(features or []))
     tw = recommend_generation_tweaks(user_id, memory=memory)
     user = user_feature_stats(int(user_id), memory=memory) if user_id else {"prefer": [], "avoid": []}

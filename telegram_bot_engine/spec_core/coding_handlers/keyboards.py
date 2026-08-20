@@ -20,7 +20,7 @@ def _emit_keyboards(spec: BotSpec) -> str:
         "shipping_set": ("🚚 الشحن والتوصيل", "🚚 Shipping", "shippingset"),
         "ticket_open": ("📞 الدعم", "📞 Support", "ticket"),
         "ticket_my": ("🎫 تذاكري", "🎫 My tickets", "mytickets"),
-        "faq_list": ("❓ الأسئلة الشائعة", "❓ FAQ", "faqlist"),
+        "faq_show": ("❓ الأسئلة الشائعة", "❓ FAQ", "faqlist"),
         "faq_show": ("❓ FAQ", "❓ FAQ", "faq"),
         "cart_view": ("🛒 السلة", "🛒 Cart", "cartview"),
         "wallet_balance": ("👛 المحفظة", "👛 Wallet", "walletbalance"),
