@@ -26,6 +26,7 @@ from ..helpers import (
     safe_edit_text,
     make_zip_from_path,
     run_generation,
+    run_generation_with_bridge,
 )
 from ..live import handle_live_run_token, handle_live_deploy_token
 from ..progress_tracker import run_with_heartbeat
@@ -351,8 +352,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         preferred_keys = None
+        _bridge_pkg = None
         try:
             from telegram_bot_engine.services.translator_client import translate_request
+            from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
             _tr = translate_request(
                 gen_request,
                 {
@@ -360,19 +363,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "server_facts": {"project": "Maestro"},
                 },
             )
-            if isinstance(_tr, dict):
-                if str(_tr.get("spec_request") or "").strip():
-                    gen_request = str(_tr.get("spec_request")).strip()
-                preferred_keys = [
-                    str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
-                ] or None
-                logger.info(
-                    "generate-now Groq ok features=%s model=%s",
-                    preferred_keys,
-                    _tr.get("model"),
-                )
+            _bridge_pkg = analyze_and_prepare(gen_request, _tr if isinstance(_tr, dict) else None)
+            gen_request = str(_bridge_pkg.get("spec_request") or gen_request).strip()
+            preferred_keys = list(_bridge_pkg.get("preferred_keys") or []) or None
+            if context.user_data is not None:
+                context.user_data["last_bridge"] = {
+                    "mode": _bridge_pkg.get("engine_mode"),
+                    "keys": preferred_keys,
+                    "model": _bridge_pkg.get("model"),
+                }
+            logger.info(
+                "generate-now bridge mode=%s features=%s model=%s",
+                _bridge_pkg.get("engine_mode"),
+                preferred_keys,
+                _bridge_pkg.get("model"),
+            )
         except Exception:
-            logger.exception("generate-now Groq failed; continuing with raw request")
+            logger.exception("generate-now translate/bridge failed; continuing with raw request")
 
         if context.user_data is not None:
             context.user_data.pop("force_generate_once", None)
@@ -418,14 +425,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
 
-            result = await run_with_heartbeat(
-                run_generation,
-                gen_request,
-                work_dir,
-                int(user.id) if user else 0,
-                status_msg=status_msg,
-                preferred_keys=preferred_keys,
-            )
+            if _bridge_pkg and _bridge_pkg.get("needs_ai_codegen"):
+                from telegram_bot_engine.services.groq_codegen import generate_bot_via_groq
+                result = await run_with_heartbeat(
+                    generate_bot_via_groq,
+                    gen_request,
+                    work_dir,
+                    status_msg=status_msg,
+                    user_id=int(user.id) if user else 0,
+                )
+                if not getattr(result, "success", False):
+                    # Fall back to engine with best-effort keys
+                    result = await run_with_heartbeat(
+                        run_generation,
+                        gen_request,
+                        work_dir,
+                        int(user.id) if user else 0,
+                        status_msg=status_msg,
+                        preferred_keys=preferred_keys,
+                    )
+            else:
+                result = await run_with_heartbeat(
+                    run_generation,
+                    gen_request,
+                    work_dir,
+                    int(user.id) if user else 0,
+                    status_msg=status_msg,
+                    preferred_keys=preferred_keys,
+                )
             if result is None:
                 await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
                 return
@@ -543,9 +570,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 request = str(_tr.get("spec_request")).strip()
                 if context.user_data is not None:
                     context.user_data["translated_spec_request"] = request
-                    context.user_data["translated_preferred_keys"] = [
-                        str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
-                    ]
+                    try:
+                        from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
+                        _pkg = analyze_and_prepare(request, _tr)
+                        context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
+                        context.user_data["last_bridge"] = {"mode": _pkg.get("engine_mode"), "keys": _pkg.get("preferred_keys")}
+                    except Exception:
+                        context.user_data["translated_preferred_keys"] = [
+                            str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
+                        ]
                     context.user_data["translated_source"] = "groq_confirm_fastpath"
                     context.user_data["skip_clarify_once"] = True
                 logger.info(
@@ -757,9 +790,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         request = str(_tr.get("spec_request")).strip()
                         if context.user_data is not None:
                             context.user_data["translated_spec_request"] = request
-                            context.user_data["translated_preferred_keys"] = list(
-                                _tr.get("features_requested") or []
-                            )
+                            try:
+                                from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
+                                _pkg = analyze_and_prepare(request, _tr)
+                                context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
+                                context.user_data["last_bridge"] = {
+                                    "mode": _pkg.get("engine_mode"),
+                                    "keys": _pkg.get("preferred_keys"),
+                                }
+                            except Exception:
+                                context.user_data["translated_preferred_keys"] = list(
+                                    _tr.get("features_requested") or []
+                                )
                             context.user_data["translated_source"] = "groq_on_force_generate"
                             context.user_data["skip_clarify_once"] = True
                         _translated_generation_request = request

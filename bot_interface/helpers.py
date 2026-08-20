@@ -164,28 +164,36 @@ def split_file_for_telegram(path: str | Path, max_mb: float = 45.0) -> list[Path
 
 
 def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_keys=None):
-    """Synchronous call into the generation engine (runs in a thread).
+    """Synchronous generation. Engine (spec_core) is primary.
 
-    Passes user_id so L4 memory + L6 personalization apply per user.
-    preferred_keys: optional capability keys from Phase-2 detection.
-
-    Experimental: when GROQ_CODEGEN_ENABLED=1, bypass spec_core and let Groq
-    emit the full project (engine remains installed for instant rollback).
+    Groq is a helper:
+      - preferred_keys / brief come from translator + rules (bridge)
+      - full AI codegen only when GROQ_CODEGEN_ENABLED=1 (manual force)
+        OR when bridge marks the request out-of-catalog (GROQ_ASSIST_OUT_OF_SCOPE=1)
     """
+    # Forced full AI path (manual experiment only)
     try:
         from telegram_bot_engine.services.groq_codegen import (
             groq_codegen_enabled,
             generate_bot_via_groq,
         )
         if groq_codegen_enabled():
-            logger.info("GROQ_CODEGEN_ENABLED=1 — using experimental Groq direct codegen")
+            logger.info("GROQ_CODEGEN_ENABLED=1 — full Groq codegen (manual)")
             return generate_bot_via_groq(
                 request,
                 work_dir,
                 user_id=int(user_id or 0),
             )
     except Exception:
-        logger.exception("Groq codegen path failed to start; falling back to spec_core")
+        logger.exception("Groq codegen forced path failed; continuing with engine")
+
+    # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
+    try:
+        if (preferred_keys is not None) and isinstance(preferred_keys, dict):
+            # Legacy misuse guard — preferred_keys must be a list
+            preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
+    except Exception:
+        pass
 
     from telegram_bot_engine import generate_bot
 
@@ -194,6 +202,39 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
         work_dir=str(work_dir),
         user_id=int(user_id or 0),
         preferred_keys=preferred_keys,
+    )
+
+
+def run_generation_with_bridge(
+    request: str,
+    work_dir: Path,
+    user_id: int = 0,
+    translation: dict | None = None,
+):
+    """Translate/analyze then generate: engine primary, Groq assist if needed."""
+    from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
+    from telegram_bot_engine.services.groq_codegen import generate_bot_via_groq
+
+    package = analyze_and_prepare(request, translation)
+    if package.get("needs_ai_codegen"):
+        logger.info("Bridge → Groq assist (out of engine catalog)")
+        result = generate_bot_via_groq(
+            package["spec_request"] or request,
+            work_dir,
+            user_id=int(user_id or 0),
+        )
+        if result.success:
+            meta = dict(result.metadata or {})
+            meta["bridge"] = package
+            result.metadata = meta
+            return result
+        logger.warning("Groq assist failed; falling back to spec_core: %s", result.errors)
+
+    return run_generation(
+        package["spec_request"] or request,
+        work_dir,
+        user_id=int(user_id or 0),
+        preferred_keys=package.get("preferred_keys"),
     )
 
 
