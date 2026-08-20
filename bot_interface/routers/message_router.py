@@ -57,6 +57,21 @@ def _looks_like_generation_request(text: str) -> bool:
     )
 
 
+def _qwen_rescue_translation(request: str, context: dict) -> dict | None:
+    """Translate an explicit bot build when Gemini chat is unavailable."""
+    if not _looks_like_generation_request(request):
+        return None
+    try:
+        from telegram_bot_engine.services.gemini_client import validate_spec_translation
+        from telegram_bot_engine.services.translator_client import translate_request
+        result = translate_request(request, {**(context or {}), "gemini_unavailable": True})
+        if isinstance(result, dict) and validate_spec_translation(result):
+            return result
+    except Exception:
+        logger.exception("Direct Qwen rescue translation failed")
+    return None
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.message
@@ -254,11 +269,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Two-stage understanding pipeline:
         # Gemini understands the user and produces a structured intent;
         # Qwen translates that intent into the validated spec_core contract.
-        # The user sees only the final conversational/generation result.
+        # If Gemini is unavailable for an explicit build request, Qwen is the
+        # direct translation rescue path; ordinary chat never uses Qwen.
+        _direct_qwen_translation = None
+        if not isinstance(chat_result, dict):
+            _direct_qwen_translation = _qwen_rescue_translation(request, chat_context)
+            if _direct_qwen_translation:
+                logger.info("Direct Qwen rescue translation validated after Gemini failure")
+
         _translated_generation_request = ""
         _translated_preferred_keys = []
         _translation_source = ""
-        if isinstance(chat_result, dict):
+        if isinstance(_direct_qwen_translation, dict):
+            _translated_generation_request = str(
+                _direct_qwen_translation.get("spec_request") or ""
+            ).strip()
+            _translated_preferred_keys = [
+                str(key).strip()
+                for key in (_direct_qwen_translation.get("features_requested") or [])
+                if str(key).strip()
+            ]
+            _translation_source = "qwen_direct_after_gemini_failure"
+        elif isinstance(chat_result, dict):
             try:
                 from telegram_bot_engine.services.gemini_client import validate_spec_translation
                 from telegram_bot_engine.services.translator_client import translate_request
