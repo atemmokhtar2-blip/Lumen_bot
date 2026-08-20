@@ -943,6 +943,56 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as _gate_exc:
         layers_meta["acceptance_gate_error"] = f"{type(_gate_exc).__name__}:{str(_gate_exc)[:160]}"
 
+    # ── Final seal: preferred_keys from Groq/rules bridge win over presets ──
+    if preferred_keys:
+        try:
+            from .spec_core.registry import CAPABILITIES as _CAPS_SEAL
+            from .spec_core.schema import Feature as _Feature, Trigger as _Trigger, Action as _Action, Messages as _Messages
+            _ALIAS = {
+                "admin_ban_bot": "user_ban", "admin_unban_bot": "user_unban",
+                "ban": "user_ban", "kick": "user_kick", "mute": "user_mute",
+                "warn": "user_warn", "welcome": "welcome_set", "setwelcome": "welcome_set",
+            }
+            sealed: list[str] = []
+            for _k in preferred_keys:
+                if not isinstance(_k, str):
+                    continue
+                _c = _ALIAS.get(_k.strip(), _k.strip())
+                if _c in _CAPS_SEAL and _c not in sealed:
+                    sealed.append(_c)
+            for _core in ("start", "help"):
+                if _core not in sealed and _core in _CAPS_SEAL:
+                    sealed.insert(0, _core)
+            if len(sealed) > 2 and hasattr(spec, "features"):
+                existing = {str(getattr(f, "feature", "")): f for f in (spec.features or [])}
+                new_feats = []
+                # keep start/help handlers from existing if present
+                for _c in sealed:
+                    if _c in existing:
+                        new_feats.append(existing[_c])
+                        continue
+                    cap = _CAPS_SEAL.get(_c)
+                    if not cap:
+                        continue
+                    trig_id = _c.replace("_", "")[:32]
+                    new_feats.append(_Feature(
+                        id=_c,
+                        feature=_c,
+                        actor="user",
+                        trigger=_Trigger(type="command", id=trig_id),
+                        action=_Action(service=getattr(cap, "service", "generic"), method=getattr(cap, "method", "act")),
+                        messages=_Messages(prompt=f"/{trig_id}", success="تم"),
+                        success={"message": "تم"},
+                        failure={"message": "تعذر"},
+                    ))
+                if new_feats:
+                    spec.features = new_feats
+                    layers_meta["preferred_keys_final_seal"] = sealed
+                    layers_meta["bridge_final_seal"] = True
+                    tag = "bridge:" + "+".join(k for k in sealed if k not in {"start", "help"})[:5]
+        except Exception as _seal_exc:
+            layers_meta["preferred_keys_seal_error"] = f"{type(_seal_exc).__name__}:{_seal_exc}"
+
     result = build_from_spec(spec, project_dir, request=request)
     elapsed = _time.perf_counter() - t0
     # Stage-4: bake narrative into metadata for delivery

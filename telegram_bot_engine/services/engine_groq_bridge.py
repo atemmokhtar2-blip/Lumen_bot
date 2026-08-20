@@ -108,17 +108,30 @@ def analyze_and_prepare(
     if assist_flag in {"0", "false", "no", "off"}:
         needs_ai = False
 
+    # Prefer rule order (intent) then model extras
+    ordered: list[str] = []
+    for k in list(rules) + list(preferred):
+        if k not in ordered:
+            ordered.append(k)
+    preferred = ordered[:12] or preferred[:12]
+
+    # Strong binding string the engine can also keyword-match
+    if preferred:
+        bind_line = "CAPABILITY_KEYS: " + ", ".join(preferred)
+        if bind_line not in engine_request:
+            engine_request = f"{engine_request}\n\n{bind_line}"
+
     package = {
         "original_text": original,
         "spec_request": engine_request,
         "preferred_keys": preferred[:12],
         "engine_mode": "ai_codegen" if needs_ai else "spec_core",
         "needs_ai_codegen": bool(needs_ai),
-        "confidence": confidence,
+        "confidence": max(confidence, 0.9 if rules else confidence),
         "model": tr.get("model") or "rules",
         "purpose": purpose,
         "rule_features": rules,
-        "notes": [],
+        "notes": ["keys_bound"] if preferred else [],
     }
     if needs_ai:
         package["notes"].append("out_of_catalog_or_custom_stack")
