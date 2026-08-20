@@ -227,7 +227,7 @@ def _smart_auto_heal(
         or "TelegramUnauthorizedError" in log
     ):
         try:
-            from .source_fix import discover_token_env_names
+            from ..source_fix import discover_token_env_names
             notes.append(_write_project_env(root, bot_token, discover_token_env_names(root)))
         except Exception as e:
             notes.append(f"write_env_fail:{type(e).__name__}")
@@ -249,7 +249,7 @@ def _smart_auto_heal(
     # 3) Syntax
     if action == "fix_syntax" or "SyntaxError" in log or "IndentationError" in log:
         try:
-            from .source_fix import repair_project_sources
+            from ..source_fix import repair_project_sources
             for n in (repair_project_sources(root) or [])[:10]:
                 notes.append(f"syntax_repair:{n}")
         except Exception as e:

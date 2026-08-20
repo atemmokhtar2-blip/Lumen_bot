@@ -143,7 +143,7 @@ class LiveRunnerService:
             )
 
         # Auto-repair common source syntax issues (e.g. \\' written literally)
-        from .source_fix import repair_project_sources, discover_token_env_names, syntax_check_entry
+        from ..source_fix import repair_project_sources, discover_token_env_names, syntax_check_entry
         repair_notes = list(preflight_warnings) + repair_project_sources(root)
         # Proactive: clear webhook + inject token so polling bots start cleanly
         try:
@@ -152,7 +152,7 @@ class LiveRunnerService:
         except Exception as e:
             repair_notes.append(f"preflight_webhook_err:{type(e).__name__}")
         try:
-            from .source_fix import discover_token_env_names as _disc
+            from ..source_fix import discover_token_env_names as _disc
             repair_notes.append(_write_project_env(root, bot_token, _disc(root)))
             repair_notes.extend(_patch_hardcoded_tokens(root, bot_token)[:8])
             repair_notes.append(_inject_entry_bootstrap(entry, bot_token))
@@ -445,7 +445,7 @@ class LiveRunnerService:
                 duration_ms=(time.perf_counter() - t0) * 1000,
             )
 
-        from .source_fix import discover_token_env_names
+        from ..source_fix import discover_token_env_names
 
         from telegram_bot_engine.services.user_sandbox import clean_child_env
         env = clean_child_env(bot_token if "bot_token" in locals() else "")
