@@ -49,17 +49,25 @@ python main.py
 
 
 def _emit_flow_engine() -> str:
-    path = Path(__file__).resolve().parent / "templates_flow_engine.py"
+    # emitters/ is one level under spec_core/
+    path = Path(__file__).resolve().parents[1] / "templates_flow_engine.py"
+    if not path.is_file():
+        raise FileNotFoundError(f"templates_flow_engine missing: {path}")
     return path.read_text(encoding="utf-8")
 
 
 def _emit_market() -> str:
-    path = Path(__file__).resolve().parent / "runtime" / "market_runtime.py"
+    # market_runtime lives in spec_core/runtime/, not emitters/runtime/
+    path = Path(__file__).resolve().parents[1] / "runtime" / "market_runtime.py"
+    if not path.is_file():
+        raise FileNotFoundError(f"market_runtime missing: {path}")
     return path.read_text(encoding="utf-8")
 
 
 def _emit_generic_runtime() -> str:
-    path = Path(__file__).resolve().parent / "runtime" / "generic_runtime.py"
+    path = Path(__file__).resolve().parents[1] / "runtime" / "generic_runtime.py"
+    if not path.is_file():
+        raise FileNotFoundError(f"generic_runtime missing: {path}")
     return path.read_text(encoding="utf-8")
 
 
