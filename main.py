@@ -291,12 +291,28 @@ def main() -> None:
             _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
             # Always build a fresh Application — avoids "start_polling never awaited"
             # after a previous cycle stopped mid-flight.
-            app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            try:
+                from telegram.request import HTTPXRequest
+                _tg_request = HTTPXRequest(
+                    connect_timeout=15.0,
+                    read_timeout=40.0,
+                    write_timeout=40.0,
+                    pool_timeout=15.0,
+                )
+                app = (
+                    Application.builder()
+                    .token(TELEGRAM_BOT_TOKEN)
+                    .request(_tg_request)
+                    .concurrent_updates(True)
+                    .build()
+                )
+            except Exception:
+                app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
             _wire(app)
             logger.info("Polling cycle %s/%s starting…", cycle, max_cycles)
             app.run_polling(
                 allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
+                drop_pending_updates=False,
                 bootstrap_retries=3,
                 close_loop=False,
             )

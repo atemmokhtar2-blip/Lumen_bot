@@ -223,6 +223,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Remember last explicit bot-build request for later "ابدأ / أنجز" turns.
     if context.user_data is not None and _looks_like_generation_request(request):
         context.user_data["last_bot_request"] = request
+        # Fast product path: never wait on Gemini for an explicit bot-build request.
+        # User was waiting 10+ minutes with no reply while chat layer hung.
+        context.user_data["skip_clarify_once"] = True
+        context.user_data["force_generate_once"] = True
+        logger.info("Generation-like request → force generate-now (skip Gemini)")
 
     # If the user embeds start intent in a longer message (… وابدا حالا), force generation.
     if context.user_data is not None and not (context.user_data or {}).get("force_generate_once"):
@@ -317,6 +322,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Do not touch Gemini, L3, help gates, or feasibility soft-blocks.
     # ══════════════════════════════════════════════════════════════════
     if (context.user_data or {}).get("force_generate_once"):
+        # Instant ack so the user never stares at silence for minutes.
+        try:
+            await message.reply_text("استلمت الطلب ✅ جاري التوليد الآن…")
+        except Exception:
+            pass
         gen_request = request
         if not _looks_like_generation_request(gen_request):
             prior = _prior_bot_request(context.user_data)

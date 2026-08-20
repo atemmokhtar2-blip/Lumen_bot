@@ -101,7 +101,7 @@ def _models() -> list[str]:
 
 def _timeout() -> float:
     try:
-        return max(8.0, min(60.0, float(os.getenv("GROQ_TRANSLATOR_TIMEOUT_SEC") or "25")))
+        return max(5.0, min(35.0, float(os.getenv("GROQ_TRANSLATOR_TIMEOUT_SEC") or "18")))
     except ValueError:
         return 25.0
 
