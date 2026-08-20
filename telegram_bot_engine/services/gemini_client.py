@@ -546,5 +546,31 @@ def translate(text: str, context: dict[str, Any] | None = None) -> dict[str, Any
     return generate("translate", text, context)
 
 
+def _compact_retry_allowed(exc: Exception) -> bool:
+    message = str(exc).lower()
+    blocked = ("401", "403", "429", "503", "not configured", "api key rejected")
+    return not any(token in message for token in blocked)
+
+
+def _compact_chat_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    compact = dict(context or {})
+    history = compact.get("conversation_history")
+    if isinstance(history, list):
+        compact["conversation_history"] = history[-4:]
+    compact["compact_retry"] = True
+    return compact
+
+
 def chat(message: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
-    return generate("chat", message, context)
+    try:
+        return generate("chat", message, context)
+    except Exception as first_error:
+        enabled_retry = _truthy(os.getenv("GEMINI_COMPACT_RETRY_ENABLED") or "1")
+        if not enabled_retry or not _compact_retry_allowed(first_error):
+            raise
+        logger.warning(
+            "Gemini chat compact retry after %s: %s",
+            type(first_error).__name__,
+            str(first_error)[:240],
+        )
+        return generate("chat", message, _compact_chat_context(context))
