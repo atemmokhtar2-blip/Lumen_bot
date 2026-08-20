@@ -820,8 +820,18 @@ def _emit_handlers(spec: BotSpec) -> str:
         lines.append("")
         lines.append("")
 
-    # text router for multi-step captures
-    if need_tasks or need_notes or need_reminders or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice or need_mod:
+    # Free-text / multi-step router — ALWAYS emitted so MessageHandler never points at a missing symbol.
+    # Rich capture flows when domain flags are set; otherwise echo-back so plain messages work.
+    _need_rich_text = bool(
+        need_tasks or need_notes or need_reminders or need_welcome or need_tickets
+        or need_security or need_market or need_ocr or need_voice or need_mod
+    )
+    _has_echo = any(
+        (getattr(f, "feature", "") or "").lower() in {"echo", "echo_basic", "echo_message"}
+        or (getattr(getattr(f, "trigger", None), "id", "") or "").lower() == "echo"
+        for f in spec.features
+    )
+    if True:  # always define text_router (main.py always registers it for command bots)
         lines += [
             "async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
             "    message = update.effective_message",
@@ -1321,12 +1331,28 @@ def _emit_handlers(spec: BotSpec) -> str:
             lines.append(f"        await {handler}(update, context)")
             lines.append("        return")
     lines.append("    if data in {'i18n.lang', 'lang', 'language'}:")
+    lines.append("        # Always defined below — never call a missing symbol")
     lines.append("        await handle_lang(update, context)")
     lines.append("        return")
     lines.append("    message = update.effective_message")
     lines.append("    if message is not None:")
     lines.append("        await message.reply_text(data)")
     lines.append("")
+
+    # Root: handle_lang MUST exist — callback_router always routes lang here.
+    if "handle_lang" not in emitted_fnames:
+        emitted_fnames.add("handle_lang")
+        lines += [
+            "async def handle_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    if message is None:",
+            "        return",
+            "    await message.reply_text(",
+            "        '🌐 اللغة: العربية (الافتراضية).\\nاستخدم /help لعرض الأوامر.'",
+            "    )",
+            "",
+            "",
+        ]
 
 
     # Telegram Payments: pre-checkout + successful_payment (never fake-paid)

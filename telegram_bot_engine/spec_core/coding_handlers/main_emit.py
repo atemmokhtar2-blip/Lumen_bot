@@ -166,8 +166,8 @@ def _emit_main(spec: BotSpec) -> str:
         })  # type: ignore
         for f in spec.features
     )
-    if need_tasks or need_notes or need_reminders or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice or need_mod:
-        imports_handlers += ", text_router, cancel_handler"
+    # Always imported — handlers.py always emits these (root: no silent free-text).
+    imports_handlers += ", text_router, cancel_handler"
     if need_mod:
         imports_handlers += ", anti_abuse_filter"
     if need_ocr or need_market:
@@ -205,18 +205,16 @@ def _emit_main(spec: BotSpec) -> str:
         f"BotCommand({c!r}, {d!r})" for c, d in menu_cmds
     ) or 'BotCommand("start", "start")'
 
-    text_handler = ""
-    if need_tasks or need_notes or need_reminders or need_welcome or need_tickets or need_security or need_market or need_ocr or need_voice or need_mod:
-        text_handler = (
-            "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
-            "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
-        )
-        if need_mod:
-            text_handler += "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_abuse_filter), group=0)"
-        if need_ocr or need_market:
-            text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
-    else:
-        text_handler = ""
+    # Root: always wire free-text + cancel so user messages never vanish silently.
+    # text_router and cancel_handler are always emitted by handlers.py.
+    text_handler = (
+        "\n    app.add_handler(CommandHandler('cancel', cancel_handler))"
+        "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))"
+    )
+    if need_mod:
+        text_handler += "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_abuse_filter), group=0)"
+    if need_ocr or need_market:
+        text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
     if need_voice:
         text_handler += (
             "\n    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_router))"
