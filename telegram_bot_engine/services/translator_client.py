@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 import requests
@@ -56,9 +57,17 @@ def _headers() -> dict[str, str]:
 
 
 def _timeout() -> tuple[float, float]:
-    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "20")
-    timeout = max(5.0, min(90.0, timeout))
-    return max(3.0, min(10.0, timeout)), timeout
+    # Qwen may need to load a 1.5B GGUF on the first request.
+    timeout = float(os.getenv("MAESTRO_TRANSLATOR_TIMEOUT_SEC") or "120")
+    timeout = max(10.0, min(240.0, timeout))
+    return max(5.0, min(15.0, timeout)), timeout
+
+
+def _retry_count() -> int:
+    try:
+        return max(0, min(2, int(os.getenv("MAESTRO_TRANSLATOR_RETRY_COUNT") or "1")))
+    except ValueError:
+        return 1
 
 
 def _spec_core_capabilities() -> list[str]:
@@ -100,40 +109,64 @@ def translate_request(
         "spec_core_capabilities": _spec_core_capabilities(),
     }
     connect_timeout, read_timeout = _timeout()
-    try:
-        response = requests.post(
-            f"{base}/v1/translate",
-            json=payload,
-            headers=_headers(),
-            timeout=(connect_timeout, read_timeout),
-        )
-        response.raise_for_status()
-        body = response.json()
-        translation = body.get("translation") if isinstance(body, dict) else None
-        if not isinstance(translation, dict):
-            raise ValueError("Qwen response missing translation")
-        features = translation.get("features_requested")
-        if not isinstance(features, list) or not all(isinstance(x, str) for x in features):
-            raise ValueError("Qwen response has invalid features_requested")
-        confidence = float(translation.get("confidence") or 0.0)
-        minimum = float(os.getenv("MAESTRO_TRANSLATOR_MIN_CONFIDENCE") or "0.60")
-        clarification = bool(translation.get("clarification_needed"))
-        if not clarification and confidence < minimum:
-            raise ValueError(f"Qwen confidence below threshold: {confidence:.2f}")
-        if not clarification and not str(translation.get("spec_request") or "").strip():
-            raise ValueError("Qwen completed translation has no spec_request")
-        logger.info(
-            "Qwen translation ok status=%s source=%s model=%s features=%s clarification=%s",
-            response.status_code,
-            body.get("source") if isinstance(body, dict) else None,
-            body.get("model") if isinstance(body, dict) else None,
-            features,
-            clarification,
-        )
-        return translation
-    except Exception as exc:
-        logger.exception("Qwen translator unavailable; using deterministic spec_core fallback: %s", exc)
-        return None
+    last_error: Exception | None = None
+    for attempt in range(_retry_count() + 1):
+        try:
+            response = requests.post(
+                f"{base}/v1/translate",
+                json=payload,
+                headers=_headers(),
+                timeout=(connect_timeout, read_timeout),
+            )
+            if response.status_code in {502, 503, 504} and attempt < _retry_count():
+                logger.warning(
+                    "Qwen translator returned retryable status=%s attempt=%s/%s",
+                    response.status_code,
+                    attempt + 1,
+                    _retry_count() + 1,
+                )
+                time.sleep(min(2.0, 0.5 * (attempt + 1)))
+                continue
+            response.raise_for_status()
+            body = response.json()
+            translation = body.get("translation") if isinstance(body, dict) else None
+            if not isinstance(translation, dict):
+                raise ValueError("Qwen response missing translation")
+            features = translation.get("features_requested")
+            if not isinstance(features, list) or not all(isinstance(x, str) for x in features):
+                raise ValueError("Qwen response has invalid features_requested")
+            confidence = float(translation.get("confidence") or 0.0)
+            minimum = float(os.getenv("MAESTRO_TRANSLATOR_MIN_CONFIDENCE") or "0.60")
+            clarification = bool(translation.get("clarification_needed"))
+            if not clarification and confidence < minimum:
+                raise ValueError(f"Qwen confidence below threshold: {confidence:.2f}")
+            if not clarification and not str(translation.get("spec_request") or "").strip():
+                raise ValueError("Qwen completed translation has no spec_request")
+            logger.info(
+                "Qwen translation ok status=%s source=%s model=%s features=%s clarification=%s attempt=%s",
+                response.status_code,
+                body.get("source") if isinstance(body, dict) else None,
+                body.get("model") if isinstance(body, dict) else None,
+                features,
+                clarification,
+                attempt + 1,
+            )
+            return translation
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout) as exc:
+            last_error = exc
+            if attempt < _retry_count():
+                logger.warning("Qwen translator timeout; retrying attempt=%s/%s", attempt + 1, _retry_count() + 1)
+                time.sleep(min(2.0, 0.5 * (attempt + 1)))
+                continue
+            break
+        except requests.exceptions.HTTPError as exc:
+            last_error = exc
+            break
+        except Exception as exc:
+            last_error = exc
+            break
+    logger.warning("Qwen translator unavailable; using deterministic spec_core fallback: %s", last_error)
+    return None
 
 
 def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None:
