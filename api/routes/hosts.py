@@ -7,7 +7,11 @@ import logging
 from aiohttp import web
 
 from api.auth import require_tenant
-from api.security import stable_tenant_uid, validate_tenant_project_path
+from api.security import (
+    safe_json_body,
+    stable_tenant_uid,
+    validate_tenant_project_path,
+)
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
 from telegram_bot_engine.services.hosting import get_hosting_service
@@ -21,24 +25,7 @@ def _tenant_user_id(tenant_id: str) -> int:
 
 async def host_start(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    cl = request.headers.get("Content-Length")
-    if cl and cl.isdigit() and int(cl) > 65536:
-        raise web.HTTPRequestEntityTooLarge(
-            text='{"error":"payload_too_large"}',
-            content_type="application/json",
-        )
-    try:
-        body = await request.json()
-    except Exception:
-        raise web.HTTPBadRequest(
-            text='{"error":"invalid_json"}',
-            content_type="application/json",
-        )
-    if not isinstance(body, dict):
-        raise web.HTTPBadRequest(
-            text='{"error":"body_must_be_object"}',
-            content_type="application/json",
-        )
+    body = await safe_json_body(request, max_bytes=65536)
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
 
@@ -103,7 +90,7 @@ async def host_start(request: web.Request) -> web.Response:
 
 async def host_stop(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    body = await request.json()
+    body = await safe_json_body(request, max_bytes=65536)
     instance_id = str(body.get("instance_id") or "").strip()
     uid = _tenant_user_id(tenant.tenant_id)
     result = await asyncio.to_thread(
@@ -136,9 +123,9 @@ async def host_status(request: web.Request) -> web.Response:
 
 async def host_diagnose(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    body = await request.json() if request.can_read_body else {}
+    body = await safe_json_body(request, required=False, max_bytes=65536)
     instance_id = str(
-        (body or {}).get("instance_id") or request.rel_url.query.get("instance_id") or ""
+        body.get("instance_id") or request.rel_url.query.get("instance_id") or ""
     )
     uid = _tenant_user_id(tenant.tenant_id)
     result = await asyncio.to_thread(

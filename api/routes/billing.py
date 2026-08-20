@@ -7,6 +7,7 @@ import logging
 from aiohttp import web
 
 from api.auth import require_tenant
+from api.security import admin_token_matches, safe_json_body
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
 from b2b_platform.plans import get_plan
@@ -56,7 +57,7 @@ async def create_invoice(request: web.Request) -> web.Response:
 async def checkout(request: web.Request) -> web.Response:
     """Start Stripe Checkout for plan upgrade (pro / business)."""
     tenant = require_tenant(request)
-    body = await request.json()
+    body = await safe_json_body(request, max_bytes=65536)
     plan_id = str(body.get("plan_id") or "").strip().lower()
     if not plan_id:
         raise web.HTTPBadRequest(text='{"error":"plan_id_required"}', content_type="application/json")
@@ -147,13 +148,15 @@ async def dev_activate(request: web.Request) -> web.Response:
     # Multi-tenant or non-dev: require platform admin token always
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if is_multi_tenant() or not is_dev_environment() or stripe_configured():
-        if not admin or (request.headers.get("X-Admin-Token") or "").strip() != admin:
+        if not admin or not admin_token_matches(
+            request.headers.get("X-Admin-Token") or "", admin
+        ):
             raise web.HTTPUnauthorized(
                 text='{"error":"admin_required_for_dev_activate"}',
                 content_type="application/json",
             )
     tenant = require_tenant(request)
-    body = await request.json()
+    body = await safe_json_body(request, max_bytes=65536)
     plan_id = str(body.get("plan_id") or "pro").lower()
     inv_id = str(body.get("invoice_id") or "")
     ok = get_billing().apply_plan(tenant.tenant_id, plan_id)

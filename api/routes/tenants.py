@@ -4,8 +4,20 @@ from __future__ import annotations
 from aiohttp import web
 
 from api.auth import require_tenant
+from api.security import admin_token_matches, safe_json_body
 from b2b_platform.plans import PLANS, get_plan, normalize_plan_id, public_plan_dict
 from b2b_platform.tenants import get_tenant_store
+
+
+def _safe_telegram_id(value) -> int:
+    """Parse owner_telegram_id without raising on malformed input."""
+    if value is None or value == "":
+        return 0
+    try:
+        n = int(value)
+        return n if n > 0 else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 async def create_tenant(request: web.Request) -> web.Response:
@@ -19,11 +31,11 @@ async def create_tenant(request: web.Request) -> web.Response:
             text='{"error":"admin_token_required","detail":"set PLATFORM_ADMIN_TOKEN"}',
             content_type="application/json",
         )
-    if (request.headers.get("X-Admin-Token") or "").strip() != admin:
+    if not admin_token_matches(request.headers.get("X-Admin-Token") or "", admin):
         raise web.HTTPUnauthorized(
             text='{"error":"admin_required"}', content_type="application/json"
         )
-    body = await request.json()
+    body = await safe_json_body(request, max_bytes=65536)
     name = str(body.get("name") or "Tenant").strip()
     # Only admin may assign plans; unknown → free. Still no self-service enterprise.
     plan_id = str(body.get("plan_id") or "free").lower()
@@ -34,7 +46,7 @@ async def create_tenant(request: web.Request) -> web.Response:
         name,
         plan_id=plan_id,
         brand_name=str(body.get("brand_name") or name),
-        owner_telegram_id=int(body.get("owner_telegram_id") or 0),
+        owner_telegram_id=_safe_telegram_id(body.get("owner_telegram_id")),
         brand_logo_url=body.get("brand_logo_url") or "",
         primary_color=body.get("primary_color") or "#2563eb",
         support_email=body.get("support_email") or "",
@@ -66,9 +78,7 @@ async def update_white_label(request: web.Request) -> web.Response:
             text='{"error":"plan_lacks_white_label"}',
             content_type="application/json",
         )
-    body = await request.json()
-    if not isinstance(body, dict):
-        raise web.HTTPBadRequest(text='{"error":"invalid_body"}', content_type="application/json")
+    body = await safe_json_body(request, max_bytes=65536)
     # Strict allow-list — blocks privilege escalation via plan_id / active / metadata
     allowed = {
         "brand_name",

@@ -133,3 +133,82 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
     if not is_path_inside(path, sandbox):
         raise ValueError("project_path_outside_sandbox")
     return path
+
+
+async def safe_json_body(
+    request,
+    *,
+    required: bool = True,
+    max_bytes: int = 65536,
+) -> dict:
+    """Parse JSON body safely: never raise unhandled errors to the client.
+
+    - Invalid / non-object JSON → HTTP 400 with stable error code.
+    - Empty body when required=False → {}.
+    - Oversized declared Content-Length → 413 (defense in depth; aiohttp
+      still enforces client_max_size when reading).
+
+    Returns a dict only. Callers must not assume other JSON root types.
+    """
+    from aiohttp import web
+
+    cl = request.headers.get("Content-Length")
+    if cl is not None:
+        try:
+            if int(cl) > max_bytes:
+                raise web.HTTPRequestEntityTooLarge(
+                    text='{"error":"payload_too_large"}',
+                    content_type="application/json",
+                )
+        except ValueError:
+            raise web.HTTPBadRequest(
+                text='{"error":"invalid_content_length"}',
+                content_type="application/json",
+            )
+
+    if not required and not request.can_read_body:
+        return {}
+
+    try:
+        body = await request.json()
+    except Exception:
+        if not required:
+            return {}
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_json"}',
+            content_type="application/json",
+        )
+
+    if body is None:
+        if not required:
+            return {}
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_json"}',
+            content_type="application/json",
+        )
+
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(
+            text='{"error":"body_must_be_object"}',
+            content_type="application/json",
+        )
+    return body
+
+
+def admin_token_matches(provided: str, expected: str) -> bool:
+    """Constant-time comparison for PLATFORM_ADMIN_TOKEN.
+
+    Empty expected always fails (caller should fail-closed when unset).
+    """
+    import hmac
+
+    exp = (expected or "").strip()
+    got = (provided or "").strip()
+    if not exp or not got:
+        return False
+    if len(got) != len(exp):
+        # Still run compare_digest on equal-length buffers to avoid
+        # leaking length via early return timing alone when lengths match
+        # the common case; unequal length is an immediate reject.
+        return False
+    return hmac.compare_digest(got.encode("utf-8"), exp.encode("utf-8"))
