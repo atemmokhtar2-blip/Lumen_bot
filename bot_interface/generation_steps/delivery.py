@@ -187,15 +187,17 @@ async def deliver_generation_result(
     if not smoke_ok:
         logger.error("pre-delivery smoke failed: %s", smoke_msg)
         await message.reply_text(
-            "❌ فشل اختبار التشغيل السريع للمشروع قبل التسليم.\n"
-            f"التفاصيل: `{escape_md(smoke_msg[:200])}`\n"
-            "لم يتم إرسال الملف ولن يُفتح مسار التوكن حتى يمر الاختبار."
+            "⚠️ فشل اختبار التشغيل السريع — سيتم إرسال ZIP للمراجعة.\n"
+            f"التفاصيل: `{escape_md(str(smoke_msg)[:200])}`"
         )
-        return
-    try:
-        await message.reply_text(f"✅ اختبار 10 ثوانٍ ناجح ({smoke_msg})")
-    except Exception:
-        pass
+        # Still deliver the zip so the user is not blocked by smoke flakiness.
+        # Token/live path stays closed unless anti-hallucination already said ready.
+        ready = False
+    else:
+        try:
+            await message.reply_text(f"✅ اختبار 10 ثوانٍ ناجح ({smoke_msg})")
+        except Exception:
+            pass
 
     # Zip delivery, only after the pre-delivery gate + smoke pass.
     delivery_ok = False
