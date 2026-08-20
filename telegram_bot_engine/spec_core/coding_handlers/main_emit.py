@@ -33,68 +33,23 @@ def _emit_main(spec: BotSpec) -> str:
     if 'CommandHandler("help"' not in reg_text:
         reg_text += '\n    app.add_handler(CommandHandler("help", help_handler))'
 
-    # Friendly aliases so /cart works even if trigger is cartview, etc.
-    _alias_map = {
-        "shop": "handle_shop_catalog",
-        "catalog": "handle_shop_catalog",
-        "products": "handle_shop_catalog",
-        "product": "handle_shop_catalog",
-        "cart": "handle_cart_view",
-        "orders": "handle_shop_orders",
-        "order": "handle_shop_order",
-        "points": "handle_balance",
-        "sub": "handle_plans",
-        "subs": "handle_plans",
-        "invite": "handle_referral_invite",
-        "checkin": "handle_daily_checkin",
-        "wallet": "handle_wallet_balance",
-    }
-    # Only add alias if target handler function exists in imports later — filter by features
-    feat_names = {f.feature for f in spec.features}
+    # Canonical aliases from command_map for every selected feature
+    try:
+        from telegram_bot_engine.spec_core.command_map import commands_for_feature as _cmds_for
+    except Exception:
+        _cmds_for = lambda f: []  # type: ignore
     feat_to_handler = {
         f.feature: f"handle_{f.id}".replace("-", "_")
         for f in spec.features
-        if f.feature not in ("start", "help") and f.trigger.type == "command"
+        if f.feature not in ("start", "help") and getattr(f.trigger, "type", "") == "command"
     }
-    # Also index by generated handler name so aliases can target shop order handlers
     for f in spec.features:
         if f.feature in ("start", "help"):
             continue
         hname = f"handle_{f.id}".replace("-", "_")
         feat_to_handler.setdefault(f.feature, hname)
-        if f.feature == "shop_catalog":
-            feat_to_handler.setdefault("shop_catalog", hname)
-    # map alias to feature
-    alias_feature = {
-        "shop": "shop_catalog",
-        "catalog": "shop_catalog",
-        "products": "shop_catalog",
-        "product": "shop_catalog",
-        "cart": "cart_view",
-        "orders": "shop_orders",
-        "order": "shop_order",  # place order (not track)
-        "book": "book_slot",
-        "booking": "book_slot",
-        "faq": "faq_show",
-        "balance": "wallet_balance",
-        "topup": "wallet_topup",
-        "points": "balance",
-        "sub": "plans",
-        "subs": "plans",
-        "invite": "referral_invite",
-        "checkin": "daily_checkin",
-        "wallet": "wallet_balance",
-        "ban": "user_ban",
-        "mute": "user_mute",
-        "warn": "user_warn",
-        "note": "note_add",
-        "notes": "note_list",
-        "broadcast": "broadcast_admin",
-    }
-    for alias, feat in alias_feature.items():
-        if feat in feat_to_handler:
-            h = feat_to_handler[feat]
-            # avoid duplicate if alias already the trigger id
+    for feat, h in list(feat_to_handler.items()):
+        for alias in _cmds_for(feat):
             if f"CommandHandler('{alias}'" in reg_text or f'CommandHandler("{alias}"' in reg_text:
                 continue
             reg_text += f"\n    app.add_handler(CommandHandler({alias!r}, {h}))"

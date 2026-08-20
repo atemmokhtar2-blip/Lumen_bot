@@ -114,6 +114,13 @@ DEFAULT_COMMANDS: dict[str, str] = {
 for _k in CAPABILITIES:
     DEFAULT_COMMANDS.setdefault(_k, _k.replace("_", "")[:32])
 
+# Canonical override from command_map (single source of truth)
+try:
+    from .command_map import primary_commands as _primary_cmds
+    DEFAULT_COMMANDS.update(_primary_cmds())
+except Exception:
+    pass
+
 DEFAULT_SUCCESS_AR: dict[str, str] = {
     "user_ban": "تم حظر المستخدم",
     "user_unban": "تم إلغاء الحظر",

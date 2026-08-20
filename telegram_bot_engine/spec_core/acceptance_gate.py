@@ -107,23 +107,11 @@ def _append_feature(spec: Any, key: str) -> bool:
 
 def _protected_features_from_request(request: str) -> set[str]:
     """Features the user explicitly asked for via /slash — never strip these."""
-    import re
-    protected: set[str] = set()
     try:
-        from telegram_bot_engine.spec_core.language_understanding.bot_spec_extract import (
-            _cmd_to_feature_map,
-        )
-        cmap = _cmd_to_feature_map()
+        from telegram_bot_engine.spec_core.command_map import protected_features
+        return protected_features(request or "")
     except Exception:
-        cmap = {}
-    for m in re.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
-        cid = m.group(1).lower()
-        feat = cmap.get(cid)
-        if feat:
-            protected.add(feat)
-        elif cid not in {"start", "help", "cancel", "lang"}:
-            protected.add(cid)
-    return protected
+        return set()
 
 
 def _filter_features(

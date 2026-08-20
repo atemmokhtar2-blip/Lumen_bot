@@ -281,53 +281,25 @@ def _extract_constraints(text: str) -> list[str]:
 
 
 def _cmd_to_feature_map() -> dict[str, str]:
-    """Full reverse DEFAULT_COMMANDS + user-facing aliases → registry keys only."""
-    try:
-        from telegram_bot_engine.spec_core.builder import DEFAULT_COMMANDS
-        from telegram_bot_engine.spec_core.registry import CAPABILITIES
-    except Exception:
-        DEFAULT_COMMANDS, CAPABILITIES = {}, {}
-    caps = set(CAPABILITIES.keys()) if CAPABILITIES else set()
-    out: dict[str, str] = {}
-    for feat, cmd in (DEFAULT_COMMANDS or {}).items():
-        if not isinstance(cmd, str) or not cmd.strip():
-            continue
-        if caps and feat not in caps:
-            continue
-        out.setdefault(cmd.strip().lower(), str(feat))
-    aliases = {
-        "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
-        "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
-        "book": "book_slot", "booking": "book_slot",
-        "faq": "faq_show", "faqs": "faq_show",
-        "cart": "cart_view", "cartcheckout": "cart_checkout",
-        "balance": "wallet_balance", "topup": "wallet_topup",
-        "ticket": "ticket_open", "tickets": "ticket_list", "mytickets": "ticket_my",
-        "ban": "user_ban", "mute": "user_mute", "warn": "user_warn",
-        "unban": "user_unban", "kick": "user_kick",
-        "note": "note_add", "notes": "note_list", "broadcast": "broadcast_admin",
-        "plans": "plans", "subscribe": "subscribe", "about": "about",
-        "setwelcome": "welcome_set", "welcome": "welcome_set",
-        "add": "task_add", "list": "task_list", "done": "task_done",
-        "delete": "task_delete", "clear": "task_clear", "id": "my_id",
-    }
-    for cmd, feat in aliases.items():
-        if not caps or feat in caps:
-            out[cmd] = feat
-    return out
+    """Deprecated wrapper — use command_map.reverse_map()."""
+    from telegram_bot_engine.spec_core.command_map import reverse_map
+    return dict(reverse_map())
 
 
 def _features_from_brief(brief: BotBrief) -> list[str]:
-    """Map extracted actions/flows → real registry keys only (no invented extras)."""
+    """Map extracted actions/flows → registry keys via canonical command_map only."""
+    from telegram_bot_engine.spec_core.command_map import (
+        feature_for_command,
+        is_registry_feature,
+    )
     feats: list[str] = ["start", "help", "lang"]
-    mapping = _cmd_to_feature_map()
     for aid in brief.all_action_ids():
         if aid in {"start", "help", "lang"}:
             continue
-        cap = mapping.get(aid)
-        if cap and cap not in feats:
+        cap = feature_for_command(aid)
+        if cap and is_registry_feature(cap) and cap not in feats:
             feats.append(cap)
-        elif aid == "about" and "about" not in feats:
+        elif aid == "about" and is_registry_feature("about") and "about" not in feats:
             feats.append("about")
     flow_map: dict[str, list[str]] = {
         "order_track_by_id": ["order_track"],
@@ -339,7 +311,7 @@ def _features_from_brief(brief: BotBrief) -> list[str]:
     }
     for f in brief.flows:
         for cap in flow_map.get(f, []):
-            if cap not in feats:
+            if is_registry_feature(cap) and cap not in feats:
                 feats.append(cap)
     return feats
 

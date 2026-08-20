@@ -922,63 +922,61 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
     # Contract boundary: every slash command explicitly written by the user must
     # survive intelligence/capability layers and become a real generated handler.
-    # The intelligence layer may add capabilities, but it must never erase user
-    # commands or replace them with unrelated learned/preset actions.
     try:
-        import re as _re
         from .spec_core.schema import Action as _Action, Feature as _Feature, Messages as _Messages, Trigger as _Trigger
         from .spec_core.registry import CAPABILITIES as _CAPS_EXPLICIT
-        from .spec_core.builder import DEFAULT_COMMANDS as _DEFAULT_COMMANDS
-        explicit_ids = []
-        seen_explicit = set()
-        for _m in _re.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
-            _cid = _m.group(1).lower()
-            if _cid not in seen_explicit:
-                explicit_ids.append(_cid)
-                seen_explicit.add(_cid)
-        # Root: reverse DEFAULT_COMMANDS so /add→task_add, /list→task_list, etc.
-        # Manual aliases override; unknown commands stay explicit_command (never dropped).
-        alias_to_feature: dict[str, str] = {}
-        for _feat_key, _cmd_id in (_DEFAULT_COMMANDS or {}).items():
-            if isinstance(_cmd_id, str) and _cmd_id.strip():
-                alias_to_feature.setdefault(_cmd_id.strip().lower(), str(_feat_key))
-        alias_to_feature.update({
-            "register": "lead_capture", "new_client": "lead_capture", "my_clients": "lead_list",
-            "stats": "analytics_revenue", "all_tasks": "task_list",
-            "new_task": "task_add", "add_task": "task_add", "my_tasks": "task_list",
-            "list_tasks": "task_list", "complete_task": "task_done", "done_task": "task_done",
-            "delete_task": "task_delete", "new_ticket": "ticket_open", "my_tickets": "ticket_my",
-            "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
-            "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
-            "about": "about", "ticket": "ticket_open",
-        })
+        from .spec_core.command_map import (
+            slash_commands_in_text as _slash_cmds,
+            feature_for_command as _feat_for_cmd,
+            primary_commands as _primary_cmds,
+        )
+        explicit_ids = _slash_cmds(request or "")
         existing_triggers = {
             str(getattr(getattr(_f, "trigger", None), "id", "")).lower()
             for _f in getattr(spec, "features", [])
         }
+        existing_feats = {
+            str(getattr(_f, "feature", "") or "")
+            for _f in getattr(spec, "features", [])
+        }
+        _prim = _primary_cmds()
         for _cid in explicit_ids:
             if _cid in {"start", "help"} or _cid in existing_triggers:
                 continue
-            _feature_key = alias_to_feature.get(_cid)
-            if _feature_key in _CAPS_EXPLICIT:
+            _feature_key = _feat_for_cmd(_cid)
+            if _feature_key and _feature_key in _CAPS_EXPLICIT:
+                if _feature_key in existing_feats:
+                    # ensure trigger alias exists via primary id if missing
+                    continue
                 _cap = _CAPS_EXPLICIT[_feature_key]
-                _service, _method = _cap.service, _cap.method
-                _feature_id = _feature_key
+                _trig = _prim.get(_feature_key, _cid)
+                spec.features.append(_Feature(
+                    id=_feature_key,
+                    feature=_feature_key,
+                    actor="user",
+                    trigger=_Trigger(type="command", id=_trig),
+                    action=_Action(service=_cap.service, method=_cap.method),
+                    messages=_Messages(prompt=f"/{_cid}", success="تم تنفيذ الأمر"),
+                    success={"message": "تم تنفيذ الأمر"},
+                    failure={"message": "تعذر تنفيذ الأمر"},
+                ))
+                existing_triggers.add(_trig)
+                existing_triggers.add(_cid)
+                existing_feats.add(_feature_key)
             else:
-                _service, _method = "generic", "explicit_command"
-                _feature_key = "explicit_command"
+                # Unknown slash → explicit_command generic handler (never dropped)
                 _feature_id = "explicit_" + _cid
-            spec.features.append(_Feature(
-                id=_feature_id,
-                feature=_feature_key,
-                actor="user",
-                trigger=_Trigger(type="command", id=_cid),
-                action=_Action(service=_service, method=_method),
-                messages=_Messages(prompt=f"/{_cid}", success="تم تنفيذ الأمر"),
-                success={"message": "تم تنفيذ الأمر"},
-                failure={"message": "تعذر تنفيذ الأمر"},
-            ))
-            existing_triggers.add(_cid)
+                spec.features.append(_Feature(
+                    id=_feature_id,
+                    feature="explicit_command",
+                    actor="user",
+                    trigger=_Trigger(type="command", id=_cid),
+                    action=_Action(service="generic", method="explicit_command"),
+                    messages=_Messages(prompt=f"/{_cid}", success="تم تنفيذ الأمر"),
+                    success={"message": "تم تنفيذ الأمر"},
+                    failure={"message": "تعذر تنفيذ الأمر"},
+                ))
+                existing_triggers.add(_cid)
         if explicit_ids:
             layers_meta["explicit_user_commands"] = explicit_ids
     except Exception as _explicit_exc:
@@ -1008,92 +1006,85 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as _gate_exc:
         layers_meta["acceptance_gate_error"] = f"{type(_gate_exc).__name__}:{str(_gate_exc)[:160]}"
 
-    # ── Final seal: preferred_keys MERGE with user slash features — never erase them ──
-    if preferred_keys:
-        try:
-            import re as _re_seal
-            from .spec_core.registry import CAPABILITIES as _CAPS_SEAL
-            from .spec_core.schema import Feature as _Feature, Trigger as _Trigger, Action as _Action, Messages as _Messages
-            from .spec_core.builder import DEFAULT_COMMANDS as _DC_SEAL
-            _ALIAS = {
-                "admin_ban_bot": "user_ban", "admin_unban_bot": "user_unban",
-                "ban": "user_ban", "kick": "user_kick", "mute": "user_mute",
-                "warn": "user_warn", "welcome": "welcome_set", "setwelcome": "welcome_set",
-                "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
-                "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
-                "add": "task_add", "list": "task_list", "done": "task_done",
-                "ticket": "ticket_open", "about": "about",
-            }
-            # Reverse DEFAULT_COMMANDS for slash → feature
-            _cmd_to_feat: dict[str, str] = {}
-            for _fk, _cid in (_DC_SEAL or {}).items():
-                if isinstance(_cid, str) and _cid.strip():
-                    _cmd_to_feat.setdefault(_cid.strip().lower(), str(_fk))
-            _cmd_to_feat.update(_ALIAS)
-
-            # User-written /commands always enter the sealed set first
-            sealed: list[str] = []
-            user_slash_feats: list[str] = []
-            for _m in _re_seal.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", request or ""):
-                _cid = _m.group(1).lower()
-                _feat = _cmd_to_feat.get(_cid)
-                if _feat and _feat in _CAPS_SEAL and _feat not in user_slash_feats:
-                    user_slash_feats.append(_feat)
-            for _k in user_slash_feats + list(preferred_keys or []):
-                if not isinstance(_k, str):
+    # ── Final seal: user slash (command_map) ∪ preferred_keys — never erase slash ──
+    try:
+        from .spec_core.registry import CAPABILITIES as _CAPS_SEAL
+        from .spec_core.schema import Feature as _Feature, Trigger as _Trigger, Action as _Action, Messages as _Messages
+        from .spec_core.command_map import (
+            features_from_text as _feats_from_text,
+            primary_commands as _prim_seal,
+            protected_features as _prot_feats,
+        )
+        user_slash_feats = _feats_from_text(request or "", include_core=False)
+        sealed: list[str] = []
+        for _k in list(user_slash_feats) + list(preferred_keys or []):
+            if not isinstance(_k, str):
+                continue
+            _c = _k.strip()
+            if _c in _CAPS_SEAL and _c not in sealed:
+                sealed.append(_c)
+        for _core in ("start", "help"):
+            if _core not in sealed and _core in _CAPS_SEAL:
+                sealed.insert(0, _core)
+        if "lang" in _CAPS_SEAL and "lang" not in sealed:
+            sealed.append("lang")
+        if len(sealed) > 2 and hasattr(spec, "features"):
+            existing = {str(getattr(f, "feature", "")): f for f in (spec.features or [])}
+            _prim = _prim_seal()
+            new_feats = []
+            for _c in sealed:
+                if _c in existing:
+                    new_feats.append(existing[_c])
                     continue
-                _c = _ALIAS.get(_k.strip(), _k.strip())
-                if _c in _CAPS_SEAL and _c not in sealed:
-                    sealed.append(_c)
-            for _core in ("start", "help"):
-                if _core not in sealed and _core in _CAPS_SEAL:
-                    sealed.insert(0, _core)
-            if len(sealed) > 2 and hasattr(spec, "features"):
-                existing = {str(getattr(f, "feature", "")): f for f in (spec.features or [])}
-                # Preserve features tied to explicit user slash triggers
-                existing_by_trig = {
-                    str(getattr(getattr(f, "trigger", None), "id", "")).lower(): f
-                    for f in (spec.features or [])
-                }
-                new_feats = []
-                for _c in sealed:
-                    if _c in existing:
-                        new_feats.append(existing[_c])
-                        continue
-                    # keep trigger id from DEFAULT_COMMANDS when possible
-                    trig_id = (_DC_SEAL or {}).get(_c) or _c.replace("_", "")[:32]
-                    if isinstance(trig_id, str) and trig_id.lower() in existing_by_trig:
-                        new_feats.append(existing_by_trig[trig_id.lower()])
-                        continue
-                    cap = _CAPS_SEAL.get(_c)
-                    if not cap:
-                        continue
-                    new_feats.append(_Feature(
-                        id=_c,
-                        feature=_c,
-                        actor="user",
-                        trigger=_Trigger(type="command", id=str(trig_id)),
-                        action=_Action(service=getattr(cap, "service", "generic"), method=getattr(cap, "method", "act")),
-                        messages=_Messages(prompt=f"/{trig_id}", success="تم"),
-                        success={"message": "تم"},
-                        failure={"message": "تعذر"},
-                    ))
-                # Keep any remaining explicit_command features the contract added
-                sealed_set = set(sealed)
-                for f in (spec.features or []):
-                    fid = str(getattr(f, "feature", "") or "")
-                    if fid in sealed_set:
-                        continue
-                    if fid == "explicit_command" or str(getattr(f, "id", "")).startswith("explicit_"):
-                        new_feats.append(f)
-                if new_feats:
-                    spec.features = new_feats
-                    layers_meta["preferred_keys_final_seal"] = sealed
-                    layers_meta["user_slash_feats"] = user_slash_feats
-                    layers_meta["bridge_final_seal"] = True
-                    tag = "bridge:" + "+".join(k for k in sealed if k not in {"start", "help"})[:5]
-        except Exception as _seal_exc:
-            layers_meta["preferred_keys_seal_error"] = f"{type(_seal_exc).__name__}:{_seal_exc}"
+                cap = _CAPS_SEAL.get(_c)
+                if not cap:
+                    continue
+                trig_id = _prim.get(_c, _c.replace("_", "")[:32])
+                new_feats.append(_Feature(
+                    id=_c,
+                    feature=_c,
+                    actor="user",
+                    trigger=_Trigger(type="command", id=str(trig_id)),
+                    action=_Action(service=getattr(cap, "service", "generic"), method=getattr(cap, "method", "act")),
+                    messages=_Messages(prompt=f"/{trig_id}", success="تم"),
+                    success={"message": "تم"},
+                    failure={"message": "تعذر"},
+                ))
+            # keep explicit_command generics
+            sealed_set = set(sealed)
+            for f in (spec.features or []):
+                fid = str(getattr(f, "feature", "") or "")
+                if fid in sealed_set:
+                    continue
+                if fid == "explicit_command" or str(getattr(f, "id", "")).startswith("explicit_"):
+                    new_feats.append(f)
+            if new_feats:
+                spec.features = new_feats
+                layers_meta["preferred_keys_final_seal"] = sealed
+                layers_meta["user_slash_feats"] = user_slash_feats
+                layers_meta["bridge_final_seal"] = True
+                tag = "bridge:" + "+".join(k for k in sealed if k not in {"start", "help"})[:5]
+        # Ensure protected slash features survived any prior strip
+        prot = _prot_feats(request or "")
+        have = {str(getattr(f, "feature", "")) for f in (spec.features or [])}
+        for _c in prot:
+            if _c in have or _c not in _CAPS_SEAL:
+                continue
+            cap = _CAPS_SEAL[_c]
+            trig_id = _prim_seal().get(_c, _c.replace("_", "")[:32])
+            spec.features.append(_Feature(
+                id=_c,
+                feature=_c,
+                actor="user",
+                trigger=_Trigger(type="command", id=str(trig_id)),
+                action=_Action(service=getattr(cap, "service", "generic"), method=getattr(cap, "method", "act")),
+                messages=_Messages(prompt=f"/{trig_id}", success="تم"),
+                success={"message": "تم"},
+                failure={"message": "تعذر"},
+            ))
+            layers_meta.setdefault("slash_rehydrated", []).append(_c)
+    except Exception as _seal_exc:
+        layers_meta["preferred_keys_seal_error"] = f"{type(_seal_exc).__name__}:{_seal_exc}"
 
     result = build_from_spec(spec, project_dir, request=request)
     elapsed = _time.perf_counter() - t0

@@ -37,32 +37,10 @@ def _rule_features(text: str) -> list[str]:
 
 
 def _slash_features_from_text(text: str, catalog: set[str]) -> list[str]:
-    """Map user-written /commands to registry keys. Always wins over model cart noise."""
-    import re
-    try:
-        from telegram_bot_engine.spec_core.builder import DEFAULT_COMMANDS
-    except Exception:
-        DEFAULT_COMMANDS = {}
-    cmd_to_feat: dict[str, str] = {}
-    for feat, cmd in (DEFAULT_COMMANDS or {}).items():
-        if isinstance(cmd, str) and cmd.strip():
-            cmd_to_feat.setdefault(cmd.strip().lower(), str(feat))
-    cmd_to_feat.update({
-        "products": "shop_catalog", "product": "shop_catalog", "catalog": "shop_catalog",
-        "shop": "shop_catalog", "order": "shop_order", "orders": "shop_orders",
-        "add": "task_add", "list": "task_list", "done": "task_done",
-        "delete": "task_delete", "ticket": "ticket_open", "about": "about",
-        "welcome": "welcome_set", "setwelcome": "welcome_set",
-    })
-    out: list[str] = []
-    for m in re.finditer(r"(?<!\w)/([A-Za-z][A-Za-z0-9_]{0,31})", text or ""):
-        cid = m.group(1).lower()
-        feat = cmd_to_feat.get(cid)
-        if feat and feat in catalog and feat not in out:
-            out.append(feat)
-        elif cid in catalog and cid not in out:
-            out.append(cid)
-    return out
+    """User-written /commands → features (canonical command_map only)."""
+    from telegram_bot_engine.spec_core.command_map import features_from_text
+    feats = features_from_text(text or "", include_core=False)
+    return [f for f in feats if f in catalog] if catalog else feats
 
 
 def analyze_and_prepare(
