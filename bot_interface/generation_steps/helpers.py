@@ -203,6 +203,8 @@ class Msg:
         self.photo = None
         self.document = None
         self.caption = None
+        self.reply_to_message = None
+        self.from_user = SimpleNamespace(id=1, username="smoke", first_name="Smoke")
     async def reply_text(self, *a, **k):
         self.replies.append((a, k))
         return self

@@ -260,11 +260,12 @@ def _emit_handlers(spec: BotSpec) -> str:
 
         if cap.service == "moderation":
             if cap.method in {"pin_message", "delete_message", "purge"}:
-                lines.append("    if chat is None or message.reply_to_message is None:")
+                lines.append("    reply = getattr(message, 'reply_to_message', None)")
+                lines.append("    if chat is None or reply is None:")
                 lines.append(f"        await message.reply_text({fail!r})")
                 lines.append("        return")
                 lines.append("    try:")
-                lines.append("        mid = message.reply_to_message.message_id")
+                lines.append("        mid = reply.message_id")
                 lines.append(f"        await moderation_svc.{cap.method}(context, chat.id, mid)")
                 lines.append(f"        await message.reply_text({ok!r})")
                 lines.append("    except Exception:")
@@ -299,8 +300,9 @@ def _emit_handlers(spec: BotSpec) -> str:
                 lines.append(f"        await message.reply_text({fail!r})")
             else:
                 lines.append("    target_id = None")
-                lines.append("    if message.reply_to_message and message.reply_to_message.from_user:")
-                lines.append("        target_id = message.reply_to_message.from_user.id")
+                lines.append("    reply = getattr(message, 'reply_to_message', None)")
+                lines.append("    if reply is not None and getattr(reply, 'from_user', None) is not None:")
+                lines.append("        target_id = reply.from_user.id")
                 lines.append("    elif context.args:")
                 lines.append("        try:")
                 lines.append("            target_id = int(context.args[0])")
