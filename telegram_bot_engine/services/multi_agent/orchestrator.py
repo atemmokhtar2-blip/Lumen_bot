@@ -420,3 +420,32 @@ def resume_after_confirm(
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
     board.put(state)
     return orch._deliver(state)
+
+def continue_after_confirm(
+    state_id: str,
+    *,
+    user_id: int = 0,
+    work_dir: str | Path | None = None,
+    board: BlackboardStore | None = None,
+) -> AgentState:
+    """Continue after confirm_action already succeeded (token already consumed)."""
+    board = board or get_blackboard()
+    state = board.get(state_id)
+    if state is None:
+        state = AgentState(status=AgentStatus.FAILED.value)
+        state.final_message = "state_not_found"
+        return state
+    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
+        state.final_message = "user_mismatch"
+        return state
+    pending = (state.extensions or {}).get("pending_action") or {}
+    tool = str(pending.get("tool") or state.capability_id or "")
+    ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
+    orch = Orchestrator(board=board)
+    if tool in {"generate_bot", "refine_bot"}:
+        return orch.run(state, context=ctx)
+    from .tools import execute_tool_gated
+    state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
+    board.put(state)
+    return orch._deliver(state)
+

@@ -25,6 +25,7 @@ from .orchestrator import (
     get_state,
     latest_for_user,
     resume_after_confirm,
+    continue_after_confirm,
 )
 from .strict_spec import StrictSpec, validate_strict_spec, merge_spec_request, STRICT_SPEC_SCHEMA
 from .context_views import router_view, architect_view, builder_view, critic_view, deliver_view
@@ -65,6 +66,7 @@ __all__ = [
     "get_state",
     "latest_for_user",
     "resume_after_confirm",
+    "continue_after_confirm",
     "StrictSpec",
     "validate_strict_spec",
     "merge_spec_request",

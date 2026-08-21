@@ -201,6 +201,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _clear_thinking()
         return
 
+    # Multi-agent HITL (Phase D): تأكيد/رفض <id> [<token>]
+    try:
+        from ..multi_agent_bridge import try_handle_hitl_message
+        handled, hitl_reply = try_handle_hitl_message(
+            request,
+            user_id=int(user.id) if user else 0,
+            user_data=context.user_data,
+        )
+        if handled:
+            await _clear_thinking()
+            await message.reply_text((hitl_reply or "تم.")[:4000])
+            return
+    except Exception:
+        logger.exception("multi_agent HITL bridge failed")
+
     # User plan status from MongoDB
     if request.lower().split("@")[0] in {"/plan", "/myplan", "/خطة"}:
         uid = int(user.id) if user else 0

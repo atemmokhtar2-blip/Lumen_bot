@@ -197,7 +197,7 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             orchestrator_enabled,
         )
         if orchestrator_enabled():
-            logger.info("multi_agent orchestrator Phase A — generate path")
+            logger.info("multi_agent orchestrator A–E — generate path")
             return orchestrate_generate(
                 request,
                 work_dir,
