@@ -249,14 +249,26 @@ def accept_spec(
         warnings.extend(_fix_bot_identity(spec, primary))
 
     # ── ecommerce ──────────────────────────────────────────────────────
-    elif primary == "ecommerce" and conf >= 0.45:
+    # Threshold 0.35: Arabic shop briefs often score ~0.40 and were skipping
+    # the lean pack, leaving catalog-only bots without cart/order commands.
+    elif primary == "ecommerce" and conf >= 0.35:
         stripped.extend(_filter_features(spec, set(_SHOP_DENY_EXACT), _SHOP_DENY_PREFIXES, protect=protect))
         ids_after = set(_feature_ids(spec))
+        # Lean commerce pack: browse + cart + order — matches «عرض / اختيار / طلب»
+        _lean_shop = (
+            "shop_catalog",
+            "cart_view",
+            "cart_add",
+            "cart_checkout",
+            "shop_my_orders",
+        )
+        if repair:
+            for key in _lean_shop:
+                if key not in ids_after and _append_feature(spec, key):
+                    injected.append(key)
+                    ids_after.add(key)
         if not any(i.startswith("shop_") or i.startswith("cart_") for i in ids_after):
-            if repair and _append_feature(spec, "shop_catalog"):
-                injected.append("shop_catalog")
-            else:
-                warnings.append("ecommerce_without_shop_caps")
+            warnings.append("ecommerce_without_shop_caps")
         warnings.extend(_fix_bot_identity(spec, primary))
 
     # ── generic: always strip absolute nonsense if domain blocked presets
