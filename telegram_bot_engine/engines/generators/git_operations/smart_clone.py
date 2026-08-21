@@ -488,6 +488,7 @@ def _update_existing(
     )
 
 
+
 def smart_clone(
     text: str,
     dest_dir: str | Path,
@@ -496,8 +497,17 @@ def smart_clone(
     url_override: Optional[str] = None,
     branch: Optional[str] = None,
     timeout_sec: Optional[int] = None,
+    sparse_paths: Optional[list[str]] = None,
+    prefer_mirror: bool = True,
 ) -> CloneResult:
-    """Clone or refresh a repository into dest_dir. ok=True only after verification."""
+    """Clone or refresh via Power Git multi-strategy engine (honest verify).
+
+    Strategy chain (circuit breaker):
+      1. Local bare mirror materialize (no network when warm)
+      2. HTTPS shallow clone (+ optional sparse-checkout)
+      3. ZIP archive fallback
+    Success only after structural verification.
+    """
     t0 = time.monotonic()
     extracted = extract_repo_url(text) if not url_override else None
     raw = (url_override or extracted or "").strip()
@@ -506,17 +516,7 @@ def smart_clone(
         return CloneResult(ok=False, message=err or "لم يتم العثور على رابط مستودع صالح")
 
     tok = token or extract_token(text)
-    try:
-        tout = int(timeout_sec) if timeout_sec is not None else int(
-            os.environ.get("GIT_CLONE_TIMEOUT_SEC") or "300"
-        )
-    except ValueError:
-        tout = 300
-    tout = max(60, min(tout, 900))
-
-    depth_i = 1 if depth is None else int(depth)
-    depth_i = max(0, min(depth_i, 50))
-
+    depth_i = 1 if depth is None else max(0, min(int(depth), 50))
     br = (branch or "").strip() or None
     if br and (len(br) > 200 or not re.match(r"^[A-Za-z0-9._/-]+$", br)):
         return CloneResult(ok=False, url=url, message="اسم الفرع غير صالح")
@@ -532,69 +532,91 @@ def smart_clone(
         return CloneResult(ok=False, url=url, message=str(exc))
 
     if target.exists() and (target / ".git").exists():
-        result = _update_existing(target, token=tok, branch=br, timeout=tout)
+        result = _update_existing(target, token=tok, branch=br, timeout=int(timeout_sec or 300))
         result.url = url
         result.elapsed_sec = time.monotonic() - t0
         return result
+
+    try:
+        from .power.strategies import clone_multi_strategy
+        from .power.security import ensure_strict_gitignore
+
+        eng = clone_multi_strategy(
+            url,
+            target,
+            token=tok,
+            branch=br,
+            depth=depth_i,
+            sparse_paths=sparse_paths,
+            prefer_mirror=prefer_mirror,
+        )
+        if eng.ok and eng.path:
+            try:
+                ensure_strict_gitignore(Path(eng.path))
+            except Exception:
+                pass
+            return CloneResult(
+                ok=True,
+                path=eng.path,
+                url=url,
+                message=eng.message or "ok",
+                strategy=eng.strategy_used or "power",
+                attempts=eng.attempts or 1,
+                file_count=int(eng.files_changed_count or 0),
+                elapsed_sec=time.monotonic() - t0,
+                meta=dict(eng.metadata or {}),
+            )
+        return CloneResult(
+            ok=False,
+            url=url,
+            message=eng.message or eng.redacted_error or "clone_failed",
+            stderr=(eng.redacted_error or "")[:500],
+            needs_auth=bool(eng.needs_auth),
+            strategy=eng.strategy_used or "",
+            attempts=int(eng.attempts or 0),
+            elapsed_sec=time.monotonic() - t0,
+            meta=dict(eng.metadata or {}),
+        )
+    except Exception:
+        logger.exception("power clone path failed; legacy strategies")
 
     auth_url = _inject_token(url, tok)
     attempts = 0
     last_err = ""
     used = ""
-
     for name, argv in _clone_strategies(auth_url, target, branch=br, depth=depth_i):
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
         attempts += 1
         used = name
-        code, err_text = _run_clone_argv(argv, timeout=tout, token=tok)
+        code, err_text = _run_clone_argv(argv, timeout=int(timeout_sec or 300), token=tok)
         last_err = err_text
-        logger.info("clone attempt strategy=%s code=%s url=%s", name, code, url)
         if code == 0:
             ok, verr, meta = _verify_clone(target)
             if ok:
-                n = int(meta.get("file_count") or 0)
                 return CloneResult(
                     ok=True,
                     path=str(target),
                     url=url,
-                    message=f"تم سحب المستودع إلى {target} ({n} ملف، {name})",
-                    strategy=name,
+                    message="ok",
+                    strategy=used,
                     attempts=attempts,
-                    file_count=n,
+                    file_count=int(meta.get("file_count") or 0),
                     elapsed_sec=time.monotonic() - t0,
                     meta=meta,
                 )
             last_err = verr or last_err
-            shutil.rmtree(target, ignore_errors=True)
-            continue
-
-        if _is_auth_failure(err_text, code):
-            needs = not bool(tok)
+        if _is_auth_failure(err_text, code) and not tok:
             return CloneResult(
                 ok=False,
                 url=url,
-                message=_diagnose(err_text, code, bool(tok)),
+                message=_diagnose(err_text, code, False),
                 stderr=err_text[:500],
-                needs_auth=needs,
-                strategy=name,
+                needs_auth=True,
+                strategy=used,
                 attempts=attempts,
                 elapsed_sec=time.monotonic() - t0,
             )
-        if any(
-            x in err_text.lower()
-            for x in ("could not resolve host", "network is unreachable")
-        ):
-            return CloneResult(
-                ok=False,
-                url=url,
-                message=_diagnose(err_text, code, bool(tok)),
-                stderr=err_text[:500],
-                strategy=name,
-                attempts=attempts,
-                elapsed_sec=time.monotonic() - t0,
-            )
-        shutil.rmtree(target, ignore_errors=True)
 
     return CloneResult(
         ok=False,
@@ -605,6 +627,7 @@ def smart_clone(
         attempts=attempts,
         elapsed_sec=time.monotonic() - t0,
     )
+
 
 
 __all__ = [

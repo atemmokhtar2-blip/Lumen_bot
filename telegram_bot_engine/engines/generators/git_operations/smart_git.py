@@ -305,15 +305,27 @@ def git_push(
         if auth_url and auth_url != remote_url:
             _run_git(["remote", "set-url", remote, auth_url], cwd=root)
 
-    # Stage + commit if dirty
-    _run_git(["add", "-A"], cwd=root)
-    code, status_out, _ = _run_git(["status", "--porcelain"], cwd=root)
-    if status_out.strip():
-        code, _, err = _run_git(
-            ["commit", "-m", (message or "update")[:200]],
-            cwd=root,
-        )
-        # commit may fail if nothing / identity — continue to push if already committed
+    # Secure atomic stage+commit (secret scan + gitignore) when dirty
+    try:
+        from .power.security import ensure_strict_gitignore
+        from .power.workflow import atomic_commit
+        ensure_strict_gitignore(root)
+        code, status_out, _ = _run_git(["status", "--porcelain"], cwd=root)
+        if status_out.strip():
+            cr = atomic_commit(root, None, message or "update")
+            if not cr.ok and cr.message == "secret_scan_blocked":
+                return GitOpResult(
+                    ok=False,
+                    op="push",
+                    path=str(root),
+                    message="رفض الـ commit: أسرار مكتشفة في الملفات",
+                    stderr=cr.redacted_error,
+                )
+    except Exception:
+        _run_git(["add", "-A"], cwd=root)
+        code, status_out, _ = _run_git(["status", "--porcelain"], cwd=root)
+        if status_out.strip():
+            _run_git(["commit", "-m", (message or "update")[:200]], cwd=root)
 
     code, out, err = _run_git(["push", "-u", remote, br], cwd=root, token=token, timeout=180)
     # Restore clean remote without embedded token
