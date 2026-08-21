@@ -798,7 +798,59 @@ def run_tool(name: str, root: Path, **kwargs: Any) -> dict[str, Any]:
         return {"tool": name, "ok": False, "error": type(exc).__name__}
 
 
+_FILE_NAME_RX = re.compile(
+    r"""(?ix)
+    (?:
+        [\w./\-]+\.(?:py|js|ts|tsx|jsx|go|rs|java|kt|c|cpp|h|hpp|cs|rb|php|swift|
+        sh|bash|sql|html|css|vue|svelte|md|txt|toml|ya?ml|json|ini|cfg|env|rst|xml|Dockerfile)
+    )
+    |
+    (?:(?:file|path|ملف|مسار)\s*[:\-]?\s*)([\w./\-]+\.[\w]+)
+    """
+)
+
+_FILE_REQUEST_HINTS = (
+    "هات", "جيب", "اعرض", "وريني", "ورني", "افتح", "اقرأ", "اقرا", "محتوى",
+    "show", "read", "open", "get", "file", "content", "contents", "ملف",
+)
+
+
+def extract_file_queries(user_question: str) -> list[str]:
+    """Pull likely file names/paths from free-form user text."""
+    text = user_question or ""
+    found: list[str] = []
+    for m in _FILE_NAME_RX.finditer(text):
+        s = (m.group(0) or "").strip()
+        # strip leading arabic/english keywords if captured as whole
+        s = re.sub(
+            r"^(?:file|path|ملف|مسار)\s*[:\-]?\s*",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        ).strip()
+        if s and s not in found:
+            found.append(s)
+    # bare basename after "هات/جيب/..." e.g. هات main.py or هات requirements
+    low = text.lower()
+    if any(h in low or h in text for h in _FILE_REQUEST_HINTS):
+        for tok in re.findall(r"[\w.\-/]+", text):
+            if "." in tok and tok not in found and len(tok) < 120:
+                found.append(tok)
+            elif tok.lower() in {
+                "readme", "dockerfile", "makefile", "requirements", "pyproject",
+                "package", "main", "app", "config", "settings",
+            } and tok not in found:
+                found.append(tok)
+    return found[:12]
+
+
 def run_core_toolkit(root: Path, *, user_question: str = "") -> list[dict[str, Any]]:
+    """Run measurable tools; always bias toward the user's free-form question.
+
+    For questions like «هات الملف X» or any unexpected ask, Grok only answers
+    from these tool outputs — so we must actually *run* find/read/search when
+    the question points at files or terms.
+    """
     root = Path(root).resolve()
     q = (user_question or "").lower()
     out: list[dict[str, Any]] = [
@@ -813,7 +865,42 @@ def run_core_toolkit(root: Path, *, user_question: str = "") -> list[dict[str, A
         run_tool("import_graph", root),
         run_tool("git_log", root),
     ]
-    # question-driven
+
+    # --- File-oriented free-form requests (هات الملف / read X / show main.py) ---
+    file_queries = extract_file_queries(user_question or "")
+    file_request = bool(file_queries) or any(h in q or h in (user_question or "") for h in _FILE_REQUEST_HINTS)
+    if file_request or file_queries:
+        for fq in file_queries or ["readme", "main", "requirements"]:
+            hits = run_tool("find_files", root, query=fq, limit=20)
+            out.append(hits)
+            for hit in (hits.get("hits") or [])[:3]:
+                rel = str(hit.get("path") or "")
+                if rel:
+                    out.append(run_tool("read_file", root, path=rel, max_chars=14000))
+        # If user named an exact relative path, try read directly
+        for fq in file_queries:
+            if "/" in fq or fq.endswith((".py", ".md", ".json", ".yml", ".yaml", ".toml", ".txt")):
+                out.append(run_tool("read_file", root, path=fq, max_chars=14000))
+
+    # --- Generic search terms from the question (unexpected questions) ---
+    # Extract meaningful tokens (len>=3) not stopwords; search code for them.
+    stop = {
+        "the", "and", "for", "with", "this", "that", "from", "what", "how", "هل",
+        "ايه", "فين", "عايز", "ممكن", "لو", "عن", "في", "من", "على", "هو", "هي",
+        "file", "path", "repo", "مستودع", "مشروع", "كود", "code", "please",
+    }
+    tokens = [
+        t for t in re.findall(r"[A-Za-z_][\w]{2,}|[\u0600-\u06FF]{3,}", user_question or "")
+        if t.lower() not in stop and t not in stop
+    ][:8]
+    if tokens and not file_request:
+        # Prefer search_code on distinctive tokens
+        for tok in tokens[:4]:
+            if re.match(r"^[A-Za-z_]", tok):
+                out.append(run_tool("search_code", root, pattern=re.escape(tok), limit=25))
+                out.append(run_tool("find_files", root, query=tok, limit=15))
+
+    # question-driven domain hooks
     if any(x in q for x in ("stripe", "payment", "دفع", "سترايب", "billing")):
         out.append(run_tool("search_code", root, pattern=r"stripe|Stripe|STRIPE"))
     if any(x in q for x in ("api", "fastapi", "flask", "aiohttp", "endpoint", "مسار")):
@@ -822,24 +909,22 @@ def run_core_toolkit(root: Path, *, user_question: str = "") -> list[dict[str, A
     if any(x in q for x in ("telegram", "بوت", "bot", "handler")):
         out.append(run_tool("search_code", root, pattern=r"(telegram|Application|CommandHandler|aiogram)"))
     if any(x in q for x in ("docker", "deploy", "استضاف", "host", "أمن", "security", "سر", "secret", "token")):
-        out.append(run_tool("security_scan", root))
+        out.append(run_tool("security_scan", root)
+        )
         out.append(run_tool("find_files", root, query="docker"))
     if any(x in q for x in ("blame", "مين كتب", "من كتب", "author", "مؤلف")):
-        # blame main if exists
         eps = run_tool("entrypoints", root).get("entrypoints") or []
         if eps:
             out.append(run_tool("git_blame", root, path=eps[0].get("path") or "main.py"))
     if any(x in q for x in ("diff", "تغيّر", "تغير", "commits", "آخر", "اخر")):
         out.append(run_tool("diff_since", root, since="HEAD~15"))
     if any(x in q for x in ("test", "اختبار", "pytest")):
-        # already have test_discovery
         out.append(run_tool("find_files", root, query="test_"))
     # symbols for top entrypoints
     for ep in (run_tool("entrypoints", root).get("entrypoints") or [])[:3]:
         path = ep.get("path") or ""
         if str(path).endswith(".py"):
             out.append(run_tool("symbols", root, path=path))
-    # always light security if not already
     if not any(r.get("tool") == "security_scan" for r in out):
         out.append(run_tool("security_scan", root))
     return out
@@ -860,10 +945,17 @@ def toolkit_to_prompt_block(results: list[dict[str, Any]]) -> str:
         else:
             c = {k: v for k, v in r.items() if k != "content"}
             compact.append(c)
-    return json.dumps(compact, ensure_ascii=False, indent=0)[:26000]
+    # Prefer large window so Grok (big-context models) can see file contents
+    try:
+        import os as _os
+        cap = max(20000, int(_os.getenv("REPO_TOOLKIT_PROMPT_CHARS") or "52000"))
+    except Exception:
+        cap = 52000
+    return json.dumps(compact, ensure_ascii=False, indent=0)[:cap]
 
 
 __all__ = [
+    "extract_file_queries",
     "REPO_TOOLS",
     "run_tool",
     "run_core_toolkit",

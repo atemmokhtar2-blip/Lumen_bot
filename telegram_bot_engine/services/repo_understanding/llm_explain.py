@@ -73,10 +73,12 @@ def explain_repo_with_llm(
     }
 
     prompt = "\n".join([
-        "أنت جوراك. لازم تجاوب من مخرجات أدوات المحرك فقط (TOOL_RESULTS).",
-        "ممنوع تخترع ملفات أو مكتبات أو أرقام غير موجودة في TOOL_RESULTS.",
-        "لو المعلومة مش في الأدوات قول: غير موجود في نتائج الأدوات.",
-        "جاوب بالعربية بوضوح على سؤال المستخدم.",
+        "أنت جوراك مربوط بالمستودع النشط اللي المستخدم سحبه.",
+        "جاوب من مخرجات أدوات المحرك فقط (TOOL_RESULTS) — دي الحقيقة الوحيدة.",
+        "ممنوع تخترع ملفات أو مكتبات أو أرقام أو محتوى غير موجود في TOOL_RESULTS.",
+        "لو المستخدم طلب ملف (هات/اعرض/اقرأ): استخدم نتائج find_files و read_file واعرض المحتوى أو المسار.",
+        "لو السؤال غير متوقع: استنتج من TOOL_RESULTS فقط؛ لو مش موجود قول بصراحة: غير موجود في نتائج الأدوات.",
+        "جاوب بالعربية بوضوح واختصار مفيد.",
         "",
         f"سؤال المستخدم: {user_question or 'افهم المستودع'}",
         f"ROOT: {root}",
@@ -130,9 +132,20 @@ def _freeform_completion(prompt: str) -> str | None:
         "gemma2-9b-it",
     ]
     system = (
-        "You are Grok answering strictly from TOOL_RESULTS. "
-        "Never invent. Arabic preferred. No JSON wrapper."
+        "You are Grok bound to the user's cloned repository. "
+        "Answer ONLY from TOOL_RESULTS (engine measurements). Never invent files or numbers. "
+        "If the user asked for a file, quote path + content from read_file/find_files results. "
+        "Arabic preferred when the user writes Arabic. No JSON wrapper."
     )
+    # Large context: allow generous prompt window (models with big context use more)
+    try:
+        prompt_cap = max(12000, int(os.getenv("REPO_EXPLAIN_PROMPT_CHARS") or "48000"))
+    except ValueError:
+        prompt_cap = 48000
+    try:
+        max_tok = max(800, int(os.getenv("REPO_EXPLAIN_MAX_TOKENS") or "4096"))
+    except ValueError:
+        max_tok = 4096
     api = "https://api.groq.com/openai/v1/chat/completions"
     for source, key in keys:
         for model in models:
@@ -143,10 +156,10 @@ def _freeform_completion(prompt: str) -> str | None:
                     json={
                         "model": model,
                         "temperature": 0.15,
-                        "max_tokens": 2500,
+                        "max_tokens": max_tok,
                         "messages": [
                             {"role": "system", "content": system},
-                            {"role": "user", "content": prompt[:22000]},
+                            {"role": "user", "content": prompt[:prompt_cap]},
                         ],
                     },
                     timeout=float(os.getenv("GROQ_TIMEOUT") or "90"),

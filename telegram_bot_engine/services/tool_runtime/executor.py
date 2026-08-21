@@ -299,7 +299,9 @@ def _tool_repo_understand(
                     )
                 path = str(clone_res.path or "")
                 url = str(clone_res.url or found)
-                user_data["active_repo"] = {"path": path, "url": url}
+                _prev = dict(user_data.get("active_repo") or {})
+                _prev.update({"path": path, "url": url, "bound_for_grok": True})
+                user_data["active_repo"] = _prev
                 user_data["last_project_path"] = path
         except Exception as exc:
             logger.exception("clone-before-understand failed")

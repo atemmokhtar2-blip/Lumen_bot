@@ -259,11 +259,17 @@ async def try_handle_git(
                 repo_contract = await asyncio.to_thread(_do_u)
                 from telegram_bot_engine.schemas.repo_contract import safe_contract_dict
                 _cdata = safe_contract_dict(repo_contract)
-                context.user_data["active_repo"] = {
-                    "path": result.path,
-                    "url": result.url,
-                    "contract": _cdata,
-                }
+                # Merge — never wipe dossier/facts already bound for Grok
+                _prev = dict(context.user_data.get("active_repo") or {})
+                _prev.update(
+                    {
+                        "path": result.path,
+                        "url": result.url or _prev.get("url") or "",
+                        "contract": _cdata,
+                        "bound_for_grok": True,
+                    }
+                )
+                context.user_data["active_repo"] = _prev
                 if _cdata.get("summary"):
                     lines.append(f"• الملخص: {str(_cdata.get('summary'))[:300]}")
                 _eps = _cdata.get("entry_points") or []
