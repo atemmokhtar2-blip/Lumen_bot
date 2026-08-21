@@ -75,6 +75,11 @@ class SessionStore:
                 "pending_host",
                 "pending_clone_auth",
                 "active_repo",
+                "chat_history",
+                "last_bot_request",
+                "pending_chat_action",
+                "translated_preferred_keys",
+                "translated_source",
             )
             if k in data and data[k] is not None
         }

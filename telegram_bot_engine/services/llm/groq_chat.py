@@ -124,6 +124,8 @@ def _build_system(context: dict[str, Any]) -> str:
         "7) features_requested مفاتيح حرفية من SPEC_CORE_CAPABILITIES فقط.\n"
         "8) إن نقصت المواصفات: clarification_needed=true واسأل سؤالًا محددًا.\n"
         "9) translation يمكن أن يكون null في الدردشة العادية؛ answer مطلوب دائمًا.\n"
+        "10) إذا وُجد conversation_summary أو conversation_history في السياق فأكمل منه — "
+        "قد يتبدل مزود/مفتاح الشات بين الرسائل ولا تنسَ ما سبق.\n"
         f"\nSERVER_CONTEXT:\n{facts}\n"
         f"\nSPEC_CORE_CAPABILITIES:\n{json.dumps(caps, ensure_ascii=False)}\n"
     )

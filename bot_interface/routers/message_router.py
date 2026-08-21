@@ -656,14 +656,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "url": str(_active_repo.get("url") or ""),
             }
 
+        # Durable chat memory (survives key failover + worker restart)
         chat_history = []
-        if context.user_data is not None:
+        _mem_ctx: dict = {}
+        try:
+            from telegram_bot_engine.services.chat_memory import get_chat_memory
+            _cm = get_chat_memory()
+            _uid = int(user.id) if user else 0
+            if _uid:
+                _mem_ctx = _cm.context_for_llm(_uid)
+                chat_history = list(_mem_ctx.get("conversation_history") or [])
+        except Exception:
+            logger.exception("chat_memory load failed")
+            _mem_ctx = {}
+        if not chat_history and context.user_data is not None:
             try:
-                chat_history = list(context.user_data.get("chat_history") or [])[-12:]
+                chat_history = list(context.user_data.get("chat_history") or [])[-16:]
             except Exception:
                 chat_history = []
         chat_context = dict(live_context)
         chat_context["conversation_history"] = chat_history
+        if _mem_ctx.get("conversation_summary"):
+            chat_context["conversation_summary"] = _mem_ctx["conversation_summary"]
+        if _mem_ctx.get("memory_facts"):
+            chat_context["memory_facts"] = _mem_ctx["memory_facts"]
         try:
             from telegram_bot_engine.services.translator_client import chat_request
             chat_result = chat_request(request, chat_context)
@@ -671,14 +687,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("live model chat unavailable; continuing generation path")
             chat_result = None
 
-        # Keep a bounded, server-local conversation context so a final "ابدأ"
-        # can refer to the requirements collected in previous turns.
+        # Persist turns to durable memory + in-process user_data
+        _provider = ""
+        if isinstance(chat_result, dict):
+            _provider = str(chat_result.get("provider") or chat_result.get("model") or "")[:40]
+        try:
+            from telegram_bot_engine.services.chat_memory import get_chat_memory
+            _cm = get_chat_memory()
+            _uid = int(user.id) if user else 0
+            if _uid:
+                _cm.append(_uid, "user", request, provider=_provider)
+                if isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
+                    _cm.append(
+                        _uid,
+                        "assistant",
+                        str(chat_result["answer"]),
+                        provider=_provider,
+                        meta={"action": (chat_result.get("action") or {}).get("name")},
+                    )
+                facts = {}
+                if (context.user_data or {}).get("last_bot_request"):
+                    facts["last_bot_request"] = context.user_data.get("last_bot_request")
+                if (context.user_data or {}).get("pending_chat_action"):
+                    facts["pending_chat_action"] = context.user_data.get("pending_chat_action")
+                if live_context.get("plan"):
+                    facts["plan"] = live_context.get("plan")
+                if facts:
+                    _cm.set_facts(_uid, **facts)
+        except Exception:
+            logger.exception("chat_memory persist failed")
         if context.user_data is not None:
             try:
                 updated_history = chat_history + [{"role": "user", "content": request}]
                 if isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
                     updated_history.append({"role": "assistant", "content": str(chat_result["answer"])})
-                context.user_data["chat_history"] = updated_history[-12:]
+                context.user_data["chat_history"] = updated_history[-16:]
             except Exception:
                 pass
 

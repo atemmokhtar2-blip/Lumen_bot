@@ -244,6 +244,7 @@ def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
     10. إذا لم يكتمل وصف البوت بعد، اجعل clarification_needed=true وspec_request فارغًا.
     11. إذا اكتملت المواصفات أو قال المستخدم «ابدأ/نفّذ/ولّد» بعد اكتمالها، اجعل action.name="generate_bot"، وclarification_needed=false، واكتب spec_request كطلب واحد مستقل يفهمه spec_core ويحتوي على عبارة «بوت» أو «Telegram bot» وعلى features_requested الدقيقة فقط.
     12. spec_request ليس ردًا للمستخدم؛ هو عقد داخلي لإرساله إلى spec_core.
+    13. إن وُجد conversation_summary أو conversation_history في SERVER_CONTEXT فأكمل منه؛ تبديل المفتاح/المزود لا يلغي سياق المستخدم.
 
 SERVER_CONTEXT:
 {facts}
