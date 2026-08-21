@@ -50,9 +50,10 @@ def build_default_registry() -> AgentRegistry:
     from .roles.architect import ArchitectAgent
     from .roles.builder import BuilderAgent
     from .roles.critic import CriticAgent
+    from .roles.deliver import DeliverAgent
 
     reg = AgentRegistry()
-    for agent in (RouterAgent(), ArchitectAgent(), BuilderAgent(), CriticAgent()):
+    for agent in (RouterAgent(), ArchitectAgent(), BuilderAgent(), CriticAgent(), DeliverAgent()):
         reg.register(agent)
     return reg
 

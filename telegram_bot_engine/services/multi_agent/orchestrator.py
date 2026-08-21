@@ -48,21 +48,43 @@ class Orchestrator:
         return None
 
     def _run_agent(self, name: str, state: AgentState, ctx: dict[str, Any]) -> AgentState:
+        from .circuit import get_circuit_board
+        from .metrics import get_metrics
+        metrics = get_metrics()
+        breaker = get_circuit_board().get(f"agent:{name}")
+        if not breaker.allow():
+            state.record(AgentRole.ORCHESTRATOR, "circuit_open", name)
+            metrics.incr("agent_circuit_open", agent=name)
+            try:
+                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=f"circuit:{name}", force=True)
+            except Exception:
+                state.status = AgentStatus.FAILED.value
+            self.board.put(state)
+            return state
         agent = self._agent(name)
         if agent is None:
             state.record(AgentRole.ORCHESTRATOR, "missing_agent", name)
             return state
         if not agent.can_run(state) and name != "architect":
-            # architect always runs in repair loop
             if name == "critic" and state.build_success:
                 pass
             elif name != "architect":
                 state.record(AgentRole.ORCHESTRATOR, "can_run_false", name)
                 return state
         try:
-            state = agent.run(state, context=ctx)
+            with metrics.timer("agent_latency_s", agent=name):
+                state = agent.run(state, context=ctx)
+            # Success heuristic: not FAILED after agent
+            if state.status != AgentStatus.FAILED.value:
+                breaker.record_success()
+                metrics.incr("agent_success", agent=name)
+            else:
+                breaker.record_failure()
+                metrics.incr("agent_failure", agent=name)
         except Exception as exc:
             logger.exception("agent %s crashed", name)
+            breaker.record_failure()
+            metrics.incr("agent_crash", agent=name)
             state.record(AgentRole.ORCHESTRATOR, "agent_crash", f"{name}:{type(exc).__name__}")
             try:
                 state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=name, force=True)
@@ -93,6 +115,31 @@ class Orchestrator:
         *,
         context: Optional[dict[str, Any]] = None,
     ) -> AgentState:
+        from .concurrency import orchestration_slot
+        from .metrics import get_metrics
+        metrics = get_metrics()
+        with orchestration_slot() as got:
+            if not got:
+                metrics.incr("orchestrator_slot_timeout")
+                state.final_message = "النظام مشغول — أعد المحاولة بعد لحظات."
+                try:
+                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="busy", force=True)
+                except Exception:
+                    state.status = AgentStatus.FAILED.value
+                self.board.put(state)
+                return state
+            metrics.incr("orchestrator_start")
+            with metrics.timer("orchestrator_total_s"):
+                return self._run_inner(state, context=context)
+
+    def _run_inner(
+        self,
+        state: AgentState,
+        *,
+        context: Optional[dict[str, Any]] = None,
+    ) -> AgentState:
+        from .metrics import get_metrics
+        metrics = get_metrics()
         ctx = dict(context or {})
         self.board.put(state)
         max_att = _max_attempts(state)
@@ -240,6 +287,16 @@ class Orchestrator:
             state.record(AgentRole.ORCHESTRATOR, "deliver_terminal", state.status)
 
         self.board.put(state)
+        try:
+            from .metrics import get_metrics
+            m = get_metrics()
+            m.incr("orchestrator_done", status=str(state.status))
+            if state.qa_passed:
+                m.incr("orchestrator_qa_passed")
+            else:
+                m.incr("orchestrator_qa_failed")
+        except Exception:
+            pass
         logger.info(
             "orchestrator done id=%s status=%s path=%s qa=%s attempts=%s",
             state.state_id, state.status, state.generated_path, state.qa_passed, state.attempts,

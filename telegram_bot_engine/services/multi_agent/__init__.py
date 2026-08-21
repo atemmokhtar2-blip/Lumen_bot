@@ -33,6 +33,10 @@ from .gates import architect_gate, filter_features_to_catalog, apply_catalog_fil
 from .repair import RepairDirective, build_repair_directive, apply_deterministic_repair
 from .hitl import PendingAction, request_confirmation, confirm_action, reject_action, parse_confirmation_message, tool_requires_confirmation, consume_execute_grant, audit_log, tool_risk
 from .tools import execute_tool_gated, list_tools, select_tool
+from .metrics import get_metrics, metrics_snapshot
+from .circuit import get_circuit_board, CircuitBreaker
+from .health import health_snapshot
+from .concurrency import active_count, orchestration_slot
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -83,4 +87,7 @@ __all__ = [
     "parse_confirmation_message", "tool_requires_confirmation",
     "consume_execute_grant", "audit_log", "tool_risk",
     "execute_tool_gated", "list_tools", "select_tool",
+    "get_metrics", "metrics_snapshot",
+    "get_circuit_board", "CircuitBreaker",
+    "health_snapshot", "active_count", "orchestration_slot",
 ]
