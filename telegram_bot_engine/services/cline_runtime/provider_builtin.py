@@ -1,15 +1,4 @@
-"""Builtin general provider — Phase 3 without external Cline SDK.
-
-Pipeline under IR + tool policies:
-  1) compose_catalog
-  2) apply_hybrid_scaffolds for gaps
-  3) ir_acceptance + smoke
-  4) write TOOLS_USED.md + model router metadata
-
-Enable with:
-  CLINE_ENABLED=1
-  # optional: CLINE_PROVIDER=telegram_bot_engine.services.cline_runtime.provider_builtin:build
-"""
+"""Builtin general provider — Phase 3 hardened (ToolRunner + audit)."""
 from __future__ import annotations
 
 import logging
@@ -17,23 +6,19 @@ from pathlib import Path
 from typing import Any
 
 from .model_router import describe_runtime
-from .tools import build_default_tools
+from .tool_runner import ToolRunner
 
 logger = logging.getLogger(__name__)
 
 
 def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
-    """CLINE_PROVIDER entrypoint. Returns dict compatible with ClineExecutionResult."""
-    tools = build_default_tools()
+    runner = ToolRunner()
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
-    steps: list[dict[str, Any]] = []
     errors: list[str] = []
     warnings: list[str] = []
 
-    # 1) catalog compose
-    compose = tools["compose_catalog"].execute(ir_dict, str(work))
-    steps.append({"tool": "compose_catalog", "result": {k: compose.get(k) for k in ("ok", "project_path", "errors")}})
+    compose = runner.run("compose_catalog", ir=ir_dict, work_dir=str(work))
     if not compose.get("ok") or not compose.get("project_path"):
         return {
             "ok": False,
@@ -41,43 +26,52 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
             "engine": "cline_builtin",
             "errors": list(compose.get("errors") or ["compose_catalog_failed"]),
             "warnings": warnings,
-            "metadata": {"steps": steps, "model": describe_runtime()},
+            "metadata": {
+                "history": runner.history,
+                "model": describe_runtime(),
+            },
             "fallback_catalog": True,
         }
 
     path = str(compose["project_path"])
     gaps = list(ir_dict.get("capabilities_gap") or [])
-
-    # 2) scaffolds
-    sc = tools["apply_hybrid_scaffolds"].execute(path, gaps)
-    steps.append({"tool": "apply_hybrid_scaffolds", "result": sc})
-
-    # 3) acceptance
-    acc = tools["ir_acceptance"].execute(path, ir_dict)
-    steps.append({"tool": "ir_acceptance", "result": acc})
+    runner.run("apply_hybrid_scaffolds", project_path=path, gaps=gaps)
+    acc = runner.run("ir_acceptance", project_path=path, ir=ir_dict)
     if not acc.get("ok"):
-        warnings.append("ir_acceptance_soft_fail:" + ",".join(acc.get("missing_features") or [])[:200])
-
-    # 4) smoke
-    smoke = tools["run_smoke"].execute(path)
-    steps.append({"tool": "run_smoke", "result": smoke})
+        warnings.append(
+            "ir_acceptance_soft_fail:"
+            + ",".join(acc.get("missing_features") or [])[:200]
+        )
+    smoke = runner.run("run_smoke", project_path=path)
     if not smoke.get("ok"):
-        errors.append("smoke_failed:" + str(smoke.get("message") or smoke.get("error") or "")[:200])
+        errors.append(
+            "smoke_failed:"
+            + str(smoke.get("message") or smoke.get("error") or "")[:200]
+        )
 
-    # 5) audit file
+    try:
+        from .mcp_bridge import status as mcp_status
+
+        mcp = mcp_status()
+    except Exception:
+        mcp = {}
+
     try:
         audit = Path(path) / "TOOLS_USED.md"
         lines = [
             "# Tools used (builtin Cline path)",
             "",
             f"- model: `{describe_runtime()}`",
+            f"- mcp: `{mcp}`",
             f"- gaps: `{gaps}`",
             "",
-            "## Steps",
+            "## History",
             "",
         ]
-        for s in steps:
-            lines.append(f"- **{s['tool']}**: `{s['result']}`")
+        for h in runner.history:
+            lines.append(
+                f"- **{h.get('tool')}** allowed={h.get('allowed')}: `{h.get('result')}`"
+            )
         lines.append("")
         audit.write_text("\n".join(lines), encoding="utf-8")
     except Exception as exc:
@@ -86,14 +80,14 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
     ok = bool(compose.get("ok")) and not errors
     return {
         "ok": ok,
-        "project_path": path if ok else path,
+        "project_path": path,
         "engine": "cline_builtin",
         "errors": errors,
         "warnings": warnings,
         "metadata": {
-            "steps": steps,
+            "history": runner.history,
             "model": describe_runtime(),
-            "tools": list(tools.keys()),
+            "mcp": mcp,
         },
         "fallback_catalog": False,
     }

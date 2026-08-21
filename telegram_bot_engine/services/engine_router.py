@@ -200,6 +200,30 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
     meta["ir"] = ir.to_dict()
     meta["engine_router_mode"] = ir.engine_mode.value
 
+    # Control plane: permissions + project record + delivery gate
+    try:
+        from telegram_bot_engine.control_plane.permissions import check_generate_permission
+        from telegram_bot_engine.control_plane.projects import ProjectStore
+        from telegram_bot_engine.control_plane.plans import PlanStore
+        from telegram_bot_engine.control_plane.delivery_gate import gate_delivery
+
+        perm = check_generate_permission(ir.user_id, engine_mode=ir.engine_mode.value)
+        meta["permission"] = {"allowed": perm.allowed, "reason": perm.reason}
+        if not perm.allowed:
+            from telegram_bot_engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                project_path=None,
+                stages=[],
+                validation_reports=[],
+                errors=[perm.reason],
+                metadata=meta,
+            )
+        plan = PlanStore().save_draft(ir.user_id, ir.to_dict(), notes=list(ir.notes or []))
+        meta["plan_id"] = plan.plan_id
+    except Exception as exc:
+        meta["control_plane_error"] = f"{type(exc).__name__}:{exc}"
+
     path = getattr(result, "project_path", None)
     if path and hybrid and ir.capabilities_gap:
         try:
@@ -225,6 +249,38 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
                 )
         except Exception as exc:
             meta["ir_acceptance_error"] = f"{type(exc).__name__}:{exc}"
+
+    path = getattr(result, "project_path", None)
+    if path and getattr(result, "success", False):
+        try:
+            from telegram_bot_engine.control_plane.delivery_gate import gate_delivery
+            from telegram_bot_engine.control_plane.projects import ProjectStore
+            from telegram_bot_engine.control_plane.plans import PlanStore
+
+            gate = gate_delivery(path, ir=ir.to_dict())
+            meta["delivery_gate"] = gate
+            if not gate.get("ok"):
+                result.success = False
+                errs = list(getattr(result, "errors", None) or [])
+                errs.extend(gate.get("errors") or [])
+                result.errors = errs
+            proj = ProjectStore().create(
+                user_id=ir.user_id,
+                title=(ir.purpose or ir.original_text or "bot")[:80],
+                engine_mode=ir.engine_mode.value,
+                ir_snapshot=ir.to_dict(),
+                path=str(path),
+                metadata={"delivery_gate": gate, "hybrid": hybrid},
+            )
+            meta["project_id"] = proj.project_id
+            if meta.get("plan_id"):
+                PlanStore().mark_executed(str(meta["plan_id"]))
+            ProjectStore().update(
+                proj.project_id,
+                status="delivered" if getattr(result, "success", False) else "failed",
+            )
+        except Exception as exc:
+            meta["control_plane_finalize_error"] = f"{type(exc).__name__}:{exc}"
 
     try:
         result.metadata = meta
