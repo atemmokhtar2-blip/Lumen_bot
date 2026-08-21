@@ -170,6 +170,9 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
       - preferred_keys / brief come from translator + rules (bridge)
       - full AI codegen only when GROQ_CODEGEN_ENABLED=1 (manual force)
         OR when bridge marks the request out-of-catalog (GROQ_ASSIST_OUT_OF_SCOPE=1)
+
+    Phase A: when MULTI_AGENT_ORCHESTRATOR is enabled (default on), runs
+    ROUTER→ARCHITECT→BUILDER→CRITIC blackboard pipeline then returns GenerationResult.
     """
     # Forced full AI path (manual experiment only)
     try:
@@ -186,6 +189,23 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             )
     except Exception:
         logger.exception("Groq codegen forced path failed; continuing with engine")
+
+    # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
+    try:
+        from telegram_bot_engine.services.multi_agent import (
+            orchestrate_generate,
+            orchestrator_enabled,
+        )
+        if orchestrator_enabled():
+            logger.info("multi_agent orchestrator Phase A — generate path")
+            return orchestrate_generate(
+                request,
+                work_dir,
+                user_id=int(user_id or 0),
+                preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
+            )
+    except Exception:
+        logger.exception("multi_agent orchestrator failed; falling back to direct engine")
 
     # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
     try:
