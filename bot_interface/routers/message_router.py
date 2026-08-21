@@ -1524,7 +1524,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if _is_hard and getattr(_rt, "capability_id", "") in _engine_only:
         await _clear_thinking()
         cap = str(_rt.capability_id)
-        status = await message.reply_text(f"⚙️ جاري تنفيذ `{cap}` عبر المحرك...")
+        status = await message.reply_text(
+            "📥 المحرك يجمع المستودع..." if cap == "repo_understand"
+            else f"⚙️ جاري تنفيذ `{cap}` عبر المحرك..."
+        )
         try:
             from telegram_bot_engine.services.tool_runtime import execute_tool
             params = dict(getattr(_rt, "params", None) or {})

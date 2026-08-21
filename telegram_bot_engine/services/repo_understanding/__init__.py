@@ -12,3 +12,9 @@ def understand_repo(root_path, remote_url: str = ""):
         return contract
 
 __all__ = ["RepoUnderstandingService", "understand_repo"]
+
+try:
+    from .llm_explain import explain_repo_with_llm, gather_repo_dossier
+except Exception:
+    explain_repo_with_llm = None  # type: ignore
+    gather_repo_dossier = None  # type: ignore

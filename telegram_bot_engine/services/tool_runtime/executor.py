@@ -183,14 +183,19 @@ def _tool_repo_inspect(
 
 
 
+
+
 def _tool_repo_understand(
     params: dict[str, Any],
     *,
     user_data: dict[str, Any],
 ) -> ToolResult:
-    """Deep structural understanding via engine scanner — never the chat LLM."""
+    """Engine pulls/gathers files; Grok (LLM) understands and explains to the user."""
     path = str(params.get("path") or "").strip()
     url = str(params.get("url") or "").strip()
+    user_q = str(
+        params.get("text") or params.get("raw_text") or params.get("question") or ""
+    ).strip()
     if not path:
         active = user_data.get("active_repo")
         if isinstance(active, dict):
@@ -200,30 +205,30 @@ def _tool_repo_understand(
         if not path:
             path = str(user_data.get("last_project_path") or "")
 
-    # If only URL given (or text contains github) and no local path → clone first
-    text_blob = str(params.get("text") or params.get("raw_text") or "").strip()
+    text_blob = user_q
     if (not path or not Path(path).is_dir()) and (url or text_blob):
         try:
             from telegram_bot_engine.services.git_safe_import import get_smart_clone
+
             sc = get_smart_clone()
-            extract_repo_url = sc.extract_repo_url
-            smart_clone = sc.smart_clone
-            found = url or (extract_repo_url(text_blob) or "")
+            found = url or (sc.extract_repo_url(text_blob) or "")
             if found:
                 uid = int(user_data.get("user_id") or 0)
                 try:
                     from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+
                     dest = get_user_sandbox(uid, _output_dir()).new_clone_dir(label="understand")
                 except Exception:
                     dest = _output_dir() / "clones" / str(uid or "anon")
                     dest.mkdir(parents=True, exist_ok=True)
                 token = str(params.get("token") or "").strip() or None
-                clone_res = smart_clone(found, dest_dir=dest, token=token, url_override=found)
+                clone_res = sc.smart_clone(found, dest_dir=dest, token=token, url_override=found)
                 if not getattr(clone_res, "ok", False):
                     return ToolResult(
                         ok=False,
                         tool="repo_understand",
-                        message=getattr(clone_res, "message", None) or "فشل سحب المستودع قبل الفهم",
+                        message=getattr(clone_res, "message", None)
+                        or "clone failed before understand",
                         data={"url": found},
                         needs_auth=bool(getattr(clone_res, "needs_auth", False)),
                     )
@@ -236,7 +241,7 @@ def _tool_repo_understand(
             return ToolResult(
                 ok=False,
                 tool="repo_understand",
-                message=f"تعذر السحب قبل الفهم: {type(exc).__name__}",
+                message=f"clone error: {type(exc).__name__}",
             )
 
     root = Path(path) if path else None
@@ -244,96 +249,54 @@ def _tool_repo_understand(
         return ToolResult(
             ok=False,
             tool="repo_understand",
-            message="لا يوجد مستودع نشط. اسحب مستودعاً أولاً أو أرسل رابط GitHub مع «افهم المستودع».",
+            message="no active repo — clone first or send a Git URL with the request",
         )
 
     try:
-        from telegram_bot_engine.services.repo_understanding import understand_repo
-        from telegram_bot_engine.schemas.repo_contract import safe_contract_dict
+        from telegram_bot_engine.services.repo_understanding.llm_explain import (
+            explain_repo_with_llm,
+        )
 
-        contract = understand_repo(root, remote_url=url or "")
-        data = safe_contract_dict(contract)
-        data["path"] = str(root)
-        if url:
-            data["url"] = url
-
-        # Human-readable Arabic brief from real contract (not LLM invention)
-        lines: list[str] = [
-            "🔍 *فهم المستودع (محرك حتمي — ليس تخمين دردشة)*",
-            f"• المسار: `{root}`",
-        ]
-        if url:
-            lines.append(f"• الرابط: {url}")
-        summary = str(data.get("summary") or getattr(contract, "summary", "") or "").strip()
-        if summary:
-            lines.append(f"• الملخص: {summary[:400]}")
-        langs = data.get("languages") or []
-        if langs:
-            lines.append("• اللغات: " + ", ".join(str(x) for x in langs[:8]))
-        fws = data.get("frameworks") or []
-        if fws:
-            lines.append("• الأُطر: " + ", ".join(str(x) for x in fws[:8]))
-        style = str(data.get("architecture_style") or "").strip()
-        if style:
-            lines.append(f"• الأسلوب: {style}")
-        # entry points
-        eps = data.get("entry_points") or []
-        ep_paths = []
-        for e in eps[:8]:
-            if isinstance(e, dict):
-                ep_paths.append(str(e.get("path") or ""))
-            else:
-                ep_paths.append(str(getattr(e, "path", e)))
-        ep_paths = [x for x in ep_paths if x]
-        if ep_paths:
-            lines.append("• نقاط الدخول: " + ", ".join(f"`{x}`" for x in ep_paths[:6]))
-        # commands
-        cmds = data.get("commands") or []
-        cmd_names = []
-        for c in cmds[:25]:
-            if isinstance(c, dict):
-                cmd_names.append(str(c.get("name") or ""))
-            else:
-                cmd_names.append(str(getattr(c, "name", c)))
-        cmd_names = [c for c in cmd_names if c]
-        if cmd_names:
-            lines.append("• أوامر مكتشفة: " + ", ".join("/" + c.lstrip("/") for c in cmd_names[:15]))
-        is_tg = bool(data.get("is_telegram_bot"))
-        lines.append(f"• بوت تيليجرام؟ {'نعم' if is_tg else 'لا/غير مؤكد'}")
-        fc = data.get("file_count") or data.get("python_file_count")
-        if fc:
-            lines.append(f"• ملفات: {fc}")
-        conf = data.get("confidence")
-        if conf is not None:
-            try:
-                lines.append(f"• ثقة التحليل: {float(conf):.0%}")
-            except Exception:
-                pass
-        notes = data.get("notes") or []
-        if notes:
-            lines.append("• ملاحظات: " + "; ".join(str(n)[:80] for n in notes[:4]))
-
-        brief = "\n".join(lines)
-        # persist contract on active_repo for later tools
+        explanation, meta = explain_repo_with_llm(
+            root,
+            user_question=user_q or "understand this repository",
+            url=url or "",
+        )
         active = user_data.get("active_repo")
         if not isinstance(active, dict):
             active = {}
-        active.update({"path": str(root), "url": url or active.get("url") or "", "contract": data})
+        active.update(
+            {
+                "path": str(root),
+                "url": url or active.get("url") or "",
+                "dossier": (meta or {}).get("dossier") or {},
+            }
+        )
         user_data["active_repo"] = active
         user_data["last_project_path"] = str(root)
+
+        if (meta or {}).get("explainer") == "engine_facts_only":
+            header = "[engine materials only — Grok LLM unavailable]\n\n"
+        else:
+            header = "[Grok understanding — engine only gathered files]\n\n"
 
         return ToolResult(
             ok=True,
             tool="repo_understand",
-            message=brief[:4000],
-            data=data,
+            message=(header + (explanation or ""))[:4000],
+            data={
+                "path": str(root),
+                "url": url,
+                "meta": {k: v for k, v in (meta or {}).items() if k != "dossier"},
+                "dossier": (meta or {}).get("dossier") or {},
+            },
         )
     except Exception as exc:
-        logger.exception("repo_understand failed")
+        logger.exception("repo_understand/llm failed")
         return ToolResult(
             ok=False,
             tool="repo_understand",
-            message=f"فشل فهم المستودع: {type(exc).__name__}: {exc}",
+            message=f"repo_understand failed: {type(exc).__name__}: {exc}",
             data={"path": str(root)},
         )
 
