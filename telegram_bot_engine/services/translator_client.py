@@ -1,8 +1,13 @@
-"""Groq-backed spec translator + Gemini chat client.
+"""LLM provider bodies + stable public API for translate/chat.
 
-Translation runs on Groq only (no external Qwen translator service).
-Gemini remains the optional chat-only path. Any unavailable external service
-returns None so the deterministic spec_core path stays authoritative.
+Provider *implementations* live here (Groq translate, Gemini chat helpers).
+Provider *selection* lives in ``telegram_bot_engine.services.llm.facade``.
+Callers should use ``translate_request`` / ``chat_request`` (or llm.facade)
+and must not hard-code a vendor in business logic.
+
+Default wiring (step 1 — behavior unchanged):
+  translate → Groq (``translate_via_groq``)
+  chat      → Gemini (``chat_via_gemini``)
 """
 from __future__ import annotations
 
@@ -316,7 +321,7 @@ def _merge_features(rule: list[str], model: list[str], allowed: set[str]) -> lis
     return merged[:8]
 
 
-def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def translate_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Translate user text into a validated spec_core-oriented contract via Groq."""
     if not _enabled():
         return None
@@ -438,8 +443,8 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
     return None
 
 
-def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask Gemini for chat only; Groq is intentionally translation-only."""
+def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Gemini chat implementation (provider body — call via llm.facade)."""
     if not _gemini_enabled():
         logger.warning(
             "Gemini chat skipped; key_present=%s GEMINI_ENABLED=%s",
@@ -454,3 +459,15 @@ def chat_request(message: str, context: dict[str, Any]) -> dict[str, Any] | None
     except Exception as exc:
         logger.exception("Gemini chat unavailable; continuing generation path: %s", exc)
         return None
+
+
+def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Stable public API — provider chosen by llm.facade (default: Groq)."""
+    from .llm.facade import translate_request as _facade_translate
+    return _facade_translate(text, context)
+
+
+def chat_request(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Stable public API — provider chosen by llm.facade (default: Gemini)."""
+    from .llm.facade import chat_request as _facade_chat
+    return _facade_chat(message, context)
