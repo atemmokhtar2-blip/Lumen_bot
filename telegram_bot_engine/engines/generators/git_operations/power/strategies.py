@@ -56,7 +56,7 @@ def _finalize(dest: Path, *, op: str, strategy: str, url: str, attempts: int) ->
     code, out = _run_git(["git", "-C", str(dest), "rev-parse", "HEAD"])
     if code == 0:
         commit = out.strip().splitlines()[-1][:40] if out.strip() else None
-    if not ok_struct and files <= 0:
+    if not ok_struct or files <= 0:
         return GitEngineResult.fail(
             op,
             message="verification_failed",
@@ -73,10 +73,10 @@ def _finalize(dest: Path, *, op: str, strategy: str, url: str, attempts: int) ->
         strategy_used=strategy,
         files_changed_count=files,
         commit_hash=commit,
-        validation_passed=ok_struct,
+        validation_passed=True,
         path=str(dest),
         url=url,
-        message="clone_ok" if ok_struct else "clone_ok_soft_validation",
+        message="clone_ok",
         attempts=attempts,
         metadata=details,
     )

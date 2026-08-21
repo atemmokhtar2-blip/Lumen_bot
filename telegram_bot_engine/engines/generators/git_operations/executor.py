@@ -2,12 +2,11 @@
 GitExecutor — Specification 047 (CRITICAL)
 
 Plans and executes Git operations after user/permission/repo checks.
-Supports both logical (planning) and real (subprocess) modes.
+Real execution only via PowerGitEngine.
+
 Dangerous ops require explicit confirmation. Conflict resolution is suggested
 only; never applied without user approval. No autonomous history rewrite.
-
-Real mode activates when request provides repo_path / work_dir and
-execute_real=True (or when the operation is push/pull/commit on a verified path).
+No logical/fake STATUS_EXECUTED — missing path/url fails closed.
 """
 
 from __future__ import annotations
@@ -61,7 +60,7 @@ _ALIASES = {
 
 
 class GitExecutor:
-    """Permission-gated Git operation executor (logical, not live process)."""
+    """Permission-gated Git operation executor — real PowerGitEngine only (no fake success)."""
 
     def run(
         self,
@@ -81,6 +80,26 @@ class GitExecutor:
         user_id, repo, branch, confirmed_ops, requested = self._parse_request(
             request_data, repo_mgmt_data, ctx_data,
         )
+        # Enrich request with concrete workspace paths from context (no fake success without them)
+        raw = dict(request_data.raw or {})
+        ctx = dict(ctx_data.raw or {}) if ctx_data else {}
+        if not raw.get("repo_path") and not raw.get("work_dir") and not raw.get("path"):
+            for key in ("repo_path", "work_dir", "path", "project_path", "active_repo_path"):
+                if ctx.get(key):
+                    raw["repo_path"] = str(ctx[key])
+                    break
+            active = ctx.get("active_repo")
+            if not raw.get("repo_path") and isinstance(active, dict) and active.get("path"):
+                raw["repo_path"] = str(active["path"])
+        if not raw.get("url") and not raw.get("repo_url"):
+            if ctx.get("repo_url"):
+                raw["url"] = str(ctx["repo_url"])
+            elif raw.get("repository") and str(raw.get("repository", "")).startswith("http"):
+                raw["url"] = str(raw["repository"])
+            elif str(repo).startswith("http"):
+                raw["url"] = str(repo)
+        request_data.raw = raw
+
         user_ok, perm_ok, repo_ok = self._verify_gates(
             request_data, repo_mgmt_data, user_id, repo,
         )
@@ -132,7 +151,7 @@ class GitExecutor:
                 ))
                 continue
 
-            # Logical execution
+            # Real execution (PowerGitEngine)
             status, message, verification_ok, rolled_back = self._execute(
                 op, repo, branch, user_id, request_data,
             )
@@ -314,6 +333,7 @@ class GitExecutor:
 
         return user_ok, perm_ok, repo_ok
 
+
     def _execute(
         self,
         op: str,
@@ -324,12 +344,10 @@ class GitExecutor:
     ) -> Tuple[str, str, bool, bool]:
         """Return status, message, verification_ok, rolled_back.
 
-        Supports real git execution when repo_path/work_dir is provided
-        and the operation is allowed. Falls back to logical simulation otherwise.
+        REAL ONLY via PowerGitEngine. Never reports success without execution.
         """
-        raw = request_data.raw or {}
+        raw = dict(request_data.raw or {})
 
-        # Simulate rare failure on merge without confirm conflict handling
         if op in (OP_MERGE, OP_REBASE) and raw.get("simulate_conflict"):
             return (
                 STATUS_FAILED,
@@ -343,25 +361,41 @@ class GitExecutor:
         if raw.get("force_fail"):
             return STATUS_ROLLED_BACK, f"{op} failed; rolled back to last stable state", False, True
 
-        # --- Real execution path ---
-        repo_path = raw.get("repo_path") or raw.get("work_dir") or raw.get("path")
-        execute_real = bool(raw.get("execute_real", False)) or op in (
-            OP_PUSH, OP_PULL, OP_FETCH, OP_COMMIT, OP_ADD, OP_CLONE
+        # Resolve workspace / URL for real execution
+        repo_path = (
+            raw.get("repo_path")
+            or raw.get("work_dir")
+            or raw.get("path")
+            or raw.get("target_dir")
         )
+        url = raw.get("url") or raw.get("repo_url") or ""
+        if not repo_path and op == OP_CLONE:
+            # clone can target a fresh dir under OUTPUT_DIR / work
+            import os
+            base = raw.get("dest_parent") or os.environ.get("OUTPUT_DIR") or "/tmp/cm_git_work"
+            repo_path = str(Path(base) / "clones")
+            raw["target_dir"] = repo_path
+            if url:
+                raw["url"] = url
 
-        if repo_path and execute_real:
-            try:
-                status, message = self._run_real_git(op, str(repo_path), branch, raw)
-                return status, message, status == STATUS_EXECUTED, False
-            except Exception as exc:
-                _log.exception("Real git execution failed for %s", op)
-                return STATUS_FAILED, f"real git {op} failed: {exc}", False, False
+        if not repo_path and not (op == OP_CLONE and url):
+            return (
+                STATUS_FAILED,
+                f"real_execution_required: missing repo_path/work_dir for {op}",
+                False,
+                False,
+            )
 
-        # --- Logical / planning fallback ---
-        verification_ok = True
-        message = f"{op} succeeded on {repo} ({branch}) [logical]"
-        return STATUS_EXECUTED, message, verification_ok, False
-
+        # Always real — no logical fallback
+        try:
+            status, message = self._run_real_git(op, str(repo_path or "."), branch, raw)
+            # Guard: never accept messages that claim logical success
+            if "[logical]" in (message or ""):
+                return STATUS_FAILED, "rejected_logical_success", False, False
+            return status, message, status == STATUS_EXECUTED, False
+        except Exception as exc:
+            _log.exception("Real git execution failed for %s", op)
+            return STATUS_FAILED, f"real git {op} failed: {type(exc).__name__}", False, False
 
     def _run_real_git(
         self,
@@ -373,9 +407,9 @@ class GitExecutor:
         """Execute real git via PowerGitEngine only — no weak ad-hoc clone/commit."""
         from .power import get_engine
         from .report_data import (
-            OP_CLONE, OP_PULL, OP_PUSH, OP_COMMIT, OP_ADD,
-            OP_BRANCH_CREATE, OP_INIT,
-            STATUS_EXECUTED, STATUS_FAILED,
+            OP_CLONE, OP_PULL, OP_PUSH, OP_COMMIT, OP_ADD, OP_FETCH,
+            OP_BRANCH_CREATE, OP_INIT, OP_FORCE_PUSH,
+            STATUS_EXECUTED, STATUS_FAILED, STATUS_AWAITING_CONFIRMATION,
         )
 
         eng = get_engine()
@@ -480,6 +514,21 @@ class GitExecutor:
                 if not result.ok:
                     return STATUS_FAILED, result.redacted_error or result.message
                 return STATUS_EXECUTED, result.message
+
+
+            if op == OP_FETCH:
+                result = eng.pull(path, token=token, branch=branch or None)
+                if not result.ok:
+                    msg = result.redacted_error or result.message
+                    if result.needs_auth:
+                        msg = f"needs_auth: {msg}"
+                    return STATUS_FAILED, msg
+                return STATUS_EXECUTED, f"fetched/pulled {result.commit_hash or ''}"
+
+            if op == OP_FORCE_PUSH:
+                if not raw.get("confirm_all_dangerous"):
+                    return STATUS_AWAITING_CONFIRMATION, "force push needs confirmation"
+                return STATUS_FAILED, "force_push_disabled_by_policy"
 
             # Unknown real op — refuse silent logical success
             return STATUS_FAILED, f"unsupported_real_op:{op}"
