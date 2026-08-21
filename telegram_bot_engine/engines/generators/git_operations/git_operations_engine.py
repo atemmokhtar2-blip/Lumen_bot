@@ -33,9 +33,19 @@ _log = logging.getLogger("engine.git_operations")
 class GitOperationsEngine(BaseEngine):
     """Specification 047 — Intelligent Git Operations Engine."""
 
+
+    declared_engine_id = "git_operations"
+    declared_priority = 180
+    declared_dependencies = ['component_detector']
+    declared_role = "infra"
+
     def __init__(self) -> None:
         super().__init__(
             name="git_operations",
+            engine_id="git_operations",
+            priority=180,
+            dependencies=['component_detector'],
+            role="infra",
             version="1.0.0",
             description=(
                 "Executes Git operations (clone/commit/push/branch/merge/…) after "

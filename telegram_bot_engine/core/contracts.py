@@ -60,15 +60,15 @@ class Component:
 class Engine(ABC, Component):
     """A generation engine.
 
-    An engine performs a *single* transformation: it receives a
-    :class:`~core.context.GenerationContext` and produces outputs stored
-    either on the context or returned in a :class:`StageResult`.
-
-    Engines are registered with the
-    :class:`~telegram_bot_engine.registry.EngineRegistry` and are invoked
-    by the pipeline orchestrator.  An engine must never assume the
-    existence of other engines — it only reads from the context.
+    Self-declaration (required):
+      declared_engine_id, declared_priority, declared_dependencies, declared_role
+    Core bootstrap COLLECTS metadata; it does not hard-code every engine.
     """
+
+    declared_engine_id: Optional[str] = None
+    declared_priority: int = 100
+    declared_dependencies: List[str] = []
+    declared_role: str = "generation"
 
     @abstractmethod
     def execute(self, context: "GenerationContext") -> StageResult:
@@ -92,6 +92,19 @@ class Engine(ABC, Component):
 
     def shutdown(self) -> None:
         """Optional hook called when the engine is being torn down."""
+
+    def get_engine_id(self) -> str:
+        return self.declared_engine_id or self.name
+
+    def get_priority(self) -> int:
+        return int(self.declared_priority)
+
+    def get_dependencies(self) -> List[str]:
+        return list(self.declared_dependencies or [])
+
+    def get_role(self) -> str:
+        return self.declared_role or "generation"
+
 
 
 # ---------------------------------------------------------------------------

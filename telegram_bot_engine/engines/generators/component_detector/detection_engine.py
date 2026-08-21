@@ -98,9 +98,19 @@ class ComponentDetectionEngine(BaseEngine):
     analysis report.
     """
 
+
+    declared_engine_id = "component_detector"
+    declared_priority = 150
+    declared_dependencies = ['blueprint_validator']
+    declared_role = "generation"
+
     def __init__(self) -> None:
         super().__init__(
             name="component_detector",
+            engine_id="component_detector",
+            priority=150,
+            dependencies=['blueprint_validator'],
+            role="generation",
             version="1.0.0",
             description=(
                 "Detects all software components the project will need "

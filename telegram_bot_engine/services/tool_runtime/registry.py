@@ -1,10 +1,16 @@
-"""Catalog of tools Groq may request. Implementations live in executor only."""
+"""Catalog of tools. ToolContract is source of truth; TOOL_SPECS derived."""
 from __future__ import annotations
 
 from typing import Any
 
-# Machine contract for the chat model (never executed by the model itself).
-TOOL_SPECS: dict[str, dict[str, Any]] = {
+try:
+    from telegram_bot_engine.tools.contracts import build_default_contracts
+    _CONTRACTS = build_default_contracts()
+    TOOL_SPECS: dict[str, dict[str, Any]] = {
+        name: c.to_spec_dict() for name, c in _CONTRACTS.items()
+    }
+except Exception:
+    TOOL_SPECS = {
     "create_repo": {
         "description": "إنشاء مستودع جديد على GitHub باستخدام توكن المستخدم (PAT)",
         "params": {

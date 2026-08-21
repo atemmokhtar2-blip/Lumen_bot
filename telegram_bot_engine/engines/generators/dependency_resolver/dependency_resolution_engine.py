@@ -110,9 +110,19 @@ class DependencyResolutionEngine(BaseEngine):
     The engine is forbidden from reading the user's request.
     """
 
+
+    declared_engine_id = "dependency_resolver"
+    declared_priority = 100
+    declared_dependencies = ['file_planner']
+    declared_role = "generation"
+
     def __init__(self) -> None:
         super().__init__(
             name="dependency_resolver",
+            engine_id="dependency_resolver",
+            priority=100,
+            dependencies=['file_planner'],
+            role="generation",
             version="1.0.0",
             description=(
                 "Builds the complete dependency map for the "

@@ -104,6 +104,10 @@ class PipelineOrchestrator:
             config=self._config,
             work_dir=work_dir,
         )
+        context.mark_running()
+        control = getattr(self, "control_plane", None)
+        if control is not None and context.run_state is not None:
+            control.upsert_run(context.run_state)
 
         self._log.info(
             "Pipeline starting",
@@ -152,6 +156,7 @@ class PipelineOrchestrator:
         )
 
         if success:
+            context.mark_succeeded()
             self._log.info(
                 "Pipeline completed successfully",
                 {"run_id": context.run_id,
@@ -159,10 +164,14 @@ class PipelineOrchestrator:
                  "project_path": project_path},
             )
         else:
+            context.mark_failed("; ".join(errors[:5]) if errors else "pipeline_failed")
             self._log.error(
                 "Pipeline completed with errors",
                 {"run_id": context.run_id, "error_count": len(errors)},
             )
+
+        if control is not None and context.run_state is not None:
+            control.upsert_run(context.run_state)
 
         return result
 

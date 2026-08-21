@@ -34,9 +34,19 @@ _log = logging.getLogger("engine.file_system")
 class FileSystemEngine(BaseEngine):
     """Specification 048 — Intelligent File System Engine."""
 
+
+    declared_engine_id = "file_system"
+    declared_priority = 120
+    declared_dependencies = ['dependency_resolver']
+    declared_role = "generation"
+
     def __init__(self) -> None:
         super().__init__(
             name="file_system",
+            engine_id="file_system",
+            priority=120,
+            dependencies=['dependency_resolver'],
+            role="generation",
             version="1.0.0",
             description=(
                 "Abstract FS layer: create/read/write/delete/move files and folders "

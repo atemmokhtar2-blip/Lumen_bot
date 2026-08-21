@@ -43,9 +43,19 @@ _log = logging.getLogger("engine.project_structure_planning")
 class ProjectStructurePlanningEngine(BaseEngine):
     """Specification 020 — Project Structure Planning Engine."""
 
+
+    declared_engine_id = "project_structure_planning"
+    declared_priority = 50
+    declared_dependencies = ['project_planner']
+    declared_role = "planning"
+
     def __init__(self) -> None:
         super().__init__(
             name="project_structure_planning",
+            engine_id="project_structure_planning",
+            priority=50,
+            dependencies=['project_planner'],
+            role="planning",
             version="1.0.0",
             description=(
                 "Designs the complete project folder and file structure "

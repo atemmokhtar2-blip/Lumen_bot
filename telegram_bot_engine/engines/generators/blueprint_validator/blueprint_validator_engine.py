@@ -96,9 +96,19 @@ class BlueprintValidatorEngine(BaseEngine):
     analysis report.  It reads only the blueprint.
     """
 
+
+    declared_engine_id = "blueprint_validator"
+    declared_priority = 140
+    declared_dependencies = ['workspace_management']
+    declared_role = "validation"
+
     def __init__(self) -> None:
         super().__init__(
             name="blueprint_validator",
+            engine_id="blueprint_validator",
+            priority=140,
+            dependencies=['workspace_management'],
+            role="validation",
             version="1.0.0",
             description=(
                 "Validates the ProjectBlueprint through six layers, "

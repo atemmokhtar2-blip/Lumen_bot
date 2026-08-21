@@ -92,9 +92,19 @@ class StructureGenerationEngine(BaseEngine):
     report.
     """
 
+
+    declared_engine_id = "structure_generator"
+    declared_priority = 90
+    declared_dependencies = ['project_structure_planning']
+    declared_role = "generation"
+
     def __init__(self) -> None:
         super().__init__(
             name="structure_generator",
+            engine_id="structure_generator",
+            priority=90,
+            dependencies=['project_structure_planning'],
+            role="generation",
             version="1.0.0",
             description=(
                 "Builds the project structure map (folders and files) "

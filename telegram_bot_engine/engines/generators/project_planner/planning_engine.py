@@ -247,9 +247,19 @@ class ProjectPlanningEngine(BaseEngine):
     produces a ``project_blueprint`` artefact.
     """
 
+
+    declared_engine_id = "project_planner"
+    declared_priority = 30
+    declared_dependencies = []
+    declared_role = "planning"
+
     def __init__(self) -> None:
         super().__init__(
             name="project_planner",
+            engine_id="project_planner",
+            priority=30,
+            dependencies=[],
+            role="planning",
             version="1.0.0",
             description=(
                 "Converts the AnalysisReport into a professional "

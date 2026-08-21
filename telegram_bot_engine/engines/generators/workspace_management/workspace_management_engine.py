@@ -33,9 +33,19 @@ _log = logging.getLogger("engine.workspace_management")
 class WorkspaceManagementEngine(BaseEngine):
     """Specification 049 — Intelligent Workspace Management Engine."""
 
+
+    declared_engine_id = "workspace_management"
+    declared_priority = 130
+    declared_dependencies = ['file_system']
+    declared_role = "infra"
+
     def __init__(self) -> None:
         super().__init__(
             name="workspace_management",
+            engine_id="workspace_management",
+            priority=130,
+            dependencies=['file_system'],
+            role="infra",
             version="1.0.0",
             description=(
                 "Manages isolated project workspaces: create/open/suspend/resume/"

@@ -1,5 +1,8 @@
 """
-Repo Intelligence — deterministic layer above structural RepoContract.
+Repo Intelligence — DERIVED model only. Never source of truth.
+
+  Repository / RepoContract = source of truth
+  Repo Intelligence = derived, always recomputed
 
 Computes:
   - dependency gaps (imports vs requirements)

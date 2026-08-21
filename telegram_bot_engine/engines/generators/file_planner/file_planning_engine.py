@@ -97,9 +97,19 @@ class FileGenerationPlanningEngine(BaseEngine):
     The engine is forbidden from reading the user's request.
     """
 
+
+    declared_engine_id = "file_planner"
+    declared_priority = 95
+    declared_dependencies = ['structure_generator']
+    declared_role = "planning"
+
     def __init__(self) -> None:
         super().__init__(
             name="file_planner",
+            engine_id="file_planner",
+            priority=95,
+            dependencies=['structure_generator'],
+            role="planning",
             version="1.0.0",
             description=(
                 "Plans all files the project will contain before "

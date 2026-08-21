@@ -31,9 +31,19 @@ _log = logging.getLogger("engine.repository_management")
 class RepositoryManagementEngine(BaseEngine):
     """Specification 046 — Intelligent Repository Management Engine."""
 
+
+    declared_engine_id = "repository_management"
+    declared_priority = 190
+    declared_dependencies = ['git_operations']
+    declared_role = "infra"
+
     def __init__(self) -> None:
         super().__init__(
             name="repository_management",
+            engine_id="repository_management",
+            priority=190,
+            dependencies=['git_operations'],
+            role="infra",
             version="1.0.0",
             description=(
                 "Manages user repositories (clone/pull/push/branch/create) only "

@@ -39,12 +39,45 @@ def execute_tool(
     *,
     user_id: int = 0,
     user_data: dict[str, Any] | None = None,
+    confirmed: bool = False,
 ) -> ToolResult:
-    """Dispatch a tool by name. Unknown tools fail closed."""
+    """Dispatch a tool by name. Unknown tools fail closed.
+
+    Mandatory path: ToolRequest → PolicyEngine → (ALLOW only) → provider.
+    """
     params = dict(params or {})
     name = (name or "").strip()
     if not name:
         return ToolResult(ok=False, tool="", message="اسم الأداة فارغ")
+
+    try:
+        from telegram_bot_engine.security.policy import PolicyEngine, ToolRequest
+        confirmed_flag = bool(
+            confirmed or (user_data or {}).get("confirmed") or params.pop("_confirmed", False)
+        )
+        decision = PolicyEngine().evaluate(
+            ToolRequest(
+                tool_name=name,
+                params=params,
+                user_id=str(user_id) if user_id else None,
+                confirmed=confirmed_flag,
+            )
+        )
+        if decision.needs_confirmation:
+            return ToolResult(
+                ok=False, tool=name,
+                message=f"يتطلب تأكيد المستخدم: {decision.reason}",
+                data={"needs_confirmation": True, "reason": decision.reason},
+            )
+        if not decision.allowed:
+            return ToolResult(
+                ok=False, tool=name,
+                message=f"مرفوض بالسياسة: {decision.reason}",
+                data={"denied": True, "reason": decision.reason},
+            )
+    except Exception as pol_exc:
+        logger.warning("policy evaluation error (fail closed): %s", pol_exc)
+        return ToolResult(ok=False, tool=name, message=f"policy_error: {type(pol_exc).__name__}")
 
     try:
         if name == "clone_repo":

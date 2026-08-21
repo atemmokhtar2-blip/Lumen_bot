@@ -546,10 +546,15 @@ class CoreEngineManager:
             },
         )
 
-        # 5. Execute the engine.
+        # 5. Execute the engine (bind role for ArtifactStore write enforcement).
         result: StageResult
         try:
-            result = entry.instance.execute(context)
+            eng = entry.instance
+            if hasattr(eng, "bind_context_role"):
+                eng.bind_context_role(context)
+            elif hasattr(context, "set_active_role") and hasattr(eng, "get_role"):
+                context.set_active_role(eng.get_role())
+            result = eng.execute(context)
         except Exception as exc:
             duration = time.time() - entry.last_run_started_at
             entry.last_run_finished_at = time.time()
