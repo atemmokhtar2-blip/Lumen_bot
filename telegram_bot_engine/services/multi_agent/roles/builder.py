@@ -1,11 +1,13 @@
-"""Builder agent — deterministic generate_bot only."""
+"""Builder agent — reads StrictSpec only; runs deterministic generate_bot."""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
 
+from ..context_views import builder_view
 from ..protocol import Agent
 from ..state import AgentRole, AgentState, AgentStatus
+from ..strict_spec import StrictSpec, merge_spec_request
 
 
 class BuilderAgent(Agent):
@@ -20,15 +22,25 @@ class BuilderAgent(Agent):
         work_dir = Path(ctx.get("work_dir") or state.extensions.get("work_dir") or ".")
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        req = (state.spec_request or state.user_text or "").strip()
-        preferred = list(state.preferred_keys or []) or None
+        # Context isolation: only builder_view fields drive generation
+        view = builder_view(state)
+        spec = StrictSpec.from_dict(view.get("strict_spec") or {})
+        req = str(view.get("spec_request") or "").strip() or merge_spec_request(spec)
+        preferred = list(view.get("preferred_keys") or spec.features or []) or None
+
+        if not req:
+            state.build_success = False
+            state.build_errors = ["empty_spec_request"]
+            state.record(AgentRole.BUILDER, "build_abort", "empty_spec")
+            state.transition(AgentStatus.FAILED, role=AgentRole.BUILDER, detail="empty_spec")
+            return state
 
         try:
             from telegram_bot_engine import generate_bot
             result = generate_bot(
                 req,
                 work_dir=str(work_dir),
-                user_id=int(state.user_id or 0),
+                user_id=int(view.get("user_id") or state.user_id or 0),
                 preferred_keys=preferred,
             )
         except Exception as exc:
@@ -45,13 +57,12 @@ class BuilderAgent(Agent):
         errs = list(getattr(result, "errors", None) or [])
         state.build_errors = [str(e)[:200] for e in errs[:20]]
         meta = dict(getattr(result, "metadata", None) or {})
-        # strip non-serializable
         meta = {k: v for k, v in meta.items() if not str(k).startswith("_")}
         meta["orchestrator_state_id"] = state.state_id
+        meta["architect_source"] = (state.strict_spec or {}).get("source")
         state.build_metadata = meta
-        # Side channel for orchestrator return only (never persisted in to_dict)
         state.extensions["_generation_result"] = result
-        state.record(AgentRole.BUILDER, "build_done", f"success={success}")
+        state.record(AgentRole.BUILDER, "build_done", f"success={success} src={(state.strict_spec or {}).get('source')}")
         if not success:
             state.transition(AgentStatus.FAILED, role=AgentRole.BUILDER, detail="build_failed")
         return state

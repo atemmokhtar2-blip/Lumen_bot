@@ -66,6 +66,8 @@ class Orchestrator:
             self.board.put(state)
 
         # Deliver
+        from .context_views import deliver_view
+        dview = deliver_view(state)
         if state.status == AgentStatus.PASSED.value:
             state.final_message = (
                 f"تم البناء بنجاح.\nالمسار: {state.generated_path}\n"
@@ -73,6 +75,17 @@ class Orchestrator:
             )
             try:
                 state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR)
+            except Exception:
+                state.status = AgentStatus.DELIVERED.value
+        elif dview.get("clarification_needed") and dview.get("clarification_questions"):
+            qs = dview["clarification_questions"]
+            state.final_message = (
+                "المعماري يحتاج توضيح قبل البناء:\n"
+                + "\n".join(f"• {q}" for q in qs[:5])
+                + f"\nstate_id: {state.state_id}"
+            )
+            try:
+                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
             except Exception:
                 state.status = AgentStatus.DELIVERED.value
         else:

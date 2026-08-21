@@ -1,4 +1,4 @@
-"""Multi-Agent foundation — protocol, blackboard, registry, orchestrator."""
+"""Multi-Agent foundation — protocol, blackboard, registry, orchestrator, strict_spec."""
 from .state import (
     SCHEMA_VERSION,
     AgentState,
@@ -25,6 +25,9 @@ from .orchestrator import (
     get_state,
     latest_for_user,
 )
+from .strict_spec import StrictSpec, validate_strict_spec, merge_spec_request, STRICT_SPEC_SCHEMA
+from .context_views import router_view, architect_view, builder_view, critic_view, deliver_view
+from .architect_backends import SpecBackend, GeminiSpecBackend, BridgeSpecBackend, DeterministicSpecBackend, produce_strict_spec
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -50,4 +53,18 @@ __all__ = [
     "save_state",
     "get_state",
     "latest_for_user",
+    "StrictSpec",
+    "validate_strict_spec",
+    "merge_spec_request",
+    "STRICT_SPEC_SCHEMA",
+    "router_view",
+    "architect_view",
+    "builder_view",
+    "critic_view",
+    "deliver_view",
+    "SpecBackend",
+    "GeminiSpecBackend",
+    "BridgeSpecBackend",
+    "DeterministicSpecBackend",
+    "produce_strict_spec",
 ]

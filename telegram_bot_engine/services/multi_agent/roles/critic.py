@@ -1,9 +1,10 @@
-"""Critic agent — structural QA (one-shot in Phase A; loop reserved in FSM)."""
+"""Critic agent — QA on generated_path only (isolated view)."""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
 
+from ..context_views import critic_view
 from ..protocol import Agent
 from ..state import AgentRole, AgentState, AgentStatus
 
@@ -20,7 +21,8 @@ class CriticAgent(Agent):
         if state.status == AgentStatus.FAILED.value and not state.build_success:
             return state
         state.transition(AgentStatus.QA, role=AgentRole.CRITIC)
-        path = (state.generated_path or "").strip()
+        view = critic_view(state)
+        path = str(view.get("generated_path") or "").strip()
         if not path or not Path(path).is_dir():
             state.qa_passed = False
             state.qa_report = {"ok": False, "errors": ["no_generated_path"]}
