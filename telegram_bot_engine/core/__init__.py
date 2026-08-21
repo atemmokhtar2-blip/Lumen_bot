@@ -32,3 +32,5 @@ def __getattr__(name: str):
         from .bootstrap import bootstrap, build_configuration
         return bootstrap if name == "bootstrap" else build_configuration
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+from .ir import BuildIR, EngineMode, IRStatus, AcceptanceCriterion  # noqa: F401

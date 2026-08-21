@@ -156,11 +156,59 @@ def analyze_and_prepare(
         if bind_line not in engine_request:
             engine_request = f"{engine_request}\n\n{bind_line}"
 
+    # Catalog match vs gap (control-plane IR fields)
+    core = {"start", "help", "lang", "language", "cancel"}
+    matched = [k for k in preferred if k not in core]
+    # Heuristic gaps: custom markers not covered by catalog keys
+    integrations: list[str] = []
+    gap: list[str] = []
+    if looks_custom:
+        for marker, label in (
+            ("stripe", "payment_gateway"),
+            ("paypal", "payment_gateway"),
+            ("openai", "llm_api"),
+            ("gpt", "llm_api"),
+            ("chatgpt", "llm_api"),
+            ("webhook", "webhook"),
+            ("postgres", "external_db"),
+            ("mongo", "external_db"),
+            ("redis", "external_db"),
+            ("تكامل", "external_integration"),
+            ("api خارجي", "external_api"),
+            ("ذكاء اصطناعي", "llm_api"),
+        ):
+            if marker in lower and label not in integrations:
+                integrations.append(label)
+                if label not in gap:
+                    gap.append(label)
+    if needs_ai and not matched:
+        if "out_of_catalog" not in gap:
+            gap.append("out_of_catalog")
+
+    # New engine modes: catalog | hybrid | cline (legacy aliases kept in notes)
+    try:
+        from telegram_bot_engine.services.engine_router import decide_engine_mode
+        mode = decide_engine_mode(
+            preferred_keys=preferred,
+            capabilities_gap=gap,
+            looks_custom=looks_custom,
+            needs_ai_codegen=bool(needs_ai),
+            confidence=float(confidence or 0.0),
+        )
+        engine_mode = mode.value
+    except Exception:
+        engine_mode = "cline" if needs_ai else "catalog"
+
     package = {
         "original_text": original,
         "spec_request": engine_request,
         "preferred_keys": preferred[:12],
-        "engine_mode": "ai_codegen" if needs_ai else "spec_core",
+        "capabilities_matched": matched[:16],
+        "capabilities_gap": gap[:16],
+        "integrations": integrations[:12],
+        "looks_custom": bool(looks_custom),
+        "engine_mode": engine_mode,
+        # legacy fields for older callers
         "needs_ai_codegen": bool(needs_ai),
         "confidence": max(confidence, 0.9 if rules else confidence),
         "model": tr.get("model") or "rules",
@@ -170,10 +218,12 @@ def analyze_and_prepare(
     }
     if needs_ai:
         package["notes"].append("out_of_catalog_or_custom_stack")
+    package["notes"].append(f"engine_mode:{engine_mode}")
     logger.info(
-        "engine_groq_bridge mode=%s keys=%s conf=%.2f model=%s",
+        "engine_groq_bridge mode=%s keys=%s gap=%s conf=%.2f model=%s",
         package["engine_mode"],
         package["preferred_keys"],
+        package["capabilities_gap"],
         confidence,
         package["model"],
     )

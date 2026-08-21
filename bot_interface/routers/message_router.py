@@ -511,26 +511,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
 
-            if _bridge_pkg and _bridge_pkg.get("needs_ai_codegen"):
-                from telegram_bot_engine.services.groq_codegen import generate_bot_via_groq
+            # Control plane: BuildIR → engine_router (catalog | hybrid | cline)
+            try:
+                from telegram_bot_engine.services.engine_router import (
+                    build_ir_from_package,
+                    execute_ir,
+                )
+                _pkg = dict(_bridge_pkg or {})
+                if preferred_keys is not None:
+                    _pkg["preferred_keys"] = list(preferred_keys)
+                if not _pkg.get("spec_request"):
+                    _pkg["spec_request"] = gen_request
+                if not _pkg.get("original_text"):
+                    _pkg["original_text"] = gen_request
+                ir = build_ir_from_package(_pkg, user_id=int(user.id) if user else 0)
+                logger.info(
+                    "force_generate IR mode=%s matched=%s gap=%s",
+                    ir.engine_mode.value,
+                    ir.capabilities_matched,
+                    ir.capabilities_gap,
+                )
                 result = await run_with_heartbeat(
-                    generate_bot_via_groq,
-                    gen_request,
+                    execute_ir,
+                    ir,
                     work_dir,
                     status_msg=status_msg,
                     user_id=int(user.id) if user else 0,
                 )
-                if not getattr(result, "success", False):
-                    # Fall back to engine with best-effort keys
-                    result = await run_with_heartbeat(
-                        run_generation,
-                        gen_request,
-                        work_dir,
-                        int(user.id) if user else 0,
-                        status_msg=status_msg,
-                        preferred_keys=preferred_keys,
-                    )
-            else:
+            except Exception:
+                logger.exception("IR router failed; falling back to run_generation")
                 result = await run_with_heartbeat(
                     run_generation,
                     gen_request,

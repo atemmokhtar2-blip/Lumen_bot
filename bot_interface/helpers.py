@@ -231,31 +231,32 @@ def run_generation_with_bridge(
     user_id: int = 0,
     translation: dict | None = None,
 ):
-    """Translate/analyze then generate: engine primary, Groq assist if needed."""
+    """Analyze → BuildIR → engine_router (catalog | hybrid | cline).
+
+    Translation is optional input to the bridge, not a required independent layer.
+    Cline path is gated by CLINE_ENABLED + policies; falls back to catalog safely.
+    """
     from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
-    from telegram_bot_engine.services.groq_codegen import generate_bot_via_groq
+    from telegram_bot_engine.services.engine_router import build_ir_from_package, execute_ir
 
     package = analyze_and_prepare(request, translation)
-    if package.get("needs_ai_codegen"):
-        logger.info("Bridge → Groq assist (out of engine catalog)")
-        result = generate_bot_via_groq(
-            package["spec_request"] or request,
-            work_dir,
-            user_id=int(user_id or 0),
-        )
-        if result.success:
-            meta = dict(result.metadata or {})
-            meta["bridge"] = package
-            result.metadata = meta
-            return result
-        logger.warning("Groq assist failed; falling back to spec_core: %s", result.errors)
-
-    return run_generation(
-        package["spec_request"] or request,
-        work_dir,
-        user_id=int(user_id or 0),
-        preferred_keys=package.get("preferred_keys"),
+    ir = build_ir_from_package(package, user_id=int(user_id or 0))
+    logger.info(
+        "IR mode=%s matched=%s gap=%s conf=%.2f",
+        ir.engine_mode.value,
+        ir.capabilities_matched,
+        ir.capabilities_gap,
+        ir.confidence,
     )
+    result = execute_ir(ir, work_dir, user_id=int(user_id or 0))
+    try:
+        meta = dict(getattr(result, "metadata", None) or {})
+        meta["bridge"] = package
+        meta["ir"] = ir.to_dict()
+        result.metadata = meta
+    except Exception:
+        pass
+    return result
 
 
 async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:

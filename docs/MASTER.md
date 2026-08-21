@@ -96,3 +96,5 @@ python api_main.py
 ---
 
 *التوثيق يعكس بنية المستودع كما هي في الكود. أي تعارض مع الكود → الكود هو المرجع.*
+
+- [Engine Router & IR](14_ENGINE_ROUTER_AND_IR.md)
