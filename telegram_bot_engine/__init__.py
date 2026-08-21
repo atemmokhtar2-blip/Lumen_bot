@@ -793,11 +793,25 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
         )
         from .spec_core.registry import CAPABILITIES as _CAPS_DET
 
-        keys = [k for k in (preferred_keys or []) if isinstance(k, str) and k in _CAPS_DET]
-        if not keys:
+        _CORE_ONLY = {"start", "help", "lang", "language", "cancel"}
+        # preferred_keys that are only core are NOT authoritative — bridge often
+        # returns ['start','help'] when rules miss the domain (was wiping shop).
+        caller_keys = [
+            k for k in (preferred_keys or [])
+            if isinstance(k, str) and k in _CAPS_DET
+        ]
+        caller_non_core = [k for k in caller_keys if k not in _CORE_ONLY]
+        keys = list(caller_keys)
+        if not caller_non_core:
             _det_report = run_detection(request)
-            keys = feature_keys(_det_report, include_core=True)
+            det_keys = feature_keys(_det_report, include_core=True)
+            for k in det_keys:
+                if k not in keys:
+                    keys.append(k)
             detection_meta = metadata_from_report(_det_report)
+            if caller_keys and not caller_non_core:
+                detection_meta = dict(detection_meta or {})
+                detection_meta["caller_keys_core_only_ignored_as_authoritative"] = caller_keys
         else:
             detection_meta = {
                 "capability_detection": {
@@ -808,10 +822,10 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             }
 
         # Apply detection keys to the session/spec that will be built.
-        # - preferred_keys from caller (Telegram/API Phase-2): always merge (authoritative)
-        # - auto-detected only: merge unless strict user menu already locked features
+        # - preferred_keys with non-core features: authoritative replace
+        # - core-only preferred_keys: merge detection (do NOT wipe domain plan)
         apply_keys = bool(keys) and (
-            bool(preferred_keys) or not (strict and explicit_feats)
+            bool(caller_non_core) or bool(keys) or not (strict and explicit_feats)
         )
         if apply_keys:
             sess = locals().get("session")
@@ -823,15 +837,11 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 except Exception:
                     sess = None
             if sess is not None and hasattr(sess, "selected"):
-                # Authoritative pack from detection/synthesis:
-                # preferred_keys from Telegram/API replace the fat preset selection
-                # to avoid duplicate_trigger collisions from unrelated market caps.
-                if preferred_keys:
+                if caller_non_core:
                     base = {"start", "help"}
-                    for k in list(preferred_keys) + list(keys):
+                    for k in list(preferred_keys or []) + list(keys):
                         if isinstance(k, str) and k in _CAPS_DET:
                             base.add(k)
-                    # Keep strict user menu items if any
                     if strict and explicit_feats:
                         for k in explicit_feats:
                             if isinstance(k, str) and k in _CAPS_DET:

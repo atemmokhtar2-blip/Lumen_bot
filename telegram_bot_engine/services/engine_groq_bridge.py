@@ -65,8 +65,23 @@ def analyze_and_prepare(
     rules = _rule_features(original)
     # Root: user slash commands beat Groq model features (e.g. /products over cart_*)
     slash_feats = _slash_features_from_text(original, catalog)
+    # When rules are weak (no domain keys), pull capability detection so
+    # preferred_keys is not stuck at start/help for shop/tasks/etc.
+    det_feats: list[str] = []
+    if len([k for k in rules if k not in {"start", "help"}]) == 0:
+        try:
+            from telegram_bot_engine.services.capability_detection.integration import (
+                feature_keys,
+                run_detection,
+            )
+            det_feats = [
+                k for k in feature_keys(run_detection(original), include_core=False)
+                if k in catalog
+            ]
+        except Exception:
+            det_feats = []
     preferred: list[str] = []
-    for key in slash_feats + rules + model_feats:
+    for key in slash_feats + rules + model_feats + det_feats:
         if key in catalog and key not in preferred:
             preferred.append(key)
     if not preferred:

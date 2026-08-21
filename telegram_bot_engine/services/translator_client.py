@@ -254,6 +254,7 @@ _FEATURE_ALIASES = {
 
 _AR_RULES: list[tuple[str, list[str]]] = [
     # (regex, feature keys) — order matters, first matches accumulate
+    # Group moderation
     (r"يرحب|ترحيب|ترحيب.?بال|welcome", ["welcome_set", "welcome_show"]),
     (r"يحظر|حظر|بان|ban(?!k)", ["user_ban"]),
     (r"يطرد|طرد|kick", ["user_kick"]),
@@ -262,6 +263,16 @@ _AR_RULES: list[tuple[str, list[str]]] = [
     (r"قواعد|laws|rules", ["rules"]),
     (r"يشتم|سب|إساء|مسيئ|insult|toxic|bad.?word|كلمات.?مسي", ["user_ban", "delete_message", "user_warn"]),
     (r"يمسح|حذف.?رس|delete.?msg", ["delete_message"]),
+    # Ecommerce — without this, bridge preferred_keys collapses to start/help
+    (
+        r"متجر|تسوق|منتج|منتجات|أسعار|اسعار|سلة|طلب\b|طلبات|شراء|"
+        r"ecommerce|shop|store|cart|product|catalog|checkout|price",
+        ["shop_catalog", "cart_view", "cart_add", "cart_checkout", "shop_my_orders"],
+    ),
+    # Tasks
+    (r"مهام|مهمة|\btodo\b|\btask\b", ["task_add", "task_list"]),
+    # Support tickets
+    (r"تذاكر|تذكرة|دعم|\bsupport\b|\bticket\b", ["ticket_open", "ticket_my"]),
 ]
 
 
@@ -278,12 +289,13 @@ def _rule_features_from_text(text: str, allowed: set[str]) -> list[str]:
                 canon = _FEATURE_ALIASES.get(k, k)
                 if canon in allowed and canon not in found:
                     found.append(canon)
-    # Always include start/help when we detected any group-moderation intent
+    # Always include start/help when we detected any domain intent
     if found:
         for core in ("start", "help"):
             if core in allowed and core not in found:
                 found.append(core)
-    return found[:8]
+    # Shop pack alone is 5 keys + start/help — allow up to 12
+    return found[:12]
 
 
 def _canonicalize_features(features: list[str], allowed: set[str]) -> list[str]:
