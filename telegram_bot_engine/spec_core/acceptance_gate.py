@@ -271,6 +271,22 @@ def accept_spec(
             warnings.append("ecommerce_without_shop_caps")
         warnings.extend(_fix_bot_identity(spec, primary))
 
+    # ── multi-domain lean packs (phase-2) ───────────────────────────────
+    elif primary and conf >= 0.30:
+        try:
+            from .lean_packs import pack_for_domain
+            pack = pack_for_domain(primary)
+        except Exception:
+            pack = ()
+        if pack and repair:
+            ids_after = set(_feature_ids(spec))
+            for key in pack:
+                if key not in ids_after and _append_feature(spec, key):
+                    injected.append(key)
+                    ids_after.add(key)
+            warnings.append(f"lean_pack:{primary}:{len(pack)}")
+            warnings.extend(_fix_bot_identity(spec, primary))
+
     # ── generic: always strip absolute nonsense if domain blocked presets
     blocked = set(getattr(dec, "blocked_presets", None) or [])
     if "clinic" in blocked:

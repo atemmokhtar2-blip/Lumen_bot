@@ -58,3 +58,20 @@ Force mode (ops): `ENGINE_MODE_FORCE=catalog|hybrid|cline`
 
 - Activepieces: MCP tools registered via `createTool` / provider (not in Core)
 - OpenClaw: channel layer only — does not build bots
+
+## Phase 2 (lean packs + hybrid scaffolds)
+
+### Stronger foundation
+- `core/ir_validate.py`: normalize keys against catalog, domain lean enrichment, post-gen `check_project_against_ir`
+- Router always validates IR before execute; attaches `ir_acceptance` to metadata
+
+### Lean packs (`spec_core/lean_packs.py`)
+Domains: ecommerce, group_moderation, tasks, notes, tickets, healthcare, crm, education, cybersecurity, echo  
+Applied in IR validation + acceptance_gate when domain confidence ≥ 0.30
+
+### Hybrid scaffolds (`services/hybrid_scaffolds.py`)
+On hybrid/cline-fallback with gaps:
+- `app/services/webhook_scaffold.py`
+- `app/services/http_tool.py`
+- `app/services/cron_scaffold.py`
+- `HYBRID_GAPS.md`
