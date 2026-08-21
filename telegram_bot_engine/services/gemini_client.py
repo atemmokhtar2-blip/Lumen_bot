@@ -90,6 +90,30 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
+
+_ARCHITECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "purpose": {"type": "string"},
+        "domain": {"type": "string"},
+        "features_requested": {"type": "array", "items": {"type": "string"}},
+        "flows": {"type": "array", "items": {"type": "string"}},
+        "commands": {"type": "array", "items": {"type": "string"}},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "language": {"type": "string"},
+        "spec_request": {"type": "string"},
+        "confidence": {"type": "number"},
+        "clarification_needed": {"type": "boolean"},
+        "clarification_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "purpose", "features_requested", "flows", "spec_request",
+        "confidence", "clarification_needed", "clarification_questions",
+    ],
+}
+
+
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -210,6 +234,28 @@ def _experiment_delay() -> None:
 
 
 def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
+    if mode == "architect":
+        context = context or {}
+        caps = json.dumps(context.get("spec_core_capabilities") or [], ensure_ascii=False)
+        qa = json.dumps(context.get("qa_summary") or {}, ensure_ascii=False)
+        intent = context.get("user_intent") or ""
+        return f"""أنت Architect فقط. لا تتحدث مع المستخدم. لا تكتب answer.
+حوّل الطلب إلى StrictSpec لـ spec_core.
+
+قواعد:
+1) JSON فقط حسب المخطط.
+2) features_requested من SPEC_CORE_CAPABILITIES إن أمكن.
+3) spec_request عقد مستقل فيه «بوت» والميزات المطلوبة فقط — بلا ميزات غير مطلوبة.
+4) ناقص؟ clarification_needed=true وspec_request="".
+5) confidence 0..1. language عادة ar.
+
+USER_INTENT: {intent}
+QA_SUMMARY: {qa}
+SPEC_CORE_CAPABILITIES: {caps}
+USER_REQUEST:
+{text[:20000]}
+""".strip()
+
     context = dict(context or {})
     if not context.get("spec_core_capabilities"):
         try:
@@ -396,13 +442,14 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
     base_payload = {
         "contents": [{"parts": [{"text": _prompt(mode, text, context)}]}],
     }
+    response_schema = _ARCHITECT_SCHEMA if mode == "architect" else _RESPONSE_SCHEMA
     schema_config = {
-        "temperature": 0.2,
+        "temperature": 0.15 if mode == "architect" else 0.2,
         "responseMimeType": "application/json",
-        "responseSchema": _RESPONSE_SCHEMA,
+        "responseSchema": response_schema,
     }
     plain_config = {
-        "temperature": 0.2,
+        "temperature": 0.15 if mode == "architect" else 0.2,
         "responseMimeType": "application/json",
     }
 
@@ -494,7 +541,17 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                     continue
 
                 try:
-                    result = _normalize(_extract_json(response.json()))
+                    parsed = _extract_json(response.json())
+                    if mode == "architect":
+                        # Architect JSON may be the translation itself (no answer wrapper)
+                        if "translation" not in parsed and "purpose" in parsed:
+                            result = _normalize_architect(parsed)
+                        elif "translation" in parsed and isinstance(parsed.get("translation"), dict):
+                            result = _normalize_architect(parsed["translation"])
+                        else:
+                            result = _normalize_architect(parsed)
+                    else:
+                        result = _normalize(parsed)
                 except Exception as exc:
                     last_error = exc
                     logger.warning(
@@ -518,6 +575,54 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                 break
 
     raise RuntimeError(f"Gemini generate failed for all authorized keys/models: {last_error}")
+
+
+
+def _normalize_architect(result: dict[str, Any]) -> dict[str, Any]:
+    def strings(name: str) -> list[str]:
+        value = result.get(name) or []
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()][:100]
+    try:
+        confidence = float(result.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    translation = {
+        "purpose": str(result.get("purpose") or "").strip(),
+        "domain": str(result.get("domain") or "").strip(),
+        "features_requested": strings("features_requested"),
+        "flows": strings("flows"),
+        "commands": strings("commands"),
+        "entities": strings("entities"),
+        "constraints": strings("constraints"),
+        "language": str(result.get("language") or "ar").strip()[:8] or "ar",
+        "strict_spec": True,
+        "model": model_name(),
+        "confidence": max(0.0, min(1.0, confidence)),
+        "clarification_needed": bool(result.get("clarification_needed")),
+        "clarification_questions": strings("clarification_questions"),
+        "spec_request": str(result.get("spec_request") or "").strip()[:20000],
+    }
+    return {
+        "ok": True,
+        "answered": False,
+        "source": "gemini_architect",
+        "model": model_name(),
+        "answer": "",
+        "action": {"name": "generate_bot", "requires_confirmation": False},
+        "translation": translation,
+    }
+
+
+def architect_spec(text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Dedicated architect path — StrictSpec only, never user chat."""
+    result = generate("architect", text, context)
+    if result.get("source") == "gemini_architect":
+        return result
+    tr = result.get("translation") if isinstance(result.get("translation"), dict) else {}
+    return _normalize_architect(tr if tr else result)
+
 
 
 def translate(text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:

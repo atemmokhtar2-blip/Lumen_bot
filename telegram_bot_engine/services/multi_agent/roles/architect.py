@@ -8,6 +8,7 @@ from ..context_views import architect_view
 from ..protocol import Agent
 from ..state import AgentRole, AgentState, AgentStatus
 from ..strict_spec import merge_spec_request, validate_strict_spec
+from ..gates import apply_catalog_filter_to_state
 
 
 class ArchitectAgent(Agent):
@@ -35,6 +36,8 @@ class ArchitectAgent(Agent):
 
         state.strict_spec = spec.to_dict()
         state.spec_request = spec.spec_request
+        state = apply_catalog_filter_to_state(state)
+        spec = type(spec).from_dict(state.strict_spec)
         # preferred_keys for Builder = features from contract
         if spec.features:
             state.preferred_keys = list(spec.features)

@@ -54,6 +54,21 @@ class Orchestrator:
             if not agent.can_run(state):
                 state.record(AgentRole.ORCHESTRATOR, "can_run_false", agent.name)
                 continue
+            # Phase B hard gate: Builder blocked without buildable StrictSpec
+            if agent.name == "builder":
+                from .gates import architect_gate, apply_catalog_filter_to_state
+                state = apply_catalog_filter_to_state(state)
+                ok, errors = architect_gate(state)
+                if not ok:
+                    state.build_success = False
+                    state.build_errors = list(errors)
+                    state.record(AgentRole.ORCHESTRATOR, "builder_blocked", ",".join(errors[:5]))
+                    try:
+                        state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="spec_gate")
+                    except Exception:
+                        state.status = AgentStatus.FAILED.value
+                    self.board.put(state)
+                    continue
             try:
                 state = agent.run(state, context=ctx)
             except Exception as exc:

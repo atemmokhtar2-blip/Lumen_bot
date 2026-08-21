@@ -53,18 +53,20 @@ class GeminiSpecBackend(SpecBackend):
             except Exception:
                 ctx["spec_core_capabilities"] = []
 
-            result = gemini_client.translate(text, ctx)
-            if not isinstance(result, dict) or not result.get("ok"):
+            # Dedicated architect mode (no user-facing answer)
+            if hasattr(gemini_client, "architect_spec"):
+                result = gemini_client.architect_spec(text, ctx)
+            else:
+                result = gemini_client.translate(text, ctx)
+            if not isinstance(result, dict) or not result.get("ok", True):
                 return None
             tr = result.get("translation") or {}
-            if not gemini_client.validate_spec_translation(tr):
-                # still accept partial if purpose/spec_request present
-                if not (tr.get("spec_request") or tr.get("purpose") or tr.get("features_requested")):
-                    return None
+            if not (tr.get("spec_request") or tr.get("purpose") or tr.get("features_requested")):
+                return None
             spec = StrictSpec.from_dict({
                 **tr,
                 "features": tr.get("features_requested") or tr.get("features") or [],
-                "source": "gemini",
+                "source": str(result.get("source") or "gemini_architect"),
                 "model": result.get("model") or tr.get("model") or "",
                 "domain": tr.get("domain") or "",
             })
