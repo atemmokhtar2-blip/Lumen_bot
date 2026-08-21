@@ -75,3 +75,33 @@ On hybrid/cline-fallback with gaps:
 - `app/services/http_tool.py`
 - `app/services/cron_scaffold.py`
 - `HYBRID_GAPS.md`
+
+## Phase 2 hardened
+
+- Lean packs extended: fitness, restaurant, auction, realestate
+- Hybrid always writes `ENV.example` with integration env keys
+- IR acceptance + smoke remain post-gen gates
+
+## Phase 3 — Cline runtime (builtin first)
+
+```bash
+CLINE_ENABLED=1
+# optional override:
+# CLINE_PROVIDER=telegram_bot_engine.services.cline_runtime.provider_builtin:build
+ENGINE_LLM_PROVIDER=gemini|xai|ollama
+GOOGLE_API_KEY=...   # or GEMINI_API_KEY
+XAI_API_KEY=...
+OLLAMA_HOST=http://...
+ACTIVEPIECES_WEBHOOK_BASE=...
+ACTIVEPIECES_TOKEN=...
+CLINE_ALLOW_SHELL=0
+CLINE_ALLOW_WEB=0
+```
+
+Modules:
+- `cline_runtime/tools.py` — compose_catalog, scaffolds, smoke, ir_acceptance (shell/web disabled)
+- `cline_runtime/model_router.py` — Gemini / xAI / Ollama selection
+- `cline_runtime/provider_builtin.py` — default provider pipeline
+- `cline_runtime/mcp_bridge.py` — Activepieces webhook contract
+
+Builtin path does **not** open shell/web. It runs catalog tools under IR.

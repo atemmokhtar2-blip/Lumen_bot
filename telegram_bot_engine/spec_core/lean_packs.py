@@ -65,6 +65,28 @@ LEAN_PACKS: dict[str, tuple[str, ...]] = {
     "echo": (
         "echo",
     ),
+    "fitness": (
+        "gym_book",
+        "gym_schedule",
+        "book_slot",
+        "book_list",
+    ),
+    "restaurant": (
+        "shop_catalog",
+        "cart_add",
+        "cart_view",
+        "cart_checkout",
+    ),
+    "auction": (
+        "auction_list",
+        "auction_bid",
+        "auction_my_bids",
+    ),
+    "realestate": (
+        "shop_catalog",
+        "lead_capture",
+        "lead_list",
+    ),
 }
 
 _DOMAIN_ALIASES = {
@@ -78,6 +100,11 @@ _DOMAIN_ALIASES = {
     "crm": "crm",
     "cybersecurity": "cybersecurity",
     "social": "group_moderation",
+    "fitness": "fitness",
+    "restaurant": "restaurant",
+    "auction": "auction",
+    "realestate": "realestate",
+    "gaming": "echo",
 }
 
 

@@ -164,6 +164,23 @@ def apply_hybrid_scaffolds(
             )
             note.write_text("\n".join(lines), encoding="utf-8")
             written.append("HYBRID_GAPS.md")
+        env_ex = root / "ENV.example"
+        if not env_ex.exists():
+            env_ex.write_text(
+                "\n".join(
+                    [
+                        "# Hybrid / integration env",
+                        "WEBHOOK_SECRET=",
+                        "EXTERNAL_API_BASE=",
+                        "EXTERNAL_API_KEY=",
+                        "ACTIVEPIECES_WEBHOOK_BASE=",
+                        "ACTIVEPIECES_TOKEN=",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            written.append("ENV.example")
     return written
 
 

@@ -44,43 +44,21 @@ class ClineExecutionResult:
 
 
 def is_cline_available() -> bool:
-    """True only when explicitly enabled AND a provider can be loaded."""
+    """True when CLINE_ENABLED — builtin provider always usable; external optional."""
     flag = (os.getenv("CLINE_ENABLED") or "0").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
-        return False
-    # Optional real SDK
-    try:
-        importlib.import_module("cline")  # type: ignore
-        return True
-    except Exception:
-        pass
-    try:
-        importlib.import_module("@cline/sdk")  # invalid as py module; ignore
-    except Exception:
-        pass
-    # Custom provider module: path.to.module:callable
-    prov = (os.getenv("CLINE_PROVIDER") or "").strip()
-    if prov:
-        return True
-    return False
+    return flag in {"1", "true", "yes", "on"}
 
 
 def _policy_allows_cline(ir: Any) -> tuple[bool, str]:
-    """Security gate: never open shell tools without sandbox policy."""
+    """Security gate: shell/web stay off unless env allows; builtin scaffolds always ok."""
     allow_shell = (os.getenv("CLINE_ALLOW_SHELL") or "0").strip().lower() in {
         "1", "true", "yes", "on"
     }
-    allow_web = (os.getenv("CLINE_ALLOW_WEB") or "0").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-    # Default: Cline path is allowed for planning/codegen files only when enabled
     if not is_cline_available():
         return False, "cline_disabled_or_unavailable"
-    # High-risk IR gaps still require explicit allow
     gaps = list(getattr(ir, "capabilities_gap", None) or [])
-    integrations = list(getattr(ir, "integrations", None) or [])
-    if integrations and not allow_web:
-        return False, "integrations_require_CLINE_ALLOW_WEB=1"
+    # Builtin provider does not fetch web/shell — only catalog+scaffolds.
+    # Live web/shell tools remain disabled in tools.py until policy enables them.
     if any("shell" in str(g).lower() or "terminal" in str(g).lower() for g in gaps):
         if not allow_shell:
             return False, "shell_gap_requires_CLINE_ALLOW_SHELL=1"
@@ -138,35 +116,31 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
     if external is not None:
         return external
 
-    # SDK present but no custom provider: scaffold contract only (no blind codegen)
-    matched = list(getattr(ir, "capabilities_matched", None) or getattr(ir, "preferred_keys", None) or [])
-    gap = list(getattr(ir, "capabilities_gap", None) or [])
-    if matched and not gap:
-        # Should have been catalog mode; still safe to ask catalog
+    # Default: builtin provider (catalog compose + scaffolds + QA tools)
+    try:
+        from telegram_bot_engine.services.cline_runtime.provider_builtin import build as builtin_build
+
+        raw = builtin_build(
+            ir.to_dict() if hasattr(ir, "to_dict") else dict(ir),
+            str(work),
+        )
+        return ClineExecutionResult(
+            ok=bool(raw.get("ok")),
+            project_path=raw.get("project_path"),
+            engine=str(raw.get("engine") or "cline_builtin"),
+            errors=list(raw.get("errors") or []),
+            warnings=list(raw.get("warnings") or []),
+            metadata=dict(raw.get("metadata") or {}),
+            fallback_catalog=bool(raw.get("fallback_catalog")),
+        )
+    except Exception as exc:
+        logger.exception("builtin cline provider failed")
         return ClineExecutionResult(
             ok=False,
-            engine="cline_noop_matched_catalog",
-            warnings=["ir_has_no_gap_use_catalog"],
-            metadata={"matched": matched},
+            engine="cline_builtin_error",
+            errors=[f"{type(exc).__name__}:{exc}"],
             fallback_catalog=True,
         )
-
-    # Without a wired provider, do not pretend we built a custom bot
-    return ClineExecutionResult(
-        ok=False,
-        engine="cline_not_wired",
-        errors=[
-            "CLINE_ENABLED but no CLINE_PROVIDER and no usable SDK hook. "
-            "Set CLINE_PROVIDER=module:fn or install/wire the SDK."
-        ],
-        warnings=["fallback_catalog_recommended"],
-        metadata={
-            "gap": gap,
-            "matched": matched,
-            "hint": "Wire provider to implement Files/Terminal/MCP under sandbox",
-        },
-        fallback_catalog=True,
-    )
 
 
 __all__ = [
