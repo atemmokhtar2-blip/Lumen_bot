@@ -29,6 +29,7 @@ from .strict_spec import StrictSpec, validate_strict_spec, merge_spec_request, S
 from .context_views import router_view, architect_view, builder_view, critic_view, deliver_view
 from .architect_backends import SpecBackend, GeminiSpecBackend, BridgeSpecBackend, DeterministicSpecBackend, produce_strict_spec
 from .gates import architect_gate, filter_features_to_catalog, apply_catalog_filter_to_state
+from .repair import RepairDirective, build_repair_directive, apply_deterministic_repair
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -71,4 +72,7 @@ __all__ = [
     "architect_gate",
     "filter_features_to_catalog",
     "apply_catalog_filter_to_state",
+    "RepairDirective",
+    "build_repair_directive",
+    "apply_deterministic_repair",
 ]

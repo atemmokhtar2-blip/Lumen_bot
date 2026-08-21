@@ -16,6 +16,7 @@ def router_view(state: AgentState) -> dict[str, Any]:
 
 def architect_view(state: AgentState) -> dict[str, Any]:
     """Architect must NOT see QA noise, full event logs, or delivery messages."""
+    repair = (state.extensions or {}).get("last_repair")
     return {
         "user_text": (state.user_text or "")[:8000],
         "user_intent": state.user_intent,
@@ -23,8 +24,9 @@ def architect_view(state: AgentState) -> dict[str, Any]:
         "route_params": dict(state.route_params or {}),
         "preferred_keys_hint": list(state.preferred_keys or [])[:40],
         "attempts": state.attempts,
-        # Phase C: always pass QA summary when present so Architect can repair
         "qa_summary": _qa_summary(state),
+        "repair_directive": repair,
+        "previous_strict_spec": dict(state.strict_spec or {}) if state.attempts else None,
     }
 
 

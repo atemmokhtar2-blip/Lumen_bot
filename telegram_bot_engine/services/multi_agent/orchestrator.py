@@ -149,21 +149,32 @@ class Orchestrator:
                 )
                 break
 
-            # Prepare next iteration: QA → PLANNING
+            # Prepare next iteration: QA → PLANNING with structured repair directive
+            from .repair import build_repair_directive, spec_hash
+            directive = build_repair_directive(state)
+            # Stagnant if last two history hashes match current strict_spec
+            hist = list((state.extensions or {}).get("repair_history") or [])
+            cur_h = spec_hash(state.strict_spec)
+            stagnant = bool(hist) and any(h.get("spec_hash") == cur_h for h in hist[-2:])
+            directive.stagnant = stagnant
+            if stagnant:
+                directive.actions = list(directive.actions) + ["STAGNANT: force simplified core bot with /start /help only"]
+                directive.add_constraints = list(directive.add_constraints) + ["تبسيط إجباري بسبب تكرار الفشل"]
+                directive.drop_features = list(dict.fromkeys(list(directive.drop_features) + list((state.strict_spec or {}).get("features") or [])[2:]))
+            state.extensions["last_repair"] = directive.to_dict()
             state.record(
                 AgentRole.ORCHESTRATOR,
                 "repair_loop",
-                f"attempt={state.attempts} errors={(state.qa_report or {}).get('errors', [])[:3]}",
+                f"attempt={state.attempts} stagnant={stagnant} errors={(state.qa_report or {}).get('errors', [])[:3]}",
             )
             try:
                 state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
             except Exception:
                 state.status = AgentStatus.PLANNING.value
-            # Keep qa_report for architect_view; clear build flags for next try
             state.build_success = False
-            state.generated_path = state.generated_path  # keep last path for reference in extensions
             state.extensions["last_failed_path"] = state.generated_path
             state.generated_path = ""
+            state.qa_passed = False  # keep qa_report for architect
             self.board.put(state)
 
         return self._deliver(state)

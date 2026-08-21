@@ -9,6 +9,7 @@ from ..protocol import Agent
 from ..state import AgentRole, AgentState, AgentStatus
 from ..strict_spec import merge_spec_request, validate_strict_spec
 from ..gates import apply_catalog_filter_to_state
+from ..repair import build_repair_directive, apply_deterministic_repair, spec_hash, record_repair_history
 
 
 class ArchitectAgent(Agent):
@@ -30,14 +31,28 @@ class ArchitectAgent(Agent):
         elif self.backends is not None:
             backends = self.backends
 
+        # Phase C: build structured repair directive when prior QA failed
+        directive = None
+        if state.qa_report and not state.qa_passed and int(state.attempts or 0) >= 1:
+            directive = build_repair_directive(state)
+            state.extensions["last_repair"] = directive.to_dict()
+            view = {**view, "repair_directive": directive.to_dict()}
+
         spec = produce_strict_spec(view, backends=backends)
         if not (spec.spec_request or "").strip():
             spec.spec_request = merge_spec_request(spec)
+
+        # Always apply deterministic repair mutations when we have a directive
+        if directive is not None:
+            spec = apply_deterministic_repair(spec, directive)
+            state.record(AgentRole.ARCHITECT, "repair_applied", f"actions={len(directive.actions)}")
 
         state.strict_spec = spec.to_dict()
         state.spec_request = spec.spec_request
         state = apply_catalog_filter_to_state(state)
         spec = type(spec).from_dict(state.strict_spec)
+        if directive is not None:
+            record_repair_history(state, directive, spec_hash(spec))
         # preferred_keys for Builder = features from contract
         if spec.features:
             state.preferred_keys = list(spec.features)

@@ -45,7 +45,8 @@ class GeminiSpecBackend(SpecBackend):
                 "capability_id": view.get("capability_id"),
                 "preferred_keys_hint": view.get("preferred_keys_hint") or [],
                 "qa_summary": view.get("qa_summary"),
-                # Keep capability list small if available
+                "repair_directive": view.get("repair_directive"),
+                "previous_strict_spec": view.get("previous_strict_spec"),
             }
             try:
                 from telegram_bot_engine.spec_core.registry import CAPABILITIES

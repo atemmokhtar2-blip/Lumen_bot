@@ -238,6 +238,8 @@ def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
         context = context or {}
         caps = json.dumps(context.get("spec_core_capabilities") or [], ensure_ascii=False)
         qa = json.dumps(context.get("qa_summary") or {}, ensure_ascii=False)
+        repair = json.dumps(context.get("repair_directive") or {}, ensure_ascii=False)
+        prev = json.dumps(context.get("previous_strict_spec") or {}, ensure_ascii=False)[:4000]
         intent = context.get("user_intent") or ""
         return f"""أنت Architect فقط. لا تتحدث مع المستخدم. لا تكتب answer.
 حوّل الطلب إلى StrictSpec لـ spec_core.
@@ -248,9 +250,13 @@ def _prompt(mode: str, text: str, context: dict[str, Any] | None) -> str:
 3) spec_request عقد مستقل فيه «بوت» والميزات المطلوبة فقط — بلا ميزات غير مطلوبة.
 4) ناقص؟ clarification_needed=true وspec_request="".
 5) confidence 0..1. language عادة ar.
+6) إن وُجد REPAIR_DIRECTIVE: عدّل المواصفات صراحة لمعالجة BLOCKING_ERRORS ونفّذ REQUIRED_ACTIONS.
+   لا تُعد نفس spec_request السابق. قلل الميزات إن تكررت الأخطاء.
 
 USER_INTENT: {intent}
 QA_SUMMARY: {qa}
+REPAIR_DIRECTIVE: {repair}
+PREVIOUS_STRICT_SPEC: {prev}
 SPEC_CORE_CAPABILITIES: {caps}
 USER_REQUEST:
 {text[:20000]}
