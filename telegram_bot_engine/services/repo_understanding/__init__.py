@@ -18,3 +18,10 @@ try:
 except Exception:
     explain_repo_with_llm = None  # type: ignore
     gather_repo_dossier = None  # type: ignore
+
+try:
+    from .repo_tools import REPO_TOOLS, run_tool, run_core_toolkit
+except Exception:
+    REPO_TOOLS = {}  # type: ignore
+    run_tool = None  # type: ignore
+    run_core_toolkit = None  # type: ignore
