@@ -53,14 +53,32 @@ def _looks_like_generation_request(text: str) -> bool:
         return False
     if "بوت" not in value and "bot" not in value:
         return False
-    return bool(
-        re.search(
-            r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
-            r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
+    # Explicit generate verbs
+    if re.search(
+        r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
+        r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
+        value,
+        re.IGNORECASE,
+    ):
+        return True
+    # Spec-style: starts with بوت + describes purpose (NOT a question about an existing repo)
+    # e.g. «بوت متجر إلكتروني لعرض المنتجات...»
+    if re.match(r"^\s*بوت\b", value) or re.match(r"^\s*bot\b", value, re.I):
+        # exclude pure questions about the active repo
+        if re.search(
+            r"(كم|عدد|فين|ايه|إيه|هات|اعرض|وريني|شوف|inspect|how many|what is|where)",
             value,
-            re.IGNORECASE,
-        )
-    )
+            re.I,
+        ) and not re.search(
+            r"(متجر|جروب|قناة|متجر|shop|store|group|channel|ترحيب|حظر|أسعار|منتجات|عملاء)",
+            value,
+            re.I,
+        ):
+            return False
+        # long enough descriptive payload → generation
+        if len(value) >= 18:
+            return True
+    return False
 
 
 _CONFIRM_ROOTS = {
@@ -1628,10 +1646,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         _looks_gen = False
 
+    # Never hijack bot-generation specs into repo_understand just because
+    # an active_repo exists from a previous clone.
     if (
         _repo_path_ok
         and not _rt_hard_other
         and not _looks_gen
+        and not _is_bot_spec
         and not (context.user_data or {}).get("force_generate_once")
         and len((request or "").strip()) >= 2
     ):
@@ -1639,7 +1660,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ok = True
             capability_id = "repo_understand"
             confidence = 0.99
-            params = {"path": str((_ar or {}).get("path") or ""), "url": str((_ar or {}).get("url") or "")}
+            params = {
+                "path": str((_ar or {}).get("path") or ""),
+                "url": str((_ar or {}).get("url") or ""),
+                "text": request,
+                "raw_text": request,
+                "question": request,
+            }
         _rt = _BoundRepoRt()
         _repo_bound = True
         logger.info("active_repo bound → repo_understand for free-form Q")

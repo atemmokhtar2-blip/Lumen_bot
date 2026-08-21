@@ -323,6 +323,14 @@ def _looks_like_bot_spec(text: str) -> bool:
         re.I,
     ):
         return True
+    # Spec starts with بوت + purpose description (common Arabic style)
+    if re.match(r"^\s*بوت\b", t) and len(t.strip()) >= 18:
+        if not re.search(
+            r"(كم\s*سطر|عدد\s*الملفات|هات\s*الملف|اعرض\s*الملف|شوف\s*المستودع)",
+            t,
+            re.I,
+        ):
+            return True
     # Two or more explicit slash-commands → generation payload
     if len(re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", t)) >= 2:
         return True

@@ -345,15 +345,11 @@ def _tool_repo_understand(
         user_data["active_repo"] = active
         user_data["last_project_path"] = str(root)
 
-        if (meta or {}).get("explainer") == "engine_facts_only":
-            header = "[engine materials only — Grok LLM unavailable]\n\n"
-        else:
-            header = "[Grok understanding — engine only gathered files]\n\n"
-
+        # User-facing text only — no English debug banners.
         return ToolResult(
             ok=True,
             tool="repo_understand",
-            message=(header + (explanation or ""))[:4000],
+            message=(explanation or "")[:4000],
             data={
                 "path": str(root),
                 "url": url,

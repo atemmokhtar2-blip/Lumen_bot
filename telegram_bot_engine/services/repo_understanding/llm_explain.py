@@ -93,19 +93,74 @@ def explain_repo_with_llm(
         meta["explainer"] = "groq_freeform"
         return text.strip(), meta
 
-    # facts-only fallback
-    facts_ar = (
-        f"ROOT: `{root}`\n"
-        + (f"URL: {url}\n" if url else "")
-        + f"total_files={stats.get('total_files')}\n"
-        + f"total_lines={stats.get('total_lines')}\n"
-        + f"code_lines={stats.get('code_lines')}\n"
-        + f"files_by_extension={stats.get('files_by_extension')}\n"
-        + f"tools_run={[r.get('tool') for r in tool_results]}\n"
-        + "(Grok LLM unavailable — engine tool numbers only)"
-    )
+    # facts-only fallback — clean Arabic, never raw English dumps
     meta["explainer"] = "engine_facts_only"
-    return facts_ar, meta
+    return _format_facts_ar(user_question or "", root, url, stats, tool_results), meta
+
+
+def _format_facts_ar(
+    question: str,
+    root: Path,
+    url: str,
+    stats: dict[str, Any],
+    tool_results: list[dict[str, Any]],
+) -> str:
+    """Human-readable Arabic answer from engine measurements when LLM is down."""
+    q = (question or "").lower()
+    total_files = stats.get("total_files")
+    total_lines = stats.get("total_lines")
+    code_lines = stats.get("code_lines")
+    by_ext = stats.get("files_by_extension") or {}
+
+    # Direct answers for common measurable questions
+    if any(x in q for x in ("كم سطر", "عدد الأسطر", "عدد الاسطر", "سطر", "lines", "loc")):
+        lines = [
+            "📊 قياس المحرك للمستودع:",
+            f"• إجمالي الأسطر (نصوص/كود): **{total_lines}**",
+            f"• أسطر الكود تقريباً: **{code_lines}**",
+            f"• عدد الملفات: **{total_files}**",
+        ]
+        if by_ext:
+            top = ", ".join(f"{k}: {v}" for k, v in list(by_ext.items())[:8])
+            lines.append(f"• توزيع الامتدادات: {top}")
+        return "\n".join(lines)
+
+    if any(x in q for x in ("كم ملف", "عدد الملفات", "files", "كم عدد")):
+        lines = [
+            "📊 قياس المحرك للمستودع:",
+            f"• عدد الملفات: **{total_files}**",
+            f"• إجمالي الأسطر: **{total_lines}**",
+            f"• أسطر الكود: **{code_lines}**",
+        ]
+        return "\n".join(lines)
+
+    # File content from tools if present
+    for r in tool_results:
+        if r.get("tool") == "read_file" and r.get("ok") and r.get("content"):
+            path = r.get("path") or "?"
+            content = str(r.get("content") or "")
+            if len(content) > 3500:
+                content = content[:3500] + "\n… (مقتطف)"
+            return f"📄 الملف `{path}`:\n```\n{content}\n```"
+
+    # Generic clean summary (no English dump, no "Grok unavailable" noise)
+    lines = [
+        "📊 ملخص المستودع (قياس المحرك):",
+        f"• المسار: `{root}`",
+    ]
+    if url:
+        lines.append(f"• الرابط: {url}")
+    lines.extend(
+        [
+            f"• عدد الملفات: **{total_files}**",
+            f"• إجمالي الأسطر: **{total_lines}**",
+            f"• أسطر الكود: **{code_lines}**",
+        ]
+    )
+    if by_ext:
+        top = ", ".join(f"{k}: {v}" for k, v in list(by_ext.items())[:10])
+        lines.append(f"• الامتدادات: {top}")
+    return "\n".join(lines)
 
 
 def _freeform_completion(prompt: str) -> str | None:
