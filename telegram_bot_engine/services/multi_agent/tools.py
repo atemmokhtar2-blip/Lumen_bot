@@ -1,10 +1,15 @@
-"""Explicit tool layer for multi-agent — catalog + gated execution."""
+"""Hardened explicit tool layer — validation, risk, HITL grant, executor."""
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional
 
-from .hitl import request_confirmation, tool_requires_confirmation
+from .hitl import (
+    consume_execute_grant,
+    request_confirmation,
+    tool_requires_confirmation,
+    tool_risk,
+)
 from .state import AgentRole, AgentState, AgentStatus
 
 logger = logging.getLogger(__name__)
@@ -25,23 +30,28 @@ def list_tools() -> list[str]:
 def get_tool_spec(name: str) -> dict[str, Any]:
     try:
         from telegram_bot_engine.services.tool_runtime.registry import get_tool_spec, TOOL_SPECS
-        if "get_tool_spec" in dir() and callable(get_tool_spec):
-            spec = get_tool_spec(name)
-            if spec:
-                return dict(spec)
+        spec = get_tool_spec(name)
+        if spec:
+            return dict(spec)
         return dict(TOOL_SPECS.get(name) or {})
     except Exception:
         return {}
 
 
 def select_tool(state: AgentState) -> str:
-    """Resolve tool name from router intent / capability_id."""
     tool = (state.capability_id or state.user_intent or "").strip()
-    if tool in list_tools() or tool in {
-        "generate_bot", "refine_bot", "chat_or_other",
-    }:
+    known = set(list_tools()) | {"chat_or_other"}
+    if tool in known:
         return tool
     return tool or "chat_or_other"
+
+
+def _validate(tool: str, params: dict[str, Any]) -> tuple[bool, list[str]]:
+    try:
+        from telegram_bot_engine.services.tool_runtime.registry import validate_tool_params
+        return validate_tool_params(tool, params)
+    except Exception:
+        return True, []
 
 
 def execute_tool_gated(
@@ -52,26 +62,64 @@ def execute_tool_gated(
     skip_hitl: bool = False,
 ) -> AgentState:
     """
-    Execute tool with HITL gate.
-    - If requires confirmation and not yet confirmed → park AWAITING_CONFIRMATION
-    - If confirmed or safe tool → dispatch executor
+    Execute with hard gates:
+    1) tool must be known (or chat_or_other)
+    2) required params validated
+    3) high/critical risk → HITL unless single-use grant present
+    4) skip_hitl only honored when grant is consumed successfully
     """
     params = dict(params or state.route_params or {})
     tool = (tool or select_tool(state)).strip()
     state.extensions["selected_tool"] = tool
+    risk = tool_risk(tool)
+    state.extensions["tool_risk"] = risk
 
-    pending = (state.extensions or {}).get("pending_action") or {}
-    already_confirmed = (
-        bool((state.extensions or {}).get("hitl_confirmed"))
-        and str(pending.get("tool") or "") == tool
-        and str(pending.get("status") or "") == "confirmed"
-    )
-
-    if tool_requires_confirmation(tool) and not skip_hitl and not already_confirmed:
-        request_confirmation(state, tool, params, reason=f"الأداة `{tool}` تتطلب موافقة صريحة")
+    # Unknown tools fail closed
+    if tool not in set(list_tools()) | {"chat_or_other", "generate_bot", "refine_bot"}:
+        state.extensions["tool_result"] = {"ok": False, "tool": tool, "message": "unknown_tool"}
+        state.final_message = f"أداة غير معروفة: {tool}"
+        try:
+            state.transition(AgentStatus.FAILED, role=AgentRole.TOOL, force=True)
+        except Exception:
+            state.status = AgentStatus.FAILED.value
+        state.record(AgentRole.TOOL, "unknown_tool", tool)
         return state
 
-    # generate_bot / refine_bot are handled by the build pipeline — signal only
+    ok_params, missing = _validate(tool, params)
+    if not ok_params:
+        state.extensions["tool_result"] = {
+            "ok": False, "tool": tool, "message": "missing_params", "missing": missing,
+        }
+        state.final_message = f"معاملات ناقصة لـ `{tool}`: {', '.join(missing)}"
+        try:
+            state.transition(AgentStatus.FAILED, role=AgentRole.TOOL, force=True)
+        except Exception:
+            state.status = AgentStatus.FAILED.value
+        state.record(AgentRole.TOOL, "missing_params", ",".join(missing))
+        return state
+
+    needs_hitl = tool_requires_confirmation(tool)
+
+    if needs_hitl:
+        # Only proceed if we can consume a grant (from successful confirm)
+        if skip_hitl or (state.extensions or {}).get("hitl_confirmed"):
+            if not consume_execute_grant(state, tool):
+                # No valid grant — re-request confirmation
+                request_confirmation(
+                    state, tool, params,
+                    reason=f"لا يوجد تفويض ساري — أعد التأكيد (مخاطر {risk})",
+                    raw_params=params,
+                )
+                return state
+        else:
+            request_confirmation(
+                state, tool, params,
+                reason=f"الأداة `{tool}` مستوى {risk} تتطلب موافقة صريحة",
+                raw_params=params,
+            )
+            return state
+
+    # Safe / granted path
     if tool in {"generate_bot", "refine_bot"}:
         state.extensions["tool_result"] = {
             "ok": True, "tool": tool, "defer": True, "message": "defer_to_builder",
@@ -94,7 +142,7 @@ def execute_tool_gated(
             "message": str(getattr(result, "message", "")),
         }
         state.extensions["tool_result"] = data
-        state.record(AgentRole.TOOL, "executed", f"{tool}:ok={data.get('ok')}")
+        state.record(AgentRole.TOOL, "executed", f"{tool}:ok={data.get('ok')}:risk={risk}")
         if data.get("ok"):
             state.final_message = str(data.get("message") or f"تم تنفيذ {tool}")
             try:

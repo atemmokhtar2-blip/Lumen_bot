@@ -109,11 +109,94 @@ def tool_catalog_for_prompt() -> str:
     return "\n".join(lines)
 
 
-def tool_requires_confirmation(name: str) -> bool:
-    """True if tool must not run until human confirms (HITL)."""
-    spec = TOOL_SPECS.get((name or "").strip()) or {}
-    return bool(spec.get("requires_confirmation"))
+# --- Phase D hardened catalog helpers ---
+
+# Risk: low | medium | high | critical — critical/high always HITL
+_TOOL_RISK: dict[str, str] = {
+    "repo_inspect": "low",
+    "repo_understand": "low",
+    "host_status": "low",
+    "git_pull": "medium",
+    "clone_repo": "medium",
+    "generate_bot": "medium",
+    "refine_bot": "medium",
+    "create_repo": "high",
+    "git_push": "high",
+    "repo_modify": "high",
+    "host_start": "critical",
+    "host_stop": "critical",
+}
+
+_REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
+    "create_repo": ("name", "token"),
+    "clone_repo": ("url",),
+    "git_push": (),  # path optional if active repo
+    "host_start": (),
+    "host_stop": (),
+    "repo_modify": (),
+    "generate_bot": ("spec_request",),
+}
+
+# Secrets never stored in pending snapshots
+_SECRET_PARAM_KEYS = frozenset({
+    "token", "pat", "password", "secret", "api_key", "apikey",
+    "telegram_bot_token", "bot_token", "authorization",
+})
 
 
 def get_tool_spec(name: str) -> dict[str, Any] | None:
-    return TOOL_SPECS.get((name or "").strip())
+    spec = TOOL_SPECS.get((name or "").strip())
+    return dict(spec) if spec else None
+
+
+def tool_risk_level(name: str) -> str:
+    n = (name or "").strip()
+    if n in _TOOL_RISK:
+        return _TOOL_RISK[n]
+    spec = TOOL_SPECS.get(n) or {}
+    if spec.get("requires_confirmation"):
+        return "high"
+    return "medium" if n in TOOL_SPECS else "unknown"
+
+
+def tool_requires_confirmation(name: str) -> bool:
+    """Fail-closed: high/critical risk always requires HITL; also honor catalog flag."""
+    n = (name or "").strip()
+    risk = tool_risk_level(n)
+    if risk in {"high", "critical"}:
+        return True
+    spec = TOOL_SPECS.get(n) or {}
+    return bool(spec.get("requires_confirmation"))
+
+
+def tool_required_params(name: str) -> tuple[str, ...]:
+    return _REQUIRED_PARAMS.get((name or "").strip(), ())
+
+
+def validate_tool_params(name: str, params: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    """Validate required params present (non-empty)."""
+    params = dict(params or {})
+    missing = []
+    for key in tool_required_params(name):
+        val = params.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            missing.append(key)
+    # Unknown tool
+    if (name or "").strip() not in TOOL_SPECS and (name or "").strip() not in _TOOL_RISK:
+        return False, ["unknown_tool"]
+    return (len(missing) == 0, missing)
+
+
+def redact_secrets(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Return params copy with secret values replaced by redacted markers."""
+    out: dict[str, Any] = {}
+    for k, v in dict(params or {}).items():
+        lk = str(k).lower()
+        if lk in _SECRET_PARAM_KEYS or any(s in lk for s in ("token", "secret", "password", "key")):
+            if v:
+                out[k] = "***REDACTED***"
+            else:
+                out[k] = v
+        else:
+            out[k] = v
+    return out

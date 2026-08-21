@@ -314,13 +314,16 @@ def resume_after_confirm(
     action_id: str,
     *,
     user_id: int = 0,
+    confirm_token: str = "",
     work_dir: str | Path | None = None,
     board: BlackboardStore | None = None,
 ) -> AgentState:
-    """Confirm HITL action then continue orchestration (tool exec or generate)."""
+    """Confirm HITL action (action_id + token) then continue orchestration."""
     from .hitl import confirm_action
     board = board or get_blackboard()
-    ok, state, reason = confirm_action(state_id, action_id, user_id=user_id, board=board)
+    ok, state, reason = confirm_action(
+        state_id, action_id, user_id=user_id, confirm_token=confirm_token, board=board,
+    )
     if not ok or state is None:
         if state is None:
             state = AgentState(status=AgentStatus.FAILED.value)

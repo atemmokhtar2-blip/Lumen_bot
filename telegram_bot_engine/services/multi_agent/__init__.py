@@ -31,7 +31,7 @@ from .context_views import router_view, architect_view, builder_view, critic_vie
 from .architect_backends import SpecBackend, GeminiSpecBackend, BridgeSpecBackend, DeterministicSpecBackend, produce_strict_spec
 from .gates import architect_gate, filter_features_to_catalog, apply_catalog_filter_to_state
 from .repair import RepairDirective, build_repair_directive, apply_deterministic_repair
-from .hitl import PendingAction, request_confirmation, confirm_action, reject_action, parse_confirmation_message, tool_requires_confirmation
+from .hitl import PendingAction, request_confirmation, confirm_action, reject_action, parse_confirmation_message, tool_requires_confirmation, consume_execute_grant, audit_log, tool_risk
 from .tools import execute_tool_gated, list_tools, select_tool
 
 __all__ = [
@@ -81,5 +81,6 @@ __all__ = [
     "apply_deterministic_repair",
     "PendingAction", "request_confirmation", "confirm_action", "reject_action",
     "parse_confirmation_message", "tool_requires_confirmation",
+    "consume_execute_grant", "audit_log", "tool_risk",
     "execute_tool_gated", "list_tools", "select_tool",
 ]
