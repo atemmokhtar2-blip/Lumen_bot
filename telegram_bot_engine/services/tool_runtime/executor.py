@@ -49,6 +49,12 @@ def execute_tool(
     try:
         if name == "clone_repo":
             return _tool_clone_repo(params, user_id=user_id)
+        if name == "create_repo":
+            return _tool_create_repo(params, user_id=user_id)
+        if name == "git_push":
+            return _tool_git_push(params, user_id=user_id, user_data=user_data)
+        if name == "git_pull":
+            return _tool_git_pull(params, user_id=user_id, user_data=user_data)
         if name == "repo_inspect":
             return _tool_repo_inspect(params, user_data=user_data or {})
         if name == "repo_understand":

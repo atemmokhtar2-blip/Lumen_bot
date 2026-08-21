@@ -74,6 +74,8 @@ class SessionStore:
                 "pending_deploy",
                 "pending_host",
                 "pending_clone_auth",
+                "pending_create_repo",
+                "pending_git_push",
                 "active_repo",
                 "chat_history",
                 "last_bot_request",

@@ -10,6 +10,8 @@ from .report_data import (
 
 __all__ = [
     "smart_clone", "looks_like_clone_request", "extract_repo_url", "extract_token", "looks_like_git_token", "CloneResult",
+    "GitOpResult", "detect_git_intent", "looks_like_git_request", "extract_repo_name",
+    "create_github_repo", "git_push", "git_pull", "git_status", "run_git_intent",
     
     "GitOperationsEngine",
     "GitOperationsReport",
@@ -33,3 +35,14 @@ __all__ = [
 ]
 
 from .smart_clone import smart_clone, looks_like_clone_request, extract_repo_url, extract_token, looks_like_git_token, CloneResult
+from .smart_git import (
+    GitOpResult,
+    detect_git_intent,
+    looks_like_git_request,
+    extract_repo_name,
+    create_github_repo,
+    git_push,
+    git_pull,
+    git_status,
+    run_git_intent,
+)

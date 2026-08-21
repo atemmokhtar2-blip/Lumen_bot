@@ -113,6 +113,48 @@ _BUILTIN: list[Capability] = [
         priority=75,
     ),
     Capability(
+        id="create_repo",
+        title_ar="إنشاء مستودع",
+        description_ar="إنشاء مستودع GitHub جديد بالتوكن",
+        phrases=(
+            "أنشئ مستودع", "انشئ مستودع", "إنشاء مستودع", "اعمل مستودع",
+            "مستودع جديد", "ريبو جديد", "create repo", "new repo",
+            "أنشئ ريبو", "انشئ ريبو",
+        ),
+        patterns=(
+            r"(?:أن?شئ|اعمل|إنشاء).*مستودع",
+            r"(?:أن?شئ|اعمل).*ريبو",
+            r"create\s+repo", r"new\s+repo",
+            r"مستودع\s*جديد",
+        ),
+        boost_words=("توكن", "token", "ghp_", "github", "خاص", "private"),
+        priority=92,
+    ),
+    Capability(
+        id="git_push",
+        title_ar="دفع للمستودع",
+        description_ar="git push للتغييرات على المستودع النشط",
+        phrases=(
+            "اعمل بوش", "بوش", "ادفع", "ادفع للمستودع", "git push", "push",
+            "ارفع التعديلات", "ادفع التغييرات",
+        ),
+        patterns=(r"\bpush\b", r"بوش", r"ادفع", r"git\s+push"),
+        boost_words=("توكن", "token", "ghp_", "origin"),
+        priority=88,
+    ),
+    Capability(
+        id="git_pull",
+        title_ar="تحديث المستودع",
+        description_ar="سحب آخر نسخة git pull",
+        phrases=(
+            "هات آخر نسخة", "هات اخر نسخه", "اسحب آخر نسخة", "حدّث المستودع",
+            "حدث المستودع", "git pull", "pull", "آخر النسخة من المستودع",
+        ),
+        patterns=(r"git\s+pull", r"\bpull\b", r"آخر\s*نسخ", r"اخر\s*نسخ", r"حد[ّ]?ث\s*المستودع"),
+        boost_words=("توكن", "token", "مستودع", "repo"),
+        priority=87,
+    ),
+    Capability(
         id="clone_repo",
         title_ar="سحب مستودع",
         description_ar="سحب مستودع Git وفهمه",

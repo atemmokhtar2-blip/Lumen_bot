@@ -5,6 +5,33 @@ from typing import Any
 
 # Machine contract for the chat model (never executed by the model itself).
 TOOL_SPECS: dict[str, dict[str, Any]] = {
+    "create_repo": {
+        "description": "إنشاء مستودع جديد على GitHub باستخدام توكن المستخدم (PAT)",
+        "params": {
+            "name": "اسم المستودع",
+            "token": "توكن GitHub PAT بصلاحية repo",
+            "private": "اختياري — true/false (افتراضي true)",
+            "description": "اختياري — وصف المستودع",
+        },
+        "requires_confirmation": False,
+    },
+    "git_push": {
+        "description": "دفع التغييرات (commit+push) للمستودع النشط أو المسار المحدد",
+        "params": {
+            "path": "اختياري — مسار المستودع المحلي",
+            "token": "اختياري — PAT إن كان المستودع خاصاً",
+            "message": "اختياري — رسالة الكوميت",
+        },
+        "requires_confirmation": False,
+    },
+    "git_pull": {
+        "description": "سحب آخر نسخة من المستودع النشط (git pull)",
+        "params": {
+            "path": "اختياري — مسار المستودع",
+            "token": "اختياري — PAT للمستودعات الخاصة",
+        },
+        "requires_confirmation": False,
+    },
     "clone_repo": {
         "description": "سحب مستودع Git (GitHub/GitLab/Bitbucket) إلى مساحة المستخدم",
         "params": {

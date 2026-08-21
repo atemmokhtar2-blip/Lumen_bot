@@ -989,7 +989,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         return
             # Tool path: Groq only selects; engines execute
             if isinstance(_action, dict) and _action_name in {
-                "clone_repo", "repo_inspect", "repo_understand", "repo_modify",
+                "clone_repo", "create_repo", "git_push", "git_pull", "repo_inspect", "repo_understand", "repo_modify",
             }:
                 await _clear_thinking()
                 try:
@@ -1003,13 +1003,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         user_id=int(user.id) if user else 0,
                         user_data=dict(context.user_data or {}),
                     )
-                    if _tr.ok and _action_name == "clone_repo" and _tr.data.get("path"):
+                    if _tr.ok and _action_name in {"clone_repo", "create_repo"} and _tr.data.get("path"):
                         if context.user_data is not None:
                             context.user_data["active_repo"] = {
                                 "path": _tr.data["path"],
                                 "url": _tr.data.get("url") or "",
                             }
                             context.user_data["last_project_path"] = _tr.data["path"]
+                    if (not _tr.ok) and _tr.data.get("needs_auth") and context.user_data is not None:
+                        if _action_name == "create_repo":
+                            context.user_data["pending_create_repo"] = {
+                                "name": (_params.get("name") or _tr.data.get("pending_name") or ""),
+                            }
+                        elif _action_name == "git_push":
+                            context.user_data["pending_git_push"] = {
+                                "path": _params.get("path") or _tr.data.get("path") or "",
+                            }
                     if (
                         _tr.ok
                         and _action_name == "repo_modify"
@@ -1474,7 +1483,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ------------------------------------------------------------------
     _rt = chat_route(request)
     _hard_caps = {
-        "clone_repo", "host_start", "host_stop", "host_status", "host_diagnose",
+        "clone_repo", "create_repo", "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose",
         "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
         "repo_develop", "live_run", "generate_bot",
     }

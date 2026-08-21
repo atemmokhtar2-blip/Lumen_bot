@@ -105,6 +105,67 @@ async def try_handle_token(
         return True
 
 
+    # Create repo: user sends GitHub PAT after being asked
+    pending_create = (context.user_data or {}).get("pending_create_repo")
+    if pending_create:
+        from telegram_bot_engine.engines.generators.git_operations.smart_clone import extract_token
+        from telegram_bot_engine.engines.generators.git_operations.smart_git import run_git_intent
+        git_tok = extract_token(request)
+        if git_tok:
+            name = str(pending_create.get("name") or "").strip()
+            status = await message.reply_text(f"🔑 جاري إنشاء المستودع `{name}`...")
+            await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+            uid = int(user.id) if user else 0
+            try:
+                from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+                dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="newrepo")
+            except Exception:
+                dest = Path(OUTPUT_DIR) / "clones"
+                dest.mkdir(parents=True, exist_ok=True)
+
+            def _create():
+                return run_git_intent(
+                    f"create repo {name}",
+                    dest_dir=dest,
+                    token=git_tok,
+                    repo_name=name,
+                )
+
+            try:
+                result = await asyncio.to_thread(_create)
+            except Exception as e:
+                await status.edit_text(f"❌ فشل الإنشاء: {sanitize_error(str(e))}")
+                return True
+            if result.ok:
+                context.user_data.pop("pending_create_repo", None)
+                if result.path:
+                    context.user_data["active_repo"] = {"path": result.path, "url": result.url or ""}
+                    context.user_data["last_project_path"] = result.path
+                await status.edit_text(
+                    f"✅ {result.message}\n• الرابط: {result.url or ''}\n"
+                    + (f"• المسار: `{result.path}`" if result.path else "")
+                )
+            else:
+                await status.edit_text(f"❌ {result.message}")
+            return True
+
+    # Push: PAT after auth failure
+    pending_push = (context.user_data or {}).get("pending_git_push")
+    if pending_push:
+        from telegram_bot_engine.engines.generators.git_operations.smart_clone import extract_token
+        from telegram_bot_engine.engines.generators.git_operations.smart_git import git_push
+        git_tok = extract_token(request)
+        if git_tok:
+            path = str(pending_push.get("path") or "").strip()
+            status = await message.reply_text("🔑 جاري الدفع بالتوكن...")
+            result = await asyncio.to_thread(lambda: git_push(path, token=git_tok))
+            if result.ok:
+                context.user_data.pop("pending_git_push", None)
+                await status.edit_text(f"✅ {result.message}")
+            else:
+                await status.edit_text(f"❌ {sanitize_error(result.message)}")
+            return True
+
     # Private repo: user sends GitHub PAT after auth failure
     pending_clone = (context.user_data or {}).get("pending_clone_auth")
     if pending_clone:
