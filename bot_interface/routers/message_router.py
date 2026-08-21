@@ -326,8 +326,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 from .hosting_router import try_handle_hosting
                 if await try_handle_hosting(update, context, original, user, message):
                     return
-            elif action == "repo_understand":
-                await message.reply_text("المستودع النشط موجود، لكن تنفيذ التحليل التفصيلي يحتاج مسار تطوير مخصص. اكتب: حلل المستودع النشط.")
+            elif action in {"repo_understand", "repo_inspect", "repo_modify"}:
+                from telegram_bot_engine.services.tool_runtime import execute_tool
+                _tr = execute_tool(
+                    action,
+                    {},
+                    user_id=int(user.id) if user else 0,
+                    user_data=dict(context.user_data or {}),
+                )
+                await message.reply_text((_tr.message or "تم")[:4000])
                 return
             else:
                 # Unknown pending action + confirm → try bot generation from history
@@ -980,9 +987,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     from .hosting_router import try_handle_hosting
                     if await try_handle_hosting(update, context, request, user, message):
                         return
-            await _clear_thinking()
-            await message.reply_text(_answer)
-            return
+            # Tool path: Groq only selects; engines execute
+            if isinstance(_action, dict) and _action_name in {
+                "clone_repo", "repo_inspect", "repo_understand", "repo_modify",
+            }:
+                await _clear_thinking()
+                try:
+                    from telegram_bot_engine.services.tool_runtime import execute_tool
+                    _params = dict(_action.get("params") or {})
+                    if _action_name == "clone_repo" and not _params.get("url"):
+                        _params["text"] = request
+                    _tr = execute_tool(
+                        _action_name,
+                        _params,
+                        user_id=int(user.id) if user else 0,
+                        user_data=dict(context.user_data or {}),
+                    )
+                    if _tr.ok and _action_name == "clone_repo" and _tr.data.get("path"):
+                        if context.user_data is not None:
+                            context.user_data["active_repo"] = {
+                                "path": _tr.data["path"],
+                                "url": _tr.data.get("url") or "",
+                            }
+                            context.user_data["last_project_path"] = _tr.data["path"]
+                    if (
+                        _tr.ok
+                        and _action_name == "repo_modify"
+                        and _tr.data.get("defer_refine")
+                        and context.user_data is not None
+                    ):
+                        change = str(_tr.data.get("change") or request)
+                        context.user_data["last_project_path"] = str(
+                            _tr.data.get("path") or context.user_data.get("last_project_path") or ""
+                        )
+                        context.user_data["force_generate_once"] = True
+                        context.user_data["skip_clarify_once"] = True
+                        context.user_data["translated_spec_request"] = (
+                            f"تعديل البوت/المشروع في {_tr.data.get('path')}: {change}"
+                        )
+                        # continue into refine/generation pipeline
+                        request = context.user_data["translated_spec_request"]
+                        _force_generate = True
+                        _translated_generation_request = request
+                        await message.reply_text(
+                            (
+                                ((_answer + "\n\n") if _answer else "")
+                                + (_tr.message or "جاري التعديل عبر المحرك…")
+                            )[:4000]
+                        )
+                        # do not return — fall through to generation
+                    else:
+                        msg = (_answer + "\n\n" if _answer else "") + (_tr.message or "")
+                        await message.reply_text(msg[:4000])
+                        return
+                    if not (_translated_generation_request and _force_generate):
+                        return
+                except Exception:
+                    logger.exception("tool execution failed")
+            if not (_translated_generation_request and _force_generate):
+                await _clear_thinking()
+                await message.reply_text(_answer)
+                return
 
         if _force_generate and _answer and not _translated_generation_request:
             # Still show the model message, then continue into generation below.

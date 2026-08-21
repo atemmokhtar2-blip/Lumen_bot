@@ -1,0 +1,314 @@
+"""Execute tools on the server. Groq never runs these — only requests them."""
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolResult:
+    ok: bool
+    tool: str
+    message: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    needs_auth: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _output_dir() -> Path:
+    try:
+        from b2b_platform.paths import default_output_dir
+
+        return Path(default_output_dir())
+    except Exception:
+        root = Path(os.getenv("OUTPUT_DIR") or (Path.home() / ".capability_maestro"))
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+
+def execute_tool(
+    name: str,
+    params: dict[str, Any] | None = None,
+    *,
+    user_id: int = 0,
+    user_data: dict[str, Any] | None = None,
+) -> ToolResult:
+    """Dispatch a tool by name. Unknown tools fail closed."""
+    params = dict(params or {})
+    name = (name or "").strip()
+    if not name:
+        return ToolResult(ok=False, tool="", message="اسم الأداة فارغ")
+
+    try:
+        if name == "clone_repo":
+            return _tool_clone_repo(params, user_id=user_id)
+        if name == "repo_inspect":
+            return _tool_repo_inspect(params, user_data=user_data or {})
+        if name == "repo_understand":
+            return _tool_repo_understand(params, user_data=user_data or {})
+        if name == "repo_modify":
+            return _tool_repo_modify(params, user_data=user_data or {})
+        if name in {"generate_bot", "refine_bot", "host_start", "host_stop", "host_status"}:
+            # Handled by message_router generation/hosting paths — signal only
+            return ToolResult(
+                ok=True,
+                tool=name,
+                message=f"tool:{name}:defer_to_router",
+                data={"defer": True, "params": params},
+            )
+        return ToolResult(ok=False, tool=name, message=f"أداة غير معروفة: {name}")
+    except Exception as exc:
+        logger.exception("tool %s failed", name)
+        return ToolResult(ok=False, tool=name, message=f"{type(exc).__name__}: {exc}")
+
+
+def _load_smart_clone():
+    """Load smart_clone without importing telegram_bot_engine.engines package (circular)."""
+    import importlib.util
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "engines"
+        / "generators"
+        / "git_operations"
+        / "smart_clone.py"
+    )
+    spec = importlib.util.spec_from_file_location("cm_smart_clone", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"smart_clone not found at {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
+    _sc = _load_smart_clone()
+    extract_repo_url = _sc.extract_repo_url
+    smart_clone = _sc.smart_clone
+
+    text = str(params.get("text") or params.get("url") or "")
+    url = str(params.get("url") or "").strip() or (extract_repo_url(text) or "")
+    token = str(params.get("token") or "").strip() or None
+    branch = str(params.get("branch") or "").strip() or None
+    try:
+        depth = int(params.get("depth") if params.get("depth") is not None else 1)
+    except (TypeError, ValueError):
+        depth = 1
+
+    if not url and not text:
+        return ToolResult(ok=False, tool="clone_repo", message="مطلوب رابط مستودع")
+
+    dest: Path
+    try:
+        from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+
+        dest = get_user_sandbox(int(user_id), _output_dir()).new_clone_dir(label="clone")
+    except Exception:
+        dest = _output_dir() / "clones" / str(user_id or "anon")
+        dest.mkdir(parents=True, exist_ok=True)
+
+    # Prefer strengthened smart_clone signature
+    try:
+        result = smart_clone(
+            text or url,
+            dest_dir=dest,
+            token=token,
+            depth=depth if depth > 0 else 1,
+            url_override=url or None,
+            branch=branch,
+        )
+    except TypeError:
+        # older signature without branch
+        result = smart_clone(
+            text or url,
+            dest_dir=dest,
+            token=token,
+            depth=depth if depth > 0 else 1,
+            url_override=url or None,
+        )
+
+    if not result.ok:
+        return ToolResult(
+            ok=False,
+            tool="clone_repo",
+            message=result.message or "فشل السحب",
+            data={"url": result.url, "stderr": (result.stderr or "")[:400]},
+            needs_auth=bool(result.needs_auth),
+        )
+    return ToolResult(
+        ok=True,
+        tool="clone_repo",
+        message=result.message or "تم السحب",
+        data={"path": result.path, "url": result.url},
+    )
+
+
+def _tool_repo_inspect(
+    params: dict[str, Any],
+    *,
+    user_data: dict[str, Any],
+) -> ToolResult:
+    from telegram_bot_engine.services.bot_inspector import inspect_bot_project
+    from telegram_bot_engine.services.bot_inspector.service import resolve_user_bot_path
+
+    path = str(params.get("path") or "").strip()
+    if not path:
+        path = resolve_user_bot_path(user_data=user_data)
+    if not path:
+        # active_repo from continuity
+        active = user_data.get("active_repo")
+        if isinstance(active, dict):
+            path = str(active.get("path") or "")
+    if not path or not Path(path).is_dir():
+        return ToolResult(ok=False, tool="repo_inspect", message="لا يوجد مشروع/مستودع نشط للفحص")
+    insp = inspect_bot_project(path)
+    return ToolResult(
+        ok=True,
+        tool="repo_inspect",
+        message=insp.chat_brief(),
+        data=insp.to_dict(),
+    )
+
+
+def _tool_repo_understand(
+    params: dict[str, Any],
+    *,
+    user_data: dict[str, Any],
+) -> ToolResult:
+    """Deep structural understanding — deterministic scanner, not the LLM."""
+    path = str(params.get("path") or "").strip()
+    if not path:
+        active = user_data.get("active_repo")
+        if isinstance(active, dict):
+            path = str(active.get("path") or "")
+        if not path:
+            path = str(user_data.get("last_project_path") or "")
+    root = Path(path) if path else None
+    if not root or not root.is_dir():
+        return ToolResult(ok=False, tool="repo_understand", message="لا يوجد مستودع نشط")
+
+    data: dict[str, Any] = {"path": str(root)}
+    brief_parts: list[str] = [f"المسار: {root}"]
+
+    # Prefer production deep scanner when available
+    try:
+        from telegram_bot_engine.services.repo_understanding.scanner import scan_repo
+
+        contract = scan_repo(root)
+        if hasattr(contract, "to_dict"):
+            data["contract"] = contract.to_dict()
+        else:
+            data["contract"] = {
+                "summary": str(getattr(contract, "summary", "") or "")[:500],
+                "framework": str(getattr(contract, "framework", "") or ""),
+                "entrypoints": [
+                    str(x) for x in (getattr(contract, "entry_points", None) or [])[:12]
+                ],
+            }
+        cmds = getattr(contract, "commands", None) or getattr(contract, "detected_commands", None) or []
+        cmd_names = []
+        for c in list(cmds)[:30]:
+            if hasattr(c, "name"):
+                cmd_names.append(str(c.name))
+            else:
+                cmd_names.append(str(c))
+        data["commands"] = cmd_names
+        if cmd_names:
+            brief_parts.append("أوامر مكتشفة: " + ", ".join("/" + c for c in cmd_names[:20]))
+        fw = data.get("contract", {}).get("framework") or getattr(contract, "framework", "")
+        if fw:
+            brief_parts.append(f"إطار العمل: {fw}")
+    except Exception as exc:
+        logger.warning("deep scan unavailable, using lightweight listing: %s", exc)
+        files: list[str] = []
+        for pth in sorted(root.rglob("*")):
+            if pth.is_file() and ".git" not in pth.parts and "__pycache__" not in pth.parts:
+                rel = pth.relative_to(root).as_posix()
+                if rel.count("/") <= 2:
+                    files.append(rel)
+            if len(files) >= 60:
+                break
+        data["files"] = files
+        brief_parts.append("ملفات: " + ", ".join(files[:25]))
+        readme = ""
+        for name in ("README.md", "README.rst", "README"):
+            rp = root / name
+            if rp.is_file():
+                try:
+                    readme = rp.read_text(encoding="utf-8", errors="replace")[:1500]
+                except Exception:
+                    readme = ""
+                break
+        if readme:
+            data["readme_preview"] = readme[:800]
+            brief_parts.append("README: " + readme[:240].replace("\n", " "))
+
+    # Always attach top-level listing for chat
+    try:
+        top = sorted(
+            p.name for p in root.iterdir()
+            if p.name not in {".git", "__pycache__", ".venv", "node_modules"}
+        )[:40]
+        data["top_level"] = top
+        brief_parts.append("المستوى الأعلى: " + ", ".join(top[:20]))
+    except Exception:
+        pass
+
+    return ToolResult(
+        ok=True,
+        tool="repo_understand",
+        message="\n".join(brief_parts)[:3500],
+        data=data,
+    )
+
+
+
+
+def _tool_repo_modify(
+    params: dict[str, Any],
+    *,
+    user_data: dict[str, Any],
+) -> ToolResult:
+    """Prepare a refine request against the active repo/bot — engine does the work."""
+    path = str(params.get("path") or "").strip()
+    if not path:
+        active = user_data.get("active_repo")
+        if isinstance(active, dict):
+            path = str(active.get("path") or "")
+        if not path:
+            path = str(user_data.get("last_project_path") or "")
+    change = str(params.get("change") or params.get("spec_request") or params.get("text") or "").strip()
+    if not path or not Path(path).is_dir():
+        return ToolResult(ok=False, tool="repo_modify", message="لا يوجد مستودع/بوت نشط للتعديل")
+    if not change:
+        return ToolResult(
+            ok=False,
+            tool="repo_modify",
+            message="صف التعديل المطلوب (مثال: أضف أمر /faq واحذف /cart)",
+        )
+    # Structural snapshot so router can merge into refine_bot
+    try:
+        from telegram_bot_engine.services.bot_inspector import inspect_bot_project
+        insp = inspect_bot_project(path)
+        snapshot = insp.to_dict()
+        brief = insp.chat_brief()
+    except Exception:
+        snapshot = {"path": path}
+        brief = f"المسار: {path}"
+    return ToolResult(
+        ok=True,
+        tool="repo_modify",
+        message=f"جاهز للتعديل عبر المحرك.\n{brief}\nالتغيير: {change[:500]}",
+        data={
+            "path": path,
+            "change": change,
+            "snapshot": snapshot,
+            "defer_refine": True,
+        },
+    )

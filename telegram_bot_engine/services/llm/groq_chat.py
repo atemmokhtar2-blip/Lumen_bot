@@ -27,6 +27,7 @@ _ALLOWED_ACTIONS = {
     "repo_understand",
     "generate_bot",
     "refine_bot",
+    "repo_inspect",
 }
 
 # Fast chat models first
@@ -89,11 +90,13 @@ def _product_brief() -> str:
         "أنت Maestro (ميسترو): منصة توليد بوتات تيليجرام احترافية.\n"
         "ماذا تفعل: تفهم طلب المستخدم بالعربي/الإنجليزي، تترجم المواصفات لقدرات حقيقية "
         "(spec_core)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته.\n"
-        "ماذا تقدر تعمل الآن: شرح القدرات، توضيح الخطط والاستخدام من SERVER_CONTEXT فقط، "
-        "المساعدة في صياغة مواصفات البوت، إطلاق التوليد عبر action=generate_bot، "
-        "تحليل بوت المستخدم الحالي من active_bot / active_bot_brief (أوامر، نقاط ضعف)، "
-        "واقتراح تحسينات؛ عند طلب تعديل البوت استخدم action=refine_bot مع translation "
-        "تصف التغييرات (إضافة/حذف أوامر وميزات) دون اختراع ملفات غير موجودة.\n"
+        "دورك: تفهم نية المستخدم وتختار أداة من قائمة الأدوات فقط. "
+        "لا تسحب مستودعات ولا تعدّل ملفات بنفسك — التنفيذ دائمًا على محركات Maestro. "
+        "الأدوات: clone_repo, repo_inspect, repo_understand, generate_bot, refine_bot, "
+        "host_status, host_start, host_stop. "
+        "عند الحاجة املأ action.name باسم الأداة وaction.params بالوسائط (مثل url). "
+        "لتحليل بوت موجود استخدم active_bot_brief أو action=repo_inspect. "
+        "للتعديل action=refine_bot مع translation.spec_request.\n"
         "حالة المنتج: أنت قيد التطوير المستمر وتتطور باستمرار — كن صادقًا وواضحًا عند السؤال.\n"
         "المطور المعروف الوحيد هو حاتم. لا تخترع فريقًا أو شركة.\n"
         "الخطط والحدود والاستخدام: فقط من SERVER_CONTEXT (plan، usage، quotas). "
@@ -112,7 +115,13 @@ def _build_system(context: dict[str, Any]) -> str:
     context = dict(context or {})
     context["spec_core_capabilities"] = caps
     facts = json.dumps(context, ensure_ascii=False, sort_keys=True)[:12000]
+    try:
+        from telegram_bot_engine.services.tool_runtime.registry import tool_catalog_for_prompt
+        tool_cat = tool_catalog_for_prompt()
+    except Exception:
+        tool_cat = "clone_repo, repo_inspect, generate_bot, refine_bot"
     return (
+
         _product_brief()
         + "\nقواعد الرد:\n"
         "1) أجب بالعربية الطبيعية (افهم العامية المصرية والإنجليزي التقني).\n"
@@ -120,7 +129,7 @@ def _build_system(context: dict[str, Any]) -> str:
         "3) لا تنفّذ إجراءات بنفسك. للإجراءات الحساسة املأ action مع requires_confirmation=true.\n"
         "4) أعد JSON فقط (بدون markdown) بالمفاتيح: answer, action, translation.\n"
         "5) action.name واحد من: \"\" | generate_bot | clone_repo | host_start | host_stop | "
-        "host_status | repo_understand | refine_bot\n"
+        "host_status | repo_understand | repo_inspect | repo_modify | refine_bot\n"
         "6) إذا طلب المستخدم بناء بوت واكتملت المواصفات أو قال ابدأ/نفّذ/ولّد: "
         "action.name=generate_bot و translation.clarification_needed=false و "
         "translation.spec_request عقد واضح يحتوي بوت/Telegram bot و features_requested من القائمة فقط.\n"
@@ -131,6 +140,7 @@ def _build_system(context: dict[str, Any]) -> str:
         "قد يتبدل مزود/مفتاح الشات بين الرسائل ولا تنسَ ما سبق.\n"
         f"\nSERVER_CONTEXT:\n{facts}\n"
         f"\nSPEC_CORE_CAPABILITIES:\n{json.dumps(caps, ensure_ascii=False)}\n"
+        f"\nAVAILABLE_TOOLS:\n{tool_cat}\n"
     )
 
 
@@ -166,10 +176,16 @@ def _normalize(result: dict[str, Any], *, model: str) -> dict[str, Any]:
     if action_name not in _ALLOWED_ACTIONS:
         action = {"name": "", "requires_confirmation": False}
     else:
-        action = {
+        cleaned = {
             "name": action_name,
             "requires_confirmation": bool(action.get("requires_confirmation")),
         }
+        if isinstance(action.get("params"), dict):
+            cleaned["params"] = {
+                str(k)[:64]: (str(v)[:2000] if not isinstance(v, (int, float, bool)) else v)
+                for k, v in list(action["params"].items())[:20]
+            }
+        action = cleaned
 
     translation = result.get("translation")
     if translation is not None and not isinstance(translation, dict):

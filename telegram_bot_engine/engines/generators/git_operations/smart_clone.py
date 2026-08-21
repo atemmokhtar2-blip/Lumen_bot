@@ -144,6 +144,8 @@ def smart_clone(
     token: Optional[str] = None,
     depth: Optional[int] = 1,
     url_override: Optional[str] = None,
+    branch: Optional[str] = None,
+    timeout_sec: Optional[int] = None,
 ) -> CloneResult:
     from telegram_bot_engine.services.secure_exec import (
         clean_child_environ,
@@ -163,6 +165,16 @@ def smart_clone(
     tok = token or extract_token(text)
     # Inject token only into a validated HTTPS URL (never from user-supplied userinfo)
     auth_url = _inject_token(url, tok)
+    try:
+        tout = int(timeout_sec) if timeout_sec is not None else int(
+            __import__("os").environ.get("GIT_CLONE_TIMEOUT_SEC") or "240"
+        )
+    except ValueError:
+        tout = 240
+    tout = max(60, min(tout, 600))
+    br = (branch or "").strip() or None
+    if br and (not br.replace("_", "").replace("-", "").replace(".", "").isalnum() or len(br) > 200):
+        return CloneResult(ok=False, message="اسم الفرع غير صالح")
 
     dest = Path(dest_dir).resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -201,12 +213,14 @@ def smart_clone(
         "--no-tags",
         "--filter=blob:none",  # partial clone for speed when supported
     ]
+    if br:
+        cmd += ["--branch", br]
     if depth and depth > 0:
         cmd += ["--depth", str(int(depth))]
     cmd += [auth_url, str(target)]
 
     try:
-        proc = run_git(cmd, timeout=180)
+        proc = run_git(cmd, timeout=tout)
     except subprocess.TimeoutExpired:
         return CloneResult(ok=False, url=url, message="انتهت مهلة الـ clone")
     except Exception as e:
@@ -219,10 +233,13 @@ def smart_clone(
     # retry without partial filter if unsupported
     if proc.returncode != 0 and "filter" in err.lower() and target.exists() is False:
         cmd2 = ["git", "clone", "--single-branch", "--no-tags"]
+        if br:
+            cmd2 += ["--branch", br]
         if depth and depth > 0:
             cmd2 += ["--depth", str(depth)]
         cmd2 += [auth_url, str(target)]
-        proc = subprocess.run(cmd2, capture_output=True, text=True, timeout=180, check=False, env=env)
+        env = clean_child_environ()
+        proc = subprocess.run(cmd2, capture_output=True, text=True, timeout=tout, check=False, env=env)
         err = proc.stderr or proc.stdout or ""
         if tok:
             err = err.replace(tok, "***")
@@ -230,10 +247,14 @@ def smart_clone(
     if proc.returncode != 0:
         # Auto-retry once without filter / with full history on ambiguous failures
         if target.exists() is False and "Could not resolve host" not in err:
-            cmd_retry = ["git", "clone", "--single-branch", "--depth", "1", auth_url, str(target)]
+            cmd_retry = ["git", "clone", "--single-branch", "--depth", "1"]
+            if br:
+                cmd_retry += ["--branch", br]
+            cmd_retry += [auth_url, str(target)]
             try:
+                env = clean_child_environ()
                 proc2 = subprocess.run(
-                    cmd_retry, capture_output=True, text=True, timeout=180, check=False, env=env
+                    cmd_retry, capture_output=True, text=True, timeout=tout, check=False, env=env
                 )
                 err2 = proc2.stderr or proc2.stdout or ""
                 if tok:
@@ -271,4 +292,20 @@ def smart_clone(
             )
         return CloneResult(ok=False, url=url, message=_diagnose_clone_error(err, proc.returncode, bool(tok)), stderr=err[:500])
 
-    return CloneResult(ok=True, path=str(target), url=url, message=f"تم سحب المستودع إلى {target}")
+    if not (target / ".git").exists() and not (target / ".git").is_file():
+        return CloneResult(
+            ok=False,
+            url=url,
+            message="اكتمل الأمر لكن مجلد .git غير موجود — السحب غير مكتمل",
+        )
+    # lightweight tree count for operator feedback
+    try:
+        n_files = sum(1 for _ in target.rglob("*") if _.is_file() and ".git" not in _.parts)
+    except Exception:
+        n_files = 0
+    return CloneResult(
+        ok=True,
+        path=str(target),
+        url=url,
+        message=f"تم سحب المستودع إلى {target} ({n_files} ملف)",
+    )
