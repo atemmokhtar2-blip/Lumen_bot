@@ -138,14 +138,26 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
             ok=False,
             tool="clone_repo",
             message=result.message or "فشل السحب",
-            data={"url": result.url, "stderr": (result.stderr or "")[:400]},
+            data={
+                "url": result.url,
+                "stderr": (result.stderr or "")[:400],
+                "strategy": getattr(result, "strategy", ""),
+                "attempts": getattr(result, "attempts", 0),
+            },
             needs_auth=bool(result.needs_auth),
         )
     return ToolResult(
         ok=True,
         tool="clone_repo",
         message=result.message or "تم السحب",
-        data={"path": result.path, "url": result.url},
+        data={
+            "path": result.path,
+            "url": result.url,
+            "strategy": getattr(result, "strategy", ""),
+            "attempts": getattr(result, "attempts", 0),
+            "file_count": getattr(result, "file_count", 0),
+            "meta": getattr(result, "meta", {}) or {},
+        },
     )
 
 
