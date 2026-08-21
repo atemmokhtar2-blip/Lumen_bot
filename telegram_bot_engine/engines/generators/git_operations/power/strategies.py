@@ -136,6 +136,39 @@ def strategy_https_shallow(
     return _finalize(dest, op="clone", strategy="https_shallow_sparse" if sparse_paths else "https_shallow", url=url, attempts=1)
 
 
+
+def strategy_ssh_shallow(
+    url: str, dest: Path, *, branch: Optional[str], depth: int,
+) -> GitEngineResult:
+    """Optional SSH path when agent/keys available (no token embedding)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    parts = [p for p in (parsed.path or "").split("/") if p]
+    if len(parts) < 2 or not host:
+        return GitEngineResult.fail("clone", message="ssh_url_unmapped", strategy_used="ssh_shallow", url=url)
+    owner, repo = parts[0], parts[1].removesuffix(".git")
+    ssh_url = f"git@{host}:{owner}/{repo}.git"
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    argv = ["git", "clone", "--single-branch"]
+    if depth and depth > 0:
+        argv.append(f"--depth={int(depth)}")
+    if branch:
+        argv += ["--branch", branch]
+    argv += ["--", ssh_url, str(dest)]
+    code, err = _run_git(argv)
+    if code != 0:
+        return GitEngineResult.fail(
+            "clone",
+            message="ssh_shallow_failed",
+            redacted_error=err[:300],
+            strategy_used="ssh_shallow",
+            url=url,
+        )
+    return _finalize(dest, op="clone", strategy="ssh_shallow", url=url, attempts=1)
+
+
 def strategy_zip_archive(url: str, dest: Path, *, token: Optional[str], branch: Optional[str]) -> GitEngineResult:
     """Last-resort: download GitHub/GitLab zipball and extract (no full git history)."""
     from ..smart_clone import normalize_and_validate_url
@@ -221,6 +254,11 @@ def clone_multi_strategy(
             url, dest, token=token, branch=branch, depth=depth, sparse_paths=sparse_paths
         ))
     )
+    # SSH only when no token (token path stays HTTPS) and git SSH may work
+    if not token:
+        strategies.append(
+            ("ssh_shallow", lambda: strategy_ssh_shallow(url, dest, branch=branch, depth=depth))
+        )
     strategies.append(("zip_archive", lambda: strategy_zip_archive(url, dest, token=token, branch=branch)))
 
     last = GitEngineResult.fail("clone", message="no_strategy", url=url)

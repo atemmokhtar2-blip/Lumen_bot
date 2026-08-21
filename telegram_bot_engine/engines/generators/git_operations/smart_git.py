@@ -192,81 +192,19 @@ def create_github_repo(
     description: str = "",
     auto_init: bool = True,
 ) -> GitOpResult:
-    """Create a new GitHub repository under the authenticated user."""
-    name = (name or "").strip()
-    if not re.match(r"^[A-Za-z0-9_.-]{1,100}$", name):
-        return GitOpResult(ok=False, op="create_repo", message="اسم المستودع غير صالح")
-    tok = (token or "").strip()
-    if not tok:
-        return GitOpResult(
-            ok=False,
-            op="create_repo",
-            message="مطلوب توكن GitHub (PAT) بصلاحية repo لإنشاء مستودع",
-            needs_auth=True,
-        )
-
-    body = {
-        "name": name,
-        "private": bool(private),
-        "description": (description or "")[:350],
-        "auto_init": bool(auto_init),
-    }
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.github.com/user/repos",
-        data=data,
-        method="POST",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {tok}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-            "User-Agent": "capability-maestro-smart-git",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        needs = exc.code in {401, 403}
-        msg = f"GitHub API {exc.code}"
-        try:
-            detail = json.loads(raw)
-            msg = detail.get("message") or msg
-            if isinstance(detail.get("errors"), list) and detail["errors"]:
-                msg += " — " + str(detail["errors"][0])
-        except Exception:
-            msg = raw[:200] or msg
-        return GitOpResult(
-            ok=False,
-            op="create_repo",
-            message=msg,
-            needs_auth=needs,
-            stderr=_redact(raw, tok)[:400],
-        )
-    except Exception as exc:
-        return GitOpResult(
-            ok=False,
-            op="create_repo",
-            message=f"{type(exc).__name__}: {exc}",
-            needs_auth=False,
-        )
-
-    html_url = str(payload.get("html_url") or "")
-    clone_url = str(payload.get("clone_url") or html_url)
-    full_name = str(payload.get("full_name") or name)
+    """Create a new GitHub repository via PowerGitEngine."""
+    from .power import get_engine
+    eng = get_engine()
+    r = eng.create_github_repo(name, token, private=private, description=description, auto_clone=False)
     return GitOpResult(
-        ok=True,
+        ok=r.ok,
         op="create_repo",
-        url=html_url or clone_url,
-        message=f"تم إنشاء المستودع {full_name}",
-        data={
-            "full_name": full_name,
-            "clone_url": clone_url,
-            "private": bool(payload.get("private")),
-            "default_branch": payload.get("default_branch") or "main",
-        },
+        path=r.path,
+        url=r.url,
+        message=r.message,
+        needs_auth=r.needs_auth,
+        stderr=r.redacted_error,
+        data=dict(r.metadata or {}),
     )
 
 
@@ -278,83 +216,18 @@ def git_push(
     remote: str = "origin",
     branch: Optional[str] = None,
 ) -> GitOpResult:
-    """Stage, commit (if needed), and push to remote."""
-    root = Path(repo_path).expanduser().resolve()
-    if not (root / ".git").exists():
-        return GitOpResult(ok=False, op="push", message="المسار ليس مستودع git")
-
-    # Detect branch
-    code, out, err = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root)
-    br = branch or (out.strip() if code == 0 else "main")
-    if not br or br == "HEAD":
-        br = "main"
-
-    # Ensure remote URL can use token
-    code, remote_url, _ = _run_git(["remote", "get-url", remote], cwd=root)
-    if code != 0 or not remote_url.strip():
-        return GitOpResult(
-            ok=False,
-            op="push",
-            path=str(root),
-            message=f"لا يوجد remote باسم {remote}",
-        )
-    remote_url = remote_url.strip()
-
-    if token:
-        auth_url = _inject_token(remote_url, token)
-        if auth_url and auth_url != remote_url:
-            _run_git(["remote", "set-url", remote, auth_url], cwd=root)
-
-    # Secure atomic stage+commit (secret scan + gitignore) when dirty
-    try:
-        from .power.security import ensure_strict_gitignore
-        from .power.workflow import atomic_commit
-        ensure_strict_gitignore(root)
-        code, status_out, _ = _run_git(["status", "--porcelain"], cwd=root)
-        if status_out.strip():
-            cr = atomic_commit(root, None, message or "update")
-            if not cr.ok and cr.message == "secret_scan_blocked":
-                return GitOpResult(
-                    ok=False,
-                    op="push",
-                    path=str(root),
-                    message="رفض الـ commit: أسرار مكتشفة في الملفات",
-                    stderr=cr.redacted_error,
-                )
-    except Exception:
-        _run_git(["add", "-A"], cwd=root)
-        code, status_out, _ = _run_git(["status", "--porcelain"], cwd=root)
-        if status_out.strip():
-            _run_git(["commit", "-m", (message or "update")[:200]], cwd=root)
-
-    code, out, err = _run_git(["push", "-u", remote, br], cwd=root, token=token, timeout=180)
-    # Restore clean remote without embedded token
-    if token and remote_url:
-        try:
-            clean, _ = normalize_and_validate_url(remote_url)
-            if clean:
-                _run_git(["remote", "set-url", remote, clean], cwd=root)
-        except Exception:
-            pass
-
-    if code == 0:
-        return GitOpResult(
-            ok=True,
-            op="push",
-            path=str(root),
-            url=remote_url,
-            message=f"تم الدفع إلى {remote}/{br}",
-            data={"branch": br},
-        )
-    needs = _is_auth_failure(err, code)
+    """Stage/commit (secret-scanned) and push via PowerGitEngine."""
+    from .power import get_engine
+    r = get_engine().push(repo_path, token=token, message=message, branch=branch)
     return GitOpResult(
-        ok=False,
+        ok=r.ok,
         op="push",
-        path=str(root),
-        url=remote_url,
-        message="فشل الدفع — يحتاج توكن بصلاحية repo" if needs else (err.strip()[:300] or "فشل الدفع"),
-        needs_auth=needs,
-        stderr=err[:400],
+        path=r.path,
+        url=r.url,
+        message=r.message if r.ok else (r.redacted_error or r.message),
+        needs_auth=r.needs_auth,
+        stderr=r.redacted_error,
+        data={"strategy": r.strategy_used, "commit": r.commit_hash, **(r.metadata or {})},
     )
 
 
@@ -364,50 +237,18 @@ def git_pull(
     *,
     branch: Optional[str] = None,
 ) -> GitOpResult:
-    """Pull latest changes into an existing clone."""
-    root = Path(repo_path).expanduser().resolve()
-    if not (root / ".git").exists():
-        return GitOpResult(ok=False, op="pull", message="المسار ليس مستودع git")
-
-    code, remote_url, _ = _run_git(["remote", "get-url", "origin"], cwd=root)
-    remote_url = (remote_url or "").strip()
-    if token and remote_url:
-        auth_url = _inject_token(remote_url, token)
-        if auth_url:
-            _run_git(["remote", "set-url", "origin", auth_url], cwd=root)
-
-    args = ["pull", "--ff-only"]
-    if branch:
-        args = ["pull", "--ff-only", "origin", branch]
-    code, out, err = _run_git(args, cwd=root, token=token, timeout=180)
-
-    if token and remote_url:
-        try:
-            clean, _ = normalize_and_validate_url(remote_url)
-            if clean:
-                _run_git(["remote", "set-url", "origin", clean], cwd=root)
-        except Exception:
-            pass
-
-    if code == 0:
-        ok, verr, meta = _verify_clone(root)
-        return GitOpResult(
-            ok=True,
-            op="pull",
-            path=str(root),
-            url=remote_url or None,
-            message="تم سحب آخر نسخة",
-            data={"verify": verr, **(meta or {})},
-        )
-    needs = _is_auth_failure(err, code)
+    """Pull latest via PowerGitEngine + structural verify."""
+    from .power import get_engine
+    r = get_engine().pull(repo_path, token=token, branch=branch)
     return GitOpResult(
-        ok=False,
+        ok=r.ok,
         op="pull",
-        path=str(root),
-        url=remote_url or None,
-        message="فشل السحب — المستودع خاص، أرسل توكن GitHub" if needs else (err.strip()[:300] or "فشل السحب"),
-        needs_auth=needs,
-        stderr=err[:400],
+        path=r.path,
+        url=r.url,
+        message=r.message if r.ok else (r.redacted_error or r.message),
+        needs_auth=r.needs_auth,
+        stderr=r.redacted_error,
+        data={"strategy": r.strategy_used, "commit": r.commit_hash, "validation": r.validation_passed, **(r.metadata or {})},
     )
 
 
@@ -463,20 +304,25 @@ def run_git_intent(
         # if user said public
         if re.search(r"\bpublic\b|عام", text or "", re.I):
             private = False
-        result = create_github_repo(name, tok, private=private)
-        # Optionally clone into dest after create
-        if result.ok and dest_dir and result.data.get("clone_url"):
-            clone = smart_clone(
-                text=result.data["clone_url"],
-                dest_dir=dest_dir,
-                token=tok,
-                url_override=result.data["clone_url"],
-                depth=1,
-            )
-            if clone.ok:
-                result.path = clone.path
-                result.message += f"\nتم السحب محلياً: {clone.path}"
-        return result
+        private = True
+        if re.search(r"\bpublic\b|عام", text or "", re.I):
+            private = False
+        elif _PRIVATE_RE.search(text or ""):
+            private = True
+        from .power import get_engine
+        eng_r = get_engine().create_github_repo(
+            name, tok, private=private, dest_parent=dest_dir, auto_clone=bool(dest_dir),
+        )
+        return GitOpResult(
+            ok=eng_r.ok,
+            op="create_repo",
+            path=eng_r.path,
+            url=eng_r.url,
+            message=eng_r.message,
+            needs_auth=eng_r.needs_auth,
+            stderr=eng_r.redacted_error,
+            data=dict(eng_r.metadata or {}),
+        )
 
     if intent == "clone":
         if not dest_dir:

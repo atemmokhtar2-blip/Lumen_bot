@@ -362,6 +362,7 @@ class GitExecutor:
         message = f"{op} succeeded on {repo} ({branch}) [logical]"
         return STATUS_EXECUTED, message, verification_ok, False
 
+
     def _run_real_git(
         self,
         op: str,
@@ -369,126 +370,122 @@ class GitExecutor:
         branch: str,
         raw: Dict[str, Any],
     ) -> Tuple[str, str]:
-        """Execute a real git command via subprocess. Returns (status, message)."""
-        path = Path(repo_path).resolve()
-        if not path.exists() and op != OP_CLONE:
-            return STATUS_FAILED, f"path does not exist: {path}"
+        """Execute real git via PowerGitEngine only — no weak ad-hoc clone/commit."""
+        from .power import get_engine
+        from .report_data import (
+            OP_CLONE, OP_PULL, OP_PUSH, OP_COMMIT, OP_ADD,
+            OP_BRANCH_CREATE, OP_INIT,
+            STATUS_EXECUTED, STATUS_FAILED,
+        )
 
-        timeout = int(raw.get("timeout", 120))
-        # Environment is scrubbed inside run() — do not inherit platform secrets.
-
-        def run(cmd: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
-            from telegram_bot_engine.services.secure_exec import clean_child_environ
-            return subprocess.run(
-                cmd,
-                cwd=str(cwd or path),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=clean_child_environ(),
-                check=False,
-                shell=False,
-            )
+        eng = get_engine()
+        path = Path(repo_path).resolve() if repo_path else None
+        token = str(raw.get("token") or raw.get("repository_token") or "").strip() or None
+        message = str(raw.get("commit_title") or raw.get("message") or "update")[:200]
 
         try:
             if op == OP_CLONE:
                 from telegram_bot_engine.services.secure_exec import validate_git_https_url
-                url = str(raw.get("url") or raw.get("repo_url") or repo_path)
+                url = str(raw.get("url") or raw.get("repo_url") or "")
                 try:
                     url = validate_git_https_url(url)
                 except ValueError as exc:
                     return STATUS_FAILED, f"clone rejected: {exc}"
-                target = Path(raw.get("target_dir") or path).resolve()
-                target.parent.mkdir(parents=True, exist_ok=True)
-                r = run(["git", "clone", "--depth", "1", url, str(target)], cwd=target.parent)
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"clone failed: {r.stderr.strip() or r.stdout.strip()}"
-                return STATUS_EXECUTED, f"cloned {url} → {target}"
+                parent = Path(raw.get("target_dir") or path or ".").resolve()
+                parent = parent if parent.is_dir() or not parent.suffix else parent.parent
+                parent.mkdir(parents=True, exist_ok=True)
+                sparse = raw.get("sparse_paths")
+                if isinstance(sparse, str):
+                    sparse = [sparse]
+                result = eng.clone(
+                    url,
+                    parent,
+                    token=token,
+                    branch=(branch or None),
+                    depth=int(raw.get("depth") or 1),
+                    sparse_paths=list(sparse) if sparse else None,
+                    prefer_mirror=bool(raw.get("prefer_mirror", True)),
+                    preferred_name=str(raw.get("name") or "") or None,
+                )
+                if not result.ok:
+                    msg = result.redacted_error or result.message
+                    if result.needs_auth:
+                        msg = f"needs_auth: {msg}"
+                    return STATUS_FAILED, f"clone failed [{result.strategy_used}]: {msg}"
+                return STATUS_EXECUTED, (
+                    f"cloned via {result.strategy_used} → {result.path} "
+                    f"(files={result.files_changed_count}, validate={result.validation_passed}, "
+                    f"commit={result.commit_hash or '-'})"
+                )
 
             if op == OP_INIT:
-                path.mkdir(parents=True, exist_ok=True)
-                r = run(["git", "init"])
+                target = path or Path(".")
+                target.mkdir(parents=True, exist_ok=True)
+                import subprocess
+                from telegram_bot_engine.services.secure_exec import clean_child_environ
+                r = subprocess.run(
+                    ["git", "init"], cwd=str(target), capture_output=True, text=True,
+                    env=clean_child_environ(), check=False,
+                )
                 if r.returncode != 0:
-                    return STATUS_FAILED, f"init failed: {r.stderr.strip()}"
-                return STATUS_EXECUTED, f"initialized repo at {path}"
+                    return STATUS_FAILED, f"init failed: {(r.stderr or '')[:200]}"
+                from .power.security import ensure_strict_gitignore
+                ensure_strict_gitignore(target)
+                return STATUS_EXECUTED, f"initialized {target}"
 
-            if op == OP_ADD:
-                files = raw.get("files") or ["."]
+            if not path or not path.exists():
+                return STATUS_FAILED, f"path does not exist: {path}"
+
+            if op in (OP_ADD, OP_COMMIT):
+                files = raw.get("files") or raw.get("modified_files")
                 if isinstance(files, str):
                     files = [files]
-                r = run(["git", "add"] + list(files)[:50])
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"add failed: {r.stderr.strip()}"
-                return STATUS_EXECUTED, f"added {files}"
-
-            if op == OP_COMMIT:
-                msg = str(raw.get("message") or raw.get("commit_title") or "chore: update")
-                # Stage everything first if requested
-                if raw.get("add_all", True):
-                    run(["git", "add", "-A"])
-                r = run(["git", "commit", "-m", msg])
-                if r.returncode != 0:
-                    out = (r.stderr or r.stdout or "").strip()
-                    if "nothing to commit" in out.lower():
-                        return STATUS_EXECUTED, "nothing to commit (clean)"
-                    return STATUS_FAILED, f"commit failed: {out}"
-                return STATUS_EXECUTED, f"committed: {msg[:80]}"
-
-            if op == OP_PUSH:
-                remote = str(raw.get("remote") or "origin")
-                ref = branch or str(raw.get("ref") or "HEAD")
-                force = bool(raw.get("force") or op == OP_FORCE_PUSH)
-                cmd = ["git", "push"]
-                if force:
-                    cmd.append("--force-with-lease")
-                cmd.extend([remote, ref])
-                r = run(cmd)
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"push failed: {(r.stderr or r.stdout or '').strip()}"
-                return STATUS_EXECUTED, f"pushed to {remote}/{ref}"
+                paths = [Path(f) for f in files] if files else None
+                result = eng.commit(path, message, paths)
+                if not result.ok:
+                    return STATUS_FAILED, result.redacted_error or result.message
+                return STATUS_EXECUTED, (
+                    f"committed {result.commit_hash or ''} files={result.files_changed_count} "
+                    f"validate={result.validation_passed}"
+                )
 
             if op == OP_PULL:
-                remote = str(raw.get("remote") or "origin")
-                ref = branch or ""
-                cmd = ["git", "pull", remote]
-                if ref:
-                    cmd.append(ref)
-                r = run(cmd)
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"pull failed: {(r.stderr or r.stdout or '').strip()}"
-                return STATUS_EXECUTED, f"pulled from {remote} {ref}".strip()
+                result = eng.pull(path, token=token, branch=branch or None)
+                if not result.ok:
+                    msg = result.redacted_error or result.message
+                    if result.needs_auth:
+                        msg = f"needs_auth: {msg}"
+                    return STATUS_FAILED, msg
+                return STATUS_EXECUTED, f"pulled {result.commit_hash or ''} validate={result.validation_passed}"
 
-            if op == OP_FETCH:
-                remote = str(raw.get("remote") or "origin")
-                r = run(["git", "fetch", remote])
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"fetch failed: {(r.stderr or r.stdout or '').strip()}"
-                return STATUS_EXECUTED, f"fetched from {remote}"
-
-            if op == OP_CHECKOUT or op == OP_SWITCH:
-                if not branch:
-                    return STATUS_FAILED, "branch required for checkout/switch"
-                r = run(["git", "checkout", branch])
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"checkout failed: {(r.stderr or r.stdout or '').strip()}"
-                return STATUS_EXECUTED, f"checked out {branch}"
+            if op == OP_PUSH:
+                result = eng.push(path, token=token, message=message, branch=branch or None)
+                if not result.ok:
+                    msg = result.redacted_error or result.message
+                    if result.needs_auth:
+                        msg = f"needs_auth: {msg}"
+                    return STATUS_FAILED, msg
+                return STATUS_EXECUTED, result.message
 
             if op == OP_BRANCH_CREATE:
-                new_branch = str(raw.get("new_branch") or branch)
-                if not new_branch:
-                    return STATUS_FAILED, "new_branch required"
-                r = run(["git", "checkout", "-b", new_branch])
-                if r.returncode != 0:
-                    return STATUS_FAILED, f"branch create failed: {(r.stderr or r.stdout or '').strip()}"
-                return STATUS_EXECUTED, f"created and switched to {new_branch}"
+                job = str(raw.get("job_id") or raw.get("branch") or "")
+                result = eng.start_refine(path, job_id=job)
+                if not result.ok:
+                    return STATUS_FAILED, result.redacted_error or result.message
+                return STATUS_EXECUTED, result.message
 
-            # Fallback for other ops: logical only
-            return STATUS_EXECUTED, f"{op} succeeded on {path} ({branch}) [logical-fallback]"
+            if op in ("git_reset_hard", "git_reset"):
+                ref = str(raw.get("ref") or "HEAD~1")
+                result = eng.rollback(path, ref)
+                if not result.ok:
+                    return STATUS_FAILED, result.redacted_error or result.message
+                return STATUS_EXECUTED, result.message
 
-        except subprocess.TimeoutExpired:
-            return STATUS_FAILED, f"{op} timed out after {timeout}s"
+            # Unknown real op — refuse silent logical success
+            return STATUS_FAILED, f"unsupported_real_op:{op}"
+
         except Exception as exc:
-            return STATUS_FAILED, f"{op} error: {exc}"
+            return STATUS_FAILED, f"{op} error: {type(exc).__name__}"
 
     def _build_commit(
         self, user_id: str, request_data: GenericData, ts: str
