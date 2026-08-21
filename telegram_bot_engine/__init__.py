@@ -1006,7 +1006,11 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
     except Exception as _gate_exc:
         layers_meta["acceptance_gate_error"] = f"{type(_gate_exc).__name__}:{str(_gate_exc)[:160]}"
 
-    # ── Final seal: user slash (command_map) ∪ preferred_keys — never erase slash ──
+    # ── Final seal: merge slash ∪ preferred_keys ∪ features already on spec ──
+    # BUG FIX: previously sealed = only slash+preferred_keys (+lang). When the
+    # caller had no preferred_keys, len(sealed)>2 still held (start/help/lang)
+    # and *replaced* the full detected plan (e.g. shop_catalog) with a lang-only
+    # bot — success=True but the bot did not match the user request.
     try:
         from .spec_core.registry import CAPABILITIES as _CAPS_SEAL
         from .spec_core.schema import Feature as _Feature, Trigger as _Trigger, Action as _Action, Messages as _Messages
@@ -1016,8 +1020,31 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             protected_features as _prot_feats,
         )
         user_slash_feats = _feats_from_text(request or "", include_core=False)
+        # Features already planned by detection / strict / presets / phase-C
+        planned_on_spec = [
+            str(getattr(f, "feature", "") or "").strip()
+            for f in (getattr(spec, "features", None) or [])
+            if str(getattr(f, "feature", "") or "").strip()
+        ]
+        # Also keep L1/strict/detection keys if recorded on layers_meta
+        meta_feats = []
+        for _mk in (
+            "strict_locked_features",
+            "detection_preferred_keys",
+            "l1_features",
+            "l2_feature_plan",
+            "phase_c_resolved_caps",
+        ):
+            for _x in list(layers_meta.get(_mk) or []):
+                if isinstance(_x, str) and _x.strip():
+                    meta_feats.append(_x.strip())
         sealed: list[str] = []
-        for _k in list(user_slash_feats) + list(preferred_keys or []):
+        for _k in (
+            list(user_slash_feats)
+            + list(preferred_keys or [])
+            + planned_on_spec
+            + meta_feats
+        ):
             if not isinstance(_k, str):
                 continue
             _c = _k.strip()
@@ -1028,7 +1055,15 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 sealed.insert(0, _core)
         if "lang" in _CAPS_SEAL and "lang" not in sealed:
             sealed.append("lang")
-        if len(sealed) > 2 and hasattr(spec, "features"):
+        # Only rewrite features when we have more than core, AND we are not
+        # collapsing a richer plan down to start/help/lang alone.
+        _core_only = {"start", "help", "lang", "language", "cancel"}
+        _non_core = [k for k in sealed if k not in _core_only]
+        if len(sealed) > 2 and hasattr(spec, "features") and (
+            bool(preferred_keys)
+            or bool(user_slash_feats)
+            or bool(_non_core)
+        ):
             existing = {str(getattr(f, "feature", "")): f for f in (spec.features or [])}
             _prim = _prim_seal()
             new_feats = []
@@ -1064,6 +1099,13 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
                 layers_meta["user_slash_feats"] = user_slash_feats
                 layers_meta["bridge_final_seal"] = True
                 tag = "bridge:" + "+".join(k for k in sealed if k not in {"start", "help"})[:5]
+        else:
+            layers_meta["preferred_keys_final_seal_skipped"] = {
+                "reason": "no_authoritative_keys_or_only_core",
+                "sealed_preview": sealed[:20],
+                "preferred_keys": list(preferred_keys or [])[:20],
+                "user_slash_feats": list(user_slash_feats or [])[:20],
+            }
         # Ensure protected slash features survived any prior strip
         prot = _prot_feats(request or "")
         have = {str(getattr(f, "feature", "")) for f in (spec.features or [])}
