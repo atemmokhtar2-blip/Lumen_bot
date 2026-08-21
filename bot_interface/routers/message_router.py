@@ -136,7 +136,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not message or not message.text:
         return
 
+    # ── FIRST: thinking indicator (before auth/mongo/rate-limit/group checks) ──
+    _thinking_msg = None
+    try:
+        # typing status (non-blocking UX) then the visible phrase
+        try:
+            await context.bot.send_chat_action(
+                chat_id=message.chat_id, action="typing"
+            )
+        except Exception:
+            pass
+        _thinking_msg = await message.reply_text("مايسترو يفكر 🤔")
+    except Exception:
+        logger.exception("thinking indicator send failed")
+        _thinking_msg = None
+
+    async def _clear_thinking() -> None:
+        nonlocal _thinking_msg
+        if _thinking_msg is None:
+            return
+        try:
+            await _thinking_msg.delete()
+        except Exception:
+            pass
+        _thinking_msg = None
+
     if not is_allowed(user.id if user else None):
+        await _clear_thinking()
         await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
         return
 
@@ -146,6 +172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid_check = int(user.id) if user else 0
     if not _rate_limit_ok(uid_check):
         wait_s = _rate_limit_wait_seconds(uid_check)
+        await _clear_thinking()
         await message.reply_text(
             f"⏳ تجاوزت الحد المسموح من الطلبات. انتظر حوالي {wait_s} ثانية ثم حاول مرة أخرى."
         )
@@ -164,30 +191,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 and message.reply_to_message.from_user.id == context.bot.id
             )
             if not mentioned and not is_reply_to_us:
+                await _clear_thinking()
                 return
     except Exception:
         pass
 
     request = message.text.strip()
-
-    # Immediate thinking indicator (before any heavy work)
-    _thinking_msg = None
-    if request:
-        try:
-            _thinking_msg = await message.reply_text("مايسترو يفكر 🤔")
-        except Exception:
-            logger.exception("thinking indicator send failed")
-            _thinking_msg = None
-
-    async def _clear_thinking() -> None:
-        nonlocal _thinking_msg
-        if _thinking_msg is None:
-            return
-        try:
-            await _thinking_msg.delete()
-        except Exception:
-            pass
-        _thinking_msg = None
+    if not request:
+        await _clear_thinking()
+        return
 
     # User plan status from MongoDB
     if request.lower().split("@")[0] in {"/plan", "/myplan", "/خطة"}:
