@@ -45,6 +45,11 @@ from ..middlewares.mongo_sync import (
 
 
 def _looks_like_generation_request(text: str) -> bool:
+    """Explicit generate intent (verbs). Does NOT include bare bot-spec descriptions.
+
+    Bare specs like «بوت متجر إلكتروني…» are handled by _looks_like_bot_spec and
+    must flow through Gemini chat → translator → engine — not force_generate.
+    """
     value = (text or "").strip().lower()
     # Strip decorative quotes/punctuation that users often paste from chat UIs.
     value = re.sub(r'["“”‘’«»٬،,]+', " ", value)
@@ -53,32 +58,14 @@ def _looks_like_generation_request(text: str) -> bool:
         return False
     if "بوت" not in value and "bot" not in value:
         return False
-    # Explicit generate verbs
-    if re.search(
-        r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
-        r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
-        value,
-        re.IGNORECASE,
-    ):
-        return True
-    # Spec-style: starts with بوت + describes purpose (NOT a question about an existing repo)
-    # e.g. «بوت متجر إلكتروني لعرض المنتجات...»
-    if re.match(r"^\s*بوت\b", value) or re.match(r"^\s*bot\b", value, re.I):
-        # exclude pure questions about the active repo
-        if re.search(
-            r"(كم|عدد|فين|ايه|إيه|هات|اعرض|وريني|شوف|inspect|how many|what is|where)",
+    return bool(
+        re.search(
+            r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
+            r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
             value,
-            re.I,
-        ) and not re.search(
-            r"(متجر|جروب|قناة|متجر|shop|store|group|channel|ترحيب|حظر|أسعار|منتجات|عملاء)",
-            value,
-            re.I,
-        ):
-            return False
-        # long enough descriptive payload → generation
-        if len(value) >= 18:
-            return True
-    return False
+            re.IGNORECASE,
+        )
+    )
 
 
 _CONFIRM_ROOTS = {
@@ -661,6 +648,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
+    # NEVER intercept bot generation/specs here — those must reach:
+    #   Gemini (understand) → translator (spec_core contract) → engine
     try:
         _ar0 = (context.user_data or {}).get("active_repo") if context.user_data else None
         _path0 = ""
@@ -674,9 +663,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _req0,
             re.I,
         ))
+        # Bot-spec descriptions (e.g. «بوت متجر إلكتروني…») must NOT be eaten by repo tools
+        _bot_spec0 = False
+        try:
+            from telegram_bot_engine.services.chat_router.service import _looks_like_bot_spec as _llbs
+            _bot_spec0 = bool(_llbs(_req0)) or bool(_looks_like_generation_request(_req0))
+        except Exception:
+            _bot_spec0 = bool(_looks_like_generation_request(_req0)) or bool(
+                re.match(r"^\s*بوت\b", _req0) and len(_req0) >= 18
+            )
         if (
             _repo_ok0
             and not _other0
+            and not _bot_spec0
             and not (context.user_data or {}).get("force_generate_once")
             and len(_req0) >= 2
             and not _req0.startswith("/")
