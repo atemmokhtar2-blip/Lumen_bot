@@ -56,12 +56,24 @@ def analyze_and_prepare(
     catalog = _catalog()
     original = (user_text or "").strip()
     tr = translation if isinstance(translation, dict) else {}
-
+    # Gemini may nest under translation{} — accept both shapes
+    nested = tr.get("translation") if isinstance(tr.get("translation"), dict) else {}
+    model_feats_raw = tr.get("features_requested") or nested.get("features_requested") or []
     model_feats = [
         str(x).strip()
-        for x in (tr.get("features_requested") or [])
+        for x in model_feats_raw
         if str(x).strip()
     ]
+    # Prefer nested purpose/spec when top-level empty
+    if not str(tr.get("spec_request") or "").strip() and nested.get("spec_request"):
+        tr = dict(tr)
+        tr["spec_request"] = nested.get("spec_request")
+    if not str(tr.get("purpose") or "").strip() and nested.get("purpose"):
+        tr = dict(tr)
+        tr["purpose"] = nested.get("purpose")
+    if tr.get("confidence") in (None, 0, 0.0) and nested.get("confidence"):
+        tr = dict(tr)
+        tr["confidence"] = nested.get("confidence")
     rules = _rule_features(original)
     # Root: user slash commands beat Groq model features (e.g. /products over cart_*)
     slash_feats = _slash_features_from_text(original, catalog)
