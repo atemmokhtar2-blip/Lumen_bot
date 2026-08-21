@@ -76,21 +76,9 @@ def execute_tool(
 
 
 def _load_smart_clone():
-    """Load smart_clone without importing telegram_bot_engine.engines package (circular)."""
-    import importlib.util
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "engines"
-        / "generators"
-        / "git_operations"
-        / "smart_clone.py"
-    )
-    spec = importlib.util.spec_from_file_location("cm_smart_clone", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"smart_clone not found at {path}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Load smart_clone without circular engines package import (safe for @dataclass)."""
+    from telegram_bot_engine.services.git_safe_import import get_smart_clone
+    return get_smart_clone()
 
 
 def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:

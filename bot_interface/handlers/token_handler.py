@@ -108,7 +108,8 @@ async def try_handle_token(
     # Create repo: user sends GitHub PAT after being asked
     pending_create = (context.user_data or {}).get("pending_create_repo")
     if pending_create:
-        from telegram_bot_engine.engines.generators.git_operations.smart_clone import extract_token
+        from telegram_bot_engine.services.git_safe_import import get_smart_clone
+        extract_token = get_smart_clone().extract_token
         from telegram_bot_engine.engines.generators.git_operations.smart_git import run_git_intent
         git_tok = extract_token(request)
         if git_tok:
@@ -152,7 +153,8 @@ async def try_handle_token(
     # Push: PAT after auth failure
     pending_push = (context.user_data or {}).get("pending_git_push")
     if pending_push:
-        from telegram_bot_engine.engines.generators.git_operations.smart_clone import extract_token
+        from telegram_bot_engine.services.git_safe_import import get_smart_clone
+        extract_token = get_smart_clone().extract_token
         from telegram_bot_engine.engines.generators.git_operations.smart_git import git_push
         git_tok = extract_token(request)
         if git_tok:
@@ -169,10 +171,10 @@ async def try_handle_token(
     # Private repo: user sends GitHub PAT after auth failure
     pending_clone = (context.user_data or {}).get("pending_clone_auth")
     if pending_clone:
-        from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
-            extract_token,
-            smart_clone,
-        )
+        from telegram_bot_engine.services.git_safe_import import get_smart_clone
+        _sc = get_smart_clone()
+        extract_token = _sc.extract_token
+        smart_clone = _sc.smart_clone
         git_tok = extract_token(request)
         if git_tok:
             status = await message.reply_text("🔑 جاري إعادة سحب المستودع بالتوكن...")

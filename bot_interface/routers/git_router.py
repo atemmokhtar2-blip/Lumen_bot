@@ -34,21 +34,23 @@ async def try_handle_git(
 ) -> bool:
     """Return True if this message was fully handled as a git flow."""
     try:
-        from telegram_bot_engine.engines.generators.git_operations.smart_clone import (
-            looks_like_clone_request,
-            smart_clone,
-            extract_repo_url,
-            extract_token,
+        from telegram_bot_engine.services.git_safe_import import (
+            get_smart_clone,
+            get_smart_git,
         )
-        from telegram_bot_engine.engines.generators.git_operations.smart_git import (
-            detect_git_intent,
-            looks_like_git_request,
-            extract_repo_name,
-            run_git_intent,
-            create_github_repo,
-            git_push,
-            git_pull,
-        )
+        _sc = get_smart_clone()
+        _sg = get_smart_git()
+        looks_like_clone_request = _sc.looks_like_clone_request
+        smart_clone = _sc.smart_clone
+        extract_repo_url = _sc.extract_repo_url
+        extract_token = _sc.extract_token
+        detect_git_intent = _sg.detect_git_intent
+        looks_like_git_request = _sg.looks_like_git_request
+        extract_repo_name = _sg.extract_repo_name
+        run_git_intent = getattr(_sg, "run_git_intent", None)
+        create_github_repo = _sg.create_github_repo
+        git_push = _sg.git_push
+        git_pull = _sg.git_pull
     except Exception:
         logger.exception("git modules unavailable")
         return False
