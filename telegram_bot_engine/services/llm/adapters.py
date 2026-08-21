@@ -4,8 +4,7 @@ Step 1 keeps current production behavior:
   translate → Groq body in translator_client.translate_via_groq
   chat      → Gemini body in translator_client.chat_via_gemini
 
-Gemini translate / Groq chat adapters are wired for future swap (step 2)
-and fail soft (None) until fully enabled and tested.
+Step 2: Groq chat is production-ready; Gemini translate adapter is live.
 """
 from __future__ import annotations
 
@@ -71,10 +70,7 @@ class GeminiTranslateAdapter:
 
 
 class GroqChatAdapter:
-    """Future chat path — not production-ready in step 1 (returns None).
-
-    Step 2 will implement Groq chat with the same action/JSON contract as Gemini.
-    """
+    """Production chat (step 2 default) — same JSON contract as Gemini chat."""
 
     name = "groq"
 
@@ -83,11 +79,9 @@ class GroqChatAdapter:
         message: str,
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        logger.warning(
-            "Groq chat adapter not implemented yet (step 2); message_len=%s",
-            len(message or ""),
-        )
-        return None
+        from telegram_bot_engine.services.llm.groq_chat import chat_via_groq
+
+        return chat_via_groq(message, context)
 
 
 __all__ = [
