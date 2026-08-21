@@ -619,6 +619,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         return
 
+    # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
+    try:
+        _ar0 = (context.user_data or {}).get("active_repo") if context.user_data else None
+        _path0 = ""
+        if isinstance(_ar0, dict):
+            _path0 = str(_ar0.get("path") or "").strip()
+        from pathlib import Path as _PathEarly
+        _repo_ok0 = bool(_path0 and _PathEarly(_path0).is_dir())
+        _req0 = (request or "").strip()
+        _other0 = bool(re.search(
+            r"(اسحب|clone|بوش|push|pull|استضاف|host|ول[ّ]?د|اعمل\s*بوت|generate|/start|/help|/status)",
+            _req0,
+            re.I,
+        ))
+        if (
+            _repo_ok0
+            and not _other0
+            and not (context.user_data or {}).get("force_generate_once")
+            and len(_req0) >= 2
+            and not _req0.startswith("/")
+        ):
+            await _clear_thinking()
+            status0 = await message.reply_text("جاري قياس المستودع بالأدوات…")
+            from telegram_bot_engine.services.tool_runtime import execute_tool
+            ud0 = dict(context.user_data or {})
+            ud0["user_id"] = int(user.id) if user else 0
+            tr0 = execute_tool(
+                "repo_understand",
+                {
+                    "path": _path0,
+                    "url": str((_ar0 or {}).get("url") or ""),
+                    "text": _req0,
+                    "raw_text": _req0,
+                },
+                user_id=int(user.id) if user else 0,
+                user_data=ud0,
+            )
+            if context.user_data is not None and isinstance(ud0.get("active_repo"), dict):
+                context.user_data["active_repo"] = ud0["active_repo"]
+                if ud0.get("last_project_path"):
+                    context.user_data["last_project_path"] = ud0["last_project_path"]
+                try:
+                    _persist_session(user, context)
+                except Exception:
+                    pass
+            msg0 = (tr0.message or "").strip()
+            if re.search(r"(سطر|أسطر|اسطر|lines|loc|ملف|files)", _req0, re.I):
+                try:
+                    from telegram_bot_engine.services.repo_understanding.repo_tools import run_tool
+                    st = run_tool("stats", _PathEarly(_path0))
+                    lg = run_tool("largest_files", _PathEarly(_path0), limit=10)
+                    facts = (
+                        f"إجمالي الملفات: {st.get('total_files')}\n"
+                        f"إجمالي الأسطر (نصي): {st.get('total_lines')}\n"
+                        f"أسطر الكود: {st.get('code_lines')}\n"
+                        f"حسب الامتداد: {st.get('files_by_extension')}\n"
+                        f"أسطر الكود حسب الامتداد: {st.get('code_lines_by_extension')}\n"
+                        "أكبر الملفات:\n"
+                        + "\n".join(
+                            f"• {x.get('path')}: {x.get('lines')} سطر"
+                            for x in (lg.get('by_lines') or lg.get('files') or [])[:10]
+                        )
+                    )
+                    if msg0 and "engine materials only" not in msg0.lower() and len(msg0) > 40:
+                        msg0 = facts + "\n\n" + msg0
+                    else:
+                        msg0 = facts
+                except Exception:
+                    logger.exception("stats overlay failed")
+            await status0.edit_text((msg0 or ("تم" if tr0.ok else "فشل"))[:4000])
+            return
+    except Exception:
+        logger.exception("early active_repo bind failed")
+
     _skip_chat_for_generate = bool(
         (context.user_data or {}).get("force_generate_once")
     )

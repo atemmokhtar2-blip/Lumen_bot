@@ -140,19 +140,38 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
             },
             needs_auth=bool(result.needs_auth),
         )
+    # Human message (never leak bare clone_ok)
+    try:
+        from telegram_bot_engine.services.repo_understanding.repo_tools import run_tool
+        st = run_tool("stats", Path(result.path)) if result.path else {}
+    except Exception:
+        st = {}
+    msg = (
+        f"تم سحب المستودع بنجاح.\n"
+        f"• المسار: `{result.path}`\n"
+        f"• الرابط: {result.url or ''}\n"
+        f"• الملفات: {st.get('total_files') or getattr(result, 'file_count', 0)}\n"
+        f"• إجمالي الأسطر: {st.get('total_lines', '—')}\n"
+        f"• أسطر الكود: {st.get('code_lines', '—')}\n"
+        f"• الاستراتيجية: {getattr(result, 'strategy', '') or '—'}"
+    )
     return ToolResult(
         ok=True,
         tool="clone_repo",
-        message=result.message or "تم السحب",
+        message=msg,
         data={
             "path": result.path,
             "url": result.url,
             "strategy": getattr(result, "strategy", ""),
             "attempts": getattr(result, "attempts", 0),
-            "file_count": getattr(result, "file_count", 0),
+            "file_count": st.get("total_files") or getattr(result, "file_count", 0),
+            "total_lines": st.get("total_lines"),
+            "code_lines": st.get("code_lines"),
             "meta": getattr(result, "meta", {}) or {},
+            "facts": st,
         },
     )
+
 
 
 def _tool_repo_inspect(
@@ -160,29 +179,42 @@ def _tool_repo_inspect(
     *,
     user_data: dict[str, Any],
 ) -> ToolResult:
-    from telegram_bot_engine.services.bot_inspector import inspect_bot_project
-    from telegram_bot_engine.services.bot_inspector.service import resolve_user_bot_path
-
+    """Real measurements via repo_tools (not weak chat_brief only)."""
     path = str(params.get("path") or "").strip()
     if not path:
-        path = resolve_user_bot_path(user_data=user_data)
-    if not path:
-        # active_repo from continuity
         active = user_data.get("active_repo")
         if isinstance(active, dict):
             path = str(active.get("path") or "")
+        if not path:
+            path = str(user_data.get("last_project_path") or "")
     if not path or not Path(path).is_dir():
         return ToolResult(ok=False, tool="repo_inspect", message="لا يوجد مشروع/مستودع نشط للفحص")
-    insp = inspect_bot_project(path)
+
+    from telegram_bot_engine.services.repo_understanding.repo_tools import run_tool, run_core_toolkit
+    root = Path(path)
+    st = run_tool("stats", root)
+    tree = run_tool("tree", root, max_entries=40)
+    deps = run_tool("dependencies", root)
+    eps = run_tool("entrypoints", root)
+    tests = run_tool("test_discovery", root)
+    lines = [
+        "فحص المستودع (أدوات قياس):",
+        f"• المسار: `{root}`",
+        f"• الملفات: {st.get('total_files')}",
+        f"• إجمالي الأسطر: {st.get('total_lines')}",
+        f"• أسطر الكود: {st.get('code_lines')}",
+        f"• حسب الامتداد: {st.get('files_by_extension')}",
+        f"• نقاط الدخول: {[e.get('path') for e in (eps.get('entrypoints') or [])[:8]]}",
+        f"• الحزم: {(deps.get('packages') or [])[:15]}",
+        f"• ملفات اختبار: {tests.get('test_files')} / دوال: {tests.get('test_functions_total')}",
+        f"• عينة مسارات: {(tree.get('paths') or [])[:20]}",
+    ]
     return ToolResult(
         ok=True,
         tool="repo_inspect",
-        message=insp.chat_brief(),
-        data=insp.to_dict(),
+        message="\n".join(lines)[:4000],
+        data={"stats": st, "entrypoints": eps, "dependencies": deps, "tests": tests},
     )
-
-
-
 
 
 def _tool_repo_understand(

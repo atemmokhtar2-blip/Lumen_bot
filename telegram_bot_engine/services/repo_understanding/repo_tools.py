@@ -724,6 +724,46 @@ def tool_diff_since(root: Path, since: str = "HEAD~10") -> dict[str, Any]:
 # Registry + orchestration
 # ---------------------------------------------------------------------------
 
+
+
+def tool_git_push(root: Path, *, token: str = "", message: str = "") -> dict[str, Any]:
+    """Push active repo via smart_git engine (not simulation)."""
+    root = Path(root).resolve()
+    try:
+        from telegram_bot_engine.services.git_safe_import import get_smart_git
+        sg = get_smart_git()
+        res = sg.git_push(str(root), token=token or None, message=message or None)
+        ok = bool(getattr(res, "ok", False) if not isinstance(res, dict) else res.get("ok"))
+        msg = getattr(res, "message", None) if not isinstance(res, dict) else res.get("message")
+        return {
+            "tool": "git_push",
+            "ok": ok,
+            "message": str(msg or ("pushed" if ok else "push_failed")),
+            "path": str(root),
+        }
+    except Exception as exc:
+        return {"tool": "git_push", "ok": False, "error": type(exc).__name__, "detail": str(exc)[:200]}
+
+
+def tool_git_pull(root: Path, *, token: str = "") -> dict[str, Any]:
+    """Pull latest for active repo via smart_git engine."""
+    root = Path(root).resolve()
+    try:
+        from telegram_bot_engine.services.git_safe_import import get_smart_git
+        sg = get_smart_git()
+        res = sg.git_pull(str(root), token=token or None)
+        ok = bool(getattr(res, "ok", False) if not isinstance(res, dict) else res.get("ok"))
+        msg = getattr(res, "message", None) if not isinstance(res, dict) else res.get("message")
+        return {
+            "tool": "git_pull",
+            "ok": ok,
+            "message": str(msg or ("pulled" if ok else "pull_failed")),
+            "path": str(root),
+        }
+    except Exception as exc:
+        return {"tool": "git_pull", "ok": False, "error": type(exc).__name__, "detail": str(exc)[:200]}
+
+
 REPO_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
     "stats": lambda root, **kw: tool_stats(root),
     "tree": lambda root, **kw: tool_tree(root, max_entries=int(kw.get("max_entries") or 250)),
@@ -743,6 +783,8 @@ REPO_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
     "config_scan": lambda root, **kw: tool_config_scan(root),
     "security_scan": lambda root, **kw: tool_security_scan(root),
     "diff_since": lambda root, **kw: tool_diff_since(root, str(kw.get("since") or "HEAD~10")),
+    "git_push": lambda root, **kw: tool_git_push(root, token=str(kw.get("token") or ""), message=str(kw.get("message") or "")),
+    "git_pull": lambda root, **kw: tool_git_pull(root, token=str(kw.get("token") or "")),
 }
 
 
