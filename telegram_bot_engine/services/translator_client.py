@@ -270,9 +270,24 @@ _AR_RULES: list[tuple[str, list[str]]] = [
         ["shop_catalog", "cart_view", "cart_add", "cart_checkout", "shop_my_orders"],
     ),
     # Tasks
-    (r"مهام|مهمة|\btodo\b|\btask\b", ["task_add", "task_list"]),
+    (r"مهام|مهمة|\btodo\b|\btasks?\b", ["task_add", "task_list", "task_done"]),
+    # Notes
+    (r"ملاحظات|ملاحظة|\bnotes?\b", ["note_add", "note_list"]),
     # Support tickets
-    (r"تذاكر|تذكرة|دعم|\bsupport\b|\bticket\b", ["ticket_open", "ticket_my"]),
+    (r"تذاكر|تذكرة|دعم\s*فني|\bsupport\b|\btickets?\b", ["ticket_open", "ticket_my"]),
+    # Clinic / booking
+    (
+        r"عيادة|حجز\s*مواعيد|موعد|مواعيدي|clinic|booking|appointment",
+        ["clinic_book", "clinic_my", "clinic_cancel", "book_slot", "book_list", "book_cancel"],
+    ),
+    # CRM
+    (r"\bcrm\b|عملاء|عميل\s*جديد|صفقات|leads?|pipeline",
+     ["lead_capture", "lead_list", "lead_status", "followup_set"]),
+    # Simple echo — must not pick form/quiz/trial scaffolds
+    (
+        r"بوت\s*بسيط|يرد\s*على\s*(أي|اي)?\s*رسال|echo\s*bot|simple\s*bot",
+        ["echo"],
+    ),
 ]
 
 

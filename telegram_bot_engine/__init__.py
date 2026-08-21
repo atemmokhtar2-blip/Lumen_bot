@@ -1048,13 +1048,28 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
             for _x in list(layers_meta.get(_mk) or []):
                 if isinstance(_x, str) and _x.strip():
                     meta_feats.append(_x.strip())
+        # Authoritative preferred_keys (non-core from bridge/translation):
+        # lock seal to those + slash + cores — do NOT re-inflate from L1/phase-C
+        # (that caused notes→tasks, simple→quiz, crm→tasks bleed).
+        _seal_core = {"start", "help", "lang", "language", "cancel"}
+        _pk_non_core = [
+            k for k in (preferred_keys or [])
+            if isinstance(k, str) and k.strip() and k.strip() not in _seal_core
+            and k.strip() in _CAPS_SEAL
+        ]
         sealed: list[str] = []
-        for _k in (
-            list(user_slash_feats)
-            + list(preferred_keys or [])
-            + planned_on_spec
-            + meta_feats
-        ):
+        if _pk_non_core:
+            _seal_src = list(user_slash_feats) + list(preferred_keys or [])
+            layers_meta["final_seal_mode"] = "authoritative_preferred_keys"
+        else:
+            _seal_src = (
+                list(user_slash_feats)
+                + list(preferred_keys or [])
+                + planned_on_spec
+                + meta_feats
+            )
+            layers_meta["final_seal_mode"] = "merge_detection_and_layers"
+        for _k in _seal_src:
             if not isinstance(_k, str):
                 continue
             _c = _k.strip()
