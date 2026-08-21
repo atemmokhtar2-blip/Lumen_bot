@@ -72,19 +72,28 @@ class Orchestrator:
                 state.record(AgentRole.ORCHESTRATOR, "can_run_false", name)
                 return state
         try:
+            from .tracing import start_span, end_span
+            start_span(state, name)
             with metrics.timer("agent_latency_s", agent=name):
                 state = agent.run(state, context=ctx)
             # Success heuristic: not FAILED after agent
             if state.status != AgentStatus.FAILED.value:
                 breaker.record_success()
                 metrics.incr("agent_success", agent=name)
+                end_span(state, name, ok=True)
             else:
                 breaker.record_failure()
                 metrics.incr("agent_failure", agent=name)
+                end_span(state, name, ok=False, detail=state.status)
         except Exception as exc:
             logger.exception("agent %s crashed", name)
             breaker.record_failure()
             metrics.incr("agent_crash", agent=name)
+            try:
+                from .tracing import end_span
+                end_span(state, name, ok=False, detail=type(exc).__name__)
+            except Exception:
+                pass
             state.record(AgentRole.ORCHESTRATOR, "agent_crash", f"{name}:{type(exc).__name__}")
             try:
                 state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=name, force=True)
@@ -118,10 +127,10 @@ class Orchestrator:
         from .concurrency import orchestration_slot
         from .metrics import get_metrics
         metrics = get_metrics()
-        with orchestration_slot() as got:
+        with orchestration_slot(user_id=int(state.user_id or 0)) as got:
             if not got:
                 metrics.incr("orchestrator_slot_timeout")
-                state.final_message = "النظام مشغول — أعد المحاولة بعد لحظات."
+                state.final_message = "النظام مشغول (حد التوازي) — أعد المحاولة بعد لحظات."
                 try:
                     state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="busy", force=True)
                 except Exception:
@@ -140,6 +149,8 @@ class Orchestrator:
     ) -> AgentState:
         from .metrics import get_metrics
         metrics = get_metrics()
+        from .tracing import ensure_trace
+        ensure_trace(state)
         ctx = dict(context or {})
         self.board.put(state)
         max_att = _max_attempts(state)
@@ -286,17 +297,29 @@ class Orchestrator:
                 state.status = AgentStatus.DELIVERED.value
             state.record(AgentRole.ORCHESTRATOR, "deliver_terminal", state.status)
 
+        # Formal deliver agent (if registered) may refine final_message
+        deliver = self._agent("deliver")
+        if deliver is not None and state.status != AgentStatus.AWAITING_CONFIRMATION.value:
+            try:
+                state = deliver.run(state, context={})
+            except Exception:
+                logger.exception("deliver agent failed")
         self.board.put(state)
         try:
             from .metrics import get_metrics
+            from .run_report import write_run_report
+            from .tracing import trace_summary
             m = get_metrics()
             m.incr("orchestrator_done", status=str(state.status))
             if state.qa_passed:
                 m.incr("orchestrator_qa_passed")
             else:
                 m.incr("orchestrator_qa_failed")
+            path = write_run_report(state)
+            state.extensions["run_report_path"] = str(path)
+            state.extensions["trace_summary"] = trace_summary(state)
         except Exception:
-            pass
+            logger.exception("run report failed")
         logger.info(
             "orchestrator done id=%s status=%s path=%s qa=%s attempts=%s",
             state.state_id, state.status, state.generated_path, state.qa_passed, state.attempts,

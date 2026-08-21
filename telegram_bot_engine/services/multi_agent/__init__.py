@@ -35,7 +35,9 @@ from .hitl import PendingAction, request_confirmation, confirm_action, reject_ac
 from .tools import execute_tool_gated, list_tools, select_tool
 from .metrics import get_metrics, metrics_snapshot
 from .circuit import get_circuit_board, CircuitBreaker
-from .health import health_snapshot
+from .health import health_snapshot, liveness, readiness
+from .run_report import write_run_report, recent_reports
+from .tracing import ensure_trace, trace_summary
 from .concurrency import active_count, orchestration_slot
 
 __all__ = [
@@ -89,5 +91,8 @@ __all__ = [
     "execute_tool_gated", "list_tools", "select_tool",
     "get_metrics", "metrics_snapshot",
     "get_circuit_board", "CircuitBreaker",
-    "health_snapshot", "active_count", "orchestration_slot",
+    "health_snapshot", "liveness", "readiness",
+    "write_run_report", "recent_reports",
+    "ensure_trace", "trace_summary",
+    "active_count", "orchestration_slot",
 ]
