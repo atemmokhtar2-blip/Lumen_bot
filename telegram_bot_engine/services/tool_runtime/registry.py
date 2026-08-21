@@ -13,7 +13,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "private": "اختياري — true/false (افتراضي true)",
             "description": "اختياري — وصف المستودع",
         },
-        "requires_confirmation": False,
+        "requires_confirmation": True,
     },
     "git_push": {
         "description": "دفع التغييرات (commit+push) للمستودع النشط أو المسار المحدد",
@@ -22,7 +22,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "token": "اختياري — PAT إن كان المستودع خاصاً",
             "message": "اختياري — رسالة الكوميت",
         },
-        "requires_confirmation": False,
+        "requires_confirmation": True,
     },
     "git_pull": {
         "description": "سحب آخر نسخة من المستودع النشط (git pull)",
@@ -76,7 +76,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "path": "اختياري — مسار المشروع",
             "change": "وصف التعديل بالعربية أو الإنجليزية",
         },
-        "requires_confirmation": False,
+        "requires_confirmation": True,
     },
     "host_status": {
         "description": "حالة الاستضافة للبوتات المستضافة",
@@ -107,3 +107,13 @@ def tool_catalog_for_prompt() -> str:
         conf = " (يحتاج تأكيد)" if spec.get("requires_confirmation") else ""
         lines.append(f"- {name}{conf}: {spec.get('description')} | params: {params or '—'}")
     return "\n".join(lines)
+
+
+def tool_requires_confirmation(name: str) -> bool:
+    """True if tool must not run until human confirms (HITL)."""
+    spec = TOOL_SPECS.get((name or "").strip()) or {}
+    return bool(spec.get("requires_confirmation"))
+
+
+def get_tool_spec(name: str) -> dict[str, Any] | None:
+    return TOOL_SPECS.get((name or "").strip())

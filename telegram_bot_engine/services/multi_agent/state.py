@@ -19,6 +19,7 @@ class AgentStatus(str, Enum):
     QA = "QA"
     PASSED = "PASSED"
     FAILED = "FAILED"
+    AWAITING_CONFIRMATION = "AWAITING_CONFIRMATION"
     DELIVERED = "DELIVERED"
     CANCELLED = "CANCELLED"
 
@@ -29,6 +30,8 @@ class AgentRole(str, Enum):
     BUILDER = "BUILDER"
     CRITIC = "CRITIC"
     ORCHESTRATOR = "ORCHESTRATOR"
+    TOOL = "TOOL"
+    HITL = "HITL"
 
 
 # Allowed transitions (extensible FSM). Unknown edges rejected.
@@ -37,7 +40,8 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
         AgentStatus.ROUTING.value, AgentStatus.CANCELLED.value, AgentStatus.FAILED.value,
     }),
     AgentStatus.ROUTING.value: frozenset({
-        AgentStatus.PLANNING.value, AgentStatus.FAILED.value, AgentStatus.CANCELLED.value,
+        AgentStatus.PLANNING.value, AgentStatus.AWAITING_CONFIRMATION.value,
+        AgentStatus.FAILED.value, AgentStatus.CANCELLED.value,
     }),
     AgentStatus.PLANNING.value: frozenset({
         AgentStatus.BUILDING.value, AgentStatus.FAILED.value, AgentStatus.CANCELLED.value,
@@ -55,6 +59,13 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
         AgentStatus.PLANNING.value,  # retry
         AgentStatus.DELIVERED.value,  # deliver failure message
         AgentStatus.CANCELLED.value,
+    }),
+    AgentStatus.AWAITING_CONFIRMATION.value: frozenset({
+        AgentStatus.PLANNING.value,  # confirmed generate path
+        AgentStatus.ROUTING.value,   # re-route after confirm for tools
+        AgentStatus.FAILED.value,
+        AgentStatus.CANCELLED.value,
+        AgentStatus.DELIVERED.value,
     }),
     AgentStatus.DELIVERED.value: frozenset(),
     AgentStatus.CANCELLED.value: frozenset(),

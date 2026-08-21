@@ -108,7 +108,28 @@ class Orchestrator:
         if state.status == AgentStatus.CANCELLED.value:
             return self._deliver(state)
 
-        # 2) Build–QA loop (Phase C)
+        # Phase D: non-generate tools go through explicit tool + HITL gate
+        tool = str((state.extensions or {}).get("selected_tool") or state.capability_id or "")
+        if tool and tool not in {"generate_bot", "refine_bot", "chat_or_other", ""}:
+            from .tools import execute_tool_gated
+            # If resuming after confirm, skip HITL
+            skip = bool((state.extensions or {}).get("hitl_confirmed"))
+            state = execute_tool_gated(state, tool, state.route_params, skip_hitl=skip)
+            self.board.put(state)
+            if state.status == AgentStatus.AWAITING_CONFIRMATION.value:
+                return state  # parked for human — do not deliver as finished build
+            return self._deliver(state)
+
+        # chat_or_other: no build pipeline
+        if tool == "chat_or_other":
+            state.final_message = state.final_message or "لم يُطلب توليد بوت. اكتب وصف البوت للبدء."
+            try:
+                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.DELIVERED.value
+            return self._deliver(state)
+
+        # 2) Build–QA loop (Phase C) for generate_bot / refine_bot
         while True:
             # Architect (fresh plan or repair using qa_summary in architect_view)
             try:
@@ -286,3 +307,33 @@ def get_state(state_id: str) -> Optional[AgentState]:
 
 def latest_for_user(user_id: int) -> Optional[AgentState]:
     return get_blackboard().latest_for_user(user_id)
+
+
+def resume_after_confirm(
+    state_id: str,
+    action_id: str,
+    *,
+    user_id: int = 0,
+    work_dir: str | Path | None = None,
+    board: BlackboardStore | None = None,
+) -> AgentState:
+    """Confirm HITL action then continue orchestration (tool exec or generate)."""
+    from .hitl import confirm_action
+    board = board or get_blackboard()
+    ok, state, reason = confirm_action(state_id, action_id, user_id=user_id, board=board)
+    if not ok or state is None:
+        if state is None:
+            state = AgentState(status=AgentStatus.FAILED.value)
+            state.final_message = f"فشل التأكيد: {reason}"
+        return state
+    pending = (state.extensions or {}).get("pending_action") or {}
+    tool = str(pending.get("tool") or state.capability_id or "")
+    ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
+    orch = Orchestrator(board=board)
+    # For generate tools after confirm, run full build loop
+    if tool in {"generate_bot", "refine_bot"}:
+        return orch.run(state, context=ctx)
+    from .tools import execute_tool_gated
+    state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
+    board.put(state)
+    return orch._deliver(state)
