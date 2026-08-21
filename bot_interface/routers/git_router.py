@@ -217,6 +217,10 @@ async def try_handle_git(
         await status.edit_text(f"❌ فشل سحب المستودع: {type(e).__name__}: {sanitize_error(str(e))}")
         return True
 
+    if result is None:
+        await status.edit_text("❌ فشل سحب المستودع: نتيجة فارغة من محرك السحب")
+        return True
+
     if result.ok:
         lines = [
             f"✅ تم سحب المستودع",
@@ -241,7 +245,12 @@ async def try_handle_git(
                 context.user_data["active_repo"] = {
                     "path": result.path,
                     "url": result.url,
-                    "contract": repo_contract.model_dump(mode="json"),
+                    "contract": (
+                        __import__(
+                            "telegram_bot_engine.schemas.repo_contract",
+                            fromlist=["safe_contract_dict"],
+                        ).safe_contract_dict(repo_contract)
+                    ),
                 }
                 try:
                     from telegram_bot_engine.services.repo_understanding.contract import is_runnable_bot

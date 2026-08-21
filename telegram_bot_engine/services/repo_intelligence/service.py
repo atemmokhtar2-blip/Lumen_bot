@@ -360,6 +360,19 @@ def build_repo_intelligence(contract: RepoContract) -> RepoIntelligence:
 
 
 def enrich_repo_contract(contract: RepoContract) -> RepoContract:
-    """Attach intelligence layer onto an existing contract (mutates via copy)."""
-    intel = build_repo_intelligence(contract)
-    return contract.model_copy(update={"intelligence": intel, "schema_version": "2.1"})
+    """Attach intelligence layer onto an existing contract (safe copy)."""
+    if contract is None:
+        return RepoContract(ok=False, message="no_contract", confidence=0.0)
+    try:
+        intel = build_repo_intelligence(contract)
+    except Exception:
+        return contract
+    try:
+        return contract.model_copy(update={"intelligence": intel, "schema_version": "2.1"})
+    except Exception:
+        try:
+            contract.intelligence = intel
+            contract.schema_version = "2.1"
+        except Exception:
+            pass
+        return contract

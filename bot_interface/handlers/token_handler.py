@@ -237,7 +237,12 @@ async def try_handle_token(
                 context.user_data["active_repo"] = {
                     "path": result.path,
                     "url": result.url,
-                    "contract": repo_contract.model_dump(mode="json"),
+                    "contract": (
+                        __import__(
+                            "telegram_bot_engine.schemas.repo_contract",
+                            fromlist=["safe_contract_dict"],
+                        ).safe_contract_dict(repo_contract)
+                    ),
                 }
                 try:
                     from telegram_bot_engine.services.user_sandbox import get_user_sandbox
