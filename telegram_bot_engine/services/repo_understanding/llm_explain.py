@@ -1,97 +1,160 @@
-"""Grok/LLM understands the repo; engine only supplies raw material (clone + files)."""
+"""Engine gathers measurable repo facts; Grok (LLM) explains/answers from those facts."""
 from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_SKIP = {".git", "__pycache__", ".venv", "venv", "node_modules", ".tox", "dist", "build"}
+_SKIP = {
+    ".git", "__pycache__", ".venv", "venv", "node_modules", ".tox",
+    "dist", "build", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "htmlcov", "site-packages", ".eggs",
+}
 _KEY_NAMES = {
     "readme.md", "readme.rst", "readme.txt", "readme",
-    "main.py", "bot.py", "app.py", "run.py",
-    "requirements.txt", "pyproject.toml", "package.json",
-    "dockerfile", "docker-compose.yml", ".env.example",
+    "main.py", "bot.py", "app.py", "run.py", "server.py",
+    "requirements.txt", "pyproject.toml", "package.json", "setup.py",
+    "dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    ".env.example", "makefile", "procfile",
+}
+_CODE_EXT = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt",
+    ".c", ".cpp", ".h", ".cs", ".rb", ".php", ".swift", ".scala",
+    ".sh", ".bash", ".sql", ".html", ".css", ".vue", ".svelte",
 }
 
 
-def gather_repo_dossier(root: Path, *, max_files: int = 80, max_bytes_per_file: int = 4000) -> dict[str, Any]:
-    """Deterministic file facts only — no interpretation."""
+def gather_repo_dossier(
+    root: Path,
+    *,
+    max_tree: int = 120,
+    max_bytes_per_file: int = 5000,
+    max_key_files: int = 14,
+) -> dict[str, Any]:
+    """Deterministic measurable facts — line counts, tree, key file contents."""
     root = Path(root).resolve()
     tree: list[str] = []
     key_files: dict[str, str] = {}
-    all_py: list[str] = []
+    ext_counts: Counter[str] = Counter()
+    ext_lines: Counter[str] = Counter()
+    total_files = 0
+    total_lines = 0
+    code_lines = 0
+    largest: list[tuple[int, str]] = []
 
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
-            continue
-        if any(s in p.parts for s in _SKIP):
-            continue
-        rel = p.relative_to(root).as_posix()
-        if rel.count("/") <= 3:
-            tree.append(rel)
-        if len(tree) >= max_files:
-            break
+    for p in root.rglob("*"):
+        try:
+            if not p.is_file():
+                continue
+            if any(s in p.parts for s in _SKIP):
+                continue
+            rel = p.relative_to(root).as_posix()
+            total_files += 1
+            ext = p.suffix.lower() or "(no_ext)"
+            ext_counts[ext] += 1
 
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
-            continue
-        if any(s in p.parts for s in _SKIP):
-            continue
-        rel = p.relative_to(root).as_posix()
-        name = p.name.lower()
-        if name in _KEY_NAMES or rel.lower() in _KEY_NAMES:
+            # line count
+            lines_n = 0
             try:
-                text = p.read_text(encoding="utf-8", errors="ignore")[:max_bytes_per_file]
-                key_files[rel] = text
+                # binary-ish skip for huge non-text
+                if p.stat().st_size > 2_000_000:
+                    pass
+                else:
+                    raw = p.read_bytes()
+                    if b"\x00" in raw[:2048]:
+                        lines_n = 0
+                    else:
+                        lines_n = raw.count(b"\n") + (1 if raw and not raw.endswith(b"\n") else 0)
             except Exception:
-                pass
-        if p.suffix == ".py" and rel.count("/") <= 2:
-            all_py.append(rel)
-        if len(key_files) >= 12:
-            break
+                lines_n = 0
+            total_lines += lines_n
+            if ext in _CODE_EXT:
+                code_lines += lines_n
+                ext_lines[ext] += lines_n
+            largest.append((lines_n, rel))
 
-    # fill more py snippets if few key files
-    if len(key_files) < 6:
-        for rel in all_py[:8]:
+            if len(tree) < max_tree and rel.count("/") <= 4:
+                tree.append(rel)
+
+            name = p.name.lower()
+            if name in _KEY_NAMES or rel.lower() in _KEY_NAMES:
+                if len(key_files) < max_key_files:
+                    try:
+                        key_files[rel] = p.read_text(encoding="utf-8", errors="ignore")[:max_bytes_per_file]
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+
+    largest.sort(reverse=True)
+    # more py/js entry-ish files into key_files
+    if len(key_files) < max_key_files:
+        for _, rel in largest:
+            if len(key_files) >= max_key_files:
+                break
             if rel in key_files:
                 continue
+            low = rel.lower()
+            if not any(low.endswith(x) for x in (".py", ".ts", ".js", ".md", ".toml", ".json", ".yml", ".yaml")):
+                continue
+            if low.count("/") > 2:
+                continue
             try:
-                text = (root / rel).read_text(encoding="utf-8", errors="ignore")[:2500]
-                key_files[rel] = text
+                key_files[rel] = (root / rel).read_text(encoding="utf-8", errors="ignore")[:max_bytes_per_file]
             except Exception:
                 pass
-            if len(key_files) >= 8:
-                break
 
+    facts = {
+        "total_files": total_files,
+        "total_lines_all_textish": total_lines,
+        "code_lines": code_lines,
+        "files_by_extension": dict(ext_counts.most_common(25)),
+        "lines_by_code_extension": dict(ext_lines.most_common(15)),
+        "largest_files_by_lines": [
+            {"path": rel, "lines": n} for n, rel in largest[:15]
+        ],
+    }
     return {
         "root": str(root),
-        "tree": tree[:max_files],
+        "tree": tree[:max_tree],
         "key_files": key_files,
-        "python_files_top": all_py[:40],
+        "facts": facts,
         "file_count_sampled": len(tree),
     }
 
 
 def _dossier_prompt(dossier: dict[str, Any], *, user_question: str, url: str = "") -> str:
+    facts = dossier.get("facts") or {}
     parts = [
-        "أنت جوراك. مهمتك: تفهم المستودع من المواد الخام التالية وتشرح للمستخدم بالعربية بوضوح.",
-        "لا تخترع ملفات أو مكتبات غير موجودة في المواد. لو معلومة ناقصة قول إنها غير ظاهرة.",
-        "اشرح: الغرض، الهيكل، نقاط التشغيل، التقنيات، وكيف يستخدمه المستخدم عملياً.",
+        "أنت جوراك. عندك مواد خام مقاسة من المستودع. أجب بدقة من قسم FACTS ولا تخترع أرقاماً.",
+        "لو المستخدم سأل عن عدد الأسطر أو الملفات استخدم الأرقام في FACTS حرفياً.",
+        "اشرح بالعربية بوضوح. لا ترجع JSON.",
         "",
-        f"سؤال المستخدم: {user_question or 'افهم المستودع واشرحه لي'}",
+        f"سؤال المستخدم: {user_question or 'افهم المستودع'}",
     ]
     if url:
-        parts.append(f"رابط المستودع: {url}")
-    parts.append(f"المسار المحلي: {dossier.get('root')}")
-    parts.append("شجرة ملفات (عينة):")
-    parts.append("\n".join(f"- {x}" for x in (dossier.get("tree") or [])[:60]))
-    parts.append("محتوى ملفات مهمة:")
-    for path, body in list((dossier.get("key_files") or {}).items())[:10]:
-        parts.append(f"\n--- {path} ---\n{body[:3500]}")
-    return "\n".join(parts)[:24000]
+        parts.append(f"URL: {url}")
+    parts.append(f"ROOT: {dossier.get('root')}")
+    parts.append("")
+    parts.append("=== FACTS (مقاسة بالمحرك — مصدر الحقيقة) ===")
+    parts.append(f"total_files = {facts.get('total_files')}")
+    parts.append(f"total_lines_all_textish = {facts.get('total_lines_all_textish')}")
+    parts.append(f"code_lines = {facts.get('code_lines')}")
+    parts.append(f"files_by_extension = {facts.get('files_by_extension')}")
+    parts.append(f"lines_by_code_extension = {facts.get('lines_by_code_extension')}")
+    parts.append(f"largest_files_by_lines = {facts.get('largest_files_by_lines')}")
+    parts.append("")
+    parts.append("=== TREE (عينة مسارات) ===")
+    parts.append("\n".join(f"- {x}" for x in (dossier.get("tree") or [])[:80]))
+    parts.append("")
+    parts.append("=== KEY FILE CONTENTS ===")
+    for path, body in list((dossier.get("key_files") or {}).items())[:12]:
+        parts.append(f"\n--- {path} ---\n{body[:4000]}")
+    return "\n".join(parts)[:28000]
 
 
 def explain_repo_with_llm(
@@ -100,37 +163,28 @@ def explain_repo_with_llm(
     user_question: str = "",
     url: str = "",
 ) -> tuple[str | None, dict[str, Any]]:
-    """
-    Engine gathers dossier; LLM (Grok path via Groq chat completions) explains.
-    Returns (explanation_text or None, meta).
-    """
     dossier = gather_repo_dossier(Path(root))
+    facts = dossier.get("facts") or {}
     meta: dict[str, Any] = {
         "dossier": {
             "root": dossier.get("root"),
             "tree": dossier.get("tree"),
-            "python_files_top": dossier.get("python_files_top"),
+            "facts": facts,
             "key_file_names": list((dossier.get("key_files") or {}).keys()),
-            "file_count_sampled": dossier.get("file_count_sampled"),
         },
         "url": url or "",
         "explainer": None,
     }
     prompt = _dossier_prompt(dossier, user_question=user_question, url=url)
 
-    # Direct free-text completion (not the JSON action chat schema)
     text = _freeform_completion(prompt)
     if text:
         meta["explainer"] = "groq_freeform"
         return text.strip(), meta
 
-    # Fallback: facade chat_request (may return structured JSON)
     try:
         from telegram_bot_engine.services.llm.facade import chat_request
-        result = chat_request(
-            prompt[:8000],
-            context={"mode": "repo_explain", "no_tools": True},
-        )
+        result = chat_request(prompt[:8000], context={"mode": "repo_explain", "no_tools": True})
         if isinstance(result, dict):
             answer = (
                 result.get("answer")
@@ -146,23 +200,27 @@ def explain_repo_with_llm(
         logger.warning("chat_request explain failed: %s", exc)
         meta["chat_request_error"] = type(exc).__name__
 
-    # Last resort: honest engine stub so user is not lied to
-    tree = dossier.get("tree") or []
-    keys = list((dossier.get("key_files") or {}).keys())
-    stub = (
-        "تم جمع ملفات المستودع بواسطة المحرك، لكن نموذج الشرح (جوراك/LLM) غير متاح حالياً.\n"
-        f"• المسار: `{dossier.get('root')}`\n"
-        + (f"• الرابط: {url}\n" if url else "")
-        + f"• عينة ملفات: {', '.join(tree[:15])}\n"
-        + (f"• ملفات مقروءة: {', '.join(keys[:8])}\n" if keys else "")
-        + "فعّل GROQ_API_KEY (أو مزود الشات) حتى يشرح جوراك المستودع بنفسه."
+    # Honest facts-only answer so questions like line-count still work without LLM
+    facts_ar = (
+        f"المسار: `{dossier.get('root')}`\n"
+        + (f"الرابط: {url}\n" if url else "")
+        + f"عدد الملفات: {facts.get('total_files')}\n"
+        + f"إجمالي الأسطر (نصي): {facts.get('total_lines_all_textish')}\n"
+        + f"أسطر الكود: {facts.get('code_lines')}\n"
+        + f"حسب الامتداد (ملفات): {facts.get('files_by_extension')}\n"
+        + f"أسطر الكود حسب الامتداد: {facts.get('lines_by_code_extension')}\n"
+        + "أكبر الملفات بالأسطر:\n"
+        + "\n".join(
+            f"  - {x.get('path')}: {x.get('lines')}"
+            for x in (facts.get("largest_files_by_lines") or [])[:10]
+        )
+        + "\n\n(جوراك/LLM غير متاح — الأرقام من قياس المحرك)"
     )
     meta["explainer"] = "engine_facts_only"
-    return stub, meta
+    return facts_ar, meta
 
 
 def _freeform_completion(prompt: str) -> str | None:
-    """Groq OpenAI-compatible free text — Grok-style understanding layer."""
     try:
         import requests
         from telegram_bot_engine.services.llm.key_pool import groq_keys, mark_groq_cooldown
@@ -186,29 +244,26 @@ def _freeform_completion(prompt: str) -> str | None:
         "openai/gpt-oss-20b",
     ]
     system = (
-        "أنت جوراك. تفهم المستودعات من مواد خام فقط وتشرح للمستخدم بالعربية "
-        "بأسلوب واضح ومباشر. لا تخترع. لا ترجع JSON — اكتب شرحاً مفيداً فقط."
+        "أنت جوراك. تجيب من FACTS والملفات المعطاة فقط. "
+        "أرقام الأسطر والملفات تؤخذ من FACTS حرفياً. بالعربية. بدون JSON."
     )
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    api = "https://api.groq.com/openai/v1/chat/completions"
     for source, key in keys:
         for model in models:
             try:
                 resp = requests.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {key}",
-                        "Content-Type": "application/json",
-                    },
+                    api,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                     json={
                         "model": model,
-                        "temperature": 0.35,
+                        "temperature": 0.2,
                         "max_tokens": 2500,
                         "messages": [
                             {"role": "system", "content": system},
-                            {"role": "user", "content": prompt[:20000]},
+                            {"role": "user", "content": prompt[:22000]},
                         ],
                     },
-                    timeout=float(os.getenv("GROQ_TIMEOUT") or "60"),
+                    timeout=float(os.getenv("GROQ_TIMEOUT") or "75"),
                 )
                 if resp.status_code in {401, 403, 429}:
                     try:
@@ -221,13 +276,12 @@ def _freeform_completion(prompt: str) -> str | None:
                     continue
                 body = resp.json()
                 content = (
-                    ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-                    or ""
+                    ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
                 ).strip()
                 if content:
                     logger.info("repo explain ok source=%s model=%s", source, model)
                     return content
             except Exception as exc:
-                logger.warning("repo explain failed source=%s model=%s: %s", source, model, type(exc).__name__)
+                logger.warning("repo explain fail %s %s: %s", source, model, type(exc).__name__)
                 continue
     return None

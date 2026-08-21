@@ -1496,7 +1496,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 4 — Developer partner mode (AI only, zero fixed scripts)
     # SmartChat + memory + context: clarify, challenge, route to engines.
     # ------------------------------------------------------------------
+    # Follow-up questions about already-cloned active_repo → engine+Grok path
+    try:
+        _ar = (context.user_data or {}).get("active_repo") if context.user_data else None
+        _has_repo = isinstance(_ar, dict) and bool(_ar.get("path"))
+        _q = (request or "").strip()
+        _repo_follow = bool(
+            _has_repo
+            and re.search(
+                r"(افهم|فهم|اشرح|حلل|وصف).{0,20}(المستودع|الريبو|المشروع)|"
+                r"(كم|عدد).{0,12}(سطر|أسطر|اسطر|ملف)|"
+                r"(ما هو|ايه|وش).{0,20}(المستودع|المشروع)|"
+                r"understand\s+repo|how many lines|line count",
+                _q,
+                re.I,
+            )
+        )
+        if _repo_follow and context.user_data is not None:
+            # force engine tool path below via synthetic hard route
+            pass
+    except Exception:
+        _repo_follow = False
+        _has_repo = False
+
     _rt = chat_route(request)
+    if (not getattr(_rt, "ok", False) or not getattr(_rt, "capability_id", "")) and locals().get("_repo_follow"):
+        class _FakeRt:
+            ok = True
+            capability_id = "repo_understand"
+            confidence = 0.95
+            params = {}
+        _rt = _FakeRt()
     _hard_caps = {
         "clone_repo", "create_repo", "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose",
         "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
