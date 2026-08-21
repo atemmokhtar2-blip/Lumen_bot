@@ -26,6 +26,7 @@ _ALLOWED_ACTIONS = {
     "host_status",
     "repo_understand",
     "generate_bot",
+    "refine_bot",
 }
 
 # Fast chat models first
@@ -89,8 +90,10 @@ def _product_brief() -> str:
         "ماذا تفعل: تفهم طلب المستخدم بالعربي/الإنجليزي، تترجم المواصفات لقدرات حقيقية "
         "(spec_core)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته.\n"
         "ماذا تقدر تعمل الآن: شرح القدرات، توضيح الخطط والاستخدام من SERVER_CONTEXT فقط، "
-        "المساعدة في صياغة مواصفات البوت، إطلاق التوليد عند اكتمال المواصفات عبر action=generate_bot، "
-        "أسئلة عن الاستضافة/المستودع ضمن الإجراءات المسموحة.\n"
+        "المساعدة في صياغة مواصفات البوت، إطلاق التوليد عبر action=generate_bot، "
+        "تحليل بوت المستخدم الحالي من active_bot / active_bot_brief (أوامر، نقاط ضعف)، "
+        "واقتراح تحسينات؛ عند طلب تعديل البوت استخدم action=refine_bot مع translation "
+        "تصف التغييرات (إضافة/حذف أوامر وميزات) دون اختراع ملفات غير موجودة.\n"
         "حالة المنتج: أنت قيد التطوير المستمر وتتطور باستمرار — كن صادقًا وواضحًا عند السؤال.\n"
         "المطور المعروف الوحيد هو حاتم. لا تخترع فريقًا أو شركة.\n"
         "الخطط والحدود والاستخدام: فقط من SERVER_CONTEXT (plan، usage، quotas). "
@@ -117,7 +120,7 @@ def _build_system(context: dict[str, Any]) -> str:
         "3) لا تنفّذ إجراءات بنفسك. للإجراءات الحساسة املأ action مع requires_confirmation=true.\n"
         "4) أعد JSON فقط (بدون markdown) بالمفاتيح: answer, action, translation.\n"
         "5) action.name واحد من: \"\" | generate_bot | clone_repo | host_start | host_stop | "
-        "host_status | repo_understand\n"
+        "host_status | repo_understand | refine_bot\n"
         "6) إذا طلب المستخدم بناء بوت واكتملت المواصفات أو قال ابدأ/نفّذ/ولّد: "
         "action.name=generate_bot و translation.clarification_needed=false و "
         "translation.spec_request عقد واضح يحتوي بوت/Telegram bot و features_requested من القائمة فقط.\n"

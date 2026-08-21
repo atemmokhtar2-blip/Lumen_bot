@@ -80,6 +80,8 @@ class SessionStore:
                 "pending_chat_action",
                 "translated_preferred_keys",
                 "translated_source",
+                "last_project_path",
+                "active_bot_path",
             )
             if k in data and data[k] is not None
         }

@@ -272,7 +272,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if context.user_data is not None:
             context.user_data.pop("pending_chat_action", None)
         try:
-            if action in {"generate_bot", "translate_spec", ""}:
+            if action in {"generate_bot", "refine_bot", "translate_spec", ""}:
                 if original.strip():
                     request = original.strip()
                 else:
@@ -309,7 +309,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("confirmed chat action failed: %s", action)
             await message.reply_text("تعذر تنفيذ العملية المؤكدة. راجع سجل الخدمة للتفاصيل.")
             return
-        if action not in {"generate_bot", "translate_spec", ""} and not (
+        if action not in {"generate_bot", "refine_bot", "translate_spec", ""} and not (
             context.user_data or {}
         ).get("force_generate_once"):
             return
@@ -680,6 +680,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             chat_context["conversation_summary"] = _mem_ctx["conversation_summary"]
         if _mem_ctx.get("memory_facts"):
             chat_context["memory_facts"] = _mem_ctx["memory_facts"]
+        # Active bot inspection so chat (Groq) can discuss real commands/weaknesses
+        try:
+            from telegram_bot_engine.services.bot_inspector import inspect_bot_project
+            from telegram_bot_engine.services.bot_inspector.service import resolve_user_bot_path
+            _bot_path = resolve_user_bot_path(
+                user_data=dict(context.user_data or {}),
+            )
+            if _bot_path:
+                _insp = inspect_bot_project(_bot_path)
+                chat_context["active_bot"] = _insp.to_dict()
+                chat_context["active_bot_brief"] = _insp.chat_brief()
+                if context.user_data is not None:
+                    context.user_data["last_project_path"] = _bot_path
+        except Exception:
+            logger.exception("bot inspection for chat failed")
         try:
             from telegram_bot_engine.services.translator_client import chat_request
             chat_result = chat_request(request, chat_context)
@@ -756,7 +771,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 _translation = chat_result.get("translation")
                 _action = chat_result.get("action") if isinstance(chat_result.get("action"), dict) else {}
                 if (
-                    str(_action.get("name") or "") == "generate_bot"
+                    str(_action.get("name") or "") in {"generate_bot", "refine_bot"}
                     and isinstance(_translation, dict)
                     and validate_spec_translation(_translation)
                 ):
@@ -811,6 +826,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if _translated_generation_request:
             request = _translated_generation_request
+            # refine_bot: merge structural features from the user's current bot
+            try:
+                _act = (chat_result or {}).get("action") if isinstance(chat_result, dict) else None
+                _an = str((_act or {}).get("name") or "") if isinstance(_act, dict) else ""
+                if _an == "refine_bot" or "refine" in (_translation_source or ""):
+                    from telegram_bot_engine.services.bot_inspector import inspect_bot_project
+                    from telegram_bot_engine.services.bot_inspector.service import resolve_user_bot_path
+                    _bp = resolve_user_bot_path(user_data=dict(context.user_data or {}))
+                    if _bp:
+                        _ins = inspect_bot_project(_bp)
+                        prior = list(_ins.features_hint or [])
+                        # map commands → features via command_map when features_hint empty
+                        if not prior and _ins.commands:
+                            try:
+                                from telegram_bot_engine.spec_core.command_map import feature_for_command
+                                for c in _ins.commands:
+                                    f = feature_for_command(c)
+                                    if f and f not in prior:
+                                        prior.append(f)
+                            except Exception:
+                                pass
+                        merged = []
+                        for k in list(prior) + list(_translated_preferred_keys or []):
+                            if k and k not in merged:
+                                merged.append(k)
+                        if merged:
+                            _translated_preferred_keys = merged
+                        # ensure request mentions prior bot refine
+                        if "refine" not in request.lower() and "تعديل" not in request:
+                            request = (
+                                f"تعديل البوت الحالي مع الاحتفاظ بالميزات: "
+                                f"{', '.join(prior[:20])}. التغيير المطلوب: {request}"
+                            )
+            except Exception:
+                logger.exception("refine_bot feature merge failed")
             if context.user_data is not None:
                 context.user_data["translated_spec_request"] = request
                 context.user_data["translated_preferred_keys"] = _translated_preferred_keys
@@ -822,7 +872,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _answer = str((chat_result or {}).get("answer") or "").strip() if isinstance(chat_result, dict) else ""
         _action = (chat_result or {}).get("action") if isinstance(chat_result, dict) else None
         _action_name = str((_action or {}).get("name") or "") if isinstance(_action, dict) else ""
-        if isinstance(_action, dict) and _action_name == "generate_bot" and not _action.get("requires_confirmation"):
+        if isinstance(_action, dict) and _action_name in {"generate_bot", "refine_bot"} and not _action.get("requires_confirmation"):
             _force_generate = True
         # Gemini often *says* it will generate without setting action=generate_bot.
         if _answer and re.search(
@@ -1684,6 +1734,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         "entry_point": "main.py",
                     },
                 )
+                if context.user_data is not None:
+                    context.user_data["last_project_path"] = str(result.project_path)
+                    context.user_data["active_bot_path"] = str(result.project_path)
+                try:
+                    from telegram_bot_engine.services.chat_memory import get_chat_memory
+                    if user:
+                        get_chat_memory().set_facts(
+                            int(user.id),
+                            last_project_path=str(result.project_path),
+                            last_bot_request=(request or "")[:500],
+                        )
+                except Exception:
+                    logger.exception("chat_memory project fact failed")
             _persist_session(user, context)
         except Exception:
             pass
