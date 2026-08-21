@@ -23,8 +23,8 @@ def architect_view(state: AgentState) -> dict[str, Any]:
         "route_params": dict(state.route_params or {}),
         "preferred_keys_hint": list(state.preferred_keys or [])[:40],
         "attempts": state.attempts,
-        # Phase C will inject qa_report summary here for repair only
-        "qa_summary": _qa_summary(state) if state.attempts > 0 else None,
+        # Phase C: always pass QA summary when present so Architect can repair
+        "qa_summary": _qa_summary(state),
     }
 
 

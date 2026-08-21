@@ -1,8 +1,8 @@
 """
 Extensible Multi-Agent Orchestrator.
 
-Runs the registered agent pipeline against a BlackboardStore.
-Adding a new agent = registry.register(MyAgent()) — no core edits required.
+Phase C: Critic repair loop — QA FAIL → Architect repair → Builder → Critic
+until PASSED or max_attempts.
 """
 from __future__ import annotations
 
@@ -24,6 +24,14 @@ def orchestrator_enabled() -> bool:
     }
 
 
+def _max_attempts(state: AgentState) -> int:
+    try:
+        env = int(os.environ.get("MULTI_AGENT_MAX_ATTEMPTS") or state.max_attempts or 3)
+    except ValueError:
+        env = 3
+    return max(1, min(env, 5))
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -33,6 +41,52 @@ class Orchestrator:
         self.registry = registry or get_registry()
         self.board = board or get_blackboard()
 
+    def _agent(self, name: str):
+        for a in self.registry.pipeline():
+            if a.name == name:
+                return a
+        return None
+
+    def _run_agent(self, name: str, state: AgentState, ctx: dict[str, Any]) -> AgentState:
+        agent = self._agent(name)
+        if agent is None:
+            state.record(AgentRole.ORCHESTRATOR, "missing_agent", name)
+            return state
+        if not agent.can_run(state) and name != "architect":
+            # architect always runs in repair loop
+            if name == "critic" and state.build_success:
+                pass
+            elif name != "architect":
+                state.record(AgentRole.ORCHESTRATOR, "can_run_false", name)
+                return state
+        try:
+            state = agent.run(state, context=ctx)
+        except Exception as exc:
+            logger.exception("agent %s crashed", name)
+            state.record(AgentRole.ORCHESTRATOR, "agent_crash", f"{name}:{type(exc).__name__}")
+            try:
+                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=name, force=True)
+            except Exception:
+                state.status = AgentStatus.FAILED.value
+        self.board.put(state)
+        return state
+
+    def _builder_with_gate(self, state: AgentState, ctx: dict[str, Any]) -> AgentState:
+        from .gates import architect_gate, apply_catalog_filter_to_state
+        state = apply_catalog_filter_to_state(state)
+        ok, errors = architect_gate(state)
+        if not ok:
+            state.build_success = False
+            state.build_errors = list(errors)
+            state.record(AgentRole.ORCHESTRATOR, "builder_blocked", ",".join(errors[:5]))
+            try:
+                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="spec_gate", force=True)
+            except Exception:
+                state.status = AgentStatus.FAILED.value
+            self.board.put(state)
+            return state
+        return self._run_agent("builder", state, ctx)
+
     def run(
         self,
         state: AgentState,
@@ -41,55 +95,90 @@ class Orchestrator:
     ) -> AgentState:
         ctx = dict(context or {})
         self.board.put(state)
-        state.record(AgentRole.ORCHESTRATOR, "pipeline_start", f"agents={self.registry.names()}")
+        max_att = _max_attempts(state)
+        state.max_attempts = max_att
+        state.record(
+            AgentRole.ORCHESTRATOR,
+            "pipeline_start",
+            f"agents={self.registry.names()} max_attempts={max_att}",
+        )
 
-        for agent in self.registry.pipeline():
-            if state.status in {AgentStatus.CANCELLED.value}:
-                break
-            # Skip remaining build chain if already failed hard before builder done
-            if state.status == AgentStatus.FAILED.value and agent.order >= 40:
-                # still allow critic? no — skip
-                state.record(AgentRole.ORCHESTRATOR, "skip_agent", agent.name)
-                continue
-            if not agent.can_run(state):
-                state.record(AgentRole.ORCHESTRATOR, "can_run_false", agent.name)
-                continue
-            # Phase B hard gate: Builder blocked without buildable StrictSpec
-            if agent.name == "builder":
-                from .gates import architect_gate, apply_catalog_filter_to_state
-                state = apply_catalog_filter_to_state(state)
-                ok, errors = architect_gate(state)
-                if not ok:
-                    state.build_success = False
-                    state.build_errors = list(errors)
-                    state.record(AgentRole.ORCHESTRATOR, "builder_blocked", ",".join(errors[:5]))
-                    try:
-                        state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="spec_gate")
-                    except Exception:
-                        state.status = AgentStatus.FAILED.value
-                    self.board.put(state)
-                    continue
+        # 1) Router once
+        state = self._run_agent("router", state, ctx)
+        if state.status == AgentStatus.CANCELLED.value:
+            return self._deliver(state)
+
+        # 2) Build–QA loop (Phase C)
+        while True:
+            # Architect (fresh plan or repair using qa_summary in architect_view)
             try:
-                state = agent.run(state, context=ctx)
-            except Exception as exc:
-                logger.exception("agent %s crashed", agent.name)
-                state.record(AgentRole.ORCHESTRATOR, "agent_crash", f"{agent.name}:{type(exc).__name__}")
+                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.PLANNING.value
+            state = self._run_agent("architect", state, ctx)
+
+            # Builder + gate
+            state = self._builder_with_gate(state, ctx)
+
+            # Critic only if build produced a path
+            if state.build_success and (state.generated_path or "").strip():
+                state = self._run_agent("critic", state, ctx)
+            else:
+                state.qa_passed = False
+                if not state.qa_report:
+                    state.qa_report = {
+                        "ok": False,
+                        "errors": list(state.build_errors or ["build_failed"]),
+                        "attempt": state.attempts,
+                    }
                 try:
-                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=agent.name)
+                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="no_build", force=True)
                 except Exception:
                     state.status = AgentStatus.FAILED.value
-            self.board.put(state)
+                self.board.put(state)
 
-        # Deliver
-        from .context_views import deliver_view
-        dview = deliver_view(state)
-        if state.status == AgentStatus.PASSED.value:
-            state.final_message = (
-                f"تم البناء بنجاح.\nالمسار: {state.generated_path}\n"
-                f"QA: PASSED\nstate_id: {state.state_id}"
+            if state.status == AgentStatus.PASSED.value or state.qa_passed:
+                break
+
+            # Repair decision
+            if int(state.attempts or 0) >= max_att:
+                state.record(
+                    AgentRole.ORCHESTRATOR,
+                    "repair_exhausted",
+                    f"attempts={state.attempts} max={max_att}",
+                )
+                break
+
+            # Prepare next iteration: QA → PLANNING
+            state.record(
+                AgentRole.ORCHESTRATOR,
+                "repair_loop",
+                f"attempt={state.attempts} errors={(state.qa_report or {}).get('errors', [])[:3]}",
             )
             try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR)
+                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.PLANNING.value
+            # Keep qa_report for architect_view; clear build flags for next try
+            state.build_success = False
+            state.generated_path = state.generated_path  # keep last path for reference in extensions
+            state.extensions["last_failed_path"] = state.generated_path
+            state.generated_path = ""
+            self.board.put(state)
+
+        return self._deliver(state)
+
+    def _deliver(self, state: AgentState) -> AgentState:
+        from .context_views import deliver_view
+        dview = deliver_view(state)
+        if state.status == AgentStatus.PASSED.value or state.qa_passed:
+            state.final_message = (
+                f"تم البناء بنجاح.\nالمسار: {state.generated_path}\n"
+                f"QA: PASSED\nمحاولات: {state.attempts}/{state.max_attempts}\n"
+                f"state_id: {state.state_id}"
+            )
+            try:
+                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
             except Exception:
                 state.status = AgentStatus.DELIVERED.value
         elif dview.get("clarification_needed") and dview.get("clarification_questions"):
@@ -106,23 +195,22 @@ class Orchestrator:
         else:
             qa_errs = (state.qa_report or {}).get("errors") or state.build_errors or []
             state.final_message = (
-                f"انتهى المسار بحالة {state.status}.\n"
+                f"انتهى المسار بحالة {state.status} بعد {state.attempts} محاولة/محاولات.\n"
                 f"المسار: {state.generated_path or '—'}\n"
                 f"QA: {'PASSED' if state.qa_passed else 'FAILED'}\n"
-                f"تفاصيل: {'; '.join(str(e) for e in qa_errs[:3])}\n"
+                f"تفاصيل: {'; '.join(str(e) for e in qa_errs[:5])}\n"
                 f"state_id: {state.state_id}"
             )
-            if state.status != AgentStatus.DELIVERED.value:
-                try:
-                    state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-                except Exception:
-                    state.status = AgentStatus.DELIVERED.value
+            try:
+                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.DELIVERED.value
             state.record(AgentRole.ORCHESTRATOR, "deliver_terminal", state.status)
 
         self.board.put(state)
         logger.info(
-            "orchestrator done id=%s status=%s path=%s qa=%s",
-            state.state_id, state.status, state.generated_path, state.qa_passed,
+            "orchestrator done id=%s status=%s path=%s qa=%s attempts=%s",
+            state.state_id, state.status, state.generated_path, state.qa_passed, state.attempts,
         )
         return state
 
@@ -150,7 +238,6 @@ def orchestrate_generate(
     state = orch.run(state, context={"work_dir": work})
 
     result = (state.extensions or {}).pop("_generation_result", None)
-    # ensure not persisted
     state.extensions.pop("_generation_result", None)
     try:
         orch.board.put(state)
@@ -162,6 +249,10 @@ def orchestrate_generate(
             meta = dict(getattr(result, "metadata", None) or {})
             meta["multi_agent"] = state.to_dict()
             result.metadata = meta
+            # If final QA failed after retries, surface honesty
+            if not state.qa_passed and getattr(result, "success", False):
+                meta["qa_failed_after_retries"] = True
+                result.metadata = meta
         except Exception:
             pass
         return result
@@ -174,7 +265,6 @@ def orchestrate_generate(
     )
 
 
-# Backward-compatible helpers
 def save_state(state: AgentState) -> AgentState:
     return get_blackboard().put(state)
 
