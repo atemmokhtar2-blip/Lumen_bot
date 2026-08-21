@@ -137,39 +137,10 @@ def _key_failover_enabled() -> bool:
 
 
 def _api_keys() -> list[tuple[str, str]]:
-    """Resolve ordered, deduplicated keys without exposing values in logs."""
-    names = _KEY_ENV_NAMES + _NUMBERED_KEY_ENV_NAMES
-    resolved: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for name in names:
-        val = _normalize_secret(os.getenv(name) or "")
-        if val and val not in seen:
-            resolved.append((name, val))
-            seen.add(val)
-    wanted = {n.upper() for n in names}
-    try:
-        for k, v in list(os.environ.items()):
-            if (k or "").strip().upper() in wanted:
-                val = _normalize_secret(v or "")
-                if val and val not in seen:
-                    resolved.append((k, val))
-                    seen.add(val)
-    except Exception:
-        logger.exception("Gemini env scan failed")
-    if not resolved:
-        for path in (
-            (os.getenv("GEMINI_API_KEY_FILE") or "").strip(),
-            (os.getenv("GOOGLE_API_KEY_FILE") or "").strip(),
-            "/run/secrets/gemini_api_key",
-            "/run/secrets/GEMINI_API_KEY",
-        ):
-            if not path:
-                continue
-            val = _read_key_file(path)
-            if val and val not in seen:
-                resolved.append((path, val))
-                seen.add(val)
-    return resolved
+    """Resolve ordered keys: primary aliases + GEMINI_API_KEY_0..150 via key_pool."""
+    from telegram_bot_engine.services.llm.key_pool import gemini_keys
+    return gemini_keys()
+
 
 
 def _api_key() -> str:
@@ -179,18 +150,16 @@ def _api_key() -> str:
 
 
 def _available_api_keys() -> list[tuple[str, str]]:
-    keys = _api_keys()
-    if not _key_failover_enabled() or len(keys) <= 1:
-        return keys[:1]
-    now = time.monotonic()
-    available = [(source, key) for source, key in keys if _KEY_COOLDOWN_UNTIL.get(source, 0.0) <= now]
-    return available or keys[:1]
+    """Keys not in cooldown; failover until exhausted then retry soonest."""
+    from telegram_bot_engine.services.llm.key_pool import gemini_available
+    return gemini_available()
+
 
 
 def _cooldown_key(source: str) -> None:
-    cooldown = _key_cooldown_seconds()
-    if cooldown > 0:
-        _KEY_COOLDOWN_UNTIL[source] = time.monotonic() + cooldown
+    from telegram_bot_engine.services.llm.key_pool import mark_gemini_cooldown
+    mark_gemini_cooldown(source)
+
 
 
 def enabled() -> bool:

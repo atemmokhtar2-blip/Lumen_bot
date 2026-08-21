@@ -163,12 +163,18 @@ def chat_request(
 
 
 def status_snapshot() -> dict[str, Any]:
-    """Observability: which providers are selected (not whether keys work)."""
+    """Observability: providers + key pool counts (never raw secrets)."""
+    try:
+        from telegram_bot_engine.services.llm.key_pool import pool_status
+        pool = pool_status()
+    except Exception:
+        pool = {}
     return {
         "translate_provider": get_translate_provider_name(),
         "chat_provider": get_chat_provider_name(),
         "translate_registry": sorted(_TRANSLATE_REGISTRY.keys()),
         "chat_registry": sorted(_CHAT_REGISTRY.keys()),
+        "key_pool": pool,
     }
 
 

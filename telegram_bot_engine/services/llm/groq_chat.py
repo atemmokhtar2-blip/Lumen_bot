@@ -42,19 +42,9 @@ def _truthy(value: str | None) -> bool:
 
 
 def _api_keys() -> list[tuple[str, str]]:
-    found: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    primary = (os.getenv("GROQ_API_KEY") or "").strip()
-    if primary and primary not in seen:
-        found.append(("GROQ_API_KEY", primary))
-        seen.add(primary)
-    for idx in range(1, 51):
-        name = f"GROQ_API_KEY_{idx}"
-        val = (os.getenv(name) or "").strip()
-        if val and val not in seen:
-            found.append((name, val))
-            seen.add(val)
-    return found
+    from telegram_bot_engine.services.llm.key_pool import groq_keys
+    return groq_keys()
+
 
 
 def _enabled() -> bool:
@@ -74,14 +64,9 @@ def _cooldown_sec() -> float:
 
 
 def _available_keys() -> list[tuple[str, str]]:
-    keys = _api_keys()
-    if not keys:
-        return []
-    if not _truthy(os.getenv("GROQ_KEY_FAILOVER_ENABLED") or "1"):
-        return keys[:1]
-    now = time.monotonic()
-    ready = [(s, k) for s, k in keys if _KEY_COOLDOWN_UNTIL.get(s, 0.0) <= now]
-    return ready or keys[:1]
+    from telegram_bot_engine.services.llm.key_pool import groq_available
+    return groq_available()
+
 
 
 def _models() -> list[str]:
@@ -233,7 +218,8 @@ def chat_via_groq(
                     timeout=_timeout(),
                 )
                 if resp.status_code in {401, 403, 429}:
-                    _KEY_COOLDOWN_UNTIL[source] = time.monotonic() + _cooldown_sec()
+                    from telegram_bot_engine.services.llm.key_pool import mark_groq_cooldown
+                    mark_groq_cooldown(source)
                     logger.warning(
                         "Groq chat HTTP %s source=%s model=%s — cooldown",
                         resp.status_code,

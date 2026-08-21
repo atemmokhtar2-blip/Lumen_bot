@@ -49,20 +49,10 @@ def _enabled() -> bool:
 
 
 def _api_keys() -> list[tuple[str, str]]:
-    """Collect GROQ_API_KEY + GROQ_API_KEY_1..50 (same pattern as Gemini)."""
-    found: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    primary = (os.getenv("GROQ_API_KEY") or "").strip()
-    if primary and primary not in seen:
-        found.append(("GROQ_API_KEY", primary))
-        seen.add(primary)
-    for idx in range(1, 51):
-        name = f"GROQ_API_KEY_{idx}"
-        val = (os.getenv(name) or "").strip()
-        if val and val not in seen:
-            found.append((name, val))
-            seen.add(val)
-    return found
+    """GROQ_API_KEY + GROQ_API_KEY_1..50 via shared key_pool."""
+    from telegram_bot_engine.services.llm.key_pool import groq_keys
+    return groq_keys()
+
 
 
 def _key_cooldown_seconds() -> float:
@@ -73,21 +63,15 @@ def _key_cooldown_seconds() -> float:
 
 
 def _available_keys() -> list[tuple[str, str]]:
-    keys = _api_keys()
-    if not keys:
-        return []
-    if not _truthy(os.getenv("GROQ_KEY_FAILOVER_ENABLED") or "1"):
-        return keys[:1]
-    now = time.monotonic()
-    ready = [(s, k) for s, k in keys if _KEY_COOLDOWN_UNTIL.get(s, 0.0) <= now]
-    return ready or keys[:1]
+    from telegram_bot_engine.services.llm.key_pool import groq_available
+    return groq_available()
+
 
 
 def _cooldown_key(source: str) -> None:
-    sec = _key_cooldown_seconds()
-    if sec > 0:
-        _KEY_COOLDOWN_UNTIL[source] = time.monotonic() + sec
-        logger.warning("Groq key cooldown source=%s for %.0fs", source, sec)
+    from telegram_bot_engine.services.llm.key_pool import mark_groq_cooldown
+    mark_groq_cooldown(source)
+
 
 
 def _models() -> list[str]:
