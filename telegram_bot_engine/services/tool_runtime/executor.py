@@ -182,98 +182,160 @@ def _tool_repo_inspect(
     )
 
 
+
 def _tool_repo_understand(
     params: dict[str, Any],
     *,
     user_data: dict[str, Any],
 ) -> ToolResult:
-    """Deep structural understanding — deterministic scanner, not the LLM."""
+    """Deep structural understanding via engine scanner — never the chat LLM."""
     path = str(params.get("path") or "").strip()
+    url = str(params.get("url") or "").strip()
     if not path:
         active = user_data.get("active_repo")
         if isinstance(active, dict):
             path = str(active.get("path") or "")
+            if not url:
+                url = str(active.get("url") or "")
         if not path:
             path = str(user_data.get("last_project_path") or "")
+
+    # If only URL given (or text contains github) and no local path → clone first
+    text_blob = str(params.get("text") or params.get("raw_text") or "").strip()
+    if (not path or not Path(path).is_dir()) and (url or text_blob):
+        try:
+            from telegram_bot_engine.services.git_safe_import import get_smart_clone
+            sc = get_smart_clone()
+            extract_repo_url = sc.extract_repo_url
+            smart_clone = sc.smart_clone
+            found = url or (extract_repo_url(text_blob) or "")
+            if found:
+                uid = int(user_data.get("user_id") or 0)
+                try:
+                    from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+                    dest = get_user_sandbox(uid, _output_dir()).new_clone_dir(label="understand")
+                except Exception:
+                    dest = _output_dir() / "clones" / str(uid or "anon")
+                    dest.mkdir(parents=True, exist_ok=True)
+                token = str(params.get("token") or "").strip() or None
+                clone_res = smart_clone(found, dest_dir=dest, token=token, url_override=found)
+                if not getattr(clone_res, "ok", False):
+                    return ToolResult(
+                        ok=False,
+                        tool="repo_understand",
+                        message=getattr(clone_res, "message", None) or "فشل سحب المستودع قبل الفهم",
+                        data={"url": found},
+                        needs_auth=bool(getattr(clone_res, "needs_auth", False)),
+                    )
+                path = str(clone_res.path or "")
+                url = str(clone_res.url or found)
+                user_data["active_repo"] = {"path": path, "url": url}
+                user_data["last_project_path"] = path
+        except Exception as exc:
+            logger.exception("clone-before-understand failed")
+            return ToolResult(
+                ok=False,
+                tool="repo_understand",
+                message=f"تعذر السحب قبل الفهم: {type(exc).__name__}",
+            )
+
     root = Path(path) if path else None
     if not root or not root.is_dir():
-        return ToolResult(ok=False, tool="repo_understand", message="لا يوجد مستودع نشط")
+        return ToolResult(
+            ok=False,
+            tool="repo_understand",
+            message="لا يوجد مستودع نشط. اسحب مستودعاً أولاً أو أرسل رابط GitHub مع «افهم المستودع».",
+        )
 
-    data: dict[str, Any] = {"path": str(root)}
-    brief_parts: list[str] = [f"المسار: {root}"]
-
-    # Prefer production deep scanner when available
     try:
-        from telegram_bot_engine.services.repo_understanding.scanner import scan_repo
+        from telegram_bot_engine.services.repo_understanding import understand_repo
+        from telegram_bot_engine.schemas.repo_contract import safe_contract_dict
 
-        contract = scan_repo(root)
-        if hasattr(contract, "to_dict"):
-            data["contract"] = contract.to_dict()
-        else:
-            data["contract"] = {
-                "summary": str(getattr(contract, "summary", "") or "")[:500],
-                "framework": str(getattr(contract, "framework", "") or ""),
-                "entrypoints": [
-                    str(x) for x in (getattr(contract, "entry_points", None) or [])[:12]
-                ],
-            }
-        cmds = getattr(contract, "commands", None) or getattr(contract, "detected_commands", None) or []
-        cmd_names = []
-        for c in list(cmds)[:30]:
-            if hasattr(c, "name"):
-                cmd_names.append(str(c.name))
+        contract = understand_repo(root, remote_url=url or "")
+        data = safe_contract_dict(contract)
+        data["path"] = str(root)
+        if url:
+            data["url"] = url
+
+        # Human-readable Arabic brief from real contract (not LLM invention)
+        lines: list[str] = [
+            "🔍 *فهم المستودع (محرك حتمي — ليس تخمين دردشة)*",
+            f"• المسار: `{root}`",
+        ]
+        if url:
+            lines.append(f"• الرابط: {url}")
+        summary = str(data.get("summary") or getattr(contract, "summary", "") or "").strip()
+        if summary:
+            lines.append(f"• الملخص: {summary[:400]}")
+        langs = data.get("languages") or []
+        if langs:
+            lines.append("• اللغات: " + ", ".join(str(x) for x in langs[:8]))
+        fws = data.get("frameworks") or []
+        if fws:
+            lines.append("• الأُطر: " + ", ".join(str(x) for x in fws[:8]))
+        style = str(data.get("architecture_style") or "").strip()
+        if style:
+            lines.append(f"• الأسلوب: {style}")
+        # entry points
+        eps = data.get("entry_points") or []
+        ep_paths = []
+        for e in eps[:8]:
+            if isinstance(e, dict):
+                ep_paths.append(str(e.get("path") or ""))
             else:
-                cmd_names.append(str(c))
-        data["commands"] = cmd_names
+                ep_paths.append(str(getattr(e, "path", e)))
+        ep_paths = [x for x in ep_paths if x]
+        if ep_paths:
+            lines.append("• نقاط الدخول: " + ", ".join(f"`{x}`" for x in ep_paths[:6]))
+        # commands
+        cmds = data.get("commands") or []
+        cmd_names = []
+        for c in cmds[:25]:
+            if isinstance(c, dict):
+                cmd_names.append(str(c.get("name") or ""))
+            else:
+                cmd_names.append(str(getattr(c, "name", c)))
+        cmd_names = [c for c in cmd_names if c]
         if cmd_names:
-            brief_parts.append("أوامر مكتشفة: " + ", ".join("/" + c for c in cmd_names[:20]))
-        fw = data.get("contract", {}).get("framework") or getattr(contract, "framework", "")
-        if fw:
-            brief_parts.append(f"إطار العمل: {fw}")
+            lines.append("• أوامر مكتشفة: " + ", ".join("/" + c.lstrip("/") for c in cmd_names[:15]))
+        is_tg = bool(data.get("is_telegram_bot"))
+        lines.append(f"• بوت تيليجرام؟ {'نعم' if is_tg else 'لا/غير مؤكد'}")
+        fc = data.get("file_count") or data.get("python_file_count")
+        if fc:
+            lines.append(f"• ملفات: {fc}")
+        conf = data.get("confidence")
+        if conf is not None:
+            try:
+                lines.append(f"• ثقة التحليل: {float(conf):.0%}")
+            except Exception:
+                pass
+        notes = data.get("notes") or []
+        if notes:
+            lines.append("• ملاحظات: " + "; ".join(str(n)[:80] for n in notes[:4]))
+
+        brief = "\n".join(lines)
+        # persist contract on active_repo for later tools
+        active = user_data.get("active_repo")
+        if not isinstance(active, dict):
+            active = {}
+        active.update({"path": str(root), "url": url or active.get("url") or "", "contract": data})
+        user_data["active_repo"] = active
+        user_data["last_project_path"] = str(root)
+
+        return ToolResult(
+            ok=True,
+            tool="repo_understand",
+            message=brief[:4000],
+            data=data,
+        )
     except Exception as exc:
-        logger.warning("deep scan unavailable, using lightweight listing: %s", exc)
-        files: list[str] = []
-        for pth in sorted(root.rglob("*")):
-            if pth.is_file() and ".git" not in pth.parts and "__pycache__" not in pth.parts:
-                rel = pth.relative_to(root).as_posix()
-                if rel.count("/") <= 2:
-                    files.append(rel)
-            if len(files) >= 60:
-                break
-        data["files"] = files
-        brief_parts.append("ملفات: " + ", ".join(files[:25]))
-        readme = ""
-        for name in ("README.md", "README.rst", "README"):
-            rp = root / name
-            if rp.is_file():
-                try:
-                    readme = rp.read_text(encoding="utf-8", errors="replace")[:1500]
-                except Exception:
-                    readme = ""
-                break
-        if readme:
-            data["readme_preview"] = readme[:800]
-            brief_parts.append("README: " + readme[:240].replace("\n", " "))
-
-    # Always attach top-level listing for chat
-    try:
-        top = sorted(
-            p.name for p in root.iterdir()
-            if p.name not in {".git", "__pycache__", ".venv", "node_modules"}
-        )[:40]
-        data["top_level"] = top
-        brief_parts.append("المستوى الأعلى: " + ", ".join(top[:20]))
-    except Exception:
-        pass
-
-    return ToolResult(
-        ok=True,
-        tool="repo_understand",
-        message="\n".join(brief_parts)[:3500],
-        data=data,
-    )
-
-
+        logger.exception("repo_understand failed")
+        return ToolResult(
+            ok=False,
+            tool="repo_understand",
+            message=f"فشل فهم المستودع: {type(exc).__name__}: {exc}",
+            data={"path": str(root)},
+        )
 
 
 def _tool_repo_modify(

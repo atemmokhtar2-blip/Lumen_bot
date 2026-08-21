@@ -155,6 +155,23 @@ _BUILTIN: list[Capability] = [
         priority=87,
     ),
     Capability(
+        id="repo_understand",
+        title_ar="فهم المستودع",
+        description_ar="تحليل هيكلي حتمي للمستودع النشط أو بعد السحب",
+        phrases=(
+            "افهم المستودع", "فهم المستودع", "حلل المستودع", "اشرح المستودع",
+            "فهم الريبو", "افهم الريبو", "understand repo", "analyze repo",
+            "وش فيه المستودع", "ايه اللي في المستودع", "وصف المستودع",
+        ),
+        patterns=(
+            r"افهم\s*المستودع", r"فهم\s*المستودع", r"اشرح\s*المستودع",
+            r"حلل\s*المستودع", r"understand\s*repo", r"analyze\s*repo",
+        ),
+        boost_words=("مستودع", "ريبو", "repo", "github"),
+        priority=88,
+        needs_active_repo=False,
+    ),
+    Capability(
         id="clone_repo",
         title_ar="سحب مستودع",
         description_ar="سحب مستودع Git وفهمه",

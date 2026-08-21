@@ -1501,6 +1501,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "clone_repo", "create_repo", "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose",
         "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
         "repo_develop", "live_run", "generate_bot",
+        "repo_understand", "repo_inspect", "repo_modify",
     }
     _is_hard = (
         _rt is not None
@@ -1513,6 +1514,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _ai_route_generate = bool(
         _is_hard and getattr(_rt, "capability_id", "") == "generate_bot"
     )
+
+    # Engine-only hard tools (Grok/chat only routes intent — engines execute)
+    _engine_only = {
+        "repo_understand", "repo_inspect", "repo_modify",
+        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
+        "live_run",
+    }
+    if _is_hard and getattr(_rt, "capability_id", "") in _engine_only:
+        await _clear_thinking()
+        cap = str(_rt.capability_id)
+        status = await message.reply_text(f"⚙️ جاري تنفيذ `{cap}` عبر المحرك...")
+        try:
+            from telegram_bot_engine.services.tool_runtime import execute_tool
+            params = dict(getattr(_rt, "params", None) or {})
+            params.setdefault("text", request)
+            params.setdefault("raw_text", request)
+            # pass user_id for sandbox clone-if-needed
+            ud = dict(context.user_data or {})
+            ud["user_id"] = int(user.id) if user else 0
+            tr = execute_tool(cap, params, user_id=int(user.id) if user else 0, user_data=ud)
+            # write back active_repo if tool updated ud
+            if context.user_data is not None and isinstance(ud.get("active_repo"), dict):
+                context.user_data["active_repo"] = ud["active_repo"]
+                if ud.get("last_project_path"):
+                    context.user_data["last_project_path"] = ud["last_project_path"]
+                try:
+                    _persist_session(user, context)
+                except Exception:
+                    pass
+            await status.edit_text((tr.message or ("تم" if tr.ok else "فشل"))[:4000])
+        except Exception as e:
+            logger.exception("engine-only tool failed: %s", cap)
+            await status.edit_text(f"❌ فشل تنفيذ {cap}: {type(e).__name__}")
+        return
 
     # Non-bot, non-hard messages: short deterministic help (no AI)
     # Exception: just finished L3 clarify → always continue to generate

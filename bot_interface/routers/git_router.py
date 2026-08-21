@@ -244,16 +244,24 @@ async def try_handle_git(
                     return understand_repo(result.path, remote_url=result.url or "")
 
                 repo_contract = await asyncio.to_thread(_do_u)
+                from telegram_bot_engine.schemas.repo_contract import safe_contract_dict
+                _cdata = safe_contract_dict(repo_contract)
                 context.user_data["active_repo"] = {
                     "path": result.path,
                     "url": result.url,
-                    "contract": (
-                        __import__(
-                            "telegram_bot_engine.schemas.repo_contract",
-                            fromlist=["safe_contract_dict"],
-                        ).safe_contract_dict(repo_contract)
-                    ),
+                    "contract": _cdata,
                 }
+                if _cdata.get("summary"):
+                    lines.append(f"• الملخص: {str(_cdata.get('summary'))[:300]}")
+                _eps = _cdata.get("entry_points") or []
+                _ep_show = []
+                for e in _eps[:5]:
+                    if isinstance(e, dict) and e.get("path"):
+                        _ep_show.append(str(e["path"]))
+                if _ep_show:
+                    lines.append("• نقاط الدخول: " + ", ".join(f"`{x}`" for x in _ep_show))
+                if _cdata.get("is_telegram_bot"):
+                    lines.append("• يبدو كبوت تيليجرام")
                 try:
                     from telegram_bot_engine.services.repo_understanding.contract import is_runnable_bot
                     _is_runnable = is_runnable_bot(repo_contract)
