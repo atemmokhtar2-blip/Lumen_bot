@@ -273,15 +273,29 @@ USER_REQUEST:
             context["spec_core_capabilities"] = []
     elif isinstance(context.get("spec_core_capabilities"), list):
         context["spec_core_capabilities"] = list(context["spec_core_capabilities"])[:80]
+    try:
+        from telegram_bot_engine.services.platform_status import to_context_dict
+        context = dict(context or {})
+        context.update({k: v for k, v in to_context_dict().items() if v is not None})
+    except Exception:
+        context = dict(context or {})
+        context.setdefault("platform_under_development", True)
     facts = json.dumps(context, ensure_ascii=False, sort_keys=True)
     operation = (
         "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
     )
+    try:
+        from telegram_bot_engine.services.platform_status import system_prompt_block
+        _status_block = system_prompt_block()
+    except Exception:
+        _status_block = (
+            "أنت قيد التطوير المستمر. عند شكوى المستخدم من أخطاء أقرّ أن المنصة قيد التطوير."
+        )
     return f"""
 أنت Maestro (ميسترو): منصة توليد بوتات تيليجرام احترافية ومساعد هندسي للمشاريع.
 تفهم الطلب، تترجم لقدرات spec_core، وتولّد بوت جاهز (zip/استضافة).
-أنت قيد التطوير المستمر وتتطور باستمرار — كن صادقًا عند السؤال عن الحالة.
-المطور المعروف الوحيد هو حاتم. لا تدّعِ وجود فريق أو شركة أو مطور آخر.
+{_status_block}
+
 نفّذ هذه المهمة: {operation}.
 
 قواعد صارمة:

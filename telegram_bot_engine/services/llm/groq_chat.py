@@ -86,22 +86,37 @@ def _timeout() -> float:
 
 
 def _product_brief() -> str:
-    return (
-        "أنت Maestro (ميسترو): منصة توليد بوتات تيليجرام احترافية.\n"
-        "ماذا تفعل: تفهم طلب المستخدم بالعربي/الإنجليزي، تترجم المواصفات لقدرات حقيقية "
-        "(spec_core)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته.\n"
-        "دورك: تفهم نية المستخدم وتختار أداة من قائمة الأدوات فقط. "
-        "لا تسحب مستودعات ولا تعدّل ملفات بنفسك — التنفيذ دائمًا على محركات Maestro. "
-        "الأدوات: clone_repo, repo_inspect, repo_understand, generate_bot, refine_bot, "
-        "host_status, host_start, host_stop. "
-        "عند الحاجة املأ action.name باسم الأداة وaction.params بالوسائط (مثل url). "
-        "لتحليل بوت موجود استخدم active_bot_brief أو action=repo_inspect. "
-        "للتعديل action=refine_bot مع translation.spec_request.\n"
-        "حالة المنتج: أنت قيد التطوير المستمر وتتطور باستمرار — كن صادقًا وواضحًا عند السؤال.\n"
-        "المطور المعروف الوحيد هو حاتم. لا تخترع فريقًا أو شركة.\n"
-        "الخطط والحدود والاستخدام: فقط من SERVER_CONTEXT (plan، usage، quotas). "
-        "إن لم توجد المعلومة قل ذلك بصراحة ولا تخترع أرقامًا.\n"
-    )
+    try:
+        from telegram_bot_engine.services.platform_status import system_prompt_block
+        status_block = system_prompt_block()
+    except Exception:
+        status_block = (
+            "حالة المنتج: أنت قيد التطوير المستمر — عند شكوى المستخدم من أخطاء "
+            "أقرّ بذلك وقل إن المنصة قيد التطوير والمشاكل تُصلح مع التحديثات."
+        )
+    parts = [
+        "أنت Maestro (ميسترو): منصة توليد بوتات تيليجرام احترافية.",
+        (
+            "ماذا تفعل: تفهم طلب المستخدم بالعربي/الإنجليزي، تترجم المواصفات لقدرات حقيقية "
+            "(spec_core)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته."
+        ),
+        (
+            "دورك: تفهم نية المستخدم وتختار أداة من قائمة الأدوات فقط. "
+            "لا تسحب مستودعات ولا تعدّل ملفات بنفسك — التنفيذ دائمًا على محركات Maestro. "
+            "الأدوات: clone_repo, repo_inspect, repo_understand, generate_bot, refine_bot, "
+            "host_status, host_start, host_stop. "
+            "عند الحاجة املأ action.name باسم الأداة وaction.params بالوسائط (مثل url). "
+            "لتحليل بوت موجود استخدم active_bot_brief أو action=repo_inspect. "
+            "للتعديل action=refine_bot مع translation.spec_request."
+        ),
+        status_block,
+        (
+            "الخطط والحدود والاستخدام: فقط من SERVER_CONTEXT (plan، usage، quotas). "
+            "إن لم توجد المعلومة قل ذلك بصراحة ولا تخترع أرقامًا."
+        ),
+    ]
+    return "\n".join(parts) + "\n"
+
 
 
 def _build_system(context: dict[str, Any]) -> str:
@@ -114,6 +129,12 @@ def _build_system(context: dict[str, Any]) -> str:
         caps = list(context.get("spec_core_capabilities") or [])[:80]
     context = dict(context or {})
     context["spec_core_capabilities"] = caps
+    try:
+        from telegram_bot_engine.services.platform_status import to_context_dict
+        context.update({k: v for k, v in to_context_dict().items() if v is not None})
+    except Exception:
+        context.setdefault("platform_under_development", True)
+        context.setdefault("platform_status", "قيد التطوير المستمر")
     facts = json.dumps(context, ensure_ascii=False, sort_keys=True)[:12000]
     try:
         from telegram_bot_engine.services.tool_runtime.registry import tool_catalog_for_prompt

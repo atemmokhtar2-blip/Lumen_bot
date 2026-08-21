@@ -201,6 +201,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _clear_thinking()
         return
 
+    # Platform under development: deterministic reply on error/bug complaints
+    try:
+        from telegram_bot_engine.services.platform_status import (
+            is_under_development,
+            looks_like_error_complaint,
+            complaint_reply_ar,
+        )
+        if is_under_development() and looks_like_error_complaint(request):
+            # Keep routing for clear action requests; only pure complaints get this reply.
+            _actionish = any(
+                k in request.lower()
+                for k in (
+                    "clone", "generate", "استضاف", "ولّد", "ولد", "اسحب",
+                    "repo", "git", "شغل", "ابدأ", "ابدء",
+                )
+            )
+            if not _actionish:
+                await _clear_thinking()
+                await message.reply_text(complaint_reply_ar()[:4000])
+                return
+    except Exception:
+        logger.exception("platform_status complaint handler failed")
+
     # Multi-agent HITL (Phase D): تأكيد/رفض <id> [<token>]
     try:
         from ..multi_agent_bridge import try_handle_hitl_message
