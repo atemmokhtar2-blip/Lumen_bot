@@ -265,11 +265,14 @@ def _tool_repo_understand(
         active = user_data.get("active_repo")
         if not isinstance(active, dict):
             active = {}
+        dos = (meta or {}).get("dossier") or {}
         active.update(
             {
                 "path": str(root),
                 "url": url or active.get("url") or "",
-                "dossier": (meta or {}).get("dossier") or {},
+                "dossier": dos,
+                "facts": dos.get("facts") or active.get("facts") or {},
+                "bound_for_grok": True,
             }
         )
         user_data["active_repo"] = active

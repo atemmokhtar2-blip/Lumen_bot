@@ -712,6 +712,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             live_context["active_repo"] = {
                 "path": str(_active_repo.get("path") or ""),
                 "url": str(_active_repo.get("url") or ""),
+                "facts": _active_repo.get("facts") or (_active_repo.get("dossier") or {}).get("facts") or {},
+                "key_file_names": (_active_repo.get("dossier") or {}).get("key_file_names")
+                    or list((_active_repo.get("dossier") or {}).get("key_files") or [])[:20],
+                "bound": True,
             }
 
         # Durable chat memory (survives key failover + worker restart)
@@ -1496,37 +1500,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Phase 4 — Developer partner mode (AI only, zero fixed scripts)
     # SmartChat + memory + context: clarify, challenge, route to engines.
     # ------------------------------------------------------------------
-    # Follow-up questions about already-cloned active_repo → engine+Grok path
+    # Bind Grok to the user-cloned active_repo: ANY question not clearly another
+    # hard capability is answered from that repo's materials (not phrase whitelist).
+    _repo_bound = False
     try:
         _ar = (context.user_data or {}).get("active_repo") if context.user_data else None
         _has_repo = isinstance(_ar, dict) and bool(_ar.get("path"))
-        _q = (request or "").strip()
-        _repo_follow = bool(
-            _has_repo
-            and re.search(
-                r"(افهم|فهم|اشرح|حلل|وصف).{0,20}(المستودع|الريبو|المشروع)|"
-                r"(كم|عدد).{0,12}(سطر|أسطر|اسطر|ملف)|"
-                r"(ما هو|ايه|وش).{0,20}(المستودع|المشروع)|"
-                r"understand\s+repo|how many lines|line count",
-                _q,
-                re.I,
-            )
-        )
-        if _repo_follow and context.user_data is not None:
-            # force engine tool path below via synthetic hard route
-            pass
+        from pathlib import Path as _P
+        _repo_path_ok = bool(_has_repo and _P(str(_ar.get("path"))).is_dir())
     except Exception:
-        _repo_follow = False
-        _has_repo = False
+        _repo_path_ok = False
+        _ar = None
 
     _rt = chat_route(request)
-    if (not getattr(_rt, "ok", False) or not getattr(_rt, "capability_id", "")) and locals().get("_repo_follow"):
-        class _FakeRt:
+    _other_hard_ids = {
+        "clone_repo", "create_repo", "git_push", "git_pull",
+        "host_start", "host_stop", "host_status", "host_diagnose",
+        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
+        "repo_develop", "live_run", "generate_bot", "repo_modify", "help",
+    }
+    _rt_cap = str(getattr(_rt, "capability_id", "") or "") if _rt is not None else ""
+    _rt_hard_other = (
+        bool(getattr(_rt, "ok", False))
+        and _rt_cap in _other_hard_ids
+        and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
+    )
+    _looks_gen = False
+    try:
+        _looks_gen = bool(_looks_like_generation_request(request))
+    except Exception:
+        _looks_gen = False
+
+    if (
+        _repo_path_ok
+        and not _rt_hard_other
+        and not _looks_gen
+        and not (context.user_data or {}).get("force_generate_once")
+        and len((request or "").strip()) >= 2
+    ):
+        class _BoundRepoRt:
             ok = True
             capability_id = "repo_understand"
-            confidence = 0.95
-            params = {}
-        _rt = _FakeRt()
+            confidence = 0.99
+            params = {"path": str((_ar or {}).get("path") or ""), "url": str((_ar or {}).get("url") or "")}
+        _rt = _BoundRepoRt()
+        _repo_bound = True
+        logger.info("active_repo bound → repo_understand for free-form Q")
     _hard_caps = {
         "clone_repo", "create_repo", "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose",
         "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",

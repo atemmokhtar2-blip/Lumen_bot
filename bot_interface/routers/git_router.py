@@ -235,6 +235,19 @@ async def try_handle_git(
                 "url": result.url or "",
             }
             context.user_data["last_project_path"] = result.path
+            # Bind Grok context: pre-compute measurable dossier for free-form Q&A
+            try:
+                from telegram_bot_engine.services.repo_understanding.llm_explain import gather_repo_dossier
+                _dos = gather_repo_dossier(Path(result.path))
+                context.user_data["active_repo"]["dossier"] = {
+                    "root": _dos.get("root"),
+                    "tree": _dos.get("tree"),
+                    "facts": _dos.get("facts"),
+                    "key_file_names": list((_dos.get("key_files") or {}).keys()),
+                }
+                context.user_data["active_repo"]["facts"] = _dos.get("facts") or {}
+            except Exception:
+                logger.exception("post-clone dossier gather failed")
             _persist_session(user, context)
             try:
                 await status.edit_text("\n".join(lines + ["", "🔍 جاري فهم المستودع..."]))
