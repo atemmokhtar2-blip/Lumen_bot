@@ -208,6 +208,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
+    _thinking_msg = None  # chat UX indicator; deleted when reply is ready
     # Restore durable session (pending_run etc.) after restarts
     try:
         if user and context.user_data is not None:
@@ -695,6 +696,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     context.user_data["last_project_path"] = _bot_path
         except Exception:
             logger.exception("bot inspection for chat failed")
+        # UX: show thinking indicator until the chat model replies
+        _thinking_msg = None
+        try:
+            _thinking_msg = await message.reply_text("مايسترو يفكر 🤔")
+        except Exception:
+            logger.exception("thinking indicator send failed")
+            _thinking_msg = None
         try:
             from telegram_bot_engine.services.translator_client import chat_request
             chat_result = chat_request(request, chat_context)
@@ -944,11 +952,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     from .hosting_router import try_handle_hosting
                     if await try_handle_hosting(update, context, request, user, message):
                         return
+            try:
+                if _thinking_msg is not None:
+                    await _thinking_msg.delete()
+            except Exception:
+                pass
             await message.reply_text(_answer)
             return
 
         if _force_generate and _answer and not _translated_generation_request:
             # Still show the model message, then continue into generation below.
+            try:
+                if _thinking_msg is not None:
+                    await _thinking_msg.delete()
+                    _thinking_msg = None
+            except Exception:
+                pass
             try:
                 await message.reply_text(_answer)
             except Exception:
@@ -967,6 +986,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "model": os.getenv("GEMINI_MODEL") or "gemini-2.0-flash",
                 "gemini_enabled_env": os.getenv("GEMINI_ENABLED"),
             }
+        try:
+            if _thinking_msg is not None:
+                await _thinking_msg.delete()
+                _thinking_msg = None
+        except Exception:
+            pass
         logger.warning(
             "chat_request returned no answer; gemini_enabled=%s key_present=%s "
             "key_len=%s model=%s GEMINI_ENABLED=%s env_names_seen=%s",
@@ -1419,6 +1444,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _strong_bot_spec = True
         _ai_route_generate = True
         logger.info("force_generate_once honored — entering generation pipeline")
+    # Clear chat thinking indicator before any generation status message
+    try:
+        if _thinking_msg is not None:
+            await _thinking_msg.delete()
+            _thinking_msg = None
+    except Exception:
+        pass
     if not _ai_route_generate and not _strong_bot_spec:
         return
 
