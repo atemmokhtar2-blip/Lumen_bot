@@ -25,6 +25,13 @@ def _env_force_mode() -> EngineMode | None:
         return None
 
 
+def _cline_only() -> bool:
+    """Temporary test switch: all generation goes through free Cline agent."""
+    return (os.getenv("CLINE_ONLY") or os.getenv("CLINE_FORCE_AGENT") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def decide_engine_mode(
     *,
     preferred_keys: list[str],
@@ -33,7 +40,12 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Policy: catalog first; cline only for real gaps / custom stacks."""
+    """Policy: catalog first; cline only for real gaps / custom stacks.
+
+    Override: CLINE_ONLY=1 or ENGINE_MODE_FORCE=cline → always free agent path.
+    """
+    if _cline_only():
+        return EngineMode.CLINE
     forced = _env_force_mode()
     if forced is not None:
         return forced
@@ -79,6 +91,8 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
             needs_ai_codegen=needs_ai,
             confidence=conf,
         )
+    if _cline_only():
+        mode = EngineMode.CLINE
 
     ir = BuildIR.from_dict(
         {
@@ -180,6 +194,23 @@ def execute_ir(
                 },
             )
             return _finalize(result, ir)
+        if _cline_only() or (os.getenv("CLINE_NO_CATALOG_FALLBACK") or "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            logger.warning("cline failed and catalog fallback DISABLED: %s", cline_res.errors[:3])
+            return GenerationResult(
+                success=False,
+                project_path=cline_res.project_path,
+                stages=[],
+                validation_reports=[],
+                errors=list(cline_res.errors) or ["cline_failed_no_catalog_fallback"],
+                metadata={
+                    "engine": cline_res.engine,
+                    "ir": ir.to_dict(),
+                    "cline": cline_res.to_dict(),
+                    "catalog_fallback": False,
+                },
+            )
         logger.warning("cline unavailable %s — catalog fallback", cline_res.errors[:2])
         result = _run_catalog(ir, work_dir, uid)
         try:
