@@ -1,130 +1,62 @@
-"""Emit handlers, keyboards, main.py registration for generated bots."""
+"""Keyboards: UX menu_buttons first, else feature labels."""
 from __future__ import annotations
 
-from ..coding_emit_foundation import _msg
-from ..registry import get_capability
-from ..schema import BotSpec, Feature
+from ..schema import BotSpec
+
+try:
+    from .labels import label, slash
+except Exception:
+    def label(fid, lang="ar"):
+        return fid.replace("_", " ")
+    def slash(fid):
+        return "".join(c for c in (fid or "").lower() if c.isalnum())[:24] or "cmd"
+
 
 def _emit_keyboards(spec: BotSpec) -> str:
-    """Main menu from ACTUAL spec.features only — never invent cart/points/etc."""
-    lang = (spec.bot.language or "ar").lower()
-    ar = lang.startswith("ar")
+    ux = getattr(spec, "ux", None)
+    menu = list(getattr(ux, "menu_buttons", None) or []) if ux else []
+    lines: list[str] = []
+    pair: list[str] = []
 
-    feat_btn = {
-        "shop_catalog": ("🛍️ المنتجات", "🛍️ Products", "shopcatalog"),
-        "product_info": ("ℹ️ تفاصيل منتج", "ℹ️ Product info", "productinfo"),
-        "product_search": ("🔎 بحث", "🔎 Search", "productsearch"),
-        "order_track": ("📦 متابعة الطلب", "📦 Track order", "ordertrack"),
-        "shop_my_orders": ("📋 طلباتي", "📋 My orders", "shopmyorders"),
-        "pay_methods": ("💳 طرق الدفع", "💳 Payments", "pay"),
-        "shipping_set": ("🚚 الشحن والتوصيل", "🚚 Shipping", "shippingset"),
-        "ticket_open": ("📞 الدعم", "📞 Support", "ticket"),
-        "ticket_my": ("🎫 تذاكري", "🎫 My tickets", "mytickets"),
-        "faq_show": ("❓ الأسئلة الشائعة", "❓ FAQ", "faqlist"),
-        "faq_show": ("❓ FAQ", "❓ FAQ", "faq"),
-        "cart_view": ("🛒 السلة", "🛒 Cart", "cartview"),
-        "cart_add": ("➕ أضف للسلة", "➕ Add to cart", "cartadd"),
-        "cart_checkout": ("✅ إتمام الطلب", "✅ Checkout", "cartcheckout"),
-        "cart_clear": ("🧹 تفريغ السلة", "🧹 Clear cart", "cartclear"),
-        "wallet_balance": ("👛 المحفظة", "👛 Wallet", "walletbalance"),
-        "coupon_apply": ("🎟️ كوبون", "🎟️ Coupon", "couponapply"),
-        "points_balance": ("⭐ النقاط", "⭐ Points", "balance"),
-        "plans": ("💎 الخطط", "💎 Plans", "plans"),
-        "lang": ("🌐 اللغة", "🌐 Language", "lang"),
-        "clinic_book": ("🏥 حجز موعد طبي", "🏥 Book clinic", "clinicbook"),
-        "clinic_my": ("📅 مواعيدي", "📅 My appointments", "clinicmy"),
-        "clinic_cancel": ("❌ إلغاء موعد", "❌ Cancel appt", "cliniccancel"),
-        "clinic_slots": ("🕐 المواعيد المتاحة", "🕐 Available slots", "clinicslots"),
-        "book_slot": ("📌 حجز موعد", "📌 Book slot", "bookslot"),
-        "book_list": ("📋 حجوزاتي", "📋 My bookings", "booklist"),
-        "book_cancel": ("❎ إلغاء حجز", "❎ Cancel booking", "bookcancel"),
-        "ticket_open": ("🎫 فتح تذكرة", "🎫 Open ticket", "ticketopen"),
-        "ticket_list": ("📬 التذاكر", "📬 Tickets", "ticketlist"),
-        "ticket_status": ("🔎 حالة تذكرة", "🔎 Ticket status", "ticketstatus"),
-        "sec_dns_check": ("🔎 فحص DNS", "🔎 DNS check", "secdnscheck"),
-        "sec_tls_check": ("🔒 فحص SSL", "🔒 TLS check", "sectlscheck"),
-        "sec_domain_overview": ("🌐 فحص النطاق", "🌐 Domain overview", "secdomainoverview"),
-        "user_ban": ("🚫 حظر", "🚫 Ban", "ban"),
-        "user_mute": ("🔇 كتم", "🔇 Mute", "mute"),
-        "user_kick": ("👢 طرد", "👢 Kick", "kick"),
-        "user_warn": ("⚠️ تحذير", "⚠️ Warn", "warn"),
-        "user_unmute": ("🔊 فك الكتم", "🔊 Unmute", "unmute"),
-        "user_unban": ("✅ فك الحظر", "✅ Unban", "unban"),
-        "user_info": ("ℹ️ معلومات", "ℹ️ Info", "info"),
-        "welcome_set": ("👋 ترحيب", "👋 Welcome", "welcome"),
-        "rules": ("📜 القوانين", "📜 Rules", "rules"),
+    def flush() -> None:
+        nonlocal pair
+        if pair:
+            lines.append("        [" + ", ".join(pair) + "],")
+            pair = []
 
-        "task_add": ("➕ إضافة مهمة", "➕ Add task", "add"),
-        "task_list": ("📋 مهامي", "📋 My tasks", "list"),
-        "task_delete": ("🗑️ حذف مهمة", "🗑️ Delete task", "delete"),
-        "task_done": ("✅ إنهاء مهمة", "✅ Done task", "done"),
-        "task_clear": ("🧹 مسح المنتهية", "🧹 Clear done", "clear"),
-        "remind_set": ("⏰ تذكير", "⏰ Set reminder", "remindset"),
-        "remind_list": ("🔔 تذكيراتي", "🔔 My reminders", "remindlist"),
-        "note_add": ("📝 ملاحظة", "📝 Add note", "note"),
-        "note_list": ("📒 ملاحظاتي", "📒 My notes", "notes"),
-    }
+    def add(text: str, body: str) -> None:
+        pair.append(f"InlineKeyboardButton({text!r}, callback_data='cmd:{body}')")
+        if len(pair) == 2:
+            flush()
 
-    ordered_keys: list[str] = []
-    seen: set[str] = set()
-    for f in spec.features:
-        if f.feature in seen or f.feature in {"start", "help"}:
-            continue
-        seen.add(f.feature)
-        ordered_keys.append(f.feature)
-
-    rows: list[str] = []
-    seen_cb: set[str] = set()
-    for k in ordered_keys:
-        if k in feat_btn:
-            ar_l, en_l, body_cb = feat_btn[k]
-            label = ar_l if ar else en_l
-            cb = f"cmd:{body_cb}"
-        else:
-            ff = next((x for x in spec.features if x.feature == k), None)
-            if not ff or ff.trigger.type != "command" or ff.trigger.id in {"start", "help"}:
+    if menu:
+        for b in menu[:12]:
+            if not isinstance(b, dict):
                 continue
-            label = (ff.messages.prompt or k).replace("_", " ")[:28]
-            body_cb = ff.trigger.id.replace(".", "").replace("-", "_").lower()
-            cb = f"cmd:{body_cb}"
-        if cb in seen_cb:
-            continue
-        rows.append(
-            f"        [InlineKeyboardButton({label!r}, callback_data={cb!r})],"
-        )
-        seen_cb.add(cb)
-        if len(rows) >= 10:
-            break
-
-    body = "\n".join(rows) if rows else "        # no buttons"
-    # NOTE: body above is wrong - we need real newlines in the *output* source
-    body = chr(10).join(rows) if rows else "        # no buttons"
+            lab = str(b.get("label") or "").strip()
+            if not lab:
+                continue
+            feat = str(b.get("feature") or "menu")
+            body = slash(feat).replace("_", "") if feat else "".join(c for c in lab.lower() if c.isalnum())[:24] or "menu"
+            add(lab, body)
+    else:
+        for f in spec.features or []:
+            k = getattr(f, "feature", "") or ""
+            if not k or k in {"start", "help"}:
+                continue
+            add(label(k, "ar"), slash(k).replace("_", ""))
+            if len(lines) >= 6:
+                break
+    flush()
+    body = "\n".join(lines) if lines else "        # no buttons"
     return (
-        '"""Inline keyboards derived from BotSpec features only."""'
-        + chr(10)
-        + "from __future__ import annotations"
-        + chr(10)
-        + chr(10)
-        + "from telegram import InlineKeyboardButton, InlineKeyboardMarkup"
-        + chr(10)
-        + chr(10)
-        + chr(10)
-        + "def main_keyboard() -> InlineKeyboardMarkup | None:"
-        + chr(10)
-        + "    rows = ["
-        + chr(10)
-        + f"{body}"
-        + chr(10)
-        + "    ]"
-        + chr(10)
-        + "    rows = [r for r in rows if r]"
-        + chr(10)
-        + "    if not rows:"
-        + chr(10)
-        + "        return None"
-        + chr(10)
-        + "    return InlineKeyboardMarkup(rows)"
-        + chr(10)
+        '"""أزرار من وصف المستخدم (ux) أولاً."""\n'
+        "from __future__ import annotations\n\n"
+        "from telegram import InlineKeyboardButton, InlineKeyboardMarkup\n\n\n"
+        "def main_keyboard() -> InlineKeyboardMarkup | None:\n"
+        "    rows = [\n"
+        f"{body}\n"
+        "    ]\n"
+        "    rows = [r for r in rows if r]\n"
+        "    return InlineKeyboardMarkup(rows) if rows else None\n"
     )
-
-

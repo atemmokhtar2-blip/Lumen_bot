@@ -266,6 +266,7 @@ def _feature_services(spec: BotSpec) -> set[str]:
 _MARKET_SERVICES = {
     "shop", "payments", "subscriptions", "points", "contests",
     "cart", "growth", "wallet", "analytics", "admin",
+    "creator",
 }
 _FLOW_HINTS = {
     "shop", "payments", "cart", "wallet", "booking", "tickets", "crm",

@@ -2205,3 +2205,8 @@ def ux_wrap(title: str, body: str, hints: list[str] | None = None) -> str:
         for h in hints[:5]:
             lines.append(f"• {h}")
     return "\n".join(lines)
+
+
+def stock_set(user_id: int, product_id: int, qty: int) -> str:
+    """Handler-compatible alias for stock updates."""
+    return stock_adjust(int(product_id), int(qty), actor_id=int(user_id), reason="set")

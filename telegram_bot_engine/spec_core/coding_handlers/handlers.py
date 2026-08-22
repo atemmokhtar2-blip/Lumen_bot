@@ -11,6 +11,11 @@ def _emit_handlers(spec: BotSpec) -> str:
     lang = (spec.bot.language or "ar").lower()
     n_cmds = len([f for f in spec.features if f.trigger.type == "command"])
     bot_name = (getattr(spec.bot, "name", None) or "Bot").strip() or "Bot"
+    _ux = getattr(spec, "ux", None)
+    _ux_welcome = (getattr(_ux, "welcome", None) or "").strip() if _ux else ""
+    _ux_contact = (getattr(_ux, "contact_phone", None) or "").strip() if _ux else ""
+    _ux_contact_text = (getattr(_ux, "contact_text", None) or "").strip() if _ux else ""
+    _ux_statuses = list(getattr(_ux, "order_statuses", None) or []) if _ux else []
     _HELP_AR = {
         "start": "البداية",
         "help": "المساعدة",
@@ -67,8 +72,17 @@ def _emit_handlers(spec: BotSpec) -> str:
             tips.append("• الدعم: /ticketopen موضوع المشكلة")
         if feat_keys & {"sec_dns_check"}:
             tips.append("• الأمان: /secdnscheck example.com")
-        tip_block = ("\n".join(tips) + "\n") if tips else ""
-        welcome = (
+        tip_block = ("
+".join(tips) + "
+") if tips else ""
+        if _ux_welcome:
+            welcome = _ux_welcome
+            if _ux_contact and _ux_contact not in welcome:
+                welcome = welcome.rstrip() + "
+
+📞 " + _ux_contact
+        else:
+            welcome = (
             f"مرحباً بك في {bot_name} 👋\n"
             f"بوت جاهز للاستخدام — {n_cmds} أمر متاح.\n"
             f"{tip_block}"
@@ -498,7 +512,17 @@ def _emit_handlers(spec: BotSpec) -> str:
 
         elif cap.service == "core":
             if cap.method == "about":
-                about = spec.bot.description or spec.bot.name
+                about_parts = []
+                if _ux_contact_text:
+                    about_parts.append(_ux_contact_text)
+                elif _ux_contact:
+                    about_parts.append("📞 " + _ux_contact)
+                base = (spec.bot.description or spec.bot.name or "").strip()
+                if base and base not in " ".join(about_parts):
+                    about_parts.insert(0, base)
+                if _ux_statuses:
+                    about_parts.append("حالات الطلب:\n" + "\n".join("• " + s for s in _ux_statuses))
+                about = "\n\n".join(about_parts) if about_parts else (spec.bot.name or "Bot")
                 lines.append(f"    await message.reply_text({about!r})")
             elif cap.method == "ping":
                 lines.append("    await message.reply_text('pong')")
@@ -1009,7 +1033,7 @@ def _emit_handlers(spec: BotSpec) -> str:
                     "        await message.reply_text('تم استلام الصورة.')",
                     "",
                 ]
-                if (need_ocr or need_market)
+                if (need_ocr)
                 else []
             ),
             "async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",

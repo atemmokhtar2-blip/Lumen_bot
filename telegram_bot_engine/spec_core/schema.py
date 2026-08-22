@@ -96,6 +96,47 @@ class AcceptanceTest:
     expected: str = ""
 
 
+
+@dataclass
+class UxCopy:
+    """User-described copy from translator / fidelity repair."""
+    welcome: str = ""
+    menu_title: str = ""
+    menu_buttons: list[dict[str, str]] = field(default_factory=list)
+    contact_phone: str = ""
+    contact_text: str = ""
+    order_statuses: list[str] = field(default_factory=list)
+    order_form_fields: list[str] = field(default_factory=list)
+    order_summary_template: str = ""
+    confirm_success: str = ""
+    cancel_text: str = ""
+    back_to_menu: str = ""
+    extras: dict[str, str] = field(default_factory=dict)
+
+
+def _parse_ux(raw) -> "UxCopy":
+    if not isinstance(raw, dict):
+        return UxCopy()
+    buttons = []
+    for b in (raw.get("menu_buttons") or [])[:20]:
+        if isinstance(b, dict) and str(b.get("label") or "").strip():
+            buttons.append({str(k): str(v) for k, v in b.items()})
+    return UxCopy(
+        welcome=str(raw.get("welcome") or "")[:2000],
+        menu_title=str(raw.get("menu_title") or "")[:200],
+        menu_buttons=buttons,
+        contact_phone=str(raw.get("contact_phone") or "")[:40],
+        contact_text=str(raw.get("contact_text") or "")[:500],
+        order_statuses=[str(x)[:80] for x in (raw.get("order_statuses") or []) if str(x).strip()][:12],
+        order_form_fields=[str(x)[:80] for x in (raw.get("order_form_fields") or []) if str(x).strip()][:12],
+        order_summary_template=str(raw.get("order_summary_template") or "")[:1000],
+        confirm_success=str(raw.get("confirm_success") or "")[:1000],
+        cancel_text=str(raw.get("cancel_text") or "")[:300],
+        back_to_menu=str(raw.get("back_to_menu") or "")[:80],
+        extras={str(k): str(v)[:500] for k, v in (raw.get("extras") or {}).items()} if isinstance(raw.get("extras"), dict) else {},
+    )
+
+
 @dataclass
 class BotSpec:
     """Root specification document — SPEC_SCHEMA_V1."""
@@ -110,6 +151,7 @@ class BotSpec:
     # Market-ready extras: QA checklist + demo rows so /start is not empty
     acceptance_tests: list[AcceptanceTest] = field(default_factory=list)
     seed_data: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    ux: UxCopy = field(default_factory=UxCopy)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -218,6 +260,7 @@ class BotSpec:
             hard_constraints=[str(x) for x in (data.get("hard_constraints") or [])],
             acceptance_tests=acceptance,
             seed_data=seed,
+            ux=_parse_ux(data.get("ux")),
         )
 
 

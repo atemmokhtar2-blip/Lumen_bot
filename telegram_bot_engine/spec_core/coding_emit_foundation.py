@@ -149,6 +149,7 @@ def _emit_db(spec: BotSpec) -> str:
             "analytics",
             "admin",
             "market",
+            "creator",
         }
     )
     if not need_market:

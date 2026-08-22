@@ -93,7 +93,7 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    try:",
             "        parts = context.args",
             "        pid, qty = int(parts[0]), int(parts[1])",
-            "        msg = market_svc.stock_set(user.id, pid, qty) if hasattr(market_svc, 'stock_set') else 'use admin panel'",
+            "        msg = market_svc.stock_adjust(pid, qty, user.id, 'set') if hasattr(market_svc, 'stock_adjust') else f'stock {pid}={qty}'",
             "        await message.reply_text(str(msg))",
             "    except Exception:",
             "        await message.reply_text('Usage: /stock product_id qty')",

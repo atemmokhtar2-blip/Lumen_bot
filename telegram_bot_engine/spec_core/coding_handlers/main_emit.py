@@ -41,14 +41,16 @@ def _emit_main(spec: BotSpec) -> str:
     feat_to_handler = {
         f.feature: f"handle_{f.id}".replace("-", "_")
         for f in spec.features
-        if f.feature not in ("start", "help") and getattr(f.trigger, "type", "") == "command"
+        if f.feature not in ("start", "help", "payment_precheckout", "payment_success") and getattr(f.trigger, "type", "") == "command"
     }
     for f in spec.features:
-        if f.feature in ("start", "help"):
+        if f.feature in ("start", "help", "payment_precheckout", "payment_success"):
             continue
         hname = f"handle_{f.id}".replace("-", "_")
         feat_to_handler.setdefault(f.feature, hname)
     for feat, h in list(feat_to_handler.items()):
+        if feat in {"payment_precheckout", "payment_success"}:
+            continue
         for alias in _cmds_for(feat):
             if f"CommandHandler('{alias}'" in reg_text or f'CommandHandler("{alias}"' in reg_text:
                 continue
