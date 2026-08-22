@@ -36,8 +36,7 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
             "features": (ir_hint.get("preferred_keys") or ir_hint.get("features_requested") or [])[:20],
             "lang": ir_hint.get("language") or "ar",
         }
-        hint = "
-HINT: " + json.dumps(slim, ensure_ascii=False)[:800]
+        hint = "\nHINT: " + json.dumps(slim, ensure_ascii=False)[:800]
     goal_s = (goal or "")[:900]
     return f"""You are Cline, an autonomous coding agent. Build a complete runnable Telegram bot from the GOAL.
 No templates — write real files under workspace (relative paths only).
