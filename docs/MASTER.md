@@ -63,6 +63,8 @@
 | [11_B2B_API.md](11_B2B_API.md) | REST API |
 | [12_SECURITY_AND_SANDBOX.md](12_SECURITY_AND_SANDBOX.md) | أمان وعزل |
 | [13_CONFIG_ENV.md](13_CONFIG_ENV.md) | متغيرات البيئة |
+| [14_ENGINE_ROUTER_AND_IR.md](14_ENGINE_ROUTER_AND_IR.md) | IR + EngineRouter |
+| [15_ROADMAP_AND_AI_HANDOFF.md](15_ROADMAP_AND_AI_HANDOFF.md) | خارطة طريق وتسليم |
 
 ---
 

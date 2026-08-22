@@ -61,3 +61,11 @@ result = build_from_spec(
 ## قاعدة
 
 أي ميزة غير موجودة في `CAPABILITIES` **لا تُنفَّذ ككود حقيقي** — إما clarification أو رفض. هذا جوهر منع الهلوسة.
+
+## UX من وصف المستخدم + مطابقة بعد التوليد
+
+- `BotSpec.ux` (في `schema.py`): ترحيب، أزرار قائمة، رقم تواصل، حالات طلب — من وصف المستخدم/الترجمة وليس قالب ثابت.
+- المولد يفضّل `ux.menu_buttons` و `ux.welcome` عند وجودهما (`coding_handlers/keyboards.py`, `handlers.py`).
+- بعد التوليد يمكن مقارنة المشروع بالوصف عبر `services/fidelity_compare.py` (محلي ± Gemini) ثم `apply_repairs_to_spec` وإعادة بناء.
+- مدفوعات تيليجرام: `PreCheckoutQueryHandler` / `SUCCESSFUL_PAYMENT` وليست أوامر `/payment_*`.
+- قدرات `creator`/`content_*` تتطلب schema تجارة كامل عند إرفاق `market.py`.
