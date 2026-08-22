@@ -386,7 +386,11 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
 
 
 def _call_qwen(system: str, user: str, model_id: str, base_url: str | None = None) -> str:
-    """Alibaba DashScope compatible-mode (sk-ws- keys) with key pool rotation."""
+    """Alibaba DashScope compatible-mode (sk-ws- keys) with key pool + region failover.
+
+    sk-ws keys from international console only work on dashscope-intl.
+    On 401 we automatically try the alternate region before rotating keys.
+    """
     from telegram_bot_engine.services.llm.key_pool import (
         qwen_available,
         mark_qwen_cooldown,
@@ -395,13 +399,21 @@ def _call_qwen(system: str, user: str, model_id: str, base_url: str | None = Non
     )
 
     model = model_id or (os.getenv("QWEN_MODEL") or "qwen-plus").strip()
-    base = (
+    preferred = (
         base_url
         or os.getenv("QWEN_BASE_URL")
         or os.getenv("DASHSCOPE_BASE_URL")
         or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     ).rstrip("/")
-    url = f"{base}/chat/completions"
+    alt = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    intl = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    # Always try preferred first, then the other region
+    bases: list[str] = []
+    for b in (preferred, intl, alt):
+        b = b.rstrip("/")
+        if b not in bases:
+            bases.append(b)
+
     anti = (
         "CRITICAL: Return ONE JSON object only for our custom tools. "
         "No markdown fences, no built-in tool calls."
@@ -425,51 +437,76 @@ def _call_qwen(system: str, user: str, model_id: str, base_url: str | None = Non
             break
         source, key = candidate
         tried.add(source)
-        payload = {
-            "model": model,
-            "temperature": 0.2,
-            "max_tokens": 2048,
-            "messages": messages,
-        }
-        try:
-            resp = requests.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=_timeout(),
+
+        key_done = False
+        for base in bases:
+            url = f"{base}/chat/completions"
+            payload = {
+                "model": model,
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "messages": messages,
+            }
+            try:
+                resp = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=_timeout(),
+                )
+            except requests.RequestException as exc:
+                last_error = f"qwen_network:{type(exc).__name__}:{exc}"
+                logger.warning("qwen network base=%s err=%s", base, exc)
+                continue
+
+            if resp.status_code == 401 or resp.status_code == 403:
+                last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:200]}"
+                logger.warning(
+                    "qwen auth fail source=%s base=%s — try next region/key",
+                    source,
+                    base,
+                )
+                # try next base URL with same key before cooling
+                continue
+
+            if resp.status_code in {429, 503}:
+                last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:200]}"
+                mark_cooldown(
+                    source,
+                    seconds=float(os.getenv("QWEN_KEY_COOLDOWN_SEC") or "60"),
+                )
+                logger.warning("qwen rate source=%s — rotate", source)
+                key_done = True
+                break
+
+            if resp.status_code >= 400:
+                last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:300]}"
+                logger.warning("qwen 400 source=%s base=%s body=%s", source, base, last_error[:120])
+                continue
+
+            choices = (resp.json() or {}).get("choices") or []
+            if not choices:
+                last_error = "qwen_empty_choices"
+                continue
+            content = str((choices[0].get("message") or {}).get("content") or "")
+            if not content.strip():
+                last_error = "qwen_empty_content"
+                continue
+            logger.info("qwen ok source=%s model=%s base=%s", source, model, base)
+            return content
+
+        if not key_done:
+            # all bases failed auth for this key
+            mark_cooldown(
+                source,
+                seconds=float(os.getenv("QWEN_BAD_KEY_COOLDOWN_SEC") or "300"),
             )
-        except requests.RequestException as exc:
-            last_error = f"qwen_network:{type(exc).__name__}:{exc}"
-            mark_qwen_cooldown(source)
-            continue
-        if resp.status_code in {401, 403, 429, 503}:
-            last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:200]}"
-            if resp.status_code == 429:
-                mark_cooldown(source, seconds=float(os.getenv("QWEN_KEY_COOLDOWN_SEC") or "60"))
-            elif resp.status_code in {401, 403}:
-                mark_cooldown(source, seconds=float(os.getenv("QWEN_BAD_KEY_COOLDOWN_SEC") or "600"))
-            else:
-                mark_qwen_cooldown(source)
-            logger.warning("qwen rotate source=%s status=%s", source, resp.status_code)
-            continue
-        if resp.status_code >= 400:
-            last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:300]}"
-            mark_qwen_cooldown(source)
-            continue
-        choices = (resp.json() or {}).get("choices") or []
-        if not choices:
-            last_error = "qwen_empty_choices"
-            continue
-        content = str((choices[0].get("message") or {}).get("content") or "")
-        if not content.strip():
-            last_error = "qwen_empty_content"
-            continue
-        logger.info("qwen ok source=%s model=%s", source, model)
-        return content
+
     raise RuntimeError(last_error or f"no_qwen_key pool={pool_status()}")
+
 
 
 def _call_ollama(system: str, user: str, model_id: str, base_url: str | None) -> str:
