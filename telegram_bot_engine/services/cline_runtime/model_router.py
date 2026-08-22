@@ -1,7 +1,8 @@
 """Model provider selection for Cline agent.
 
 Keys never collide:
-  GROQ_API_KEY   → Groq (primary engine brain)
+  GROQ_API_KEY   → Groq
+  QWEN_API_KEY / DASHSCOPE_API_KEY → Qwen DashScope intl (sk-ws-)
   GOOGLE_API_KEY / GEMINI_API_KEY → Gemini
   XAI_API_KEY    → xAI (optional)
   OLLAMA_HOST    → local
@@ -40,6 +41,14 @@ class ModelChoice:
                 return bool(groq_keys())
             except Exception:
                 return bool((os.getenv("GROQ_API_KEY") or "").strip())
+        if self.provider == "qwen":
+            try:
+                from telegram_bot_engine.services.llm.key_pool import qwen_keys
+                return bool(qwen_keys())
+            except Exception:
+                return bool(
+                    (os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip()
+                )
         return bool((os.getenv(self.api_key_env) or "").strip())
 
 
@@ -86,11 +95,30 @@ def select_model(*, task: str = "build") -> ModelChoice:
             "OLLAMA_HOST",
             base_url=(os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").strip(),
         ),
+        "qwen": ModelChoice(
+            "qwen",
+            (os.getenv("QWEN_MODEL") or os.getenv("DASHSCOPE_MODEL") or "qwen-plus").strip(),
+            "QWEN_API_KEY",
+            base_url=(
+                os.getenv("QWEN_BASE_URL")
+                or os.getenv("DASHSCOPE_BASE_URL")
+                or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            ).strip(),
+        ),
+        "dashscope": ModelChoice(
+            "qwen",
+            (os.getenv("QWEN_MODEL") or "qwen-plus").strip(),
+            "QWEN_API_KEY",
+            base_url=(
+                os.getenv("QWEN_BASE_URL")
+                or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            ).strip(),
+        ),
     }
     if forced in table:
         return table[forced]
-    # Primary engine: Groq first
-    for name in ("groq", "gemini", "xai", "ollama"):
+    # Prefer Qwen (sk-ws) when available — avoids Groq TPM walls; else Groq pool
+    for name in ("qwen", "groq", "gemini", "xai", "ollama"):
         choice = table[name]
         if choice.key_present():
             return choice

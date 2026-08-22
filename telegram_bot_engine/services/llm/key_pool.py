@@ -1,7 +1,8 @@
 """Shared API-key pool with cooldown + ordered failover.
 
 Gemini: GEMINI_API_KEY / GOOGLE_* aliases + GEMINI_API_KEY_0 .. GEMINI_API_KEY_150
-Groq:   GROQ_API_KEY + GROQ_API_KEY_0..100 + GROQ_API_KEYS (comma/newline)
+Groq:   GROQ_API_KEY + GROQ_API_KEY_0..100 + GROQ_API_KEYS
+Qwen:   QWEN_API_KEY / DASHSCOPE_API_KEY + QWEN_API_KEY_0..100 + QWEN_API_KEYS (sk-ws-)
 
 When a key hits auth/rate limits it is cooled down; the next ready key is used
 until the pool is exhausted, then the least-cooled key is retried.
@@ -190,6 +191,37 @@ def groq_keys() -> list[tuple[str, str]]:
     return keys
 
 
+
+def qwen_keys() -> list[tuple[str, str]]:
+    """Alibaba DashScope / QwenCloud keys (often sk-ws-...).
+
+    QWEN_API_KEY, DASHSCOPE_API_KEY, QWEN_API_KEY_0..100, QWEN_API_KEYS bulk.
+    """
+    keys = collect_env_keys(
+        primary_names=("QWEN_API_KEY", "DASHSCOPE_API_KEY", "DASHSCOPE_API_KEY_INTL"),
+        numbered_prefix="QWEN_API_KEY_",
+        numbered_start=0,
+        numbered_end=100,
+    )
+    bulk = (os.getenv("QWEN_API_KEYS") or os.getenv("DASHSCOPE_API_KEYS") or "").strip()
+    if bulk:
+        seen = {k for _, k in keys}
+        for i, line in enumerate(bulk.replace(",", "\n").splitlines()):
+            part = _normalize(line)
+            if part and part not in seen:
+                keys.append((f"QWEN_API_KEYS[{i}]", part))
+                seen.add(part)
+    return keys
+
+
+def qwen_available() -> list[tuple[str, str]]:
+    failover = _truthy(os.getenv("QWEN_KEY_FAILOVER_ENABLED") or "1")
+    return available_keys(qwen_keys(), failover_enabled=failover)
+
+
+def mark_qwen_cooldown(source: str) -> None:
+    mark_cooldown(source, env_name="QWEN_KEY_COOLDOWN_SEC")
+
 def gemini_available() -> list[tuple[str, str]]:
     raw = (os.getenv("GEMINI_KEY_FAILOVER_ENABLED") or "").strip()
     failover = _truthy(raw) if raw else True
@@ -213,6 +245,7 @@ def pool_status() -> dict:
     """Safe diagnostics — counts only, never key values."""
     g = gemini_keys()
     q = groq_keys()
+    w = qwen_keys()
     now = time.monotonic()
     return {
         "gemini_keys_total": len(g),
@@ -221,16 +254,22 @@ def pool_status() -> dict:
         "groq_keys_total": len(q),
         "groq_keys_ready": sum(1 for s, _ in q if _COOLDOWN_UNTIL.get(s, 0.0) <= now),
         "groq_sources": [s for s, _ in q],
+        "qwen_keys_total": len(w),
+        "qwen_keys_ready": sum(1 for s, _ in w if _COOLDOWN_UNTIL.get(s, 0.0) <= now),
+        "qwen_sources": [s for s, _ in w],
     }
 
 
 __all__ = [
     "gemini_keys",
     "groq_keys",
+    "qwen_keys",
     "gemini_available",
     "groq_available",
+    "qwen_available",
     "mark_gemini_cooldown",
     "mark_groq_cooldown",
+    "mark_qwen_cooldown",
     "mark_cooldown",
     "pool_status",
 ]

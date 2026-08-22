@@ -384,6 +384,94 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
 
 
 
+
+def _call_qwen(system: str, user: str, model_id: str, base_url: str | None = None) -> str:
+    """Alibaba DashScope compatible-mode (sk-ws- keys) with key pool rotation."""
+    from telegram_bot_engine.services.llm.key_pool import (
+        qwen_available,
+        mark_qwen_cooldown,
+        mark_cooldown,
+        pool_status,
+    )
+
+    model = model_id or (os.getenv("QWEN_MODEL") or "qwen-plus").strip()
+    base = (
+        base_url
+        or os.getenv("QWEN_BASE_URL")
+        or os.getenv("DASHSCOPE_BASE_URL")
+        or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    ).rstrip("/")
+    url = f"{base}/chat/completions"
+    anti = (
+        "CRITICAL: Return ONE JSON object only for our custom tools. "
+        "No markdown fences, no built-in tool calls."
+    )
+    messages = [
+        {"role": "system", "content": anti + "\n\n" + system},
+        {"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"},
+    ]
+    last_error = ""
+    tried: set[str] = set()
+    for _ in range(100):
+        ready = qwen_available()
+        if not ready:
+            break
+        candidate = None
+        for source, key in ready:
+            if source not in tried:
+                candidate = (source, key)
+                break
+        if candidate is None:
+            break
+        source, key = candidate
+        tried.add(source)
+        payload = {
+            "model": model,
+            "temperature": 0.2,
+            "max_tokens": 2048,
+            "messages": messages,
+        }
+        try:
+            resp = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=_timeout(),
+            )
+        except requests.RequestException as exc:
+            last_error = f"qwen_network:{type(exc).__name__}:{exc}"
+            mark_qwen_cooldown(source)
+            continue
+        if resp.status_code in {401, 403, 429, 503}:
+            last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:200]}"
+            if resp.status_code == 429:
+                mark_cooldown(source, seconds=float(os.getenv("QWEN_KEY_COOLDOWN_SEC") or "60"))
+            elif resp.status_code in {401, 403}:
+                mark_cooldown(source, seconds=float(os.getenv("QWEN_BAD_KEY_COOLDOWN_SEC") or "600"))
+            else:
+                mark_qwen_cooldown(source)
+            logger.warning("qwen rotate source=%s status=%s", source, resp.status_code)
+            continue
+        if resp.status_code >= 400:
+            last_error = f"qwen_http_{resp.status_code}:{(resp.text or '')[:300]}"
+            mark_qwen_cooldown(source)
+            continue
+        choices = (resp.json() or {}).get("choices") or []
+        if not choices:
+            last_error = "qwen_empty_choices"
+            continue
+        content = str((choices[0].get("message") or {}).get("content") or "")
+        if not content.strip():
+            last_error = "qwen_empty_content"
+            continue
+        logger.info("qwen ok source=%s model=%s", source, model)
+        return content
+    raise RuntimeError(last_error or f"no_qwen_key pool={pool_status()}")
+
+
 def _call_ollama(system: str, user: str, model_id: str, base_url: str | None) -> str:
     base = (base_url or "http://127.0.0.1:11434").rstrip("/")
     resp = requests.post(
@@ -421,8 +509,26 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
 
     for attempt in range(1, max_attempts + 1):
         try:
-            if provider == "groq":
-                raw = _call_groq(system, user, choice.model_id)
+            if provider == "qwen":
+                raw = _call_qwen(system, user, choice.model_id, choice.base_url)
+            elif provider == "groq":
+                try:
+                    raw = _call_groq(system, user, choice.model_id)
+                except Exception as groq_exc:
+                    logger.warning("groq failed (%s) — trying qwen failover", groq_exc)
+                    try:
+                        from telegram_bot_engine.services.llm.key_pool import qwen_keys
+                        if not qwen_keys():
+                            raise groq_exc
+                        raw = _call_qwen(
+                            system,
+                            user,
+                            (os.getenv("QWEN_MODEL") or "qwen-plus"),
+                            None,
+                        )
+                        provider = "qwen"
+                    except Exception:
+                        raise groq_exc
             elif provider == "gemini":
                 raw = _call_gemini(system, user, choice.model_id)
             elif provider == "xai":
