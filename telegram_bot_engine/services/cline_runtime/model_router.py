@@ -66,7 +66,7 @@ def select_model(*, task: str = "build") -> ModelChoice:
         ),
         "groq": ModelChoice(
             "groq",
-            (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip(),
+            (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
             "GROQ_API_KEY",
             base_url="https://api.groq.com/openai/v1",
         ),

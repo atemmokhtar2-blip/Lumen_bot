@@ -27,51 +27,31 @@ def _max_steps() -> int:
         return 16
 
 
+
 def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> str:
-    ir_block = ""
+    hint = ""
     if ir_hint:
         slim = {
-            "raw_request": ir_hint.get("raw_request") or ir_hint.get("user_request"),
-            "purpose": ir_hint.get("purpose"),
-            "features": ir_hint.get("preferred_keys") or ir_hint.get("features_requested"),
-            "gaps": ir_hint.get("capabilities_gap"),
-            "language": ir_hint.get("language") or "ar",
+            "request": (ir_hint.get("raw_request") or ir_hint.get("user_request") or "")[:500],
+            "features": (ir_hint.get("preferred_keys") or ir_hint.get("features_requested") or [])[:20],
+            "lang": ir_hint.get("language") or "ar",
         }
-        ir_block = (
-            "\n\nCONTEXT_HINT (from upstream router — you may ignore structure "
-            "and design freely):\n"
-            + json.dumps(slim, ensure_ascii=False)[:4000]
-        )
-    return f"""You are Cline — an autonomous coding agent inside Capability Maestro.
+        hint = "
+HINT: " + json.dumps(slim, ensure_ascii=False)[:800]
+    goal_s = (goal or "")[:900]
+    return f"""You are Cline, an autonomous coding agent. Build a complete runnable Telegram bot from the GOAL.
+No templates — write real files under workspace (relative paths only).
 
-Mission: build a COMPLETE, production-quality, runnable Telegram bot (or software project) from the user goal.
-You are NOT filling templates and NOT copying catalog stubs. You design architecture and write real source files.
-Be thorough: handlers, error handling, clear structure, requirements pinned reasonably.
+Workspace: {work_dir}
 
-Workspace (absolute): {work_dir}
-All file paths in tools are RELATIVE to this workspace.
+Tools (one JSON per turn):
+list_dir, tree, read_file, write_file, edit_file, run_shell (if allowed), finish.
 
-Tools (JSON only each turn):
-- list_dir {{ "path": "." }}
-- tree {{ "path": ".", "max_depth": 3 }}
-- read_file {{ "path": "main.py" }}
-- write_file {{ "path": "main.py", "content": "...full file..." }}
-- edit_file {{ "path": "main.py", "old_string": "...", "new_string": "..." }}
-- run_shell {{ "command": "python -m py_compile main.py" }}  (only if policy allows)
-- finish {{ "summary": "what you built" }}
-
-Rules:
-1. Prefer python-telegram-bot or aiogram if building a Telegram bot unless goal says otherwise.
-2. Create main.py, requirements.txt, README.md, .env.example at minimum for a bot.
-3. Use BOT_TOKEN from environment (never hardcode secrets).
-4. Arabic UX when the goal is Arabic.
-5. After enough files exist and look coherent, call finish.
-6. One tool per turn. Always return valid JSON.
-7. If a write fails, fix path/content and retry — do not invent shell access.
+Minimum deliverables: main.py, requirements.txt, README.md, .env.example
+Use BOT_TOKEN from env. Arabic UX if goal is Arabic. Call finish when coherent.
 
 GOAL:
-{goal}
-{ir_block}
+{goal_s}{hint}
 """.strip()
 
 

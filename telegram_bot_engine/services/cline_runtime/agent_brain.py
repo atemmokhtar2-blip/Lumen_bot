@@ -123,19 +123,35 @@ def _normalize_decision(obj: dict[str, Any] | None, raw_text: str) -> dict[str, 
 
 
 def _system_and_user(messages: list[dict[str, Any]]) -> tuple[str, str]:
+    """Compact history to fit low TPM tiers (e.g. Groq on_demand ~8k)."""
     system_parts: list[str] = []
     user_parts: list[str] = []
     for m in messages:
         role = m.get("role") or ""
         content = str(m.get("content") or "")
         if role == "system":
-            system_parts.append(content)
+            system_parts.append(content[:3500])
         elif role == "tool":
             name = m.get("tool_name") or "tool"
-            user_parts.append(f"[TOOL RESULT {name}]\n{content}")
+            # keep tool results short
+            user_parts.append(f"[TOOL RESULT {name}]\n{content[:2500]}")
         else:
-            user_parts.append(f"[{role.upper()}]\n{content}")
-    return "\n\n".join(system_parts), "\n\n".join(user_parts)
+            user_parts.append(f"[{role.upper()}]\n{content[:2000]}")
+    # keep only last N non-system chunks to control TPM
+    try:
+        keep = max(4, min(16, int(os.getenv("CLINE_HISTORY_KEEP") or "10")))
+    except ValueError:
+        keep = 10
+    if len(user_parts) > keep:
+        user_parts = user_parts[-keep:]
+    system = "\n\n".join(system_parts)
+    user = "\n\n".join(user_parts)
+    # hard cap combined chars (~4 chars/token rough)
+    max_chars = int(os.getenv("CLINE_PROMPT_MAX_CHARS") or "12000")
+    if len(system) + len(user) > max_chars:
+        budget = max(2000, max_chars - len(system))
+        user = user[-budget:]
+    return system, user
 
 
 def _call_gemini(system: str, user: str, model_id: str) -> str:
@@ -153,7 +169,7 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
         "generationConfig": {
             "temperature": 0.15,
             "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 2048,
         },
     }
     resp = requests.post(
@@ -209,7 +225,7 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
     payload = {
         "model": model,
         "temperature": 0.15,
-        "max_tokens": 8192,
+        "max_tokens": 2048,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"},
