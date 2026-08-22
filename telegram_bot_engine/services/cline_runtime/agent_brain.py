@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 import requests
@@ -323,6 +324,10 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                 tok in last_error.lower()
                 for tok in ("timeout", "429", "503", "502", "connection", "temporar")
             ):
+                delay = 2.0 * attempt
+                if "429" in last_error:
+                    delay = max(delay, 3.0 * attempt)
+                time.sleep(delay)
                 continue
             if attempt < max_attempts:
                 continue
