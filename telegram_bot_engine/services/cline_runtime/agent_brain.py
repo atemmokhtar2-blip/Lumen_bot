@@ -25,12 +25,13 @@ ALLOWED_TOOLS = {
     "write_file",
     "edit_file",
     "tree",
+    "run_shell",
     "finish",
 }
 
 _JSON_SCHEMA_HINT = (
     "Respond with ONE JSON object only (no markdown fences). Schema:\n"
-    '{"thought": "short plan", "tool": "list_dir|read_file|write_file|edit_file|tree|finish", '
+    '{"thought": "short plan", "tool": "list_dir|read_file|write_file|edit_file|tree|run_shell|finish", '
     '"args": {}, "finish": false, "summary": ""}'
 )
 
@@ -249,23 +250,59 @@ def _call_ollama(system: str, user: str, model_id: str, base_url: str | None) ->
 
 
 def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None) -> dict[str, Any]:
-    """One reasoning step. Returns normalized decision dict."""
+    """One reasoning step with smart retries (parse fail / transient HTTP)."""
     choice = choice or select_model(task="build")
     system, user = _system_and_user(messages)
     if not system:
         system = "You are an autonomous coding agent building a software project."
 
-    provider = choice.provider
     try:
-        if provider == "groq":
-            raw = _call_groq(system, user, choice.model_id)
-        elif provider == "gemini":
-            raw = _call_gemini(system, user, choice.model_id)
-        elif provider == "xai":
-            raw = _call_xai(system, user, choice.model_id)
-        elif provider == "ollama":
-            raw = _call_ollama(system, user, choice.model_id, choice.base_url)
-        else:
+        max_attempts = max(1, min(4, int(os.getenv("CLINE_LLM_RETRIES") or "3")))
+    except ValueError:
+        max_attempts = 3
+
+    provider = choice.provider
+    last_error = ""
+    raw = ""
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if provider == "groq":
+                raw = _call_groq(system, user, choice.model_id)
+            elif provider == "gemini":
+                raw = _call_gemini(system, user, choice.model_id)
+            elif provider == "xai":
+                raw = _call_xai(system, user, choice.model_id)
+            elif provider == "ollama":
+                raw = _call_ollama(system, user, choice.model_id, choice.base_url)
+            else:
+                return {
+                    "thought": "",
+                    "tool": None,
+                    "args": {},
+                    "finish": False,
+                    "summary": "",
+                    "raw": "",
+                    "parse_ok": False,
+                    "error": "no_model_provider",
+                }
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}:{exc}"
+            logger.warning(
+                "agent_brain attempt %s/%s provider=%s failed: %s",
+                attempt,
+                max_attempts,
+                provider,
+                exc,
+            )
+            # transient? retry
+            if attempt < max_attempts and any(
+                tok in last_error.lower()
+                for tok in ("timeout", "429", "503", "502", "connection", "temporar")
+            ):
+                continue
+            if attempt < max_attempts:
+                continue
             return {
                 "thought": "",
                 "tool": None,
@@ -274,26 +311,30 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                 "summary": "",
                 "raw": "",
                 "parse_ok": False,
-                "error": "no_model_provider",
+                "error": last_error,
+                "attempts": attempt,
             }
-    except Exception as exc:
-        logger.warning("agent_brain decide failed provider=%s: %s", provider, exc)
-        return {
-            "thought": "",
-            "tool": None,
-            "args": {},
-            "finish": False,
-            "summary": "",
-            "raw": "",
-            "parse_ok": False,
-            "error": f"{type(exc).__name__}:{exc}",
-        }
 
-    obj = _extract_json_object(raw)
-    decision = _normalize_decision(obj, raw)
+        obj = _extract_json_object(raw)
+        decision = _normalize_decision(obj, raw)
+        decision["provider"] = provider
+        decision["model_id"] = choice.model_id
+        decision["attempts"] = attempt
+        if decision.get("parse_ok") or decision.get("tool"):
+            return decision
+        # parse failed — nudge and retry with stronger instruction injected once
+        logger.info("agent_brain parse fail attempt %s — retry", attempt)
+        user = user + "\n\nIMPORTANT: Previous reply was invalid JSON. Output ONLY one JSON object."
+        last_error = "parse_fail"
+
+    decision = _normalize_decision(_extract_json_object(raw), raw)
     decision["provider"] = provider
     decision["model_id"] = choice.model_id
+    decision["attempts"] = max_attempts
+    if not decision.get("parse_ok"):
+        decision["error"] = last_error or "parse_fail"
     return decision
+
 
 
 __all__ = ["ALLOWED_TOOLS", "decide"]

@@ -5,6 +5,8 @@ All paths are relative to work_dir and enforced via safe_fs — no escapes.
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +168,45 @@ def tree(work_dir: str, path: str = ".", max_depth: int = 4) -> dict[str, Any]:
         return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
 
+
+
+def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str, Any]:
+    """Run a shell command inside work_dir only when CLINE_ALLOW_SHELL=1."""
+    flag = (os.getenv("CLINE_ALLOW_SHELL") or "0").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return {"ok": False, "error": "shell_disabled_set_CLINE_ALLOW_SHELL=1"}
+    cmd = (command or "").strip()
+    if not cmd:
+        return {"ok": False, "error": "empty_command"}
+    # block obvious destructive absolute system paths
+    banned = ("rm -rf /", "mkfs", ":(){", "shutdown", "reboot")
+    low = cmd.lower()
+    if any(b in low for b in banned):
+        return {"ok": False, "error": "command_blocked_policy"}
+    root = _root(work_dir)
+    try:
+        proc = subprocess.run(
+            cmd,
+            shell=True,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=max(5.0, min(120.0, float(timeout))),
+            env={**os.environ, "PWD": str(root)},
+        )
+        out = (proc.stdout or "")[-8000:]
+        err = (proc.stderr or "")[-4000:]
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "stdout": out,
+            "stderr": err,
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "timeout"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+
 def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     """Dispatch FS tool by name."""
     args = dict(args or {})
@@ -193,6 +234,12 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
         except (TypeError, ValueError):
             depth = 4
         return tree(work_dir, str(args.get("path") or "."), max_depth=depth)
+    if name == "run_shell":
+        try:
+            t = float(args.get("timeout") or 30)
+        except (TypeError, ValueError):
+            t = 30.0
+        return run_shell(work_dir, str(args.get("command") or ""), timeout=t)
     if name == "finish":
         return {
             "ok": True,

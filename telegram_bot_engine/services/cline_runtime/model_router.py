@@ -1,12 +1,13 @@
-"""Model provider selection for Cline agent — Gemini / xAI / Groq / Ollama.
+"""Model provider selection for Cline agent.
 
-Env keys are intentionally separate so they never collide:
-  GOOGLE_API_KEY / GEMINI_API_KEY  → Gemini
-  XAI_API_KEY                      → xAI Grok
-  GROQ_API_KEY                     → Groq (gsk_...)
-  OLLAMA_HOST                      → local Ollama
+Keys never collide:
+  GROQ_API_KEY   → Groq (primary engine brain)
+  GOOGLE_API_KEY / GEMINI_API_KEY → Gemini
+  XAI_API_KEY    → xAI (optional)
+  OLLAMA_HOST    → local
 
-ENGINE_LLM_PROVIDER or CLINE_LLM_PROVIDER: gemini | xai | groq | ollama | auto
+CLINE_LLM_PROVIDER / ENGINE_LLM_PROVIDER: groq | gemini | xai | ollama | auto
+Default auto order: groq → gemini → xai → ollama
 """
 from __future__ import annotations
 
@@ -41,11 +42,6 @@ def _forced_provider() -> str:
 
 
 def select_model(*, task: str = "build") -> ModelChoice:
-    """Prefer explicit provider, else first available key.
-
-    Default auto order for Cline agent: groq → gemini → xai → ollama
-    (Groq first when GROQ_API_KEY is set — primary engine brain).
-    """
     forced = _forced_provider()
     table = {
         "gemini": ModelChoice(
@@ -70,7 +66,7 @@ def select_model(*, task: str = "build") -> ModelChoice:
         ),
         "groq": ModelChoice(
             "groq",
-            (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip(),
+            (os.getenv("GROQ_MODEL") or "openai/gpt-oss-120b").strip(),
             "GROQ_API_KEY",
             base_url="https://api.groq.com/openai/v1",
         ),
@@ -83,12 +79,11 @@ def select_model(*, task: str = "build") -> ModelChoice:
     }
     if forced in table:
         return table[forced]
-    if forced == "auto" or not forced:
-        # Cline engine priority: Groq (fast/strong) → Gemini → xAI → Ollama
-        for name in ("groq", "gemini", "xai", "ollama"):
-            choice = table[name]
-            if choice.key_present():
-                return choice
+    # Primary engine: Groq first
+    for name in ("groq", "gemini", "xai", "ollama"):
+        choice = table[name]
+        if choice.key_present():
+            return choice
     return ModelChoice("none", "", "")
 
 

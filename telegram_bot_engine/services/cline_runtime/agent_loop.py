@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .agent_acceptance import check_agent_project
 from .agent_brain import decide
 from .agent_fs import run_tool
 from .agent_state import AgentState, AgentStep
@@ -56,6 +57,7 @@ Tools (JSON only each turn):
 - read_file {{ "path": "main.py" }}
 - write_file {{ "path": "main.py", "content": "...full file..." }}
 - edit_file {{ "path": "main.py", "old_string": "...", "new_string": "..." }}
+- run_shell {{ "command": "python -m py_compile main.py" }}  (only if policy allows)
 - finish {{ "summary": "what you built" }}
 
 Rules:
@@ -134,10 +136,21 @@ def run_agent(
             step.tool_result = result
             state.steps.append(step)
             state.add_assistant(step.thought or decision.get("summary") or "done")
-            state.stop_reason = "completed"
-            state.ok = True
-            state.metadata["summary"] = args.get("summary") or decision.get("summary") or ""
-            break
+            acc = check_agent_project(state.work_dir, goal=goal)
+            state.metadata["acceptance"] = acc
+            if acc.get("ok"):
+                state.stop_reason = "completed"
+                state.ok = True
+                state.metadata["summary"] = args.get("summary") or decision.get("summary") or ""
+                break
+            # acceptance failed — push agent to fix instead of stopping if steps remain
+            state.warnings.append("acceptance_soft_fail:" + ",".join(acc.get("missing") or [])[:200])
+            state.add_user(
+                "Acceptance failed. Missing: "
+                + ", ".join(acc.get("missing") or [])
+                + ". Continue writing the missing files, then call finish again."
+            )
+            continue
 
         if not tool:
             state.add_assistant(step.thought or "(no tool)")
@@ -182,6 +195,22 @@ def run_agent(
                 state.errors.append("finish_without_files")
         except Exception:
             pass
+
+    # Final acceptance snapshot
+    try:
+        acc = check_agent_project(state.work_dir, goal=goal)
+        state.metadata["acceptance"] = acc
+        if state.ok and not acc.get("ok"):
+            state.warnings.append("acceptance_final_fail")
+            # demote ok only if nothing useful written
+            if not state.files_written:
+                state.ok = False
+        elif not state.ok and acc.get("ok"):
+            state.ok = True
+            if not state.stop_reason:
+                state.stop_reason = "completed_by_acceptance"
+    except Exception as exc:
+        state.warnings.append(f"acceptance_error:{type(exc).__name__}")
 
     state.metadata["steps"] = len(state.steps)
     state.metadata["files_written"] = list(state.files_written)
