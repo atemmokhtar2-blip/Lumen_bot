@@ -528,6 +528,52 @@ def _call_ollama(system: str, user: str, model_id: str, base_url: str | None) ->
     return str((resp.json().get("message") or {}).get("content") or "")
 
 
+def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) -> str:
+    """OpenAI-compatible endpoint (llama-server / tablet tunnel).
+
+    Expects base like https://xxx.trycloudflare.com/v1
+    Hits POST {base}/chat/completions
+    """
+    base = (
+        base_url
+        or os.getenv("LLAMACPP_BASE_URL")
+        or os.getenv("OPENAI_COMPAT_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    if not base:
+        raise RuntimeError("llamacpp_no_base_url")
+    # Accept either .../v1 or host root
+    if base.endswith("/v1"):
+        url = f"{base}/chat/completions"
+    else:
+        url = f"{base}/v1/chat/completions"
+    model = (model_id or os.getenv("LLAMACPP_MODEL") or "qwen").strip()
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"},
+    ]
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": int(os.getenv("LLAMACPP_MAX_TOKENS") or "1024"),
+        "stream": False,
+    }
+    headers = {"Content-Type": "application/json"}
+    api_key = (os.getenv("LLAMACPP_API_KEY") or os.getenv("OPENAI_COMPAT_API_KEY") or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    resp = requests.post(url, headers=headers, json=payload, timeout=_timeout())
+    if resp.status_code >= 400:
+        raise RuntimeError(f"llamacpp_http_{resp.status_code}:{(resp.text or '')[:300]}")
+    body = resp.json()
+    choices = body.get("choices") or []
+    if not choices:
+        raise RuntimeError("llamacpp_empty_choices")
+    msg = choices[0].get("message") or {}
+    return str(msg.get("content") or "")
+
+
 def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None) -> dict[str, Any]:
     """One reasoning step with smart retries (parse fail / transient HTTP)."""
     choice = choice or select_model(task="build")
@@ -572,6 +618,8 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                 raw = _call_xai(system, user, choice.model_id)
             elif provider == "ollama":
                 raw = _call_ollama(system, user, choice.model_id, choice.base_url)
+            elif provider in {"llamacpp", "openai_compat", "tablet"}:
+                raw = _call_llamacpp(system, user, choice.model_id, choice.base_url)
             else:
                 return {
                     "thought": "",

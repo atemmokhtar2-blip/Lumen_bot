@@ -7,8 +7,13 @@ Keys never collide:
   XAI_API_KEY    → xAI (optional)
   OLLAMA_HOST    → local
 
-CLINE_LLM_PROVIDER / ENGINE_LLM_PROVIDER: groq | gemini | xai | ollama | auto
-Default auto order: groq → gemini → xai → ollama
+CLINE_LLM_PROVIDER / ENGINE_LLM_PROVIDER: groq | gemini | xai | ollama | llamacpp | openai_compat | auto
+Default auto order: llamacpp → qwen → groq → gemini → xai → ollama
+
+Tablet / llama.cpp server:
+  LLAMACPP_BASE_URL=https://xxx.trycloudflare.com/v1
+  LLAMACPP_MODEL=qwen
+  CLINE_LLM_PROVIDER=llamacpp
 """
 from __future__ import annotations
 
@@ -25,8 +30,13 @@ class ModelChoice:
     base_url: str | None = None
 
     def key_present(self) -> bool:
-        if self.provider == "ollama":
-            return bool((os.getenv("OLLAMA_HOST") or "").strip())
+        if self.provider in {"ollama", "llamacpp", "openai_compat"}:
+            if self.provider == "ollama":
+                return bool((os.getenv("OLLAMA_HOST") or "").strip())
+            # llama.cpp / OpenAI-compatible HTTP (tablet tunnel, local server)
+            return bool(
+                (self.base_url or os.getenv("LLAMACPP_BASE_URL") or os.getenv("OPENAI_COMPAT_BASE_URL") or "").strip()
+            )
         if self.provider == "gemini":
             try:
                 from telegram_bot_engine.services.llm.key_pool import gemini_keys
@@ -114,11 +124,38 @@ def select_model(*, task: str = "build") -> ModelChoice:
                 or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
             ).strip(),
         ),
+        # Tablet / llama-server (OpenAI-compatible /v1/chat/completions)
+        "llamacpp": ModelChoice(
+            "llamacpp",
+            (os.getenv("LLAMACPP_MODEL") or os.getenv("OPENAI_COMPAT_MODEL") or "qwen").strip(),
+            "LLAMACPP_BASE_URL",
+            base_url=(
+                os.getenv("LLAMACPP_BASE_URL")
+                or os.getenv("OPENAI_COMPAT_BASE_URL")
+                or ""
+            ).strip().rstrip("/"),
+        ),
+        "openai_compat": ModelChoice(
+            "llamacpp",
+            (os.getenv("LLAMACPP_MODEL") or os.getenv("OPENAI_COMPAT_MODEL") or "qwen").strip(),
+            "LLAMACPP_BASE_URL",
+            base_url=(
+                os.getenv("LLAMACPP_BASE_URL")
+                or os.getenv("OPENAI_COMPAT_BASE_URL")
+                or ""
+            ).strip().rstrip("/"),
+        ),
+        "tablet": ModelChoice(
+            "llamacpp",
+            (os.getenv("LLAMACPP_MODEL") or "qwen").strip(),
+            "LLAMACPP_BASE_URL",
+            base_url=(os.getenv("LLAMACPP_BASE_URL") or "").strip().rstrip("/"),
+        ),
     }
     if forced in table:
         return table[forced]
     # Prefer Qwen (sk-ws) when available — avoids Groq TPM walls; else Groq pool
-    for name in ("qwen", "groq", "gemini", "xai", "ollama"):
+    for name in ("llamacpp", "qwen", "groq", "gemini", "xai", "ollama"):
         choice = table[name]
         if choice.key_present():
             return choice
