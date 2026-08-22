@@ -548,9 +548,13 @@ def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) 
     else:
         url = f"{base}/v1/chat/completions"
     model = (model_id or os.getenv("LLAMACPP_MODEL") or "qwen").strip()
+    # Prefer short non-thinking replies on tiny local models (Qwen3)
+    user_body = user
+    if os.getenv("LLAMACPP_NO_THINK", "1").strip().lower() in {"1", "true", "yes", "on"}:
+        user_body = "/no_think\n" + user
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"},
+        {"role": "user", "content": f"{user_body}\n\n{_JSON_SCHEMA_HINT}"},
     ]
     payload = {
         "model": model,
@@ -571,7 +575,13 @@ def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) 
     if not choices:
         raise RuntimeError("llamacpp_empty_choices")
     msg = choices[0].get("message") or {}
-    return str(msg.get("content") or "")
+    content = str(msg.get("content") or "").strip()
+    # Qwen3 often fills reasoning_content and leaves content empty
+    if not content:
+        content = str(msg.get("reasoning_content") or "").strip()
+    if not content:
+        raise RuntimeError("llamacpp_empty_content")
+    return content
 
 
 def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None) -> dict[str, Any]:
