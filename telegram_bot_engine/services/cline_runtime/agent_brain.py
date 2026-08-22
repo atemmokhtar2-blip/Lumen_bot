@@ -215,12 +215,16 @@ def _call_xai(system: str, user: str, model_id: str) -> str:
 def _call_groq(system: str, user: str, model_id: str) -> str:
     """Groq chat with key pool rotation (up to 100 keys).
 
-    On 429/401/403/503 the failing key is cooled down and the next key is used
-    immediately — the agent loop continues without aborting the whole run.
+    Avoid strict response_format=json_object (causes HTTP 400
+    'Failed to generate JSON' on several Groq models). We ask for JSON
+    in the prompt and parse it ourselves.
+
+    On 429/401/403/503 the failing key is cooled down and the next key is used.
     """
     from telegram_bot_engine.services.llm.key_pool import (
         groq_available,
         mark_groq_cooldown,
+        mark_cooldown,
         pool_status,
     )
 
@@ -228,7 +232,8 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     anti = (
         "CRITICAL: Do NOT call provider built-in tools (container.exec, browser, etc.). "
-        "You only communicate by returning ONE JSON object describing our custom tools."
+        "You only communicate by returning ONE JSON object describing our custom tools. "
+        "No markdown, no explanation outside JSON."
     )
     base_messages = [
         {"role": "system", "content": anti + "\n\n" + system},
@@ -236,105 +241,121 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
     ]
 
     last_error = ""
-    # Pull a fresh ready list each outer attempt so cooled keys drop out
     tried_sources: set[str] = set()
     max_key_tries = 100
+    # Prefer plain chat; optional json_object only if GROQ_JSON_MODE=1
+    use_json_mode = (os.getenv("GROQ_JSON_MODE") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
     for _ in range(max_key_tries):
         ready = groq_available()
         if not ready:
             break
-        # skip already-tried in this call
         candidate = None
         for source, key in ready:
             if source not in tried_sources:
                 candidate = (source, key)
                 break
         if candidate is None:
-            # all ready keys already tried this round — stop
             break
         source, key = candidate
         tried_sources.add(source)
 
-        payload = {
-            "model": model,
-            "temperature": 0.15,
-            "max_tokens": 2048,
-            "messages": base_messages,
-            "response_format": {"type": "json_object"},
-        }
-        try:
-            resp = requests.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=_timeout(),
-            )
-        except requests.RequestException as exc:
-            last_error = f"groq_network:{type(exc).__name__}:{exc}"
-            mark_groq_cooldown(source)
-            logger.warning("groq network source=%s err=%s — rotate", source, exc)
-            continue
+        # Two attempts per key: optional json_mode then plain
+        modes = [True, False] if use_json_mode else [False]
+        for with_json in modes:
+            payload: dict[str, Any] = {
+                "model": model,
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "messages": base_messages,
+            }
+            if with_json:
+                payload["response_format"] = {"type": "json_object"}
 
-        if resp.status_code in {401, 403, 429, 503}:
-            body = (resp.text or "")[:240]
-            last_error = f"groq_http_{resp.status_code}:{body}"
-            if resp.status_code == 429:
-                from telegram_bot_engine.services.llm.key_pool import mark_cooldown
-                # rate-limit: cool this key longer, immediately try next
-                mark_cooldown(source, seconds=float(
-                    __import__("os").getenv("GROQ_KEY_COOLDOWN_SEC") or "90"
-                ), env_name="GROQ_KEY_COOLDOWN_SEC")
-            elif resp.status_code in {401, 403}:
-                from telegram_bot_engine.services.llm.key_pool import mark_cooldown
-                # bad key: long cool-down
-                mark_cooldown(source, seconds=float(
-                    __import__("os").getenv("GROQ_BAD_KEY_COOLDOWN_SEC") or "600"
-                ))
-            else:
+            try:
+                resp = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=_timeout(),
+                )
+            except requests.RequestException as exc:
+                last_error = f"groq_network:{type(exc).__name__}:{exc}"
                 mark_groq_cooldown(source)
-            logger.warning(
-                "groq rotate source=%s status=%s pool=%s",
-                source,
-                resp.status_code,
-                pool_status().get("groq_keys_ready"),
-            )
-            continue
+                logger.warning("groq network source=%s err=%s — rotate", source, exc)
+                break  # next key
 
-        if resp.status_code >= 400:
-            body = (resp.text or "")[:300]
-            last_error = f"groq_http_{resp.status_code}:{body}"
-            # 400 tool_use etc — do not burn the whole pool; retry next key once pattern is model issue
-            if "tool_use_failed" in body or "Request too large" in body:
+            if resp.status_code in {401, 403, 429, 503}:
+                body = (resp.text or "")[:240]
+                last_error = f"groq_http_{resp.status_code}:{body}"
+                if resp.status_code == 429:
+                    mark_cooldown(
+                        source,
+                        seconds=float(os.getenv("GROQ_KEY_COOLDOWN_SEC") or "90"),
+                        env_name="GROQ_KEY_COOLDOWN_SEC",
+                    )
+                elif resp.status_code in {401, 403}:
+                    mark_cooldown(
+                        source,
+                        seconds=float(os.getenv("GROQ_BAD_KEY_COOLDOWN_SEC") or "600"),
+                    )
+                else:
+                    mark_groq_cooldown(source)
+                logger.warning(
+                    "groq rotate source=%s status=%s pool=%s",
+                    source,
+                    resp.status_code,
+                    pool_status().get("groq_keys_ready"),
+                )
+                break  # next key
+
+            if resp.status_code >= 400:
+                body = (resp.text or "")[:400]
+                last_error = f"groq_http_{resp.status_code}:{body}"
+                # Failed to generate JSON → retry same key without json_object
+                if with_json and (
+                    "Failed to generate JSON" in body
+                    or "failed to generate json" in body.lower()
+                    or "json_validate" in body.lower()
+                ):
+                    logger.warning(
+                        "groq json_mode failed source=%s — retry plain", source
+                    )
+                    continue  # try plain mode same key
+                if "tool_use_failed" in body or "Request too large" in body:
+                    mark_groq_cooldown(source)
+                    break
+                # other 400: try next key, don't kill whole run
+                logger.warning("groq 400 source=%s body=%s — rotate", source, body[:120])
                 mark_groq_cooldown(source)
+                break
+
+            body_j = resp.json()
+            choices = body_j.get("choices") or []
+            if not choices:
+                last_error = "groq_empty_choices"
+                mark_groq_cooldown(source)
+                break
+            content = str((choices[0].get("message") or {}).get("content") or "")
+            if not content.strip():
+                last_error = "groq_empty_content"
                 continue
-            raise RuntimeError(last_error)
-
-        body = resp.json()
-        choices = body.get("choices") or []
-        if not choices:
-            last_error = "groq_empty_choices"
-            mark_groq_cooldown(source)
-            continue
-        content = str((choices[0].get("message") or {}).get("content") or "")
-        if not content.strip():
-            last_error = "groq_empty_content"
-            continue
-        logger.info("groq ok source=%s model=%s", source, model)
-        return content
+            logger.info(
+                "groq ok source=%s model=%s json_mode=%s", source, model, with_json
+            )
+            return content
 
     status = {}
     try:
         status = pool_status()
     except Exception:
         pass
-    raise RuntimeError(
-        last_error
-        or f"no_groq_key_available pool={status}"
-    )
+    raise RuntimeError(last_error or f"no_groq_key_available pool={status}")
 
 
 
