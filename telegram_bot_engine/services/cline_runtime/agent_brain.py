@@ -66,15 +66,32 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return None
     # strip model reasoning tags (qwen etc.)
     raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.I).strip()
+    raw = re.sub(r"<thinking>[\s\S]*?</thinking>", "", raw, flags=re.I).strip()
+    # strip all fenced blocks content preference
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, flags=re.I)
+    if fence:
+        raw = fence.group(1).strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
-    try:
-        obj = json.loads(raw)
-        if isinstance(obj, dict):
-            return obj
-    except json.JSONDecodeError:
-        pass
+    for candidate in (raw,):
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    # find balanced-ish JSON objects containing "tool" or "thought"
+    for m in re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw):
+        frag = m.group(0)
+        try:
+            obj = json.loads(frag)
+            if isinstance(obj, dict) and (
+                "tool" in obj or "thought" in obj or "finish" in obj or "args" in obj
+            ):
+                return obj
+        except json.JSONDecodeError:
+            continue
     m = re.search(r"\{[\s\S]*\}", raw)
     if not m:
         return None
@@ -82,7 +99,15 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         obj = json.loads(m.group(0))
         return obj if isinstance(obj, dict) else None
     except json.JSONDecodeError:
-        return None
+        # last resort: trailing commas
+        cleaned = re.sub(r",\s*}", "}", m.group(0))
+        cleaned = re.sub(r",\s*]", "]", cleaned)
+        try:
+            obj = json.loads(cleaned)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
 
 
 def _normalize_decision(obj: dict[str, Any] | None, raw_text: str) -> dict[str, Any]:
@@ -464,8 +489,10 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
     decision["provider"] = provider
     decision["model_id"] = choice.model_id
     decision["attempts"] = max_attempts
-    if not decision.get("parse_ok"):
-        decision["error"] = last_error or "parse_fail"
+    # parse failures are soft — agent_loop will nudge and continue
+    if not decision.get("parse_ok") and not decision.get("tool"):
+        decision["error"] = None
+        decision["soft_parse_fail"] = True
     return decision
 
 

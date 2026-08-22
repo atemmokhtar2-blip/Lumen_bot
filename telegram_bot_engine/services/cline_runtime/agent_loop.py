@@ -89,7 +89,16 @@ def run_agent(
             raw_model=str(decision.get("raw") or ""),
         )
 
-        if decision.get("error"):
+        err = str(decision.get("error") or "")
+        # Soft errors: keep looping (model format / transient). Hard errors abort.
+        soft = (
+            not err
+            or err.startswith("parse_fail")
+            or "parse_fail" in err
+            or "empty_content" in err
+            or "empty_choices" in err
+        )
+        if decision.get("error") and not soft:
             step.tool_result = {"ok": False, "error": decision["error"]}
             state.steps.append(step)
             state.errors.append(str(decision["error"]))
@@ -97,11 +106,19 @@ def run_agent(
             state.ok = False
             return state
 
-        if not decision.get("parse_ok") and not decision.get("tool"):
-            state.add_assistant(str(decision.get("raw") or decision.get("thought") or ""))
-            state.add_user("Your last reply was not valid JSON tool call. Reply with JSON only.")
+        if (not decision.get("parse_ok") and not decision.get("tool")) or (
+            decision.get("error") and soft
+        ):
+            raw_snip = str(decision.get("raw") or decision.get("thought") or "")[:500]
+            state.add_assistant(raw_snip or "(invalid)")
+            state.add_user(
+                "INVALID. Reply with ONLY this JSON shape:\n"
+                '{"thought":"...","tool":"write_file","args":{"path":"main.py","content":"..."},'
+                '"finish":false,"summary":""}\n'
+                "Valid tools: list_dir, tree, read_file, write_file, edit_file, finish."
+            )
             state.steps.append(step)
-            state.warnings.append(f"parse_fail_step_{i}")
+            state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")
             continue
 
         tool = decision.get("tool")
