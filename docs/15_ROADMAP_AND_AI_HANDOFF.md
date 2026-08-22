@@ -114,7 +114,12 @@ USER (Telegram)
 | `ENGINE_MODE_FORCE` | — | Force catalog\|hybrid\|cline |
 | `ENGINE_LLM_PROVIDER` | auto | gemini\|xai\|ollama |
 | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | — | Gemini |
-| `XAI_API_KEY` | — | Grok model under router |
+| `XAI_API_KEY` | — | xAI Grok model under router |
+| `GROQ_API_KEY` | — | Groq (gsk_...) — primary Cline brain when set |
+| `GROQ_MODEL` | llama-3.3-70b-versatile | Groq model id |
+| `CLINE_MODE` | agent | agent = free path; builtin = catalog compose |
+| `CLINE_LLM_PROVIDER` | auto | groq\|gemini\|xai\|ollama |
+| `CLINE_AGENT_MAX_STEPS` | 24 | agent loop budget |
 | `OLLAMA_HOST` | — | Local/remote Ollama |
 | `ACTIVEPIECES_WEBHOOK_BASE` | — | Integration webhooks |
 | `OPENCLAW_URL` / `OPENCLAW_TOKEN` | — | Multi-channel |
@@ -131,7 +136,7 @@ USER (Telegram)
 | 2 Lean packs + hybrid scaffolds | **Done (hardened)** | More domains + ENV.example |
 | 3 Cline builtin tools + model router + MCP contract | **Done (hardened)** | ToolRunner; not official Cline npm SDK yet |
 | 4 Control plane + OpenClaw boundary | **Done (this commit)** | File-backed stores; OpenClaw stub |
-| 5 Official Cline SDK package embed | **NOT DONE** | Optional when Node/SDK available in deploy |
+| 5 Free Cline agent loop (Groq/Gemini/xAI) | **FOUNDATION DONE** | agent_loop + FS tools + provider_agent; not npm Cline package |
 | 6 Activepieces live MCP client | **NOT DONE** | Only webhook helper exists |
 | 7 OpenClaw real multi-channel | **NOT DONE** | Boundary only; product still Telegram-native |
 | 8 Capability marketplace / pack versioning | **NOT DONE** | capability_packs load exists; no market UI |

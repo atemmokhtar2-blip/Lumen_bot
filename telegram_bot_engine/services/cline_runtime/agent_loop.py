@@ -1,0 +1,201 @@
+"""Autonomous agent loop — the core of free Cline path.
+
+plan → tool call → observe → repeat until finish / max_steps / error.
+Does NOT use catalog templates. Writes a real project under work_dir.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from .agent_brain import decide
+from .agent_fs import run_tool
+from .agent_state import AgentState, AgentStep
+from .model_router import describe_runtime, select_model
+
+logger = logging.getLogger(__name__)
+
+
+def _max_steps() -> int:
+    try:
+        return max(5, min(50, int(os.getenv("CLINE_AGENT_MAX_STEPS") or "24")))
+    except ValueError:
+        return 16
+
+
+def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> str:
+    ir_block = ""
+    if ir_hint:
+        slim = {
+            "raw_request": ir_hint.get("raw_request") or ir_hint.get("user_request"),
+            "purpose": ir_hint.get("purpose"),
+            "features": ir_hint.get("preferred_keys") or ir_hint.get("features_requested"),
+            "gaps": ir_hint.get("capabilities_gap"),
+            "language": ir_hint.get("language") or "ar",
+        }
+        ir_block = (
+            "\n\nCONTEXT_HINT (from upstream router — you may ignore structure "
+            "and design freely):\n"
+            + json.dumps(slim, ensure_ascii=False)[:4000]
+        )
+    return f"""You are Cline — an autonomous coding agent inside Capability Maestro.
+
+Mission: build a COMPLETE, production-quality, runnable Telegram bot (or software project) from the user goal.
+You are NOT filling templates and NOT copying catalog stubs. You design architecture and write real source files.
+Be thorough: handlers, error handling, clear structure, requirements pinned reasonably.
+
+Workspace (absolute): {work_dir}
+All file paths in tools are RELATIVE to this workspace.
+
+Tools (JSON only each turn):
+- list_dir {{ "path": "." }}
+- tree {{ "path": ".", "max_depth": 3 }}
+- read_file {{ "path": "main.py" }}
+- write_file {{ "path": "main.py", "content": "...full file..." }}
+- edit_file {{ "path": "main.py", "old_string": "...", "new_string": "..." }}
+- finish {{ "summary": "what you built" }}
+
+Rules:
+1. Prefer python-telegram-bot or aiogram if building a Telegram bot unless goal says otherwise.
+2. Create main.py, requirements.txt, README.md, .env.example at minimum for a bot.
+3. Use BOT_TOKEN from environment (never hardcode secrets).
+4. Arabic UX when the goal is Arabic.
+5. After enough files exist and look coherent, call finish.
+6. One tool per turn. Always return valid JSON.
+7. If a write fails, fix path/content and retry — do not invent shell access.
+
+GOAL:
+{goal}
+{ir_block}
+""".strip()
+
+
+def run_agent(
+    *,
+    work_dir: str | Path,
+    goal: str,
+    ir_dict: dict[str, Any] | None = None,
+    max_steps: int | None = None,
+) -> AgentState:
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
+    state.metadata["model"] = describe_runtime()
+    choice = select_model(task="build")
+    if choice.provider == "none":
+        state.stop_reason = "no_model"
+        state.errors.append("no_llm_provider_configured")
+        state.ok = False
+        return state
+
+    limit = max_steps if max_steps is not None else _max_steps()
+    state.add_system(_system_prompt(state.work_dir, goal, ir_dict))
+    state.add_user(
+        "Start building now. Inspect the workspace, then write the project files."
+    )
+
+    for i in range(limit):
+        msgs = [m.to_dict() for m in state.messages]
+        decision = decide(msgs, choice=choice)
+        step = AgentStep(
+            index=i,
+            thought=str(decision.get("thought") or ""),
+            tool_name=decision.get("tool"),
+            tool_args=dict(decision.get("args") or {}),
+            raw_model=str(decision.get("raw") or ""),
+        )
+
+        if decision.get("error"):
+            step.tool_result = {"ok": False, "error": decision["error"]}
+            state.steps.append(step)
+            state.errors.append(str(decision["error"]))
+            state.stop_reason = "error"
+            state.ok = False
+            return state
+
+        if not decision.get("parse_ok") and not decision.get("tool"):
+            state.add_assistant(str(decision.get("raw") or decision.get("thought") or ""))
+            state.add_user("Your last reply was not valid JSON tool call. Reply with JSON only.")
+            state.steps.append(step)
+            state.warnings.append(f"parse_fail_step_{i}")
+            continue
+
+        tool = decision.get("tool")
+        args = dict(decision.get("args") or {})
+
+        if decision.get("finish") or tool == "finish":
+            if decision.get("summary"):
+                args.setdefault("summary", decision["summary"])
+            result = run_tool(state.work_dir, "finish", args)
+            step.tool_name = "finish"
+            step.tool_result = result
+            state.steps.append(step)
+            state.add_assistant(step.thought or decision.get("summary") or "done")
+            state.stop_reason = "completed"
+            state.ok = True
+            state.metadata["summary"] = args.get("summary") or decision.get("summary") or ""
+            break
+
+        if not tool:
+            state.add_assistant(step.thought or "(no tool)")
+            state.add_user("Call a tool or finish. JSON only.")
+            state.steps.append(step)
+            continue
+
+        result = run_tool(state.work_dir, str(tool), args)
+        step.tool_result = result
+        state.steps.append(step)
+        state.add_assistant(
+            json.dumps(
+                {"thought": step.thought, "tool": tool, "args": _safe_args(args)},
+                ensure_ascii=False,
+            )[:4000]
+        )
+        state.add_tool_result(str(tool), result)
+
+        if tool == "write_file" and result.get("ok") and result.get("path"):
+            path = str(result["path"])
+            if path not in state.files_written:
+                state.files_written.append(path)
+        if tool == "edit_file" and result.get("ok") and args.get("path"):
+            path = str(args["path"])
+            if path not in state.files_written:
+                state.files_written.append(path)
+    else:
+        state.stop_reason = "max_steps"
+        state.warnings.append(f"hit_max_steps_{limit}")
+        state.ok = bool(state.files_written)
+
+    if state.stop_reason == "completed" and not state.files_written:
+        try:
+            written = [
+                p.relative_to(work).as_posix()
+                for p in work.rglob("*")
+                if p.is_file() and p.name not in {".DS_Store"}
+            ][:50]
+            state.files_written = written
+            if not written:
+                state.ok = False
+                state.errors.append("finish_without_files")
+        except Exception:
+            pass
+
+    state.metadata["steps"] = len(state.steps)
+    state.metadata["files_written"] = list(state.files_written)
+    return state
+
+
+def _safe_args(args: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in (args or {}).items():
+        if k == "content" and isinstance(v, str) and len(v) > 400:
+            out[k] = v[:400] + f"...({len(v)} chars)"
+        else:
+            out[k] = v
+    return out
+
+
+__all__ = ["run_agent"]
