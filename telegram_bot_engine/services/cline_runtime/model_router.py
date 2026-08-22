@@ -27,9 +27,19 @@ class ModelChoice:
         if self.provider == "ollama":
             return bool((os.getenv("OLLAMA_HOST") or "").strip())
         if self.provider == "gemini":
-            return bool(
-                (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
-            )
+            try:
+                from telegram_bot_engine.services.llm.key_pool import gemini_keys
+                return bool(gemini_keys())
+            except Exception:
+                return bool(
+                    (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
+                )
+        if self.provider == "groq":
+            try:
+                from telegram_bot_engine.services.llm.key_pool import groq_keys
+                return bool(groq_keys())
+            except Exception:
+                return bool((os.getenv("GROQ_API_KEY") or "").strip())
         return bool((os.getenv(self.api_key_env) or "").strip())
 
 

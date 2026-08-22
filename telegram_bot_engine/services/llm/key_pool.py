@@ -1,7 +1,7 @@
 """Shared API-key pool with cooldown + ordered failover.
 
 Gemini: GEMINI_API_KEY / GOOGLE_* aliases + GEMINI_API_KEY_0 .. GEMINI_API_KEY_150
-Groq:   GROQ_API_KEY + GROQ_API_KEY_1 .. GROQ_API_KEY_50
+Groq:   GROQ_API_KEY + GROQ_API_KEY_0..100 + GROQ_API_KEYS (comma/newline)
 
 When a key hits auth/rate limits it is cooled down; the next ready key is used
 until the pool is exhausted, then the least-cooled key is retried.
@@ -150,13 +150,44 @@ def gemini_keys() -> list[tuple[str, str]]:
 
 
 def groq_keys() -> list[tuple[str, str]]:
-    """GROQ_API_KEY + GROQ_API_KEY_1 .. GROQ_API_KEY_50."""
-    return collect_env_keys(
+    """GROQ_API_KEY + GROQ_API_KEY_0..100 + bulk GROQ_API_KEYS.
+
+    Bulk formats (any one):
+      GROQ_API_KEYS=gsk_a,gsk_b,gsk_c
+      GROQ_API_KEYS multiline (one key per line)
+    """
+    keys = collect_env_keys(
         primary_names=("GROQ_API_KEY",),
         numbered_prefix="GROQ_API_KEY_",
-        numbered_start=1,
-        numbered_end=50,
+        numbered_start=0,
+        numbered_end=100,
     )
+    bulk = (os.getenv("GROQ_API_KEYS") or "").strip()
+    if bulk:
+        seen = {k for _, k in keys}
+        parts: list[str] = []
+        for line in bulk.replace(",", "\n").splitlines():
+            part = _normalize(line)
+            if part:
+                parts.append(part)
+        for i, part in enumerate(parts):
+            if part in seen:
+                continue
+            keys.append((f"GROQ_API_KEYS[{i}]", part))
+            seen.add(part)
+    # optional file
+    path = (os.getenv("GROQ_API_KEY_FILE") or "").strip()
+    if path:
+        try:
+            from pathlib import Path as _P
+            raw = _P(path).read_text(encoding="utf-8")
+            for i, line in enumerate(raw.splitlines()):
+                val = _normalize(line)
+                if val and val not in {k for _, k in keys}:
+                    keys.append((f"{path}:{i}", val))
+        except Exception:
+            logger.exception("GROQ_API_KEY_FILE unreadable")
+    return keys
 
 
 def gemini_available() -> list[tuple[str, str]]:
