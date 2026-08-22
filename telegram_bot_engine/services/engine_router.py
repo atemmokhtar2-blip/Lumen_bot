@@ -26,10 +26,17 @@ def _env_force_mode() -> EngineMode | None:
 
 
 def _cline_only() -> bool:
-    """Temporary test switch: all generation goes through free Cline agent."""
-    return (os.getenv("CLINE_ONLY") or os.getenv("CLINE_FORCE_AGENT") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    """Free Cline agent path.
+
+    Default ON while testing free generation (no catalog templates).
+    Set CLINE_ONLY=0 to restore catalog-first policy.
+    """
+    raw = os.getenv("CLINE_ONLY")
+    if raw is None or not str(raw).strip():
+        raw = os.getenv("CLINE_FORCE_AGENT")
+    if raw is None or not str(raw).strip():
+        return True  # temporary default: free agent
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def decide_engine_mode(

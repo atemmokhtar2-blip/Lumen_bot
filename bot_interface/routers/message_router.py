@@ -68,6 +68,21 @@ def _looks_like_generation_request(text: str) -> bool:
     )
 
 
+
+def _free_agent_mode() -> bool:
+    """True → skip Gemini catalog chat; force Cline free generation.
+
+    Default ON (same as engine_router._cline_only). CLINE_ONLY=0 restores old path.
+    """
+    raw = os.getenv("CLINE_ONLY")
+    if raw is None or not str(raw).strip():
+        raw = os.getenv("CLINE_FORCE_AGENT")
+    if raw is None or not str(raw).strip():
+        return True
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+
 _CONFIRM_ROOTS = {
     "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
     "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "انجز", "أنجز", "ولّد", "ولد",
@@ -318,6 +333,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["force_generate_once"] = True
         logger.info("Generation-like request → force generate-now (skip Gemini)")
 
+    # Free-agent mode: bare bot specs («بوت متجر…») also skip Gemini catalog chat
+    # and go straight to Cline — no (cart_add)/(content_list) feature listing.
+    if context.user_data is not None and _free_agent_mode() and not (
+        context.user_data or {}
+    ).get("force_generate_once"):
+        _is_bot_spec_early = False
+        try:
+            from telegram_bot_engine.services.chat_router.service import _looks_like_bot_spec as _llbs
+            _is_bot_spec_early = bool(_llbs(request))
+        except Exception:
+            low = (request or "").lower()
+            _is_bot_spec_early = ("بوت" in (request or "")) or ("bot" in low)
+        if _is_bot_spec_early or _looks_like_generation_request(request):
+            context.user_data["last_bot_request"] = request
+            context.user_data["skip_clarify_once"] = True
+            context.user_data["force_generate_once"] = True
+            context.user_data["free_agent_path"] = True
+            logger.info("Free-agent mode → force generate (skip catalog chat)")
+
     # If the user embeds start intent in a longer message (… وابدا حالا), force generation.
     if context.user_data is not None and not (context.user_data or {}).get("force_generate_once"):
         _tail = (request or "").strip().lower()
@@ -524,6 +558,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     _pkg["spec_request"] = gen_request
                 if not _pkg.get("original_text"):
                     _pkg["original_text"] = gen_request
+                # Free-agent path: never lock to catalog capability keys
+                if _free_agent_mode() or (context.user_data or {}).get("free_agent_path"):
+                    _pkg["engine_mode"] = "cline"
+                    _pkg["needs_ai_codegen"] = True
+                    _pkg["looks_custom"] = True
+                    _pkg["preferred_keys"] = []
+                    _pkg["capabilities_matched"] = []
+                    gaps = list(_pkg.get("capabilities_gap") or [])
+                    if "free_agent" not in gaps:
+                        gaps.append("free_agent")
+                    _pkg["capabilities_gap"] = gaps
+                    logger.info("Free-agent IR forced: engine_mode=cline keys cleared")
                 ir = build_ir_from_package(_pkg, user_id=int(user.id) if user else 0)
                 logger.info(
                     "force_generate IR mode=%s matched=%s gap=%s",
@@ -747,40 +793,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     if _skip_chat_for_generate:
         # User confirmed generation — skip Gemini entirely (slow / failing).
-        # Translate with Groq when possible, then fall through to spec_core.
-        logger.info("Skipping chat layer; force_generate_once active")
-        try:
-            from telegram_bot_engine.services.translator_client import translate_request
-            _hist = []
+        logger.info("Skipping chat layer; force_generate_once active free_agent=%s", _free_agent_mode())
+        if _free_agent_mode():
+            # Keep raw user text — do not map to catalog capability keys.
             if context.user_data is not None:
-                _hist = list(context.user_data.get("chat_history") or [])[-8:]
-            _tr = translate_request(
-                request,
-                {"conversation_history": _hist, "server_facts": {"project": "Maestro"}},
-            )
-            if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
-                request = str(_tr.get("spec_request")).strip()
+                context.user_data["translated_spec_request"] = request
+                context.user_data["translated_preferred_keys"] = []
+                context.user_data["last_bridge"] = {
+                    "mode": "cline",
+                    "keys": [],
+                    "needs_ai_codegen": True,
+                    "looks_custom": True,
+                }
+                context.user_data["free_agent_path"] = True
+            # Fall through without Gemini translate / catalog bridge.
+            pass
+        else:
+            try:
+                from telegram_bot_engine.services.translator_client import translate_request
+                _hist = []
                 if context.user_data is not None:
-                    context.user_data["translated_spec_request"] = request
-                    try:
-                        from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
-                        _pkg = analyze_and_prepare(request, _tr)
-                        context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
-                        context.user_data["last_bridge"] = {"mode": _pkg.get("engine_mode"), "keys": _pkg.get("preferred_keys")}
-                    except Exception:
-                        context.user_data["translated_preferred_keys"] = [
-                            str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
-                        ]
-                    context.user_data["translated_source"] = "groq_confirm_fastpath"
-                    context.user_data["skip_clarify_once"] = True
-                logger.info(
-                    "Confirm fast-path Groq translation features=%s",
-                    _tr.get("features_requested"),
+                    _hist = list(context.user_data.get("chat_history") or [])[-8:]
+                _tr = translate_request(
+                    request,
+                    {"conversation_history": _hist, "server_facts": {"project": "Maestro"}},
                 )
-            else:
-                logger.warning("Confirm fast-path: Groq returned no spec; using raw request")
-        except Exception:
-            logger.exception("Confirm fast-path Groq failed; continuing with raw request")
+                if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
+                    request = str(_tr.get("spec_request")).strip()
+                    if context.user_data is not None:
+                        context.user_data["translated_spec_request"] = request
+                        try:
+                            from telegram_bot_engine.services.engine_groq_bridge import analyze_and_prepare
+                            _pkg = analyze_and_prepare(request, _tr)
+                            context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
+                            context.user_data["last_bridge"] = {"mode": _pkg.get("engine_mode"), "keys": _pkg.get("preferred_keys")}
+                        except Exception:
+                            context.user_data["translated_preferred_keys"] = [
+                                str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
+                            ]
+                        context.user_data["translated_source"] = "groq_confirm_fastpath"
+                        context.user_data["skip_clarify_once"] = True
+                    logger.info(
+                        "Confirm fast-path Groq translation features=%s",
+                        _tr.get("features_requested"),
+                    )
+                else:
+                    logger.warning("Confirm fast-path: Groq returned no spec; using raw request")
+            except Exception:
+                logger.exception("Confirm fast-path Groq failed; continuing with raw request")
         try:
             await message.reply_text("جاري تجهيز البوت الآن…")
         except Exception:
@@ -1803,8 +1863,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if context.user_data is not None and _rep is not None:
             try:
                 from telegram_bot_engine.services.capability_detection import feature_keys
-                context.user_data["detection_preferred_keys"] = feature_keys(_rep, include_core=True)
-                context.user_data["detection_meta"] = _detection_meta
+                if _free_agent_mode():
+                    context.user_data["detection_preferred_keys"] = []
+                    context.user_data["detection_meta"] = dict(_detection_meta or {})
+                    context.user_data["detection_meta"]["free_agent"] = True
+                else:
+                    context.user_data["detection_preferred_keys"] = feature_keys(_rep, include_core=True)
+                    context.user_data["detection_meta"] = _detection_meta
             except Exception:
                 pass
         # Fallback: keep legacy blocked_features note if detection silent
