@@ -69,6 +69,8 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     raw = (text or "").strip()
     if not raw:
         return None
+    # strip model reasoning tags (qwen etc.)
+    raw = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.I).strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
@@ -222,14 +224,19 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
         raise RuntimeError("no_groq_key")
     model = model_id or (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
     url = "https://api.groq.com/openai/v1/chat/completions"
+    anti = (
+        "CRITICAL: Do NOT call provider built-in tools (container.exec, browser, etc.). "
+        "You only communicate by returning ONE JSON object describing our custom tools."
+    )
     payload = {
         "model": model,
         "temperature": 0.15,
         "max_tokens": 2048,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": anti + "\n\n" + system},
             {"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"},
         ],
+        "response_format": {"type": "json_object"},
     }
     resp = requests.post(
         url,
