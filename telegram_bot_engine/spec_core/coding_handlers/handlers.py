@@ -72,22 +72,18 @@ def _emit_handlers(spec: BotSpec) -> str:
             tips.append("• الدعم: /ticketopen موضوع المشكلة")
         if feat_keys & {"sec_dns_check"}:
             tips.append("• الأمان: /secdnscheck example.com")
-        tip_block = ("
-".join(tips) + "
-") if tips else ""
+        tip_block = ("\n".join(tips) + "\n") if tips else ""
         if _ux_welcome:
             welcome = _ux_welcome
             if _ux_contact and _ux_contact not in welcome:
-                welcome = welcome.rstrip() + "
-
-📞 " + _ux_contact
+                welcome = welcome.rstrip() + "\n\n📞 " + _ux_contact
         else:
             welcome = (
-            f"مرحباً بك في {bot_name} 👋\n"
-            f"بوت جاهز للاستخدام — {n_cmds} أمر متاح.\n"
-            f"{tip_block}"
-            "اضغط الأزرار بالأسفل أو اكتب /help لعرض كل الأوامر."
-        )
+                f"مرحباً بك في {bot_name} 👋\n"
+                f"بوت جاهز للاستخدام — {n_cmds} أمر متاح.\n"
+                f"{tip_block}"
+                "اضغط الأزرار بالأسفل أو اكتب /help لعرض كل الأوامر."
+            )
     else:
         welcome = (
             f"Welcome to {bot_name} 👋\n"
