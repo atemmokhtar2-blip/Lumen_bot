@@ -166,7 +166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         except Exception:
             pass
-        _thinking_msg = await message.reply_text("مايسترو يفكر 🤔")
+        _thinking_msg = await message.reply_text("مايسترو يفكر...🤔")
     except Exception:
         logger.exception("thinking indicator send failed")
         _thinking_msg = None

@@ -246,25 +246,73 @@ def get_or_create_by_telegram(
     *,
     name: str = "",
     plan_id: str = "free",
+    username: str = "",
 ) -> tuple:
-    """Ensure a Mongo user exists for a Telegram user_id; return (tenant, created: bool)."""
+    """Ensure a Mongo user exists for a Telegram user_id; return (tenant, created: bool).
+
+    Returning users (even after blocking/deleting the bot) are touched: last_seen + profile.
+    """
+    import time as _time
     from .tenants import get_tenant_store
     store = get_tenant_store()
     uid = int(owner_telegram_id or 0)
     if uid <= 0:
         raise ValueError("owner_telegram_id required")
+    display = (name or f"tg_{uid}")[:120]
+    existing = None
     if hasattr(store, "get_by_telegram"):
         existing = store.get_by_telegram(uid)
-        if existing:
-            return existing, False
-    # File store fallback: scan
-    if hasattr(store, "list_all"):
+    if existing is None and hasattr(store, "list_all"):
         for t in store.list_all():
             if int(getattr(t, "owner_telegram_id", 0) or 0) == uid:
-                return t, False
+                existing = t
+                break
+    if existing is not None:
+        # Re-entry: always refresh last_seen so reinstall / unblock is recorded
+        try:
+            if hasattr(store, "col"):
+                store.col.update_one(
+                    {"owner_telegram_id": uid},
+                    {
+                        "$set": {
+                            "last_seen_at": _time.time(),
+                            "name": display or getattr(existing, "name", "") or f"tg_{uid}",
+                            "username": (username or "")[:64],
+                            "active": True,
+                            "updated_at": _time.time(),
+                        },
+                        "$inc": {"visit_count": 1},
+                    },
+                    upsert=False,
+                )
+            elif hasattr(store, "update_white_label"):
+                meta = dict(getattr(existing, "metadata", None) or {})
+                meta["last_seen_at"] = _time.time()
+                meta["visit_count"] = int(meta.get("visit_count") or 0) + 1
+                if username:
+                    meta["username"] = username[:64]
+                store.update_white_label(existing.tenant_id, metadata=meta, name=display)
+        except Exception:
+            pass
+        return existing, False
     tenant, _raw = store.create(
-        name or f"tg_{uid}",
+        display,
         plan_id=plan_id,
         owner_telegram_id=uid,
     )
+    try:
+        if hasattr(store, "col"):
+            store.col.update_one(
+                {"tenant_id": tenant.tenant_id},
+                {
+                    "$set": {
+                        "last_seen_at": _time.time(),
+                        "username": (username or "")[:64],
+                        "visit_count": 1,
+                        "active": True,
+                    }
+                },
+            )
+    except Exception:
+        pass
     return tenant, True

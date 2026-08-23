@@ -28,18 +28,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data is not None and "lang" not in context.user_data:
         set_lang(context, lang)
 
-    # Ensure user exists in Mongo (plan = free) on first contact
+    # Persist user on every /start (create or refresh last_seen — even after bot delete)
     try:
         if user:
-            from b2b_platform.mongo_users import get_or_create_by_telegram
-            import os
-            if (os.getenv("MONGODB_URI") or "").strip():
-                name = (
-                    getattr(user, "full_name", None)
-                    or getattr(user, "username", None)
-                    or f"tg_{user.id}"
-                )
-                get_or_create_by_telegram(int(user.id), name=str(name)[:120], plan_id="free")
+            from bot_interface.middlewares.mongo_sync import ensure_mongo_user
+            ensure_mongo_user(user)
     except Exception:
         pass
 
