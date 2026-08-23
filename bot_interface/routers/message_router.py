@@ -72,13 +72,13 @@ def _looks_like_generation_request(text: str) -> bool:
 def _free_agent_mode() -> bool:
     """True → skip Gemini catalog chat; force Cline free generation.
 
-    Default ON (same as engine_router._cline_only). CLINE_ONLY=0 restores old path.
+    Default OFF (catalog / deterministic path). Set CLINE_ONLY=1 for pure agent.
     """
     raw = os.getenv("CLINE_ONLY")
     if raw is None or not str(raw).strip():
         raw = os.getenv("CLINE_FORCE_AGENT")
     if raw is None or not str(raw).strip():
-        return True
+        return False
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 

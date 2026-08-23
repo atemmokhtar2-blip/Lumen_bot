@@ -26,16 +26,16 @@ def _env_force_mode() -> EngineMode | None:
 
 
 def _cline_only() -> bool:
-    """Free Cline agent path.
+    """Force free Cline agent path (skip catalog).
 
-    Default ON while testing free generation (no catalog templates).
-    Set CLINE_ONLY=0 to restore catalog-first policy.
+    Default OFF — catalog/hybrid first for known capabilities.
+    Set CLINE_ONLY=1 only when you want pure agent generation with a live LLM.
     """
     raw = os.getenv("CLINE_ONLY")
     if raw is None or not str(raw).strip():
         raw = os.getenv("CLINE_FORCE_AGENT")
     if raw is None or not str(raw).strip():
-        return True  # temporary default: free agent
+        return False
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -201,7 +201,9 @@ def execute_ir(
                 },
             )
             return _finalize(result, ir)
-        if _cline_only() or (os.getenv("CLINE_NO_CATALOG_FALLBACK") or "0").strip().lower() in {
+        # Network/LLM failures must not brick generation: fall back to catalog
+        # unless operator explicitly disables it.
+        if (os.getenv("CLINE_NO_CATALOG_FALLBACK") or "0").strip().lower() in {
             "1", "true", "yes", "on",
         }:
             logger.warning("cline failed and catalog fallback DISABLED: %s", cline_res.errors[:3])
