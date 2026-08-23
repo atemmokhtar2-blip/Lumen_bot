@@ -274,24 +274,38 @@ def _extract_command_handlers(src: str) -> list[str]:
 
 
 def _extract_command_bindings(src: str) -> list[tuple[str, str]]:
-    """Read CommandHandler(command, handler) bindings from Python AST."""
+    """Read CommandHandler(command, handler) bindings from AST, regex fallback on syntax errors."""
     bindings: list[tuple[str, str]] = []
     try:
         tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            if name != "CommandHandler" or len(node.args) < 2:
+                continue
+            command, handler = node.args[0], node.args[1]
+            if isinstance(command, ast.Constant) and isinstance(command.value, str):
+                if isinstance(handler, ast.Name):
+                    bindings.append((command.value, handler.id))
     except SyntaxError:
-        return bindings
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        pass
+    if not bindings:
+        for m in re.finditer(
+            r"CommandHandler\(\s*['\"]([a-zA-Z][a-zA-Z0-9_]*)['\"]\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+            src,
+        ):
+            bindings.append((m.group(1), m.group(2)))
+    # de-dupe keep first
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for cmd, h in bindings:
+        if cmd in seen:
             continue
-        fn = node.func
-        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-        if name != "CommandHandler" or len(node.args) < 2:
-            continue
-        command, handler = node.args[0], node.args[1]
-        if isinstance(command, ast.Constant) and isinstance(command.value, str):
-            if isinstance(handler, ast.Name):
-                bindings.append((command.value, handler.id))
-    return bindings
+        seen.add(cmd)
+        out.append((cmd, h))
+    return out
 
 
 def _local_import_findings(root: Path, files: list[Path]) -> list[Finding]:
@@ -667,13 +681,26 @@ def run_anti_hallucination_gate(
     # Commands must have a non-stub handler
     for cmd in commands:
         # common patterns: cmd_handler, handle_cmd, cmd
-        candidates = (
+        candidates_list = [
             f"{cmd}_handler",
             f"handle_{cmd}",
             cmd,
             f"{cmd}_cmd",
             f"cmd_{cmd}",
-        )
+        ]
+        # Resolve short aliases (shop → shop_catalog → handle_shop_catalog)
+        try:
+            from telegram_bot_engine.spec_core.command_map import feature_for_command
+            feat_key = feature_for_command(cmd)
+            if feat_key:
+                candidates_list.extend([
+                    f"handle_{feat_key}",
+                    f"{feat_key}_handler",
+                    feat_key,
+                ])
+        except Exception:
+            pass
+        candidates = tuple(dict.fromkeys(candidates_list))
         matched = binding_map.get(cmd)
         if matched not in handlers:
             matched = None

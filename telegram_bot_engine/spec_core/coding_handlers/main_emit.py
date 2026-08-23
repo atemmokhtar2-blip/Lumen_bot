@@ -5,6 +5,15 @@ from ..coding_emit_foundation import _msg
 from ..registry import get_capability
 from ..schema import BotSpec, Feature
 
+
+def _handler_fname(feat: Feature) -> str:
+    """Stable public handler name: handle_<capability> when known."""
+    key = (getattr(feat, "feature", None) or getattr(feat, "id", "") or "").strip()
+    if key and get_capability(key):
+        return f"handle_{key}".replace("-", "_")
+    fid = (getattr(feat, "id", None) or key or "cmd").replace("-", "_")
+    return f"handle_{fid}"
+
 def _emit_main(spec: BotSpec) -> str:
     commands: list[tuple[str, str]] = []
     handler_regs: list[str] = []
@@ -22,7 +31,7 @@ def _emit_main(spec: BotSpec) -> str:
             handler_regs.append('    app.add_handler(CommandHandler("help", help_handler))')
             commands.append(("help", "help"))
         else:
-            h = f"handle_{feat.id}".replace("-", "_")
+            h = _handler_fname(feat)
             handler_regs.append(f'    app.add_handler(CommandHandler({cmd!r}, {h}))')
             commands.append((cmd, feat.feature))
 
@@ -39,14 +48,14 @@ def _emit_main(spec: BotSpec) -> str:
     except Exception:
         _cmds_for = lambda f: []  # type: ignore
     feat_to_handler = {
-        f.feature: f"handle_{f.id}".replace("-", "_")
+        f.feature: _handler_fname(f)
         for f in spec.features
         if f.feature not in ("start", "help", "payment_precheckout", "payment_success") and getattr(f.trigger, "type", "") == "command"
     }
     for f in spec.features:
         if f.feature in ("start", "help", "payment_precheckout", "payment_success"):
             continue
-        hname = f"handle_{f.id}".replace("-", "_")
+        hname = _handler_fname(f)
         feat_to_handler.setdefault(f.feature, hname)
     for feat, h in list(feat_to_handler.items()):
         if feat in {"payment_precheckout", "payment_success"}:
@@ -137,7 +146,7 @@ def _emit_main(spec: BotSpec) -> str:
         if feat.trigger.type not in ("command", "callback"):
             continue
         # Same naming rule as emission in _emit_handlers
-        fname = f"handle_{feat.id}".replace("-", "_")
+        fname = _handler_fname(feat)
         extra_imports.append(fname)
     if extra_imports:
         imports_handlers += ", " + ", ".join(dict.fromkeys(extra_imports))
@@ -152,7 +161,7 @@ def _emit_main(spec: BotSpec) -> str:
     imports_handlers += ", text_router, cancel_handler"
     if need_mod:
         imports_handlers += ", anti_abuse_filter"
-    if need_ocr or need_market:
+    if need_ocr:
         if "photo_router" not in imports_handlers:
             imports_handlers += ", photo_router"
     if need_voice:
@@ -195,7 +204,7 @@ def _emit_main(spec: BotSpec) -> str:
     )
     if need_mod:
         text_handler += "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_abuse_filter), group=0)"
-    if need_ocr or need_market:
+    if need_ocr:
         text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
     if need_voice:
         text_handler += (

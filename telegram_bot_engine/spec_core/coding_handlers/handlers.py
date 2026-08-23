@@ -241,7 +241,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         trig = str(feat.trigger.id or "").lower().replace("-", "").replace("_", "")
         if trig in {"explicitcommand", "deeplinkstart", "smarthelp", "formstart"}:
             continue
-        fname = f"handle_{feat.id}".replace("-", "_")
+        fname = (f"handle_{feat.feature}".replace("-", "_") if get_capability(feat.feature) else f"handle_{feat.id}".replace("-", "_"))
         if fname in emitted_fnames:
             continue
         emitted_fnames.add(fname)
@@ -1069,7 +1069,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     for feat in spec.features:
         if feat.trigger.type != "callback":
             continue
-        fname = f"handle_{feat.id}".replace("-", "_")
+        fname = (f"handle_{feat.feature}".replace("-", "_") if get_capability(feat.feature) else f"handle_{feat.id}".replace("-", "_"))
         if fname in emitted_fnames:
             continue
         emitted_fnames.add(fname)
@@ -1077,7 +1077,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         cmd_peer = None
         for f2 in spec.features:
             if f2.trigger.type == "command" and f2.feature == feat.feature:
-                cmd_peer = f"handle_{f2.id}".replace("-", "_")
+                cmd_peer = (f"handle_{f2.feature}".replace("-", "_") if get_capability(f2.feature) else f"handle_{f2.id}".replace("-", "_"))
                 break
         lines.append(f"async def {fname}(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:")
         if cmd_peer and cmd_peer in emitted_fnames:
@@ -1144,7 +1144,7 @@ def _emit_handlers(spec: BotSpec) -> str:
     cb_map: list[tuple[str, str]] = []
     for feat in spec.features:
         if feat.trigger.type == "callback":
-            cb_map.append((feat.trigger.id, f"handle_{feat.id}".replace("-", "_")))
+            cb_map.append((feat.trigger.id, (f"handle_{feat.feature}".replace("-", "_") if get_capability(feat.feature) else f"handle_{feat.id}".replace("-", "_"))))
 
     # Build command → handler map so inline buttons actually run logic
     cmd_to_handler: list[tuple[str, str]] = []
@@ -1153,7 +1153,7 @@ def _emit_handlers(spec: BotSpec) -> str:
             continue
         if feat.feature in ("start", "help") or feat.trigger.id in ("start", "help"):
             continue
-        h = f"handle_{feat.id}".replace("-", "_")
+        h = (f"handle_{feat.feature}".replace("-", "_") if get_capability(feat.feature) else f"handle_{feat.id}".replace("-", "_"))
         cmd_to_handler.append((feat.trigger.id, h))
         slug2 = feat.feature.lower().replace("_", "")
         if slug2 and slug2 != feat.trigger.id:
