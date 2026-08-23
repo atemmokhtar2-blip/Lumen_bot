@@ -65,6 +65,7 @@
 | [13_CONFIG_ENV.md](13_CONFIG_ENV.md) | متغيرات البيئة |
 | [14_ENGINE_ROUTER_AND_IR.md](14_ENGINE_ROUTER_AND_IR.md) | IR + EngineRouter |
 | [15_ROADMAP_AND_AI_HANDOFF.md](15_ROADMAP_AND_AI_HANDOFF.md) | خارطة طريق وتسليم |
+| [18_LIVE_TOKEN_AND_UX.md](18_LIVE_TOKEN_AND_UX.md) | توكن التشغيل الحي + واجهة مختصرة |
 
 ---
 
@@ -102,3 +103,20 @@ python api_main.py
 - [Engine Router & IR](14_ENGINE_ROUTER_AND_IR.md)
 
 - [Roadmap & AI Handoff](15_ROADMAP_AND_AI_HANDOFF.md) — **read first if continuing work**
+
+## 6) تشغيل حي بعد التوليد (توكن)
+
+1. بعد نجاح التوليد + بوابة anti-hallucination تُحفظ `pending_run` / `pending_live_run` / `pending_deploy` في الجلسة (ومخزن الجلسات).
+2. المستخدم يرسل توكن `@BotFather` — يُعالج **قبل** رسالة «مايسترو يفكر» و**قبل** مسار الشات.
+3. إن ضاعت الجلسة: يُستعاد آخر مشروع من `OUTPUT_DIR/users/<shard>/<id>/projects/`.
+4. التشغيل عبر `live_runner` (تثبيت تبعيات → إقلاع). التقدم في رسالة حالة واحدة تُحدَّث.
+
+## 7) رسائل واجهة مختصرة
+
+- `QUIET_DELIVERY=1` (افتراضي): نتيجة التوليد = «✅ تم» بدل تقرير الطبقات الطويل.
+- رسالة التفكير: `مايسترو يفكر...🤔` (تُحذف بعد الرد؛ لا تظهر مع مسار التوكن).
+
+## 8) هوية المستخدم
+
+- MongoDB فقط (`MONGODB_URI` → مجموعة `users`).
+- كل رسالة و`/start` → `ensure_mongo_user` (إنشاء أو `last_seen` + `visit_count`).

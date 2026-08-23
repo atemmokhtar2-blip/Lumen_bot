@@ -97,6 +97,46 @@ async def try_handle_token(
             _persist_session(user, context)
             return True
 
+        # Recover last generated project from user sandbox if session lost
+        if not pending_run or not pending_run.get("project_path"):
+            try:
+                from telegram_bot_engine.services.user_sandbox import get_user_sandbox
+                from bot_interface.config import OUTPUT_DIR
+                uid = int(user.id) if user else 0
+                sb = get_user_sandbox(uid, OUTPUT_DIR)
+                root = Path(sb.root)
+                search_roots = [sb.projects_dir, root]
+                candidates = []
+                for base in search_roots:
+                    if not base.is_dir():
+                        continue
+                    for main_py in base.rglob("main.py"):
+                        parent = main_py.parent
+                        if parent.name in {"generated_bot", "bot"} or (parent / "app" / "handlers.py").exists():
+                            candidates.append(parent)
+                    if candidates:
+                        break
+                if not candidates and root.is_dir():
+                    for main_py in sorted(root.rglob("main.py"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
+                        candidates.append(main_py.parent)
+                if candidates:
+                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    proj = candidates[0]
+                    pending_run = {
+                        "project_path": str(proj),
+                        "entry_point": "main.py",
+                        "run_seconds": _plan_live_seconds(user),
+                    }
+                    context.user_data["pending_run"] = pending_run
+                    context.user_data["pending_live_run"] = dict(pending_run)
+                    context.user_data["pending_deploy"] = dict(pending_run)
+                    logger.info("token recovery: using latest project %s", proj)
+                    await handle_live_run_token(message, context, token_text, pending_run)
+                    _persist_session(user, context)
+                    return True
+            except Exception:
+                logger.exception("token project recovery failed")
+
         # Token sent but no project is pending — do NOT treat as bot description
         await message.reply_text(
             "استلمت توكن بوت، لكن مفيش مشروع جاهز للتشغيل دلوقتي.\n"

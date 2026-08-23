@@ -156,20 +156,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not message or not message.text:
         return
 
-    # ── FIRST: thinking indicator (before auth/mongo/rate-limit/group checks) ──
+    # Helpers for ephemeral UX
     _thinking_msg = None
-    try:
-        # typing status (non-blocking UX) then the visible phrase
-        try:
-            await context.bot.send_chat_action(
-                chat_id=message.chat_id, action="typing"
-            )
-        except Exception:
-            pass
-        _thinking_msg = await message.reply_text("مايسترو يفكر...🤔")
-    except Exception:
-        logger.exception("thinking indicator send failed")
-        _thinking_msg = None
 
     async def _clear_thinking() -> None:
         nonlocal _thinking_msg
@@ -181,8 +169,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
         _thinking_msg = None
 
+    async def _show_thinking() -> None:
+        nonlocal _thinking_msg
+        if _thinking_msg is not None:
+            return
+        try:
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=message.chat_id, action="typing"
+                )
+            except Exception:
+                pass
+            _thinking_msg = await message.reply_text("مايسترو يفكر...🤔")
+        except Exception:
+            logger.exception("thinking indicator send failed")
+            _thinking_msg = None
+
     if not is_allowed(user.id if user else None):
-        await _clear_thinking()
         await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
         return
 
@@ -192,7 +195,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid_check = int(user.id) if user else 0
     if not _rate_limit_ok(uid_check):
         wait_s = _rate_limit_wait_seconds(uid_check)
-        await _clear_thinking()
         await message.reply_text(
             f"⏳ تجاوزت الحد المسموح من الطلبات. انتظر حوالي {wait_s} ثانية ثم حاول مرة أخرى."
         )
@@ -299,7 +301,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    # Restore durable session (pending_run etc.) after restarts
+    # Restore durable session (pending_run etc.) after restarts — before token handling
     try:
         if user and context.user_data is not None:
             saved = get_session_store().load(int(user.id))
@@ -308,16 +310,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    # ── Bot token MUST be handled before Gemini/generate paths ──
-    # Otherwise the token is treated as chat text ("ما الذي تود فعله بهذا الرمز؟").
+    # ── Bot token FIRST (no thinking bubble — deploy progress has its own status) ──
     if looks_like_bot_token(request) or looks_like_bot_token(normalize_bot_token(request)):
         try:
             from ..handlers.token_handler import try_handle_token
             if await try_handle_token(update, context, request, user, message):
-                await _clear_thinking()
                 return
         except Exception:
             logger.exception("early token handler failed")
+
+    # Thinking indicator only for normal chat / generation (not tokens)
+    await _show_thinking()
 
     if not request:
         await _clear_thinking()

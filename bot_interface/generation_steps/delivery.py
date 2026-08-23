@@ -27,12 +27,14 @@ async def deliver_generation_result(
     errors = list(getattr(result, "errors", None) or [])
     stages = list(getattr(result, "stages", None) or [])
     meta = dict(getattr(result, "metadata", None) or {})
+    _quiet = (__import__("os").getenv("QUIET_DELIVERY") or "1").strip().lower() in {"1", "true", "yes", "on"}
+
 
     ok_stages = sum(1 for s in stages if getattr(s, "success", False))
     total_stages = len(stages)
     pipeline_warnings: list[str] = []
     summary_lines = [
-        f"{'✅' if success else '⚠️'} *نتيجة التوليد*",
+        f"{'✅' if success else '⚠️'} تم" if _quiet else f"{'✅' if success else '⚠️'} *نتيجة التوليد*",
         f"• النجاح: {'نعم' if success else 'جزئي / فشل'}",
         f"• المراحل الناجحة: {ok_stages}/{total_stages}",
     ]
@@ -83,7 +85,7 @@ async def deliver_generation_result(
                 addon += chr(10) + "📌 " + " · ".join(str(x) for x in list(notes)[:4])
         else:
             addon = format_result_addon(nav)
-        if addon:
+        if addon and not _quiet:
             summary_lines.insert(1, addon.strip())
             menu = list((baked or {}).get("menu_preview") or getattr(nav, "menu_preview", None) or [])[:6]
             if menu:
@@ -93,7 +95,7 @@ async def deliver_generation_result(
         pipeline_warnings.append("تعذر إنشاء الشرح الذكي للنتيجة؛ تم الاحتفاظ بالكود للتحقق المستقل.")
     # L1–L6 snapshot (so the user sees the intelligence path is active)
     layers = meta.get("layers") if isinstance(meta.get("layers"), dict) else {}
-    if layers and not layers.get("layers_error"):
+    if layers and not layers.get("layers_error") and not _quiet:
         l1 = layers.get("l1_primary") or layers.get("l1_preset") or "—"
         l2 = layers.get("l2_intent") or "—"
         l2_skill = layers.get("l2_skill") or "—"
@@ -147,9 +149,13 @@ async def deliver_generation_result(
         summary_lines.extend("  – " + w for w in pipeline_warnings)
 
     try:
-        await status_msg.edit_text(
-            "\n".join(summary_lines)[:GENERATION_STATUS_PREVIEW_LIMIT]
-        )
+        if _quiet:
+            brief = "✅ تم" if success else "⚠️ فشل التوليد"
+            await status_msg.edit_text(brief)
+        else:
+            await status_msg.edit_text(
+                "\n".join(summary_lines)[:GENERATION_STATUS_PREVIEW_LIMIT]
+            )
     except Exception:
         logger.exception("status edit failed")
 
@@ -317,14 +323,24 @@ async def deliver_generation_result(
                 lines.append("⚠️ تم التوليد مع تحذيرات")
             else:
                 lines.append("❌ فشل التحقق — غير جاهز للتشغيل")
-            for c in (ah.get("verified_commands") or [])[:15]:
-                lines.append(f"  /{c}")
-            for e in (ah.get("errors") or [])[:10]:
-                if isinstance(e, dict):
-                    lines.append(f"🔴 {e.get('ar') or e.get('code')}")
-                else:
-                    lines.append(f"🔴 {e}")
-            await message.reply_text("\n".join(lines)[:GENERATION_STATUS_PREVIEW_LIMIT])
+            if not _quiet:
+                for c in (ah.get("verified_commands") or [])[:15]:
+                    lines.append(f"  /{c}")
+                for e in (ah.get("errors") or [])[:10]:
+                    if isinstance(e, dict):
+                        lines.append(f"🔴 {e.get('ar') or e.get('code')}")
+                    else:
+                        lines.append(f"🔴 {e}")
+            else:
+                n = len(ah.get("verified_commands") or [])
+                if ah.get("ok") and ah.get("ready_for_token"):
+                    lines = [f"✅ جاهز ({n} أمر)"]
+                elif not ah.get("ok"):
+                    lines = lines  # keep header + few errors
+                    for e in (ah.get("errors") or [])[:3]:
+                        if isinstance(e, dict):
+                            lines.append(f"🔴 {e.get('ar') or e.get('code')}")
+            await message.reply_text("\n".join(lines)[: (200 if _quiet else GENERATION_STATUS_PREVIEW_LIMIT)])
     except Exception:
         logger.exception("anti_hallucination report failed")
 
@@ -351,11 +367,14 @@ async def deliver_generation_result(
             return
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
-        await message.reply_text(
-            "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
-            + cmd_line
-            + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
-        )
+        if _quiet:
+            await message.reply_text("📦 جاهز — أرسل توكن البوت من @BotFather")
+        else:
+            await message.reply_text(
+                "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
+                + cmd_line
+                + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
+            )
     else:
         await message.reply_text(
             "⚠️ المشروع اتولّد لكن التحقق ضد الهلوسة رفض تسليمه كجاهز.\n"
