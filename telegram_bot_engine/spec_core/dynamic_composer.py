@@ -34,6 +34,9 @@ def extract_bot_name(text: str) -> str | None:
 
 
 def compose_from_text(text: str, *, user_id: int = 0) -> BotSpec:
+    _inf = try_infinite_compose(text)
+    if _inf is not None:
+        return _inf
     """Main entry: domain decision is authoritative, then presets + caps."""
     decision = decide(text)
     domains = list(decision.allowed_domains)
@@ -131,3 +134,23 @@ def composition_debug(text: str) -> dict[str, Any]:
 
 
 __all__ = ["compose_from_text", "composition_debug", "extract_bot_name"]
+
+
+def try_infinite_compose(text: str) -> BotSpec | None:
+    """If text looks like infinite DynamicBotSpec JSON, compile it; else None."""
+    raw = (text or "").strip()
+    if not raw or ("nodes" not in raw and "\"nodes\"" not in raw and "'nodes'" not in raw):
+        # quick reject non-JSON-ish
+        if not (raw.startswith("{") or "```json" in raw.lower()):
+            return None
+    try:
+        from .infinite.compose import try_compose_infinite
+        bot, _dyn, err = try_compose_infinite(raw)
+        if bot is not None:
+            return bot
+        if err:
+            import logging
+            logging.getLogger(__name__).info("infinite compose rejected: %s", err)
+    except Exception:
+        pass
+    return None
