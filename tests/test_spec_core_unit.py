@@ -1,5 +1,8 @@
-"""Unit tests for spec_core — registry, integrity, and basic composition."""
+"""Unit tests for spec_core — registry, integrity, durable workflow."""
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
@@ -8,33 +11,35 @@ def test_capabilities_registry_non_empty():
     from telegram_bot_engine.spec_core.registry import CAPABILITIES
 
     assert isinstance(CAPABILITIES, dict)
-    assert len(CAPABILITIES) >= 5
-    for key, meta in list(CAPABILITIES.items())[:20]:
-        assert isinstance(key, str) and key.strip()
-        assert meta is not None
+    assert len(CAPABILITIES) >= 50
 
 
-def test_capability_keys_are_stable_identifiers():
+def test_capability_keys_unique_and_stable():
     from telegram_bot_engine.spec_core.registry import CAPABILITIES
 
-    for key in CAPABILITIES:
-        assert key.replace("_", "").replace("-", "").isalnum() or "_" in key
+    keys = list(CAPABILITIES.keys())
+    assert len(keys) == len(set(keys))
+    for key in keys:
+        assert isinstance(key, str)
+        assert key.strip() == key
         assert " " not in key
 
 
-def test_start_and_help_exist():
+def test_start_help_capabilities_present():
     from telegram_bot_engine.spec_core.registry import CAPABILITIES
 
-    # core UX capabilities expected in production bots
     keys = set(CAPABILITIES.keys())
-    assert "start" in keys or any("start" in k for k in keys)
-    assert "help" in keys or any("help" in k for k in keys)
+    assert "start" in keys
+    assert "help" in keys
 
 
-def test_builder_module_importable():
+def test_builder_import_and_surface():
     from telegram_bot_engine.spec_core import builder
 
-    assert hasattr(builder, "__file__") or builder is not None
+    assert builder is not None
+    # common builder entrypoints if present
+    names = dir(builder)
+    assert len(names) > 5
 
 
 def test_acceptance_gate_importable():
@@ -43,33 +48,61 @@ def test_acceptance_gate_importable():
     assert acceptance_gate is not None
 
 
+def test_capability_integrity_module():
+    from telegram_bot_engine.spec_core import capability_integrity
+
+    assert capability_integrity is not None
+
+
+def test_durable_journal_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_WORKFLOW_JOURNAL_DIR", str(tmp_path / "journal"))
+    from telegram_bot_engine.services.multi_agent.durable_workflow import (
+        DurableWorkflowJournal,
+        JournalEntry,
+    )
+
+    j = DurableWorkflowJournal(root=tmp_path / "journal")
+    e = JournalEntry(
+        workflow_id="wf_test123",
+        state_id="st_1",
+        step="architect",
+        status="running",
+        user_id=42,
+        description="test bot",
+    )
+    j.write(e)
+    loaded = j.get("wf_test123")
+    assert loaded is not None
+    assert loaded.step == "architect"
+    assert j.get_by_state("st_1").workflow_id == "wf_test123"
+
+
 def test_workflow_engine_memory_checkpoint():
     from telegram_bot_engine.services.multi_agent.workflow_engine import MemoryWorkflowEngine
 
     eng = MemoryWorkflowEngine()
     wid = eng.start("state_test_1", step="architect")
-    cp = eng.checkpoint(wid, state_id="state_test_1", step="builder", status="running")
-    assert cp.step == "builder"
+    eng.checkpoint(wid, state_id="state_test_1", step="builder", status="running")
     loaded = eng.resume(wid)
     assert loaded is not None
-    assert loaded.state_id == "state_test_1"
+    assert loaded.step == "builder"
 
 
-def test_prod_hard_locks_production():
-    import os
+def test_prod_hard_locks_force_off_in_production(monkeypatch):
     from telegram_bot_engine.services import prod_hard_locks as ph
 
-    old = os.environ.get("ENVIRONMENT")
-    try:
-        os.environ["ENVIRONMENT"] = "production"
-        os.environ["TBE_AUTO_HEAL_PIP"] = "1"
-        os.environ["TBE_TOKEN_IN_ENV_FILE"] = "1"
-        assert ph.auto_heal_pip_allowed() is False
-        assert ph.token_in_env_file_allowed() is False
-    finally:
-        if old is None:
-            os.environ.pop("ENVIRONMENT", None)
-        else:
-            os.environ["ENVIRONMENT"] = old
-        os.environ.pop("TBE_AUTO_HEAL_PIP", None)
-        os.environ.pop("TBE_TOKEN_IN_ENV_FILE", None)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_AUTO_HEAL_PIP", "1")
+    monkeypatch.setenv("TBE_TOKEN_IN_ENV_FILE", "1")
+    assert ph.auto_heal_pip_allowed() is False
+    assert ph.token_in_env_file_allowed() is False
+
+
+def test_isolation_policy_production_defaults(monkeypatch):
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.delenv("TBE_ALLOW_LOCAL_PROCESS", raising=False)
+    from telegram_bot_engine.services.isolation_policy import decide_isolation
+
+    d = decide_isolation()
+    assert d.require_docker is True
+    assert d.allow_local is False

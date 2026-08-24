@@ -1,13 +1,13 @@
 openapi: 3.0.3
 info:
   title: Capability Maestro B2B API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    Multi-tenant API for Telegram bot generation, jobs, hosting, and billing.
-    Authenticate with `X-Api-Key` (tenant API key) or `Authorization: Bearer <key>`.
+    Multi-tenant Telegram bot generation platform.
+    Auth: header `X-Api-Key` or `Authorization: Bearer <api_key>`.
 servers:
-  - url: /v1
-    description: Relative to API host
+  - url: /
+    description: API root
 tags:
   - name: health
   - name: tenants
@@ -20,56 +20,73 @@ paths:
   /health:
     get:
       tags: [health]
-      summary: Liveness probe
+      summary: Liveness
       security: []
       responses:
         "200":
           description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  ok: { type: boolean }
-                  service: { type: string }
   /ready:
     get:
       tags: [health]
-      summary: Readiness probe
+      summary: Readiness
+      security: []
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+  /openapi.yaml:
+    get:
+      tags: [health]
+      summary: OpenAPI document
       security: []
       responses:
         "200":
-          description: Ready
-        "503":
-          description: Not ready
-  /tenants:
+          description: YAML
+  /docs:
+    get:
+      tags: [health]
+      summary: Swagger UI
+      security: []
+      responses:
+        "200": { description: HTML }
+  /v1/plans:
+    get:
+      tags: [billing]
+      summary: List plans
+      security: []
+      responses:
+        "200": { description: OK }
+  /v1/tenants:
     post:
       tags: [tenants]
       summary: Create tenant (admin)
       responses:
-        "201":
-          description: Created
+        "201": { description: Created }
+  /v1/me:
     get:
       tags: [tenants]
-      summary: List tenants (admin)
+      summary: Current tenant
+      security: [{ ApiKeyAuth: [] }]
       responses:
-        "200":
-          description: OK
-  /tenants/me:
-    get:
+        "200": { description: OK }
+  /v1/me/rotate_key:
+    post:
       tags: [tenants]
-      summary: Current tenant profile
-      security:
-        - ApiKeyAuth: []
+      summary: Rotate API key
+      security: [{ ApiKeyAuth: [] }]
       responses:
-        "200":
-          description: OK
-  /generate:
+        "200": { description: New key }
+  /v1/me/white-label:
+    patch:
+      tags: [tenants]
+      summary: Update white-label settings
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/generate:
     post:
       tags: [generate]
-      summary: Enqueue bot generation job
-      security:
-        - ApiKeyAuth: []
+      summary: Enqueue bot generation
+      security: [{ ApiKeyAuth: [] }]
       requestBody:
         required: true
         content:
@@ -78,30 +95,28 @@ paths:
               type: object
               required: [description]
               properties:
-                description:
-                  type: string
-                  minLength: 3
-                  maxLength: 20000
-                wait:
-                  type: boolean
-                  description: If true, wait for completion (sync)
+                description: { type: string, minLength: 3, maxLength: 20000 }
+                wait: { type: boolean }
       responses:
         "202":
-          description: Accepted — poll job
+          description: Accepted
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Job"
-        "402":
-          description: Payment / quota required
-        "429":
-          description: Rate limited
-  /jobs/{job_id}:
+              schema: { $ref: "#/components/schemas/Job" }
+        "402": { description: Quota / payment }
+        "429": { description: Rate limited }
+  /v1/jobs:
     get:
       tags: [jobs]
-      summary: Get job status
-      security:
-        - ApiKeyAuth: []
+      summary: List jobs
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Get job
+      security: [{ ApiKeyAuth: [] }]
       parameters:
         - name: job_id
           in: path
@@ -112,35 +127,76 @@ paths:
           description: OK
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/Job"
-  /hosts:
+              schema: { $ref: "#/components/schemas/Job" }
+  /v1/hosts:
     get:
       tags: [hosts]
-      summary: List hosted bots
-      security:
-        - ApiKeyAuth: []
+      summary: Host status list
+      security: [{ ApiKeyAuth: [] }]
       responses:
-        "200":
-          description: OK
-  /billing/invoices:
+        "200": { description: OK }
+  /v1/hosts/start:
+    post:
+      tags: [hosts]
+      summary: Start hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/hosts/stop:
+    post:
+      tags: [hosts]
+      summary: Stop hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/hosts/diagnose:
+    post:
+      tags: [hosts]
+      summary: Diagnose host
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/usage:
+    get:
+      tags: [billing]
+      summary: Usage
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/invoices:
     get:
       tags: [billing]
       summary: List invoices
-      security:
-        - ApiKeyAuth: []
+      security: [{ ApiKeyAuth: [] }]
       responses:
-        "200":
-          description: OK
-  /dashboard/summary:
+        "200": { description: OK }
+    post:
+      tags: [billing]
+      summary: Create invoice
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "201": { description: Created }
+  /v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Stripe checkout session
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe customer portal
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/dashboard:
     get:
       tags: [dashboard]
-      summary: Tenant dashboard summary
-      security:
-        - ApiKeyAuth: []
+      summary: Dashboard overview
+      security: [{ ApiKeyAuth: [] }]
       responses:
-        "200":
-          description: OK
+        "200": { description: OK }
 components:
   securitySchemes:
     ApiKeyAuth:

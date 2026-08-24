@@ -108,3 +108,9 @@ __all__ = [
     "scan_and_resume", "redis_board_enabled", "enqueue_pending_resumes", "enqueue_resume_job",
     "append_agent_event",
 ]
+
+try:
+    from .durable_workflow import resume_generate, get_journal
+except Exception:
+    resume_generate = None  # type: ignore
+    get_journal = None  # type: ignore

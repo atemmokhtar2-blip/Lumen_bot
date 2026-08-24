@@ -410,26 +410,51 @@ class Orchestrator:
         return self._deliver(state)
 
 
+
+    def resume_run(self, state: AgentState, *, from_step: str = "architect") -> AgentState:
+        """Continue a crashed/paused generation from last durable checkpoint."""
+        state.record(AgentRole.ORCHESTRATOR, "resume_run", from_step)
+        # Force status so _run_inner skips router when appropriate
+        if from_step in {"builder", "critic", "deliver"}:
+            try:
+                state.transition(AgentStatus.BUILDING, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.BUILDING.value
+        elif from_step == "architect":
+            try:
+                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.PLANNING.value
+        self.board.put(state)
+        return self.run(state)
+
     def _wf_checkpoint(self, state: AgentState, step: str) -> None:
-        """Durable workflow checkpoint for resumability after crash."""
+        """Durable journal + Redis + workflow engine checkpoint after each agent step."""
         try:
-            from .workflow_engine import checkpoint_agent_step
+            from .durable_workflow import JournalEntry, get_journal
             ext = dict(state.extensions or {})
-            payload = {
-                "workflow_id": ext.get("workflow_id"),
-                "status": state.status,
-                "attempts": state.attempts,
-                "qa_passed": state.qa_passed,
-            }
-            checkpoint_agent_step(
-                state.state_id,
-                step,
-                str(state.status or "running"),
-                payload,
+            wid = str(ext.get("workflow_id") or "")
+            if not wid:
+                import uuid as _uuid
+                wid = f"wf_{_uuid.uuid4().hex[:16]}"
+                ext["workflow_id"] = wid
+            entry = JournalEntry(
+                workflow_id=wid,
+                state_id=state.state_id,
+                step=step,
+                status=str(state.status or "running"),
+                user_id=int(state.user_id or 0),
+                description=str(getattr(state, "user_text", "") or getattr(state, "description", "") or ""),
+                attempts=int(state.attempts or 0),
+                payload={
+                    "qa_passed": bool(state.qa_passed),
+                    "generated_path": str(state.generated_path or "")[:500],
+                    "capability_id": str(state.capability_id or ""),
+                },
             )
-            if payload.get("workflow_id"):
-                ext["workflow_id"] = payload["workflow_id"]
-                state.extensions = ext
+            get_journal().write(entry)
+            state.extensions = ext
+            self.board.put(state)
         except Exception:
             logger.exception("workflow checkpoint skipped")
 
