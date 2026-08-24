@@ -279,31 +279,23 @@ __all__ = [
     "AcceptanceTest",
 ]
 
-
-# ---------------------------------------------------------------------------
-# Infinite engine surface (Atomic DAG) — re-exported for callers that import
-# from schema.py as documented in the architecture plan.
-# Implementation lives in spec_core.infinite (Pydantic V2 DynamicBotSpec).
-# ---------------------------------------------------------------------------
-try:
-    from .infinite.infinite_schema import (  # noqa: E402
-        ActionAtom as InfiniteAction,
-        ConditionAtom as InfiniteCondition,
-        DynamicBotSpec,
-        FlowNode,
-        TriggerAtom as InfiniteTrigger,
-        TransformerAtom as InfiniteTransformer,
-    )
-    from .infinite.ast_validator import validate_dynamic_spec, SpecValidationError
-    from .infinite.jit_compiler import compile_dynamic_spec, render_handlers_python
-except Exception:  # pragma: no cover
-    DynamicBotSpec = None  # type: ignore
-    FlowNode = None  # type: ignore
-    InfiniteTrigger = None  # type: ignore
-    InfiniteCondition = None  # type: ignore
-    InfiniteAction = None  # type: ignore
-    InfiniteTransformer = None  # type: ignore
-    validate_dynamic_spec = None  # type: ignore
-    SpecValidationError = None  # type: ignore
-    compile_dynamic_spec = None  # type: ignore
-    render_handlers_python = None  # type: ignore
+# =============================================================================
+# Infinite Atomic Engine (architecture plan) — primary DynamicBotSpec surface
+# LLM emits JSON → DynamicBotSpec.validate → rule_engine.run_rule_engine
+# =============================================================================
+from .dynamic_bot_spec import (  # noqa: E402
+    Action as DynAction,
+    Condition as DynCondition,
+    DynamicBotSpec,
+    FlowNode,
+    Transformer as DynTransformer,
+    Trigger as DynTrigger,
+    parse_dynamic_spec,
+    ALLOWED_ACTIONS as INFINITE_ALLOWED_ACTIONS,
+    ALLOWED_CONDITIONS as INFINITE_ALLOWED_CONDITIONS,
+    ALLOWED_TRIGGERS as INFINITE_ALLOWED_TRIGGERS,
+    ALLOWED_TRANSFORMERS as INFINITE_ALLOWED_TRANSFORMERS,
+    MAX_DAG_DEPTH,
+    MAX_NODES,
+)
+from .rule_engine import run_rule_engine  # noqa: E402

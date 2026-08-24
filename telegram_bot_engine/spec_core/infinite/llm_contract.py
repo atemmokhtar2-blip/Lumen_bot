@@ -1,9 +1,9 @@
-"""Structured-output contract for LLM → DynamicBotSpec (no free-form Python)."""
+"""Structured-output contract — EXACT architecture-plan atoms only."""
 from __future__ import annotations
 
 from typing import Any
 
-from .atomic_primitives import (
+from ..dynamic_bot_spec import (
     ALLOWED_ACTIONS,
     ALLOWED_CONDITIONS,
     ALLOWED_TRANSFORMERS,
@@ -11,27 +11,24 @@ from .atomic_primitives import (
     MAX_NODES,
 )
 
-
 SYSTEM_PROMPT_INFINITE = f"""You are a deterministic bot-spec compiler.
 You NEVER write Python or shell code.
-You ONLY output a single JSON object matching DynamicBotSpec (infinite_v1).
+You ONLY output a single JSON object: DynamicBotSpec.
 
-Allowed trigger types: {sorted(ALLOWED_TRIGGERS)}
-Allowed condition types: {sorted(ALLOWED_CONDITIONS)}
-Allowed action types: {sorted(ALLOWED_ACTIONS)}
-Allowed transformer types: {sorted(ALLOWED_TRANSFORMERS)}
+Allowed triggers: {sorted(ALLOWED_TRIGGERS)}
+Allowed conditions: {sorted(ALLOWED_CONDITIONS)}
+Allowed actions: {sorted(ALLOWED_ACTIONS)}
+Allowed transformers: {sorted(ALLOWED_TRANSFORMERS)}
 
 Rules:
-- Max {MAX_NODES} nodes. No cycles in next_node_id chains.
-- Every node needs >=1 action.
-- call_external_api URLs must be https:// and not private/localhost.
-- Prefer on_command / on_start / on_message entry points.
-- Language of user-facing message text should match the user request.
+- Max {MAX_NODES} nodes. No cycles via next_node_id.
+- Every node needs trigger + >=1 action.
+- call_api URLs must be https:// (not localhost/private).
+- Prefer on_command / on_message entry points.
 """
 
 
 def dynamic_spec_json_schema() -> dict[str, Any]:
-    """JSON Schema fragment for function-calling / structured outputs."""
     return {
         "type": "object",
         "required": ["bot_name", "nodes"],
@@ -52,7 +49,10 @@ def dynamic_spec_json_schema() -> dict[str, Any]:
                             "type": "object",
                             "required": ["type"],
                             "properties": {
-                                "type": {"type": "string", "enum": sorted(ALLOWED_TRIGGERS)},
+                                "type": {
+                                    "type": "string",
+                                    "enum": sorted(ALLOWED_TRIGGERS),
+                                },
                                 "config": {"type": "object"},
                             },
                         },
@@ -62,7 +62,10 @@ def dynamic_spec_json_schema() -> dict[str, Any]:
                                 "type": "object",
                                 "required": ["type"],
                                 "properties": {
-                                    "type": {"type": "string", "enum": sorted(ALLOWED_CONDITIONS)},
+                                    "type": {
+                                        "type": "string",
+                                        "enum": sorted(ALLOWED_CONDITIONS),
+                                    },
                                     "config": {"type": "object"},
                                 },
                             },
@@ -73,7 +76,10 @@ def dynamic_spec_json_schema() -> dict[str, Any]:
                                 "type": "object",
                                 "required": ["type"],
                                 "properties": {
-                                    "type": {"type": "string", "enum": sorted(ALLOWED_TRANSFORMERS)},
+                                    "type": {
+                                        "type": "string",
+                                        "enum": sorted(ALLOWED_TRANSFORMERS),
+                                    },
                                     "config": {"type": "object"},
                                 },
                             },
@@ -85,7 +91,10 @@ def dynamic_spec_json_schema() -> dict[str, Any]:
                                 "type": "object",
                                 "required": ["type"],
                                 "properties": {
-                                    "type": {"type": "string", "enum": sorted(ALLOWED_ACTIONS)},
+                                    "type": {
+                                        "type": "string",
+                                        "enum": sorted(ALLOWED_ACTIONS),
+                                    },
                                     "config": {"type": "object"},
                                 },
                             },

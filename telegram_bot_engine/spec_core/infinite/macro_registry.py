@@ -9,8 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .infinite_schema import DynamicBotSpec
-from .ast_validator import validate_dynamic_spec
+from ..dynamic_bot_spec import DynamicBotSpec, parse_dynamic_spec
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ class MacroRegistry:
         score: float = 1.0,
     ) -> str:
         """Save a validated successful spec as a composite macro."""
-        dyn = validate_dynamic_spec(spec)
+        dyn = parse_dynamic_spec(spec)
         mid = (macro_id or dyn.bot_name or "macro").strip().lower().replace(" ", "_")[:64]
         mid = "".join(c for c in mid if c.isalnum() or c in "_-") or f"macro_{int(time.time())}"
         path = self.root / f"{mid}.json"
@@ -76,7 +75,7 @@ class MacroRegistry:
         if not path.exists():
             return None
         try:
-            return validate_dynamic_spec(json.loads(path.read_text(encoding="utf-8")))
+            return parse_dynamic_spec(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             return None
 
