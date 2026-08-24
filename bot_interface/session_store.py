@@ -30,22 +30,31 @@ class SessionStore:
 
     @classmethod
     def _redact_secrets(cls, obj):
-        """Strip plaintext secrets before disk persistence (encryption-at-rest for tokens)."""
+        """Never persist plaintext secrets. Prefer drop; seal only if value required for recovery."""
         if isinstance(obj, dict):
             out = {}
             for k, v in obj.items():
                 kl = str(k).lower()
-                if k in cls._SECRET_KEYS or kl in cls._SECRET_KEYS or kl.endswith("_token") or kl.endswith("_secret"):
+                is_secret = (
+                    k in cls._SECRET_KEYS
+                    or kl in cls._SECRET_KEYS
+                    or kl.endswith("_token")
+                    or kl.endswith("_secret")
+                    or kl.endswith("_password")
+                    or kl in {"token", "password", "api_key", "authorization"}
+                )
+                if is_secret:
+                    # Do not keep bot tokens in session DB at all (use sealed file / runtime env)
+                    if kl in {"bot_token", "token", "telegram_bot_token", "api_token", "TELEGRAM_BOT_TOKEN".lower(), "BOT_TOKEN".lower()}:
+                        continue  # drop
                     if isinstance(v, str) and v.strip():
                         try:
                             from telegram_bot_engine.services.crypto_tokens import seal_token
                             out[k] = seal_token(v)
                         except Exception:
-                            out[k] = "[redacted]"
-                    else:
-                        out[k] = v
-                else:
-                    out[k] = cls._redact_secrets(v)
+                            pass  # drop rather than store plaintext
+                    continue
+                out[k] = cls._redact_secrets(v)
             return out
         if isinstance(obj, list):
             return [cls._redact_secrets(x) for x in obj]

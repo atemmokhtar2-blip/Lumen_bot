@@ -83,15 +83,25 @@ def _find_entry_point(project_path: Path) -> Optional[Path]:
 
 
 def _local_process_allowed() -> bool:
-    """Local subprocess hosting is dev-only and opt-in."""
+    """Local subprocess hosting is dual-gated and OFF by default.
+
+    Requires ALL of:
+      - TBE_ALLOW_LOCAL_PROCESS=1
+      - TBE_FORCE_LOCAL_PROCESS=1  (explicit second switch — no silent fallback)
+      - non-production OR multi-tenant disabled
+    """
     import os
     flag = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower()
+    force = (os.environ.get("TBE_FORCE_LOCAL_PROCESS") or "0").strip().lower()
     if flag not in {"1", "true", "yes", "on"}:
         return False
+    if force not in {"1", "true", "yes", "on"}:
+        return False
     env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
-    # Even with the flag, refuse when multi-tenant unless explicitly overridden
     multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower()
     if multi in {"1", "true", "yes", "on"} and env not in {"dev", "development", "local", "test"}:
+        return False
+    if env in {"production", "prod", "staging"}:
         return False
     return True
 
@@ -126,6 +136,15 @@ class LocalProcessDriver(DeploymentProvider):
                 provider=self.name,
                 status=DEPLOY_FAILED,
                 message=f"Project path not found: {project_path}",
+            )
+        try:
+            from telegram_bot_engine.services.safe_fs import assert_no_symlinks_in_path
+            assert_no_symlinks_in_path(path)
+        except Exception as _sym_exc:
+            return DeploymentStatus(
+                provider=self.name,
+                status=DEPLOY_FAILED,
+                message=f"project_path_symlink_forbidden:{type(_sym_exc).__name__}",
             )
 
         entry = _find_entry_point(path)

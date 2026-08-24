@@ -258,6 +258,9 @@ def write_token_file(project_dir: str | Path, bot_token: str) -> Path | None:
         return None
     try:
         sealed = _seal_token(token)
+        if not sealed or not str(sealed).startswith(("enc2:", "enc1:")):
+            # Never write plaintext token to disk
+            return None
         path.write_text(sealed, encoding="utf-8")
         try:
             os.chmod(path, 0o600)

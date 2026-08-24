@@ -97,6 +97,17 @@ class LiveRunnerService:
         root = Path(project_path).resolve()
         if not root.exists():
             return LiveRunReport(ok=False, phase="validate", message="مسار المشروع غير موجود")
+        try:
+            from telegram_bot_engine.services.safe_fs import assert_no_symlinks_in_path
+            assert_no_symlinks_in_path(root)
+        except Exception as _sym_exc:
+            return LiveRunReport(
+                ok=False,
+                phase="security",
+                message=f"project_path_symlink_forbidden:{type(_sym_exc).__name__}",
+                errors=["symlink_forbidden"],
+                duration_ms=0.0,
+            )
 
         # Refuse to poll with the platform bot token — causes 409 Conflict
         # and takes down the SaaS bot for every user.
@@ -469,7 +480,14 @@ class LiveRunnerService:
         for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN", "BOTTOKEN"):
             env[key] = bot_token
 
-        # Write project .env so dotenv-based bots use the token the user just provided.
+        # Token stays in process env only. Disk: sealed file, never plaintext .env.
+        try:
+            from telegram_bot_engine.services.user_sandbox.service import write_token_file
+            write_token_file(root, bot_token)
+        except Exception as _tok_exc:
+            __import__("logging").getLogger("live_runner").warning(
+                "sealed token write failed: %s", type(_tok_exc).__name__
+            )
         try:
             env_path = root / ".env"
             kept: list[str] = []
@@ -483,16 +501,11 @@ class LiveRunnerService:
                     }:
                         continue
                     kept.append(ln)
-            keys = sorted(set(list(token_envs) + [
-                "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN",
-                "API_TOKEN", "TELEGRAM_TOKEN",
-            ]))
-            for key in keys:
-                kept.append(f"{key}={bot_token}")
+            kept.append("# TBE: token sealed in .tbe_bot_token — not written plaintext")
             env_path.write_text(chr(10).join(kept).strip() + chr(10), encoding="utf-8")
         except Exception as _env_exc:
             __import__("logging").getLogger("live_runner").warning(
-                "could not write project .env: %s", _env_exc
+                "could not update project .env markers: %s", _env_exc
             )
         if mode.startswith("target"):
             pp = env.get("PYTHONPATH", "")
