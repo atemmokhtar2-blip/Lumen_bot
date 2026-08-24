@@ -34,3 +34,13 @@ Agent / Chat
 - لا تكتب PAT أو توكنات في اللوج الخام
 - `sanitize_error` قبل `reply_text` عند الفشل
 - مفاتيح API B2B hashed في التخزين
+
+
+## تشغيل البوتات المولَّدة (Sandbox Runtime)
+
+انظر [19_SANDBOX_RUNTIME.md](19_SANDBOX_RUNTIME.md).
+
+الطبقات:
+- `services/sandbox_runtime` — firecracker / dind / docker المقوّى
+- `engines/.../docker_process_driver.py` — تنفيذ Docker (image-only + seccomp + شبكة egress)
+- `security/sandbox.py` — منفّذ أدوات بعد Policy (ليس عزل OS)

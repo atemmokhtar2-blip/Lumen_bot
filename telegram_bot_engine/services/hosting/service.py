@@ -4,7 +4,7 @@ HostingService — foundation for paid hosting (no billing yet).
 Manages long-running bot processes for the owner:
   start / stop / status / diagnose (via Error Intelligence)
 
-Uses LocalProcessDriver for real process lifecycle and Error Intelligence
+Uses sandbox_runtime (Docker/DinD/Firecracker) for isolated process lifecycle and Error Intelligence
 for log diagnosis. State persisted under OUTPUT_DIR/hosting_state.json.
 """
 
@@ -341,28 +341,46 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        try:
-            driver, _decision = select_process_driver()
-        except RuntimeError as exc:
-            return HostResult(
-                ok=False,
-                message=f"عزل الاستضافة مرفوض: {exc}",
-            )
-
-        # Token surface: prefer sealed token file; avoid scattering raw token keys
+        # Strong sandbox layer (firecracker > dind > hardened docker)
         env = {
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
         }
-        status = driver.deploy(
-            str(path),
-            env_vars=env,
-            service_name=f"host-u{user_id}",
-        )
-
-        dep_id = getattr(status, "deployment_id", "") or ""
-        st = getattr(status, "status", "") or ""
-        message = getattr(status, "message", "") or ""
+        try:
+            from telegram_bot_engine.services.sandbox_runtime import start_sandboxed_bot
+            _backend, handle = start_sandboxed_bot(
+                project_path=str(path),
+                bot_token=token_norm,
+                user_id=int(user_id),
+                service_name=f"host-u{user_id}",
+                env_vars=env,
+            )
+            dep_id = handle.deployment_id or ""
+            st = handle.status or ""
+            message = handle.message or ""
+            if not handle.ok:
+                return HostResult(
+                    ok=False,
+                    message=f"فشل تشغيل الصندوق المعزول ({_backend.name}): {message[:300]}",
+                    details={"backend": _backend.name, "meta": dict(handle.meta or {})},
+                )
+        except Exception as sbx_exc:
+            # Fallback to legacy select_process_driver only if sandbox package import fails
+            try:
+                driver, _decision = select_process_driver()
+            except RuntimeError as exc:
+                return HostResult(
+                    ok=False,
+                    message=f"عزل الاستضافة مرفوض: {sbx_exc}; legacy: {exc}",
+                )
+            status = driver.deploy(
+                str(path),
+                env_vars=env,
+                service_name=f"host-u{user_id}",
+            )
+            dep_id = getattr(status, "deployment_id", "") or ""
+            st = getattr(status, "status", "") or ""
+            message = getattr(status, "message", "") or ""
         # pid may only appear inside the message from LocalProcessDriver
         import re as _re
         import uuid

@@ -1,0 +1,120 @@
+"""Hardened Docker sandbox — primary production backend.
+
+Delegates image build + run to DockerProcessDriver while enforcing:
+  - egress network
+  - seccomp profile when available
+  - never mount host docker.sock into the bot
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import List
+
+from .backend import SandboxBackend
+from .network import ensure_egress_network, seccomp_profile_path
+from .types import SandboxHandle, SandboxProbe, SandboxSpec
+
+logger = logging.getLogger(__name__)
+
+
+class DockerSandboxBackend(SandboxBackend):
+    name = "docker"
+    strength = 50
+
+    def probe(self) -> SandboxProbe:
+        try:
+            from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                docker_available,
+            )
+        except Exception as exc:
+            return SandboxProbe(self.name, False, f"import:{type(exc).__name__}", self.strength)
+        if not docker_available():
+            return SandboxProbe(self.name, False, "docker_daemon_unavailable", self.strength)
+        try:
+            ensure_egress_network(create_if_missing=True)
+        except Exception as exc:
+            return SandboxProbe(self.name, False, str(exc)[:200], self.strength)
+        return SandboxProbe(self.name, True, "docker_ok", self.strength)
+
+    def start(self, spec: SandboxSpec) -> SandboxHandle:
+        probe = self.probe()
+        if not probe.available:
+            return SandboxHandle(
+                backend=self.name,
+                deployment_id="",
+                status="failed",
+                message=f"sandbox_unavailable:{probe.reason}",
+            )
+        # Ensure network env for DockerProcessDriver
+        net = ensure_egress_network(create_if_missing=True)
+        os.environ["TBE_DOCKER_NETWORK"] = net
+        sec = seccomp_profile_path()
+        if sec and not (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip():
+            os.environ["TBE_DOCKER_SECCOMP"] = sec
+
+        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+            DockerProcessDriver,
+        )
+
+        env = dict(spec.env_vars or {})
+        env.setdefault("TELEGRAM_BOT_TOKEN", spec.bot_token)
+        env.setdefault("BOT_TOKEN", spec.bot_token)
+        if spec.memory:
+            os.environ["TBE_DOCKER_MEMORY"] = spec.memory
+        if spec.cpus:
+            os.environ["TBE_DOCKER_CPUS"] = spec.cpus
+        if spec.pids:
+            os.environ["TBE_DOCKER_PIDS"] = spec.pids
+
+        status = DockerProcessDriver().deploy(
+            spec.project_path,
+            env_vars=env,
+            service_name=spec.service_name or f"host-u{spec.user_id}",
+        )
+        st = str(getattr(status, "status", "") or "")
+        dep = str(getattr(status, "deployment_id", "") or "")
+        msg = str(getattr(status, "message", "") or "")
+        running = "run" in st.lower() and "fail" not in st.lower()
+        return SandboxHandle(
+            backend=self.name,
+            deployment_id=dep,
+            container_or_vm_id=dep,
+            status="running" if running else ("failed" if "fail" in st.lower() else st or "unknown"),
+            message=msg,
+            meta={"provider_status": st, "network": net, "seccomp": bool(sec)},
+        )
+
+    def stop(self, handle_or_id: str) -> SandboxHandle:
+        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+            DockerProcessDriver,
+        )
+        status = DockerProcessDriver().stop(handle_or_id)
+        return SandboxHandle(
+            backend=self.name,
+            deployment_id=handle_or_id,
+            status=str(getattr(status, "status", "stopped") or "stopped"),
+            message=str(getattr(status, "message", "") or ""),
+        )
+
+    def status(self, handle_or_id: str) -> SandboxHandle:
+        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+            DockerProcessDriver,
+        )
+        status = DockerProcessDriver().status(handle_or_id)
+        st = str(getattr(status, "status", "") or "")
+        return SandboxHandle(
+            backend=self.name,
+            deployment_id=handle_or_id,
+            status=st or "unknown",
+            message=str(getattr(status, "message", "") or ""),
+        )
+
+    def logs(self, handle_or_id: str, *, limit: int = 50) -> List[str]:
+        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+            DockerProcessDriver,
+        )
+        try:
+            return list(DockerProcessDriver().logs(handle_or_id, limit=limit) or [])
+        except Exception:
+            return []

@@ -76,26 +76,101 @@ def assert_local_process_allowed() -> None:
 
 
 def select_process_driver():
-    """Docker only. Local process is never selected (production-grade isolation).
+    """Return a DeploymentProvider-compatible driver via sandbox_runtime.
 
-    If Docker is unavailable the call fails closed — no host-process fallback.
-    Emergency local execution requires TBE_UNSAFE_ALLOW_HOST_PROCESS=1 AND
-    TBE_FORCE_LOCAL_PROCESS=1 AND non-production; still gated by assert_local_process_allowed.
+    Prefer sandbox_runtime backends (firecracker / dind / hardened docker).
+    Local process is never selected here.
     """
-    from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
-        DockerProcessDriver,
-        docker_available,
-    )
-
     decision = decide_isolation()
-    if docker_available():
-        return DockerProcessDriver(), decision
-    # Fail closed — never return LocalProcessDriver from the production selector.
-    raise RuntimeError(
-        "docker_required_but_unavailable: isolated container required; "
-        "host-process fallback removed. "
-        f"({decision.reason})"
-    )
+    try:
+        from telegram_bot_engine.services.sandbox_runtime import select_sandbox_backend
+        from telegram_bot_engine.services.sandbox_runtime.docker_backend import DockerSandboxBackend
+        backend, probe = select_sandbox_backend(require_available=True)
+        # Adapter: backends that wrap DockerProcessDriver expose same deploy API via adapter
+        if backend.name in {"docker", "dind"}:
+            from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+                DockerProcessDriver,
+            )
+            # Ensure DinD host override is applied by using start_sandboxed path from HostingService;
+            # for legacy callers still using deploy(), return DockerProcessDriver under correct host.
+            if backend.name == "dind":
+                import os
+                host = (os.environ.get("TBE_DIND_HOST") or "").strip()
+                if host:
+                    os.environ["DOCKER_HOST"] = host
+            return DockerProcessDriver(), decision
+        # Firecracker: thin adapter implementing deploy/stop/status/logs
+        return _FirecrackerDriverAdapter(backend), decision
+    except Exception as exc:
+        raise RuntimeError(
+            "sandbox_required_but_unavailable: isolated runtime required; "
+            f"({decision.reason}; {exc})"
+        ) from exc
+
+
+class _FirecrackerDriverAdapter:
+    """Adapt FirecrackerSandboxBackend to DeploymentProvider surface."""
+
+    name = "firecracker"
+
+    def __init__(self, backend) -> None:
+        self._backend = backend
+
+    def deploy(self, project_path, *, env_vars=None, service_name="generated-bot"):
+        from telegram_bot_engine.engines.generators.live_deployment.report_data import (
+            DEPLOY_FAILED,
+            DEPLOY_RUNNING,
+            DeploymentStatus,
+        )
+        from telegram_bot_engine.services.sandbox_runtime.types import SandboxSpec
+        token = ""
+        env = dict(env_vars or {})
+        token = env.get("BOT_TOKEN") or env.get("TELEGRAM_BOT_TOKEN") or ""
+        handle = self._backend.start(
+            SandboxSpec(
+                project_path=str(project_path),
+                bot_token=token,
+                service_name=service_name,
+                env_vars=env,
+            )
+        )
+        if not handle.ok:
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=handle.deployment_id or "",
+                status=DEPLOY_FAILED,
+                message=handle.message or "firecracker_failed",
+            )
+        return DeploymentStatus(
+            provider=self.name,
+            deployment_id=handle.deployment_id,
+            status=DEPLOY_RUNNING,
+            message=handle.message or "running",
+        )
+
+    def status(self, deployment_id: str):
+        from telegram_bot_engine.engines.generators.live_deployment.report_data import (
+            DEPLOY_RUNNING,
+            DEPLOY_STOPPED,
+            DeploymentStatus,
+        )
+        h = self._backend.status(deployment_id)
+        st = DEPLOY_RUNNING if h.status == "running" else DEPLOY_STOPPED
+        return DeploymentStatus(provider=self.name, deployment_id=deployment_id, status=st, message=h.message)
+
+    def stop(self, deployment_id: str):
+        from telegram_bot_engine.engines.generators.live_deployment.report_data import (
+            DEPLOY_STOPPED,
+            DeploymentStatus,
+        )
+        h = self._backend.stop(deployment_id)
+        return DeploymentStatus(provider=self.name, deployment_id=deployment_id, status=DEPLOY_STOPPED, message=h.message)
+
+    def restart(self, deployment_id: str):
+        return self.stop(deployment_id)
+
+    def logs(self, deployment_id: str, *, limit: int = 50):
+        return list(self._backend.logs(deployment_id, limit=limit) or [])
 
 
 def require_docker_runtime() -> None:

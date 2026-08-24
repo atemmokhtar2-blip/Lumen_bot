@@ -93,6 +93,21 @@ def _assert_sandbox_mount_path(project_path: Path) -> Path:
     raise ValueError("project_path_outside_allowed_roots")
 
 
+
+def _seccomp_arg() -> str:
+    """Return seccomp profile path or 'default'."""
+    p = (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip()
+    if p and os.path.isfile(p):
+        return p
+    try:
+        from telegram_bot_engine.services.sandbox_runtime.network import seccomp_profile_path
+        sp = seccomp_profile_path()
+        if sp:
+            return sp
+    except Exception:
+        pass
+    return "default"
+
 def docker_available() -> bool:
     """Return True if docker CLI is present and the daemon responds."""
     if not shutil.which("docker"):
@@ -436,6 +451,7 @@ class DockerProcessDriver(DeploymentProvider):
                 "--log-opt", "max-file=2",
                 "--security-opt", "no-new-privileges:true",
                 "--cap-drop", "ALL",
+                "--security-opt", f"seccomp={_seccomp_arg()}",
                 "--read-only",
                 "--ipc", "none",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
