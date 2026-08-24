@@ -158,11 +158,24 @@ class Orchestrator:
         state.record(
             AgentRole.ORCHESTRATOR,
             "pipeline_start",
-            f"agents={self.registry.names()} max_attempts={max_att}",
+            f"agents={self.registry.names()} max_attempts={max_att} status={state.status}",
         )
 
-        # 1) Router once
-        state = self._run_agent("router", state, ctx)
+        _resume_statuses = {
+            AgentStatus.PLANNING.value,
+            AgentStatus.BUILDING.value,
+            AgentStatus.QA.value,
+            AgentStatus.FAILED.value,
+        }
+        skip_router = (
+            state.status in _resume_statuses
+            and bool(state.capability_id or (state.extensions or {}).get("selected_tool") or state.user_text)
+        )
+        if skip_router:
+            state.record(AgentRole.ORCHESTRATOR, "resume_checkpoint", state.status)
+            self.board.put(state)
+        else:
+            state = self._run_agent("router", state, ctx)
         if state.status == AgentStatus.CANCELLED.value:
             return self._deliver(state)
 
@@ -219,8 +232,51 @@ class Orchestrator:
             if state.status == AgentStatus.PASSED.value or state.qa_passed:
                 break
 
-            # Repair decision
-            if int(state.attempts or 0) >= max_att:
+            # Repair decision — verified template beats endless text-simplify
+            from .repair import build_repair_directive, spec_hash, record_repair_history
+            from .fallback_template import (
+                should_trigger_verified_fallback,
+                run_verified_fallback_on_state,
+            )
+            directive = build_repair_directive(state)
+            hist = list((state.extensions or {}).get("repair_history") or [])
+            cur_h = spec_hash(state.strict_spec)
+            stagnant = bool(hist) and any(h.get("spec_hash") == cur_h for h in hist[-2:])
+            directive.stagnant = stagnant
+            state.extensions["last_repair"] = directive.to_dict()
+            try:
+                record_repair_history(state, directive, cur_h)
+            except Exception:
+                pass
+
+            exhausted = int(state.attempts or 0) >= max_att
+            already = bool((state.extensions or {}).get("fallback_template_tried"))
+            if should_trigger_verified_fallback(
+                attempts=int(state.attempts or 0),
+                stagnant=stagnant,
+                already_tried=already,
+            ) or (exhausted and not already):
+                state.record(
+                    AgentRole.ORCHESTRATOR,
+                    "verified_fallback_trigger",
+                    f"stagnant={stagnant} attempts={state.attempts} exhausted={exhausted}",
+                )
+                self.board.put(state)
+                work = Path(ctx.get("work_dir") or state.extensions.get("work_dir") or ".")
+                state = run_verified_fallback_on_state(state, work_dir=work)
+                self.board.put(state)
+                if state.qa_passed and state.build_success:
+                    break
+                if exhausted:
+                    state.record(
+                        AgentRole.ORCHESTRATOR,
+                        "repair_exhausted",
+                        f"attempts={state.attempts} max={max_att} fallback_failed",
+                    )
+                    break
+                break
+
+            if exhausted:
                 state.record(
                     AgentRole.ORCHESTRATOR,
                     "repair_exhausted",
@@ -228,19 +284,6 @@ class Orchestrator:
                 )
                 break
 
-            # Prepare next iteration: QA → PLANNING with structured repair directive
-            from .repair import build_repair_directive, spec_hash
-            directive = build_repair_directive(state)
-            # Stagnant if last two history hashes match current strict_spec
-            hist = list((state.extensions or {}).get("repair_history") or [])
-            cur_h = spec_hash(state.strict_spec)
-            stagnant = bool(hist) and any(h.get("spec_hash") == cur_h for h in hist[-2:])
-            directive.stagnant = stagnant
-            if stagnant:
-                directive.actions = list(directive.actions) + ["STAGNANT: force simplified core bot with /start /help only"]
-                directive.add_constraints = list(directive.add_constraints) + ["تبسيط إجباري بسبب تكرار الفشل"]
-                directive.drop_features = list(dict.fromkeys(list(directive.drop_features) + list((state.strict_spec or {}).get("features") or [])[2:]))
-            state.extensions["last_repair"] = directive.to_dict()
             state.record(
                 AgentRole.ORCHESTRATOR,
                 "repair_loop",
@@ -253,7 +296,7 @@ class Orchestrator:
             state.build_success = False
             state.extensions["last_failed_path"] = state.generated_path
             state.generated_path = ""
-            state.qa_passed = False  # keep qa_report for architect
+            state.qa_passed = False
             self.board.put(state)
 
         return self._deliver(state)

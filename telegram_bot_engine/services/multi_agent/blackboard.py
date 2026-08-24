@@ -200,7 +200,14 @@ def get_blackboard() -> BlackboardStore:
             elif mode == "file":
                 _default_board = FileBlackboard()
             else:
-                _default_board = LayeredBlackboard()
+                try:
+                    from .redis_board import RedisLayeredBlackboard, redis_board_enabled
+                    if redis_board_enabled():
+                        _default_board = RedisLayeredBlackboard()
+                    else:
+                        _default_board = LayeredBlackboard()
+                except Exception:
+                    _default_board = LayeredBlackboard()
         return _default_board
 
 

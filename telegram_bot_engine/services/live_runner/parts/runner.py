@@ -617,23 +617,20 @@ def run_bot_project(
         )
 
     import os as _os
-    # Docker is preferred, but must not be implicitly required merely because
-    # the service is multi-tenant. An operator may explicitly require it with
-    # TBE_REQUIRE_DOCKER=1; otherwise the isolated local runner is the fallback.
-    multi = (_os.environ.get("TBE_MULTI_TENANT") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    _req_default = "0"
-    require_docker = (_os.environ.get("TBE_REQUIRE_DOCKER") or _req_default).strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    _allow_default = "1"
-    allow_local = (_os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or _allow_default).strip().lower() not in {
-        "0", "false", "no", "off",
-    }
+    # Single source of truth: isolation_policy (fail-closed multi-tenant/prod).
+    try:
+        from telegram_bot_engine.services.isolation_policy import decide_isolation
+        _d = decide_isolation()
+        require_docker = bool(_d.require_docker)
+        allow_local = bool(_d.allow_local)
+    except Exception:
+        require_docker, allow_local = True, False
     prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
+    if require_docker:
+        prefer = True
+        allow_local = False
 
     docker_err = ""
     if prefer or require_docker:

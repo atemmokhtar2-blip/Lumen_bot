@@ -40,6 +40,11 @@ from .health import health_snapshot, liveness, readiness
 from .run_report import write_run_report, recent_reports
 from .tracing import ensure_trace, trace_summary
 from .concurrency import active_count, orchestration_slot
+from .fallback_template import should_trigger_verified_fallback, build_verified_bot, run_verified_fallback_on_state
+from .redis_board import (
+    RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
+    scan_and_resume, redis_board_enabled,
+)
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -97,4 +102,7 @@ __all__ = [
     "write_run_report", "recent_reports",
     "ensure_trace", "trace_summary",
     "active_count", "orchestration_slot",
+    "should_trigger_verified_fallback", "build_verified_bot", "run_verified_fallback_on_state",
+    "RedisLayeredBlackboard", "list_resumable_state_ids", "resume_interrupted_state",
+    "scan_and_resume", "redis_board_enabled",
 ]

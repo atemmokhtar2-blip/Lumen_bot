@@ -740,6 +740,22 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
 
     runner.register("generate", handle_generate)
 
+    def handle_multi_agent_resume(job: Job) -> dict[str, Any]:
+        from telegram_bot_engine.services.multi_agent.redis_board import resume_interrupted_state
+        sid = str((job.input or {}).get("state_id") or "").strip()
+        if not sid:
+            raise ValueError("state_id_required")
+        state = resume_interrupted_state(sid)
+        return {
+            "ok": bool(state.qa_passed or state.build_success),
+            "state_id": state.state_id,
+            "status": state.status,
+            "generated_path": state.generated_path or "",
+            "final_message": (state.final_message or "")[:500],
+        }
+
+    runner.register("multi_agent_resume", handle_multi_agent_resume)
+
 
 def get_job_runner() -> JobRunner:
     global _RUNNER, _HANDLERS_READY
