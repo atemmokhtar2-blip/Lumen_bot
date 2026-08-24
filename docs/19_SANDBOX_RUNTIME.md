@@ -1,46 +1,38 @@
-# Sandbox Runtime — عزل بمستوى منصات عالمية
+# Sandbox Runtime
 
-## طبقات العزل (الأقوى → الأضعف)
+## Backends (strongest first)
 
-| Backend | التقنية | يقارب |
-|---------|---------|--------|
-| `firecracker` | MicroVM + KVM | AWS Lambda / Fly Machines |
-| `gvisor` | runsc (userspace kernel) | Google gVisor / GKE sandbox |
-| `dind` | Docker daemon منفصل | معزول عن socket المضيف |
-| `docker` | runc + seccomp + AppArmor + egress | حد أدنى إنتاجي |
+| Backend | Isolation |
+|---------|-----------|
+| firecracker | MicroVM + KVM — requires TAP + token path; claims VM process only |
+| gvisor | runsc userspace kernel |
+| dind | dedicated Docker daemon (`TBE_DIND_HOST`, not host sock) |
+| docker | hardened runc + seccomp + AppArmor + egress |
 
-`TBE_SANDBOX_BACKEND=auto` يختار الأقوى المتاح. **لا يوجد مسار host process.**
+## Egress (real)
 
-## ضمانات السياسة (`policy.py`)
+`TBE_EGRESS_MODE=strict` (default):
 
-- ممنوع `docker.sock` داخل حاوية البوت
-- ممنوع شبكة `bridge` / `host` الافتراضية
-- Egress: baseline iptables (حجب metadata `169.254.169.254` و loopback)
-- Drop ALL capabilities + no-new-privileges + read-only rootfs
-- Seccomp profile + AppArmor `tbe-bot` عند التحميل على المضيف
-- Supervisor: reap exited + max lifetime
+- DROP: 10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, 100.64/10
+- ACCEPT: resolved `api.telegram.org:443` + DNS 53
+- DROP other NEW
+- **If iptables cannot apply → start fails** (no silent success)
 
-## المسار
+Dev only: `TBE_EGRESS_MODE=baseline`
+
+## Firecracker honesty
+
+- `TBE_FC_TAP` required (or `TBE_FC_ALLOW_NO_NET=1` offline dev)
+- Token: `TBE_FC_TOKEN_DRIVE` or `TBE_FC_TOKEN_IN_BOOTARGS=1`
+- Message: `vm_process_started` — not Telegram health
+
+## Single run path
 
 ```
-host_start
-  → harden_network / egress
-  → select_sandbox_backend (fc|gvisor|dind|docker)
-  → start
-  → supervisor_tick (خلفية/cron)
+host_start / worker
+  → harden_network (strict)
+  → start_sandboxed_bot
+  → supervisor_tick (worker loop)
 ```
 
-## تفعيل gVisor على المضيف
-
-```bash
-# تثبيت runsc وتسجيله runtime في dockerd ثم:
-TBE_SANDBOX_BACKEND=gvisor
-# أو auto سيلتقطه تلقائياً
-```
-
-## تفعيل AppArmor
-
-```bash
-sudo apparmor_parser -r telegram_bot_engine/data/sandbox/apparmor-bot.profile
-# يُطبَّق تلقائياً إذا ظهر الاسم في /sys/kernel/security/apparmor/profiles
-```
+No LocalProcess path for generated bots.

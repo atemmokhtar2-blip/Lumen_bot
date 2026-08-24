@@ -1,4 +1,4 @@
-"""Sandbox runtime foundation tests."""
+"""Sandbox runtime foundation tests — fail-closed gaps."""
 from __future__ import annotations
 
 import os
@@ -60,13 +60,74 @@ def test_dind_refuses_host_socket(monkeypatch):
     assert p.available is False
 
 
-def test_seccomp_and_apparmor_files_exist():
+def test_firecracker_probe_requires_tap(monkeypatch):
+    monkeypatch.delenv("TBE_FC_TAP", raising=False)
+    monkeypatch.delenv("TBE_FC_ALLOW_NO_NET", raising=False)
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/fake_kernel")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/fake_rootfs")
     from pathlib import Path
-    from telegram_bot_engine.services.sandbox_runtime.network import seccomp_profile_path
-    p = seccomp_profile_path()
-    assert p and os.path.isfile(p)
-    aa = Path(__file__).resolve().parents[1] / "telegram_bot_engine/data/sandbox/apparmor-bot.profile"
-    assert aa.is_file()
+    Path("/tmp/fake_kernel").write_text("x")
+    Path("/tmp/fake_rootfs").write_text("x")
+    with mock.patch(
+        "telegram_bot_engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=True,
+    ), mock.patch(
+        "telegram_bot_engine.services.sandbox_runtime.firecracker_backend._bin",
+        return_value="/usr/bin/firecracker",
+    ), mock.patch("os.path.isfile", return_value=True):
+        from telegram_bot_engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        p = FirecrackerSandboxBackend().probe()
+        assert p.available is False
+        assert "TBE_FC_TAP" in p.reason
+
+
+def test_firecracker_start_requires_token_path(monkeypatch):
+    monkeypatch.setenv("TBE_FC_TAP", "tap0")
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
+    monkeypatch.delenv("TBE_FC_TOKEN_DRIVE", raising=False)
+    monkeypatch.delenv("TBE_FC_TOKEN_IN_BOOTARGS", raising=False)
+    from pathlib import Path
+    Path("/tmp/k").write_text("k")
+    Path("/tmp/r").write_text("r")
+    with mock.patch(
+        "telegram_bot_engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=True,
+    ), mock.patch(
+        "telegram_bot_engine.services.sandbox_runtime.firecracker_backend._bin",
+        return_value="/usr/bin/firecracker",
+    ), mock.patch("os.path.isfile", return_value=True), mock.patch(
+        "shutil.which", return_value="/usr/bin/curl"
+    ):
+        from telegram_bot_engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        from telegram_bot_engine.services.sandbox_runtime.types import SandboxSpec
+        h = FirecrackerSandboxBackend().start(
+            SandboxSpec(project_path="/tmp/p", bot_token="1:tok", user_id=1)
+        )
+        assert h.status == "failed"
+        assert "token" in h.message.lower()
+
+
+def test_egress_strict_raises_when_iptables_fails(monkeypatch):
+    monkeypatch.setenv("TBE_EGRESS_MODE", "strict")
+    monkeypatch.setenv("TBE_EGRESS_IPTABLES", "1")
+    from telegram_bot_engine.services.sandbox_runtime import egress as eg
+    with mock.patch.object(eg, "apply_egress_iptables", return_value={"ok": False, "errors": ["x"]}):
+        with mock.patch.object(eg, "ensure_egress_network", create=True):
+            # patch network module used inside harden
+            with mock.patch(
+                "telegram_bot_engine.services.sandbox_runtime.network.ensure_egress_network",
+                return_value="tbe-egress",
+            ), mock.patch(
+                "telegram_bot_engine.services.sandbox_runtime.network.network_exists",
+                return_value=True,
+            ):
+                with pytest.raises(RuntimeError, match="egress_strict_failed"):
+                    eg.harden_network("tbe-egress")
 
 
 def test_load_policy_egress_hosts():

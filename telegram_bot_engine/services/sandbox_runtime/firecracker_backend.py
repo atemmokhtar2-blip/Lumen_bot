@@ -1,26 +1,24 @@
-"""Firecracker microVM sandbox backend.
+"""Firecracker microVM backend — honest fail-closed implementation.
 
-Requires:
-  - /dev/kvm
-  - firecracker binary (TBE_FIRECRACKER_BIN)
-  - kernel image (TBE_FC_KERNEL)
-  - rootfs ext4 (TBE_FC_ROOTFS) with Python + bot entry prepared by operator/image pipeline
+Will NOT report status=running unless:
+  - KVM + firecracker + kernel + rootfs exist
+  - TAP network is configured (TBE_FC_TAP) OR TBE_FC_ALLOW_NO_NET=1 (dev only)
+  - Token delivery path exists (TBE_FC_TOKEN_DRIVE or TBE_FC_TOKEN_IN_BOOTARGS=1)
 
-This is fail-closed: if any prerequisite is missing, start() fails.
-No fake success paths.
+Claim is VM process started — not Telegram bot health.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import shutil
-import socket
 import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from .backend import SandboxBackend
 from .types import SandboxHandle, SandboxProbe, SandboxSpec
@@ -44,6 +42,10 @@ def _kvm_ok() -> bool:
     return os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.R_OK | os.W_OK)
 
 
+def _flag(name: str, default: str = "0") -> bool:
+    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 class FirecrackerSandboxBackend(SandboxBackend):
     name = "firecracker"
     strength = 100
@@ -65,7 +67,17 @@ class FirecrackerSandboxBackend(SandboxBackend):
             return SandboxProbe(self.name, False, "TBE_FC_KERNEL missing", self.strength)
         if not _rootfs() or not os.path.isfile(_rootfs()):
             return SandboxProbe(self.name, False, "TBE_FC_ROOTFS missing", self.strength)
-        return SandboxProbe(self.name, True, "firecracker_ok", self.strength)
+        tap = (os.environ.get("TBE_FC_TAP") or "").strip()
+        if not tap and not _flag("TBE_FC_ALLOW_NO_NET", "0"):
+            return SandboxProbe(
+                self.name,
+                False,
+                "TBE_FC_TAP required (or TBE_FC_ALLOW_NO_NET=1 for offline dev)",
+                self.strength,
+            )
+        if not shutil.which("curl"):
+            return SandboxProbe(self.name, False, "curl_required_for_firecracker_api", self.strength)
+        return SandboxProbe(self.name, True, "firecracker_prereqs_ok", self.strength)
 
     def _api_socket(self, vm_id: str) -> Path:
         return self._state_dir / f"{vm_id}.sock"
@@ -82,6 +94,20 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 status="failed",
                 message=f"firecracker_unavailable:{probe.reason}",
             )
+
+        token_drive = (os.environ.get("TBE_FC_TOKEN_DRIVE") or "").strip()
+        inject_boot = _flag("TBE_FC_TOKEN_IN_BOOTARGS", "0")
+        if not token_drive and not inject_boot:
+            return SandboxHandle(
+                backend=self.name,
+                deployment_id="",
+                status="failed",
+                message=(
+                    "firecracker_token_path_missing: set TBE_FC_TOKEN_DRIVE or "
+                    "TBE_FC_TOKEN_IN_BOOTARGS=1 (guest must read token)"
+                ),
+            )
+
         vm_id = f"fc-{spec.user_id}-{uuid.uuid4().hex[:10]}"
         sock = self._api_socket(vm_id)
         if sock.exists():
@@ -90,7 +116,6 @@ class FirecrackerSandboxBackend(SandboxBackend):
             except OSError:
                 pass
 
-        # Copy rootfs per-VM so disk state does not leak across tenants
         rootfs_src = Path(_rootfs())
         rootfs_dst = self._state_dir / f"{vm_id}.ext4"
         try:
@@ -102,10 +127,14 @@ class FirecrackerSandboxBackend(SandboxBackend):
             )
 
         log_path = self._state_dir / f"{vm_id}.log"
-        cfg = {
+        boot_args = "console=ttyS0 reboot=k panic=1 pci=off"
+        if inject_boot:
+            boot_args += f" BOT_TOKEN={spec.bot_token}"
+
+        cfg: dict = {
             "boot-source": {
                 "kernel_image_path": _kernel(),
-                "boot_args": "console=ttyS0 reboot=k panic=1 pci=off",
+                "boot_args": boot_args,
             },
             "drives": [
                 {
@@ -121,7 +150,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 "smt": False,
             },
         }
-        # Optional network: TAP must be pre-created by operator
+
         tap = (os.environ.get("TBE_FC_TAP") or "").strip()
         if tap:
             cfg["network-interfaces"] = [
@@ -132,7 +161,31 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 }
             ]
 
-        # Launch firecracker with API socket; apply config via PUT
+        if token_drive:
+            td_src = Path(token_drive)
+            td_dst = self._state_dir / f"{vm_id}.token.img"
+            try:
+                if td_src.is_file():
+                    shutil.copy2(td_src, td_dst)
+                else:
+                    return SandboxHandle(
+                        self.name, "", status="failed",
+                        message="TBE_FC_TOKEN_DRIVE not a file",
+                    )
+            except Exception as exc:
+                return SandboxHandle(
+                    self.name, "", status="failed",
+                    message=f"token_drive_copy_failed:{type(exc).__name__}",
+                )
+            cfg["drives"].append(
+                {
+                    "drive_id": "token",
+                    "path_on_host": str(td_dst),
+                    "is_root_device": False,
+                    "is_read_only": True,
+                }
+            )
+
         try:
             proc = subprocess.Popen(
                 [_bin(), "--api-sock", str(sock)],
@@ -146,7 +199,6 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 message=f"firecracker_spawn_failed:{type(exc).__name__}",
             )
 
-        # Wait for socket
         for _ in range(50):
             if sock.exists():
                 break
@@ -156,34 +208,30 @@ class FirecrackerSandboxBackend(SandboxBackend):
             return SandboxHandle(self.name, "", status="failed", message="api_sock_timeout")
 
         def _put(path: str, body: dict) -> None:
-            data = json.dumps(body).encode()
-            # Firecracker HTTP over unix socket
-            # Use curl if available for reliability
-            if shutil.which("curl"):
-                subprocess.run(
-                    [
-                        "curl", "--unix-socket", str(sock),
-                        "-sS", "-X", "PUT",
-                        f"http://localhost{path}",
-                        "-H", "Content-Type: application/json",
-                        "-d", data.decode(),
-                    ],
-                    capture_output=True,
-                    timeout=15,
-                    check=False,
-                )
-            else:
-                raise RuntimeError("curl_required_for_firecracker_api")
+            data = json.dumps(body)
+            r = subprocess.run(
+                [
+                    "curl", "--unix-socket", str(sock),
+                    "-sS", "-X", "PUT",
+                    f"http://localhost{path}",
+                    "-H", "Content-Type: application/json",
+                    "-d", data,
+                ],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(f"fc_api_put_failed:{path}:{(r.stderr or b'')!r}")
 
         try:
             _put("/boot-source", cfg["boot-source"])
             _put("/drives/rootfs", cfg["drives"][0])
+            if len(cfg["drives"]) > 1:
+                _put("/drives/token", cfg["drives"][1])
             _put("/machine-config", cfg["machine-config"])
             if "network-interfaces" in cfg:
                 _put("/network-interfaces/eth0", cfg["network-interfaces"][0])
-            # Inject token via a side-channel file next to rootfs is not mounted;
-            # operator rootfs must read TBE boot args or a secondary drive.
-            # Minimal: store token in meta for host-side orchestration only (never in guest without drive).
             _put("/actions", {"action_type": "InstanceStart"})
         except Exception as exc:
             proc.kill()
@@ -199,8 +247,9 @@ class FirecrackerSandboxBackend(SandboxBackend):
             "log": str(log_path),
             "user_id": spec.user_id,
             "project_path": spec.project_path,
-            # token fingerprint only
-            "token_fp": __import__("hashlib").sha256(spec.bot_token.encode()).hexdigest()[:16],
+            "token_fp": hashlib.sha256(spec.bot_token.encode()).hexdigest()[:16],
+            "network": bool(tap),
+            "claim": "vm_process_started_not_bot_health",
         }
         self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
         return SandboxHandle(
@@ -208,7 +257,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
             deployment_id=vm_id,
             container_or_vm_id=vm_id,
             status="running",
-            message=f"firecracker_vm_started pid={proc.pid}",
+            message=f"firecracker_vm_process_started pid={proc.pid} (bot health not verified)",
             meta=meta,
         )
 
@@ -219,8 +268,11 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 meta = json.loads(meta_p.read_text(encoding="utf-8"))
                 pid = int(meta.get("pid") or 0)
                 if pid:
-                    os.kill(pid, 15)
-                    time.sleep(0.5)
+                    try:
+                        os.kill(pid, 15)
+                        time.sleep(0.5)
+                    except ProcessLookupError:
+                        pass
                     try:
                         os.kill(pid, 9)
                     except ProcessLookupError:
@@ -262,7 +314,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 self.name, handle_or_id,
                 container_or_vm_id=handle_or_id,
                 status="running" if running else "stopped",
-                message="ok",
+                message="vm_process" if running else "stopped",
                 meta=meta,
             )
         except Exception as exc:
@@ -277,7 +329,6 @@ class FirecrackerSandboxBackend(SandboxBackend):
             log = Path(meta.get("log") or "")
             if not log.is_file():
                 return []
-            lines = log.read_text(encoding="utf-8", errors="ignore").splitlines()
-            return lines[-limit:]
+            return log.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]
         except Exception:
             return []

@@ -69,11 +69,8 @@ def start_sandboxed_bot(
     from .egress import harden_network
     from .types import SandboxSpec
 
-    # Always harden network before start
-    try:
-        harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
-    except Exception as exc:
-        logger.warning("harden_network: %s", type(exc).__name__)
+    # Always harden network before start — strict mode raises
+    harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
 
     backend, probe = select_sandbox_backend(require_available=True)
     spec = SandboxSpec(

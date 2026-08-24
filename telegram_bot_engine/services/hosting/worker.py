@@ -98,34 +98,42 @@ def process_one(queue=None, fleet=None) -> bool:
             zpath = fetch_artifact(artifact_uri, artifact_key)
             build_path = str(extract_artifact(zpath, work_id))
 
-        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
-            DockerProcessDriver,
-            docker_available,
-        )
-        if not docker_available():
-            q.mark_failed(job.job_id, "docker_unavailable")
-            return True
-
-        # sandbox path check expects OUTPUT_DIR/users — extracted work may be under artifacts/
-        # Temporarily allow by setting path under a users-like tree or relax via env for workers
+        # Single production path: sandbox_runtime (never bare LocalProcess)
         os.environ.setdefault("TBE_WORKER_BUILD", "1")
-
-        driver = DockerProcessDriver()
-        st = driver.deploy(
-            build_path,
-            env_vars={"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token},
-            service_name=f"user-{job.user_id}",
-        )
-        status = str(getattr(st, "status", "") or "")
-        if status == "running":
-            q.mark_running(
-                job.job_id,
-                deployment_id=getattr(st, "deployment_id", "") or "",
-                image_tag=str(getattr(st, "service_id", "") or ""),
+        try:
+            from telegram_bot_engine.services.sandbox_runtime import start_sandboxed_bot
+            from telegram_bot_engine.services.sandbox_runtime.egress import harden_network
+            try:
+                harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
+            except Exception as eg:
+                # strict mode raises — fail the job honestly
+                q.mark_failed(job.job_id, f"egress:{type(eg).__name__}:{eg}"[:500])
+                return True
+            backend, handle = start_sandboxed_bot(
+                project_path=build_path,
+                bot_token=token,
+                user_id=int(job.user_id),
+                service_name=f"user-{job.user_id}",
+                env_vars={"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token},
             )
-            logger.info("job %s running dep=%s", job.job_id, getattr(st, "deployment_id", ""))
-        else:
-            q.mark_failed(job.job_id, getattr(st, "message", "deploy_failed")[:500])
+            if handle.ok and handle.status == "running":
+                q.mark_running(
+                    job.job_id,
+                    deployment_id=handle.deployment_id or "",
+                    image_tag=str((handle.meta or {}).get("runtime") or backend.name),
+                )
+                logger.info(
+                    "job %s running backend=%s dep=%s",
+                    job.job_id, backend.name, handle.deployment_id,
+                )
+            else:
+                q.mark_failed(
+                    job.job_id,
+                    (handle.message or f"sandbox_failed:{backend.name}")[:500],
+                )
+        except Exception as sbx_exc:
+            q.mark_failed(job.job_id, f"sandbox:{type(sbx_exc).__name__}:{sbx_exc}"[:500])
+            return True
     except Exception as e:
         logger.exception("job %s failed", job.job_id)
         try:
@@ -155,6 +163,13 @@ def run_forever(poll_seconds: float | None = None) -> None:
         while True:
             try:
                 fleet.sweep_stale()
+                try:
+                    from telegram_bot_engine.services.sandbox_runtime.supervisor import supervisor_tick
+                    tick = supervisor_tick()
+                    if tick.get("reaped") or tick.get("lifetime_killed"):
+                        logger.info("supervisor tick %s", tick)
+                except Exception:
+                    logger.debug("supervisor tick skipped", exc_info=True)
                 worked = process_one(queue=q, fleet=fleet)
                 if not worked:
                     try:
