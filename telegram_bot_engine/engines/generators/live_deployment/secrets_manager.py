@@ -35,3 +35,14 @@ class SecretsManager:
 
     def clear(self) -> None:
         self._store.clear()
+
+
+_default_manager: SecretsManager | None = None
+
+
+def get_secrets_manager() -> SecretsManager:
+    """Process-wide SecretsManager singleton for deployment engine."""
+    global _default_manager
+    if _default_manager is None:
+        _default_manager = SecretsManager()
+    return _default_manager
