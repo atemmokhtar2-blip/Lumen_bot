@@ -5,6 +5,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -98,6 +99,51 @@ class AgentEvent:
             from_status=str(d.get("from_status") or ""),
             to_status=str(d.get("to_status") or ""),
         )
+
+
+
+def _json_safe(obj: Any, *, depth: int = 0) -> Any:
+    """Convert extensions/metadata to JSON-serializable structures."""
+    if depth > 8:
+        return str(obj)[:200]
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            key = str(k)
+            if key.startswith("_") and key not in {"_generation_result"}:
+                # keep _generation_result as summary only
+                continue
+            if key == "_generation_result":
+                try:
+                    out[key] = {
+                        "success": bool(getattr(v, "success", False)),
+                        "project_path": str(getattr(v, "project_path", None) or ""),
+                        "errors": list(getattr(v, "errors", None) or [])[:20],
+                        "metadata": _json_safe(getattr(v, "metadata", None) or {}, depth=depth + 1),
+                    }
+                except Exception:
+                    out[key] = {"success": False, "errors": ["unserializable_generation_result"]}
+                continue
+            out[key] = _json_safe(v, depth=depth + 1)
+        return out
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(x, depth=depth + 1) for x in list(obj)[:100]]
+    if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict")):
+        try:
+            return _json_safe(obj.to_dict(), depth=depth + 1)
+        except Exception:
+            return str(obj)[:200]
+    # dataclasses / simple objects
+    try:
+        import json as _json
+        _json.dumps(obj)
+        return obj
+    except Exception:
+        return str(obj)[:200]
 
 
 @dataclass
@@ -208,7 +254,7 @@ class AgentState:
             "final_message": (self.final_message or "")[:1000],
             "attempts": self.attempts,
             "max_attempts": self.max_attempts,
-            "extensions": dict(self.extensions or {}),
+            "extensions": _json_safe(dict(self.extensions or {})),
             "events": [e.to_dict() for e in self.events[-40:]],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
