@@ -467,6 +467,11 @@ class LocalProcessDriver(DeploymentProvider):
                     packages.append(pkg)
             if not packages and contract.primary and contract.primary.suggested_package:
                 packages = [contract.primary.suggested_package]
+            import os as _heal_os
+            if (_heal_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
+                "1", "true", "yes", "on",
+            }:
+                packages = []
             if not packages:
                 import re as _re
                 for m in _re.finditer(r"No module named ['\"]([^'\"]+)['\"]", run_text or ""):

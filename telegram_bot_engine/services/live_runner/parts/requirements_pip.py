@@ -756,7 +756,16 @@ def _resolve_missing_via_source(root: Path, log: str) -> list[str]:
 def _pip_install_packages_direct(
     py: str, packages: list[str], root: Path, mode: str, isolation: Path
 ) -> tuple[bool, str]:
-    """Install specific packages one-shot — allowlist enforced, PyPI index only."""
+    """Install specific packages one-shot — allowlist enforced, PyPI index only.
+
+    Auto-heal installs are OFF by default (supply-chain). Enable only with
+    TBE_AUTO_HEAL_PIP=1 for trusted local tooling.
+    """
+    import os as _os
+    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return False, "auto_heal_pip_disabled"
     if not packages:
         return True, ""
     try:

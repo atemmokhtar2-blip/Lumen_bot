@@ -350,6 +350,7 @@ class DockerProcessDriver(DeploymentProvider):
         # Token via ephemeral env-file (not argv); file removed after docker run
         import tempfile
         env_file_path = None
+        secret_path = None
         try:
             # Token validation: Telegram form digits:secret
             import re as _re
@@ -383,6 +384,23 @@ class DockerProcessDriver(DeploymentProvider):
             except Exception:
                 pass
 
+            # Token also as read-only secret file (400) — reduces sole reliance on env
+            secret_path = None
+            try:
+                sf = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    prefix="tbe_tok_",
+                    suffix=".secret",
+                    delete=False,
+                    encoding="utf-8",
+                )
+                secret_path = sf.name
+                sf.write(bot_token.strip())
+                sf.close()
+                os.chmod(secret_path, 0o400)
+            except Exception:
+                secret_path = None
+
             cmd = [
                 "docker", "run",
                 "-d",
@@ -410,6 +428,10 @@ class DockerProcessDriver(DeploymentProvider):
                 "-w", "/app",
                 "--user", "10001:10001",
                 "--env-file", env_file_path,
+                *([
+                    "--mount", f"type=bind,source={secret_path},target=/run/secrets/bot_token,readonly",
+                    "-e", "TBE_TOKEN_FILE=/run/secrets/bot_token",
+                ] if secret_path else []),
                 image_tag,
             ]
 
@@ -438,12 +460,19 @@ class DockerProcessDriver(DeploymentProvider):
         finally:
             if env_file_path:
                 try:
-                    # best-effort shred content then unlink
                     with open(env_file_path, "w", encoding="utf-8") as _wf:
-                        _wf.write("\0" * 64)
+                        _wf.write(chr(0) * 64)
                     os.unlink(env_file_path)
                 except Exception:
                     pass
+            if secret_path:
+                try:
+                    with open(secret_path, "w", encoding="utf-8") as _sf:
+                        _sf.write(chr(0) * 64)
+                    os.unlink(secret_path)
+                except Exception:
+                    pass
+
 
         # NOTE: proc is assigned inside try; if env setup failed we returned early
 

@@ -63,9 +63,17 @@ class UserSandbox:
         return self.root / "index.json"
 
     def ensure(self) -> "UserSandbox":
+        self.root.mkdir(parents=True, exist_ok=True)
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.clones_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        # Owner-only access — reduces TOCTOU symlink races from other uids
+        for d in (self.root, self.projects_dir, self.clones_dir, self.runtime_dir):
+            try:
+                import os
+                os.chmod(d, 0o700)
+            except Exception:
+                pass
         if not self.index_path.exists():
             self._write_index({"user_id": self.user_id, "projects": [], "clones": [], "updated_at": ""})
         return self
@@ -83,6 +91,11 @@ class UserSandbox:
         name = f"{_safe_segment(label, 'bot')}_{stamp}"
         path = self.projects_dir / name
         path.mkdir(parents=True, exist_ok=False)
+        try:
+            import os
+            os.chmod(path, 0o700)
+        except Exception:
+            pass
         return path
 
     def new_clone_dir(self, label: str = "clone") -> Path:
@@ -91,6 +104,11 @@ class UserSandbox:
         name = f"{_safe_segment(label, 'clone')}_{stamp}"
         path = self.clones_dir / name
         path.mkdir(parents=True, exist_ok=False)
+        try:
+            import os
+            os.chmod(path, 0o700)
+        except Exception:
+            pass
         return path
 
     def project_path(self, project_id: str) -> Path:

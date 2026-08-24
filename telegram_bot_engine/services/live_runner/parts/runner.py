@@ -304,6 +304,11 @@ class LiveRunnerService:
                     "none",
                 ):
                     packages = list(contract.heal_packages)
+                    import os as _heal_os
+                    if (_heal_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
+                        "1", "true", "yes", "on",
+                    }:
+                        packages = []  # supply-chain: no auto-install from ModuleNotFoundError
                 elif (
                     action == "install_package"
                     and contract.primary
@@ -382,7 +387,8 @@ class LiveRunnerService:
 
             try:
                 py_h, mode_h, isolation_h, _note_h = _ensure_runtime(root)
-                ok_direct, direct_log = _pip_install_packages_direct(
+                ok_direct, direct_log = _pip_install_packages_direct(  # gated inside by TBE_AUTO_HEAL_PIP
+                        
                     py_h, packages, root, mode_h, isolation_h
                 )
                 all_install_log = (
