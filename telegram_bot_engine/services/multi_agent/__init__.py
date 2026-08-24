@@ -43,7 +43,7 @@ from .concurrency import active_count, orchestration_slot
 from .fallback_template import should_trigger_verified_fallback, build_verified_bot, run_verified_fallback_on_state
 from .redis_board import (
     RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
-    scan_and_resume, redis_board_enabled,
+    scan_and_resume, redis_board_enabled, enqueue_pending_resumes, enqueue_resume_job,
 )
 
 __all__ = [
@@ -104,5 +104,5 @@ __all__ = [
     "active_count", "orchestration_slot",
     "should_trigger_verified_fallback", "build_verified_bot", "run_verified_fallback_on_state",
     "RedisLayeredBlackboard", "list_resumable_state_ids", "resume_interrupted_state",
-    "scan_and_resume", "redis_board_enabled",
+    "scan_and_resume", "redis_board_enabled", "enqueue_pending_resumes", "enqueue_resume_job",
 ]

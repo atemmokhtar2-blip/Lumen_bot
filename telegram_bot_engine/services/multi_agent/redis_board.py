@@ -130,6 +130,18 @@ class RedisLayeredBlackboard(BlackboardStore):
     def put(self, state: AgentState) -> AgentState:
         out = self.inner.put(state)
         self.mirror.put(out)
+        # Flag for worker boot / auto-enqueue (deduped in enqueue_pending_resumes)
+        if out.status in _RESUMABLE and redis_board_enabled():
+            try:
+                if (os.environ.get("MULTI_AGENT_AUTO_ENQUEUE_RESUME") or "1").strip().lower() not in {
+                    "0", "false", "no", "off",
+                }:
+                    # Only park marker — actual enqueue is batched by worker/boot
+                    r = self.mirror.conn()
+                    r.sadd(f"{_PREFIX}needs_resume", out.state_id)
+                    r.expire(f"{_PREFIX}needs_resume", _TTL)
+            except Exception:
+                pass
         return out
 
     def get(self, state_id: str) -> Optional[AgentState]:
@@ -243,6 +255,62 @@ def enqueue_resume_job(state_id: str, *, tenant_id: str = "platform") -> dict[st
         return None
 
 
+def enqueue_pending_resumes(*, limit: int = 20, tenant_id: str = "platform") -> list[dict[str, Any]]:
+    """Enqueue RQ resume jobs for interrupted multi-agent states (worker boot).
+
+    Dedupes via Redis set maestro:ma:resume_queued so the same state is not
+    spammed into the queue on every worker restart.
+    """
+    results: list[dict[str, Any]] = []
+    if not redis_board_enabled():
+        # File-board only: attempt limited inline resume (dev/single-node)
+        if (os.environ.get("MULTI_AGENT_INLINE_RESUME_ON_BOOT") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return scan_and_resume(limit=limit)
+        return results
+
+    try:
+        r = get_redis_mirror().conn()
+        queued_key = f"{_PREFIX}resume_queued"
+        needs_key = f"{_PREFIX}needs_resume"
+        # Merge explicit needs_resume markers + zset index
+        candidates: list[str] = []
+        try:
+            candidates.extend(str(x) for x in r.smembers(needs_key) or [])
+        except Exception:
+            pass
+        candidates.extend(list_resumable_state_ids(limit=limit))
+        # unique preserve order
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for sid in candidates:
+            if sid and sid not in seen:
+                seen.add(sid)
+                ordered.append(sid)
+        for sid in ordered[: max(1, min(limit, 50))]:
+            try:
+                if r.sismember(queued_key, sid):
+                    results.append({"state_id": sid, "skipped": "already_queued"})
+                    continue
+                job = enqueue_resume_job(sid, tenant_id=tenant_id)
+                if job:
+                    r.sadd(queued_key, sid)
+                    r.expire(queued_key, min(_TTL, 86400))
+                    try:
+                        r.srem(needs_key, sid)
+                    except Exception:
+                        pass
+                    results.append({"state_id": sid, "enqueued": True, "job": job})
+                else:
+                    results.append({"state_id": sid, "enqueued": False})
+            except Exception as exc:
+                results.append({"state_id": sid, "error": f"{type(exc).__name__}:{exc}"})
+    except Exception:
+        logger.warning("enqueue_pending_resumes failed", exc_info=True)
+    return results
+
+
 __all__ = [
     "RedisMirror",
     "RedisLayeredBlackboard",
@@ -252,4 +320,5 @@ __all__ = [
     "resume_interrupted_state",
     "scan_and_resume",
     "enqueue_resume_job",
+    "enqueue_pending_resumes",
 ]

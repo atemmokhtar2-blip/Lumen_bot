@@ -107,3 +107,29 @@ def select_process_driver():
             f"({decision.reason})"
         )
     return LocalProcessDriver(), decision
+
+
+def require_docker_runtime() -> None:
+    """Raise if current policy forbids running without Docker."""
+    d = decide_isolation()
+    if d.require_docker or not d.allow_local:
+        from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
+            docker_available,
+        )
+        if not docker_available():
+            raise RuntimeError(
+                "docker_required_but_unavailable: "
+                f"({d.reason})"
+            )
+
+
+__all__ = [
+    "IsolationDecision",
+    "decide_isolation",
+    "assert_local_process_allowed",
+    "select_process_driver",
+    "require_docker_runtime",
+    "is_multi_tenant",
+    "is_dev_environment",
+    "environment_name",
+]

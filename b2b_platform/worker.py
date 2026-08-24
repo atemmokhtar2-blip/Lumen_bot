@@ -19,6 +19,15 @@ def main() -> int:
     name = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
     conn = Redis.from_url(url)
     queues = [Queue(name, connection=conn)]
+    # Resume interrupted multi-agent generations left mid-flight after a crash.
+    try:
+        from telegram_bot_engine.services.multi_agent.redis_board import enqueue_pending_resumes
+        resumed = enqueue_pending_resumes(limit=int(os.getenv("MULTI_AGENT_RESUME_BOOT_LIMIT") or "20"))
+        if resumed:
+            logger.info("multi_agent resume boot enqueued=%s", len(resumed))
+    except Exception:
+        logger.warning("multi_agent resume boot failed", exc_info=True)
+
     logger.info("starting RQ worker queue=%s", name)
     Worker(queues, connection=conn).work(with_scheduler=False)
     return 0

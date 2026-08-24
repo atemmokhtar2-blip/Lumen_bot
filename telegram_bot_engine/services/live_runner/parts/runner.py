@@ -81,6 +81,19 @@ class LiveRunnerService:
           3) reinstall + rerun  (up to max_heal_rounds)
         """
         t0 = time.perf_counter()
+        # Host-process path is a privileged fallback — policy must allow it.
+        try:
+            from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
+            assert_local_process_allowed()
+        except RuntimeError as exc:
+            return LiveRunReport(
+                ok=False,
+                phase="security",
+                message=f"التشغيل المحلي مرفوض: {exc}",
+                errors=["local_process_denied"],
+                duration_ms=0.0,
+            )
+
         root = Path(project_path).resolve()
         if not root.exists():
             return LiveRunReport(ok=False, phase="validate", message="مسار المشروع غير موجود")
@@ -704,6 +717,23 @@ def run_bot_project(
             entry_point=entry_hint or "",
             duration_ms=0.0,
             details={"provider": "none", "error": docker_err or "docker_required"},
+        )
+
+    # Final gate: never enter host-process execution unless policy allows.
+    try:
+        from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
+        assert_local_process_allowed()
+    except RuntimeError as exc:
+        return LiveRunReport(
+            ok=False,
+            phase="security",
+            message=f"التشغيل المحلي مرفوض بالسياسة: {exc}",
+            install_log="",
+            run_log="",
+            warnings=["local_process_denied", "docker_required"],
+            entry_point=entry_hint or "",
+            duration_ms=0.0,
+            details={"provider": "none", "error": str(exc), "docker_err": docker_err},
         )
 
     __import__("logging").getLogger("live_runner").warning(
