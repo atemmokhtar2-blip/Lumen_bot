@@ -9,6 +9,7 @@ from .backend import SandboxBackend
 from .dind_backend import DinDSandboxBackend
 from .docker_backend import DockerSandboxBackend
 from .firecracker_backend import FirecrackerSandboxBackend
+from .gvisor_backend import GVisorSandboxBackend
 from .types import SandboxProbe
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,12 @@ def _requested_backend() -> str:
 
 
 def _all_backends() -> List[SandboxBackend]:
-    # Order by strength desc for auto
+    # Strongest first for auto selection
     return [
-        FirecrackerSandboxBackend(),
-        DinDSandboxBackend(),
-        DockerSandboxBackend(),
+        FirecrackerSandboxBackend(),  # microVM
+        GVisorSandboxBackend(),       # userspace kernel
+        DinDSandboxBackend(),         # dedicated docker daemon
+        DockerSandboxBackend(),       # hardened runc (minimum)
     ]
 
 
@@ -31,15 +33,8 @@ def probe_all() -> List[SandboxProbe]:
     return [b.probe() for b in _all_backends()]
 
 
-def select_sandbox_backend(
-    *,
-    require_available: bool = True,
-) -> Tuple[SandboxBackend, SandboxProbe]:
-    """Pick sandbox backend.
-
-    TBE_SANDBOX_BACKEND=auto|docker|dind|firecracker
-    auto → strongest available (firecracker > dind > docker)
-    """
+def select_sandbox_backend(*, require_available: bool = True) -> Tuple[SandboxBackend, SandboxProbe]:
+    """TBE_SANDBOX_BACKEND=auto|firecracker|gvisor|dind|docker"""
     req = _requested_backend()
     backends = {b.name: b for b in _all_backends()}
 
@@ -50,19 +45,16 @@ def select_sandbox_backend(
             raise RuntimeError(f"sandbox_backend_unavailable:{req}:{p.reason}")
         return b, p
 
-    # auto
-    probes = []
     for b in _all_backends():
         p = b.probe()
-        probes.append((b, p))
         if p.available:
             logger.info("sandbox selected backend=%s reason=%s", b.name, p.reason)
             return b, p
 
-    reasons = "; ".join(f"{b.name}:{p.reason}" for b, p in probes)
+    reasons = "; ".join(f"{x.name}:{x.probe().reason}" for x in _all_backends())
     raise RuntimeError(
         "no_sandbox_backend_available: "
-        f"{reasons}. Install Docker (+ TBE_DOCKER_NETWORK) or configure DinD/Firecracker."
+        f"{reasons}. Need Docker+egress network, or gVisor runsc, or Firecracker+KVM."
     )
 
 
@@ -74,7 +66,14 @@ def start_sandboxed_bot(
     service_name: str = "",
     env_vars: Optional[dict] = None,
 ):
+    from .egress import harden_network
     from .types import SandboxSpec
+
+    # Always harden network before start
+    try:
+        harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
+    except Exception as exc:
+        logger.warning("harden_network: %s", type(exc).__name__)
 
     backend, probe = select_sandbox_backend(require_available=True)
     spec = SandboxSpec(
@@ -87,4 +86,5 @@ def start_sandboxed_bot(
     handle = backend.start(spec)
     handle.meta = dict(handle.meta or {})
     handle.meta["probe"] = probe.reason
+    handle.meta["backend"] = backend.name
     return backend, handle

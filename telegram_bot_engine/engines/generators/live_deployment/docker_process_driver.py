@@ -108,6 +108,31 @@ def _seccomp_arg() -> str:
         pass
     return "default"
 
+
+def _runtime_args() -> list:
+    """Optional Docker runtime (runsc for gVisor)."""
+    rt = (os.environ.get("TBE_DOCKER_RUNTIME") or "").strip()
+    if rt and rt not in {"runc", "default"}:
+        return ["--runtime", rt]
+    return []
+
+
+def _apparmor_args() -> list:
+    """Attach AppArmor profile when host has it loaded."""
+    profile = (os.environ.get("TBE_APPARMOR_PROFILE") or "").strip()
+    if not profile:
+        # default name if operator loaded our profile
+        profile = "tbe-bot"
+    # Only pass if profile appears loaded
+    try:
+        import pathlib
+        aa = pathlib.Path("/sys/kernel/security/apparmor/profiles")
+        if aa.is_file() and profile in aa.read_text(encoding="utf-8", errors="ignore"):
+            return ["--security-opt", f"apparmor={profile}"]
+    except Exception:
+        pass
+    return []
+
 def docker_available() -> bool:
     """Return True if docker CLI is present and the daemon responds."""
     if not shutil.which("docker"):
@@ -452,6 +477,8 @@ class DockerProcessDriver(DeploymentProvider):
                 "--security-opt", "no-new-privileges:true",
                 "--cap-drop", "ALL",
                 "--security-opt", f"seccomp={_seccomp_arg()}",
+                *(_runtime_args()),
+                *(_apparmor_args()),
                 "--read-only",
                 "--ipc", "none",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
@@ -467,6 +494,20 @@ class DockerProcessDriver(DeploymentProvider):
                 image_tag,
             ]
 
+            try:
+                from telegram_bot_engine.services.sandbox_runtime.policy import (
+                    assert_network_not_default_bridge,
+                    assert_no_docker_sock_mount,
+                )
+                assert_network_not_default_bridge(net)
+                assert_no_docker_sock_mount(cmd)
+            except Exception as pol_exc:
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message=f"policy_violation:{pol_exc}",
+                )
             try:
                 proc = subprocess.run(
                     cmd,

@@ -477,18 +477,13 @@ class HostingService:
                         stopped = True
                 except Exception:
                     pass
-                if not stopped:
-                    from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
-                        LocalProcessDriver,
-                    )
-                    LocalProcessDriver().stop(inst.deployment_id)
-                    stopped = True
-            if not stopped and inst.pid:
-                import signal
-                try:
-                    os.kill(inst.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+                if not stopped and inst.deployment_id:
+                    # Last resort: docker rm by deployment id / container name only — never host PID
+                    try:
+                        DockerProcessDriver().stop(inst.deployment_id)
+                        stopped = True
+                    except Exception:
+                        pass
         except Exception as e:
             inst.status = "stopped"
             inst.last_error = str(e)
@@ -566,22 +561,7 @@ class HostingService:
             except Exception:
                 return False
             return False
-        # Legacy local subprocess path (dev only)
-        if inst.pid:
-            try:
-                from telegram_bot_engine.engines.generators.live_deployment.local_process_driver import (
-                    LocalProcessDriver,
-                )
-                driver = LocalProcessDriver()
-                st = driver.status(dep or f"local-{inst.pid}")
-                return str(getattr(st, "status", "")).lower() == "running"
-            except Exception:
-                try:
-                    import os
-                    os.kill(int(inst.pid), 0)
-                    return True
-                except Exception:
-                    return False
+        # No host-PID liveness — sandboxed bots only
         return False
 
 

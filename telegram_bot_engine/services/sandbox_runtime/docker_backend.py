@@ -1,10 +1,4 @@
-"""Hardened Docker sandbox — primary production backend.
-
-Delegates image build + run to DockerProcessDriver while enforcing:
-  - egress network
-  - seccomp profile when available
-  - never mount host docker.sock into the bot
-"""
+"""Hardened Docker sandbox — minimum production backend (runc or runsc via env)."""
 from __future__ import annotations
 
 import logging
@@ -13,6 +7,7 @@ from typing import List
 
 from .backend import SandboxBackend
 from .network import ensure_egress_network, seccomp_profile_path
+from .policy import assert_network_not_default_bridge, load_policy
 from .types import SandboxHandle, SandboxProbe, SandboxSpec
 
 logger = logging.getLogger(__name__)
@@ -32,10 +27,11 @@ class DockerSandboxBackend(SandboxBackend):
         if not docker_available():
             return SandboxProbe(self.name, False, "docker_daemon_unavailable", self.strength)
         try:
-            ensure_egress_network(create_if_missing=True)
+            net = ensure_egress_network(create_if_missing=True)
+            assert_network_not_default_bridge(net)
         except Exception as exc:
             return SandboxProbe(self.name, False, str(exc)[:200], self.strength)
-        return SandboxProbe(self.name, True, "docker_ok", self.strength)
+        return SandboxProbe(self.name, True, "docker_hardened_ok", self.strength)
 
     def start(self, spec: SandboxSpec) -> SandboxHandle:
         probe = self.probe()
@@ -46,8 +42,9 @@ class DockerSandboxBackend(SandboxBackend):
                 status="failed",
                 message=f"sandbox_unavailable:{probe.reason}",
             )
-        # Ensure network env for DockerProcessDriver
+        policy = load_policy()
         net = ensure_egress_network(create_if_missing=True)
+        assert_network_not_default_bridge(net)
         os.environ["TBE_DOCKER_NETWORK"] = net
         sec = seccomp_profile_path()
         if sec and not (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip():
@@ -60,12 +57,13 @@ class DockerSandboxBackend(SandboxBackend):
         env = dict(spec.env_vars or {})
         env.setdefault("TELEGRAM_BOT_TOKEN", spec.bot_token)
         env.setdefault("BOT_TOKEN", spec.bot_token)
+        os.environ.setdefault("TBE_DOCKER_MEMORY", policy.max_memory)
+        os.environ.setdefault("TBE_DOCKER_CPUS", policy.max_cpus)
+        os.environ.setdefault("TBE_DOCKER_PIDS", str(policy.max_pids))
         if spec.memory:
             os.environ["TBE_DOCKER_MEMORY"] = spec.memory
         if spec.cpus:
             os.environ["TBE_DOCKER_CPUS"] = spec.cpus
-        if spec.pids:
-            os.environ["TBE_DOCKER_PIDS"] = spec.pids
 
         status = DockerProcessDriver().deploy(
             spec.project_path,
@@ -82,7 +80,12 @@ class DockerSandboxBackend(SandboxBackend):
             container_or_vm_id=dep,
             status="running" if running else ("failed" if "fail" in st.lower() else st or "unknown"),
             message=msg,
-            meta={"provider_status": st, "network": net, "seccomp": bool(sec)},
+            meta={
+                "provider_status": st,
+                "network": net,
+                "seccomp": bool(sec),
+                "runtime": os.environ.get("TBE_DOCKER_RUNTIME") or "runc",
+            },
         )
 
     def stop(self, handle_or_id: str) -> SandboxHandle:
@@ -102,11 +105,10 @@ class DockerSandboxBackend(SandboxBackend):
             DockerProcessDriver,
         )
         status = DockerProcessDriver().status(handle_or_id)
-        st = str(getattr(status, "status", "") or "")
         return SandboxHandle(
             backend=self.name,
             deployment_id=handle_or_id,
-            status=st or "unknown",
+            status=str(getattr(status, "status", "") or "unknown"),
             message=str(getattr(status, "message", "") or ""),
         )
 

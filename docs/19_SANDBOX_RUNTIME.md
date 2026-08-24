@@ -1,35 +1,46 @@
-# Sandbox Runtime — عزل البوتات المولَّدة
+# Sandbox Runtime — عزل بمستوى منصات عالمية
 
-## المبدأ
+## طبقات العزل (الأقوى → الأضعف)
 
-كل بوت مولَّد يُشغَّل داخل **صندوق معزول** عن المضيف وعن بقية البوتات.
-لا يوجد مسار نجاح صامت على LocalProcess من هذه الطبقة.
+| Backend | التقنية | يقارب |
+|---------|---------|--------|
+| `firecracker` | MicroVM + KVM | AWS Lambda / Fly Machines |
+| `gvisor` | runsc (userspace kernel) | Google gVisor / GKE sandbox |
+| `dind` | Docker daemon منفصل | معزول عن socket المضيف |
+| `docker` | runc + seccomp + AppArmor + egress | حد أدنى إنتاجي |
 
-## الخلفيات (الأقوى أولاً)
+`TBE_SANDBOX_BACKEND=auto` يختار الأقوى المتاح. **لا يوجد مسار host process.**
 
-| Backend | العزل | المتطلبات |
-|---------|--------|-----------|
-| `firecracker` | MicroVM + KVM | `TBE_FIRECRACKER_BIN`, `TBE_FC_KERNEL`, `TBE_FC_ROOTFS`, `/dev/kvm` |
-| `dind` | Docker daemon منفصل | `TBE_DIND_HOST` (ليس `docker.sock` الافتراضي إلا بإذن صريح) |
-| `docker` | حاوية مقواة على Docker المضيف | Docker + `TBE_DOCKER_NETWORK` + seccomp |
+## ضمانات السياسة (`policy.py`)
 
-`TBE_SANDBOX_BACKEND=auto` يختار أقوى خلفية متاحة.
+- ممنوع `docker.sock` داخل حاوية البوت
+- ممنوع شبكة `bridge` / `host` الافتراضية
+- Egress: baseline iptables (حجب metadata `169.254.169.254` و loopback)
+- Drop ALL capabilities + no-new-privileges + read-only rootfs
+- Seccomp profile + AppArmor `tbe-bot` عند التحميل على المضيف
+- Supervisor: reap exited + max lifetime
 
 ## المسار
 
 ```
-host_start / token live-run
-  → HostingService.start
-    → sandbox_runtime.start_sandboxed_bot
-      → firecracker | dind | docker
+host_start
+  → harden_network / egress
+  → select_sandbox_backend (fc|gvisor|dind|docker)
+  → start
+  → supervisor_tick (خلفية/cron)
 ```
 
-## ملفات
+## تفعيل gVisor على المضيف
 
-- `telegram_bot_engine/services/sandbox_runtime/`
-- `telegram_bot_engine/data/sandbox/seccomp-bot.json`
-- سياسة: `isolation_policy.select_process_driver` → نفس الطبقة
+```bash
+# تثبيت runsc وتسجيله runtime في dockerd ثم:
+TBE_SANDBOX_BACKEND=gvisor
+# أو auto سيلتقطه تلقائياً
+```
 
-## فشل مغلق
+## تفعيل AppArmor
 
-إن لم تتوفر أي خلفية → `RuntimeError` / رسالة استضافة واضحة. لا تشغيل على المضيف.
+```bash
+sudo apparmor_parser -r telegram_bot_engine/data/sandbox/apparmor-bot.profile
+# يُطبَّق تلقائياً إذا ظهر الاسم في /sys/kernel/security/apparmor/profiles
+```

@@ -1,11 +1,17 @@
-"""Strong isolation layer for generated bots.
+"""Strong isolation layer for generated bots (PaaS-grade).
 
 Backends (strongest first):
   firecracker — microVM (KVM)
+  gvisor      — runsc userspace kernel
   dind        — dedicated Docker daemon (not host socket)
-  docker      — hardened host Docker (image-only, seccomp, egress network)
+  docker      — hardened runc + seccomp + AppArmor + egress network
 
-All paths fail closed. No silent LocalProcess fallback from this package.
+Control:
+  policy.py   — non-negotiable hard policy
+  egress.py   — network + iptables baseline
+  supervisor.py — reap / lifetime enforcement
+
+All paths fail closed. No host-process execution from this package.
 """
 from __future__ import annotations
 
