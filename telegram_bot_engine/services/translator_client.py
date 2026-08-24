@@ -706,13 +706,25 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     ctx = dict(context or {})
     env_on = (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}
+    # Primary product path: infinite atomic engine (default ON)
+    primary = (os.getenv("TBE_INFINITE_PRIMARY") or "1").strip().lower() not in {"0", "false", "off", "no"}
     env_auto = (os.getenv("TBE_INFINITE_AUTO") or "1").strip().lower() not in {"0", "false", "off", "no"}
     looks_custom = bool(ctx.get("looks_custom") or ctx.get("needs_ai_codegen") or ctx.get("infinite"))
-    # Prefer infinite when explicitly requested, forced by env, or auto + custom gap
-    use_infinite = bool(ctx.get("infinite")) or env_on or (env_auto and looks_custom)
+    # Use infinite for nearly all generation translates when primary
+    use_infinite = (
+        bool(ctx.get("infinite"))
+        or env_on
+        or primary
+        or (env_auto and looks_custom)
+    )
     if use_infinite:
         inf = translate_infinite_via_gemini(text, context=ctx)
-        if inf is not None:
+        # Successful DynamicBotSpec or structured failure — prefer over catalog translate
+        if inf is not None and (inf.get("ok") or inf.get("dynamic_spec") or inf.get("engine") == "infinite_v1"):
+            return inf
+        if inf is not None and inf.get("ok") is False and not primary:
+            pass  # fall through to catalog translate
+        elif inf is not None and inf.get("ok") is True:
             return inf
 
     """Stable public API — provider chosen by llm.facade (default translate: Gemini)."""

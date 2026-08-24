@@ -185,19 +185,24 @@ def analyze_and_prepare(
         if "out_of_catalog" not in gap:
             gap.append("out_of_catalog")
 
-    # New engine modes: catalog | hybrid | cline (legacy aliases kept in notes)
-    try:
-        from telegram_bot_engine.services.engine_router import decide_engine_mode
-        mode = decide_engine_mode(
-            preferred_keys=preferred,
-            capabilities_gap=gap,
-            looks_custom=looks_custom,
-            needs_ai_codegen=bool(needs_ai),
-            confidence=float(confidence or 0.0),
-        )
-        engine_mode = mode.value
-    except Exception:
-        engine_mode = "cline" if needs_ai else "catalog"
+    # Prefer infinite when translation already produced DynamicBotSpec
+    tr_engine = str(tr.get("engine") or "").lower()
+    has_dyn = isinstance(tr.get("dynamic_spec"), dict) and bool(tr.get("dynamic_spec"))
+    if tr_engine.startswith("infinite") or has_dyn or tr.get("ok") and tr_engine == "infinite_v1":
+        engine_mode = "infinite"
+    else:
+        try:
+            from telegram_bot_engine.services.engine_router import decide_engine_mode
+            mode = decide_engine_mode(
+                preferred_keys=preferred,
+                capabilities_gap=gap,
+                looks_custom=looks_custom,
+                needs_ai_codegen=bool(needs_ai),
+                confidence=float(confidence or 0.0),
+            )
+            engine_mode = mode.value
+        except Exception:
+            engine_mode = "infinite"  # default product path
 
     package = {
         "original_text": original,
@@ -215,6 +220,9 @@ def analyze_and_prepare(
         "purpose": purpose,
         "rule_features": rules,
         "notes": ["keys_bound"] if preferred else [],
+        "engine": tr.get("engine") or ("infinite_v1" if engine_mode == "infinite" else None),
+        "dynamic_spec": tr.get("dynamic_spec"),
+        "bot_spec": tr.get("bot_spec"),
     }
     if needs_ai:
         package["notes"].append("out_of_catalog_or_custom_stack")

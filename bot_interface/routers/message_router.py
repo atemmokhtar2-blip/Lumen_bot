@@ -548,7 +548,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
 
-            # Control plane: BuildIR → engine_router (catalog | hybrid | cline)
+            # Control plane: BuildIR → engine_router (infinite primary | catalog | hybrid | cline)
             try:
                 from telegram_bot_engine.services.engine_router import (
                     build_ir_from_package,
@@ -561,18 +561,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     _pkg["spec_request"] = gen_request
                 if not _pkg.get("original_text"):
                     _pkg["original_text"] = gen_request
-                # Free-agent path: never lock to catalog capability keys
+                # Free-agent / custom path: infinite atomic engine (not cline)
                 if _free_agent_mode() or (context.user_data or {}).get("free_agent_path"):
-                    _pkg["engine_mode"] = "cline"
+                    _pkg["engine_mode"] = "infinite"
                     _pkg["needs_ai_codegen"] = True
                     _pkg["looks_custom"] = True
-                    _pkg["preferred_keys"] = []
-                    _pkg["capabilities_matched"] = []
+                    _pkg["preferred_keys"] = list(_pkg.get("preferred_keys") or [])
                     gaps = list(_pkg.get("capabilities_gap") or [])
                     if "free_agent" not in gaps:
                         gaps.append("free_agent")
                     _pkg["capabilities_gap"] = gaps
-                    logger.info("Free-agent IR forced: engine_mode=cline keys cleared")
+                    logger.info("Free-agent IR forced: engine_mode=infinite")
+                # Always prefer infinite as product default unless package already set
+                if not _pkg.get("engine_mode"):
+                    _pkg["engine_mode"] = "infinite"
+                if not _pkg.get("engine") and _pkg.get("engine_mode") == "infinite":
+                    _pkg["engine"] = "infinite_v1"
                 ir = build_ir_from_package(_pkg, user_id=int(user.id) if user else 0)
                 logger.info(
                     "force_generate IR mode=%s matched=%s gap=%s",

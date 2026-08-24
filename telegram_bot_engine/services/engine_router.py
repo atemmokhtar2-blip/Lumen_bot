@@ -39,10 +39,21 @@ def _cline_only() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _infinite_preferred() -> bool:
-    """When True, custom/gap requests prefer infinite atomic path over cline."""
-    raw = (os.getenv("TBE_INFINITE_SPEC") or os.getenv("TBE_INFINITE_AUTO") or "1").strip().lower()
+def _infinite_primary() -> bool:
+    """Infinite atomic engine is the default generation path (ON by default).
+
+    Set TBE_INFINITE_PRIMARY=0 to use legacy catalog/hybrid policy.
+    TBE_INFINITE_SPEC=1 also forces infinite.
+    """
+    if (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    raw = (os.getenv("TBE_INFINITE_PRIMARY") or "1").strip().lower()
     return raw not in {"0", "false", "off", "no"}
+
+
+def _infinite_preferred() -> bool:
+    """Back-compat alias for _infinite_primary."""
+    return _infinite_primary()
 
 
 def decide_engine_mode(
@@ -53,15 +64,24 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Policy: catalog first; infinite for novel custom flows; cline as last resort.
+    """Policy: **infinite atomic engine first** for bot generation.
 
-    Override: CLINE_ONLY=1 or ENGINE_MODE_FORCE=* → forced path.
+    Order:
+      1. CLINE_ONLY / ENGINE_MODE_FORCE overrides
+      2. Infinite primary (default ON) → EngineMode.INFINITE
+      3. Else catalog when pure known keys + no gap
+      4. Else hybrid / cline
+
+    Catalog via ENGINE_MODE_FORCE=catalog or TBE_INFINITE_PRIMARY=0.
     """
     if _cline_only():
         return EngineMode.CLINE
     forced = _env_force_mode()
     if forced is not None:
         return forced
+
+    if _infinite_primary():
+        return EngineMode.INFINITE
 
     core = {"start", "help", "lang", "language", "cancel"}
     non_core = [k for k in preferred_keys if k not in core]
@@ -70,13 +90,8 @@ def decide_engine_mode(
     if non_core and not gap and not needs_ai_codegen:
         return EngineMode.CATALOG
     if non_core and (gap or looks_custom or needs_ai_codegen):
-        # Prefer infinite for novel compositions when enabled
-        if _infinite_preferred() and (looks_custom or needs_ai_codegen or len(gap) >= 2):
-            return EngineMode.INFINITE
         return EngineMode.HYBRID
     if needs_ai_codegen or (looks_custom and not non_core):
-        if _infinite_preferred():
-            return EngineMode.INFINITE
         return EngineMode.CLINE
     return EngineMode.CATALOG
 
@@ -101,6 +116,8 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
         mode = EngineMode.CATALOG
     elif mode_raw in {"ai_codegen"}:
         mode = EngineMode.CLINE
+    elif mode_raw in {"infinite", "infinite_v1", "atomic", "dynamic"}:
+        mode = EngineMode.INFINITE
     else:
         mode = decide_engine_mode(
             preferred_keys=preferred,
@@ -131,6 +148,9 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
                 "looks_custom": looks_custom,
                 "needs_ai_codegen": needs_ai,
                 "legacy_engine_mode": package.get("engine_mode"),
+                "dynamic_spec": package.get("dynamic_spec"),
+                "bot_spec": package.get("bot_spec"),
+                "engine": package.get("engine"),
             },
             "user_id": int(user_id or 0),
         }
@@ -144,14 +164,20 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
         ir.status = IRStatus.REJECTED
         ir.notes = list(ir.notes) + [f"err:{e}" for e in v.errors]
     else:
-        # Re-decide mode after lean-pack enrichment
-        ir.engine_mode = decide_engine_mode(
-            preferred_keys=ir.preferred_keys,
-            capabilities_gap=ir.capabilities_gap,
-            looks_custom=looks_custom,
-            needs_ai_codegen=needs_ai,
-            confidence=ir.confidence,
-        )
+        # Preserve infinite when package/engine says so; else re-decide
+        eng = str(package.get("engine") or "")
+        if mode == EngineMode.INFINITE or eng.startswith("infinite") or mode_raw in {
+            "infinite", "infinite_v1", "atomic", "dynamic"
+        }:
+            ir.engine_mode = EngineMode.INFINITE
+        else:
+            ir.engine_mode = decide_engine_mode(
+                preferred_keys=ir.preferred_keys,
+                capabilities_gap=ir.capabilities_gap,
+                looks_custom=looks_custom,
+                needs_ai_codegen=needs_ai,
+                confidence=ir.confidence,
+            )
     return ir
 
 
@@ -222,10 +248,59 @@ def execute_ir(
                     bot, dyn, err = try_compose_infinite(dyn_payload or {})
                 else:
                     err = (inf or {}).get("validation_error") if isinstance(inf, dict) else "infinite_translate_failed"
-                    logger.warning("infinite translate failed: %s", err)
-                    # fall through to catalog/hybrid
-                    mode = EngineMode.HYBRID
-            if mode == EngineMode.INFINITE and (bot is not None or bot_spec_dict):
+                    logger.warning("infinite translate failed: %s — building deterministic DynamicBotSpec", err)
+                    # Deterministic atomic fallback so infinite path stays primary offline
+                    try:
+                        from telegram_bot_engine.spec_core.dynamic_bot_spec import DynamicBotSpec
+                        req = (ir.original_text or ir.spec_request or "bot").strip()[:80]
+                        fallback = {
+                            "bot_name": (req[:40] or "infinite_bot").replace(" ", "_")[:40] or "infinite_bot",
+                            "description": req[:500],
+                            "language": "ar",
+                            "version": "infinite_v1",
+                            "nodes": [
+                                {
+                                    "id": "start_n",
+                                    "trigger": {"type": "on_start", "config": {"command": "start"}},
+                                    "actions": [{
+                                        "type": "send_message",
+                                        "config": {"text": f"مرحباً — {req[:120]}"},
+                                    }],
+                                },
+                                {
+                                    "id": "msg_n",
+                                    "trigger": {"type": "on_message", "config": {}},
+                                    "conditions": [{"type": "always", "config": {}}],
+                                    "actions": [{
+                                        "type": "send_message",
+                                        "config": {"text": "تم استلام رسالتك."},
+                                    }],
+                                },
+                            ],
+                        }
+                        # Add simple command nodes from preferred_keys
+                        for i, key in enumerate((ir.preferred_keys or [])[:8]):
+                            k = str(key).strip().lower().replace("-", "_")
+                            if not k or k in {"start", "help"}:
+                                continue
+                            fallback["nodes"].append({
+                                "id": f"cmd_{k}"[:32],
+                                "trigger": {"type": "on_command", "config": {"command": k}},
+                                "actions": [{
+                                    "type": "send_message",
+                                    "config": {"text": f"أمر /{k}"},
+                                }],
+                            })
+                        bot, dyn, err2 = try_compose_infinite(fallback)
+                        if bot is None and dyn is None:
+                            logger.warning("infinite deterministic fallback failed: %s", err2)
+                            mode = EngineMode.HYBRID
+                        else:
+                            dyn_payload = fallback
+                    except Exception as exc:
+                        logger.warning("infinite fallback error: %s", type(exc).__name__)
+                        mode = EngineMode.HYBRID
+            if mode == EngineMode.INFINITE and (bot is not None or bot_spec_dict or dyn is not None):
                 out = work_dir / "infinite_bot"
                 out.mkdir(parents=True, exist_ok=True)
                 project_path = None
