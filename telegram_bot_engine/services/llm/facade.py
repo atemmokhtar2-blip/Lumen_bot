@@ -138,6 +138,19 @@ def chat_request(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Chat reply for Maestro UX (provider-agnostic + fallback)."""
+    try:
+        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+        ok, reason = gate_llm_call(message or "", context)
+        if not ok:
+            logger.warning("chat_request blocked by llm budget: %s", reason)
+            return {
+                "reply": "تم بلوغ الحد اليومي لاستخدام الذكاء الاصطناعي. حاول لاحقاً.",
+                "action": "none",
+                "budget_blocked": True,
+                "reason": reason,
+            }
+    except Exception:
+        logger.exception("llm budget gate failed open-check")
     last_err: Exception | None = None
     for provider in _chat_chain():
         try:

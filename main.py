@@ -48,6 +48,14 @@ from bot_interface import (
 )
 from bot_interface.commands import handle_non_text, unknown_cmd
 
+# Redact secrets from all log records (not only user-facing errors)
+try:
+    from bot_interface.sanitize import install_secret_log_filter
+    install_secret_log_filter()
+except Exception:
+    pass
+
+
 
 # Graceful shutdown coordination (API death → stop polling cleanly)
 _shutdown_reason: str = ""
@@ -72,6 +80,28 @@ def _request_graceful_shutdown(reason: str) -> None:
             pass
 
 
+
+
+
+def _install_signal_handlers() -> None:
+    """SIGTERM/SIGINT → graceful stop of polling (no os._exit)."""
+    import signal
+
+    def _handler(signum, _frame):
+        try:
+            name = signal.Signals(signum).name
+        except Exception:
+            name = str(signum)
+        logger.info("signal %s received — graceful shutdown", name)
+        _request_graceful_shutdown(f"signal:{name}")
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _handler)
+        except Exception:
+            pass
 
 
 def _start_b2b_api_process(port: int) -> None:
@@ -249,7 +279,7 @@ def main() -> None:
     if enable_api:
         mode = (os.getenv("API_PROCESS_MODE") or "process").strip().lower()
         if mode in {"thread", "runner"}:
-            # Non-daemon so a silent death is visible; death still triggers os._exit
+            # Non-daemon so a silent death is visible; death triggers graceful shutdown
             t = threading.Thread(
                 target=_start_b2b_api_thread,
                 args=(PORT, api_death),

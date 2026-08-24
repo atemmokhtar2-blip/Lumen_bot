@@ -501,6 +501,14 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
 
 
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    try:
+        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+        ok, reason = gate_llm_call(text or "", context, response_reserve=1024)
+        if not ok:
+            logger.warning("translate_request blocked by llm budget: %s", reason)
+            return None
+    except Exception:
+        pass
     """Stable public API — provider chosen by llm.facade (default: Groq)."""
     from .llm.facade import translate_request as _facade_translate
     return _facade_translate(text, context)

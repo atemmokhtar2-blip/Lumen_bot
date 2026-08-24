@@ -216,8 +216,26 @@ def _unpin_all_hard_pins(src: Path) -> tuple[Path, list[str]]:
     return path, notes
 
 
+def _pip_index_flags() -> list[str]:
+    """Force installs from official PyPI only (no alternate indexes / find-links)."""
+    import os as _os
+    index = (_os.environ.get("TBE_PIP_INDEX_URL") or "https://pypi.org/simple").strip()
+    flags = ["--index-url", index, "--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org"]
+    flags = ["--isolated", *flags]
+    return flags
+
+
 def _run_pip(cmd: list[str], root: Path, timeout: int = 300) -> tuple[int, str]:
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(root))
+    """Run pip with isolated config + official index only."""
+    final = list(cmd)
+    try:
+        if "pip" in final and "install" in final:
+            i = final.index("install")
+            if "--index-url" not in final:
+                final = final[: i + 1] + _pip_index_flags() + final[i + 1 :]
+    except Exception:
+        pass
+    r = subprocess.run(final, capture_output=True, text=True, timeout=timeout, cwd=str(root))
     return r.returncode, ((r.stdout or "") + "\n" + (r.stderr or ""))
 
 
@@ -728,15 +746,39 @@ def _resolve_missing_via_source(root: Path, log: str) -> list[str]:
 def _pip_install_packages_direct(
     py: str, packages: list[str], root: Path, mode: str, isolation: Path
 ) -> tuple[bool, str]:
-    """Install specific packages one-shot (stronger than only editing requirements)."""
+    """Install specific packages one-shot — allowlist enforced, PyPI index only."""
     if not packages:
         return True, ""
+    try:
+        from telegram_bot_engine.services.requirements_policy import is_package_allowed
+    except Exception:
+        def is_package_allowed(n: str) -> bool:  # type: ignore
+            return False  # fail-closed if policy missing
+    safe: list[str] = []
+    skipped: list[str] = []
+    for pkg in packages:
+        name = (pkg or "").strip()
+        # strip version pins for allowlist check
+        base = __import__("re").split(r"[<>=!~;\[]", name)[0].strip()
+        if not base or not is_package_allowed(base):
+            skipped.append(name[:60])
+            continue
+        safe.append(name)
+    if not safe:
+        return False, "all_packages_blocked_by_allowlist:" + ",".join(skipped[:8])
     logs: list[str] = []
+    if skipped:
+        logs.append("skipped_not_allowlisted:" + ",".join(skipped[:12]))
+    import os as _os
+    wheels_only = (_os.environ.get("TBE_PIP_WHEELS_ONLY") or "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    wheel_flags = ["--only-binary=:all:"] if wheels_only else []
     if mode.startswith("target"):
-        base = [py, "-m", "pip", "install", "--target", str(isolation)]
+        base = [py, "-m", "pip", "install", "--target", str(isolation), *wheel_flags]
     else:
-        base = [py, "-m", "pip", "install"]
-    cmd = base + packages
+        base = [py, "-m", "pip", "install", *wheel_flags]
+    cmd = base + safe
     code, log = _run_pip(cmd, root, timeout=300)
     logs.append(f"$ {' '.join(cmd)}\n{log}")
     return code == 0, "\n".join(logs)[-4000:]

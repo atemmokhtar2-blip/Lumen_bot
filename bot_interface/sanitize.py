@@ -97,3 +97,59 @@ def sanitize_log_text(text: str, *, max_len: int = 4000) -> str:
 
 
 __all__ = ["sanitize_error", "sanitize_for_storage", "assert_safe_fs_path", "sanitize_log_text"]
+
+
+import logging
+
+
+class SecretRedactFilter(logging.Filter):
+    """Apply sanitize_error to every log record msg/args (defense in depth)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = sanitize_error(record.msg, max_len=4000)
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = {
+                        k: sanitize_error(str(v), max_len=500) if isinstance(v, str) else v
+                        for k, v in record.args.items()
+                    }
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(
+                        sanitize_error(str(a), max_len=500) if isinstance(a, str) else a
+                        for a in record.args
+                    )
+            if record.exc_text:
+                record.exc_text = sanitize_error(record.exc_text, max_len=4000)
+        except Exception:
+            pass
+        return True
+
+
+def install_secret_log_filter() -> None:
+    """Attach SecretRedactFilter to root and common app loggers once."""
+    filt = SecretRedactFilter()
+    root = logging.getLogger()
+    if not any(isinstance(f, SecretRedactFilter) for f in root.filters):
+        root.addFilter(filt)
+    for name in (
+        "ai_agent_7h",
+        "telegram",
+        "telegram_bot_engine",
+        "b2b_platform",
+        "api",
+    ):
+        log = logging.getLogger(name)
+        if not any(isinstance(f, SecretRedactFilter) for f in log.filters):
+            log.addFilter(filt)
+
+
+__all__ = [
+    "sanitize_error",
+    "sanitize_for_storage",
+    "assert_safe_fs_path",
+    "sanitize_log_text",
+    "SecretRedactFilter",
+    "install_secret_log_filter",
+]

@@ -174,6 +174,23 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
     Phase A: when MULTI_AGENT_ORCHESTRATOR is enabled (default on), runs
     ROUTER→ARCHITECT→BUILDER→CRITIC blackboard pipeline then returns GenerationResult.
     """
+    # Hard LLM budget before any model/orchestrator spend
+    try:
+        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+        ok, reason = gate_llm_call(
+            request or "",
+            {"user_id": int(user_id or 0)},
+            response_reserve=4096,
+        )
+        if not ok:
+            from telegram_bot_engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=[f"llm_budget_blocked:{reason}"],
+                metadata={"budget_blocked": True, "reason": reason},
+            )
+    except Exception:
+        logger.exception("generation llm budget gate failed")
     # Forced full AI path (manual experiment only)
     try:
         from telegram_bot_engine.services.groq_codegen import (
