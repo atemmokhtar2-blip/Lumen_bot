@@ -448,6 +448,11 @@ def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Call Gemini with model fallback and authorized-key failover."""
     try:
+        from telegram_bot_engine.services.prompt_fence import sanitize_user_text
+        text = sanitize_user_text(text or "", max_len=12000)
+    except Exception:
+        text = (text or "")[:12000]
+    try:
         from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
         ok, reason = gate_llm_call(text or "", context, response_reserve=2048)
         if not ok:

@@ -131,3 +131,76 @@ def safe_write_under_root(root: Path, abs_or_rel: Path, content: str) -> Path:
     except ValueError as exc:
         raise UnsafePathError("path_outside_root") from exc
     return safe_write_text(root, rel, content)
+
+
+def assert_no_symlinks_in_path(path: Path | str, *, root: Path | str | None = None) -> Path:
+    """Re-check every component is not a symlink (TOCTOU defense at use time).
+
+    Call immediately before open/read/write/exec — not only at initial validation.
+    """
+    p = Path(path).resolve(strict=False)
+    if root is not None:
+        r = Path(root).resolve()
+        try:
+            p.relative_to(r)
+        except ValueError as exc:
+            raise UnsafePathError("path_outside_root") from exc
+        base = r
+        rel_parts = p.relative_to(r).parts
+    else:
+        base = p.anchor and Path(p.anchor) or Path("/")
+        # walk from root of path
+        rel_parts = p.parts[1:] if p.is_absolute() else p.parts
+        base = Path(p.parts[0]) if p.is_absolute() else Path(".")
+
+    cur = Path(root).resolve() if root is not None else (Path(p.anchor) if p.is_absolute() else Path(".").resolve())
+    if root is not None:
+        cur = Path(root).resolve()
+        for part in Path(path).resolve().relative_to(cur).parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink():
+                    raise UnsafePathError(f"symlink_component_forbidden:{cur}")
+            except OSError as exc:
+                raise UnsafePathError("symlink_stat_failed") from exc
+    else:
+        # absolute walk
+        cur = Path(p.anchor) if p.is_absolute() else Path(".")
+        parts = p.parts[1:] if p.is_absolute() else p.parts
+        for part in parts:
+            cur = cur / part
+            try:
+                if cur.exists() and cur.is_symlink():
+                    raise UnsafePathError(f"symlink_component_forbidden:{cur}")
+            except OSError as exc:
+                raise UnsafePathError("symlink_stat_failed") from exc
+    # final resolve must still be under root if given
+    final = p.resolve(strict=False)
+    if root is not None:
+        try:
+            final.relative_to(Path(root).resolve())
+        except ValueError as exc:
+            raise UnsafePathError("resolved_outside_root") from exc
+    if final.is_symlink():
+        raise UnsafePathError("final_path_is_symlink")
+    return final
+
+
+def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
+    """Open a file under root with symlink rejection at open time."""
+    path = safe_resolve_under(Path(root), rel)
+    path = assert_no_symlinks_in_path(path, root=root)
+    # Prefer O_NOFOLLOW when opening for read on POSIX
+    if "b" not in mode and "r" in mode and "+" not in mode:
+        import os
+        flags = getattr(os, "O_RDONLY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(str(path), flags)
+            return open(fd, mode, **kwargs)
+        except OSError as exc:
+            # O_NOFOLLOW unsupported or not a symlink race — re-check and open normally
+            assert_no_symlinks_in_path(path, root=root)
+            return open(path, mode, **kwargs)
+    assert_no_symlinks_in_path(path, root=root)
+    return open(path, mode, **kwargs)
+

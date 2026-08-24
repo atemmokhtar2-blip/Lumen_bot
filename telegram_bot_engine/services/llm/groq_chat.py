@@ -247,7 +247,14 @@ def chat_via_groq(
         return None
 
     system = _build_system(context or {})
-    user_content = (message or "")[:8000]
+    try:
+        from telegram_bot_engine.services.prompt_fence import (
+            safe_user_message, system_prompt_injection_rules,
+        )
+        system = system + system_prompt_injection_rules()
+        user_content = safe_user_message(message or "", context)
+    except Exception:
+        user_content = (message or "")[:8000]
     last_error: Exception | None = None
 
     for source, key in keys:

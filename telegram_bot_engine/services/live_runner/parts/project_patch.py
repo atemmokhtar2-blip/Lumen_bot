@@ -27,12 +27,28 @@ import ast
 from .requirements_pip import _extract_missing_modules, _module_to_package, _ensure_packages_in_requirements, _extract_errors
 
 def _write_project_env(root: Path, bot_token: str, token_envs: list[str] | None = None) -> str:
-    """Persist token into project .env for dotenv-based bots."""
+    """Persist bot token sealed at rest; never write plaintext tokens to .env on disk.
+
+    Sealed blob goes to .tbe_bot_token (Fernet). .env only gets a non-secret marker.
+    Runtime env injection happens in-memory via LiveRunner / Docker env file (tmp, shredded).
+    """
     token_envs = list(token_envs or [])
     keys = sorted(set(token_envs + [
         "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN",
         "API_TOKEN", "TELEGRAM_TOKEN",
     ]))
+    notes = []
+    # Seal at rest
+    try:
+        from telegram_bot_engine.services.user_sandbox.service import write_token_file
+        path = write_token_file(root, bot_token)
+        if path:
+            notes.append(f"sealed_token:{path.name}")
+    except Exception as exc:
+        notes.append(f"seal_failed:{type(exc).__name__}")
+        # Fail closed: do not write plaintext token to disk
+        return "token_not_persisted_plaintext_forbidden:" + ",".join(notes)
+
     env_path = root / ".env"
     kept: list[str] = []
     if env_path.exists():
@@ -41,10 +57,13 @@ def _write_project_env(root: Path, bot_token: str, token_envs: list[str] | None 
             if key in set(keys) or key == "BOTTOKEN":
                 continue
             kept.append(ln)
+    # Do NOT write real token values into .env
+    kept.append("# TBE: bot token stored sealed in .tbe_bot_token (not plaintext)")
     for key in keys:
-        kept.append(f"{key}={bot_token}")
+        kept.append(f"# {key}=<sealed>")
     env_path.write_text(chr(10).join(kept).strip() + chr(10), encoding="utf-8")
-    return f"wrote_env:{env_path.name}:{len(keys)}_keys"
+    notes.append(f"env_markers:{len(keys)}")
+    return ",".join(notes)
 
 
 
@@ -61,11 +80,25 @@ def _inject_entry_bootstrap(entry: Path, bot_token: str) -> str:
     block_lines = [
         f"{mark_start} (auto-injected by LiveRunner) ===",
         "import os as _tbe_os",
-        f"_tbe_tok = {bot_token!r}",
-        "for _tbe_k in ("
+        "from pathlib import Path as _tbe_P",
+        "_tbe_tok = (_tbe_os.environ.get('TELEGRAM_BOT_TOKEN') or _tbe_os.environ.get('BOT_TOKEN') or '').strip()",
+        "if not _tbe_tok:",
+        "    _tp = _tbe_P(__file__).resolve().parent / '.tbe_bot_token'",
+        "    if _tp.is_file():",
+        "        _raw = _tp.read_text(encoding='utf-8').strip()",
+        "        if _raw.startswith('enc2:') or _raw.startswith('enc1:'):",
+        "            try:",
+        "                from telegram_bot_engine.services.crypto_tokens import unseal_token as _tbe_unseal",
+        "                _tbe_tok = _tbe_unseal(_raw)",
+        "            except Exception:",
+        "                _tbe_tok = ''",
+        "        else:",
+        "            _tbe_tok = _raw  # legacy plaintext migrate once",
+        "if _tbe_tok:",
+        "    for _tbe_k in ("
         '"TELEGRAM_BOT_TOKEN","BOT_TOKEN","TOKEN","TG_TOKEN",'
         '"API_TOKEN","TELEGRAM_TOKEN","BOTTOKEN"):',
-        "    _tbe_os.environ[_tbe_k] = _tbe_tok",
+        "        _tbe_os.environ.setdefault(_tbe_k, _tbe_tok)",
         mark_end,
         "",
     ]

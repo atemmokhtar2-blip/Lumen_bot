@@ -90,7 +90,11 @@ def assert_local_process_allowed() -> None:
 
 
 def select_process_driver():
-    """Return DockerProcessDriver or LocalProcessDriver per policy."""
+    """Return DockerProcessDriver or LocalProcessDriver per policy.
+
+    LocalProcessDriver requires allow_local AND TBE_FORCE_LOCAL_PROCESS=1.
+    Docker failure never silently falls back to host process.
+    """
     from telegram_bot_engine.engines.generators.live_deployment.docker_process_driver import (
         DockerProcessDriver,
         docker_available,
@@ -102,10 +106,11 @@ def select_process_driver():
     decision = decide_isolation()
     if docker_available():
         return DockerProcessDriver(), decision
-    if decision.require_docker or not decision.allow_local:
+    force = _flag("TBE_FORCE_LOCAL_PROCESS", "0")
+    if decision.require_docker or not decision.allow_local or not force:
         raise RuntimeError(
             "docker_required_but_unavailable: cannot host untrusted code without Docker. "
-            f"({decision.reason})"
+            f"({decision.reason}; force_local={force})"
         )
     return LocalProcessDriver(), decision
 

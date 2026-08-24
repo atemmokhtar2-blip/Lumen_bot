@@ -101,17 +101,27 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
 
-    # Symlink project roots are forbidden (TOCTOU / path swap)
+    # Symlink project roots and any component symlinks forbidden (TOCTOU)
     try:
         if Path(raw).is_symlink() or path.is_symlink():
             raise ValueError("project_path_symlink_forbidden")
+        from telegram_bot_engine.services.safe_fs import assert_no_symlinks_in_path
+        sandbox_pre = tenant_sandbox_root(tenant_id)
+        assert_no_symlinks_in_path(path, root=sandbox_pre)
     except ValueError:
         raise
-    except OSError:
-        pass
+    except Exception as exc:
+        if "symlink" in str(exc).lower():
+            raise ValueError("project_path_symlink_forbidden") from exc
 
     sandbox = tenant_sandbox_root(tenant_id)
     if is_path_inside(path, sandbox):
+        # Use-time re-check before returning
+        try:
+            from telegram_bot_engine.services.safe_fs import assert_no_symlinks_in_path
+            assert_no_symlinks_in_path(path, root=sandbox)
+        except Exception as exc:
+            raise ValueError("project_path_symlink_forbidden") from exc
         return path
 
     raise ValueError("project_path_outside_sandbox")

@@ -503,6 +503,11 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Stable public API — provider chosen by llm.facade (default: Groq)."""
     try:
+        from telegram_bot_engine.services.prompt_fence import sanitize_user_text
+        text = sanitize_user_text(text or "", max_len=8000)
+    except Exception:
+        text = (text or "")[:8000]
+    try:
         from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
         ok, reason = gate_llm_call(text or "", context, response_reserve=1024)
         if not ok:
