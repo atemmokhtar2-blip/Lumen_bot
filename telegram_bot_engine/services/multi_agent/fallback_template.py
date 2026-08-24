@@ -1,8 +1,7 @@
 """Verified Template Fallback — escape stagnant Architect→Builder→Critic loops.
 
-Uses existing catalog path only:
-  detect_preset / default_spec_from_request → build_from_spec
-Returns GenerationResult the orchestrator already understands.
+Catalog path only: detect_preset / default_spec_from_request → build_from_spec.
+Does NOT mark QA passed; caller must run Critic on a successful build.
 """
 from __future__ import annotations
 
@@ -29,6 +28,7 @@ def should_trigger_verified_fallback(
     stagnant: bool,
     already_tried: bool,
 ) -> bool:
+    """Trigger once: stagnant OR attempts budget reached; never if already tried."""
     if already_tried:
         return False
     if stagnant:
@@ -70,39 +70,27 @@ def _user_text_from_state(state: Any) -> str:
 
 
 def _resolve_output_root(work_dir: str | Path | None) -> Path:
-    """Ensure project root is under OUTPUT_DIR (safe_fs policy)."""
-    try:
-        from telegram_bot_engine.services.safe_fs import enforce_under_output_dir
-        from telegram_bot_engine.services.safe_fs import default_output_dir
-    except Exception:
-        enforce_under_output_dir = None  # type: ignore
-        default_output_dir = None  # type: ignore
+    """Always return a directory under OUTPUT_DIR (safe_fs policy)."""
+    from telegram_bot_engine.services.safe_fs import enforce_under_output_dir, output_dir
 
-    candidates: list[Path] = []
-    if work_dir:
-        candidates.append(Path(work_dir))
-    if default_output_dir is not None:
-        try:
-            candidates.append(Path(default_output_dir()))
-        except Exception:
-            pass
-    env = (os.environ.get("OUTPUT_DIR") or "").strip()
-    if env:
-        candidates.append(Path(env))
-    candidates.append(Path.home() / ".capability_maestro")
+    out_root = output_dir()
+    out_root.mkdir(parents=True, exist_ok=True)
 
-    for c in candidates:
+    if work_dir is not None and str(work_dir).strip() and str(work_dir).strip() not in {".", "./"}:
+        wd = Path(work_dir)
         try:
-            c.mkdir(parents=True, exist_ok=True)
-            if enforce_under_output_dir is not None:
-                return Path(enforce_under_output_dir(c))
-            return c.resolve()
+            wd.mkdir(parents=True, exist_ok=True)
+            return Path(enforce_under_output_dir(wd))
         except Exception:
-            continue
-    # last resort
-    root = Path.home() / ".capability_maestro" / "fallback"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+            # Nest under OUTPUT_DIR instead of failing or writing outside policy
+            leaf = wd.name if wd.name and wd.name not in {".", ".."} else "work"
+            nested = out_root / "fallback_work" / leaf
+            nested.mkdir(parents=True, exist_ok=True)
+            return Path(enforce_under_output_dir(nested))
+
+    nested = out_root / "fallback_work"
+    nested.mkdir(parents=True, exist_ok=True)
+    return Path(enforce_under_output_dir(nested))
 
 
 def build_verified_bot(
@@ -116,20 +104,20 @@ def build_verified_bot(
     if not req:
         return FallbackBuild(ok=False, errors=["empty_request"])
 
-    work = _resolve_output_root(work_dir)
+    try:
+        work = _resolve_output_root(work_dir)
+    except Exception as exc:
+        return FallbackBuild(ok=False, errors=[f"output_root:{type(exc).__name__}:{exc}"])
+
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out = work / f"verified_{int(user_id or 0)}_{stamp}"
     try:
         out.mkdir(parents=True, exist_ok=True)
-        # Re-validate final out path under OUTPUT_DIR
-        try:
-            from telegram_bot_engine.services.safe_fs import enforce_under_output_dir
-            out = Path(enforce_under_output_dir(out))
-            out.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        from telegram_bot_engine.services.safe_fs import enforce_under_output_dir
+        out = Path(enforce_under_output_dir(out))
+        out.mkdir(parents=True, exist_ok=True)
     except Exception as exc:
-        return FallbackBuild(ok=False, errors=[f"outdir:{exc}"])
+        return FallbackBuild(ok=False, errors=[f"outdir:{type(exc).__name__}:{exc}"])
 
     preset = "echo_basic"
     try:
@@ -148,6 +136,7 @@ def build_verified_bot(
             spec = sanitize_spec_for_request(spec, req)
         except Exception:
             logger.exception("sanitize_spec_for_request failed in verified fallback")
+
         try:
             if hasattr(spec, "spec_request"):
                 existing = (getattr(spec, "spec_request", None) or "").strip()
@@ -160,7 +149,7 @@ def build_verified_bot(
                 if req and req not in desc:
                     spec.meta.description = (f"{desc}\n{req}" if desc else req)[:800]
         except Exception:
-            pass
+            logger.exception("merge user request into verified spec failed")
 
         build = build_from_spec(spec, out_dir=out, request=req)
     except Exception as exc:
@@ -176,22 +165,24 @@ def build_verified_bot(
     path = str(getattr(build, "project_path", None) or "")
     errors = [str(e) for e in (getattr(build, "errors", None) or [])]
     warnings = [str(w) for w in (getattr(build, "warnings", None) or [])]
-    if ok and path and not Path(path).is_dir():
+    if ok and (not path or not Path(path).is_dir()):
         ok = False
         errors.append("project_path_missing")
 
     gen_result = None
     try:
         from telegram_bot_engine.core.result import GenerationResult
+
         gen_result = GenerationResult(
             success=ok,
             project_path=path if ok else None,
-            errors=errors,
+            errors=list(errors),
             metadata={
                 "engine": "verified_template_fallback",
                 "preset": preset,
                 "zero_ai": True,
                 "fallback": True,
+                "warnings": list(warnings),
             },
         )
     except Exception:
@@ -209,11 +200,24 @@ def build_verified_bot(
 
 
 def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path) -> Any:
+    """Apply verified build onto AgentState.
+
+    On success: sets build_success + path + _generation_result.
+    Does NOT set qa_passed — orchestrator must run Critic.
+    """
     from .state import AgentRole, AgentStatus
 
     state.extensions = dict(state.extensions or {})
     state.extensions["fallback_template_tried"] = True
     req = _user_text_from_state(state)
+    if not req:
+        state.build_success = False
+        state.build_errors = ["empty_user_text"]
+        state.qa_passed = False
+        state.record(AgentRole.ORCHESTRATOR, "verified_fallback_skip", "empty_user_text")
+        state.extensions["fallback_template"] = {"ok": False, "errors": ["empty_user_text"]}
+        return state
+
     result = build_verified_bot(
         req,
         work_dir=work_dir,
@@ -225,24 +229,26 @@ def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path) -> Any:
         "verified_fallback",
         f"ok={result.ok} preset={result.preset} errs={result.errors[:3]}",
     )
+
     if result.ok and result.project_path:
         state.build_success = True
         state.generated_path = result.project_path
         state.build_errors = []
-        state.qa_passed = True
+        # Leave qa_passed False until Critic runs
+        state.qa_passed = False
         state.qa_report = {
-            "ok": True,
+            "ok": False,
             "errors": [],
             "warnings": list(result.warnings),
-            "source": "verified_template",
+            "source": "verified_template_pending_critic",
             "attempt": int(getattr(state, "attempts", 0) or 0),
         }
         if result.generation_result is not None:
             state.extensions["_generation_result"] = result.generation_result
         try:
-            state.transition(AgentStatus.PASSED, role=AgentRole.ORCHESTRATOR, force=True)
+            state.transition(AgentStatus.QA, role=AgentRole.ORCHESTRATOR, force=True)
         except Exception:
-            state.status = AgentStatus.PASSED.value
+            state.status = AgentStatus.QA.value
     else:
         state.build_success = False
         state.build_errors = list(result.errors) or ["verified_fallback_failed"]
@@ -253,6 +259,10 @@ def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path) -> Any:
             "source": "verified_template",
             "attempt": int(getattr(state, "attempts", 0) or 0),
         }
+        try:
+            state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+        except Exception:
+            state.status = AgentStatus.FAILED.value
     return state
 
 

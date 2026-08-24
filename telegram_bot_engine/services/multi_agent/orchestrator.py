@@ -262,18 +262,32 @@ class Orchestrator:
                     f"stagnant={stagnant} attempts={state.attempts} exhausted={exhausted}",
                 )
                 self.board.put(state)
-                work = Path(ctx.get("work_dir") or state.extensions.get("work_dir") or ".")
+                work = Path(
+                    ctx.get("work_dir")
+                    or (state.extensions or {}).get("work_dir")
+                    or ""
+                )
                 state = run_verified_fallback_on_state(state, work_dir=work)
                 self.board.put(state)
-                if state.qa_passed and state.build_success:
-                    break
-                if exhausted:
+                # Real QA: run Critic on verified build (do not fake qa_passed)
+                if state.build_success and (state.generated_path or "").strip():
+                    state = self._run_agent("critic", state, ctx)
+                    self.board.put(state)
+                    if state.status == AgentStatus.PASSED.value or state.qa_passed:
+                        break
+                    # Critic failed on verified template — stop (no more random repair)
                     state.record(
                         AgentRole.ORCHESTRATOR,
-                        "repair_exhausted",
-                        f"attempts={state.attempts} max={max_att} fallback_failed",
+                        "verified_fallback_qa_failed",
+                        str((state.qa_report or {}).get("errors") or state.build_errors)[:200],
                     )
                     break
+                # Build itself failed
+                state.record(
+                    AgentRole.ORCHESTRATOR,
+                    "repair_exhausted" if exhausted else "verified_fallback_build_failed",
+                    f"attempts={state.attempts} max={max_att} errs={state.build_errors[:3]}",
+                )
                 break
 
             if exhausted:
