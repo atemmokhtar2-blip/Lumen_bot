@@ -1,11 +1,12 @@
-"""Deterministic Rule Engine for DynamicBotSpec (architecture plan Renderer).
+"""Deterministic Rule Engine — executes DynamicBotSpec as a DAG.
 
-Hardening:
-  - Only plan atoms execute
-  - State keys sanitized (no path/dunder injection)
-  - call_api always via egress proxy (HTTPS + SSRF + rate limit)
-  - send_message supports {{text}} after transformers
-  - Triggers match strictly (no accidental cross-fire)
+Architecture plan core:
+  atoms → validated DAG → walk graph from matching entry nodes
+  following next_node_id (not a flat independent loop).
+
+Entry: nodes whose Trigger matches the event.
+Then: execute node → follow next_node_id chain (conditions re-checked;
+triggers on continuation nodes are optional — chain is sequential flow).
 """
 from __future__ import annotations
 
@@ -20,13 +21,12 @@ logger = logging.getLogger(__name__)
 
 _SAFE_KEY = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 _TEMPLATE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+_MAX_WALK = 15  # hard stop aligned with MAX_DAG_DEPTH
 
 
 def _safe_state_key(key: str) -> str | None:
     k = (key or "").strip()
-    if not k or not _SAFE_KEY.match(k):
-        return None
-    if k.startswith("__"):
+    if not k or not _SAFE_KEY.match(k) or k.startswith("__"):
         return None
     return k
 
@@ -67,7 +67,6 @@ def _apply_transformers(text: str, node: FlowNode) -> str:
                 except Exception:
                     out = m.group(0)
         elif tr.type == "translate_text":
-            # Deterministic only — no silent external MT in the rule engine
             out = str(cfg.get("fallback") or out)
         elif tr.type == "summarize":
             try:
@@ -97,8 +96,7 @@ def _cond(cond: Condition, *, text: str, is_admin: bool, state: dict[str, Any]) 
             h = datetime.now().hour
             a = int(cfg.get("start_hour") if cfg.get("start_hour") is not None else 0)
             b = int(cfg.get("end_hour") if cfg.get("end_hour") is not None else 23)
-            a = max(0, min(23, a))
-            b = max(0, min(23, b))
+            a, b = max(0, min(23, a)), max(0, min(23, b))
             if a <= b:
                 return a <= h <= b
             return h >= a or h <= b
@@ -122,7 +120,6 @@ def _match_trigger(node: FlowNode, event: dict[str, Any]) -> bool:
     if t == "on_message":
         if et not in {"on_message", "message"}:
             return False
-        # Do not fire on_message when a command is present
         if str(event.get("command") or "").strip():
             return False
         return True
@@ -135,9 +132,7 @@ def _match_trigger(node: FlowNode, event: dict[str, Any]) -> bool:
             return False
         want = str(cfg.get("path") or "").strip()
         got = str(event.get("path") or "").strip()
-        if want:
-            return want == got
-        return bool(got)
+        return want == got if want else bool(got)
 
     return False
 
@@ -173,7 +168,7 @@ def execute_action(
         try:
             from .infinite.api_proxy import proxy_request, validate_egress_url
 
-            validate_egress_url(url)  # fail closed before request
+            validate_egress_url(url)
             return {
                 "type": "call_api",
                 "result": proxy_request(
@@ -188,6 +183,31 @@ def execute_action(
     return {"type": action.type, "error": "unknown_action"}
 
 
+def _execute_node(
+    node: FlowNode,
+    *,
+    text: str,
+    is_admin: bool,
+    state: dict[str, Any],
+    tenant_key: str,
+    results: list[dict[str, Any]],
+) -> bool:
+    """Run one node if conditions pass. Returns True if executed."""
+    if not all(_cond(c, text=text, is_admin=is_admin, state=state) for c in node.conditions):
+        return False
+    local_text = _apply_transformers(text, node)
+    for action in node.actions:
+        results.append(
+            {
+                "node_id": node.id,
+                **execute_action(
+                    action, state=state, text=local_text, tenant_key=tenant_key
+                ),
+            }
+        )
+    return True
+
+
 def run_rule_engine(
     spec: DynamicBotSpec | dict[str, Any],
     event: dict[str, Any],
@@ -195,37 +215,53 @@ def run_rule_engine(
     state: dict[str, Any] | None = None,
     tenant_key: str = "global",
 ) -> dict[str, Any]:
-    """JIT Renderer: validated plan-spec + event → deterministic action results."""
+    """Walk the atom DAG: entry triggers → actions → next_node_id chain."""
     dyn = parse_dynamic_spec(spec)
-    state = dict(state or {})
-    # Drop unsafe keys already in state
-    state = {k: v for k, v in state.items() if _safe_state_key(str(k))}
+    by_id = {n.id: n for n in dyn.nodes}
+    state = {k: v for k, v in dict(state or {}).items() if _safe_state_key(str(k))}
     text = str(event.get("text") or "")
     is_admin = bool(event.get("is_admin"))
     results: list[dict[str, Any]] = []
+    graph_paths: list[list[str]] = []
 
-    for node in dyn.nodes:
-        if not _match_trigger(node, event):
-            continue
-        if not all(
-            _cond(c, text=text, is_admin=is_admin, state=state) for c in node.conditions
-        ):
-            continue
-        local_text = _apply_transformers(text, node)
-        for action in node.actions:
-            results.append(
-                {
-                    "node_id": node.id,
-                    **execute_action(
-                        action, state=state, text=local_text, tenant_key=tenant_key
-                    ),
-                }
+    # Entry nodes = trigger matches event (the graph entry points)
+    entries = [n for n in dyn.nodes if _match_trigger(n, event)]
+
+    for entry in entries:
+        path = [entry.id]
+        node: FlowNode | None = entry
+        steps = 0
+        while node is not None and steps < _MAX_WALK:
+            steps += 1
+            executed = _execute_node(
+                node,
+                text=text,
+                is_admin=is_admin,
+                state=state,
+                tenant_key=tenant_key,
+                results=results,
             )
+            if not executed:
+                # condition failed — stop this chain
+                break
+            nxt = node.next_node_id
+            if not nxt:
+                break
+            node = by_id.get(nxt)
+            if node is None:
+                break
+            path.append(node.id)
+            # Continuation nodes: do not re-require trigger match —
+            # they are sequential DAG edges from the entry.
+        graph_paths.append(path)
 
     return {
         "ok": True,
         "bot_name": dyn.bot_name,
         "engine": "rule_engine_v1",
+        "dag": True,
+        "entry_nodes": [e.id for e in entries],
+        "graph_paths": graph_paths,
         "state": state,
         "results": results,
     }

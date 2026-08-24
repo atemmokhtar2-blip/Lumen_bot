@@ -233,3 +233,76 @@ def test_invalid_state_key_rejected():
     out = run_rule_engine(spec, {"type": "on_command", "command": "x"})
     assert out["results"][0].get("error") == "invalid_key"
     assert "__proto__" not in out["state"]
+
+
+def test_dag_walk_follows_next_node_id():
+    """Core plan behavior: atoms form a graph; engine walks next_node_id."""
+    from telegram_bot_engine.spec_core.rule_engine import run_rule_engine
+
+    spec = {
+        "bot_name": "chain",
+        "nodes": [
+            {
+                "id": "entry",
+                "trigger": {"type": "on_command", "config": {"command": "go"}},
+                "actions": [
+                    {"type": "change_state", "config": {"key": "step", "value": 1}},
+                    {"type": "send_message", "config": {"text": "one"}},
+                ],
+                "next_node_id": "second",
+            },
+            {
+                "id": "second",
+                "trigger": {"type": "on_message", "config": {}},  # not matching event
+                "conditions": [
+                    {"type": "state_equals", "config": {"key": "step", "value": 1}}
+                ],
+                "actions": [
+                    {"type": "send_message", "config": {"text": "two"}},
+                    {"type": "change_state", "config": {"key": "step", "value": 2}},
+                ],
+                "next_node_id": "third",
+            },
+            {
+                "id": "third",
+                "trigger": {"type": "on_schedule", "config": {}},
+                "actions": [{"type": "send_message", "config": {"text": "three"}}],
+            },
+        ],
+    }
+    out = run_rule_engine(spec, {"type": "on_command", "command": "go"})
+    assert out["dag"] is True
+    assert out["entry_nodes"] == ["entry"]
+    assert out["graph_paths"] == [["entry", "second", "third"]]
+    texts = [r["text"] for r in out["results"] if r.get("type") == "send_message"]
+    assert texts == ["one", "two", "three"]
+    assert out["state"]["step"] == 2
+
+
+def test_dag_stops_when_condition_fails_mid_chain():
+    from telegram_bot_engine.spec_core.rule_engine import run_rule_engine
+
+    spec = {
+        "bot_name": "stop",
+        "nodes": [
+            {
+                "id": "a",
+                "trigger": {"type": "on_command", "config": {"command": "x"}},
+                "actions": [{"type": "send_message", "config": {"text": "a"}}],
+                "next_node_id": "b",
+            },
+            {
+                "id": "b",
+                "trigger": {"type": "on_message", "config": {}},
+                "conditions": [
+                    {"type": "user_is_admin", "config": {}}
+                ],
+                "actions": [{"type": "send_message", "config": {"text": "b"}}],
+            },
+        ],
+    }
+    out = run_rule_engine(
+        spec, {"type": "on_command", "command": "x", "is_admin": False}
+    )
+    texts = [r["text"] for r in out["results"] if r.get("type") == "send_message"]
+    assert texts == ["a"]  # chain stops — b requires admin
