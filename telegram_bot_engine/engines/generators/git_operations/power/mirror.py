@@ -34,24 +34,14 @@ def _run(argv: list[str], *, cwd: Optional[Path] = None, timeout: int = 300) -> 
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        from telegram_bot_engine.services.secure_exec import clean_child_environ
-        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0"})
-    except Exception:
-        pass
-    try:
-        proc = subprocess.run(
-            argv,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
+        from telegram_bot_engine.services.secure_exec import run_git
+        if not argv or argv[0] != "git":
+            argv = ["git"] + list(argv or [])
+        proc = run_git(list(argv), cwd=cwd, timeout=timeout)
         err = (proc.stderr or "") + (proc.stdout or "")
         return int(proc.returncode), err
     except Exception as exc:
-        return 1, f"{type(exc).__name__}: {exc}"
+        return 1, type(exc).__name__
 
 
 def ensure_bare_mirror(url: str, *, token: Optional[str] = None) -> tuple[bool, Path, str]:

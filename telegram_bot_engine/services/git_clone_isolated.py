@@ -57,13 +57,21 @@ def clone_isolated(
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if prefer_docker_clone():
-        return _clone_via_docker(url, dest, branch=branch, depth=depth, timeout=timeout)
+        ok, msg = _clone_via_docker(url, dest, branch=branch, depth=depth, timeout=timeout)
+        if ok:
+            return ok, msg
+        # no host fallback unless explicit
+        allow_host = (os.getenv("TBE_GIT_CLONE_ALLOW_HOST") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if not allow_host:
+            return False, msg or "docker_clone_failed"
+        # fall through to host only when allowed
 
     allow_host = (os.getenv("TBE_GIT_CLONE_ALLOW_HOST") or "").strip().lower() in {
         "1", "true", "yes", "on",
     }
-    env = (os.getenv("ENVIRONMENT") or "").strip().lower()
-    if not allow_host and env in {"production", "prod", "staging"}:
+    if not allow_host:
         return False, "docker_required_for_git_clone"
 
     # Host path: still hooks-disabled via run_git

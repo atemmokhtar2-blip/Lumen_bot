@@ -329,36 +329,45 @@ def _run_clone_argv(
 ) -> tuple[int, str]:
     from telegram_bot_engine.services.secure_exec import clean_child_environ, _git_safe_config_args
 
-    # Prefer ephemeral Docker clone when available (RCE isolation for untrusted repos)
+    # Prefer ephemeral Docker clone (RCE isolation). Host clone only if explicitly allowed.
+    import os as _os
+    allow_host = (_os.getenv("TBE_GIT_CLONE_ALLOW_HOST") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     try:
         from telegram_bot_engine.services.git_clone_isolated import prefer_docker_clone, clone_isolated
-        if prefer_docker_clone() and argv and argv[0] == "git" and "clone" in argv:
-            # extract url and target (last two args typically)
-            if len(argv) >= 3:
-                url = argv[-2]
-                target = Path(argv[-1])
-                branch = None
-                depth = 1
-                if "--branch" in argv:
-                    i = argv.index("--branch")
-                    if i + 1 < len(argv):
-                        branch = argv[i + 1]
-                if "--depth" in argv:
-                    i = argv.index("--depth")
-                    if i + 1 < len(argv):
-                        try:
-                            depth = int(argv[i + 1])
-                        except ValueError:
-                            depth = 1
+        if argv and argv[0] == "git" and "clone" in argv and len(argv) >= 3:
+            url = argv[-2]
+            target = Path(argv[-1])
+            branch = None
+            depth = 1
+            if "--branch" in argv:
+                i = argv.index("--branch")
+                if i + 1 < len(argv):
+                    branch = argv[i + 1]
+            if "--depth" in argv:
+                i = argv.index("--depth")
+                if i + 1 < len(argv):
+                    try:
+                        depth = int(argv[i + 1])
+                    except ValueError:
+                        depth = 1
+            if prefer_docker_clone():
                 ok, msg = clone_isolated(url, target, branch=branch, depth=depth, timeout=timeout)
                 if ok:
                     return 0, msg
-                # If docker path failed, do not fall through to host in production
-                import os as _os
-                if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
-                    return 1, msg
+                # Docker path failed — never silent host fallback
+                if not allow_host:
+                    return 1, msg or "docker_clone_failed"
+            elif not allow_host:
+                return 1, "docker_required_for_git_clone"
     except Exception as _iso_exc:
         logger.warning("isolated clone path error: %s", type(_iso_exc).__name__)
+        if not allow_host:
+            return 1, f"isolated_clone_error:{type(_iso_exc).__name__}"
+
+    if not allow_host:
+        return 1, "host_git_clone_forbidden"
 
     env = clean_child_environ()
     # Inject safe git -c flags after 'git'
@@ -435,7 +444,11 @@ def _update_existing(
     branch: Optional[str],
     timeout: int,
 ) -> CloneResult:
-    from telegram_bot_engine.services.secure_exec import run_git
+    from telegram_bot_engine.services.secure_exec import run_git, neutralize_git_hooks
+    try:
+        neutralize_git_hooks(target)
+    except Exception:
+        pass
 
     t0 = time.monotonic()
     try:

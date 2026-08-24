@@ -38,25 +38,15 @@ def _run(argv: list[str], cwd: Optional[Path] = None, timeout: int = 180, token:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        from telegram_bot_engine.services.secure_exec import clean_child_environ
-        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
-    except Exception:
-        env["LC_ALL"] = "C"
-    try:
-        p = subprocess.run(
-            argv,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
-        out, err = p.stdout or "", p.stderr or ""
+        from telegram_bot_engine.services.secure_exec import run_git
+        if not argv or argv[0] != "git":
+            argv = ["git"] + list(argv or [])
+        proc = run_git(list(argv), cwd=cwd, timeout=timeout)
+        out, err = proc.stdout or "", proc.stderr or ""
         if token:
             out = redact_text(out, [token])
             err = redact_text(err, [token])
-        return int(p.returncode), out, err
+        return int(proc.returncode), out, err
     except Exception as exc:
         return 1, "", type(exc).__name__
 

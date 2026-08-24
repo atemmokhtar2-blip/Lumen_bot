@@ -96,7 +96,12 @@ async def host_stop(request: web.Request) -> web.Response:
     result = await asyncio.to_thread(
         lambda: get_hosting_service().stop(instance_id=instance_id, user_id=uid)
     )
-    return web.json_response({"ok": result.ok, "message": result.message})
+    try:
+        from bot_interface.sanitize import sanitize_error
+        msg = sanitize_error(str(result.message or ""), max_len=300)
+    except Exception:
+        msg = "host_operation_completed" if result.ok else "host_operation_failed"
+    return web.json_response({"ok": result.ok, "message": msg})
 
 
 async def host_status(request: web.Request) -> web.Response:

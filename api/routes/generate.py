@@ -17,6 +17,33 @@ _MAX_BODY_BYTES = int(os.getenv("GENERATE_MAX_BODY_BYTES") or "65536")  # 64 KiB
 _GEN_RPM = int(os.getenv("GENERATE_RPM") or "10")  # per-tenant generate RPM
 
 
+
+_SAFE_ERROR_CODES = frozenset({
+    "invalid_json", "payload_too_large", "description_required", "description_too_long",
+    "job_input_too_large", "job_queue_full", "job_queue_tenant_full", "generation_denied",
+    "unauthorized", "forbidden", "rate_limited", "internal_error",
+    "backpressure", "docker_required",
+})
+
+
+def _safe_error_code(exc: BaseException, *, default: str = "internal_error") -> str:
+    """Map exceptions to client-safe codes — never raw paths or messages."""
+    raw = str(exc or "").strip()
+    if not raw:
+        return default
+    # take prefix before colon for structured codes
+    code = raw.split(":", 1)[0].strip()
+    if code in _SAFE_ERROR_CODES:
+        return code
+    if raw in _SAFE_ERROR_CODES:
+        return raw
+    # known prefixes
+    for prefix in ("backpressure", "dependency_scan", "llm_budget"):
+        if raw.startswith(prefix) or code.startswith(prefix):
+            return prefix
+    return default
+
+
 async def generate(request: web.Request) -> web.Response:
     """Enqueue generation job.
 
@@ -51,7 +78,7 @@ async def generate(request: web.Request) -> web.Response:
         raw = await read_capped_body(request, max_bytes=_MAX_BODY_BYTES)
         body = parse_json_object_bytes(raw, empty_ok=False)
     except ValueError as exc:
-        code = str(exc) or "invalid_json"
+        code = _safe_error_code(exc, default="invalid_json")
         if code == "payload_too_large":
             raise web.HTTPRequestEntityTooLarge(
                 text='{"error":"payload_too_large"}',
@@ -92,7 +119,7 @@ async def generate(request: web.Request) -> web.Response:
             message="generation queued",
         )
     except ValueError as exc:
-        code = str(exc)
+        code = _safe_error_code(exc, default="invalid_json")
         if code == "job_input_too_large":
             raise web.HTTPRequestEntityTooLarge(
                 text='{"error":"job_input_too_large"}',
@@ -103,8 +130,8 @@ async def generate(request: web.Request) -> web.Response:
             content_type="application/json",
         )
     except RuntimeError as exc:
-        code = str(exc)
-        if code in {"job_queue_full", "job_queue_tenant_full"}:
+        code = _safe_error_code(exc, default="internal_error")
+        if code in {"job_queue_full", "job_queue_tenant_full", "backpressure"}:
             raise web.HTTPTooManyRequests(
                 text=f'{{"error":"{code}"}}',
                 content_type="application/json",
