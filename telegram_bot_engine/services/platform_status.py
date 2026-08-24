@@ -112,6 +112,14 @@ def system_prompt_block() -> str:
     if note:
         lines.append(f"- ملاحظة آخر تحديث: {note}")
     lines.append("=== نهاية حالة المنصة ===")
+    try:
+        from telegram_bot_engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        mb = macros_for_prompt(limit=8)
+        if mb:
+            lines.append("")
+            lines.append(mb)
+    except Exception:
+        pass
     return "\n".join(lines)
 
 
@@ -141,3 +149,12 @@ __all__ = [
     "system_prompt_block",
     "to_context_dict",
 ]
+
+
+def infinite_macro_prompt_block() -> str:
+    """Inject discovered macros into chat system context."""
+    try:
+        from telegram_bot_engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        return macros_for_prompt(limit=8)
+    except Exception:
+        return ""

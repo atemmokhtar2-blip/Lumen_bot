@@ -20,6 +20,7 @@ from .compose import compose_infinite_from_payload, try_compose_infinite, execut
 from .engine_router import route_and_execute
 from .llm_contract import SYSTEM_PROMPT_INFINITE, dynamic_spec_json_schema
 from .macro_registry import MacroRegistry, get_macro_registry
+from .macro_discovery import list_macro_hints, macros_for_prompt, suggest_macros_for_user
 from .api_proxy import proxy_request, validate_egress_url
 
 # back-compat names
@@ -55,6 +56,9 @@ __all__ = [
     "dynamic_spec_json_schema",
     "MacroRegistry",
     "get_macro_registry",
+    "list_macro_hints",
+    "macros_for_prompt",
+    "suggest_macros_for_user",
     "proxy_request",
     "validate_egress_url",
 ]

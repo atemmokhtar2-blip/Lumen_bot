@@ -77,21 +77,37 @@ def _apply_transformers(text: str, node: FlowNode) -> str:
     return out
 
 
-def _cond(cond: Condition, *, text: str, is_admin: bool, state: dict[str, Any]) -> bool:
+def _cond(cond: Condition, *, text: str, is_admin: bool, state: dict[str, Any], event: dict[str, Any] | None = None) -> bool:
     cfg = cond.config or {}
-    if cond.type == "user_is_admin":
+    event = event or {}
+    t = cond.type
+    if t == "always":
+        return True
+    if t == "user_is_admin":
         return bool(is_admin)
-    if cond.type == "text_contains":
+    if t == "user_is_owner":
+        return bool(event.get("is_owner") or is_admin)
+    if t == "text_contains":
         needle = str(cfg.get("value") or "")
         if not needle:
             return False
         return needle.lower() in (text or "").lower()
-    if cond.type == "state_equals":
+    if t == "text_equals":
+        return (text or "").strip() == str(cfg.get("value") or "")
+    if t == "text_regex":
+        try:
+            return bool(re.search(str(cfg.get("pattern") or ""), text or ""))
+        except re.error:
+            return False
+    if t in {"state_equals", "state_check"}:
         key = _safe_state_key(str(cfg.get("key") or ""))
         if not key:
             return False
         return state.get(key) == cfg.get("value")
-    if cond.type == "time_between":
+    if t == "state_exists":
+        key = _safe_state_key(str(cfg.get("key") or ""))
+        return bool(key) and key in state
+    if t == "time_between":
         try:
             h = datetime.now().hour
             a = int(cfg.get("start_hour") if cfg.get("start_hour") is not None else 0)
@@ -102,6 +118,12 @@ def _cond(cond: Condition, *, text: str, is_admin: bool, state: dict[str, Any]) 
             return h >= a or h <= b
         except Exception:
             return False
+    if t == "has_payload":
+        return bool(event.get("payload") or event.get("data"))
+    if t == "payment_currency":
+        want = str(cfg.get("currency") or "").upper()
+        got = str(event.get("currency") or "").upper()
+        return (not want) or want == got
     return False
 
 
@@ -110,11 +132,13 @@ def _match_trigger(node: FlowNode, event: dict[str, Any]) -> bool:
     cfg = node.trigger.config or {}
     t = node.trigger.type
 
-    if t == "on_command":
-        if et not in {"on_command", "command"}:
+    if t in {"on_command", "on_start"}:
+        if et not in {"on_command", "command", "on_start"}:
             return False
-        want = str(cfg.get("command") or cfg.get("id") or "").lstrip("/").strip().lower()
+        want = str(cfg.get("command") or cfg.get("id") or ("start" if t == "on_start" else "")).lstrip("/").strip().lower()
         got = str(event.get("command") or "").lstrip("/").strip().lower()
+        if t == "on_start" and (got in {"start", ""} or et == "on_start"):
+            return True
         return bool(want) and bool(got) and want == got
 
     if t == "on_message":
@@ -123,6 +147,13 @@ def _match_trigger(node: FlowNode, event: dict[str, Any]) -> bool:
         if str(event.get("command") or "").strip():
             return False
         return True
+
+    if t == "on_callback":
+        if et not in {"on_callback", "callback"}:
+            return False
+        want = str(cfg.get("data") or cfg.get("id") or "").strip()
+        got = str(event.get("data") or event.get("callback_data") or "").strip()
+        return (not want) or want == got
 
     if t == "on_schedule":
         return et in {"on_schedule", "schedule"}
@@ -133,6 +164,18 @@ def _match_trigger(node: FlowNode, event: dict[str, Any]) -> bool:
         want = str(cfg.get("path") or "").strip()
         got = str(event.get("path") or "").strip()
         return want == got if want else bool(got)
+
+    if t == "on_join":
+        return et in {"on_join", "chat_member_join", "new_chat_members"}
+
+    if t == "on_leave":
+        return et in {"on_leave", "chat_member_leave", "left_chat_member"}
+
+    if t == "on_payment":
+        return et in {"on_payment", "successful_payment"}
+
+    if t == "on_pre_checkout":
+        return et in {"on_pre_checkout", "pre_checkout_query"}
 
     return False
 
@@ -151,6 +194,42 @@ def execute_action(
             "type": "send_message",
             "text": _render_template(raw, text=text, state=state),
         }
+    if action.type == "reply_message":
+        raw = str(cfg.get("text") or cfg.get("message") or "")
+        return {
+            "type": "reply_message",
+            "text": _render_template(raw, text=text, state=state),
+        }
+    if action.type in {"update_state", "update_db", "change_state"}:
+        key = _safe_state_key(str(cfg.get("key") or cfg.get("collection") or ""))
+        if not key:
+            return {"type": action.type, "error": "invalid_key"}
+        state[key] = cfg.get("value")
+        return {"type": "update_state", "key": key, "value": cfg.get("value")}
+    if action.type == "clear_state":
+        key = _safe_state_key(str(cfg.get("key") or ""))
+        if key and key in state:
+            del state[key]
+        return {"type": "clear_state", "key": key}
+    if action.type == "log_event":
+        return {"type": "log_event", "message": str(cfg.get("message") or cfg.get("text") or "")[:500]}
+    if action.type == "noop":
+        return {"type": "noop"}
+    if action.type == "set_command_menu":
+        cmds = cfg.get("commands") if isinstance(cfg.get("commands"), list) else []
+        return {"type": "set_command_menu", "commands": cmds[:30]}
+    if action.type == "notify_admin":
+        raw = str(cfg.get("text") or cfg.get("message") or "")
+        return {
+            "type": "notify_admin",
+            "text": _render_template(raw, text=text, state=state),
+        }
+    if action.type == "answer_precheckout":
+        return {
+            "type": "answer_precheckout",
+            "ok": bool(cfg.get("ok", True)),
+            "error_message": str(cfg.get("error_message") or "")[:200],
+        }
     if action.type == "update_db":
         key = _safe_state_key(str(cfg.get("key") or cfg.get("collection") or ""))
         if not key:
@@ -163,23 +242,26 @@ def execute_action(
             return {"type": "change_state", "error": "invalid_key"}
         state[key] = cfg.get("value")
         return {"type": "change_state", "key": key, "value": cfg.get("value")}
-    if action.type == "call_api":
+    if action.type in {"call_api", "call_external_api", "http_request"}:
         url = str(cfg.get("url") or "")
         try:
             from .infinite.api_proxy import proxy_request, validate_egress_url
 
             validate_egress_url(url)
             return {
-                "type": "call_api",
+                "type": "call_external_api",
                 "result": proxy_request(
                     url,
                     method=str(cfg.get("method") or "GET"),
+                    headers=cfg.get("headers") if isinstance(cfg.get("headers"), dict) else None,
                     json_body=cfg.get("json") if isinstance(cfg.get("json"), dict) else None,
+                    timeout=float(cfg.get("timeout") or 10.0),
                     tenant_key=tenant_key,
                 ),
             }
         except Exception as exc:
-            return {"type": "call_api", "error": str(exc)[:200]}
+            return {"type": "call_external_api", "error": type(exc).__name__, "detail": str(exc)[:200]}
+
     return {"type": action.type, "error": "unknown_action"}
 
 
@@ -191,9 +273,11 @@ def _execute_node(
     state: dict[str, Any],
     tenant_key: str,
     results: list[dict[str, Any]],
+    event: dict[str, Any] | None = None,
 ) -> bool:
     """Run one node if conditions pass. Returns True if executed."""
-    if not all(_cond(c, text=text, is_admin=is_admin, state=state) for c in node.conditions):
+    event = event or {}
+    if not all(_cond(c, text=text, is_admin=is_admin, state=state, event=event) for c in node.conditions):
         return False
     local_text = _apply_transformers(text, node)
     for action in node.actions:
@@ -240,6 +324,7 @@ def run_rule_engine(
                 state=state,
                 tenant_key=tenant_key,
                 results=results,
+                event=event,
             )
             if not executed:
                 # condition failed — stop this chain

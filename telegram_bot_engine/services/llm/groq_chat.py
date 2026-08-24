@@ -119,6 +119,16 @@ def _product_brief() -> str:
 
 
 
+
+def _macro_prompt_suffix() -> str:
+    try:
+        from telegram_bot_engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        mb = macros_for_prompt(limit=8)
+        return ("\n\n" + mb) if mb else ""
+    except Exception:
+        return ""
+
+
 def _build_system(context: dict[str, Any]) -> str:
     caps: list[str] = []
     try:
@@ -162,6 +172,7 @@ def _build_system(context: dict[str, Any]) -> str:
         f"\nSERVER_CONTEXT:\n{facts}\n"
         f"\nSPEC_CORE_CAPABILITIES:\n{json.dumps(caps, ensure_ascii=False)}\n"
         f"\nAVAILABLE_TOOLS:\n{tool_cat}\n"
+        + _macro_prompt_suffix()
     )
 
 

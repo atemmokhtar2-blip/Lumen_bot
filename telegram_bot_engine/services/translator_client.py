@@ -514,7 +514,11 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
 
 
 def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """LLM → DynamicBotSpec JSON only (no Python). Validates via infinite AST validator."""
+    """LLM → DynamicBotSpec JSON only (no Python). Validates via infinite AST validator.
+
+    Self-correction: on schema validation failure, resubmit with error detail
+    up to TBE_INFINITE_CORRECT_RETRIES times (default 3).
+    """
     try:
         from telegram_bot_engine.services.prompt_fence import sanitize_user_text
         text = sanitize_user_text(text or "", max_len=4000)
@@ -534,80 +538,146 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
     except Exception:
         logger.exception("infinite contract unavailable")
         return None
+
+    max_retries = 3
+    try:
+        max_retries = max(1, min(5, int(os.getenv("TBE_INFINITE_CORRECT_RETRIES") or "3")))
+    except Exception:
+        max_retries = 3
+
     system = SYSTEM_PROMPT_INFINITE
     try:
         from telegram_bot_engine.services.prompt_fence import system_prompt_injection_rules
         system = system + system_prompt_injection_rules()
     except Exception:
         pass
-    user_payload = {
-        "USER_REQUEST": text,
-        "OUTPUT_SCHEMA": dynamic_spec_json_schema(),
-        "INSTRUCTION": "Emit DynamicBotSpec JSON only matching OUTPUT_SCHEMA.",
-    }
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-    ]
+
+    # Macro discovery: inject top macros as hints
+    try:
+        from telegram_bot_engine.spec_core.infinite.macro_registry import get_macro_registry
+        macros = get_macro_registry().list_macros(limit=8)
+        if macros:
+            hints = [
+                f"- {m.get('id')}: {m.get('bot_name')} (nodes={m.get('nodes')}, uses={m.get('uses')})"
+                for m in macros
+            ]
+            system = system + "\n\nKnown successful macros (reuse patterns when relevant):\n" + "\n".join(hints)
+    except Exception:
+        pass
+
+    schema = dynamic_spec_json_schema()
     models = _models()
-    for source, api_key in keys:
-        for model in models:
-            try:
-                response = requests.post(
-                    _GROQ_URL,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "temperature": 0.1,
-                        "max_tokens": int(os.getenv("GROQ_TRANSLATOR_MAX_TOKENS") or "1200"),
-                        "response_format": {"type": "json_object"},
-                        "messages": messages,
-                    },
-                    timeout=_timeout(),
-                )
-                if response.status_code >= 400:
-                    continue
-                body = response.json()
-                content = (
-                    ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-                    or ""
-                )
-                bot, dyn, err = try_compose_infinite(content)
-                if err or bot is None or dyn is None:
-                    # schema-level self-correction payload for caller
+    last_error: dict[str, Any] | None = None
+    last_raw = ""
+
+    for attempt in range(max_retries):
+        user_payload: dict[str, Any] = {
+            "USER_REQUEST": text,
+            "OUTPUT_SCHEMA": schema,
+            "INSTRUCTION": "Emit DynamicBotSpec JSON only matching OUTPUT_SCHEMA.",
+            "ATTEMPT": attempt + 1,
+            "MAX_ATTEMPTS": max_retries,
+        }
+        if last_error:
+            user_payload["PREVIOUS_VALIDATION_ERROR"] = last_error
+            user_payload["PREVIOUS_RAW"] = last_raw[:1500]
+            user_payload["INSTRUCTION"] = (
+                "Your previous JSON failed validation. Fix ONLY the schema errors listed in "
+                "PREVIOUS_VALIDATION_ERROR. Emit corrected DynamicBotSpec JSON only."
+            )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
+        composed = None
+        for source, api_key in keys:
+            for model in models:
+                try:
+                    response = requests.post(
+                        _GROQ_URL,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": model,
+                            "temperature": 0.1 if attempt == 0 else 0.05,
+                            "max_tokens": int(os.getenv("GROQ_TRANSLATOR_MAX_TOKENS") or "1200"),
+                            "response_format": {"type": "json_object"},
+                            "messages": messages,
+                        },
+                        timeout=_timeout(),
+                    )
+                    if response.status_code >= 400:
+                        continue
+                    body = response.json()
+                    content = (
+                        ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
+                        or ""
+                    )
+                    bot, dyn, err = try_compose_infinite(content)
+                    if err or bot is None or dyn is None:
+                        last_error = err if isinstance(err, dict) else {"ok": False, "detail": str(err)}
+                        last_raw = content or ""
+                        logger.info(
+                            "infinite validate fail attempt=%s err=%s",
+                            attempt + 1,
+                            last_error,
+                        )
+                        composed = None
+                        break  # next attempt with correction
+                    # success — optional macro promote on high confidence
+                    try:
+                        if (context or {}).get("promote_macro"):
+                            from telegram_bot_engine.spec_core.infinite.macro_registry import get_macro_registry
+                            get_macro_registry().promote(dyn, score=float((context or {}).get("macro_score") or 1.0))
+                    except Exception:
+                        pass
                     return {
-                        "ok": False,
+                        "ok": True,
                         "engine": "infinite_v1",
-                        "validation_error": err,
-                        "raw": content[:2000],
+                        "dynamic_spec": dyn.model_dump(),
+                        "bot_spec": bot.to_dict(),
+                        "purpose": dyn.description or dyn.bot_name,
+                        "features_requested": [f.feature for f in bot.features],
+                        "strict_spec": True,
+                        "confidence": 0.9,
+                        "clarification_needed": False,
+                        "spec_request": text[:500],
+                        "correction_attempts": attempt + 1,
                     }
-                return {
-                    "ok": True,
-                    "engine": "infinite_v1",
-                    "dynamic_spec": dyn.model_dump(),
-                    "bot_spec": bot.to_dict(),
-                    "purpose": dyn.description or dyn.bot_name,
-                    "features_requested": [f.feature for f in bot.features],
-                    "strict_spec": True,
-                    "confidence": 0.9,
-                    "clarification_needed": False,
-                    "spec_request": text[:500],
-                }
-            except Exception as exc:
-                logger.warning("infinite translate failed model=%s: %s", model, type(exc).__name__)
-                continue
+                except Exception as exc:
+                    logger.warning(
+                        "infinite translate failed model=%s attempt=%s: %s",
+                        model,
+                        attempt + 1,
+                        type(exc).__name__,
+                    )
+                    continue
+            if composed is None and last_error:
+                break  # outer attempt loop continues
+        if last_error is None:
+            break
+
+    if last_error:
+        return {
+            "ok": False,
+            "engine": "infinite_v1",
+            "validation_error": last_error,
+            "raw": last_raw[:2000],
+            "correction_attempts": max_retries,
+        }
     return None
+
 
 
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     ctx = dict(context or {})
-    use_infinite = (
-        bool(ctx.get("infinite"))
-        or (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}
-    )
+    env_on = (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}
+    env_auto = (os.getenv("TBE_INFINITE_AUTO") or "1").strip().lower() not in {"0", "false", "off", "no"}
+    looks_custom = bool(ctx.get("looks_custom") or ctx.get("needs_ai_codegen") or ctx.get("infinite"))
+    # Prefer infinite when explicitly requested, forced by env, or auto + custom gap
+    use_infinite = bool(ctx.get("infinite")) or env_on or (env_auto and looks_custom)
     if use_infinite:
         inf = translate_infinite_via_groq(text, context=ctx)
         if inf is not None:

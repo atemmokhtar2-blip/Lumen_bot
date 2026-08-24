@@ -16,60 +16,162 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# --- Atoms EXACTLY as specified in the architecture plan ---
+# --- Atomic primitives (expandable Lego bricks) ---
+# Canonical names + user-facing aliases normalized at validate time.
 
-TriggerType = Literal["on_message", "on_command", "on_schedule", "on_webhook"]
+TriggerType = Literal[
+    "on_message",
+    "on_command",
+    "on_callback",
+    "on_schedule",
+    "on_webhook",
+    "on_start",
+    "on_join",
+    "on_leave",
+    "on_payment",
+    "on_pre_checkout",
+]
 ConditionType = Literal[
     "user_is_admin",
+    "user_is_owner",
     "text_contains",
+    "text_equals",
+    "text_regex",
     "time_between",
     "state_equals",
+    "state_exists",
+    "always",
+    "state_check",
+    "has_payload",
+    "payment_currency",
 ]
 ActionType = Literal[
     "send_message",
+    "reply_message",
+    "update_state",
+    "clear_state",
+    "call_external_api",
+    "log_event",
+    "set_command_menu",
+    "noop",
     "update_db",
     "call_api",
     "change_state",
+    "http_request",
+    "answer_precheckout",
+    "notify_admin",
 ]
 TransformerType = Literal[
     "extract_regex",
+    "to_upper",
+    "to_lower",
+    "trim",
     "translate_text",
     "summarize",
+    "json_pick",
+    "template_render",
 ]
 
-ALLOWED_TRIGGERS = frozenset({"on_message", "on_command", "on_schedule", "on_webhook"})
-ALLOWED_CONDITIONS = frozenset(
-    {"user_is_admin", "text_contains", "time_between", "state_equals"}
-)
-ALLOWED_ACTIONS = frozenset(
-    {"send_message", "update_db", "call_api", "change_state"}
-)
-ALLOWED_TRANSFORMERS = frozenset(
-    {"extract_regex", "translate_text", "summarize"}
-)
+ALLOWED_TRIGGERS = frozenset({
+    "on_message", "on_command", "on_callback", "on_schedule", "on_webhook",
+    "on_start", "on_join", "on_leave", "on_payment", "on_pre_checkout",
+})
+ALLOWED_CONDITIONS = frozenset({
+    "user_is_admin", "user_is_owner", "text_contains", "text_equals", "text_regex",
+    "time_between", "state_equals", "state_exists", "always", "state_check",
+    "has_payload", "payment_currency",
+})
+ALLOWED_ACTIONS = frozenset({
+    "send_message", "reply_message", "update_state", "clear_state",
+    "call_external_api", "log_event", "set_command_menu", "noop",
+    "update_db", "call_api", "change_state", "http_request",
+    "answer_precheckout", "notify_admin",
+})
+ALLOWED_TRANSFORMERS = frozenset({
+    "extract_regex", "to_upper", "to_lower", "trim",
+    "translate_text", "summarize", "json_pick", "template_render",
+})
 
+# Safety limits (combinatorial explosion control)
 MAX_NODES = 15
+MAX_ACTIONS_PER_NODE = 8
+MAX_CONDITIONS_PER_NODE = 8
+MAX_TRANSFORMERS_PER_NODE = 4
 MAX_DAG_DEPTH = 15
+
+ACTION_ALIASES = {
+    "update_db": "update_state",
+    "change_state": "update_state",
+    "call_api": "call_external_api",
+    "http_request": "call_external_api",
+}
+CONDITION_ALIASES = {
+    "state_check": "state_equals",
+}
+
+
+def normalize_action_type(t: str) -> str:
+    x = (t or "").strip().lower()
+    return ACTION_ALIASES.get(x, x)
+
+
+def normalize_condition_type(t: str) -> str:
+    x = (t or "").strip().lower()
+    return CONDITION_ALIASES.get(x, x)
 
 
 class Trigger(BaseModel):
-    type: TriggerType
+    type: str
     config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type")
+    @classmethod
+    def _norm_trig(cls, v: str) -> str:
+        n = (v or "").strip().lower()
+        if n not in ALLOWED_TRIGGERS:
+            raise ValueError(f"Unsafe trigger: {v}")
+        return n
 
 
 class Condition(BaseModel):
-    type: ConditionType
+    type: str
     config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type")
+    @classmethod
+    def _norm_cond(cls, v: str) -> str:
+        n = normalize_condition_type(str(v or ""))
+        if n not in ALLOWED_CONDITIONS:
+            raise ValueError(f"Unsafe condition: {v}")
+        return n
 
 
 class Action(BaseModel):
-    type: ActionType
+    type: str
     config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type")
+    @classmethod
+    def _norm_action(cls, v: str) -> str:
+        n = normalize_action_type(str(v or ""))
+        if n not in ALLOWED_ACTIONS and n not in ACTION_ALIASES:
+            # allow canonical after alias map
+            if n not in ALLOWED_ACTIONS:
+                raise ValueError(f"Non-deterministic/Unsafe action: {v}")
+        return n if n in ALLOWED_ACTIONS else normalize_action_type(n)
 
 
 class Transformer(BaseModel):
-    type: TransformerType
+    type: str
     config: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type")
+    @classmethod
+    def _norm_xf(cls, v: str) -> str:
+        n = (v or "").strip().lower()
+        if n not in ALLOWED_TRANSFORMERS:
+            raise ValueError(f"Unsafe transformer: {v}")
+        return n
 
 
 class FlowNode(BaseModel):

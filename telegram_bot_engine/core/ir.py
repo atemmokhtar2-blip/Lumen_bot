@@ -18,6 +18,7 @@ class EngineMode(str, Enum):
     CATALOG = "catalog"   # deterministic spec_core only
     HYBRID = "hybrid"     # catalog compose + constrained assist for gaps
     CLINE = "cline"       # general agent execution under policies
+    INFINITE = "infinite" # atomic DAG / DynamicBotSpec rule engine
 
 
 class IRStatus(str, Enum):

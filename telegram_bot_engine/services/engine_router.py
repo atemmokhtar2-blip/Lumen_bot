@@ -39,6 +39,12 @@ def _cline_only() -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _infinite_preferred() -> bool:
+    """When True, custom/gap requests prefer infinite atomic path over cline."""
+    raw = (os.getenv("TBE_INFINITE_SPEC") or os.getenv("TBE_INFINITE_AUTO") or "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
 def decide_engine_mode(
     *,
     preferred_keys: list[str],
@@ -47,9 +53,9 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Policy: catalog first; cline only for real gaps / custom stacks.
+    """Policy: catalog first; infinite for novel custom flows; cline as last resort.
 
-    Override: CLINE_ONLY=1 or ENGINE_MODE_FORCE=cline → always free agent path.
+    Override: CLINE_ONLY=1 or ENGINE_MODE_FORCE=* → forced path.
     """
     if _cline_only():
         return EngineMode.CLINE
@@ -64,8 +70,13 @@ def decide_engine_mode(
     if non_core and not gap and not needs_ai_codegen:
         return EngineMode.CATALOG
     if non_core and (gap or looks_custom or needs_ai_codegen):
+        # Prefer infinite for novel compositions when enabled
+        if _infinite_preferred() and (looks_custom or needs_ai_codegen or len(gap) >= 2):
+            return EngineMode.INFINITE
         return EngineMode.HYBRID
     if needs_ai_codegen or (looks_custom and not non_core):
+        if _infinite_preferred():
+            return EngineMode.INFINITE
         return EngineMode.CLINE
     return EngineMode.CATALOG
 
@@ -182,6 +193,79 @@ def execute_ir(
         ir.confidence,
         (ir.metadata or {}).get("domain_primary"),
     )
+
+    if mode == EngineMode.INFINITE:
+        try:
+            from telegram_bot_engine.spec_core.infinite.compose import try_compose_infinite
+            from telegram_bot_engine.services.translator_client import translate_infinite_via_groq
+            from telegram_bot_engine.spec_core.pipeline import build_from_spec
+            from telegram_bot_engine.spec_core.infinite.jit_compiler import compile_to_project
+        except Exception as exc:
+            logger.warning("infinite path unavailable (%s); falling back to hybrid/catalog", type(exc).__name__)
+            mode = EngineMode.HYBRID
+        else:
+            dyn_payload = (ir.metadata or {}).get("dynamic_spec")
+            bot_spec_dict = (ir.metadata or {}).get("bot_spec")
+            dyn = None
+            bot = None
+            if dyn_payload:
+                bot, dyn, err = try_compose_infinite(dyn_payload)
+            if bot is None:
+                # re-translate via infinite if needed
+                inf = translate_infinite_via_groq(
+                    ir.original_text or ir.spec_request,
+                    context={"infinite": True, "looks_custom": True},
+                )
+                if inf and inf.get("ok"):
+                    dyn_payload = inf.get("dynamic_spec")
+                    bot_spec_dict = inf.get("bot_spec")
+                    bot, dyn, err = try_compose_infinite(dyn_payload or {})
+                else:
+                    err = (inf or {}).get("validation_error") if isinstance(inf, dict) else "infinite_translate_failed"
+                    logger.warning("infinite translate failed: %s", err)
+                    # fall through to catalog/hybrid
+                    mode = EngineMode.HYBRID
+            if mode == EngineMode.INFINITE and (bot is not None or bot_spec_dict):
+                out = work_dir / "infinite_bot"
+                out.mkdir(parents=True, exist_ok=True)
+                project_path = None
+                errors: list[str] = []
+                try:
+                    if callable(compile_to_project) and dyn is not None:
+                        project_path = compile_to_project(dyn, out)
+                    if project_path is None:
+                        spec = bot_spec_dict or (bot.to_dict() if bot else {})
+                        br = build_from_spec(spec, out, request=ir.original_text or ir.spec_request)
+                        if br.ok:
+                            project_path = br.project_path
+                        else:
+                            errors = list(br.errors)
+                except Exception as exc:
+                    logger.exception("infinite compile failed")
+                    errors.append(type(exc).__name__)
+                if project_path:
+                    # promote successful macro
+                    try:
+                        if dyn is not None:
+                            from telegram_bot_engine.spec_core.infinite.macro_registry import get_macro_registry
+                            get_macro_registry().promote(dyn, score=0.8)
+                    except Exception:
+                        pass
+                    result = GenerationResult(
+                        success=True,
+                        project_path=str(project_path),
+                        stages=[],
+                        validation_reports=[],
+                        errors=errors,
+                        metadata={
+                            "engine": "infinite_v1",
+                            "ir": ir.to_dict(),
+                            "dynamic_spec": dyn.model_dump() if dyn is not None else dyn_payload,
+                        },
+                    )
+                    return _finalize(result, ir)
+                logger.warning("infinite build failed: %s — fallback hybrid", errors[:3])
+                mode = EngineMode.HYBRID
 
     if mode == EngineMode.CLINE:
         from telegram_bot_engine.services.cline_runtime import execute_cline_ir
