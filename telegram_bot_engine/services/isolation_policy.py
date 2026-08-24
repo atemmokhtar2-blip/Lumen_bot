@@ -79,13 +79,19 @@ def decide_isolation() -> IsolationDecision:
 
 
 def assert_local_process_allowed() -> None:
-    """Raise RuntimeError if LocalProcessDriver must not run."""
+    """Raise RuntimeError if LocalProcessDriver must not run.
+
+    Dual gate: isolation allow_local AND explicit TBE_FORCE_LOCAL_PROCESS=1.
+    Prevents any accidental host execution of model-generated code.
+    """
     d = decide_isolation()
-    if not d.allow_local:
+    force = _flag("TBE_FORCE_LOCAL_PROCESS", "0")
+    if not d.allow_local or not force:
         raise RuntimeError(
             "local_process_denied: Docker isolation required for untrusted bot code. "
-            f"({d.reason}) Set ENVIRONMENT=dev and TBE_MULTI_TENANT=0 and "
-            "TBE_ALLOW_LOCAL_PROCESS=1 only for trusted local development."
+            f"({d.reason}; force_local={force}) Set ENVIRONMENT=dev, "
+            "TBE_MULTI_TENANT=0, TBE_ALLOW_LOCAL_PROCESS=1, and "
+            "TBE_FORCE_LOCAL_PROCESS=1 only for trusted local development."
         )
 
 

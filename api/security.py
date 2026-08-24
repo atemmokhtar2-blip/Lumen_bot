@@ -128,7 +128,7 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
 
 
 def validate_user_project_path(user_id: int, project_path: str) -> Path:
-    """Same containment for Telegram consumer user_id."""
+    """Same containment for Telegram consumer user_id (+ symlink TOCTOU checks)."""
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
     raw = str(project_path).strip()
@@ -139,9 +139,21 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
         raise ValueError("invalid_path") from exc
     if not path.is_dir():
         raise ValueError("project_path_not_a_directory")
+    try:
+        if Path(raw).is_symlink() or path.is_symlink():
+            raise ValueError("project_path_symlink_forbidden")
+    except ValueError:
+        raise
+    except OSError:
+        pass
     sandbox = get_user_sandbox(int(user_id), output_root()).root.resolve()
     if not is_path_inside(path, sandbox):
         raise ValueError("project_path_outside_sandbox")
+    try:
+        from telegram_bot_engine.services.safe_fs import assert_no_symlinks_in_path
+        assert_no_symlinks_in_path(path, root=sandbox)
+    except Exception as exc:
+        raise ValueError("project_path_symlink_forbidden") from exc
     return path
 
 

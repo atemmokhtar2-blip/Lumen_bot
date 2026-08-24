@@ -108,6 +108,11 @@ def translate_request(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Translate user bot request → structured features (provider-agnostic)."""
+    try:
+        from telegram_bot_engine.services.prompt_fence import sanitize_user_text
+        text = sanitize_user_text(text or "", max_len=8000)
+    except Exception:
+        text = (text or "")[:8000]
     last_err: Exception | None = None
     for provider in _translate_chain():
         try:

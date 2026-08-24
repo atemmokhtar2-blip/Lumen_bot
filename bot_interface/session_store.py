@@ -22,6 +22,35 @@ from typing import Any
 
 
 class SessionStore:
+    _SECRET_KEYS = frozenset({
+        "bot_token", "token", "telegram_bot_token", "api_token",
+        "TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "github_token",
+        "gh_token", "password", "secret", "api_key",
+    })
+
+    @classmethod
+    def _redact_secrets(cls, obj):
+        """Strip plaintext secrets before disk persistence (encryption-at-rest for tokens)."""
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if k in cls._SECRET_KEYS or kl in cls._SECRET_KEYS or kl.endswith("_token") or kl.endswith("_secret"):
+                    if isinstance(v, str) and v.strip():
+                        try:
+                            from telegram_bot_engine.services.crypto_tokens import seal_token
+                            out[k] = seal_token(v)
+                        except Exception:
+                            out[k] = "[redacted]"
+                    else:
+                        out[k] = v
+                else:
+                    out[k] = cls._redact_secrets(v)
+            return out
+        if isinstance(obj, list):
+            return [cls._redact_secrets(x) for x in obj]
+        return obj
+
     def __init__(self, path: str | Path | None = None) -> None:
         root = Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         root.mkdir(parents=True, exist_ok=True)
@@ -65,7 +94,8 @@ class SessionStore:
             return {}
 
     def save(self, user_id: int, data: dict[str, Any]) -> None:
-        # Only persist durable keys — avoid huge blobs
+        # Only persist durable keys — avoid huge blobs; seal secrets at rest
+        data = self._redact_secrets(dict(data or {}))
         keep = {
             k: data[k]
             for k in (

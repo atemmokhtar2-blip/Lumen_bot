@@ -15,6 +15,14 @@ from .blackboard import BlackboardStore, get_blackboard
 from .registry import AgentRegistry, get_registry
 from .state import AgentRole, AgentState, AgentStatus
 
+def _safe_user_text(request: str) -> str:
+    try:
+        from telegram_bot_engine.services.prompt_fence import sanitize_user_text
+        return sanitize_user_text(request or "", max_len=8000)
+    except Exception:
+        return (request or "")[:8000]
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -440,7 +448,7 @@ def orchestrate_generate(
     work.mkdir(parents=True, exist_ok=True)
     state = AgentState(
         user_id=int(user_id or 0),
-        user_text=request or "",
+        user_text=_safe_user_text(request),
         spec_request=(spec_request or request or ""),
         preferred_keys=list(preferred_keys or []),
     )
