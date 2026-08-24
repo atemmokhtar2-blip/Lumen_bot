@@ -62,8 +62,8 @@ ENV PYTHONUNBUFFERED=1 \\
 WORKDIR /app
 RUN useradd -u 10001 -m -s /usr/sbin/nologin botuser 2>/dev/null || true
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \\
- && pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir --isolated --index-url https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org --only-binary=:all: -r /app/requirements.txt
 COPY app /app/app
 COPY main.py /app/main.py
 # Optional entry aliases (ignored if absent — build context controlled on host)

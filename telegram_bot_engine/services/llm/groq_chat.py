@@ -227,6 +227,17 @@ def chat_via_groq(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Maestro chat via Groq. Returns None if disabled/unavailable."""
+    try:
+        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+        ok, reason = gate_llm_call(message or "", context)
+        if not ok:
+            logger.warning("chat_via_groq blocked by llm budget: %s", reason)
+            return None
+    except Exception as exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
+            logger.exception("chat_via_groq budget gate fail-closed: %s", exc)
+            return None
     if not _enabled():
         logger.warning("Groq chat skipped (disabled or no GROQ_API_KEY)")
         return None

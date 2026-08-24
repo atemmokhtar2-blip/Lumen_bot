@@ -67,7 +67,8 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             await hb_task
         except Exception:
             pass
-        await status.edit_text(f"❌ فشل التشغيل الحي: {type(e).__name__}: {str(e)[:200]}")
+        from .sanitize import sanitize_error
+        await status.edit_text(f"❌ فشل التشغيل الحي: {type(e).__name__}: {sanitize_error(str(e), max_len=200)}")
         context.user_data.pop("pending_run", None)
         return
     finally:
@@ -138,7 +139,7 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
         if not _local_process_fallback_allowed():
             await status.edit_text(
                 "❌ فشل Live Deployment في وضع العزل الإجباري (Docker).\n"
-                f"{type(e1).__name__}: {str(e1)[:220]}\n"
+                f"{type(e1).__name__}: {sanitize_error(str(e1), max_len=220)}\n"
                 "التشغيل المحلي مرفوض في الإنتاج — لا يوجد fallback غير معزول."
             )
             context.user_data.pop("pending_deploy", None)

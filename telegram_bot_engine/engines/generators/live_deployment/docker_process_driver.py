@@ -261,12 +261,31 @@ class DockerProcessDriver(DeploymentProvider):
             from telegram_bot_engine.services.requirements_policy import sanitize_requirements_text
             req = path / "requirements.txt"
             if req.is_file():
-                cleaned, _warns = sanitize_requirements_text(
-                    req.read_text(encoding="utf-8", errors="ignore")
-                )
+                raw_req = req.read_text(encoding="utf-8", errors="ignore")
+                cleaned, _warns = sanitize_requirements_text(raw_req)
+                # Fail closed: never ship unsanitized requirements into the image.
+                if (raw_req.strip() and not cleaned.strip()
+                        and any(
+                            ln.strip() and not ln.strip().startswith("#")
+                            for ln in raw_req.splitlines()
+                        )):
+                    return DeploymentStatus(
+                        provider=self.name,
+                        deployment_id=dep_id,
+                        status=DEPLOY_FAILED,
+                        message="requirements_all_blocked_by_allowlist",
+                    )
                 req.write_text(cleaned, encoding="utf-8")
+                if _warns:
+                    _log.info("requirements sanitize warnings: %s", _warns[:8])
         except Exception as _req_exc:
-            _log.warning("requirements sanitize failed: %s", _req_exc)
+            _log.error("requirements sanitize failed — refusing deploy: %s", _req_exc)
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=dep_id,
+                status=DEPLOY_FAILED,
+                message=f"requirements_sanitize_failed:{type(_req_exc).__name__}",
+            )
 
         # Multi-tenant: refuse default bridge — operator must set egress-limited network
         try:

@@ -189,8 +189,17 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                 errors=[f"llm_budget_blocked:{reason}"],
                 metadata={"budget_blocked": True, "reason": reason},
             )
-    except Exception:
-        logger.exception("generation llm budget gate failed")
+    except Exception as _bg_exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
+            logger.exception("generation llm budget gate fail-closed")
+            from telegram_bot_engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=[f"llm_budget_gate_error:{type(_bg_exc).__name__}"],
+                metadata={"budget_blocked": True},
+            )
+        logger.exception("generation llm budget gate failed (dev)")
     # Forced full AI path (manual experiment only)
     try:
         from telegram_bot_engine.services.groq_codegen import (

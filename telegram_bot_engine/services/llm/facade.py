@@ -149,8 +149,18 @@ def chat_request(
                 "budget_blocked": True,
                 "reason": reason,
             }
-    except Exception:
-        logger.exception("llm budget gate failed open-check")
+    except Exception as _bg_exc:
+        import os as _os
+        _env = (_os.getenv("ENVIRONMENT") or _os.getenv("TBE_ENV") or "").strip().lower()
+        if _env not in {"dev", "development", "local", "test"}:
+            logger.exception("llm budget gate failed — fail-closed in production")
+            return {
+                "reply": "خدمة الحد الأمني غير متاحة. حاول لاحقاً.",
+                "action": "none",
+                "budget_blocked": True,
+                "reason": f"gate_error:{type(_bg_exc).__name__}",
+            }
+        logger.exception("llm budget gate failed open-check (dev only)")
     last_err: Exception | None = None
     for provider in _chat_chain():
         try:

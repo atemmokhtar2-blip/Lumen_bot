@@ -446,6 +446,7 @@ def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
 
 
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Call Gemini with model fallback and authorized-key failover."""
     try:
         from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
         ok, reason = gate_llm_call(text or "", context, response_reserve=2048)
@@ -453,9 +454,10 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
             raise RuntimeError(f"llm_budget_blocked:{reason}")
     except RuntimeError:
         raise
-    except Exception:
-        pass
-    """Call Gemini with model fallback and authorized-key failover."""
+    except Exception as _bg_exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
+            raise RuntimeError(f"llm_budget_gate_error:{type(_bg_exc).__name__}") from _bg_exc
     keys = _available_api_keys()
     if not keys:
         raise RuntimeError("GEMINI_API_KEY is not configured")

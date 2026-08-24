@@ -142,6 +142,19 @@ def generate_bot_via_groq(
     user_id: int = 0,
 ) -> GroqCodegenResult:
     """Call Groq to emit a full bot project under work_dir/generated_bot."""
+    try:
+        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+        ok, reason = gate_llm_call(
+            request or "",
+            {"user_id": int(user_id or 0)},
+            response_reserve=6000,
+        )
+        if not ok:
+            return GroqCodegenResult(success=False, errors=[f"llm_budget_blocked:{reason}"])
+    except Exception as exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
+            return GroqCodegenResult(success=False, errors=[f"llm_budget_gate_error:{type(exc).__name__}"])
     t0 = time.perf_counter()
     keys = _api_keys()
     if not keys:
