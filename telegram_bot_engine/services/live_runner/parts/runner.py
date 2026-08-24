@@ -608,11 +608,10 @@ def run_bot_project(
     entry_hint: str | None = None,
     run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
 ) -> LiveRunReport:
-    """Run a generated bot under isolation.
+    """Run a generated bot under isolation (Docker-first, fail-closed).
 
-    Prefer Docker when available. If Docker is missing:
-      - default: fall back to local process (sandboxed under OUTPUT_DIR)
-      - strict: set TBE_REQUIRE_DOCKER=1 to refuse local entirely
+    Production / multi-tenant: Docker only. Local host process is refused unless
+    isolation_policy explicitly allows it (dev + TBE_ALLOW_LOCAL_PROCESS=1).
     """
     import re as _re
     _raw_path = str(project_path or "")

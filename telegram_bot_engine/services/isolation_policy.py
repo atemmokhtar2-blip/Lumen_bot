@@ -20,6 +20,7 @@ def environment_name() -> str:
 
 
 def is_dev_environment() -> bool:
+    # Empty / unset ENVIRONMENT is treated as production (fail-closed).
     return environment_name() in {"dev", "development", "local", "test"}
 
 

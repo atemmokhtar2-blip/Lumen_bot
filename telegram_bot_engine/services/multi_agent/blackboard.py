@@ -191,11 +191,20 @@ _board_lock = threading.Lock()
 
 
 def get_blackboard() -> BlackboardStore:
+    """Durable by default. Pure in-memory board is forbidden outside explicit dev."""
     global _default_board
     with _board_lock:
         if _default_board is None:
             mode = (os.environ.get("MULTI_AGENT_BOARD") or "layered").strip().lower()
-            if mode == "memory":
+            env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+            is_dev = env in {"dev", "development", "local", "test"}
+            # Production / unset env: never pure memory (state would vanish on restart).
+            if mode == "memory" and not is_dev:
+                logger.warning(
+                    "MULTI_AGENT_BOARD=memory ignored outside dev — forcing layered durable board"
+                )
+                mode = "layered"
+            if mode == "memory" and is_dev:
                 _default_board = MemoryBlackboard()
             elif mode == "file":
                 _default_board = FileBlackboard()

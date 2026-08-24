@@ -25,10 +25,11 @@ def orchestrator_enabled() -> bool:
 
 
 def _max_attempts(state: AgentState) -> int:
+    """Hard cap: 1 dynamic attempt + verified-template path (default 2 total)."""
     try:
-        env = int(os.environ.get("MULTI_AGENT_MAX_ATTEMPTS") or state.max_attempts or 3)
+        env = int(os.environ.get("MULTI_AGENT_MAX_ATTEMPTS") or state.max_attempts or 2)
     except ValueError:
-        env = 3
+        env = 2
     return max(1, min(env, 5))
 
 
@@ -316,6 +317,27 @@ class Orchestrator:
                     "repair_exhausted",
                     f"attempts={state.attempts} max={max_att}",
                 )
+                break
+
+            # Nuclear lock: never soft-loop after the first failed attempt.
+            # Verified template is the only continuation path.
+            if int(state.attempts or 0) >= 1 and not already:
+                state.record(
+                    AgentRole.ORCHESTRATOR,
+                    "force_verified_fallback_no_soft_loop",
+                    f"attempts={state.attempts} stagnant={stagnant}",
+                )
+                self.board.put(state)
+                work = Path(
+                    ctx.get("work_dir")
+                    or (state.extensions or {}).get("work_dir")
+                    or ""
+                )
+                state = run_verified_fallback_on_state(state, work_dir=work)
+                self.board.put(state)
+                if state.build_success and (state.generated_path or "").strip():
+                    state = self._run_agent("critic", state, ctx)
+                    self.board.put(state)
                 break
 
             state.record(

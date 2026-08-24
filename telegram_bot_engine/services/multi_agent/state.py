@@ -174,7 +174,7 @@ class AgentState:
 
     final_message: str = ""
     attempts: int = 0
-    max_attempts: int = 3
+    max_attempts: int = 2
 
     # Extensibility bag for future agents (hosting, billing, git, …)
     extensions: dict[str, Any] = field(default_factory=dict)
@@ -283,7 +283,7 @@ class AgentState:
             qa_passed=bool(d.get("qa_passed")),
             final_message=str(d.get("final_message") or ""),
             attempts=int(d.get("attempts") or 0),
-            max_attempts=int(d.get("max_attempts") or 3),
+            max_attempts=int(d.get("max_attempts") or 2),
             extensions=dict(d.get("extensions") or {}),
             events=events,
             created_at=float(d.get("created_at") or time.time()),

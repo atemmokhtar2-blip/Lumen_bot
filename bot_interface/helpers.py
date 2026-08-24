@@ -205,7 +205,31 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                 preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
             )
     except Exception:
-        logger.exception("multi_agent orchestrator failed; falling back to direct engine")
+        logger.exception(
+            "multi_agent orchestrator failed — verified template fallback (no bare engine loop)"
+        )
+        try:
+            from telegram_bot_engine.services.multi_agent.fallback_template import (
+                build_verified_bot,
+            )
+            fb = build_verified_bot(
+                request or "",
+                work_dir=work_dir,
+                user_id=int(user_id or 0),
+            )
+            if fb.ok and fb.generation_result is not None:
+                return fb.generation_result
+            if fb.ok and fb.project_path:
+                from telegram_bot_engine.core.result import GenerationResult
+                return GenerationResult(
+                    success=True,
+                    project_path=fb.project_path,
+                    errors=[],
+                    warnings=list(fb.warnings or []) + ["verified_template_emergency"],
+                    metadata={"engine": "verified_template_fallback", "preset": fb.preset},
+                )
+        except Exception:
+            logger.exception("verified template emergency fallback failed")
 
     # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
     try:
@@ -215,6 +239,7 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
     except Exception:
         pass
 
+    # Last resort: deterministic catalog engine only (never open-ended LLM codegen here).
     from telegram_bot_engine import generate_bot
 
     return generate_bot(
