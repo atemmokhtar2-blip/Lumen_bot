@@ -41,8 +41,12 @@ def _rate_limit(key: str, limit: int, window: float) -> bool:
 
 def validate_egress_url(url: str) -> str:
     raw = (url or "").strip()
+    if len(raw) > 2048:
+        raise ValueError("api_url_too_long")
     if not raw.startswith("https://"):
         raise ValueError("api_url_must_be_https")
+    if any(x in raw.lower() for x in ("@", "\\", "file:", "gopher:", "dict:")):
+        raise ValueError("api_url_scheme_or_userinfo_blocked")
     parsed = urlparse(raw)
     host = (parsed.hostname or "").lower()
     if not host:

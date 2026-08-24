@@ -174,3 +174,62 @@ def test_macro_promote(tmp_path, monkeypatch):
     reg = MacroRegistry(root=tmp_path)
     mid = reg.promote(SAMPLE, macro_id="support_v1")
     assert reg.get("support_v1") is not None
+
+
+def test_command_does_not_fire_on_message():
+    from telegram_bot_engine.spec_core.rule_engine import run_rule_engine
+
+    spec = {
+        "bot_name": "x",
+        "nodes": [
+            {
+                "id": "m",
+                "trigger": {"type": "on_message", "config": {}},
+                "actions": [{"type": "send_message", "config": {"text": "msg"}}],
+            }
+        ],
+    }
+    out = run_rule_engine(spec, {"type": "on_message", "command": "start", "text": "x"})
+    assert out["results"] == []
+
+
+def test_template_text_after_regex():
+    from telegram_bot_engine.spec_core.rule_engine import run_rule_engine
+
+    spec = {
+        "bot_name": "x",
+        "nodes": [
+            {
+                "id": "m",
+                "trigger": {"type": "on_message", "config": {}},
+                "transformers": [
+                    {"type": "extract_regex", "config": {"pattern": "id=([0-9]+)"}}
+                ],
+                "actions": [
+                    {"type": "send_message", "config": {"text": "got {{text}}"}}
+                ],
+            }
+        ],
+    }
+    out = run_rule_engine(spec, {"type": "on_message", "text": "user id=99 here"})
+    assert out["results"] and "99" in out["results"][0]["text"]
+
+
+def test_invalid_state_key_rejected():
+    from telegram_bot_engine.spec_core.rule_engine import run_rule_engine
+
+    spec = {
+        "bot_name": "x",
+        "nodes": [
+            {
+                "id": "m",
+                "trigger": {"type": "on_command", "config": {"command": "x"}},
+                "actions": [
+                    {"type": "update_db", "config": {"key": "__proto__", "value": 1}}
+                ],
+            }
+        ],
+    }
+    out = run_rule_engine(spec, {"type": "on_command", "command": "x"})
+    assert out["results"][0].get("error") == "invalid_key"
+    assert "__proto__" not in out["state"]
