@@ -116,15 +116,21 @@ class LocalProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
-        if not _local_process_allowed():
+        # Host execution of generated bots is permanently refused.
+        # Only DockerProcessDriver may host untrusted code.
+        return DeploymentStatus(
+            provider=self.name,
+            status=DEPLOY_FAILED,
+            message=(
+                "LocalProcessDriver removed: isolated container required. "
+                "Host-process fallback is not available."
+            ),
+        )
+        if not _local_process_allowed():  # unreachable — kept for static analysis clarity
             return DeploymentStatus(
                 provider=self.name,
                 status=DEPLOY_FAILED,
-                message=(
-                    'LocalProcessDriver disabled. '
-                    'Production must use Docker '
-                    '(TBE_ALLOW_LOCAL_PROCESS only in ENVIRONMENT=dev).'
-                ),
+                message="LocalProcessDriver disabled.",
             )
         # Root gate: refuse to run untrusted code without explicit local-dev opt-in
         from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed

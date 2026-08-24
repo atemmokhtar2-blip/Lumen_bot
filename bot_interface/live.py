@@ -87,20 +87,8 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
 
 
 def _local_process_fallback_allowed() -> bool:
-    """Host-process only when policy allows AND TBE_FORCE_LOCAL_PROCESS=1 (never silent)."""
-    try:
-        import os
-        force = (os.environ.get("TBE_FORCE_LOCAL_PROCESS") or "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        if not force:
-            return False
-        from telegram_bot_engine.services.isolation_policy import decide_isolation
-
-        decision = decide_isolation()
-        return bool(decision.allow_local and not decision.require_docker)
-    except Exception:
-        return False
+    """Host-process fallback permanently disabled (Docker or reject)."""
+    return False
 
 
 async def handle_live_deploy_token(message, context, token: str, pending: dict) -> None:

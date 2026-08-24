@@ -246,6 +246,16 @@ def _pip_install(py: str, req: Path | None, root: Path, mode: str, isolation: Pa
     cleaned, warns = _sanitize_requirements(req)
     if not cleaned.read_text(encoding="utf-8").strip():
         return True, "requirements empty after sanitize — skipped", warns
+    try:
+        from telegram_bot_engine.services.dependency_scanner import scan_requirements_file
+        ok_scan, scan_errs, scan_warns = scan_requirements_file(cleaned)
+        warns.extend(scan_warns)
+        if not ok_scan:
+            return False, "dependency_scan_blocked:" + ";".join(scan_errs[:12]), warns + scan_errs
+    except Exception as _scan_exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            return False, f"dependency_scan_error:{type(_scan_exc).__name__}", warns
 
     ready, prenotes = _preemptive_loosen(cleaned)
     warns.extend(prenotes)

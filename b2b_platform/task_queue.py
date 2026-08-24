@@ -49,6 +49,17 @@ def enqueue_job(
     message: str = "queued",
 ) -> dict[str, Any]:
     """Enqueue durable work. Returns public job dict including job_id / rq_id."""
+    try:
+        from .queue_backpressure import check_enqueue_allowed
+        ok_bp, reason_bp = check_enqueue_allowed(str(tenant_id), kind=str(kind))
+        if not ok_bp:
+            raise RuntimeError(f"backpressure:{reason_bp}")
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            raise RuntimeError(f"backpressure_check_failed:{type(exc).__name__}") from exc
     from .jobs import Job, STATUS_QUEUED, get_job_store
 
     store = get_job_store()

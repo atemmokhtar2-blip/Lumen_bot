@@ -31,3 +31,15 @@ def rate_limit_wait_seconds(user_id: int) -> int:
         )
     except Exception:
         return int(RATE_LIMIT_WINDOW_SECONDS)
+
+
+def generation_backpressure_ok(user_id: int) -> tuple[bool, str]:
+    """Reject when generation queue is saturated (low-and-slow defense)."""
+    try:
+        from b2b_platform.queue_backpressure import check_enqueue_allowed
+        return check_enqueue_allowed(f"tg:{int(user_id)}", kind="generate")
+    except Exception:
+        import os
+        if (os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            return False, "backpressure_unavailable"
+        return True, "ok"

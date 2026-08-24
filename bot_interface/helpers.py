@@ -174,106 +174,141 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
     Phase A: when MULTI_AGENT_ORCHESTRATOR is enabled (default on), runs
     ROUTER→ARCHITECT→BUILDER→CRITIC blackboard pipeline then returns GenerationResult.
     """
-    # Hard LLM budget before any model/orchestrator spend
+    _bp_tenant = f"tg:{int(user_id or 0)}"
+    _bp_acquired = False
     try:
-        from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
-        ok, reason = gate_llm_call(
-            request or "",
-            {"user_id": int(user_id or 0)},
-            response_reserve=4096,
-        )
-        if not ok:
+        from b2b_platform.queue_backpressure import acquire_slot, release_slot
+        ok_bp, reason_bp = acquire_slot(_bp_tenant)
+        if not ok_bp:
             from telegram_bot_engine.core.result import GenerationResult
             return GenerationResult(
                 success=False,
-                errors=[f"llm_budget_blocked:{reason}"],
-                metadata={"budget_blocked": True, "reason": reason},
+                errors=[f"backpressure:{reason_bp}"],
+                metadata={"backpressure": True, "reason": reason_bp},
             )
-    except Exception as _bg_exc:
+        _bp_acquired = True
+    except Exception as _bp_exc:
         import os as _os
-        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
-            logger.exception("generation llm budget gate fail-closed")
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
             from telegram_bot_engine.core.result import GenerationResult
             return GenerationResult(
                 success=False,
-                errors=[f"llm_budget_gate_error:{type(_bg_exc).__name__}"],
-                metadata={"budget_blocked": True},
+                errors=[f"backpressure_error:{type(_bp_exc).__name__}"],
+                metadata={"backpressure": True},
             )
-        logger.exception("generation llm budget gate failed (dev)")
-    # Forced full AI path (manual experiment only)
-    try:
-        from telegram_bot_engine.services.groq_codegen import (
-            groq_codegen_enabled,
-            generate_bot_via_groq,
-        )
-        if groq_codegen_enabled():
-            logger.info("GROQ_CODEGEN_ENABLED=1 — full Groq codegen (manual)")
-            return generate_bot_via_groq(
-                request,
-                work_dir,
-                user_id=int(user_id or 0),
-            )
-    except Exception:
-        logger.exception("Groq codegen forced path failed; continuing with engine")
+        release_slot = None  # type: ignore
 
-    # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
     try:
-        from telegram_bot_engine.services.multi_agent import (
-            orchestrate_generate,
-            orchestrator_enabled,
-        )
-        if orchestrator_enabled():
-            logger.info("multi_agent orchestrator A–E — generate path")
-            return orchestrate_generate(
-                request,
-                work_dir,
-                user_id=int(user_id or 0),
-                preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
-            )
-    except Exception:
-        logger.exception(
-            "multi_agent orchestrator failed — verified template fallback (no bare engine loop)"
-        )
+
+        # Hard LLM budget before any model/orchestrator spend
         try:
-            from telegram_bot_engine.services.multi_agent.fallback_template import (
-                build_verified_bot,
-            )
-            fb = build_verified_bot(
+            from telegram_bot_engine.services.llm_budget_gate import gate_llm_call
+            ok, reason = gate_llm_call(
                 request or "",
-                work_dir=work_dir,
-                user_id=int(user_id or 0),
+                {"user_id": int(user_id or 0)},
+                response_reserve=4096,
             )
-            if fb.ok and fb.generation_result is not None:
-                return fb.generation_result
-            if fb.ok and fb.project_path:
+            if not ok:
                 from telegram_bot_engine.core.result import GenerationResult
                 return GenerationResult(
-                    success=True,
-                    project_path=fb.project_path,
-                    errors=[],
-                    warnings=list(fb.warnings or []) + ["verified_template_emergency"],
-                    metadata={"engine": "verified_template_fallback", "preset": fb.preset},
+                    success=False,
+                    errors=[f"llm_budget_blocked:{reason}"],
+                    metadata={"budget_blocked": True, "reason": reason},
+                )
+        except Exception as _bg_exc:
+            import os as _os
+            if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
+                logger.exception("generation llm budget gate fail-closed")
+                from telegram_bot_engine.core.result import GenerationResult
+                return GenerationResult(
+                    success=False,
+                    errors=[f"llm_budget_gate_error:{type(_bg_exc).__name__}"],
+                    metadata={"budget_blocked": True},
+                )
+            logger.exception("generation llm budget gate failed (dev)")
+        # Forced full AI path (manual experiment only)
+        try:
+            from telegram_bot_engine.services.groq_codegen import (
+                groq_codegen_enabled,
+                generate_bot_via_groq,
+            )
+            if groq_codegen_enabled():
+                logger.info("GROQ_CODEGEN_ENABLED=1 — full Groq codegen (manual)")
+                return generate_bot_via_groq(
+                    request,
+                    work_dir,
+                    user_id=int(user_id or 0),
                 )
         except Exception:
-            logger.exception("verified template emergency fallback failed")
+            logger.exception("Groq codegen forced path failed; continuing with engine")
 
-    # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
-    try:
-        if (preferred_keys is not None) and isinstance(preferred_keys, dict):
-            # Legacy misuse guard — preferred_keys must be a list
-            preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
-    except Exception:
-        pass
+        # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
+        try:
+            from telegram_bot_engine.services.multi_agent import (
+                orchestrate_generate,
+                orchestrator_enabled,
+            )
+            if orchestrator_enabled():
+                logger.info("multi_agent orchestrator A–E — generate path")
+                return orchestrate_generate(
+                    request,
+                    work_dir,
+                    user_id=int(user_id or 0),
+                    preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
+                )
+        except Exception:
+            logger.exception(
+                "multi_agent orchestrator failed — verified template fallback (no bare engine loop)"
+            )
+            try:
+                from telegram_bot_engine.services.multi_agent.fallback_template import (
+                    build_verified_bot,
+                )
+                fb = build_verified_bot(
+                    request or "",
+                    work_dir=work_dir,
+                    user_id=int(user_id or 0),
+                )
+                if fb.ok and fb.generation_result is not None:
+                    return fb.generation_result
+                if fb.ok and fb.project_path:
+                    from telegram_bot_engine.core.result import GenerationResult
+                    return GenerationResult(
+                        success=True,
+                        project_path=fb.project_path,
+                        errors=[],
+                        warnings=list(fb.warnings or []) + ["verified_template_emergency"],
+                        metadata={"engine": "verified_template_fallback", "preset": fb.preset},
+                    )
+            except Exception:
+                logger.exception("verified template emergency fallback failed")
 
-    # Last resort: deterministic catalog engine only (never open-ended LLM codegen here).
-    from telegram_bot_engine import generate_bot
+        # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
+        try:
+            if (preferred_keys is not None) and isinstance(preferred_keys, dict):
+                # Legacy misuse guard — preferred_keys must be a list
+                preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
+        except Exception:
+            pass
 
-    return generate_bot(
-        request,
-        work_dir=str(work_dir),
-        user_id=int(user_id or 0),
-        preferred_keys=preferred_keys,
-    )
+        # Last resort: deterministic catalog engine only (never open-ended LLM codegen here).
+        from telegram_bot_engine import generate_bot
+
+        return generate_bot(
+            request,
+            work_dir=str(work_dir),
+            user_id=int(user_id or 0),
+            preferred_keys=preferred_keys,
+        )
+
+
+    finally:
+        if _bp_acquired:
+            try:
+                from b2b_platform.queue_backpressure import release_slot as _rs
+                _rs(_bp_tenant)
+            except Exception:
+                pass
 
 
 def run_generation_with_bridge(

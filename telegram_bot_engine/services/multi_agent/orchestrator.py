@@ -239,7 +239,48 @@ class Orchestrator:
                 self.board.put(state)
 
             if state.status == AgentStatus.PASSED.value or state.qa_passed:
-                break
+                # Independent automated gate — do not trust Critic alone
+                try:
+                    from .generated_tests import run_generated_unit_gate
+                    gate = run_generated_unit_gate(state.generated_path or "")
+                    ext = dict(state.extensions or {})
+                    ext["unit_gate"] = gate
+                    state.extensions = ext
+                    if not gate.get("ok"):
+                        state.qa_passed = False
+                        state.qa_report = {
+                            "ok": False,
+                            "errors": list(gate.get("errors") or ["unit_gate_failed"]),
+                            "attempt": state.attempts,
+                            "unit_gate": gate,
+                        }
+                        try:
+                            state.transition(
+                                AgentStatus.FAILED,
+                                role=AgentRole.ORCHESTRATOR,
+                                detail="unit_gate_failed",
+                                force=True,
+                            )
+                        except Exception:
+                            state.status = AgentStatus.FAILED.value
+                        self.board.put(state)
+                        # continue repair loop instead of accepting
+                    else:
+                        break
+                except Exception as _ug_exc:
+                    logger.exception("unit gate crashed")
+                    state.qa_passed = False
+                    state.qa_report = {
+                        "ok": False,
+                        "errors": [f"unit_gate_error:{type(_ug_exc).__name__}"],
+                        "attempt": state.attempts,
+                    }
+                if state.qa_passed and state.status == AgentStatus.PASSED.value:
+                    break
+                if not state.qa_passed:
+                    pass  # fall through to repair
+                else:
+                    break
 
             # Repair decision — verified template beats endless text-simplify
             from .repair import build_repair_directive, spec_hash, record_repair_history

@@ -731,56 +731,19 @@ def run_bot_project(
             details={"provider": "none", "error": docker_err or "docker_required"},
         )
 
-    # Host-process execution is dual-gated and OFF by default.
-    # Requires isolation_policy.allow_local AND explicit TBE_FORCE_LOCAL_PROCESS=1.
-    # Never a silent "Docker failed → run on host" fallback (RCE surface).
-    force_local = (_os.environ.get("TBE_FORCE_LOCAL_PROCESS") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    if not (allow_local and force_local):
-        return LiveRunReport(
-            ok=False,
-            phase="security",
-            message=(
-                "التشغيل المحلي معطل. Docker فقط. "
-                f"({docker_err or 'docker_required'}; "
-                "set TBE_FORCE_LOCAL_PROCESS=1 only for trusted local dev)"
-            ),
-            install_log="",
-            run_log="",
-            warnings=["local_process_disabled", "docker_required", "no_silent_fallback"],
-            entry_point=entry_hint or "",
-            duration_ms=0.0,
-            details={
-                "provider": "none",
-                "error": docker_err or "docker_required",
-                "allow_local": allow_local,
-                "force_local": force_local,
-            },
-        )
-
-    try:
-        from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
-        assert_local_process_allowed()
-    except RuntimeError as exc:
-        return LiveRunReport(
-            ok=False,
-            phase="security",
-            message=f"التشغيل المحلي مرفوض بالسياسة: {exc}",
-            install_log="",
-            run_log="",
-            warnings=["local_process_denied", "docker_required"],
-            entry_point=entry_hint or "",
-            duration_ms=0.0,
-            details={"provider": "none", "error": str(exc), "docker_err": docker_err},
-        )
-
-    __import__("logging").getLogger("live_runner").warning(
-        "EXPLICIT local process enabled (TBE_FORCE_LOCAL_PROCESS=1) — not a Docker fallback"
+    # PRODUCTION RULE: no host-process fallback. Docker or reject.
+    return LiveRunReport(
+        ok=False,
+        phase="security",
+        message=(
+            "التشغيل المحلي محذوف. التنفيذ فقط داخل حاوية معزولة (Docker). "
+            f"({docker_err or 'docker_required'})"
+        ),
+        install_log="",
+        run_log="",
+        warnings=["host_process_removed", "docker_required"],
+        entry_point=entry_hint or "",
+        duration_ms=0.0,
+        details={"provider": "none", "error": docker_err or "docker_required"},
     )
-    return LiveRunnerService().run(
-        project_path=project_path,
-        bot_token=bot_token,
-        entry_hint=entry_hint,
-        run_seconds=run_seconds,
-    )
+
