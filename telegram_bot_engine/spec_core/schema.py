@@ -278,3 +278,32 @@ __all__ = [
     "StorageSpec",
     "AcceptanceTest",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Infinite engine surface (Atomic DAG) — re-exported for callers that import
+# from schema.py as documented in the architecture plan.
+# Implementation lives in spec_core.infinite (Pydantic V2 DynamicBotSpec).
+# ---------------------------------------------------------------------------
+try:
+    from .infinite.infinite_schema import (  # noqa: E402
+        ActionAtom as InfiniteAction,
+        ConditionAtom as InfiniteCondition,
+        DynamicBotSpec,
+        FlowNode,
+        TriggerAtom as InfiniteTrigger,
+        TransformerAtom as InfiniteTransformer,
+    )
+    from .infinite.ast_validator import validate_dynamic_spec, SpecValidationError
+    from .infinite.jit_compiler import compile_dynamic_spec, render_handlers_python
+except Exception:  # pragma: no cover
+    DynamicBotSpec = None  # type: ignore
+    FlowNode = None  # type: ignore
+    InfiniteTrigger = None  # type: ignore
+    InfiniteCondition = None  # type: ignore
+    InfiniteAction = None  # type: ignore
+    InfiniteTransformer = None  # type: ignore
+    validate_dynamic_spec = None  # type: ignore
+    SpecValidationError = None  # type: ignore
+    compile_dynamic_spec = None  # type: ignore
+    render_handlers_python = None  # type: ignore

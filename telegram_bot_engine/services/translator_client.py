@@ -512,7 +512,107 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
         return None
 
 
+
+def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """LLM → DynamicBotSpec JSON only (no Python). Validates via infinite AST validator."""
+    try:
+        from telegram_bot_engine.services.prompt_fence import sanitize_user_text
+        text = sanitize_user_text(text or "", max_len=4000)
+    except Exception:
+        text = (text or "")[:4000]
+    if not _enabled():
+        return None
+    keys = _available_keys()
+    if not keys:
+        return None
+    try:
+        from telegram_bot_engine.spec_core.infinite.llm_contract import (
+            SYSTEM_PROMPT_INFINITE,
+            dynamic_spec_json_schema,
+        )
+        from telegram_bot_engine.spec_core.infinite.compose import try_compose_infinite
+    except Exception:
+        logger.exception("infinite contract unavailable")
+        return None
+    system = SYSTEM_PROMPT_INFINITE
+    try:
+        from telegram_bot_engine.services.prompt_fence import system_prompt_injection_rules
+        system = system + system_prompt_injection_rules()
+    except Exception:
+        pass
+    user_payload = {
+        "USER_REQUEST": text,
+        "OUTPUT_SCHEMA": dynamic_spec_json_schema(),
+        "INSTRUCTION": "Emit DynamicBotSpec JSON only matching OUTPUT_SCHEMA.",
+    }
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+    models = _models()
+    for source, api_key in keys:
+        for model in models:
+            try:
+                response = requests.post(
+                    _GROQ_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "temperature": 0.1,
+                        "max_tokens": int(os.getenv("GROQ_TRANSLATOR_MAX_TOKENS") or "1200"),
+                        "response_format": {"type": "json_object"},
+                        "messages": messages,
+                    },
+                    timeout=_timeout(),
+                )
+                if response.status_code >= 400:
+                    continue
+                body = response.json()
+                content = (
+                    ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
+                    or ""
+                )
+                bot, dyn, err = try_compose_infinite(content)
+                if err or bot is None or dyn is None:
+                    # schema-level self-correction payload for caller
+                    return {
+                        "ok": False,
+                        "engine": "infinite_v1",
+                        "validation_error": err,
+                        "raw": content[:2000],
+                    }
+                return {
+                    "ok": True,
+                    "engine": "infinite_v1",
+                    "dynamic_spec": dyn.model_dump(),
+                    "bot_spec": bot.to_dict(),
+                    "purpose": dyn.description or dyn.bot_name,
+                    "features_requested": [f.feature for f in bot.features],
+                    "strict_spec": True,
+                    "confidence": 0.9,
+                    "clarification_needed": False,
+                    "spec_request": text[:500],
+                }
+            except Exception as exc:
+                logger.warning("infinite translate failed model=%s: %s", model, type(exc).__name__)
+                continue
+    return None
+
+
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    ctx = dict(context or {})
+    use_infinite = (
+        bool(ctx.get("infinite"))
+        or (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    if use_infinite:
+        inf = translate_infinite_via_groq(text, context=ctx)
+        if inf is not None:
+            return inf
+
     """Stable public API — provider chosen by llm.facade (default: Groq)."""
     try:
         from telegram_bot_engine.services.prompt_fence import sanitize_user_text

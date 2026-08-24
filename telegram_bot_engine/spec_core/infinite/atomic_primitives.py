@@ -26,9 +26,11 @@ ALLOWED_CONDITIONS: Final[frozenset[str]] = frozenset({
     "state_equals",
     "state_exists",
     "always",
+    "state_check",  # user-spec alias → state_equals
 })
 
 ALLOWED_ACTIONS: Final[frozenset[str]] = frozenset({
+    # canonical
     "send_message",
     "reply_message",
     "update_state",
@@ -37,6 +39,10 @@ ALLOWED_ACTIONS: Final[frozenset[str]] = frozenset({
     "log_event",
     "set_command_menu",
     "noop",
+    # user-spec aliases (normalized at validate time)
+    "update_db",
+    "call_api",
+    "change_state",
 })
 
 ALLOWED_TRANSFORMERS: Final[frozenset[str]] = frozenset({
@@ -55,3 +61,24 @@ MAX_ACTIONS_PER_NODE: Final[int] = 8
 MAX_CONDITIONS_PER_NODE: Final[int] = 8
 MAX_TRANSFORMERS_PER_NODE: Final[int] = 4
 MAX_DAG_DEPTH: Final[int] = 15
+
+
+# Map user-facing / doc aliases → canonical engine names
+ACTION_ALIASES: Final[dict[str, str]] = {
+    "update_db": "update_state",
+    "change_state": "update_state",
+    "call_api": "call_external_api",
+}
+CONDITION_ALIASES: Final[dict[str, str]] = {
+    "state_check": "state_equals",
+}
+
+
+def normalize_action_type(t: str) -> str:
+    x = (t or "").strip().lower()
+    return ACTION_ALIASES.get(x, x)
+
+
+def normalize_condition_type(t: str) -> str:
+    x = (t or "").strip().lower()
+    return CONDITION_ALIASES.get(x, x)

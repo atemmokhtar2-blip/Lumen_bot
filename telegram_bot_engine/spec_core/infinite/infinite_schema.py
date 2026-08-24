@@ -6,6 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .atomic_primitives import (
+    normalize_action_type,
+    normalize_condition_type,
     ALLOWED_ACTIONS,
     ALLOWED_CONDITIONS,
     ALLOWED_TRANSFORMERS,
@@ -37,10 +39,12 @@ class ConditionAtom(BaseModel):
     @field_validator("type")
     @classmethod
     def type_allowed(cls, v: str) -> str:
-        t = (v or "").strip().lower()
-        if t not in ALLOWED_CONDITIONS:
-            raise ValueError(f"unsafe_or_unknown_condition:{t}")
-        return t
+        t = normalize_condition_type((v or "").strip().lower())
+        if t not in ALLOWED_CONDITIONS and t not in {"state_equals"}:
+            # after alias, must be in allowlist
+            if t not in ALLOWED_CONDITIONS:
+                raise ValueError(f"unsafe_or_unknown_condition:{v}")
+        return t if t in ALLOWED_CONDITIONS else normalize_condition_type(v)
 
 
 class ActionAtom(BaseModel):
@@ -50,9 +54,9 @@ class ActionAtom(BaseModel):
     @field_validator("type")
     @classmethod
     def type_allowed(cls, v: str) -> str:
-        t = (v or "").strip().lower()
+        t = normalize_action_type((v or "").strip().lower())
         if t not in ALLOWED_ACTIONS:
-            raise ValueError(f"unsafe_or_unknown_action:{t}")
+            raise ValueError(f"unsafe_or_unknown_action:{v}")
         return t
 
 

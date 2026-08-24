@@ -138,3 +138,48 @@ def test_compose_from_json_string():
     bot, dyn = compose_infinite_from_payload(json.dumps(SAMPLE))
     assert dyn.bot_name == "support_bot"
     assert bot.features
+
+
+def test_action_aliases_update_db_call_api():
+    from telegram_bot_engine.spec_core.infinite import validate_dynamic_spec, route_and_execute
+
+    spec = {
+        "bot_name": "alias_bot",
+        "nodes": [
+            {
+                "id": "n1",
+                "trigger": {"type": "on_command", "config": {"command": "set"}},
+                "conditions": [{"type": "state_check", "config": {"key": "x", "value": 1}}],
+                "actions": [
+                    {"type": "update_db", "config": {"key": "x", "value": 2}},
+                    {"type": "change_state", "config": {"key": "y", "value": 3}},
+                ],
+            }
+        ],
+    }
+    dyn = validate_dynamic_spec(spec)
+    assert dyn.nodes[0].actions[0].type == "update_state"
+    out = route_and_execute(
+        dyn,
+        {"type": "on_command", "command": "set", "text": ""},
+        state={"x": 1},
+        mode="interpreter",
+    )
+    assert out["ok"]
+    assert out["state"].get("x") == 2
+
+
+def test_schema_py_reexports():
+    from telegram_bot_engine.spec_core.schema import DynamicBotSpec, FlowNode, validate_dynamic_spec
+    assert DynamicBotSpec is not None
+    assert FlowNode is not None
+    assert validate_dynamic_spec is not None
+
+
+def test_ssrf_proxy():
+    from telegram_bot_engine.spec_core.infinite.api_proxy import validate_egress_url
+    import pytest
+    with pytest.raises(ValueError):
+        validate_egress_url("http://127.0.0.1/")
+    with pytest.raises(ValueError):
+        validate_egress_url("https://169.254.169.254/latest")
