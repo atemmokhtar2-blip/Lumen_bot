@@ -312,6 +312,12 @@ def _verify_clone(target: Path) -> tuple[bool, str, dict[str, Any]]:
         return False, f"فشل التحقق بعد السحب: {exc}", meta
     n = _count_files(target)
     meta["file_count"] = n
+    try:
+        from telegram_bot_engine.services.secure_exec import neutralize_git_hooks
+        neutralize_git_hooks(target)
+        meta["hooks_neutralized"] = True
+    except Exception:
+        meta["hooks_neutralized"] = False
     return True, "", meta
 
 
@@ -321,12 +327,47 @@ def _run_clone_argv(
     timeout: int,
     token: Optional[str],
 ) -> tuple[int, str]:
-    from telegram_bot_engine.services.secure_exec import clean_child_environ
+    from telegram_bot_engine.services.secure_exec import clean_child_environ, _git_safe_config_args
+
+    # Prefer ephemeral Docker clone when available (RCE isolation for untrusted repos)
+    try:
+        from telegram_bot_engine.services.git_clone_isolated import prefer_docker_clone, clone_isolated
+        if prefer_docker_clone() and argv and argv[0] == "git" and "clone" in argv:
+            # extract url and target (last two args typically)
+            if len(argv) >= 3:
+                url = argv[-2]
+                target = Path(argv[-1])
+                branch = None
+                depth = 1
+                if "--branch" in argv:
+                    i = argv.index("--branch")
+                    if i + 1 < len(argv):
+                        branch = argv[i + 1]
+                if "--depth" in argv:
+                    i = argv.index("--depth")
+                    if i + 1 < len(argv):
+                        try:
+                            depth = int(argv[i + 1])
+                        except ValueError:
+                            depth = 1
+                ok, msg = clone_isolated(url, target, branch=branch, depth=depth, timeout=timeout)
+                if ok:
+                    return 0, msg
+                # If docker path failed, do not fall through to host in production
+                import os as _os
+                if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+                    return 1, msg
+    except Exception as _iso_exc:
+        logger.warning("isolated clone path error: %s", type(_iso_exc).__name__)
 
     env = clean_child_environ()
+    # Inject safe git -c flags after 'git'
+    final = list(argv)
+    if final and final[0] == "git":
+        final = ["git", *_git_safe_config_args(), *final[1:]]
     try:
         proc = subprocess.run(
-            argv,
+            final,
             capture_output=True,
             text=True,
             timeout=timeout,

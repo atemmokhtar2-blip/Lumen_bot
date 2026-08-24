@@ -118,7 +118,25 @@ def safe_write_text(
         target.resolve(strict=False).relative_to(Path(root).resolve())
     except (ValueError, OSError) as exc:
         raise UnsafePathError("path_outside_root_after_mkdir") from exc
-    target.write_bytes(data.encode("utf-8"))  # atomic-ish single write
+    # Use-time TOCTOU: refuse if any component became a symlink since resolve
+    assert_no_symlinks_in_path(target, root=root)
+    # Write without following symlinks (O_NOFOLLOW) when the file already exists
+    import os
+    flags = getattr(os, "O_WRONLY", 1) | getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    raw = data.encode("utf-8")
+    try:
+        fd = os.open(str(target), flags | nofollow, 0o600)
+        try:
+            os.write(fd, raw)
+        finally:
+            os.close(fd)
+    except OSError:
+        # O_NOFOLLOW may fail on some FS if file missing races — re-check then write
+        assert_no_symlinks_in_path(target, root=root)
+        if target.is_symlink():
+            raise UnsafePathError("write_target_is_symlink")
+        target.write_bytes(raw)
     return target
 
 
@@ -187,20 +205,34 @@ def assert_no_symlinks_in_path(path: Path | str, *, root: Path | str | None = No
 
 
 def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
-    """Open a file under root with symlink rejection at open time."""
+    """Open a file under root with symlink rejection at open time (read and write)."""
+    import os
     path = safe_resolve_under(Path(root), rel)
     path = assert_no_symlinks_in_path(path, root=root)
-    # Prefer O_NOFOLLOW when opening for read on POSIX
-    if "b" not in mode and "r" in mode and "+" not in mode:
-        import os
-        flags = getattr(os, "O_RDONLY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    # Map common modes to flags + O_NOFOLLOW
+    if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
+        flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)
+        if "w" in mode:
+            flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
+        if "a" in mode:
+            flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_APPEND", 1024)
+        if "x" in mode:
+            flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_EXCL", 128)
         try:
-            fd = os.open(str(path), flags)
+            fd = os.open(str(path), flags | nofollow, 0o600)
             return open(fd, mode, **kwargs)
-        except OSError as exc:
-            # O_NOFOLLOW unsupported or not a symlink race — re-check and open normally
+        except OSError:
             assert_no_symlinks_in_path(path, root=root)
+            if path.is_symlink():
+                raise UnsafePathError("open_target_is_symlink")
             return open(path, mode, **kwargs)
-    assert_no_symlinks_in_path(path, root=root)
-    return open(path, mode, **kwargs)
+    # read-only
+    flags = getattr(os, "O_RDONLY", 0) | nofollow
+    try:
+        fd = os.open(str(path), flags)
+        return open(fd, mode, **kwargs)
+    except OSError:
+        assert_no_symlinks_in_path(path, root=root)
+        return open(path, mode, **kwargs)
 

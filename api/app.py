@@ -85,9 +85,15 @@ async def error_middleware(request: web.Request, handler):
         return await handler(request)
     except web.HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         # Never leak exception text / paths / stack traces to clients
-        logger.exception("unhandled api error path=%s", request.path)
+        try:
+            from bot_interface.sanitize import sanitize_error, install_secret_log_filter
+            install_secret_log_filter()
+            safe = sanitize_error(f"{type(exc).__name__}: {exc}", max_len=200)
+            logger.exception("unhandled api error path=%s detail=%s", request.path, safe)
+        except Exception:
+            logger.exception("unhandled api error path=%s", request.path)
         return web.json_response(
             {"ok": False, "error": "internal_error"},
             status=500,
@@ -253,6 +259,11 @@ def create_app() -> web.Application:
         require_production_data_plane()
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
+    try:
+        from bot_interface.sanitize import install_secret_log_filter
+        install_secret_log_filter()
+    except Exception:
+        pass
     app = web.Application(
         middlewares=[
             error_middleware,

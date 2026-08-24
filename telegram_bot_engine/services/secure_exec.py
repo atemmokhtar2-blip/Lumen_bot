@@ -131,6 +131,16 @@ def validate_git_https_url(url: str) -> str:
     return safe
 
 
+def _git_safe_config_args() -> list[str]:
+    """Disable hooks and dangerous protocols for untrusted repos."""
+    return [
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "protocol.file.allow=never",
+        "-c", "protocol.ext.allow=never",
+        "-c", "core.symlinks=false",
+    ]
+
+
 def run_git(
     args: Sequence[str],
     *,
@@ -138,12 +148,18 @@ def run_git(
     timeout: float = 120,
     extra_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a git argv list with scrubbed environment (never shell)."""
+    """Run a git argv list with scrubbed environment (never shell).
+
+    Always injects config that disables hooks and dangerous protocols so a
+    malicious remote cannot run pre-checkout / post-checkout scripts on the host.
+    """
     if not args or args[0] != "git":
         raise ValueError("git_argv_must_start_with_git")
     env = clean_child_environ(extra_env)
+    # git [global -c ...] <subcommand> ...
+    final = ["git", *_git_safe_config_args(), *list(args[1:])]
     return subprocess.run(
-        list(args),
+        final,
         cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
@@ -152,3 +168,25 @@ def run_git(
         check=False,
         shell=False,
     )
+
+
+def neutralize_git_hooks(repo_path: str | Path) -> None:
+    """Remove/disable hooks after clone so nothing runs on subsequent git ops."""
+    hooks = Path(repo_path) / ".git" / "hooks"
+    try:
+        if hooks.is_dir():
+            for item in hooks.iterdir():
+                try:
+                    if item.is_file() or item.is_symlink():
+                        item.unlink()
+                    elif item.is_dir():
+                        import shutil
+                        shutil.rmtree(item, ignore_errors=True)
+                except Exception:
+                    pass
+            # empty marker so git finds no executable hooks
+            (hooks / "README.tbe-disabled").write_text(
+                "hooks neutralized by Maestro after clone\n", encoding="utf-8"
+            )
+    except Exception:
+        pass
