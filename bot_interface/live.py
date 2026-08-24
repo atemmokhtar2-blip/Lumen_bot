@@ -85,8 +85,24 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
     await status.edit_text(text_out)
 
 
+def _local_process_fallback_allowed() -> bool:
+    """Host-process LiveRunner only when isolation_policy explicitly allows local."""
+    try:
+        from telegram_bot_engine.services.isolation_policy import decide_isolation
+
+        decision = decide_isolation()
+        return bool(decision.allow_local and not decision.require_docker)
+    except Exception:
+        # Policy unavailable → fail closed (never host untrusted code on platform).
+        return False
+
+
 async def handle_live_deploy_token(message, context, token: str, pending: dict) -> None:
-    """Deploy generated bot: LiveDeploymentEngine, fallback to LiveRunner on import/runtime gaps."""
+    """Deploy generated bot via LiveDeploymentEngine (Docker-first, fail-closed).
+
+    Host-process LiveRunner is never used when isolation requires Docker
+    (multi-tenant / production). Dev-only local fallback is gated by policy.
+    """
     status = await message.reply_text(
         "🔐 جاري التحقق من التوكن وتشغيل Live Deployment..."
     )
@@ -118,7 +134,16 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
     try:
         report = await asyncio.to_thread(_run_engine)
     except Exception as e1:
-        logger.exception("Live deployment engine failed — trying LiveRunner fallback")
+        logger.exception("Live deployment engine failed")
+        if not _local_process_fallback_allowed():
+            await status.edit_text(
+                "❌ فشل Live Deployment في وضع العزل الإجباري (Docker).\n"
+                f"{type(e1).__name__}: {str(e1)[:220]}\n"
+                "التشغيل المحلي مرفوض في الإنتاج — لا يوجد fallback غير معزول."
+            )
+            context.user_data.pop("pending_deploy", None)
+            return
+        logger.warning("Dev isolation allows LiveRunner host-process fallback")
         try:
             report = await asyncio.to_thread(_run_runner)
         except Exception as e2:

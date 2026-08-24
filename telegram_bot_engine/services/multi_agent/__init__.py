@@ -44,6 +44,7 @@ from .fallback_template import should_trigger_verified_fallback, build_verified_
 from .redis_board import (
     RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
     scan_and_resume, redis_board_enabled, enqueue_pending_resumes, enqueue_resume_job,
+    append_agent_event,
 )
 
 __all__ = [
@@ -105,4 +106,5 @@ __all__ = [
     "should_trigger_verified_fallback", "build_verified_bot", "run_verified_fallback_on_state",
     "RedisLayeredBlackboard", "list_resumable_state_ids", "resume_interrupted_state",
     "scan_and_resume", "redis_board_enabled", "enqueue_pending_resumes", "enqueue_resume_job",
+    "append_agent_event",
 ]

@@ -107,10 +107,10 @@ def build_repair_directive(state: AgentState) -> RepairDirective:
         actions.append("revise strict_spec and spec_request to address QA errors explicitly")
         constraints.append("معالجة أخطاء QA صراحة في المواصفات")
 
-    # On later attempts: drop excess features to stabilize
+    # Align with verified-fallback budget (default 1): trim excess features early.
     attempt = int(state.attempts or 0)
     spec = StrictSpec.from_dict(state.strict_spec or {})
-    if attempt >= 2 and len(spec.features) > 4:
+    if attempt >= 1 and len(spec.features) > 4:
         drop = list(spec.features[4:])
         actions.append("reduce features to the first 4 core capabilities")
         constraints.append("قلّل الميزات إلى 4 كحد أقصى")

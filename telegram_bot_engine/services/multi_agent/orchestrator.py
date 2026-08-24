@@ -241,16 +241,36 @@ class Orchestrator:
             directive = build_repair_directive(state)
             hist = list((state.extensions or {}).get("repair_history") or [])
             cur_h = spec_hash(state.strict_spec)
-            stagnant = bool(hist) and any(h.get("spec_hash") == cur_h for h in hist[-2:])
+            # Stagnant if this hash already appeared in recent history OR matches last repair hash.
+            prev_h = str(directive.previous_spec_hash or "")
+            stagnant = bool(hist) and (
+                any(h.get("spec_hash") == cur_h for h in hist[-3:])
+                or (bool(prev_h) and prev_h == cur_h)
+            )
             directive.stagnant = stagnant
             state.extensions["last_repair"] = directive.to_dict()
             try:
                 record_repair_history(state, directive, cur_h)
             except Exception:
                 pass
+            try:
+                from .redis_board import append_agent_event
+                append_agent_event(
+                    state.state_id,
+                    "repair_decision",
+                    {
+                        "attempts": int(state.attempts or 0),
+                        "stagnant": stagnant,
+                        "spec_hash": cur_h,
+                        "qa_errors": list((state.qa_report or {}).get("errors") or [])[:5],
+                    },
+                )
+            except Exception:
+                pass
 
             exhausted = int(state.attempts or 0) >= max_att
             already = bool((state.extensions or {}).get("fallback_template_tried"))
+            # Verified template wins: stagnant, attempt budget, or exhausted — never soft-loop forever.
             if should_trigger_verified_fallback(
                 attempts=int(state.attempts or 0),
                 stagnant=stagnant,

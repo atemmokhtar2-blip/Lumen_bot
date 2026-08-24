@@ -187,6 +187,18 @@ def main() -> None:
             )
     except Exception:
         logger.exception("Gemini status probe failed at boot")
+
+    # Resume interrupted multi-agent generations after crash/restart (Redis/file board).
+    try:
+        from telegram_bot_engine.services.multi_agent.redis_board import enqueue_pending_resumes
+        _resumed = enqueue_pending_resumes(
+            limit=int(os.getenv("MULTI_AGENT_RESUME_BOOT_LIMIT") or "20")
+        )
+        if _resumed:
+            logger.info("multi_agent resume boot enqueued=%s", len(_resumed))
+    except Exception:
+        logger.warning("multi_agent resume boot skipped", exc_info=True)
+
     allowed_repr = (
         sorted(ALLOWED_USER_IDS)
         if ALLOWED_USER_IDS

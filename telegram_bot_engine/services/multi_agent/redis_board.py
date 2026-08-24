@@ -61,6 +61,53 @@ def _uk(user_id: int) -> str:
     return f"{_PREFIX}user:{int(user_id)}"
 
 
+def _stream_key(state_id: str) -> str:
+    safe = "".join(c for c in state_id if c.isalnum() or c in "-_")[:80]
+    return f"{_PREFIX}stream:{safe}"
+
+
+def _events_index() -> str:
+    return f"{_PREFIX}streams"
+
+
+def append_agent_event(
+    state_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> str | None:
+    """Append-only Redis Stream event for multi-agent transitions (resumability).
+
+    Best-effort: never raises to callers. Returns stream entry id or None.
+    """
+    if not state_id or not redis_board_enabled():
+        return None
+    if (os.environ.get("MULTI_AGENT_EVENT_STREAM") or "1").strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return None
+    try:
+        r = get_redis_mirror().conn()
+        fields = {
+            "type": str(event_type or "event")[:64],
+            "ts": str(time.time()),
+            "payload": json.dumps(payload or {}, ensure_ascii=False)[:8000],
+        }
+        entry_id = r.xadd(
+            _stream_key(state_id),
+            fields,
+            maxlen=int(os.environ.get("MULTI_AGENT_STREAM_MAXLEN") or "500"),
+            approximate=True,
+        )
+        # Track active streams for boot scan
+        r.sadd(_events_index(), state_id)
+        r.expire(_events_index(), _TTL)
+        r.expire(_stream_key(state_id), _TTL)
+        return str(entry_id) if entry_id else None
+    except Exception:
+        logger.debug("append_agent_event failed id=%s", state_id, exc_info=True)
+        return None
+
+
 class RedisMirror:
     def __init__(self) -> None:
         self._c = None
@@ -85,6 +132,18 @@ class RedisMirror:
             if state.user_id:
                 pipe.set(_uk(int(state.user_id)), state.state_id, ex=_TTL)
             pipe.execute()
+            # Durable event log for crash recovery / audit
+            append_agent_event(
+                state.state_id,
+                "state_put",
+                {
+                    "status": state.status,
+                    "attempts": int(getattr(state, "attempts", 0) or 0),
+                    "user_id": int(getattr(state, "user_id", 0) or 0),
+                    "qa_passed": bool(getattr(state, "qa_passed", False)),
+                    "build_success": bool(getattr(state, "build_success", False)),
+                },
+            )
         except Exception:
             logger.warning("redis mirror put failed id=%s", state.state_id, exc_info=True)
 
@@ -321,4 +380,5 @@ __all__ = [
     "scan_and_resume",
     "enqueue_resume_job",
     "enqueue_pending_resumes",
+    "append_agent_event",
 ]

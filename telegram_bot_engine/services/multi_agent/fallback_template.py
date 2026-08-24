@@ -16,10 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def fallback_after_attempts() -> int:
+    """Hard default: verified template after the first failed attempt.
+
+    Override with FALLBACK_TEMPLATE_AFTER_ATTEMPTS (1..5). Soft repair must not
+    burn tokens once the budget is reached or the loop is stagnant.
+    """
     try:
-        return max(1, min(int(os.environ.get("FALLBACK_TEMPLATE_AFTER_ATTEMPTS") or "2"), 5))
+        return max(1, min(int(os.environ.get("FALLBACK_TEMPLATE_AFTER_ATTEMPTS") or "1"), 5))
     except ValueError:
-        return 2
+        return 1
 
 
 def should_trigger_verified_fallback(
@@ -28,7 +33,11 @@ def should_trigger_verified_fallback(
     stagnant: bool,
     already_tried: bool,
 ) -> bool:
-    """Trigger once: stagnant OR attempts budget reached; never if already tried."""
+    """Trigger once: stagnant OR attempts budget reached; never if already tried.
+
+    Fail-closed against endless Architect→Builder→Critic: a repeated spec hash
+    or the attempt budget forces the verified template path immediately.
+    """
     if already_tried:
         return False
     if stagnant:
