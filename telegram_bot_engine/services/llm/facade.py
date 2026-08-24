@@ -3,7 +3,8 @@
 Environment (step 2 defaults — speed + quality split):
   TRANSLATE_PROVIDER=gemini|groq   default: gemini
   CHAT_PROVIDER=groq|gemini        default: groq
-  Fallbacks: translate gemini→groq, chat groq→gemini
+  Fallbacks: disabled when TBE_STRICT_LLM_ROLES=1 (default):
+    translate = Gemini only | chat = Groq only
 
 Callers must use ``translate_request`` / ``chat_request`` from this module
 or from ``translator_client`` (re-exports). Do not import Groq/Gemini
@@ -64,11 +65,19 @@ def get_chat_provider() -> ChatProvider:
     return cls()  # type: ignore[return-value]
 
 
+def _strict_llm_roles() -> bool:
+    """Gemini=translate only, Groq/Grok=chat only (default ON)."""
+    raw = (os.getenv("TBE_STRICT_LLM_ROLES") or "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
 def _translate_chain() -> list:
-    """Primary + fallback translate providers (deduped)."""
+    """Translate providers: Gemini only when strict roles; else primary+fallback."""
     primary = get_translate_provider()
+    if _strict_llm_roles():
+        # Force Gemini for translation — never Groq
+        return [GeminiTranslateAdapter()]
     chain = [primary]
-    # fallback: other vendor
     if getattr(primary, "name", "") == "gemini":
         chain.append(GroqTranslateAdapter())
     else:
@@ -85,8 +94,11 @@ def _translate_chain() -> list:
 
 
 def _chat_chain() -> list:
-    """Primary + fallback chat providers (deduped)."""
+    """Chat providers: Groq only when strict roles; else primary+fallback."""
     primary = get_chat_provider()
+    if _strict_llm_roles():
+        # Force Groq for chat — never Gemini
+        return [GroqChatAdapter()]
     chain = [primary]
     if getattr(primary, "name", "") == "groq":
         chain.append(GeminiChatAdapter())

@@ -513,22 +513,30 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
 
 
 
-def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """LLM → DynamicBotSpec JSON only (no Python). Validates via infinite AST validator.
+def translate_infinite_via_gemini(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """LLM → DynamicBotSpec JSON only (no Python).
 
-    Self-correction: on schema validation failure, resubmit with error detail
-    up to TBE_INFINITE_CORRECT_RETRIES times (default 3).
+    Uses **Gemini only** (translate role). Validates via infinite AST validator.
+    Self-correction: on schema failure, resubmit with error up to N retries.
     """
     try:
         from telegram_bot_engine.services.prompt_fence import sanitize_user_text
         text = sanitize_user_text(text or "", max_len=4000)
     except Exception:
         text = (text or "")[:4000]
-    if not _enabled():
+
+    try:
+        from telegram_bot_engine.services.gemini_client import enabled as gemini_enabled, _available_api_keys, model_name, _timeout
+    except Exception:
+        logger.exception("gemini_client unavailable for infinite translate")
         return None
-    keys = _available_keys()
+    if not gemini_enabled():
+        logger.warning("infinite translate skipped: Gemini disabled / no key")
+        return None
+    keys = _available_api_keys()
     if not keys:
         return None
+
     try:
         from telegram_bot_engine.spec_core.infinite.llm_contract import (
             SYSTEM_PROMPT_INFINITE,
@@ -551,8 +559,6 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
         system = system + system_prompt_injection_rules()
     except Exception:
         pass
-
-    # Macro discovery: inject top macros as hints
     try:
         from telegram_bot_engine.spec_core.infinite.macro_registry import get_macro_registry
         macros = get_macro_registry().list_macros(limit=8)
@@ -566,15 +572,19 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
         pass
 
     schema = dynamic_spec_json_schema()
-    models = _models()
     last_error: dict[str, Any] | None = None
     last_raw = ""
+    primary = model_name()
+    models = [primary]
+    for extra in ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"):
+        if extra not in models:
+            models.append(extra)
 
     for attempt in range(max_retries):
         user_payload: dict[str, Any] = {
             "USER_REQUEST": text,
             "OUTPUT_SCHEMA": schema,
-            "INSTRUCTION": "Emit DynamicBotSpec JSON only matching OUTPUT_SCHEMA.",
+            "INSTRUCTION": "Emit DynamicBotSpec JSON only matching OUTPUT_SCHEMA. Never write Python.",
             "ATTEMPT": attempt + 1,
             "MAX_ATTEMPTS": max_retries,
         }
@@ -582,60 +592,77 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
             user_payload["PREVIOUS_VALIDATION_ERROR"] = last_error
             user_payload["PREVIOUS_RAW"] = last_raw[:1500]
             user_payload["INSTRUCTION"] = (
-                "Your previous JSON failed validation. Fix ONLY the schema errors listed in "
+                "Previous JSON failed validation. Fix ONLY the schema errors in "
                 "PREVIOUS_VALIDATION_ERROR. Emit corrected DynamicBotSpec JSON only."
             )
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-        ]
-        composed = None
-        for source, api_key in keys:
+        prompt = (
+            system
+            + "\n\n---\n"
+            + json.dumps(user_payload, ensure_ascii=False)
+        )
+        got_content = False
+        for key_source, api_key in keys:
             for model in models:
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent"
+                )
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.1 if attempt == 0 else 0.05,
+                        "responseMimeType": "application/json",
+                        "maxOutputTokens": int(os.getenv("GEMINI_TRANSLATOR_MAX_TOKENS") or "2048"),
+                    },
+                }
                 try:
                     response = requests.post(
-                        _GROQ_URL,
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={
-                            "model": model,
-                            "temperature": 0.1 if attempt == 0 else 0.05,
-                            "max_tokens": int(os.getenv("GROQ_TRANSLATOR_MAX_TOKENS") or "1200"),
-                            "response_format": {"type": "json_object"},
-                            "messages": messages,
-                        },
+                        url,
+                        params={"key": api_key},
+                        json=payload,
                         timeout=_timeout(),
                     )
                     if response.status_code >= 400:
+                        logger.warning(
+                            "infinite gemini HTTP %s model=%s source=%s",
+                            response.status_code, model, key_source,
+                        )
                         continue
                     body = response.json()
-                    content = (
-                        ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-                        or ""
-                    )
+                    # Extract text from Gemini response
+                    content = ""
+                    try:
+                        parts = (
+                            ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts")
+                            or []
+                        )
+                        content = "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict))
+                    except Exception:
+                        content = ""
+                    if not content.strip():
+                        continue
+                    got_content = True
                     bot, dyn, err = try_compose_infinite(content)
                     if err or bot is None or dyn is None:
                         last_error = err if isinstance(err, dict) else {"ok": False, "detail": str(err)}
-                        last_raw = content or ""
+                        last_raw = content
                         logger.info(
-                            "infinite validate fail attempt=%s err=%s",
-                            attempt + 1,
-                            last_error,
+                            "infinite gemini validate fail attempt=%s err=%s",
+                            attempt + 1, last_error,
                         )
-                        composed = None
-                        break  # next attempt with correction
-                    # success — optional macro promote on high confidence
+                        break  # next correction attempt
                     try:
                         if (context or {}).get("promote_macro"):
                             from telegram_bot_engine.spec_core.infinite.macro_registry import get_macro_registry
-                            get_macro_registry().promote(dyn, score=float((context or {}).get("macro_score") or 1.0))
+                            get_macro_registry().promote(
+                                dyn, score=float((context or {}).get("macro_score") or 1.0)
+                            )
                     except Exception:
                         pass
                     return {
                         "ok": True,
                         "engine": "infinite_v1",
+                        "provider": "gemini",
                         "dynamic_spec": dyn.model_dump(),
                         "bot_spec": bot.to_dict(),
                         "purpose": dyn.description or dyn.bot_name,
@@ -648,26 +675,31 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
                     }
                 except Exception as exc:
                     logger.warning(
-                        "infinite translate failed model=%s attempt=%s: %s",
-                        model,
-                        attempt + 1,
-                        type(exc).__name__,
+                        "infinite gemini failed model=%s attempt=%s: %s",
+                        model, attempt + 1, type(exc).__name__,
                     )
                     continue
-            if composed is None and last_error:
-                break  # outer attempt loop continues
-        if last_error is None:
+            if got_content and last_error:
+                break  # correction attempt
+        if last_error is None and not got_content:
             break
 
     if last_error:
         return {
             "ok": False,
             "engine": "infinite_v1",
+            "provider": "gemini",
             "validation_error": last_error,
             "raw": last_raw[:2000],
             "correction_attempts": max_retries,
         }
     return None
+
+
+# Back-compat alias — infinite path is Gemini-only (translate role)
+def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Deprecated name: delegates to Gemini (translate role only)."""
+    return translate_infinite_via_gemini(text, context)
 
 
 
@@ -679,11 +711,11 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
     # Prefer infinite when explicitly requested, forced by env, or auto + custom gap
     use_infinite = bool(ctx.get("infinite")) or env_on or (env_auto and looks_custom)
     if use_infinite:
-        inf = translate_infinite_via_groq(text, context=ctx)
+        inf = translate_infinite_via_gemini(text, context=ctx)
         if inf is not None:
             return inf
 
-    """Stable public API — provider chosen by llm.facade (default: Groq)."""
+    """Stable public API — provider chosen by llm.facade (default translate: Gemini)."""
     try:
         from telegram_bot_engine.services.prompt_fence import sanitize_user_text
         text = sanitize_user_text(text or "", max_len=8000)
@@ -706,6 +738,6 @@ def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[
 
 
 def chat_request(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Stable public API — provider chosen by llm.facade (default: Gemini)."""
+    """Stable public API — provider chosen by llm.facade (default chat: Groq)."""
     from .llm.facade import chat_request as _facade_chat
     return _facade_chat(message, context)

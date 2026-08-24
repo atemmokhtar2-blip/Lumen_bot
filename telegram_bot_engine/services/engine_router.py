@@ -197,7 +197,7 @@ def execute_ir(
     if mode == EngineMode.INFINITE:
         try:
             from telegram_bot_engine.spec_core.infinite.compose import try_compose_infinite
-            from telegram_bot_engine.services.translator_client import translate_infinite_via_groq
+            from telegram_bot_engine.services.translator_client import translate_infinite_via_gemini
             from telegram_bot_engine.spec_core.pipeline import build_from_spec
             from telegram_bot_engine.spec_core.infinite.jit_compiler import compile_to_project
         except Exception as exc:
@@ -212,7 +212,7 @@ def execute_ir(
                 bot, dyn, err = try_compose_infinite(dyn_payload)
             if bot is None:
                 # re-translate via infinite if needed
-                inf = translate_infinite_via_groq(
+                inf = translate_infinite_via_gemini(
                     ir.original_text or ir.spec_request,
                     context={"infinite": True, "looks_custom": True},
                 )
