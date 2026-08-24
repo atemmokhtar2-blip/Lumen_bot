@@ -133,6 +133,14 @@ class BillingService:
         plan = get_plan(t.plan_id)
         if not get_metering().check_rpm(tenant_id, plan.api_rpm):
             return False, f"rate_limited:{plan.api_rpm}_rpm"
+        # Hard LLM budget (tokens / USD daily) — cuts before model spend.
+        try:
+            from .rate_limit import check_tenant_llm_budget
+            ok_b, reason_b = check_tenant_llm_budget(str(tenant_id), add_tokens=0, add_usd=0.0)
+            if not ok_b:
+                return False, reason_b
+        except Exception:
+            pass
         return True, "ok"
 
     def create_monthly_invoice(self, tenant_id: str, plan_id: str | None = None) -> Invoice | None:

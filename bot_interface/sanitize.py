@@ -1,36 +1,67 @@
-"""Sanitize secrets and paths before user-facing errors or job storage."""
+"""Sanitize secrets and paths before user-facing errors or job storage.
+
+Multi-pass redaction: normalize unicode/spacing, apply many secret patterns
+repeatedly until stable. Regex alone is imperfect; iteration + broad patterns
+close common bypasses (extra spaces, zero-width chars, alternate prefixes).
+"""
 from __future__ import annotations
 
 import re
+import unicodedata
 
-# Telegram bot tokens: 123456:AA... (BotFather uses 6–12 digit ids)
-_TG_TOKEN = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b")
+# Telegram bot tokens: 123456:AA...
+_TG_TOKEN = re.compile(r"\b\d{6,12}\s*:\s*[A-Za-z0-9_-]{20,}\b")
 # GitHub PATs + fine-grained
 _GH_TOKEN = re.compile(
-    r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{10,}\b"
+    r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)\s*[A-Za-z0-9_]{10,}\b",
+    re.I,
 )
 # Stripe / sk_ live keys
-_STRIPE = re.compile(r"\b(sk_live_|sk_test_|pk_live_|pk_test_|whsec_)[A-Za-z0-9]+")
-# Generic bearer / api keys
-_BEARER = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-]{12,}")
+_STRIPE = re.compile(r"\b(sk_live_|sk_test_|pk_live_|pk_test_|whsec_)\s*[A-Za-z0-9]+", re.I)
+# OpenAI / Anthropic / Groq / Gemini style keys
+_LLM_KEY = re.compile(
+    r"\b(sk-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xai-[A-Za-z0-9]{20,})\b"
+)
+# JWT-ish
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+# Generic bearer / api keys (allow spaces around = or :)
+_BEARER = re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+=/]{12,}")
 _API_KEY = re.compile(
-    r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?([^\s'\"]{8,})"
+    r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|passwd|private[_-]?key|"
+    r"client[_-]?secret|authorization)\s*[:=]\s*['\"]?([^\s'\",;]{8,})"
 )
 # Absolute paths that may leak host layout
-_ABS_PATH = re.compile(r"(/(?:home|tmp|var|app|usr|opt|root)/[^\s:\"']+)")
-# Shell-dangerous chars for path validation (incl. command substitution)
+_ABS_PATH = re.compile(r"(/(?:home|tmp|var|app|usr|opt|root|Users|data)/[^\s:\"']+)")
+# Shell-dangerous chars for path validation
 _UNSAFE_PATH = re.compile(r"[;|&$`<>\\\n\r\0*(){}\[\]!#]")
+# Zero-width / bidi controls often used to evade simple regex
+_ZW = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff]")
+
+
+def _normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    s = _ZW.sub("", s)
+    # Collapse odd whitespace around separators used in secrets
+    s = re.sub(r"([:=])\s+", r"\1", s)
+    return s
 
 
 def sanitize_error(text: str, *, max_len: int = 200) -> str:
     """Redact tokens/secrets/paths from an error string for user or log display."""
-    s = str(text or "")
-    s = _TG_TOKEN.sub("[REDACTED_TELEGRAM_TOKEN]", s)
-    s = _GH_TOKEN.sub("[REDACTED_GITHUB_TOKEN]", s)
-    s = _STRIPE.sub("[REDACTED_STRIPE_KEY]", s)
-    s = _BEARER.sub(r"\1[REDACTED]", s)
-    s = _API_KEY.sub(r"\1=[REDACTED]", s)
-    s = _ABS_PATH.sub("[PATH]", s)
+    s = _normalize(text)
+    # Multi-pass until stable (handles nested / partial matches)
+    for _ in range(4):
+        prev = s
+        s = _TG_TOKEN.sub("[REDACTED_TELEGRAM_TOKEN]", s)
+        s = _GH_TOKEN.sub("[REDACTED_GITHUB_TOKEN]", s)
+        s = _STRIPE.sub("[REDACTED_STRIPE_KEY]", s)
+        s = _LLM_KEY.sub("[REDACTED_LLM_KEY]", s)
+        s = _JWT.sub("[REDACTED_JWT]", s)
+        s = _BEARER.sub(r"\1[REDACTED]", s)
+        s = _API_KEY.sub(r"\1=[REDACTED]", s)
+        s = _ABS_PATH.sub("[PATH]", s)
+        if s == prev:
+            break
     s = s.replace("\x00", "")
     return s[: max(0, int(max_len))]
 
@@ -49,28 +80,20 @@ def assert_safe_fs_path(path: str) -> str:
         raise ValueError("invalid_path_characters")
     if "\n" in p or "\r" in p or "\x00" in p:
         raise ValueError("invalid_path_characters")
-    # Reject path segments that look like shell expansion
     if any(seg.startswith("-") and len(seg) > 1 for seg in p.replace("\\", "/").split("/")):
-        # allow relative "./x" but not "--flag"
         if "--" in p:
             raise ValueError("invalid_path_characters")
     return p
 
 
-__all__ = ["sanitize_error", "sanitize_for_storage", "assert_safe_fs_path", "sanitize_log_text"]
-
-
 def sanitize_log_text(text: str, *, max_len: int = 4000) -> str:
     """Strip secrets and HTML/JS-looking payloads from logs shown to users/admins."""
-    import re
-    s = (text or "")
-    # Redact token-like and key-like values
-    s = re.sub(r"(?i)(bot[_-]?token|api[_-]?key|secret|password|authorization)\s*[:=]\s*\S+", r"\1=[REDACTED]", s)
-    s = re.sub(r"\b\d{8,12}:[A-Za-z0-9_-]{20,}\b", "[REDACTED_BOT_TOKEN]", s)
-    s = re.sub(r"\b(sk_live_|sk_test_|ghp_|github_pat_|glpat-)[A-Za-z0-9_-]+", "[REDACTED_SECRET]", s)
-    # Neutralize HTML/script for admin UI
+    s = sanitize_error(text or "", max_len=max(max_len, 4000))
     s = s.replace("<", "&lt;").replace(">", "&gt;")
     s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", s)
     if len(s) > max_len:
         s = s[: max_len - 1] + "…"
     return s
+
+
+__all__ = ["sanitize_error", "sanitize_for_storage", "assert_safe_fs_path", "sanitize_log_text"]

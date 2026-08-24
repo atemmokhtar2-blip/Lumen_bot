@@ -301,3 +301,86 @@ def get_rate_limiter() -> RateLimiter:
     if _LIMITER is None:
         _LIMITER = RateLimiter()
     return _LIMITER
+
+
+# ── Tenant LLM hard budget (tokens / estimated USD) ───────────────────────────
+# Soft RPM alone cannot stop LLM cost burn. These hard caps refuse the request
+# immediately when daily token or USD budget is exhausted.
+
+def _budget_defaults() -> tuple[int, float]:
+    try:
+        tokens = int(os.getenv("TENANT_LLM_TOKEN_DAILY_CAP") or "500000")
+    except ValueError:
+        tokens = 500_000
+    try:
+        usd = float(os.getenv("TENANT_LLM_USD_DAILY_CAP") or "25")
+    except ValueError:
+        usd = 25.0
+    return max(0, tokens), max(0.0, usd)
+
+
+def check_tenant_llm_budget(
+    tenant_id: str,
+    *,
+    add_tokens: int = 0,
+    add_usd: float = 0.0,
+) -> tuple[bool, str]:
+    """Hard-cap daily LLM usage per tenant. Returns (allowed, reason).
+
+    Uses Redis when available; process-local counters in pure dev only.
+    add_* are reserved/consumed only when the call is allowed.
+    """
+    tid = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(tenant_id or "anon"))[:80]
+    tok_cap, usd_cap = _budget_defaults()
+    if tok_cap <= 0 and usd_cap <= 0:
+        return True, "budget_disabled"
+
+    day = time.strftime("%Y%m%d", time.gmtime())
+    tok_key = f"llm_tok:{tid}:{day}"
+    usd_key = f"llm_usd:{tid}:{day}"
+
+    # Try Redis atomic INCR
+    url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+    if url:
+        try:
+            import redis
+            r = redis.Redis.from_url(url, decode_responses=True)
+            pipe = r.pipeline()
+            pipe.get(tok_key)
+            pipe.get(usd_key)
+            cur_tok_s, cur_usd_s = pipe.execute()
+            cur_tok = int(float(cur_tok_s or 0))
+            cur_usd = float(cur_usd_s or 0)
+            if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
+                return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
+            if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
+                return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
+            if add_tokens or add_usd:
+                pipe = r.pipeline()
+                if add_tokens:
+                    pipe.incrby(tok_key, int(add_tokens))
+                    pipe.expire(tok_key, 48 * 3600)
+                if add_usd:
+                    pipe.incrbyfloat(usd_key, float(add_usd))
+                    pipe.expire(usd_key, 48 * 3600)
+                pipe.execute()
+            return True, "ok"
+        except Exception:
+            logger.warning("llm budget redis failed; refusing in non-dev", exc_info=True)
+            env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+            if env not in {"dev", "development", "local", "test"}:
+                return False, "llm_budget_backend_unavailable"
+            # fall through to memory in dev
+
+    # Dev memory fallback
+    store = getattr(check_tenant_llm_budget, "_mem", None)
+    if store is None:
+        store = {}
+        check_tenant_llm_budget._mem = store  # type: ignore[attr-defined]
+    cur_tok, cur_usd = store.get(tok_key, (0, 0.0))
+    if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
+        return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
+    if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
+        return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
+    store[tok_key] = (cur_tok + max(0, int(add_tokens)), cur_usd + max(0.0, float(add_usd)))
+    return True, "ok"

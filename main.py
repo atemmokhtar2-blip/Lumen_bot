@@ -49,6 +49,31 @@ from bot_interface import (
 from bot_interface.commands import handle_non_text, unknown_cmd
 
 
+# Graceful shutdown coordination (API death → stop polling cleanly)
+_shutdown_reason: str = ""
+_shutdown_event = threading.Event()
+_active_application = None  # set in main() so watchdog can stop polling
+
+
+def _request_graceful_shutdown(reason: str) -> None:
+    """Request process exit without os._exit — stop PTB application first."""
+    global _shutdown_reason, _active_application
+    _shutdown_reason = reason or "shutdown"
+    _shutdown_event.set()
+    app = _active_application
+    if app is not None:
+        try:
+            app.stop()
+        except Exception:
+            logger.exception("application.stop during graceful shutdown failed")
+        try:
+            app.shutdown()
+        except Exception:
+            pass
+
+
+
+
 def _start_b2b_api_process(port: int) -> None:
     """Run B2B API in a dedicated process (aiohttp needs main-thread signals otherwise).
 
@@ -103,8 +128,8 @@ def _start_b2b_api_thread(port: int, death_event=None) -> None:
             death_event.set()
         except Exception:
             pass
-    # Hard stop: consumer bot alone is not a healthy ENABLE_API deployment
-    os._exit(1)
+    # Graceful: signal death_event only; main loop stops polling and cleans up.
+    # Avoid os._exit which can truncate in-flight work and corrupt SQLite/WAL.
 
 
 
@@ -257,15 +282,17 @@ def main() -> None:
             """Fail-fast if API process/thread dies while bot is still polling."""
             while True:
                 if api_death.is_set():
-                    logger.error("B2B API death_event set — stopping main process")
-                    os._exit(1)
+                    logger.error("B2B API death_event set — requesting graceful shutdown")
+                    _request_graceful_shutdown("api_death_event")
+                    return
                 if api_proc is not None and not api_proc.is_alive():
                     code = api_proc.exitcode
                     logger.error(
-                        "B2B API process died (exitcode=%s) — stopping main process",
+                        "B2B API process died (exitcode=%s) — requesting graceful shutdown",
                         code,
                     )
-                    os._exit(1 if code else 1)
+                    _request_graceful_shutdown(f"api_proc_exit:{code}")
+                    return
                 time.sleep(2.0)  # noqa: watchdog interval
 
         threading.Thread(
@@ -321,7 +348,12 @@ def main() -> None:
             except Exception:
                 app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
             _wire(app)
+            global _active_application
+            _active_application = app
             logger.info("Polling cycle %s/%s starting…", cycle, max_cycles)
+            if _shutdown_event.is_set():
+                logger.error("Shutdown already requested (%s) — not starting polling", _shutdown_reason)
+                break
             app.run_polling(
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=False,
@@ -334,6 +366,10 @@ def main() -> None:
             )
             _cleanup_application(app)
             app = None
+            _active_application = None
+            if _shutdown_event.is_set():
+                logger.error("Graceful shutdown complete (%s)", _shutdown_reason)
+                raise SystemExit(1)
         except SystemExit:
             raise
         except KeyboardInterrupt:

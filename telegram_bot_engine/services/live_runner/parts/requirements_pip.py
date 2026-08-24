@@ -60,51 +60,23 @@ _TRANSITIVE_WHEN = {
 
 
 def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
-    """Whitelist-style sanitizer: only pure PyPI package specs.
+    """Strict sanitizer + package allowlist via requirements_policy.
 
-    Blocks editable, VCS, nested -r, local paths, direct URLs, archives
-    (sdist setup.py RCE surface), and unknown flags.
+    Blocks VCS/URL/path/archives and drops non-allowlisted packages (RCE/supply-chain).
     """
+    from telegram_bot_engine.services.requirements_policy import sanitize_requirements_text
+
     warnings: list[str] = []
+    raw_text = req.read_text(encoding="utf-8", errors="ignore")
+    cleaned_text, pol_warns = sanitize_requirements_text(raw_text)
+    warnings.extend(pol_warns)
     lines_out: list[str] = []
-    for line in req.read_text(encoding="utf-8", errors="ignore").splitlines():
-        raw = line.strip()
-        if not raw or raw.startswith("#"):
-            continue
-        low = raw.lower()
-        if raw.startswith(("-e ", "--editable")) or low.startswith("git+") or "git+" in low:
-            warnings.append(f"skipped_vcs_or_editable:{raw[:60]}")
-            continue
-        if low.startswith(("hg+", "svn+", "bzr+", "ssh+")):
-            warnings.append(f"skipped_vcs:{raw[:60]}")
-            continue
-        if raw.startswith(("-r ", "--requirement")):
-            warnings.append(f"skipped_nested_req:{raw[:60]}")
-            continue
-        if any(x in low for x in ("http://", "https://", "file://", "ftp://")):
-            warnings.append(f"skipped_url:{raw[:60]}")
-            continue
-        # Local / relative path specs
-        name_part = re.split(r"[<>=!~;\[@]", raw)[0].strip()
-        if (
-            raw.startswith(("/", ".", "~"))
-            or "\\" in name_part
-            or "/" in name_part
-            or name_part.startswith(".")
-        ):
-            warnings.append(f"skipped_local_path:{raw[:60]}")
-            continue
-        if any(low.rstrip().endswith(ext) for ext in (".tar.gz", ".zip", ".tgz", ".tar", ".whl")):
-            warnings.append(f"skipped_archive:{raw[:60]}")
-            continue
-        if raw.startswith("-"):
-            warnings.append(f"skipped_flag:{raw[:60]}")
+    for raw in cleaned_text.splitlines():
+        raw = raw.strip()
+        if not raw:
             continue
         name = re.split(r"[<>=!~;\[]", raw)[0].strip().lower()
         name_us = name.replace("-", "_")
-        if not name or not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._+-]*$", name):
-            warnings.append(f"skipped_invalid_name:{raw[:60]}")
-            continue
         if name_us in _NEVER_PIP_INSTALL or name in _NEVER_PIP_INSTALL or name_us in _STDLIB_SKIP:
             warnings.append(f"skipped_stdlib_or_invalid:{raw[:60]}")
             continue
@@ -113,7 +85,6 @@ def _sanitize_requirements(req: Path) -> tuple[Path, list[str]]:
     cleaned = req.parent / ".tbe_requirements_clean.txt"
     cleaned.write_text("\n".join(lines_out) + ("\n" if lines_out else ""), encoding="utf-8")
     return cleaned, warnings
-
 
 
 def _present_packages(lines: list[str]) -> set[str]:
@@ -817,12 +788,18 @@ def _ensure_packages_in_requirements(root: Path, packages: list[str]) -> list[st
     """
     if not packages:
         return []
+    try:
+        from telegram_bot_engine.services.requirements_policy import is_package_allowed
+    except Exception:
+        def is_package_allowed(n: str) -> bool:  # type: ignore
+            return True
     packages = [
         p for p in packages
         if p
         and p.lower().replace("-", "_") not in _NEVER_PIP_INSTALL
         and p.lower().replace("-", "_") not in _STDLIB_SKIP
         and p.lower() not in {"types", "typing"}
+        and is_package_allowed(p)
     ]
     if not packages:
         return []
