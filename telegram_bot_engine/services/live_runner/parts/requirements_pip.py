@@ -761,10 +761,11 @@ def _pip_install_packages_direct(
     Auto-heal installs are OFF by default (supply-chain). Enable only with
     TBE_AUTO_HEAL_PIP=1 for trusted local tooling.
     """
-    import os as _os
-    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
-        "1", "true", "yes", "on",
-    }:
+    try:
+        from telegram_bot_engine.services.prod_hard_locks import auto_heal_pip_allowed
+        if not auto_heal_pip_allowed():
+            return False, "auto_heal_pip_disabled"
+    except Exception:
         return False, "auto_heal_pip_disabled"
     if not packages:
         return True, ""
@@ -817,10 +818,11 @@ def _preflight_ensure_deps(root: Path) -> list[str]:
     Before first run: AST-scan project imports, map to packages.
     DISABLED unless TBE_AUTO_HEAL_PIP=1.
     """
-    import os as _os
-    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
-        "1", "true", "yes", "on",
-    }:
+    try:
+        from telegram_bot_engine.services.prod_hard_locks import auto_heal_pip_allowed
+        if not auto_heal_pip_allowed():
+            return []
+    except Exception:
         return []
     mods = _collect_project_third_party_imports(root)
     pkgs = _packages_from_modules(mods)
@@ -859,10 +861,11 @@ def _ensure_packages_in_requirements(root: Path, packages: list[str]) -> list[st
     Append missing packages to requirements.txt.
     DISABLED unless TBE_AUTO_HEAL_PIP=1 (supply-chain: no silent package injection).
     """
-    import os as _os
-    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
-        "1", "true", "yes", "on",
-    }:
+    try:
+        from telegram_bot_engine.services.prod_hard_locks import auto_heal_pip_allowed
+        if not auto_heal_pip_allowed():
+            return []
+    except Exception:
         return []
     if not packages:
         return []

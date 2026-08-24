@@ -467,10 +467,11 @@ class LocalProcessDriver(DeploymentProvider):
                     packages.append(pkg)
             if not packages and contract.primary and contract.primary.suggested_package:
                 packages = [contract.primary.suggested_package]
-            import os as _heal_os
-            if (_heal_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
-                "1", "true", "yes", "on",
-            }:
+            try:
+                from telegram_bot_engine.services.prod_hard_locks import auto_heal_pip_allowed
+                if not auto_heal_pip_allowed():
+                    packages = []
+            except Exception:
                 packages = []
             if not packages:
                 import re as _re

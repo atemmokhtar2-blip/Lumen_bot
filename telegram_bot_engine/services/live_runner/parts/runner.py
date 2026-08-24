@@ -304,11 +304,12 @@ class LiveRunnerService:
                     "none",
                 ):
                     packages = list(contract.heal_packages)
-                    import os as _heal_os
-                    if (_heal_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
-                        "1", "true", "yes", "on",
-                    }:
-                        packages = []  # supply-chain: no auto-install from ModuleNotFoundError
+                    try:
+                        from telegram_bot_engine.services.prod_hard_locks import auto_heal_pip_allowed
+                        if not auto_heal_pip_allowed():
+                            packages = []
+                    except Exception:
+                        packages = []
                 elif (
                     action == "install_package"
                     and contract.primary

@@ -371,10 +371,11 @@ class DockerProcessDriver(DeploymentProvider):
             env_file_path = ef.name
             # Token NOT in env-file by default — secret file mount is the source of truth.
             # Entrypoint loads /run/secrets/bot_token into process env at start only.
-            import os as _os_tok
-            put_token_in_env = (_os_tok.environ.get("TBE_TOKEN_IN_ENV_FILE") or "0").strip().lower() in {
-                "1", "true", "yes", "on",
-            }
+            try:
+                from telegram_bot_engine.services.prod_hard_locks import token_in_env_file_allowed
+                put_token_in_env = token_in_env_file_allowed()
+            except Exception:
+                put_token_in_env = False
             if put_token_in_env:
                 ef.write(f"BOT_TOKEN={bot_token.strip()}\n")
                 ef.write(f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n")
