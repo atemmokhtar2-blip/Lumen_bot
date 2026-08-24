@@ -814,10 +814,14 @@ def _pip_install_packages_direct(
 
 def _preflight_ensure_deps(root: Path) -> list[str]:
     """
-    Before first run: AST-scan project imports, map to packages,
-    append any missing ones to requirements.txt.
-    Returns list of packages added.
+    Before first run: AST-scan project imports, map to packages.
+    DISABLED unless TBE_AUTO_HEAL_PIP=1.
     """
+    import os as _os
+    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return []
     mods = _collect_project_third_party_imports(root)
     pkgs = _packages_from_modules(mods)
     if not pkgs:
@@ -853,9 +857,13 @@ def _packages_already_in_requirements(root: Path) -> set[str]:
 def _ensure_packages_in_requirements(root: Path, packages: list[str]) -> list[str]:
     """
     Append missing packages to requirements.txt.
-    Creates the file if it does not exist.
-    Returns the list of packages actually added.
+    DISABLED unless TBE_AUTO_HEAL_PIP=1 (supply-chain: no silent package injection).
     """
+    import os as _os
+    if (_os.environ.get("TBE_AUTO_HEAL_PIP") or "0").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return []
     if not packages:
         return []
     try:

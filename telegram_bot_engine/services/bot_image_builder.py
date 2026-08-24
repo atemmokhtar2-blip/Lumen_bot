@@ -66,10 +66,11 @@ RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir --isolated --index-url https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org --only-binary=:all: -r /app/requirements.txt
 COPY app /app/app
 COPY main.py /app/main.py
-# Optional entry aliases (ignored if absent — build context controlled on host)
+COPY tbe_entrypoint.py /app/tbe_entrypoint.py
 USER 10001:10001
 WORKDIR /app
-CMD ["python", "-u", "{entry}"]
+# Token loaded from /run/secrets/bot_token by entrypoint (not baked into image)
+CMD ["python", "-u", "/app/tbe_entrypoint.py", "{entry}"]
 """
 
 
@@ -226,6 +227,22 @@ def _stage_clean_context(project_path: Path, entry_rel: str) -> Path:
                     drop.append(n)
             return drop
         shutil.copytree(app_src, stage / "app", ignore=_ignore)
+    # Entrypoint loads token from secret mount (not baked into layers)
+    try:
+        ep_src = Path(__file__).resolve().parent / "tbe_docker_entrypoint.py"
+        if ep_src.is_file():
+            import shutil as _sh
+            _sh.copy2(ep_src, stage / "tbe_entrypoint.py")
+        else:
+            (stage / "tbe_entrypoint.py").write_text(
+                "import runpy,sys\nrunpy.run_path(sys.argv[1] if len(sys.argv)>1 else 'main.py', run_name='__main__')\n",
+                encoding="utf-8",
+            )
+    except Exception:
+        (stage / "tbe_entrypoint.py").write_text(
+            "import runpy,sys\nrunpy.run_path(sys.argv[1] if len(sys.argv)>1 else 'main.py', run_name='__main__')\n",
+            encoding="utf-8",
+        )
     write_dockerfile(stage, entry=entry_rel)
     write_dockerignore(stage)
     return stage

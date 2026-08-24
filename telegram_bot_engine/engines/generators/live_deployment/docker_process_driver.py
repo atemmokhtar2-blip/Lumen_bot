@@ -369,13 +369,20 @@ class DockerProcessDriver(DeploymentProvider):
                 encoding="utf-8",
             )
             env_file_path = ef.name
-            # Only bot token keys — nothing from host environ
-            ef.write(f"BOT_TOKEN={bot_token.strip()}\n")
-            ef.write(f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n")
+            # Token NOT in env-file by default — secret file mount is the source of truth.
+            # Entrypoint loads /run/secrets/bot_token into process env at start only.
+            import os as _os_tok
+            put_token_in_env = (_os_tok.environ.get("TBE_TOKEN_IN_ENV_FILE") or "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if put_token_in_env:
+                ef.write(f"BOT_TOKEN={bot_token.strip()}\n")
+                ef.write(f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n")
             ef.write("PYTHONUNBUFFERED=1\n")
             ef.write("PYTHONDONTWRITEBYTECODE=1\n")
             ef.write("TBE_SANDBOX=docker-image\n")
             ef.write("TBE_ISOLATED=1\n")
+            ef.write("TBE_TOKEN_FILE=/run/secrets/bot_token\n")
             ef.write("AWS_EC2_METADATA_DISABLED=true\n")
             ef.write("HOME=/tmp\n")
             ef.close()
@@ -398,8 +405,16 @@ class DockerProcessDriver(DeploymentProvider):
                 sf.write(bot_token.strip())
                 sf.close()
                 os.chmod(secret_path, 0o400)
-            except Exception:
+            except Exception as _sec_exc:
                 secret_path = None
+                _log.error("token secret file failed: %s", type(_sec_exc).__name__)
+            if not secret_path:
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id=dep_id,
+                    status=DEPLOY_FAILED,
+                    message="token_secret_file_required",
+                )
 
             cmd = [
                 "docker", "run",
