@@ -115,39 +115,18 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
             owner_user_id=owner_id,
         )
 
-    def _run_runner():
-        from telegram_bot_engine.services.live_runner import run_bot_project
-        return run_bot_project(
-            project_path=project_path,
-            bot_token=token,
-            entry_hint=entry or None,
-            run_seconds=float(os.environ.get("LIVE_RUN_SECONDS", 900)),
-        )
-
     report = None
     try:
         report = await asyncio.to_thread(_run_engine)
     except Exception as e1:
         logger.exception("Live deployment engine failed")
-        if not _local_process_fallback_allowed():
-            await status.edit_text(
-                "❌ فشل Live Deployment في وضع العزل الإجباري (Docker).\n"
-                f"{type(e1).__name__}: {sanitize_error(str(e1), max_len=220)}\n"
-                "التشغيل المحلي مرفوض في الإنتاج — لا يوجد fallback غير معزول."
-            )
-            context.user_data.pop("pending_deploy", None)
-            return
-        logger.warning("Dev isolation allows LiveRunner host-process fallback")
-        try:
-            report = await asyncio.to_thread(_run_runner)
-        except Exception as e2:
-            logger.exception("LiveRunner fallback failed")
-            await status.edit_text(
-                f"❌ فشل Live Deployment: {type(e1).__name__}: {str(e1)[:180]}\n"
-                f"fallback: {type(e2).__name__}: {str(e2)[:180]}"
-            )
-            context.user_data.pop("pending_deploy", None)
-            return
+        await status.edit_text(
+            "❌ فشل Live Deployment — العزل بحاوية Docker إلزامي.\n"
+            f"{type(e1).__name__}: {sanitize_error(str(e1), max_len=220)}\n"
+            "لا يوجد تشغيل محلي بديل."
+        )
+        context.user_data.pop("pending_deploy", None)
+        return
     finally:
         token = ""  # noqa: F841
 

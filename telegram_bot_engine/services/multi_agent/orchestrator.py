@@ -409,6 +409,30 @@ class Orchestrator:
     def _deliver(self, state: AgentState) -> AgentState:
         from .context_views import deliver_view
         dview = deliver_view(state)
+        # Final automated unit gate before any "success" delivery
+        if (state.status == AgentStatus.PASSED.value or state.qa_passed) and (state.generated_path or "").strip():
+            try:
+                from .generated_tests import run_generated_unit_gate
+                gate = run_generated_unit_gate(state.generated_path)
+                ext = dict(state.extensions or {})
+                ext["unit_gate_deliver"] = gate
+                state.extensions = ext
+                if not gate.get("ok"):
+                    state.qa_passed = False
+                    state.status = AgentStatus.FAILED.value
+                    state.final_message = (
+                        "فشل بوابة الاختبار الآلي على الكود المولَّد:\n"
+                        + "\n".join(str(e) for e in (gate.get("errors") or [])[:6])
+                    )
+                    self.board.put(state)
+                    return state
+            except Exception as _ug:
+                logger.exception("unit gate at deliver failed")
+                state.qa_passed = False
+                state.status = AgentStatus.FAILED.value
+                state.final_message = f"unit_gate_error:{type(_ug).__name__}"
+                self.board.put(state)
+                return state
         if state.status == AgentStatus.PASSED.value or state.qa_passed:
             state.final_message = (
                 f"تم البناء بنجاح.\nالمسار: {state.generated_path}\n"
@@ -487,6 +511,25 @@ def orchestrate_generate(
 ) -> Any:
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    try:
+        from b2b_platform.queue_backpressure import check_enqueue_allowed
+        ok_bp, reason_bp = check_enqueue_allowed(f"tg:{int(user_id or 0)}", kind="generate")
+        if not ok_bp:
+            from telegram_bot_engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=[f"backpressure:{reason_bp}"],
+                metadata={"backpressure": True},
+            )
+    except Exception as _bp:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            from telegram_bot_engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=[f"backpressure_error:{type(_bp).__name__}"],
+                metadata={"backpressure": True},
+            )
     state = AgentState(
         user_id=int(user_id or 0),
         user_text=_safe_user_text(request),

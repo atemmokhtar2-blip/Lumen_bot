@@ -278,6 +278,15 @@ class DockerProcessDriver(DeploymentProvider):
                 req.write_text(cleaned, encoding="utf-8")
                 if _warns:
                     _log.info("requirements sanitize warnings: %s", _warns[:8])
+                from telegram_bot_engine.services.dependency_scanner import scan_requirements_file
+                ok_s, errs_s, _ws = scan_requirements_file(req)
+                if not ok_s:
+                    return DeploymentStatus(
+                        provider=self.name,
+                        deployment_id=dep_id,
+                        status=DEPLOY_FAILED,
+                        message="dependency_scan_blocked:" + ";".join(errs_s[:12]),
+                    )
         except Exception as _req_exc:
             _log.error("requirements sanitize failed — refusing deploy: %s", _req_exc)
             return DeploymentStatus(

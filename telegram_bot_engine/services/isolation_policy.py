@@ -41,41 +41,21 @@ class IsolationDecision:
 
 
 def decide_isolation() -> IsolationDecision:
-    """Return the binding isolation decision for this process.
+    """Binding isolation decision — Docker only, no host-process alternative.
 
-    Priority:
-    1. Explicit TBE_REQUIRE_DOCKER / TBE_ALLOW_LOCAL_PROCESS
-    2. Multi-tenant or non-dev → Docker required, local denied
-    3. Dev + not multi-tenant → local may be allowed
+    Production-grade rule: generated/untrusted bot code never runs on the host.
+    Local process is never allowed by policy (select_process_driver / LiveRunner refuse).
     """
     multi = is_multi_tenant()
     dev = is_dev_environment()
-
-    if "TBE_REQUIRE_DOCKER" in os.environ:
-        require = _flag("TBE_REQUIRE_DOCKER", "1")
-    else:
-        # Fail closed unless pure local dev
-        require = not (dev and not multi)
-
-    if "TBE_ALLOW_LOCAL_PROCESS" in os.environ:
-        allow = _flag("TBE_ALLOW_LOCAL_PROCESS", "0")
-    else:
-        allow = bool(dev and not multi and not require)
-
-    # Never allow local when require_docker is on
-    if require:
-        allow = False
-
-    # Multi-tenant never allows local regardless of confusing env combos
-    if multi and allow:
-        allow = False
-        require = True
-
+    require = True
+    allow = False
     reason = (
-        f"env={environment_name() or 'unset'} multi_tenant={multi} "
+        f"docker_only multi_tenant={multi} dev={dev} "
         f"require_docker={require} allow_local={allow}"
     )
     return IsolationDecision(require_docker=require, allow_local=allow, reason=reason)
+
 
 
 def assert_local_process_allowed() -> None:

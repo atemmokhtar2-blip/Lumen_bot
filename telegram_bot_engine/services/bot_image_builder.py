@@ -261,6 +261,19 @@ def build_image(
     if insp.returncode == 0:
         return True, tag, "image_cached"
 
+    # Supply-chain gate before any image build installs deps
+    try:
+        req = path / "requirements.txt"
+        if req.is_file():
+            from telegram_bot_engine.services.dependency_scanner import scan_requirements_file
+            ok_s, errs_s, _warns_s = scan_requirements_file(req)
+            if not ok_s:
+                return False, "dependency_scan_blocked", ";".join(errs_s[:12])
+    except Exception as _scan_exc:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            return False, f"dependency_scan_error:{type(_scan_exc).__name__}", ""
+
     try:
         stage = _stage_clean_context(path, entry_rel)
         cmd = [

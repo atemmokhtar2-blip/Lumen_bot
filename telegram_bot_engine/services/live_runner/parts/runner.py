@@ -81,7 +81,15 @@ class LiveRunnerService:
           3) reinstall + rerun  (up to max_heal_rounds)
         """
         t0 = time.perf_counter()
-        # Host-process path is a privileged fallback — policy must allow it.
+        # Host-process execution permanently disabled (Docker-only production rule).
+        return LiveRunReport(
+            ok=False,
+            phase="security",
+            message="LiveRunner host process removed — Docker isolation required",
+            errors=["host_process_removed", "docker_required"],
+            duration_ms=0.0,
+        )
+        # unreachable legacy gate
         try:
             from telegram_bot_engine.services.isolation_policy import assert_local_process_allowed
             assert_local_process_allowed()

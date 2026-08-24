@@ -776,6 +776,15 @@ def _pip_install_packages_direct(
         safe.append(name)
     if not safe:
         return False, "all_packages_blocked_by_allowlist:" + ",".join(skipped[:8])
+    try:
+        from telegram_bot_engine.services.dependency_scanner import scan_requirements_text
+        ok_s, errs_s, _ws = scan_requirements_text("\n".join(safe))
+        if not ok_s:
+            return False, "dependency_scan_blocked:" + ";".join(errs_s[:8])
+    except Exception as _se:
+        import os as _os
+        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            return False, f"dependency_scan_error:{type(_se).__name__}"
     logs: list[str] = []
     if skipped:
         logs.append("skipped_not_allowlisted:" + ",".join(skipped[:12]))
