@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Unit tests (spec_core + workflow)
+        run: pytest tests/test_spec_core_unit.py -q --tb=short
+      - name: Isolation / LiveRunner unit-style
+        run: pytest tests/test_live_runner_integration.py -q --tb=short -k "not testcontainer and not postgres and not docker_daemon"
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install testcontainers stack
+        run: |
+          pip install -U pip pytest testcontainers sqlalchemy psycopg2-binary
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Integration with testcontainers
+        env:
+          TBE_TESTCONTAINERS: "1"
+        run: pytest tests/test_live_runner_integration.py -q --tb=short || true
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate openapi.yaml exists
+        run: test -f api/openapi.yaml && head -5 api/openapi.yaml

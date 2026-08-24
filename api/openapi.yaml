@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: Capability Maestro B2B API
+  version: 1.0.0
+  description: |
+    Multi-tenant API for Telegram bot generation, jobs, hosting, and billing.
+    Authenticate with `X-Api-Key` (tenant API key) or `Authorization: Bearer <key>`.
+servers:
+  - url: /v1
+    description: Relative to API host
+tags:
+  - name: health
+  - name: tenants
+  - name: generate
+  - name: jobs
+  - name: hosts
+  - name: billing
+  - name: dashboard
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  service: { type: string }
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness probe
+      security: []
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+  /tenants:
+    post:
+      tags: [tenants]
+      summary: Create tenant (admin)
+      responses:
+        "201":
+          description: Created
+    get:
+      tags: [tenants]
+      summary: List tenants (admin)
+      responses:
+        "200":
+          description: OK
+  /tenants/me:
+    get:
+      tags: [tenants]
+      summary: Current tenant profile
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /generate:
+    post:
+      tags: [generate]
+      summary: Enqueue bot generation job
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description:
+                  type: string
+                  minLength: 3
+                  maxLength: 20000
+                wait:
+                  type: boolean
+                  description: If true, wait for completion (sync)
+      responses:
+        "202":
+          description: Accepted — poll job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "402":
+          description: Payment / quota required
+        "429":
+          description: Rate limited
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Get job status
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+  /hosts:
+    get:
+      tags: [hosts]
+      summary: List hosted bots
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /billing/invoices:
+    get:
+      tags: [billing]
+      summary: List invoices
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+  /dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Tenant dashboard summary
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    Job:
+      type: object
+      properties:
+        ok: { type: boolean }
+        job_id: { type: string }
+        status: { type: string }
+        message: { type: string }
+        tenant_id: { type: string }
+security:
+  - ApiKeyAuth: []

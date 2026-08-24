@@ -275,6 +275,30 @@ def create_app() -> web.Application:
         client_max_size=max(4096, max_size),
     )
     app.router.add_get("/health", health.health)
+
+    # OpenAPI / Swagger for B2B developers
+    async def _openapi_yaml(request):
+        from pathlib import Path as _P
+        path = _P(__file__).resolve().parent / "openapi.yaml"
+        return web.Response(text=path.read_text(encoding="utf-8"), content_type="application/yaml")
+
+    async def _swagger_ui(request):
+        html = """<!DOCTYPE html>
+<html><head><title>Maestro API</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head><body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+SwaggerUIBundle({ url: '/openapi.yaml', dom_id: '#swagger-ui' });
+</script>
+</body></html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    app.router.add_get("/openapi.yaml", _openapi_yaml)
+    app.router.add_get("/docs", _swagger_ui)
+    app.router.add_get("/swagger", _swagger_ui)
+
     app.router.add_get("/ready", health.ready)
     # Public
     app.router.add_get("/v1/plans", tenants.list_plans)

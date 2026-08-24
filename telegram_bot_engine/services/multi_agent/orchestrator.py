@@ -217,13 +217,16 @@ class Orchestrator:
             except Exception:
                 state.status = AgentStatus.PLANNING.value
             state = self._run_agent("architect", state, ctx)
+            self._wf_checkpoint(state, "architect")
 
             # Builder + gate
             state = self._builder_with_gate(state, ctx)
+            self._wf_checkpoint(state, "builder")
 
             # Critic only if build produced a path
             if state.build_success and (state.generated_path or "").strip():
                 state = self._run_agent("critic", state, ctx)
+                self._wf_checkpoint(state, "critic")
             else:
                 state.qa_passed = False
                 if not state.qa_report:
@@ -405,6 +408,30 @@ class Orchestrator:
             self.board.put(state)
 
         return self._deliver(state)
+
+
+    def _wf_checkpoint(self, state: AgentState, step: str) -> None:
+        """Durable workflow checkpoint for resumability after crash."""
+        try:
+            from .workflow_engine import checkpoint_agent_step
+            ext = dict(state.extensions or {})
+            payload = {
+                "workflow_id": ext.get("workflow_id"),
+                "status": state.status,
+                "attempts": state.attempts,
+                "qa_passed": state.qa_passed,
+            }
+            checkpoint_agent_step(
+                state.state_id,
+                step,
+                str(state.status or "running"),
+                payload,
+            )
+            if payload.get("workflow_id"):
+                ext["workflow_id"] = payload["workflow_id"]
+                state.extensions = ext
+        except Exception:
+            logger.exception("workflow checkpoint skipped")
 
     def _deliver(self, state: AgentState) -> AgentState:
         from .context_views import deliver_view
