@@ -1,4 +1,6 @@
--- Credits ledger schema (Phase 1). Applied by PostgresCreditsStore._ensure_schema.
+-- Credits ledger Phase 1 (hardened)
+-- Balance moves: amount != 0. Reservation holds: reservation_delta != 0.
+-- Never UPDATE/DELETE ledger rows from application code.
 
 CREATE TABLE IF NOT EXISTS credit_wallets (
     tenant_id TEXT PRIMARY KEY,
@@ -13,20 +15,27 @@ CREATE TABLE IF NOT EXISTS credit_wallets (
 CREATE TABLE IF NOT EXISTS credit_ledger (
     transaction_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
-    amount BIGINT NOT NULL,
+    amount BIGINT NOT NULL DEFAULT 0,
+    reservation_delta BIGINT NOT NULL DEFAULT 0,
     balance_after BIGINT NOT NULL,
+    reserved_after BIGINT NOT NULL DEFAULT 0,
     type TEXT NOT NULL,
+    counterparty TEXT NOT NULL DEFAULT 'system',
     reference_id TEXT NOT NULL DEFAULT '',
     idempotency_key TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at DOUBLE PRECISION NOT NULL,
-    CONSTRAINT credit_ledger_idempotency UNIQUE (idempotency_key)
+    CONSTRAINT credit_ledger_idempotency UNIQUE (idempotency_key),
+    CONSTRAINT credit_ledger_nonzero_effect
+        CHECK (amount <> 0 OR reservation_delta <> 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_credit_ledger_tenant_time
     ON credit_ledger (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_credit_ledger_type
     ON credit_ledger (tenant_id, type);
+CREATE INDEX IF NOT EXISTS idx_credit_ledger_reference
+    ON credit_ledger (tenant_id, reference_id);
 
 CREATE TABLE IF NOT EXISTS credit_pricing_rules (
     resource_type TEXT PRIMARY KEY,

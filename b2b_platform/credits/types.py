@@ -14,18 +14,21 @@ class Wallet:
 
     @property
     def available(self) -> int:
-        return int(self.current_balance) - int(self.reserved_balance)
+        return max(0, int(self.current_balance) - int(self.reserved_balance))
 
 
 @dataclass
 class LedgerEntry:
     transaction_id: str
     tenant_id: str
-    amount: int  # +credit / -debit
+    amount: int  # effect on current_balance (+ in / - out)
     balance_after: int
     type: str
     reference_id: str = ""
     idempotency_key: str = ""
+    reservation_delta: int = 0  # +hold / -release-or-capture
+    reserved_after: int = 0
+    counterparty: str = "system"
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = 0.0
 
@@ -46,3 +49,15 @@ class CreditResult:
     wallet: Optional[Wallet] = None
     entry: Optional[LedgerEntry] = None
     transaction_id: str = ""
+
+
+@dataclass
+class ReconcileReport:
+    ok: bool
+    tenant_id: str
+    wallet_balance: int
+    ledger_sum: int
+    wallet_reserved: int
+    ledger_reservation_sum: int
+    drift_balance: int = 0
+    drift_reserved: int = 0

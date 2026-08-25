@@ -1,37 +1,33 @@
-# Credits Ledger — ADR (Phase 0 + 1)
+# Credits Ledger — ADR (Phase 0 + 1 hardened)
 
 ## Decision
 
 Usage billing uses an **append-only credit ledger** + wallet balances.
-Stripe subscriptions remain for *plan purchase*; they do not mutate balance
-except via an explicit `purchase` ledger entry (Phase 5).
+Stripe stays for plan purchase; credits move only via `CreditService`.
 
-## Units
+## Invariants
 
-- Smallest unit: integer **credit** (never float).
-- `available = current_balance - reserved_balance` (enforced in application).
+1. `available = current_balance - reserved_balance >= 0`
+2. `reserved_balance <= current_balance`
+3. Ledger is append-only (`amount` and/or `reservation_delta` non-zero)
+4. `SUM(ledger.amount) == wallet.current_balance` (reconcile)
+5. `SUM(ledger.reservation_delta) == wallet.reserved_balance` (reconcile)
+6. Same `idempotency_key` → one effect only
 
-## Tables
+## Operations
 
-| Table | Role |
-|-------|------|
-| `credit_wallets` | One row per tenant; `current_balance`, `reserved_balance` |
-| `credit_ledger` | Append-only movements; unique `idempotency_key` |
-| `credit_pricing_rules` | Resource → cost_per_unit |
+| Method | current | reserved | ledger |
+|--------|---------|----------|--------|
+| credit_credits | +N | — | amount=+N |
+| deduct_credits | −N (from available) | — | amount=−N |
+| reserve_credits | — | +N | reservation_delta=+N |
+| release_reservation | — | −N | reservation_delta=−N |
+| capture_reservation | −N | −N | amount=−N, reservation_delta=−N |
 
-## Single write gate
+## Gate
 
-Only `CreditService` methods may change wallet balances:
+Only `CreditService` mutates balances. Production: `PostgresCreditsStore` + `FOR UPDATE`.
 
-- `credit_credits` — top-up / purchase / refund
-- `deduct_credits` — consumption
-- `reserve_credits` / `release_reservation` / `capture_reservation`
+## Phase 2 readiness
 
-## Non-goals (later phases)
-
-- Metering batches, rating worker, grace suspension, admin UI.
-
-## Storage
-
-- Production: PostgreSQL (`DATABASE_URL`)
-- Tests / offline: in-memory store with identical semantics
+Phase 2 may emit usage batches **without** calling deduct until phase 3 rating worker uses this gate.

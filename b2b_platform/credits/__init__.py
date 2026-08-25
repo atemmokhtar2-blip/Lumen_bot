@@ -1,11 +1,8 @@
-"""Credits wallet + append-only ledger (double-entry style).
-
-Phase 1: schema + CreditService gate only.
-"""
+"""Credits wallet + append-only ledger (hardened phase 1)."""
 from __future__ import annotations
 
-from .service import CreditService, CreditResult, get_credit_service
-from .types import LedgerEntry, PricingRule, Wallet
+from .service import CreditService, get_credit_service, reset_credit_service_for_tests
+from .types import CreditResult, LedgerEntry, PricingRule, ReconcileReport, Wallet
 
 __all__ = [
     "CreditService",
@@ -13,5 +10,7 @@ __all__ = [
     "Wallet",
     "LedgerEntry",
     "PricingRule",
+    "ReconcileReport",
     "get_credit_service",
+    "reset_credit_service_for_tests",
 ]
