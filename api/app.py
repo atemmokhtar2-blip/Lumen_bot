@@ -51,6 +51,36 @@ def _cors_origin_for(request: web.Request) -> str | None:
     return None
 
 
+
+@web.middleware
+async def security_headers_middleware(request: web.Request, handler):
+    """OWASP-aligned response headers on every response (incl. errors)."""
+    try:
+        resp = await handler(request)
+    except web.HTTPException as ex:
+        resp = ex
+    # Never cache authenticated API responses by default
+    path = request.path or ""
+    if path.startswith("/v1/") and path not in {"/v1/plans"}:
+        resp.headers.setdefault("Cache-Control", "no-store")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    # HSTS only when request is HTTPS (or behind terminated TLS proxy)
+    proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower()
+    if proto == "https":
+        resp.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    resp.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+    return resp
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":
@@ -270,6 +300,7 @@ def create_app() -> web.Application:
             body_size_guard_middleware,
             json_body_middleware,
             ip_rate_limit_middleware,
+            security_headers_middleware,
             cors_middleware,
         ],
         client_max_size=max(4096, max_size),

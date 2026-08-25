@@ -1,0 +1,42 @@
+rules:
+  - id: maestro.http.disable-ssl-verify
+    languages: [python]
+    severity: ERROR
+    message: "TLS verification disabled (verify=False) is forbidden outside tests."
+    pattern: verify=False
+    paths:
+      exclude:
+        - tests/**
+        - sdks/**
+
+  - id: maestro.secrets.hardcoded-long-secret
+    languages: [python]
+    severity: ERROR
+    message: "Possible hardcoded secret/token assignment."
+    pattern-regex: '(?i)(api_key|secret_key|password|private_key)\s*=\s*["\'][A-Za-z0-9_\-+/=]{24,}["\']'
+    paths:
+      exclude:
+        - tests/**
+        - docs/**
+        - "**/.env.example"
+        - "**/templates*"
+        - "**/samples/**"
+
+  - id: maestro.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: "subprocess with shell=True is high risk."
+    pattern: shell=True
+    paths:
+      exclude:
+        - tests/**
+        - scripts/**
+
+  - id: maestro.eval-call
+    languages: [python]
+    severity: ERROR
+    message: "Use of eval() is forbidden in production paths."
+    pattern: eval(...)
+    paths:
+      exclude:
+        - tests/**
