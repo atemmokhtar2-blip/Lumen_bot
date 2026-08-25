@@ -1,30 +1,34 @@
-# المرحلة 3 — Supply chain & release admission
+# المرحلة 3 — Supply chain (مشدّدة)
 
-بعد المرحلة 1 (SAST/secrets/CI) والمرحلة 2 (IDOR + OWASP ZAP DAST):
+محركات **رسمية فقط** — لا سكربتات مسح بديلة.
 
-## محركات رسمية فقط
+## البوابات (كلها fail-closed على HIGH/CRITICAL حيث ينطبق)
 
-| المحرك | الناشر | الوظيفة | Workflow |
-|--------|--------|---------|----------|
-| **Dependency Review** | GitHub | منع دمج PR يدخل CVE معروفة في التبعيات | `supply-chain.yml` |
-| **Syft** | Anchore | توليد SBOM (SPDX + CycloneDX) | `supply-chain.yml` |
-| **Grype** | Anchore | مطابقة ثغرات على المجلد/SBOM — fail على HIGH | `supply-chain.yml` |
-| **Trivy image** | Aqua | بناء `Dockerfile` ثم مسح الصورة — fail على CRITICAL/HIGH | `supply-chain.yml` |
+| # | المحرك | الجهة | الوظيفة |
+|---|--------|--------|---------|
+| 1 | **Dependency Review** | GitHub | PR: منع moderate+ CVE في التبعيات الجديدة |
+| 2 | **OSV-Scanner** | Google | قاعدة OSV لكل الحزم |
+| 3 | **Syft** | Anchore | SBOM SPDX + CycloneDX (إلزامي غير فارغ) |
+| 4 | **Grype** | Anchore | ثغرات HIGH+ على الشجرة |
+| 5 | **Trivy secrets** | Aqua | أسرار في الشجرة |
+| 6 | **docker build** | Docker | صورة من Dockerfile hardened |
+| 7 | **Trivy image** | Aqua | CVE + secrets على الصورة |
+| 8 | **Cosign** | Sigstore | توقيع keyless (OIDC) على main |
+| 9 | **attest-build-provenance** | GitHub | إثبات بناء |
+| 10 | **admission-gate** | CI | يفشل إن فشل أي محرك إلزامي |
 
-لا يوجد سكربت بديل لـ Grype/Syft/Trivy/Dependency Review.
+## Dockerfile hardened
 
-## ترتيب المراحل
+- `python:3.12-slim-bookworm`
+- مستخدم غير root `appuser` uid 10001
+- `.dockerignore` يستبعد `.git` / `.env` / tests
+- لا build-args للأسرار
 
-1. **Phase 1** — `security.yml`: Gitleaks, pip-audit, Bandit, Semgrep, CodeQL, Trivy fs, Scorecard  
-2. **Phase 2** — `dast-zap.yml`: OWASP ZAP docker + IDOR حي  
-3. **Phase 3** — `supply-chain.yml`: Dependency Review + Syft + Grype + Trivy image  
+## Dependabot
 
-## إقرار الدمج (يدوي على GitHub)
+- pip **يومي**
+- actions + docker أسبوعي
 
-Settings → Branches → `main` → Require status checks:
+## إقرار الدمج على GitHub
 
-- `Security` / jobs الحرجة  
-- `DAST ZAP`  
-- `Supply Chain` / `Grype` + `Trivy image`  
-
-هذا إعداد منصة GitHub وليس سكربت في المستودع.
+Require status check: **`Phase-3 admission gate`**.

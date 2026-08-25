@@ -1,18 +1,20 @@
-# Dependabot — dependency vulnerability & update monitoring
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "06:00"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 15
     labels:
       - "dependencies"
       - "security"
     commit-message:
       prefix: "chore(deps)"
+    # Group patch updates to reduce noise while staying current on CVEs
+    groups:
+      pip-patch:
+        update-types: ["patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -21,7 +23,7 @@ updates:
       day: "monday"
     labels:
       - "ci"
-      - "dependencies"
+      - "security"
     commit-message:
       prefix: "chore(ci)"
 

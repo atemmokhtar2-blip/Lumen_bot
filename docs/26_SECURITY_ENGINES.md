@@ -15,6 +15,9 @@
 | SBOM | **Anchore Syft** | `supply-chain.yml` |
 | SBOM/dir CVE | **Anchore Grype** | `supply-chain.yml` |
 | Container image | **Aqua Trivy** (image ref after `docker build`) | `supply-chain.yml` |
+| Multi-ecosystem CVE | **Google OSV-Scanner** (`ghcr.io/google/osv-scanner`) | `supply-chain.yml` |
+| Image signing | **Sigstore Cosign** | `supply-chain.yml` |
+| Build provenance | **GitHub attest-build-provenance** | `supply-chain.yml` |
 
 ## ما ليس محركاً عاماً (مقصود)
 

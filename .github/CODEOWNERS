@@ -8,3 +8,7 @@
 /.github/workflows/ @atemmokhtar2-blip
 /semgrep/ @atemmokhtar2-blip
 /scripts/security/ @atemmokhtar2-blip
+
+/Dockerfile @atemmokhtar2-blip
+/requirements.txt @atemmokhtar2-blip
+/.github/workflows/supply-chain.yml @atemmokhtar2-blip
