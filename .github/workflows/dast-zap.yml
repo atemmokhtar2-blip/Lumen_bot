@@ -100,9 +100,9 @@ jobs:
               -r /zap/wrk/zap-baseline-report.html
           code=$?
           echo "zap-baseline exit=$code"
-          # ZAP: 0 ok, 1 warnings, 2+ fail
-          if [ "$code" -ge 2 ]; then exit $code; fi
-          exit 0
+          test -f zap-baseline-report.json || { echo "missing ZAP baseline JSON report"; exit 1; }
+          # World-class: fail on warnings (1) and failures (2+)
+          if [ "$code" -ne 0 ]; then exit $code; fi
 
       - name: ZAP API scan — real engine + OpenAPI
         run: |
@@ -117,8 +117,8 @@ jobs:
               -r /zap/wrk/zap-api-report.html
           code=$?
           echo "zap-api-scan exit=$code"
-          if [ "$code" -ge 2 ]; then exit $code; fi
-          exit 0
+          test -f zap-api-report.json || { echo "missing ZAP API JSON report"; exit 1; }
+          if [ "$code" -ne 0 ]; then exit $code; fi
 
       - name: ZAP authenticated baseline (tenant A key via Replacer)
         env:
@@ -141,8 +141,8 @@ jobs:
                   -config replacer.full_list(0).regex=false"
           code=$?
           echo "zap-auth exit=$code"
-          if [ "$code" -ge 2 ]; then exit $code; fi
-          exit 0
+          test -f zap-auth-report.json || { echo "missing ZAP auth JSON report"; exit 1; }
+          if [ "$code" -ne 0 ]; then exit $code; fi
 
       - name: Fail on MEDIUM/HIGH in ZAP JSON (engine output)
         run: |
@@ -177,3 +177,18 @@ jobs:
       - name: Stop API
         if: always()
         run: kill "$(cat "${{ runner.temp }}/dast-api-out/api.pid")" 2>/dev/null || true
+
+  phase2-gate:
+    name: Phase-2 DAST gate
+    runs-on: ubuntu-latest
+    needs: [unit-idor, live-zap-engine]
+    if: always()
+    steps:
+      - name: Both IDOR unit and live ZAP engine must succeed
+        run: |
+          echo "unit-idor=${{ needs.unit-idor.result }}"
+          echo "live-zap=${{ needs.live-zap-engine.result }}"
+          for r in "${{ needs.unit-idor.result }}" "${{ needs.live-zap-engine.result }}"; do
+            if [ "$r" != "success" ]; then echo "PHASE2 DENIED"; exit 1; fi
+          done
+          echo "PHASE2 OK"

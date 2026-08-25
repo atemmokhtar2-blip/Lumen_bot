@@ -176,7 +176,7 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-fs.sarif
-      - name: Trivy config (Dockerfile misconfig)
+      - name: Trivy config (Dockerfile misconfig) — fail closed
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: config
@@ -184,7 +184,6 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: table
-        continue-on-error: true
       - name: Upload Trivy SARIF
         if: always() && github.actor != 'dependabot[bot]'
         uses: github/codeql-action/upload-sarif@v3
@@ -273,3 +272,26 @@ jobs:
         run: |
           python scripts/security/security_baseline_check.py --strict
           python scripts/security/dast_api_probe.py
+
+
+  phase1-gate:
+    name: Phase-1 security gate
+    runs-on: ubuntu-latest
+    needs: [secrets, dependencies, sast-bandit, sast-semgrep, codeql, trivy, credits-integrity, api-baseline]
+    if: always()
+    steps:
+      - name: Required phase-1 engines must succeed
+        run: |
+          for r in \
+            "${{ needs.secrets.result }}" \
+            "${{ needs.dependencies.result }}" \
+            "${{ needs.sast-bandit.result }}" \
+            "${{ needs.sast-semgrep.result }}" \
+            "${{ needs.codeql.result }}" \
+            "${{ needs.trivy.result }}" \
+            "${{ needs.credits-integrity.result }}" \
+            "${{ needs.api-baseline.result }}"; do
+            echo "result=$r"
+            if [ "$r" != "success" ]; then echo "PHASE1 DENIED"; exit 1; fi
+          done
+          echo "PHASE1 OK"
