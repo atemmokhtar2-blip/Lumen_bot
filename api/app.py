@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from api.routes import billing, dashboard, generate, health, hosts, jobs, tenants, usage
+from api.routes import audit, billing, dashboard, generate, health, hosts, jobs, tenants, usage
 
 logger = logging.getLogger("ai_agent_7h_api")
 
@@ -325,6 +325,13 @@ SwaggerUIBundle({ url: '/openapi.yaml', dom_id: '#swagger-ui' });
     app.router.add_post("/v1/billing/portal", billing.portal)
     app.router.add_post("/v1/billing/dev/activate", billing.dev_activate)
     app.router.add_get("/v1/dashboard", dashboard.overview)
+    # Phase 5 audit
+    app.router.add_get("/v1/me/credits/ledger", audit.me_ledger)
+    app.router.add_get("/v1/me/credits/reconcile", audit.me_reconcile)
+    app.router.add_get("/v1/me/credits/overview", audit.me_overview)
+    app.router.add_get("/v1/admin/credits/{tenant_id}/overview", audit.admin_tenant_overview)
+    app.router.add_get("/v1/admin/credits/{tenant_id}/ledger", audit.admin_tenant_ledger)
+    app.router.add_get("/v1/admin/credits/{tenant_id}/reconcile", audit.admin_tenant_reconcile)
     return app
 
 
