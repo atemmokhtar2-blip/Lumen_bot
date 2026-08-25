@@ -1,34 +1,23 @@
-# Phase 3 — Rating & deduction
+# Phase 3 — Rating engine (hardened)
+
+## Guarantees
+
+| Rule | How |
+|------|-----|
+| Single charge per batch | `UNIQUE(batch_id)` claim → debit → finalize |
+| No double debit under race | claim first; losers skip; debit idempotent `rate-{batch_id}` |
+| Prefer holds | `capture_reservation` when `reserved >= cost` |
+| Cap | `TBE_RATING_MAX_CREDITS_PER_BATCH` (default 100000) |
+| Insufficient funds | `usage_rating_failures` + abort claim (retryable) |
+| Batches immutable | ratings table separate |
 
 ## Flow
 
-```
-usage_batches (accepted, immutable)
-        │
-        ▼
-RatingEngine.rate_pending()
-        │  compute_batch_cost(pricing_rules)
-        ▼
-CreditService.deduct_credits(...)   ← sole debit gate
-        │
-        ▼
-usage_ratings (append-only, unique batch_id)
-```
+1. `try_begin_rating` (pending row / memory claim)
+2. `compute_batch_cost`
+3. capture or deduct via **CreditService only**
+4. `finalize_rating` or `abort_claim` + `record_failure`
 
-## Cost mapping
+## API
 
-| Metric | Rule |
-|--------|------|
-| messages_processed | `telegram_message` |
-| llm_tokens_used | `llm_output_token` |
-| uptime_seconds | `hourly_hosting` (pro-rated, min 1 if uptime>0) |
-| ram_mb × hours | `docker_ram_mb_per_hour` |
-
-## Pre-auth
-
-`reserve_for_hosting(tenant, hours, ram_mb)` before host start.
-Actual usage later `deduct` or `capture_reservation`.
-
-## Idempotency
-
-`idempotency_key = rate-{batch_id}` on both debit and rating row.
+- `GET /v1/usage/ratings` — tenant rating history

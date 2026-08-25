@@ -88,3 +88,15 @@ async def list_batches(request: web.Request) -> web.Response:
             ],
         }
     )
+
+
+async def list_ratings(request: web.Request) -> web.Response:
+    """List credit ratings for the authenticated tenant."""
+    tenant = require_tenant(request)
+    try:
+        limit = min(200, max(1, int(request.rel_url.query.get("limit") or "50")))
+    except ValueError:
+        limit = 50
+    from b2b_platform.rating_engine import get_rating_engine
+    rows = get_rating_engine().list_ratings(tenant.tenant_id, limit=limit)
+    return web.json_response({"ok": True, "ratings": rows})
