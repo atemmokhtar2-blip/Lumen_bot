@@ -484,3 +484,91 @@ def test_admin_token_reads_both_tenants(monkeypatch, tmp_path):
                 assert r.status == 200, (tmpl, tid, r.status, await r.text())
 
     asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+# ── Layer-2 closure: identity spoof + ownership helpers ─────────────────────
+
+def test_spoof_tenant_id_in_generate_body_rejected(monkeypatch, tmp_path):
+    async def body(client, ctx):
+        r = await client.post(
+            "/v1/generate",
+            json={
+                "description": "بوت تجريبي لاختبار العزل",
+                "tenant_id": ctx["tid_b"],
+            },
+            headers={"Authorization": f"Bearer {ctx['key_a']}"},
+        )
+        assert r.status == 403
+        data = await r.json()
+        assert data.get("error") == "tenant_spoof_rejected"
+
+    asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_spoof_tenant_id_in_host_start_rejected(monkeypatch, tmp_path):
+    async def body(client, ctx):
+        r = await client.post(
+            "/v1/hosts/start",
+            json={
+                "project_path": "proj",
+                "bot_token": "123:ABC",
+                "tenant_id": ctx["tid_b"],
+                "user_id": 999999,
+            },
+            headers={"Authorization": f"Bearer {ctx['key_a']}"},
+        )
+        assert r.status == 403
+
+    asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_spoof_tenant_id_in_credits_checkout_rejected(monkeypatch, tmp_path):
+    async def body(client, ctx):
+        r = await client.post(
+            "/v1/billing/credits/checkout",
+            json={"credits_amount": 100, "tenant_id": ctx["tid_b"]},
+            headers={"Authorization": f"Bearer {ctx['key_a']}"},
+        )
+        assert r.status == 403
+
+    asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_admin_invalid_tenant_id_rejected(monkeypatch, tmp_path):
+    async def body(client, ctx):
+        for bad in ("../etc/passwd", "a/b", "x" * 200, "ten_../../x"):
+            r = await client.get(
+                f"/v1/admin/credits/{bad}/overview",
+                headers={"X-Admin-Token": ADMIN},
+            )
+            assert r.status in (400, 404)
+
+    asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_job_response_strips_input_payload(monkeypatch, tmp_path):
+    async def body(client, ctx):
+        r = await client.get(
+            f"/v1/jobs/{ctx['job_a']}",
+            headers={"Authorization": f"Bearer {ctx['key_a']}"},
+        )
+        assert r.status == 200
+        data = await r.json()
+        assert data.get("input") in ({}, None)
+        assert "secret-of-A" not in json.dumps(data)
+
+    asyncio.run(_world(monkeypatch, tmp_path, body))
+
+
+def test_ownership_module_normalize():
+    from aiohttp import web
+    from api.ownership import normalize_tenant_id, reject_identity_spoof
+    import pytest as _pt
+
+    assert normalize_tenant_id("ten_abc123") == "ten_abc123"
+    with _pt.raises(web.HTTPBadRequest):
+        normalize_tenant_id("../x")
+    with _pt.raises(web.HTTPForbidden):
+        reject_identity_spoof({"tenant_id": "other"}, tenant_id="ten_self")
+    reject_identity_spoof({"tenant_id": "ten_self"}, tenant_id="ten_self")
+    reject_identity_spoof({}, tenant_id="ten_self")

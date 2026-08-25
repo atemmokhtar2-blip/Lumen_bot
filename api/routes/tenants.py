@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from api.auth import require_admin, require_tenant
+from api.ownership import reject_identity_spoof
 from api.security import safe_json_body
 from b2b_platform.plans import PLANS, get_plan, normalize_plan_id, public_plan_dict
 from b2b_platform.tenants import get_tenant_store
@@ -67,6 +68,7 @@ async def update_white_label(request: web.Request) -> web.Response:
             content_type="application/json",
         )
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     # Strict allow-list — blocks privilege escalation via plan_id / active / metadata
     allowed = {
         "brand_name",

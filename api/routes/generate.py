@@ -6,6 +6,7 @@ import os
 from aiohttp import web
 
 from api.auth import require_tenant
+from api.ownership import reject_identity_spoof
 from b2b_platform.billing import get_billing
 from b2b_platform.jobs import get_job_runner
 from b2b_platform.rate_limit import get_rate_limiter
@@ -91,6 +92,7 @@ async def generate(request: web.Request) -> web.Response:
             content_type="application/json",
         )
 
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     description = str(body.get("description") or body.get("prompt") or "").strip()
     if len(description) < 3:
         raise web.HTTPBadRequest(

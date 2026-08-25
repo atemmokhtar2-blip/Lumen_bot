@@ -7,6 +7,7 @@ import logging
 from aiohttp import web
 
 from api.auth import require_admin, require_tenant
+from api.ownership import reject_identity_spoof
 from api.security import safe_json_body
 from b2b_platform.billing import get_billing
 from b2b_platform.metering import get_metering
@@ -42,6 +43,7 @@ async def invoices(request: web.Request) -> web.Response:
 async def create_invoice(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     body = await safe_json_body(request, required=False, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     plan_id = str(body.get("plan_id") or tenant.plan_id)
     inv = get_billing().create_monthly_invoice(tenant.tenant_id, plan_id=plan_id)
     if not inv:
@@ -53,6 +55,7 @@ async def checkout(request: web.Request) -> web.Response:
     """Start Stripe Checkout for plan upgrade (pro / business)."""
     tenant = require_tenant(request)
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     plan_id = str(body.get("plan_id") or "").strip().lower()
     if not plan_id:
         raise web.HTTPBadRequest(text='{"error":"plan_id_required"}', content_type="application/json")
@@ -75,6 +78,7 @@ async def credits_checkout(request: web.Request) -> web.Response:
     """
     tenant = require_tenant(request)
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     try:
         amount = int(body.get("credits_amount") or body.get("amount") or 0)
     except (TypeError, ValueError):
@@ -88,6 +92,8 @@ async def credits_checkout(request: web.Request) -> web.Response:
     cancel_url = str(body.get("cancel_url") or "").strip()
     if amount <= 0:
         return web.json_response({"ok": False, "error": "credits_amount_required"}, status=400)
+    if amount > 1_000_000:
+        return web.json_response({"ok": False, "error": "credits_amount_too_large"}, status=400)
     result = get_billing().start_credits_checkout(
         tenant.tenant_id,
         amount,

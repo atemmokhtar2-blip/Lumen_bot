@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from api.auth import require_admin, require_tenant
+from api.ownership import normalize_tenant_id
 from b2b_platform.audit import ledger_audit, reconcile_tenant, tenant_overview
 from b2b_platform.credits import get_credit_service
 
@@ -45,9 +46,7 @@ async def me_overview(request: web.Request) -> web.Response:
 
 async def admin_tenant_overview(request: web.Request) -> web.Response:
     require_admin(request)
-    tenant_id = str(request.match_info.get("tenant_id") or "").strip()
-    if not tenant_id:
-        return web.json_response({"ok": False, "error": "tenant_id_required"}, status=400)
+    tenant_id = normalize_tenant_id(str(request.match_info.get("tenant_id") or ""))
     try:
         limit = min(500, max(1, int(request.rel_url.query.get("limit") or "100")))
     except ValueError:
@@ -71,9 +70,7 @@ async def admin_tenant_overview(request: web.Request) -> web.Response:
 
 async def admin_tenant_ledger(request: web.Request) -> web.Response:
     require_admin(request)
-    tenant_id = str(request.match_info.get("tenant_id") or "").strip()
-    if not tenant_id:
-        return web.json_response({"ok": False, "error": "tenant_id_required"}, status=400)
+    tenant_id = normalize_tenant_id(str(request.match_info.get("tenant_id") or ""))
     try:
         limit = min(500, max(1, int(request.rel_url.query.get("limit") or "100")))
     except ValueError:
@@ -85,9 +82,7 @@ async def admin_tenant_ledger(request: web.Request) -> web.Response:
 
 async def admin_tenant_reconcile(request: web.Request) -> web.Response:
     require_admin(request)
-    tenant_id = str(request.match_info.get("tenant_id") or "").strip()
-    if not tenant_id:
-        return web.json_response({"ok": False, "error": "tenant_id_required"}, status=400)
+    tenant_id = normalize_tenant_id(str(request.match_info.get("tenant_id") or ""))
     data = reconcile_tenant(get_credit_service(), tenant_id)
     status = 200 if data.get("ok") else 409
     return web.json_response({"ok": bool(data.get("ok")), **data}, status=status)

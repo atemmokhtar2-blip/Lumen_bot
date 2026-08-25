@@ -7,6 +7,7 @@ import logging
 from aiohttp import web
 
 from api.auth import require_tenant
+from api.ownership import reject_identity_spoof
 from api.security import (
     safe_json_body,
     stable_tenant_uid,
@@ -59,6 +60,7 @@ async def host_start(request: web.Request) -> web.Response:
                 status=503,
             )
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
 
@@ -124,10 +126,24 @@ async def host_start(request: web.Request) -> web.Response:
 async def host_stop(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     instance_id = str(body.get("instance_id") or "").strip()
+    if not instance_id or len(instance_id) > 128:
+        raise web.HTTPNotFound(
+            text='{"error":"instance_not_found"}',
+            content_type="application/json",
+        )
     uid = _tenant_user_id(tenant.tenant_id)
+    # Explicit ownership probe before stop (uniform 404)
+    svc = get_hosting_service()
+    inst = svc.get(instance_id, user_id=uid)
+    if inst is None:
+        raise web.HTTPNotFound(
+            text='{"error":"instance_not_found"}',
+            content_type="application/json",
+        )
     result = await asyncio.to_thread(
-        lambda: get_hosting_service().stop(instance_id=instance_id, user_id=uid)
+        lambda: svc.stop(instance_id=instance_id, user_id=uid)
     )
     try:
         from bot_interface.sanitize import sanitize_error
@@ -162,9 +178,10 @@ async def host_status(request: web.Request) -> web.Response:
 async def host_diagnose(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     body = await safe_json_body(request, required=False, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     instance_id = str(
         body.get("instance_id") or request.rel_url.query.get("instance_id") or ""
-    )
+    ).strip()
     uid = _tenant_user_id(tenant.tenant_id)
     result = await asyncio.to_thread(
         lambda: get_hosting_service().diagnose(
