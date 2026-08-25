@@ -318,7 +318,7 @@ def enqueue_resume_job(state_id: str, *, tenant_id: str = "platform") -> dict[st
 def enqueue_pending_resumes(*, limit: int = 20, tenant_id: str = "platform") -> list[dict[str, Any]]:
     """Enqueue RQ resume jobs for interrupted multi-agent states (worker boot).
 
-    Dedupes via Redis set lumen:ma:resume_queued so the same state is not
+    Dedupes via Redis set lumen:resume_queued so the same state is not
     spammed into the queue on every worker restart.
     """
     results: list[dict[str, Any]] = []

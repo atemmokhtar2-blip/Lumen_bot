@@ -6,9 +6,7 @@
 
 أي اسم منتج / برومبت / watermark / مسار بيانات / service id يُقرأ من هنا.
 
-## ممنوع
-
-Maestro، ميسترو، Maya، capability_maestro، AI Agent 7h، ai_agent_7h
+المنتج المعروض للمستخدم والمستودع والكود: **Lumen** فقط.
 
 ## المستودع
 
@@ -19,17 +17,17 @@ Maestro، ميسترو، Maya، capability_maestro، AI Agent 7h، ai_agent_7h
 
 `tests/test_lumen_identity.py`
 
-## Package foundation (radical)
+## Package foundation
 
 All product code lives under the `lumen` namespace:
 
 ```
 lumen/
   identity.py     # brand only
-  engine/         # was telegram_bot_engine
-  platform/       # was b2b_platform
-  bot/            # was bot_interface
-  api/            # was api/
+  engine/         # generation, tools, LLM, hosting
+  platform/       # credits, tenants, billing
+  bot/            # Telegram consumer interface
+  api/            # B2B HTTP API
 ```
 
 Imports: `from lumen.engine...`, `from lumen.platform...`, `from lumen.bot...`, `from lumen.api...`.

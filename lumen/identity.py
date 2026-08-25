@@ -29,7 +29,7 @@ DOTDIR_NAME: str = ".lumen"
 VAR_LIB_PATH: str = "/var/lib/lumen"
 OUTPUT_DIR_DEFAULT: str = "/tmp/lumen_output"
 CONTROL_PLANE_DEFAULT: str = "/tmp/lumen_control"
-REDIS_KEY_PREFIX: str = "lumen:ma:"
+REDIS_KEY_PREFIX: str = "lumen:"
 
 # ── Chat / LLM — who the model is ──────────────────────────────────────────
 SYSTEM_PROMPT_IDENTITY_AR: str = (
@@ -41,26 +41,6 @@ SYSTEM_PROMPT_IDENTITY_LONG_AR: str = (
 SYSTEM_PROMPT_ENGINE_NOTE_AR: str = (
     "لا تسحب مستودعات ولا تعدّل ملفات بنفسك — التنفيذ دائمًا على محركات Lumen."
 )
-
-# ── Forbidden legacy brands (must never reappear) ──────────────────────────
-FORBIDDEN_BRAND_TOKENS: tuple[str, ...] = (
-    "maestro",
-    "ميسترو",
-    "maya",
-    "capability_maestro",
-    "capability-maestro",
-    "ai_agent_7h",
-    "ai-agent-7h",
-    "ai agent 7h",
-)
-
-
-def contains_forbidden_brand(text: str) -> bool:
-    low = (text or "").lower()
-    for tok in FORBIDDEN_BRAND_TOKENS:
-        if tok.lower() in low:
-            return True
-    return False
 
 
 def system_identity_line(*, long: bool = False) -> str:
