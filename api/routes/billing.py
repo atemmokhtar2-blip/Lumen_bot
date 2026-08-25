@@ -67,6 +67,41 @@ async def checkout(request: web.Request) -> web.Response:
     return web.json_response(result, status=status)
 
 
+async def credits_checkout(request: web.Request) -> web.Response:
+    """POST /v1/billing/credits/checkout — buy credits pack via Stripe.
+
+    Body: { "credits_amount": 1000, "unit_amount_cents"?: 500, "price_id"?: "..." }
+    Webhook on success → CreditService.credit_credits (idempotent).
+    """
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    try:
+        amount = int(body.get("credits_amount") or body.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    try:
+        unit_cents = int(body.get("unit_amount_cents") or 0)
+    except (TypeError, ValueError):
+        unit_cents = 0
+    price_id = str(body.get("price_id") or "").strip()
+    success_url = str(body.get("success_url") or "").strip()
+    cancel_url = str(body.get("cancel_url") or "").strip()
+    if amount <= 0:
+        return web.json_response({"ok": False, "error": "credits_amount_required"}, status=400)
+    result = get_billing().start_credits_checkout(
+        tenant.tenant_id,
+        amount,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        customer_email=str(body.get("email") or ""),
+        unit_amount_cents=unit_cents,
+        price_id=price_id,
+    )
+    status = 200 if result.get("ok") else 400
+    return web.json_response(result, status=status)
+
+
+
 async def checkout_success(request: web.Request) -> web.Response:
     """Browser return URL after Stripe Checkout — applies plan if webhook delayed."""
     session_id = request.rel_url.query.get("session_id") or ""

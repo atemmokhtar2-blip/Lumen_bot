@@ -102,6 +102,95 @@ def create_checkout_session(
         return {"ok": False, "error": "stripe_request_failed", "detail": str(exc)[:300]}
 
 
+
+def create_credits_checkout_session(
+    *,
+    tenant_id: str,
+    credits_amount: int,
+    customer_email: str = "",
+    success_url: str,
+    cancel_url: str,
+    price_id: str = "",
+    unit_amount_cents: int = 0,
+    currency: str = "usd",
+    client_reference_id: str = "",
+    metadata: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """One-time payment Checkout for credit packs (mode=payment).
+
+    Prefer STRIPE_PRICE_CREDITS (or explicit price_id). Fallback: ad-hoc
+    price_data when unit_amount_cents > 0.
+    """
+    if not stripe_configured():
+        return {"ok": False, "error": "stripe_not_configured"}
+    amount = int(credits_amount or 0)
+    if amount <= 0:
+        return {"ok": False, "error": "credits_amount_required"}
+
+    price = (price_id or os.getenv("STRIPE_PRICE_CREDITS") or "").strip()
+    meta = {
+        "tenant_id": str(tenant_id),
+        "product_type": "credits",
+        "credits_amount": str(amount),
+        **(metadata or {}),
+    }
+    data: dict[str, Any] = {
+        "mode": "payment",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": client_reference_id or str(tenant_id),
+        "metadata[tenant_id]": str(tenant_id),
+        "metadata[product_type]": "credits",
+        "metadata[credits_amount]": str(amount),
+        "allow_promotion_codes": "true",
+    }
+    if price:
+        data["line_items[0][price]"] = price
+        data["line_items[0][quantity]"] = 1
+    elif unit_amount_cents > 0:
+        data["line_items[0][price_data][currency]"] = (currency or "usd").lower()
+        data["line_items[0][price_data][product_data][name]"] = f"{amount} Maestro credits"
+        data["line_items[0][price_data][unit_amount]"] = int(unit_amount_cents)
+        data["line_items[0][quantity]"] = 1
+    else:
+        return {
+            "ok": False,
+            "error": "missing_credits_price",
+            "hint": "Set STRIPE_PRICE_CREDITS or pass unit_amount_cents",
+        }
+    if customer_email:
+        data["customer_email"] = customer_email
+    for k, v in meta.items():
+        data[f"metadata[{k}]"] = str(v)
+
+    try:
+        r = requests.post(
+            f"{STRIPE_API}/checkout/sessions",
+            data=data,
+            auth=(_secret(), ""),
+            timeout=30,
+        )
+        body = r.json() if r.content else {}
+        if r.status_code >= 400:
+            return {
+                "ok": False,
+                "error": "stripe_api_error",
+                "status": r.status_code,
+                "detail": body.get("error", {}).get("message") or body,
+            }
+        return {
+            "ok": True,
+            "session_id": body.get("id"),
+            "url": body.get("url"),
+            "customer": body.get("customer"),
+            "credits_amount": amount,
+            "raw": {"id": body.get("id"), "status": body.get("status")},
+        }
+    except Exception as exc:
+        logger.exception("credits checkout session failed")
+        return {"ok": False, "error": "stripe_request_failed", "detail": str(exc)[:300]}
+
+
 def create_billing_portal_session(
     *,
     customer_id: str,

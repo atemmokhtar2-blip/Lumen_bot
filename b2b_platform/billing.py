@@ -26,6 +26,7 @@ from .plans import get_plan
 from .stripe_client import (
     create_billing_portal_session,
     create_checkout_session,
+    create_credits_checkout_session,
     retrieve_checkout_session,
     stripe_configured,
     verify_webhook_signature,
@@ -286,6 +287,120 @@ class BillingService:
         return_url = return_url or f"{base}/v1/dashboard"
         return create_billing_portal_session(customer_id=customer, return_url=return_url)
 
+
+    def _grant_stripe_credits(
+        self,
+        tenant_id: str,
+        credits_amount: int,
+        *,
+        reference_id: str = "",
+        event_type: str = "",
+        customer: str = "",
+        product_type: str = "credits",
+    ) -> dict[str, Any]:
+        """Idempotent credit grant from Stripe (session/payment id as key)."""
+        amount = int(credits_amount or 0)
+        if not tenant_id or amount <= 0:
+            return {"ok": False, "reason": "invalid_args"}
+        try:
+            from b2b_platform.credits import get_credit_service
+            ref = (reference_id or "").strip() or f"stripe-{tenant_id}-{amount}"
+            idem = f"stripe-{ref}-{amount}"[:128]
+            result = get_credit_service().credit_credits(
+                tenant_id,
+                amount,
+                reason="stripe_credit",
+                reference_id=ref,
+                idempotency_key=idem,
+                metadata={
+                    "source": "stripe_webhook",
+                    "event_type": event_type,
+                    "customer": str(customer or ""),
+                    "product_type": product_type or "credits",
+                },
+            )
+            return {
+                "ok": bool(result.ok),
+                "reason": getattr(result, "reason", "") or "",
+                "credits_amount": amount,
+            }
+        except Exception as exc:
+            logger.exception("stripe → credit_credits failed tenant=%s", tenant_id)
+            return {"ok": False, "reason": f"exception:{type(exc).__name__}"}
+
+    def start_credits_checkout(
+        self,
+        tenant_id: str,
+        credits_amount: int,
+        *,
+        success_url: str = "",
+        cancel_url: str = "",
+        customer_email: str = "",
+        unit_amount_cents: int = 0,
+        price_id: str = "",
+    ) -> dict[str, Any]:
+        """Start a one-time Stripe Checkout to purchase credits (top-up).
+
+        On success, webhook → credit_credits(tenant, amount, reason=stripe_credit).
+        """
+        store = get_tenant_store()
+        t = store.get(tenant_id)
+        if not t:
+            return {"ok": False, "error": "tenant_not_found"}
+        amount = int(credits_amount or 0)
+        if amount <= 0:
+            return {"ok": False, "error": "credits_amount_required"}
+        max_pack = int(os.getenv("CREDITS_CHECKOUT_MAX") or "10000000")
+        if amount > max_pack:
+            return {"ok": False, "error": "credits_amount_too_large", "max": max_pack}
+
+        base = (os.getenv("PUBLIC_BASE_URL") or "http://localhost:8080").rstrip("/")
+        success_url = success_url or f"{base}/v1/billing/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = cancel_url or f"{base}/v1/billing/checkout/cancel"
+
+        if not stripe_configured():
+            from b2b_platform.credits import get_credit_service
+            idem = f"dev-credits-{tenant_id}-{amount}-{int(time.time())}"
+            result = get_credit_service().credit_credits(
+                tenant_id,
+                amount,
+                reason="topup",
+                reference_id=idem,
+                idempotency_key=idem,
+                metadata={"source": "dev_no_stripe"},
+            )
+            return {
+                "ok": bool(result.ok),
+                "checkout_required": False,
+                "stripe_configured": False,
+                "credits_amount": amount,
+                "credited": bool(result.ok),
+                "reason": getattr(result, "reason", "") or "",
+                "message": "STRIPE_SECRET_KEY not set — credits granted in-process (dev)",
+            }
+
+        session = create_credits_checkout_session(
+            tenant_id=tenant_id,
+            credits_amount=amount,
+            customer_email=customer_email or t.support_email or "",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            price_id=price_id,
+            unit_amount_cents=int(unit_amount_cents or 0),
+            client_reference_id=str(tenant_id),
+            metadata={"credits_amount": str(amount), "product_type": "credits"},
+        )
+        if not session.get("ok"):
+            return session
+        return {
+            "ok": True,
+            "checkout_required": True,
+            "stripe_configured": True,
+            "credits_amount": amount,
+            "session_id": session.get("session_id"),
+            "url": session.get("url"),
+        }
+
     def handle_stripe_event(self, event: dict[str, Any]) -> dict[str, Any]:
         etype = (event or {}).get("type") or ""
         obj = (event or {}).get("data", {}).get("object") or {}
@@ -300,17 +415,52 @@ class BillingService:
             if not plan_id:
                 plan_id = (obj.get("metadata") or {}).get("plan_id") or ""
             customer = obj.get("customer") or ""
+            session_id = str(obj.get("id") or "")
+            product_type = str(meta.get("product_type") or meta.get("product") or "").strip().lower()
+            credits_raw = meta.get("credits_amount") or meta.get("credits") or ""
+            try:
+                credits_amount = int(str(credits_raw).strip() or "0")
+            except ValueError:
+                credits_amount = 0
+
+            credits_result = None
+            # Credits top-up path → CreditService.credit_credits (idempotent on session id)
+            if tenant_id and (product_type in {"credits", "credit", "credit_pack", "topup"} or credits_amount > 0):
+                if credits_amount <= 0:
+                    try:
+                        credits_amount = int(os.getenv("STRIPE_CREDITS_PER_PACK") or "0")
+                    except ValueError:
+                        credits_amount = 0
+                if credits_amount > 0:
+                    credits_result = self._grant_stripe_credits(
+                        tenant_id,
+                        credits_amount,
+                        reference_id=session_id or invoice_id or "",
+                        event_type=etype,
+                        customer=str(customer),
+                        product_type=product_type or "credits",
+                    )
+                    logger.info(
+                        "stripe credits granted tenant=%s amount=%s ok=%s",
+                        tenant_id, credits_amount, (credits_result or {}).get("ok"),
+                    )
+
+            # Plan subscription path (unchanged)
             if tenant_id and plan_id:
                 self.apply_plan(tenant_id, plan_id, stripe_customer=str(customer))
             if invoice_id:
-                self.mark_paid(invoice_id, provider_ref=str(obj.get("id") or ""))
-            elif tenant_id:
-                # best-effort: pay latest open invoice for tenant
+                self.mark_paid(invoice_id, provider_ref=session_id or str(obj.get("id") or ""))
+            elif tenant_id and not credits_amount:
                 for inv in self.list_invoices(tenant_id):
                     if inv.get("status") == "open":
-                        self.mark_paid(inv["invoice_id"], provider_ref=str(obj.get("id") or ""))
+                        self.mark_paid(inv["invoice_id"], provider_ref=session_id or str(obj.get("id") or ""))
                         break
-            return {"ok": True, "handled": etype, "tenant_id": tenant_id, "plan_id": plan_id}
+            out = {"ok": True, "handled": etype, "tenant_id": tenant_id, "plan_id": plan_id}
+            if credits_result is not None:
+                out["credits_amount"] = credits_amount
+                out["credits_ok"] = bool((credits_result or {}).get("ok"))
+                out["credits_reason"] = (credits_result or {}).get("reason") or ""
+            return out
 
         if etype in ("invoice.paid", "invoice.payment_succeeded"):
             if invoice_id:
