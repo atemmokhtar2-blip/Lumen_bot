@@ -1,0 +1,112 @@
+# Phase 4 — Policy-as-Code (official engines only)
+# - Checkov (Prisma / Bridgecrew): Dockerfile, GitHub Actions, IaC misconfig
+# - Hadolint: Dockerfile best practices
+# - actionlint: GitHub Actions workflow correctness + security
+# No custom policy scanners.
+name: Policy as Code
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "15 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+concurrency:
+  group: policy-as-code-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hadolint:
+    name: Hadolint (Dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hadolint official
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+          format: tty
+
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      - name: Lint all workflows
+        run: ./actionlint -color -shellcheck=
+
+  checkov:
+    name: Checkov (Prisma)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkov official action
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: dockerfile,github_actions,secrets
+          soft_fail: false
+          output_format: cli,sarif
+          output_file_path: console,checkov.sarif
+          skip_check: CKV_DOCKER_2
+          # CKV_DOCKER_2 = HEALTHCHECK — optional for long-running bot workers
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+        continue-on-error: true
+
+  kics:
+    name: KICS (Checkmarx)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: KICS scan official
+        uses: checkmarx/kics-github-action@v2
+        with:
+          path: .
+          fail_on: high
+          output_path: kics-results
+          output_formats: json,sarif
+          enable_comments: false
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kics-results
+          path: kics-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+  phase4-gate:
+    name: Phase-4 policy gate
+    runs-on: ubuntu-latest
+    needs: [hadolint, actionlint, checkov, kics]
+    if: always()
+    steps:
+      - name: All policy engines must succeed
+        run: |
+          for r in \
+            "${{ needs.hadolint.result }}" \
+            "${{ needs.actionlint.result }}" \
+            "${{ needs.checkov.result }}" \
+            "${{ needs.kics.result }}"; do
+            echo "result=$r"
+            if [ "$r" != "success" ]; then
+              echo "PHASE4 DENIED"
+              exit 1
+            fi
+          done
+          echo "PHASE4 OK"

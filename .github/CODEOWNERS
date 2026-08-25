@@ -12,3 +12,6 @@
 /Dockerfile @atemmokhtar2-blip
 /requirements.txt @atemmokhtar2-blip
 /.github/workflows/supply-chain.yml @atemmokhtar2-blip
+
+/.github/workflows/policy-as-code.yml @atemmokhtar2-blip
+/.github/rulesets/ @atemmokhtar2-blip

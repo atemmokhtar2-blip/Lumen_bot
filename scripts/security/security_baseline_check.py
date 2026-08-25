@@ -139,6 +139,8 @@ def main() -> int:
         "scripts/security/start_api_dast.py",
         ".github/workflows/supply-chain.yml",
         "docs/27_PHASE3_SUPPLY_CHAIN.md",
+        ".github/workflows/policy-as-code.yml",
+        "docs/28_PHASE4_POLICY_AS_CODE.md",
         "scripts/security/seed_dast_tenants.py",
     ):
         check(

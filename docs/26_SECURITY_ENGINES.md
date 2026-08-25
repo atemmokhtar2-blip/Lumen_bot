@@ -28,3 +28,13 @@
 | `security_baseline_check.py` | بوابة ثابتة أن الأدوات/القواعد موجودة |
 
 DAST العام = **ZAP فقط**. اختبارات IDOR = منطق المنتج.
+
+
+## Phase 4 — Policy-as-Code
+
+| المحرك | الجهة | Workflow |
+|--------|--------|----------|
+| **Hadolint** | hadolint | `policy-as-code.yml` |
+| **actionlint** | rhysd | `policy-as-code.yml` |
+| **Checkov** | Prisma Bridgecrew | `policy-as-code.yml` |
+| **KICS** | Checkmarx | `policy-as-code.yml` |
