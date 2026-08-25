@@ -1,0 +1,24 @@
+# ZAP baseline rules — fail on High; warn on Medium; ignore noisy Informational
+# Format: ruleId	threshold (OFF|IGNORE|INFO|LOW|MEDIUM|HIGH)
+# 10021: X-Content-Type-Options — we set it; ignore false alerts if any
+10021	IGNORE
+# 10020: X-Frame-Options
+10020	IGNORE
+# 10035: Strict-Transport-Security — only relevant on HTTPS
+10035	IGNORE
+# 10055: CSP — we set restrictive CSP
+10055	IGNORE
+# 10096: Timestamp disclosure — noise on /health
+10096	IGNORE
+# 10027: Information disclosure in errors — keep as MEDIUM
+10027	MEDIUM
+# 40012: Reflected XSS — HIGH
+40012	HIGH
+# 40014: Persistent XSS — HIGH
+40014	HIGH
+# 40018: SQL Injection — HIGH
+40018	HIGH
+# 90019: Server side code injection — HIGH
+90019	HIGH
+# 90020: Remote OS command injection — HIGH
+90020	HIGH

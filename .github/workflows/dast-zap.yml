@@ -1,0 +1,111 @@
+# Live DAST — OWASP ZAP baseline against a running API process
+name: DAST ZAP
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dast-zap-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  idor-complete:
+    name: IDOR matrix (two real tenants)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt
+      - name: Full IDOR + ownership suite
+        env:
+          ENVIRONMENT: test
+          TBE_ENV: test
+          TBE_MULTI_TENANT: "0"
+          TBE_REQUIRE_DOCKER: "0"
+          TBE_ALLOW_LOCAL_PROCESS: "1"
+        run: |
+          pytest tests/test_security_idor_dast.py -q --tb=short
+          python scripts/security/dast_api_probe.py
+
+  zap-baseline:
+    name: OWASP ZAP vs live API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install API deps
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt
+      - name: Start API on :8765
+        env:
+          ENVIRONMENT: test
+          TBE_ENV: test
+          TBE_MULTI_TENANT: "0"
+          TBE_REQUIRE_DOCKER: "0"
+          TBE_ALLOW_LOCAL_PROCESS: "1"
+          PLATFORM_ADMIN_TOKEN: dast-live-admin-token-32chars-xx
+          STRIPE_WEBHOOK_SECRET: whsec_dast_live_secret
+          ALLOW_DEV_BILLING: "0"
+          API_HOST: 127.0.0.1
+          API_PORT: "8765"
+          OUTPUT_DIR: ${{ runner.temp }}/dast-api-out
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          nohup python scripts/security/start_api_dast.py > "$OUTPUT_DIR/api.log" 2>&1 &
+          echo $! > "$OUTPUT_DIR/api.pid"
+          for i in $(seq 1 45); do
+            if curl -sf "http://127.0.0.1:8765/health" >/dev/null; then
+              echo "API ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API failed to start"; tail -100 "$OUTPUT_DIR/api.log" || true
+          exit 1
+      - name: Smoke — unauth sensitive must not be 2xx
+        run: |
+          set -e
+          for path in /v1/me /v1/generate /v1/admin/credits/x/overview /v1/me/credits/overview; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:8765$path" || true)
+            echo "$path -> $code"
+            case "$code" in
+              2*) echo "FAIL unexpected 2xx on $path"; exit 1 ;;
+            esac
+          done
+      - name: OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://127.0.0.1:8765"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a"
+          fail_action: true
+          allow_issue_writing: false
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f "${{ runner.temp }}/dast-api-out/api.pid" ]; then
+            kill "$(cat "${{ runner.temp }}/dast-api-out/api.pid")" 2>/dev/null || true
+          fi
+      - name: Upload API log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-api-log
+          path: ${{ runner.temp }}/dast-api-out/api.log
+          retention-days: 7

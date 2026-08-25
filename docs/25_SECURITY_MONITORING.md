@@ -95,3 +95,17 @@ Covers **every** tenant-authenticated route from `api/app.py`:
 pytest tests/test_security_idor_dast.py -q
 python scripts/security/dast_api_probe.py
 ```
+
+
+## Layer complete: IDOR + live ZAP DAST
+
+| Item | Artifact |
+|------|----------|
+| IDOR (two tenants, ownership, spoof) | `tests/test_security_idor_dast.py` + `api/ownership.py` |
+| In-process DAST probe | `scripts/security/dast_api_probe.py` |
+| **Live API + OWASP ZAP baseline** | `.github/workflows/dast-zap.yml` |
+| ZAP rules | `.zap/rules.tsv` |
+| Local live runner | `bash scripts/security/run_live_dast.sh` |
+
+CI starts `scripts/security/start_api_dast.py` on `127.0.0.1:8765`, waits for `/health`,
+runs unauth smoke, then **zaproxy/action-baseline** against the live process.

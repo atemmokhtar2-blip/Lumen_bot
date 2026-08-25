@@ -134,6 +134,9 @@ def main() -> int:
         "semgrep/maestro-security.yml",
         "scripts/security/dast_api_probe.py",
         "tests/test_security_idor_dast.py",
+        ".github/workflows/dast-zap.yml",
+        ".zap/rules.tsv",
+        "scripts/security/start_api_dast.py",
     ):
         check(
             f"tooling.{rel}",
