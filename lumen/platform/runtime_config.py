@@ -32,20 +32,28 @@ def redis_url() -> str:
 
 
 def require_production_data_plane() -> None:
-    """Raise if production is missing mandatory infrastructure."""
+    """Raise if production is missing mandatory infrastructure or secrets."""
     if is_dev():
         return
     missing = []
     if not database_url():
         missing.append("DATABASE_URL (PostgreSQL)")
     if not redis_url():
-        missing.append("REDIS_URL (Redis for RQ + rate limits)")
+        missing.append("REDIS_URL (Redis for RQ + rate limits — mandatory, no SQLite fallback)")
     if missing:
         raise RuntimeError(
             "Production data plane incomplete. Set: "
             + ", ".join(missing)
             + ". File/SQLite/Mongo backends are disabled outside ENVIRONMENT=dev."
         )
+    # Auth pepper — refuse boot with missing/weak API_KEY_PEPPER
+    try:
+        from lumen.platform.tenants import require_api_key_pepper
+        require_api_key_pepper()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"API_KEY_PEPPER validation failed: {exc}") from exc
 
 
 def allow_file_backends() -> bool:

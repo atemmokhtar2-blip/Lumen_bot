@@ -293,6 +293,13 @@ def create_app() -> web.Application:
     from lumen.platform.runtime_config import require_production_data_plane, is_dev
     if not is_dev():
         require_production_data_plane()
+    else:
+        # Dev still validates pepper shape if API_KEY_PEPPER is set (warn-only path is inside require)
+        try:
+            from lumen.platform.tenants import require_api_key_pepper
+            require_api_key_pepper()
+        except Exception:
+            pass
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     try:

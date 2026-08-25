@@ -1,10 +1,13 @@
-"""Rate limiter — Redis-first, SQLite fallback.
+"""Rate limiter — Redis mandatory in production; local only in explicit dev.
 
 Foundation:
-  - When REDIS_URL is set and reachable → Redis sliding-window counters.
-  - Otherwise → process-safe SQLite (WAL) for single-node / local dev.
+  - Production / staging: REDIS_URL required. No SQLite / memory fallback
+    (multi-worker DoS hole if local backends are used under B2B load).
+  - Dev / local / test: SQLite or in-process memory allowed when Redis is absent.
+  - Every backend is fronted by a process-local token-bucket (first layer) to
+    absorb bursts before hitting Redis/SQLite.
 
-Both backends share the same RateLimiter interface so callers never branch.
+Callers use RateLimiter only — never branch on backend type.
 """
 from __future__ import annotations
 
@@ -248,10 +251,43 @@ class MemoryRateLimiter:
             return max(1, int(oldest + window_sec - now) + 1)
 
 
-class RateLimiter:
-    """Facade: prefers Redis, falls back to SQLite without changing callers."""
+class LocalTokenBucket:
+    """Process-local token bucket — first defense layer before Redis/SQLite.
+
+    Not a multi-worker authority (that is Redis). Absorbs intra-process bursts
+    and fails closed under extreme local load without opening DB locks.
+    """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # key -> (tokens, last_refill_monotonic)
+        self._buckets: dict[str, tuple[float, float]] = {}
+
+    def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
+        if limit <= 0:
+            return True
+        rate = max(0.01, float(limit) / max(0.1, float(window_sec)))
+        capacity = float(max(1, limit))
+        now = time.monotonic()
+        with self._lock:
+            tokens, last = self._buckets.get(key, (capacity, now))
+            elapsed = max(0.0, now - last)
+            tokens = min(capacity, tokens + elapsed * rate)
+            if tokens < 1.0:
+                self._buckets[key] = (tokens, now)
+                return False
+            self._buckets[key] = (tokens - 1.0, now)
+            return True
+
+
+class RateLimiter:
+    """Facade: Redis mandatory outside dev; local backends only when ENVIRONMENT=dev.
+
+    Layering: LocalTokenBucket (process) → Redis/SQLite backend (shared).
+    """
+
+    def __init__(self) -> None:
+        self._local = LocalTokenBucket()
         self._backend: RateLimiterBackend = self._select_backend()
 
     @staticmethod
@@ -274,16 +310,19 @@ class RateLimiter:
                 return MemoryRateLimiter()
         if is_dev():
             try:
-                logger.info("rate_limit backend=sqlite (dev)")
+                logger.info("rate_limit backend=sqlite (dev only — never production)")
                 return SqliteRateLimiter()
             except Exception:
                 return MemoryRateLimiter()
         raise RuntimeError(
             "REDIS_URL is required for rate limiting outside ENVIRONMENT=dev. "
-            "No MemoryRateLimiter / SQLite fallback in production."
+            "No MemoryRateLimiter / SQLite fallback in production (B2B multi-tenant DoS risk)."
         )
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
+        # First layer: process-local token bucket
+        if not self._local.allow(key, limit=limit, window_sec=window_sec):
+            return False
         return self._backend.allow(key, limit=limit, window_sec=window_sec)
 
     def remaining(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:

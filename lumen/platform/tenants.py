@@ -34,6 +34,52 @@ def _is_dev_environment() -> bool:
     return env in {"dev", "development", "local", "test"}
 
 
+# Known-weak peppers — always rejected (even if set explicitly in env).
+_WEAK_PEPPERS = frozenset({
+    b"lumen_dev_only_pepper_change_me",
+    b"change-me",
+    b"changeme",
+    b"secret",
+    b"pepper",
+    b"dev",
+    b"test",
+    b"password",
+    b"123456",
+})
+
+
+def _pepper_is_strong(raw: bytes) -> bool:
+    """Reject short / known-weak peppers (root auth hardening)."""
+    if not raw or len(raw) < 32:
+        return False
+    if raw in _WEAK_PEPPERS:
+        return False
+    low = raw.lower()
+    if low in _WEAK_PEPPERS:
+        return False
+    if low.startswith(b"change") or low.startswith(b"lumen_dev"):
+        return False
+    return True
+
+
+def require_api_key_pepper() -> None:
+    """Fail closed at process start if production lacks a strong API_KEY_PEPPER.
+
+    Call from API create_app / worker boot. Unset ENVIRONMENT is production.
+    """
+    if _is_dev_environment():
+        return
+    for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
+        v = (os.getenv(name) or "").strip()
+        if v and _pepper_is_strong(v.encode("utf-8")):
+            return
+    raise RuntimeError(
+        "Refusing to start: API_KEY_PEPPER is missing or too weak for production. "
+        "Set API_KEY_PEPPER to a random secret >= 32 characters. "
+        "Hardcoded / dev peppers are never accepted outside ENVIRONMENT=dev|local|test."
+    )
+
+
 def _key_pepper() -> bytes:
     """Server-side pepper for API key hashes.
 
@@ -41,15 +87,24 @@ def _key_pepper() -> bytes:
     TBE_TOKEN_SECRET so existing single-node deploys keep a non-empty pepper
     without a new secret.
 
-    A hardcoded pepper is allowed ONLY in explicit dev environments.
-    Production / unset ENVIRONMENT must set API_KEY_PEPPER (or an equivalent).
+    Hardcoded / weak peppers are allowed ONLY in explicit dev environments.
+    Production / unset ENVIRONMENT must set a strong API_KEY_PEPPER (or equivalent).
     """
     for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
         v = (os.getenv(name) or "").strip()
-        if v:
-            return v.encode("utf-8")
+        if not v:
+            continue
+        raw = v.encode("utf-8")
+        if _pepper_is_strong(raw):
+            return raw
+        if _is_dev_environment():
+            # Weak but explicit env in dev — still prefer non-hardcoded
+            return raw
+        raise RuntimeError(
+            f"{name} is too weak for production (need >= 32 random chars). "
+            "Refusing to use known-dev or short peppers."
+        )
     if _is_dev_environment():
-        # Local/dev only — never used when ENVIRONMENT is unset or production
         return b"lumen_dev_only_pepper_change_me"
     raise RuntimeError(
         "API_KEY_PEPPER is required outside dev. "

@@ -4,6 +4,8 @@ Foundation rules:
 1. Every write target must resolve *inside* a declared project root.
 2. Project roots themselves must resolve *inside* OUTPUT_DIR (unless explicit temp allow).
 3. No absolute paths, no "..", no symlink escapes, no oversized files.
+4. TOCTOU: never trust a prior is_symlink() check alone — open with O_NOFOLLOW
+   (and O_DIRECTORY for dirs) so the kernel refuses symlink substitution at use time.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ def _cm_default_output_dir() -> str:
 
 import os
 import re
+import stat
 from pathlib import Path
 
 _SAFE_REL = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
@@ -52,7 +55,6 @@ def enforce_under_output_dir(path: Path | str, *, allow_temp_prefix: str = "spec
         "1", "true", "yes", "on",
     }
     if allow_temp and allow_temp_prefix and allow_temp_prefix in p.name:
-        # still must not be clearly sensitive system paths
         forbidden = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/root", "/home")
         s = str(p)
         if any(s == f or s.startswith(f + "/") for f in forbidden):
@@ -67,6 +69,155 @@ def safe_ident(name: str) -> str:
     if not _SAFE_IDENT.fullmatch(n):
         raise UnsafePathError(f"invalid_identifier:{name!r}")
     return n
+
+
+def _lstat_is_symlink(path: Path) -> bool:
+    """True if path is a symlink — uses lstat (never follows)."""
+    try:
+        return stat.S_ISLNK(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise UnsafePathError("lstat_failed") from exc
+
+
+def assert_no_symlinks_in_path(path: Path | str, *, root: Path | str | None = None) -> Path:
+    """Re-check every component is not a symlink via lstat (never follows).
+
+    Call immediately before open/read/write/exec — not only at initial validation.
+    """
+    raw = Path(path)
+    if root is not None:
+        r = Path(root).resolve(strict=False)
+        # Walk components under root using lstat only
+        try:
+            # Prefer relative walk from root when path is under root after resolve
+            candidate = raw if raw.is_absolute() else (r / raw)
+            # Build component chain without following
+            parts: list[str] = []
+            cur = candidate
+            # Normalize string parts without resolve-follow
+            s = str(candidate)
+            # Use resolve(strict=False) only after component lstat checks
+            walk_base = r
+            rel_try = None
+            try:
+                rel_try = Path(os.path.realpath(str(candidate))).relative_to(
+                    Path(os.path.realpath(str(r)))
+                )
+            except Exception:
+                rel_try = None
+            if rel_try is not None:
+                cur = r
+                for part in rel_try.parts:
+                    cur = cur / part
+                    if _lstat_is_symlink(cur):
+                        raise UnsafePathError(f"symlink_component_forbidden:{cur}")
+            else:
+                # Absolute walk with lstat
+                cur = Path(candidate.anchor) if candidate.is_absolute() else Path(".")
+                parts = candidate.parts[1:] if candidate.is_absolute() else candidate.parts
+                for part in parts:
+                    cur = cur / part
+                    if _lstat_is_symlink(cur):
+                        raise UnsafePathError(f"symlink_component_forbidden:{cur}")
+        except UnsafePathError:
+            raise
+        except OSError as exc:
+            raise UnsafePathError("symlink_stat_failed") from exc
+
+        final = Path(os.path.realpath(str(raw)))
+        try:
+            final.relative_to(Path(os.path.realpath(str(r))))
+        except ValueError as exc:
+            raise UnsafePathError("resolved_outside_root") from exc
+        if _lstat_is_symlink(Path(str(raw))):
+            # original path name itself is a symlink
+            raise UnsafePathError("final_path_is_symlink")
+        if _lstat_is_symlink(final):
+            raise UnsafePathError("final_path_is_symlink")
+        return final
+
+    # No root: absolute/relative walk with lstat
+    p = raw
+    cur = Path(p.anchor) if p.is_absolute() else Path(".")
+    parts = p.parts[1:] if p.is_absolute() else p.parts
+    for part in parts:
+        cur = cur / part
+        if _lstat_is_symlink(cur):
+            raise UnsafePathError(f"symlink_component_forbidden:{cur}")
+    final = Path(os.path.realpath(str(p)))
+    if _lstat_is_symlink(final) or _lstat_is_symlink(p):
+        raise UnsafePathError("final_path_is_symlink")
+    return final
+
+
+def open_directory_nofollow(path: Path | str) -> int:
+    """Open a directory fd with O_DIRECTORY|O_NOFOLLOW (atomic anti-TOCTOU).
+
+    Returns an integer fd. Caller must os.close(fd).
+    Raises UnsafePathError if path is a symlink or not a directory.
+    """
+    flags = getattr(os, "O_RDONLY", 0)
+    # O_DIRECTORY: fail if not a directory; O_NOFOLLOW: fail if final component is symlink
+    o_dir = getattr(os, "O_DIRECTORY", 0)
+    o_nofollow = getattr(os, "O_NOFOLLOW", 0)
+    o_cloexec = getattr(os, "O_CLOEXEC", 0)
+    flags |= o_dir | o_nofollow | o_cloexec
+    p = Path(path)
+    try:
+        fd = os.open(str(p), flags)
+    except OSError as exc:
+        # Distinguish symlink vs not-a-dir when possible
+        if _lstat_is_symlink(p):
+            raise UnsafePathError("directory_is_symlink") from exc
+        raise UnsafePathError(f"open_directory_failed:{type(exc).__name__}") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode):
+            os.close(fd)
+            raise UnsafePathError("not_a_directory")
+        if stat.S_ISLNK(st.st_mode):  # should be unreachable with O_NOFOLLOW
+            os.close(fd)
+            raise UnsafePathError("directory_is_symlink")
+    except UnsafePathError:
+        raise
+    except Exception:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        raise
+    return fd
+
+
+def verify_directory_nofollow(path: Path | str, *, root: Path | str | None = None) -> Path:
+    """Validate path is a real directory under root with atomic O_NOFOLLOW open.
+
+    Closes the fd after verification. Returns realpath under root.
+    This is the use-time authority for project_path checks — not is_symlink().
+    """
+    p = Path(path)
+    if root is not None:
+        assert_no_symlinks_in_path(p, root=root)
+    else:
+        assert_no_symlinks_in_path(p)
+    fd = open_directory_nofollow(p)
+    try:
+        # realpath of fd via /proc when available, else realpath string
+        real = Path(os.path.realpath(str(p)))
+        if root is not None:
+            root_real = Path(os.path.realpath(str(root)))
+            try:
+                real.relative_to(root_real)
+            except ValueError as exc:
+                raise UnsafePathError("resolved_outside_root") from exc
+        return real
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
 
 
 def safe_resolve_under(root: Path, rel: str) -> Path:
@@ -91,12 +242,8 @@ def safe_resolve_under(root: Path, rel: str) -> Path:
     cur = root
     for part in parts:
         cur = cur / part
-        try:
-            if cur.exists() and cur.is_symlink():
-                target = cur.resolve()
-                target.relative_to(root)
-        except (ValueError, OSError) as exc:
-            raise UnsafePathError("symlink_escape") from exc
+        if _lstat_is_symlink(cur):
+            raise UnsafePathError("symlink_escape")
     return resolved
 
 
@@ -107,7 +254,7 @@ def safe_write_text(
     *,
     max_bytes: int | None = None,
 ) -> Path:
-    """Write UTF-8 text to root/rel with containment + size limits."""
+    """Write UTF-8 text to root/rel with containment + size limits + O_NOFOLLOW."""
     limit = int(max_bytes if max_bytes is not None else _MAX_FILE_BYTES)
     data = content if isinstance(content, str) else str(content)
     if len(data.encode("utf-8")) > limit:
@@ -118,10 +265,7 @@ def safe_write_text(
         target.resolve(strict=False).relative_to(Path(root).resolve())
     except (ValueError, OSError) as exc:
         raise UnsafePathError("path_outside_root_after_mkdir") from exc
-    # Use-time TOCTOU: refuse if any component became a symlink since resolve
     assert_no_symlinks_in_path(target, root=root)
-    # Write without following symlinks (O_NOFOLLOW) when the file already exists
-    import os
     flags = getattr(os, "O_WRONLY", 1) | getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     raw = data.encode("utf-8")
@@ -131,12 +275,20 @@ def safe_write_text(
             os.write(fd, raw)
         finally:
             os.close(fd)
-    except OSError:
-        # O_NOFOLLOW may fail on some FS if file missing races — re-check then write
+    except OSError as exc:
+        # Never fall back to following open — re-check then retry O_NOFOLLOW only
         assert_no_symlinks_in_path(target, root=root)
-        if target.is_symlink():
-            raise UnsafePathError("write_target_is_symlink")
-        target.write_bytes(raw)
+        if _lstat_is_symlink(target):
+            raise UnsafePathError("write_target_is_symlink") from exc
+        # File may not exist yet; O_NOFOLLOW on create is fine on Linux for new files
+        try:
+            fd = os.open(str(target), flags | nofollow, 0o600)
+            try:
+                os.write(fd, raw)
+            finally:
+                os.close(fd)
+        except OSError as exc2:
+            raise UnsafePathError(f"write_failed:{type(exc2).__name__}") from exc2
     return target
 
 
@@ -151,66 +303,11 @@ def safe_write_under_root(root: Path, abs_or_rel: Path, content: str) -> Path:
     return safe_write_text(root, rel, content)
 
 
-def assert_no_symlinks_in_path(path: Path | str, *, root: Path | str | None = None) -> Path:
-    """Re-check every component is not a symlink (TOCTOU defense at use time).
-
-    Call immediately before open/read/write/exec — not only at initial validation.
-    """
-    p = Path(path).resolve(strict=False)
-    if root is not None:
-        r = Path(root).resolve()
-        try:
-            p.relative_to(r)
-        except ValueError as exc:
-            raise UnsafePathError("path_outside_root") from exc
-        base = r
-        rel_parts = p.relative_to(r).parts
-    else:
-        base = p.anchor and Path(p.anchor) or Path("/")
-        # walk from root of path
-        rel_parts = p.parts[1:] if p.is_absolute() else p.parts
-        base = Path(p.parts[0]) if p.is_absolute() else Path(".")
-
-    cur = Path(root).resolve() if root is not None else (Path(p.anchor) if p.is_absolute() else Path(".").resolve())
-    if root is not None:
-        cur = Path(root).resolve()
-        for part in Path(path).resolve().relative_to(cur).parts:
-            cur = cur / part
-            try:
-                if cur.is_symlink():
-                    raise UnsafePathError(f"symlink_component_forbidden:{cur}")
-            except OSError as exc:
-                raise UnsafePathError("symlink_stat_failed") from exc
-    else:
-        # absolute walk
-        cur = Path(p.anchor) if p.is_absolute() else Path(".")
-        parts = p.parts[1:] if p.is_absolute() else p.parts
-        for part in parts:
-            cur = cur / part
-            try:
-                if cur.exists() and cur.is_symlink():
-                    raise UnsafePathError(f"symlink_component_forbidden:{cur}")
-            except OSError as exc:
-                raise UnsafePathError("symlink_stat_failed") from exc
-    # final resolve must still be under root if given
-    final = p.resolve(strict=False)
-    if root is not None:
-        try:
-            final.relative_to(Path(root).resolve())
-        except ValueError as exc:
-            raise UnsafePathError("resolved_outside_root") from exc
-    if final.is_symlink():
-        raise UnsafePathError("final_path_is_symlink")
-    return final
-
-
 def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
-    """Open a file under root with symlink rejection at open time (read and write)."""
-    import os
+    """Open a file under root with O_NOFOLLOW at open time — never follow symlinks."""
     path = safe_resolve_under(Path(root), rel)
     path = assert_no_symlinks_in_path(path, root=root)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    # Map common modes to flags + O_NOFOLLOW
     if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
         flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)
         if "w" in mode:
@@ -222,17 +319,15 @@ def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
         try:
             fd = os.open(str(path), flags | nofollow, 0o600)
             return open(fd, mode, **kwargs)
-        except OSError:
-            assert_no_symlinks_in_path(path, root=root)
-            if path.is_symlink():
-                raise UnsafePathError("open_target_is_symlink")
-            return open(path, mode, **kwargs)
-    # read-only
+        except OSError as exc:
+            if _lstat_is_symlink(path):
+                raise UnsafePathError("open_target_is_symlink") from exc
+            raise UnsafePathError(f"open_failed:{type(exc).__name__}") from exc
     flags = getattr(os, "O_RDONLY", 0) | nofollow
     try:
         fd = os.open(str(path), flags)
         return open(fd, mode, **kwargs)
-    except OSError:
-        assert_no_symlinks_in_path(path, root=root)
-        return open(path, mode, **kwargs)
-
+    except OSError as exc:
+        if _lstat_is_symlink(path):
+            raise UnsafePathError("open_target_is_symlink") from exc
+        raise UnsafePathError(f"open_failed:{type(exc).__name__}") from exc

@@ -87,7 +87,8 @@ def _reject_unsafe_path_string(raw: str) -> None:
 def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     """Resolve and enforce that project_path is inside the tenant sandbox.
 
-    Rejects absolute escapes, relative traversal, and any path outside OUTPUT_DIR/users/...
+    Anti-TOCTOU: final authority is O_DIRECTORY|O_NOFOLLOW open (kernel refuses
+    symlink substitution between check and use), not pathlib is_symlink() alone.
     """
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
@@ -98,37 +99,31 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     except (OSError, RuntimeError) as exc:
         raise ValueError("invalid_path") from exc
 
-    if not path.is_dir():
-        raise ValueError("project_path_not_a_directory")
-
-    # Symlink project roots and any component symlinks forbidden (TOCTOU)
-    try:
-        if Path(raw).is_symlink() or path.is_symlink():
-            raise ValueError("project_path_symlink_forbidden")
-        from lumen.engine.services.safe_fs import assert_no_symlinks_in_path
-        sandbox_pre = tenant_sandbox_root(tenant_id)
-        assert_no_symlinks_in_path(path, root=sandbox_pre)
-    except ValueError:
-        raise
-    except Exception as exc:
-        if "symlink" in str(exc).lower():
-            raise ValueError("project_path_symlink_forbidden") from exc
-
     sandbox = tenant_sandbox_root(tenant_id)
-    if is_path_inside(path, sandbox):
-        # Use-time re-check before returning
-        try:
-            from lumen.engine.services.safe_fs import assert_no_symlinks_in_path
-            assert_no_symlinks_in_path(path, root=sandbox)
-        except Exception as exc:
-            raise ValueError("project_path_symlink_forbidden") from exc
-        return path
+    if not is_path_inside(path, sandbox):
+        raise ValueError("project_path_outside_sandbox")
 
-    raise ValueError("project_path_outside_sandbox")
+    try:
+        from lumen.engine.services.safe_fs import verify_directory_nofollow, UnsafePathError
+        verified = verify_directory_nofollow(path, root=sandbox)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "symlink" in msg or "directory_is_symlink" in msg:
+            raise ValueError("project_path_symlink_forbidden") from exc
+        if "not_a_directory" in msg:
+            raise ValueError("project_path_not_a_directory") from exc
+        raise ValueError("project_path_symlink_forbidden") from exc
+
+    if not is_path_inside(verified, sandbox):
+        raise ValueError("project_path_outside_sandbox")
+    return verified
 
 
 def validate_user_project_path(user_id: int, project_path: str) -> Path:
-    """Same containment for Telegram consumer user_id (+ symlink TOCTOU checks)."""
+    """Same containment for Telegram consumer user_id.
+
+    Anti-TOCTOU: O_DIRECTORY|O_NOFOLLOW at use time (see validate_tenant_project_path).
+    """
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
     raw = str(project_path).strip()
@@ -137,24 +132,20 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
         path = Path(raw).resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         raise ValueError("invalid_path") from exc
-    if not path.is_dir():
-        raise ValueError("project_path_not_a_directory")
-    try:
-        if Path(raw).is_symlink() or path.is_symlink():
-            raise ValueError("project_path_symlink_forbidden")
-    except ValueError:
-        raise
-    except OSError:
-        pass
     sandbox = get_user_sandbox(int(user_id), output_root()).root.resolve()
     if not is_path_inside(path, sandbox):
         raise ValueError("project_path_outside_sandbox")
     try:
-        from lumen.engine.services.safe_fs import assert_no_symlinks_in_path
-        assert_no_symlinks_in_path(path, root=sandbox)
+        from lumen.engine.services.safe_fs import verify_directory_nofollow
+        verified = verify_directory_nofollow(path, root=sandbox)
     except Exception as exc:
+        msg = str(exc).lower()
+        if "not_a_directory" in msg:
+            raise ValueError("project_path_not_a_directory") from exc
         raise ValueError("project_path_symlink_forbidden") from exc
-    return path
+    if not is_path_inside(verified, sandbox):
+        raise ValueError("project_path_outside_sandbox")
+    return verified
 
 
 # Paths that must keep a raw body stream (custom size caps / signature verify).

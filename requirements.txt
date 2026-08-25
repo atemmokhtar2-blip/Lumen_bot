@@ -1,22 +1,23 @@
-# Runtime — Lumen (zero-AI generation path)
-python-telegram-bot>=21.0,<22
-python-dotenv>=1.0.0
-pydantic>=2.5,<3
-pydantic-settings>=2.1,<3
-requests>=2.31.0
-curl_cffi>=0.6.0
-aiohttp>=3.9.0
+# Runtime — Lumen (pinned for supply-chain / CVE control)
+# Bump deliberately after pip-audit / changelog review — do not use floating majors in prod.
+python-telegram-bot==21.10
+python-dotenv==1.0.1
+pydantic==2.10.6
+pydantic-settings==2.7.1
+requests==2.32.3
+curl_cffi==0.7.4
+aiohttp==3.11.12
 
 # Optional: faster fuzzy matching for Layer-1 LU
-rapidfuzz>=3.5.0
-pymongo>=4.6.0
+rapidfuzz==3.12.1
+pymongo==4.11.1
 
 # Security / hosting foundation
-cryptography>=42.0.0
+cryptography==44.0.1
 # Optional object storage (S3/R2/MinIO)
-# boto3>=1.34.0
+# boto3==1.36.16
 # Optional Postgres host state
-psycopg[binary]>=3.1.0
+psycopg[binary]==3.2.4
 
-redis>=5.0.0
-rq>=1.16.0
+redis==5.2.1
+rq==2.1.0
