@@ -17,8 +17,8 @@
 | تشغيل | entry processes | `main.py`, `api_main.py` |
 | واجهة تيليجرام | استقبال رسائل، جلسات، أوامر | `lumen.bot/` |
 | توجيه الرسالة | ترتيب المسارات الحرج | `message_router.py` |
-| شات (Grok/Groq) | فهم نية + اختيار action | `llm/groq_chat.py`, `llm/facade.py` |
-| ترجمة | عقد features لـ spec_core | `translator_client`, Gemini translate |
+| شات (**Groq فقط**) | فهم نية + اختيار action — لا Gemini | `llm/groq_chat.py`, `llm/facade.py` |
+| ترجمة (**Gemini فقط**) | عقد features لـ spec_core — لا Groq | `translator_client`, Gemini translate |
 | أدوات | تنفيذ clone/host/repo/… | `tool_runtime/executor.py` |
 | توليد حتمي | كود بوت من مواصفات | `spec_core/` |
 | Pipeline/Engines | مراحل ومحركات داخلية | `pipeline/`, `engines/` |

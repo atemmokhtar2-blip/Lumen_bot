@@ -1,10 +1,13 @@
-"""LLM facade — single entry for translate/chat; providers are swappable.
+"""LLM facade — single entry for translate/chat.
 
-Environment (step 2 defaults — speed + quality split):
-  TRANSLATE_PROVIDER=gemini|groq   default: gemini
-  CHAT_PROVIDER=groq|gemini        default: groq
-  Fallbacks: disabled when TBE_STRICT_LLM_ROLES=1 (default):
-    translate = Gemini only | chat = Groq only
+Product rule (hard separation — do not mix):
+  • Chat / guidance     → Groq only   (GROQ_API_KEY / GROQ_API_KEYS)
+  • Translate / spec    → Gemini only (GEMINI_API_KEY / GEMINI_API_KEYS)
+
+  TBE_STRICT_LLM_ROLES=1 (default ON) enforces the split:
+    translate chain = GeminiTranslateAdapter only
+    chat chain      = GroqChatAdapter only
+  No cross-provider failover between Groq and Gemini.
 
 Callers must use ``translate_request`` / ``chat_request`` from this module
 or from ``translator_client`` (re-exports). Do not import Groq/Gemini
@@ -41,11 +44,21 @@ def _env_name(value: str | None, default: str) -> str:
     return raw if raw else default
 
 
+def _strict_llm_roles() -> bool:
+    """Product rule: Gemini=translate only, Groq=chat only (default ON)."""
+    raw = (os.getenv("TBE_STRICT_LLM_ROLES") or "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
 def get_translate_provider_name() -> str:
+    if _strict_llm_roles():
+        return "gemini"
     return _env_name(os.getenv("TRANSLATE_PROVIDER"), "gemini")
 
 
 def get_chat_provider_name() -> str:
+    if _strict_llm_roles():
+        return "groq"
     return _env_name(os.getenv("CHAT_PROVIDER"), "groq")
 
 
@@ -64,11 +77,6 @@ def get_chat_provider() -> ChatProvider:
         logger.warning("Unknown CHAT_PROVIDER=%s; using groq", name)
     return cls()  # type: ignore[return-value]
 
-
-def _strict_llm_roles() -> bool:
-    """Gemini=translate only, Groq/Grok=chat only (default ON)."""
-    raw = (os.getenv("TBE_STRICT_LLM_ROLES") or "1").strip().lower()
-    return raw not in {"0", "false", "off", "no"}
 
 
 def _translate_chain() -> list:
@@ -93,33 +101,18 @@ def _translate_chain() -> list:
     return out
 
 
-def _cross_provider_failover() -> bool:
-    """When primary chat pool is exhausted, try the other provider (UX continuity).
-
-    Default ON so a dead Groq pool does not surface a hard error if Gemini keys exist.
-    Set CHAT_CROSS_FAILOVER=0 to keep strict single-provider chat.
-    """
-    raw = (os.getenv("CHAT_CROSS_FAILOVER") or "1").strip().lower()
-    return raw not in {"0", "false", "off", "no"}
-
-
 def _chat_chain() -> list:
-    """Chat providers with fast key-pool rotation inside each adapter.
+    """Chat providers — Groq only under product rule (strict roles default ON).
 
-    Strict roles still prefer Groq first; optional silent Gemini tail keeps
-    conversation alive when every Groq key is rate-limited/invalid.
+    Key rotation stays inside the Groq pool (GROQ_API_KEYS). Gemini is never
+    used for chat when TBE_STRICT_LLM_ROLES is enabled.
     """
-    primary = get_chat_provider()
     if _strict_llm_roles():
-        chain: list = [GroqChatAdapter()]
-        if _cross_provider_failover():
-            chain.append(GeminiChatAdapter())
-        return chain
+        return [GroqChatAdapter()]
+    primary = get_chat_provider()
     chain = [primary]
-    if getattr(primary, "name", "") == "groq":
-        chain.append(GeminiChatAdapter())
-    else:
-        chain.append(GroqChatAdapter())
+    # Non-strict only: allow configured primary; still no automatic Gemini tail
+    # unless CHAT_PROVIDER explicitly selects gemini.
     seen: set[str] = set()
     out = []
     for p in chain:
