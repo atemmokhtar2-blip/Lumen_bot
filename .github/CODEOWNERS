@@ -1,0 +1,10 @@
+# Critical security paths — require review
+/api/auth.py @atemmokhtar2-blip
+/api/security.py @atemmokhtar2-blip
+/api/app.py @atemmokhtar2-blip
+/b2b_platform/credits/ @atemmokhtar2-blip
+/b2b_platform/security_events.py @atemmokhtar2-blip
+/telegram_bot_engine/security/ @atemmokhtar2-blip
+/.github/workflows/ @atemmokhtar2-blip
+/semgrep/ @atemmokhtar2-blip
+/scripts/security/ @atemmokhtar2-blip

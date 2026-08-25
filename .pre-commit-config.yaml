@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
+    hooks:
+      - id: bandit
+        args: ["-ll", "-r", "b2b_platform", "api", "telegram_bot_engine/security", "-s", "B101,B601"]
+
+  - repo: local
+    hooks:
+      - id: security-baseline
+        name: security baseline strict
+        entry: python scripts/security/security_baseline_check.py --strict
+        language: system
+        pass_filenames: false
+      - id: credits-attack-tests
+        name: credits + attack surface tests
+        entry: pytest tests/test_security_attack_surface.py tests/test_security_baseline.py tests/test_welcome_credits.py -q
+        language: system
+        pass_filenames: false

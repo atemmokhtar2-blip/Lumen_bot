@@ -46,3 +46,17 @@ pytest tests/test_security_baseline.py tests/test_welcome_credits.py -q
 - `security_headers_middleware`: nosniff, DENY frame, CSP, Permissions-Policy, HSTS on HTTPS
 - CORS: deny-by-default (لا `*` في الإنتاج)
 - Admin credits: `require_admin` فقط
+
+## Offensive layer (not scanners)
+
+| Artifact | Role |
+|----------|------|
+| `tests/test_security_attack_surface.py` | Auth bypass, admin probe, path traversal, promo abuse, policy fail-closed, HTTP 401 gates |
+| `b2b_platform/security_events.py` | Append-only JSONL runtime events (`auth.admin_rejected`, …) |
+| `.github/workflows/security-attack.yml` | Must stay green on every PR |
+| `.pre-commit-config.yaml` | gitleaks + bandit + baseline + attack tests before commit |
+| `.github/CODEOWNERS` | Review gate on security-critical paths |
+
+```bash
+pytest tests/test_security_attack_surface.py -q
+```
