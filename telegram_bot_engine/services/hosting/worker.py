@@ -170,6 +170,14 @@ def run_forever(poll_seconds: float | None = None) -> None:
                         logger.info("supervisor tick %s", tick)
                 except Exception:
                     logger.debug("supervisor tick skipped", exc_info=True)
+
+                try:
+                    from b2b_platform.rating_engine import get_rating_engine
+                    rated = get_rating_engine().rate_pending(limit=50)
+                    if rated.get("processed") or rated.get("failed"):
+                        logger.info("rating tick %s", rated)
+                except Exception:
+                    logger.debug("rating tick skipped", exc_info=True)
                 worked = process_one(queue=q, fleet=fleet)
                 if not worked:
                     try:
