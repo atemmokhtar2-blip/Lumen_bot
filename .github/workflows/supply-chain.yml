@@ -180,7 +180,7 @@ jobs:
 
       - name: Attest build provenance (GitHub official)
         if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: sha256:${{ github.sha }}
