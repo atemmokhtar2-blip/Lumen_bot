@@ -70,3 +70,28 @@ pytest tests/test_security_attack_surface.py -q
 | `scripts/security/dast_api_probe.py` | Standalone probe, exit ≠ 0 on any unexpected 2xx |
 
 Also fixed production bug: `HTTPRequestEntityTooLarge` missing `max_size` (was 500 on big body).
+
+
+## World-class IDOR matrix (layer 2 hardened)
+
+Covers **every** tenant-authenticated route from `api/app.py`:
+
+- Unauth matrix (GET/POST/PUT/DELETE) → never 2xx on sensitive paths
+- Tenant key + spoofed X-Admin-Token → never admin
+- `/v1/me` strict identity + no cross-tenant id leak in JSON
+- Credits overview/ledger/reconcile/balance isolation
+- **Job IDOR**: planted job of A returns 404 to B; list_jobs hides it
+- usage / invoices / dashboard no cross leak
+- Mass-assignment on white-label cannot set plan_id
+- create_tenant + dev_activate privilege escalation locked
+- Auth header confusion (empty bearer, admin as bearer, X-Api-Key)
+- Stripe webhook forgery cannot mint credits
+- Injection path matrix on admin + jobs
+- Oversized generate → 413 (not 500)
+- Parallel deduct race → no negative balance
+- rotate_key isolates tenants
+
+```bash
+pytest tests/test_security_idor_dast.py -q
+python scripts/security/dast_api_probe.py
+```
