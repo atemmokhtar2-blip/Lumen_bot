@@ -137,6 +137,7 @@ def main() -> int:
         ".github/workflows/dast-zap.yml",
         ".zap/rules.tsv",
         "scripts/security/start_api_dast.py",
+        "scripts/security/seed_dast_tenants.py",
     ):
         check(
             f"tooling.{rel}",

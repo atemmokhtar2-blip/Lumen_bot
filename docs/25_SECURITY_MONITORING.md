@@ -109,3 +109,17 @@ python scripts/security/dast_api_probe.py
 
 CI starts `scripts/security/start_api_dast.py` on `127.0.0.1:8765`, waits for `/health`,
 runs unauth smoke, then **zaproxy/action-baseline** against the live process.
+
+
+## World-class live DAST (complete)
+
+| Stage | What |
+|-------|------|
+| 1 | Start live API `:8765` |
+| 2 | Seed **two tenants** via `POST /v1/tenants` + admin token |
+| 3 | **Live HTTP IDOR** (`live_idor_http.py`) with real keys |
+| 4 | **OWASP ZAP baseline** spider/active light |
+| 5 | **OWASP ZAP API scan** against `/openapi.yaml` |
+| 6 | Parse reports — block on **MEDIUM + HIGH** |
+
+Artifacts: `.github/workflows/dast-zap.yml`, `.zap/rules.tsv`, `seed_dast_tenants.py`, `live_idor_http.py`.
