@@ -25,6 +25,29 @@ def _tenant_user_id(tenant_id: str) -> int:
 
 async def host_start(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
+    try:
+        from b2b_platform.balance_lifecycle import get_balance_lifecycle
+        from b2b_platform.rating_engine import reserve_for_hosting
+        from b2b_platform.credits import get_credit_service
+        import time as _time
+        ok_h, reason_h = get_balance_lifecycle().is_hosting_allowed(tenant.tenant_id)
+        if not ok_h:
+            return web.json_response({"ok": False, "error": reason_h}, status=402)
+        res = reserve_for_hosting(
+            get_credit_service(),
+            tenant.tenant_id,
+            hours=1,
+            ram_mb=256,
+            reference_id="host_start",
+            idempotency_key=f"reserve-host-{tenant.tenant_id}-{int(_time.time()) // 3600}",
+        )
+        if not res.ok and "insufficient" in (res.reason or ""):
+            return web.json_response(
+                {"ok": False, "error": res.reason, "hint": "top up credits before hosting"},
+                status=402,
+            )
+    except Exception:
+        logger.debug("balance gate skipped", exc_info=True)
     body = await safe_json_body(request, max_bytes=65536)
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()

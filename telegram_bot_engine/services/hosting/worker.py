@@ -178,6 +178,13 @@ def run_forever(poll_seconds: float | None = None) -> None:
                         logger.info("rating tick %s", rated)
                 except Exception:
                     logger.debug("rating tick skipped", exc_info=True)
+                try:
+                    from b2b_platform.balance_lifecycle import get_balance_lifecycle
+                    lc = get_balance_lifecycle().tick()
+                    if lc.get("actions"):
+                        logger.info("balance lifecycle %s", lc)
+                except Exception:
+                    logger.debug("balance lifecycle tick skipped", exc_info=True)
                 worked = process_one(queue=q, fleet=fleet)
                 if not worked:
                     try:

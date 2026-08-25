@@ -36,10 +36,21 @@ class CreditService:
 
     def credit_credits(self, tenant_id, amount, *, reason="purchase", reference_id="",
                        idempotency_key="", metadata=None) -> CreditResult:
-        return self._store.credit(
+        result = self._store.credit(
             str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
             idempotency_key=idempotency_key, metadata=metadata,
         )
+        if result.ok:
+            try:
+                from b2b_platform.balance_lifecycle import get_balance_lifecycle
+                get_balance_lifecycle().clear_suspension_on_credit(str(tenant_id))
+                # refresh baseline for threshold % if purchase
+                if reason in {"purchase", "topup", "stripe_credit"}:
+                    w = result.wallet or self.get_wallet(str(tenant_id))
+                    get_balance_lifecycle().set_baseline(str(tenant_id), int(w.current_balance))
+            except Exception:
+                pass
+        return result
 
     def deduct_credits(self, tenant_id, amount, *, reason="generation_cost",
                        reference_id="", idempotency_key="", metadata=None) -> CreditResult:
