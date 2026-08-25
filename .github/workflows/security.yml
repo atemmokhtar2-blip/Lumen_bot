@@ -167,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy filesystem (CRITICAL/HIGH) — real engine, fail closed
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -177,7 +177,7 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
       - name: Trivy config (Dockerfile misconfig) — fail closed
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
