@@ -132,6 +132,8 @@ def main() -> int:
         ".gitleaks.toml",
         "scripts/security/credits_health_monitor.py",
         "semgrep/maestro-security.yml",
+        "scripts/security/dast_api_probe.py",
+        "tests/test_security_idor_dast.py",
     ):
         check(
             f"tooling.{rel}",

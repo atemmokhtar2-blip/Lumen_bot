@@ -81,6 +81,8 @@ async def generate(request: web.Request) -> web.Response:
         code = _safe_error_code(exc, default="invalid_json")
         if code == "payload_too_large":
             raise web.HTTPRequestEntityTooLarge(
+                max_size=_MAX_BODY_BYTES,
+                actual_size=_MAX_BODY_BYTES + 1,
                 text='{"error":"payload_too_large"}',
                 content_type="application/json",
             )
@@ -122,6 +124,8 @@ async def generate(request: web.Request) -> web.Response:
         code = _safe_error_code(exc, default="invalid_json")
         if code == "job_input_too_large":
             raise web.HTTPRequestEntityTooLarge(
+                max_size=1024 * 1024,
+                actual_size=1024 * 1024 + 1,
                 text='{"error":"job_input_too_large"}',
                 content_type="application/json",
             )

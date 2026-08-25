@@ -60,3 +60,13 @@ pytest tests/test_security_baseline.py tests/test_welcome_credits.py -q
 ```bash
 pytest tests/test_security_attack_surface.py -q
 ```
+
+
+## IDOR + DAST (layer after attack-surface)
+
+| Artifact | What it proves |
+|----------|----------------|
+| `tests/test_security_idor_dast.py` | Tenant A cannot admin-read B; `/v1/me` isolation; forged Stripe webhook; method fuzz; injection paths; oversized body → 413; dev activate locked |
+| `scripts/security/dast_api_probe.py` | Standalone probe, exit ≠ 0 on any unexpected 2xx |
+
+Also fixed production bug: `HTTPRequestEntityTooLarge` missing `max_size` (was 500 on big body).

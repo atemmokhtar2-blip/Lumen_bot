@@ -31,9 +31,12 @@ jobs:
           TBE_ALLOW_LOCAL_PROCESS: "1"
         run: |
           pytest tests/test_security_attack_surface.py \
+                tests/test_security_idor_dast.py \
                 tests/test_security_baseline.py \
                 tests/test_welcome_credits.py \
                 tests/test_credits_ledger.py \
                 -q --tb=short
       - name: Static baseline strict
         run: python scripts/security/security_baseline_check.py --strict
+      - name: In-process DAST probe
+        run: python scripts/security/dast_api_probe.py

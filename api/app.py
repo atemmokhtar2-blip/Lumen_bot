@@ -52,14 +52,7 @@ def _cors_origin_for(request: web.Request) -> str | None:
 
 
 
-@web.middleware
-async def security_headers_middleware(request: web.Request, handler):
-    """OWASP-aligned response headers on every response (incl. errors)."""
-    try:
-        resp = await handler(request)
-    except web.HTTPException as ex:
-        resp = ex
-    # Never cache authenticated API responses by default
+def _apply_security_headers(resp: web.StreamResponse, request: web.Request) -> None:
     path = request.path or ""
     if path.startswith("/v1/") and path not in {"/v1/plans"}:
         resp.headers.setdefault("Cache-Control", "no-store")
@@ -71,41 +64,54 @@ async def security_headers_middleware(request: web.Request, handler):
         "Content-Security-Policy",
         "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     )
-    # HSTS only when request is HTTPS (or behind terminated TLS proxy)
     proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower()
     if proto == "https":
         resp.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
     resp.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-    return resp
 
 
 @web.middleware
-async def cors_middleware(request: web.Request, handler):
-    if request.method == "OPTIONS":
-        resp = web.Response(status=204)
-    else:
-        try:
-            resp = await handler(request)
-        except web.HTTPException as ex:
-            resp = ex
+async def security_headers_middleware(request: web.Request, handler):
+    """OWASP-aligned response headers on every response (incl. errors)."""
+    try:
+        resp = await handler(request)
+    except web.HTTPException as ex:
+        _apply_security_headers(ex, request)
+        raise
+    _apply_security_headers(resp, request)
+    return resp
+
+
+def _apply_cors(resp: web.StreamResponse, request: web.Request) -> None:
     origin = _cors_origin_for(request)
     if origin:
         resp.headers["Access-Control-Allow-Origin"] = origin
         resp.headers["Vary"] = "Origin"
-        # Spec forbids Access-Control-Allow-Credentials: true together with
-        # Access-Control-Allow-Origin: *. Browsers reject that combination.
         if origin != "*":
             resp.headers["Access-Control-Allow-Credentials"] = "true"
     resp.headers["Access-Control-Allow-Headers"] = (
         "Authorization, Content-Type, X-Api-Key, X-Admin-Token"
     )
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-    # Basic hardening headers
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
+
+
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+        _apply_cors(resp, request)
+        return resp
+    try:
+        resp = await handler(request)
+    except web.HTTPException as ex:
+        _apply_cors(ex, request)
+        raise
+    _apply_cors(resp, request)
     return resp
 
 

@@ -232,7 +232,7 @@ jobs:
           pip install -U pip pytest
           pip install -r requirements.txt 2>/dev/null || true
       - name: Ledger + welcome + privilege gates
-        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py tests/test_security_baseline.py tests/test_security_attack_surface.py -q --tb=short
+        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py tests/test_security_baseline.py tests/test_security_attack_surface.py tests/test_security_idor_dast.py -q --tb=short
 
   # ── 9. Daily / on-demand credits health ─────────────────
   credits-health-monitor:
@@ -268,4 +268,6 @@ jobs:
           pip install -U pip pytest
           pip install -r requirements.txt 2>/dev/null || true
       - name: Static security baseline
-        run: python scripts/security/security_baseline_check.py --strict
+        run: |
+          python scripts/security/security_baseline_check.py --strict
+          python scripts/security/dast_api_probe.py

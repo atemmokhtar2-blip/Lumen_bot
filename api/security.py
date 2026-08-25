@@ -238,6 +238,8 @@ async def safe_json_body(
     def _http_for(code: str):
         if code == "payload_too_large":
             return web.HTTPRequestEntityTooLarge(
+                max_size=max_bytes,
+                actual_size=max_bytes + 1,
                 text='{"error":"payload_too_large"}',
                 content_type="application/json",
             )
