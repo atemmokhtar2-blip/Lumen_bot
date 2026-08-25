@@ -9,7 +9,7 @@ aiohttp>=3.9.0
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz>=3.5.0
-pymongo>=4.6.0
+pymongo>=4.17.0
 
 # Security / hosting foundation
 cryptography>=42.0.0
