@@ -35,4 +35,4 @@ updates:
       - "docker"
       - "security"
     commit-message:
-      prefix: "chore(docker)"
+      prefix: "chore(docker)" 
