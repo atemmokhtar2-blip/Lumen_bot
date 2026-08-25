@@ -107,7 +107,36 @@ def enforce_max_lifetime() -> int:
 
 
 def supervisor_tick() -> Dict[str, int]:
+    reaped = reap_exited(remove=True)
+    lifetime_killed = enforce_max_lifetime()
+    heartbeats = 0
+    try:
+        from telegram_bot_engine.services.usage.heartbeat import emit_host_heartbeat
+        for c in list_managed_containers():
+            labels = c.get("labels") if isinstance(c.get("labels"), dict) else {}
+            tenant_id = str(
+                labels.get("tbe.tenant_id")
+                or labels.get("tenant_id")
+                or c.get("tenant_id")
+                or ""
+            ).strip()
+            bot_id = str(
+                labels.get("tbe.bot_id")
+                or labels.get("bot_id")
+                or c.get("name")
+                or c.get("Names")
+                or c.get("Id")
+                or ""
+            ).strip()[:120]
+            if not tenant_id or not bot_id:
+                continue
+            r = emit_host_heartbeat(tenant_id=tenant_id, bot_id=bot_id, uptime_seconds=0)
+            if r.get("ok"):
+                heartbeats += 1
+    except Exception:
+        logger.debug("usage heartbeat skipped", exc_info=True)
     return {
-        "reaped": reap_exited(remove=True),
-        "lifetime_killed": enforce_max_lifetime(),
+        "reaped": reaped,
+        "lifetime_killed": lifetime_killed,
+        "heartbeats": heartbeats,
     }
