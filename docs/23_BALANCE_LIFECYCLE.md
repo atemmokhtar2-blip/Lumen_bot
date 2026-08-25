@@ -1,13 +1,9 @@
-# Phase 4 — Zero-balance graceful degradation
+# Phase 4 — Balance lifecycle (hardened)
 
-## Flow
+State machine: active → warning → grace → suspended → active
 
-1. After successful rating debit → `on_balance_changed`
-2. 80/90/95% of baseline → alert
-3. available<=0 or insufficient rating → grace (`TBE_BALANCE_GRACE_SEC`)
-4. Grace expired → suspend managed bots
-5. Top-up → clear suspension + baseline
-
-## Host start
-
-Reject if suspended (402). Pre-auth reserve_for_hosting.
+- Grace warnings every TBE_BALANCE_GRACE_WARN_SEC
+- Snapshot bots before stop
+- Optimistic concurrency version
+- Host start fail-closed 503 if gate errors (non-dev)
+- GET /v1/billing/balance

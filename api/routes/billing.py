@@ -146,3 +146,21 @@ async def dev_activate(request: web.Request) -> web.Response:
     if inv_id:
         get_billing().mark_paid(inv_id, provider_ref="dev_activate")
     return web.json_response({"ok": ok, "plan_id": plan_id, "tenant_id": tenant.tenant_id})
+
+
+async def balance_status(request: web.Request) -> web.Response:
+    """Phase 4: wallet + lifecycle phase for authenticated tenant."""
+    tenant = require_tenant(request)
+    try:
+        from b2b_platform.balance_lifecycle import get_balance_lifecycle
+        from b2b_platform.credits import get_credit_service
+        status = get_balance_lifecycle().status(tenant.tenant_id)
+        w = get_credit_service().get_wallet(tenant.tenant_id)
+        status["wallet"] = {
+            "current_balance": w.current_balance,
+            "reserved_balance": w.reserved_balance,
+            "available": w.available,
+        }
+        return web.json_response({"ok": True, **status})
+    except Exception:
+        return web.json_response({"ok": False, "error": "balance_status_unavailable"}, status=503)

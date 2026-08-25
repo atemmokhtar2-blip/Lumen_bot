@@ -25,6 +25,11 @@ def _tenant_user_id(tenant_id: str) -> int:
 
 async def host_start(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
+    # Balance lifecycle gate — fail-closed in production
+    import os as _os
+    _dev = (_os.getenv("ENVIRONMENT") or _os.getenv("TBE_ENV") or "").strip().lower() in {
+        "dev", "development", "local", "test",
+    }
     try:
         from b2b_platform.balance_lifecycle import get_balance_lifecycle
         from b2b_platform.rating_engine import reserve_for_hosting
@@ -46,8 +51,13 @@ async def host_start(request: web.Request) -> web.Response:
                 {"ok": False, "error": res.reason, "hint": "top up credits before hosting"},
                 status=402,
             )
-    except Exception:
-        logger.debug("balance gate skipped", exc_info=True)
+    except Exception as _bal_exc:
+        logger.exception("balance gate error")
+        if not _dev:
+            return web.json_response(
+                {"ok": False, "error": "balance_gate_unavailable"},
+                status=503,
+            )
     body = await safe_json_body(request, max_bytes=65536)
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()

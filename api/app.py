@@ -318,6 +318,7 @@ SwaggerUIBundle({ url: '/openapi.yaml', dom_id: '#swagger-ui' });
     app.router.add_get("/v1/hosts", hosts.host_status)
     app.router.add_post("/v1/hosts/diagnose", hosts.host_diagnose)
     app.router.add_get("/v1/usage", billing.usage)
+    app.router.add_get("/v1/billing/balance", billing.balance_status)
     app.router.add_get("/v1/invoices", billing.invoices)
     app.router.add_post("/v1/invoices", billing.create_invoice)
     app.router.add_post("/v1/billing/checkout", billing.checkout)
