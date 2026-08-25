@@ -26,6 +26,8 @@ def _tenant_user_id(tenant_id: str) -> int:
 
 async def host_start(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     # Balance lifecycle gate — fail-closed in production
     import os as _os
     _dev = (_os.getenv("ENVIRONMENT") or _os.getenv("TBE_ENV") or "").strip().lower() in {
@@ -59,8 +61,6 @@ async def host_start(request: web.Request) -> web.Response:
                 {"ok": False, "error": "balance_gate_unavailable"},
                 status=503,
             )
-    body = await safe_json_body(request, max_bytes=65536)
-    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
 
