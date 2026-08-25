@@ -93,12 +93,28 @@ def _translate_chain() -> list:
     return out
 
 
+def _cross_provider_failover() -> bool:
+    """When primary chat pool is exhausted, try the other provider (UX continuity).
+
+    Default ON so a dead Groq pool does not surface a hard error if Gemini keys exist.
+    Set CHAT_CROSS_FAILOVER=0 to keep strict single-provider chat.
+    """
+    raw = (os.getenv("CHAT_CROSS_FAILOVER") or "1").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
 def _chat_chain() -> list:
-    """Chat providers: Groq only when strict roles; else primary+fallback."""
+    """Chat providers with fast key-pool rotation inside each adapter.
+
+    Strict roles still prefer Groq first; optional silent Gemini tail keeps
+    conversation alive when every Groq key is rate-limited/invalid.
+    """
     primary = get_chat_provider()
     if _strict_llm_roles():
-        # Force Groq for chat — never Gemini
-        return [GroqChatAdapter()]
+        chain: list = [GroqChatAdapter()]
+        if _cross_provider_failover():
+            chain.append(GeminiChatAdapter())
+        return chain
     chain = [primary]
     if getattr(primary, "name", "") == "groq":
         chain.append(GeminiChatAdapter())
@@ -161,8 +177,9 @@ def chat_request(
         if not ok:
             logger.warning("chat_request blocked by llm budget: %s", reason)
             return {
+                "answer": "تم بلوغ الحد اليومي لاستخدام الذكاء الاصطناعي. حاول لاحقاً.",
                 "reply": "تم بلوغ الحد اليومي لاستخدام الذكاء الاصطناعي. حاول لاحقاً.",
-                "action": "none",
+                "action": {"name": "", "requires_confirmation": False},
                 "budget_blocked": True,
                 "reason": reason,
             }
@@ -172,17 +189,37 @@ def chat_request(
         if _env not in {"dev", "development", "local", "test"}:
             logger.exception("llm budget gate failed — fail-closed in production")
             return {
+                "answer": "خدمة الحد الأمني غير متاحة. حاول لاحقاً.",
                 "reply": "خدمة الحد الأمني غير متاحة. حاول لاحقاً.",
-                "action": "none",
+                "action": {"name": "", "requires_confirmation": False},
                 "budget_blocked": True,
                 "reason": f"gate_error:{type(_bg_exc).__name__}",
             }
         logger.exception("llm budget gate failed open-check (dev only)")
+    def _normalize_chat_result(result: dict[str, Any]) -> dict[str, Any]:
+        """Router reads ``answer``; some paths only set ``reply`` — unify."""
+        if not isinstance(result, dict):
+            return result
+        answer = str(result.get("answer") or "").strip()
+        reply = str(result.get("reply") or "").strip()
+        if not answer and reply:
+            result = dict(result)
+            result["answer"] = reply
+        return result
+
     last_err: Exception | None = None
     for provider in _chat_chain():
         try:
             result = provider.chat(message, context)
             if result is not None:
+                result = _normalize_chat_result(result)
+                # Empty answer is treated as soft failure → try next provider
+                if not str(result.get("answer") or "").strip() and not result.get("budget_blocked"):
+                    logger.warning(
+                        "chat_request provider=%s returned empty answer — next provider",
+                        getattr(provider, "name", "?"),
+                    )
+                    continue
                 logger.info(
                     "chat_request provider=%s keys=%s",
                     getattr(provider, "name", "?"),

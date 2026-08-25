@@ -4,8 +4,12 @@ Gemini: GEMINI_API_KEY / GOOGLE_* aliases + GEMINI_API_KEY_0..150 + GEMINI_API_K
 Groq:   GROQ_API_KEY + GROQ_API_KEY_0..100 + GROQ_API_KEYS
 Qwen:   QWEN_API_KEY / DASHSCOPE_API_KEY + QWEN_API_KEY_0..100 + QWEN_API_KEYS (sk-ws-)
 
-When a key hits auth/rate limits it is cooled down; the next ready key is used
-until the pool is exhausted, then the least-cooled key is retried.
+When a key hits auth/rate limits it is cooled down with adaptive duration:
+  rate/429  → short (default 8s) so the next key is tried almost immediately
+  auth/401  → longer (default 300s) so bad keys are skipped
+Callers must break to the next key on rate/auth errors (do not retry models on a hot key).
+If every key is cooling, all keys are still returned ordered by soonest-ready so
+the request can keep rotating without surfacing a hard failure to the user.
 """
 from __future__ import annotations
 
@@ -39,16 +43,54 @@ def cooldown_seconds(env_name: str, default: float = 60.0) -> float:
         return default
 
 
-def mark_cooldown(source: str, *, seconds: float | None = None, env_name: str = "KEY_COOLDOWN_SEC") -> None:
-    sec = seconds if seconds is not None else cooldown_seconds(env_name, 60.0)
+def mark_cooldown(
+    source: str,
+    *,
+    seconds: float | None = None,
+    env_name: str = "KEY_COOLDOWN_SEC",
+    reason: str = "rate",
+) -> None:
+    """Cool a key. ``reason`` selects adaptive default duration when ``seconds`` is None.
+
+    reason:
+      rate|429|quota  → KEY_RATE_COOLDOWN_SEC (default 8) — rotate to next key ASAP
+      auth|401|403|invalid → KEY_AUTH_COOLDOWN_SEC (default 300)
+      other → env_name default 20
+    """
+    if seconds is None:
+        r = (reason or "rate").strip().lower()
+        if r in {"rate", "429", "quota", "resource_exhausted"}:
+            sec = cooldown_seconds("KEY_RATE_COOLDOWN_SEC", 8.0)
+            # allow per-provider override via env_name when set lower intentionally
+            alt = cooldown_seconds(env_name, sec)
+            sec = min(sec, alt) if alt > 0 else sec
+        elif r in {"auth", "401", "403", "invalid", "forbidden"}:
+            sec = cooldown_seconds("KEY_AUTH_COOLDOWN_SEC", 300.0)
+        else:
+            sec = cooldown_seconds(env_name, 20.0)
+    else:
+        sec = float(seconds)
     if sec <= 0:
         return
-    _COOLDOWN_UNTIL[source] = time.monotonic() + sec
-    logger.warning("key cooldown source=%s for %.0fs", source, sec)
+    prev = _COOLDOWN_UNTIL.get(source, 0.0)
+    until = time.monotonic() + sec
+    # never shorten an existing longer auth cooldown with a short rate blip
+    if until > prev:
+        _COOLDOWN_UNTIL[source] = until
+    logger.warning(
+        "key cooldown source=%s reason=%s for %.0fs",
+        source,
+        reason,
+        max(0.0, _COOLDOWN_UNTIL.get(source, until) - time.monotonic()),
+    )
 
 
 def is_cooling(source: str) -> bool:
     return _COOLDOWN_UNTIL.get(source, 0.0) > time.monotonic()
+
+
+def clear_cooldown(source: str) -> None:
+    _COOLDOWN_UNTIL.pop(source, None)
 
 
 def collect_env_keys(
@@ -95,20 +137,27 @@ def available_keys(
     *,
     failover_enabled: bool = True,
 ) -> list[tuple[str, str]]:
-    """Keys not in cooldown; if all cooling, return first as last resort."""
+    """Keys ready for use, ordered for fastest rotation.
+
+    - Prefer keys not in cooldown (original pool order preserved among ready).
+    - If every key is cooling, return **all** keys ordered by soonest-ready so
+      callers can still walk the pool instead of failing the user request.
+    - When failover is disabled, still return the full list only if a single key
+      exists; otherwise first key only (legacy).
+    """
     if not all_keys:
         return []
-    if not failover_enabled or len(all_keys) <= 1:
+    if not failover_enabled:
         return all_keys[:1]
-    ready = [(s, k) for s, k in all_keys if not is_cooling(s)]
-    if ready:
-        return ready
-    # all cooling — pick the one that cools down soonest
+
     def _until(source: str) -> float:
         return _COOLDOWN_UNTIL.get(source, 0.0)
 
-    ordered = sorted(all_keys, key=lambda sk: _until(sk[0]))
-    return ordered[:1]
+    ready = [(s, k) for s, k in all_keys if not is_cooling(s)]
+    if ready:
+        return ready
+    # all cooling — full pool by soonest-ready (fast sequential retry)
+    return sorted(all_keys, key=lambda sk: _until(sk[0]))
 
 
 def gemini_keys() -> list[tuple[str, str]]:
@@ -233,8 +282,9 @@ def qwen_available() -> list[tuple[str, str]]:
     return available_keys(qwen_keys(), failover_enabled=failover)
 
 
-def mark_qwen_cooldown(source: str) -> None:
-    mark_cooldown(source, env_name="QWEN_KEY_COOLDOWN_SEC")
+def mark_qwen_cooldown(source: str, *, reason: str = "rate") -> None:
+    mark_cooldown(source, env_name="QWEN_KEY_COOLDOWN_SEC", reason=reason)
+
 
 def gemini_available() -> list[tuple[str, str]]:
     raw = (os.getenv("GEMINI_KEY_FAILOVER_ENABLED") or "").strip()
@@ -247,12 +297,12 @@ def groq_available() -> list[tuple[str, str]]:
     return available_keys(groq_keys(), failover_enabled=failover)
 
 
-def mark_gemini_cooldown(source: str) -> None:
-    mark_cooldown(source, env_name="GEMINI_KEY_COOLDOWN_SEC")
+def mark_gemini_cooldown(source: str, *, reason: str = "rate") -> None:
+    mark_cooldown(source, env_name="GEMINI_KEY_COOLDOWN_SEC", reason=reason)
 
 
-def mark_groq_cooldown(source: str) -> None:
-    mark_cooldown(source, env_name="GROQ_KEY_COOLDOWN_SEC")
+def mark_groq_cooldown(source: str, *, reason: str = "rate") -> None:
+    mark_cooldown(source, env_name="GROQ_KEY_COOLDOWN_SEC", reason=reason)
 
 
 def pool_status() -> dict:

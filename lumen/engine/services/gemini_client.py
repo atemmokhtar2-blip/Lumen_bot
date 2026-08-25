@@ -183,9 +183,9 @@ def _available_api_keys() -> list[tuple[str, str]]:
 
 
 
-def _cooldown_key(source: str) -> None:
+def _cooldown_key(source: str, *, reason: str = "rate") -> None:
     from lumen.engine.services.llm.key_pool import mark_gemini_cooldown
-    mark_gemini_cooldown(source)
+    mark_gemini_cooldown(source, reason=reason)
 
 
 
@@ -520,7 +520,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                         model,
                         exc,
                     )
-                    _cooldown_key(key_source)
+                    _cooldown_key(key_source, reason="rate")
                     rotate_key = True
                     break
 
@@ -536,7 +536,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                     last_error = RuntimeError(
                         f"Gemini source {key_source} HTTP {response.status_code}: {body_preview}"
                     )
-                    _cooldown_key(key_source)
+                    _cooldown_key(key_source, reason="rate")
                     rotate_key = True
                     break
 
@@ -560,7 +560,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                     last_error = RuntimeError(
                         f"Gemini source {key_source} auth HTTP {response.status_code}: {body_preview}"
                     )
-                    _cooldown_key(key_source)
+                    _cooldown_key(key_source, reason="auth")
                     rotate_key = True
                     break
 

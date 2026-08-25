@@ -293,17 +293,18 @@ def chat_via_groq(
                 )
                 if resp.status_code in {401, 403, 429}:
                     from lumen.engine.services.llm.key_pool import mark_groq_cooldown
-                    mark_groq_cooldown(source)
+                    reason = "auth" if resp.status_code in {401, 403} else "rate"
+                    mark_groq_cooldown(source, reason=reason)
                     logger.warning(
-                        "Groq chat HTTP %s source=%s model=%s — cooldown",
+                        "Groq chat HTTP %s source=%s model=%s — cooldown reason=%s → next key",
                         resp.status_code,
                         source,
                         model,
+                        reason,
                     )
                     last_error = RuntimeError(f"HTTP {resp.status_code}")
-                    if resp.status_code in {401, 403}:
-                        break  # next key
-                    continue
+                    # Always leave this key immediately (do not burn models on a hot key)
+                    break
                 if resp.status_code >= 400:
                     last_error = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
                     logger.warning(
@@ -313,7 +314,10 @@ def chat_via_groq(
                         model,
                         resp.text[:180],
                     )
-                    continue
+                    # 5xx on one model → try next model; 4xx other → next key
+                    if 500 <= resp.status_code <= 599:
+                        continue
+                    break
                 body = resp.json()
                 content = (
                     ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
