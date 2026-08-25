@@ -28,8 +28,36 @@ def _new_api_key(prefix: str = "sk_live") -> str:
     return f"{prefix}_{secrets.token_urlsafe(32)}"
 
 
+def _production_signals_present() -> bool:
+    """Heuristic: real deploy platforms set these — ENVIRONMENT=dev must not win."""
+    markers = (
+        "KUBERNETES_SERVICE_HOST",
+        "K_SERVICE",  # Cloud Run
+        "AWS_EXECUTION_ENV",
+        "AWS_REGION",
+        "RAILWAY_ENVIRONMENT",
+        "RENDER_SERVICE_ID",
+        "FLY_APP_NAME",
+        "DYNO",  # Heroku
+        "WEBSITE_INSTANCE_ID",  # Azure
+    )
+    for m in markers:
+        if (os.getenv(m) or "").strip():
+            return True
+    # Explicit production force
+    if (os.getenv("FORCE_PRODUCTION") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return False
+
+
 def _is_dev_environment() -> bool:
-    """True only for explicit local/dev/test environments."""
+    """True only for explicit local/dev/test — never when deploy signals present.
+
+    Prevents 'forgot to change ENVIRONMENT=dev' from opening hardcoded pepper
+    on Railway/K8s/Render/Fly/etc.
+    """
+    if _production_signals_present():
+        return False
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
     return env in {"dev", "development", "local", "test"}
 

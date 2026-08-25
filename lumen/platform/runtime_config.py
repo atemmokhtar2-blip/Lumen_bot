@@ -16,6 +16,13 @@ def environment() -> str:
 
 
 def is_dev() -> bool:
+    """Explicit dev only — deploy platform signals force production semantics."""
+    try:
+        from lumen.platform.tenants import _production_signals_present
+        if _production_signals_present():
+            return False
+    except Exception:
+        pass
     return environment() in {"dev", "development", "local", "test"}
 
 

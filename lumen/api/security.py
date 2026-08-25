@@ -87,8 +87,8 @@ def _reject_unsafe_path_string(raw: str) -> None:
 def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     """Resolve and enforce that project_path is inside the tenant sandbox.
 
-    Anti-TOCTOU: final authority is O_DIRECTORY|O_NOFOLLOW open (kernel refuses
-    symlink substitution between check and use), not pathlib is_symlink() alone.
+    Anti-TOCTOU: final authority is Linux openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)
+    (fallback: O_DIRECTORY|O_NOFOLLOW). Never pathlib.is_symlink() alone.
     """
     if not project_path or not str(project_path).strip():
         raise ValueError("project_path_required")
@@ -104,19 +104,18 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
         raise ValueError("project_path_outside_sandbox")
 
     try:
-        from lumen.engine.services.safe_fs import verify_directory_nofollow, UnsafePathError
-        verified = verify_directory_nofollow(path, root=sandbox)
+        # Kernel authority: openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS) when available
+        from lumen.engine.services.linux_path_open import verify_dir_beneath, PathOpenError
+        verified = verify_dir_beneath(sandbox, path, require_openat2=False)
     except Exception as exc:
         msg = str(exc).lower()
-        if "symlink" in msg or "directory_is_symlink" in msg:
-            raise ValueError("project_path_symlink_forbidden") from exc
-        if "not_a_directory" in msg:
+        if "not_a_directory" in msg or "enotdir" in msg:
             raise ValueError("project_path_not_a_directory") from exc
         raise ValueError("project_path_symlink_forbidden") from exc
 
-    if not is_path_inside(verified, sandbox):
+    if not is_path_inside(Path(verified), sandbox):
         raise ValueError("project_path_outside_sandbox")
-    return verified
+    return Path(verified)
 
 
 def validate_user_project_path(user_id: int, project_path: str) -> Path:
@@ -136,16 +135,16 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
     if not is_path_inside(path, sandbox):
         raise ValueError("project_path_outside_sandbox")
     try:
-        from lumen.engine.services.safe_fs import verify_directory_nofollow
-        verified = verify_directory_nofollow(path, root=sandbox)
+        from lumen.engine.services.linux_path_open import verify_dir_beneath
+        verified = verify_dir_beneath(sandbox, path, require_openat2=False)
     except Exception as exc:
         msg = str(exc).lower()
-        if "not_a_directory" in msg:
+        if "not_a_directory" in msg or "enotdir" in msg:
             raise ValueError("project_path_not_a_directory") from exc
         raise ValueError("project_path_symlink_forbidden") from exc
-    if not is_path_inside(verified, sandbox):
+    if not is_path_inside(Path(verified), sandbox):
         raise ValueError("project_path_outside_sandbox")
-    return verified
+    return Path(verified)
 
 
 # Paths that must keep a raw body stream (custom size caps / signature verify).

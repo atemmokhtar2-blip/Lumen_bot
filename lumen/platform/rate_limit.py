@@ -119,9 +119,18 @@ class RedisRateLimiter:
 # ── SQLite backend (fallback) ────────────────────────────────────────────────
 
 class SqliteRateLimiter:
-    """Process-safe rate limiter backed by SQLite (shared across local workers)."""
+    """Process-safe rate limiter backed by SQLite — **dev only**.
+
+    Construction outside ENVIRONMENT=dev|local|test raises. Production must use Redis.
+    """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
+        from .runtime_config import is_dev
+        if not is_dev():
+            raise RuntimeError(
+                "SqliteRateLimiter is forbidden outside ENVIRONMENT=dev|local|test. "
+                "Set REDIS_URL for production rate limiting."
+            )
         base = _durable_data_dir()
         self.path = Path(db_path or (base / "platform" / "rate_limit.sqlite3"))
         self.path.parent.mkdir(parents=True, exist_ok=True)

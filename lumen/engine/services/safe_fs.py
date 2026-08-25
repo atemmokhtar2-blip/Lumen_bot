@@ -192,26 +192,24 @@ def open_directory_nofollow(path: Path | str) -> int:
 
 
 def verify_directory_nofollow(path: Path | str, *, root: Path | str | None = None) -> Path:
-    """Validate path is a real directory under root with atomic O_NOFOLLOW open.
+    """Validate path is a real directory under root — prefers openat2.
 
-    Closes the fd after verification. Returns realpath under root.
-    This is the use-time authority for project_path checks — not is_symlink().
+    Authority order:
+      1) linux_path_open.verify_dir_beneath (openat2 RESOLVE_BENEATH|NO_SYMLINKS)
+      2) O_DIRECTORY|O_NOFOLLOW fallback
     """
     p = Path(path)
     if root is not None:
-        assert_no_symlinks_in_path(p, root=root)
-    else:
-        assert_no_symlinks_in_path(p)
+        try:
+            from lumen.engine.services.linux_path_open import verify_dir_beneath, PathOpenError
+            return Path(verify_dir_beneath(root, p, require_openat2=False))
+        except Exception as exc:
+            # Map to UnsafePathError for callers
+            raise UnsafePathError(str(exc) or "path_open_refused") from exc
+    assert_no_symlinks_in_path(p)
     fd = open_directory_nofollow(p)
     try:
-        # realpath of fd via /proc when available, else realpath string
         real = Path(os.path.realpath(str(p)))
-        if root is not None:
-            root_real = Path(os.path.realpath(str(root)))
-            try:
-                real.relative_to(root_real)
-            except ValueError as exc:
-                raise UnsafePathError("resolved_outside_root") from exc
         return real
     finally:
         try:

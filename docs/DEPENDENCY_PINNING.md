@@ -1,6 +1,24 @@
 # Dependency pinning policy (Lumen)
-#
-# - requirements.txt uses exact == pins for runtime packages.
-# - requirements-security.txt remains tool-only (bandit, pip-audit, semgrep).
-# - After any pin bump: run `pip-audit -r requirements.txt` and CI supply-chain workflow.
-# - Do not deploy production with unpinned >= ranges.
+
+## Source of truth
+
+| File | Role |
+|------|------|
+| `requirements.txt` | Direct runtime deps, exact `==` pins |
+| `requirements.lock` | Full transitive lock from `pip-compile` |
+| `requirements-security.txt` | CI-only tools (bandit, pip-audit, semgrep) |
+
+## Install (production)
+
+```bash
+pip install -r requirements.lock
+```
+
+## Bump procedure
+
+1. Edit `requirements.txt` (direct pins only).
+2. `pip-compile -o requirements.lock requirements.txt`
+3. `pip-audit -r requirements.lock`
+4. Run CI supply-chain workflow; commit both files together.
+
+Never deploy production from unpinned `>=` ranges.
