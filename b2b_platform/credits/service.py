@@ -30,18 +30,47 @@ class CreditService:
         self._store = store
 
     def get_wallet(self, tenant_id: str) -> Wallet:
-        return self._store.get_wallet(str(tenant_id))
+        # Always surface post-expiry truth (no stale promotional balance)
+        return self.ensure_fresh_wallet(str(tenant_id))
 
     def ensure_wallet(self, tenant_id: str) -> Wallet:
-        return self._store.ensure_wallet(str(tenant_id))
+        return self.ensure_fresh_wallet(str(tenant_id))
 
     def credit_credits(self, tenant_id, amount, *, reason="purchase", reference_id="",
                        idempotency_key="", metadata=None,
                        promotional: bool = False, promo_expires_at: float = 0.0) -> CreditResult:
+        reason = str(reason or "purchase").strip() or "purchase"
+        promotional = bool(promotional)
+        exp = float(promo_expires_at or 0)
+
+        # Privilege rules — close grant/expiry loopholes
+        _PROMO_REASONS = {"welcome_grant", "promo_grant", "referral_bonus"}
+        if promotional and reason not in _PROMO_REASONS:
+            return CreditResult(
+                ok=False,
+                reason="promotional_requires_promo_reason",
+            )
+        if reason in _PROMO_REASONS and not promotional:
+            return CreditResult(
+                ok=False,
+                reason="promo_reason_requires_promotional_flag",
+            )
+        if promotional and exp <= 0:
+            # Fail closed: promotional without expiry is a free infinite grant
+            return CreditResult(
+                ok=False,
+                reason="promotional_requires_expiry",
+            )
+        if reason == "welcome_grant":
+            # Only the canonical idempotency key shape may mint welcome packs
+            key = str(idempotency_key or "")
+            if not key.startswith("welcome-grant-"):
+                return CreditResult(ok=False, reason="welcome_grant_key_required")
+
         result = self._store.credit(
             str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
             idempotency_key=idempotency_key, metadata=metadata,
-            promotional=bool(promotional), promo_expires_at=float(promo_expires_at or 0),
+            promotional=promotional, promo_expires_at=exp,
         )
         if result.ok:
             try:
@@ -57,6 +86,7 @@ class CreditService:
 
     def deduct_credits(self, tenant_id, amount, *, reason="generation_cost",
                        reference_id="", idempotency_key="", metadata=None) -> CreditResult:
+        self.expire_promotional(str(tenant_id))
         return self._store.deduct(
             str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
             idempotency_key=idempotency_key, metadata=metadata,
@@ -64,6 +94,7 @@ class CreditService:
 
     def reserve_credits(self, tenant_id, amount, *, reference_id="",
                         idempotency_key="") -> CreditResult:
+        self.expire_promotional(str(tenant_id))
         return self._store.reserve(
             str(tenant_id), int(amount), reference_id=reference_id,
             idempotency_key=idempotency_key,
@@ -71,6 +102,7 @@ class CreditService:
 
     def release_reservation(self, tenant_id, amount, *, reference_id="",
                             idempotency_key="") -> CreditResult:
+        self.expire_promotional(str(tenant_id))
         return self._store.release_reservation(
             str(tenant_id), int(amount), reference_id=reference_id,
             idempotency_key=idempotency_key,
@@ -78,6 +110,7 @@ class CreditService:
 
     def capture_reservation(self, tenant_id, amount, *, reason="generation_cost",
                             reference_id="", idempotency_key="", metadata=None) -> CreditResult:
+        self.expire_promotional(str(tenant_id))
         return self._store.capture_reservation(
             str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
             idempotency_key=idempotency_key, metadata=metadata,
@@ -102,9 +135,9 @@ class CreditService:
         return self._store.expire_promotional(str(tenant_id))
 
     def ensure_fresh_wallet(self, tenant_id: str) -> Wallet:
-        """Expire promo if needed, then return wallet."""
+        """Expire promo if needed, then return wallet (store-level, no recurse)."""
         self.expire_promotional(str(tenant_id))
-        return self.get_wallet(str(tenant_id))
+        return self._store.get_wallet(str(tenant_id))
 
 
 _SVC: CreditService | None = None

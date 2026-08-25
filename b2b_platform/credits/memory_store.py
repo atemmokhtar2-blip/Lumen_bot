@@ -217,6 +217,7 @@ class MemoryCreditsStore:
             if hit:
                 return hit
             w = self.ensure_wallet(tenant_id)
+            self._expire_promotional_unlocked(w, tenant_id)
             if w.available < amount:
                 return CreditResult(
                     ok=False, reason=f"insufficient_balance_for_reserve:{w.available}",
@@ -297,6 +298,7 @@ class MemoryCreditsStore:
             if hit:
                 return hit
             w = self.ensure_wallet(tenant_id)
+            self._expire_promotional_unlocked(w, tenant_id)
             if w.reserved_balance < amount:
                 return CreditResult(
                     ok=False, reason=f"insufficient_reserved:{w.reserved_balance}",
@@ -317,9 +319,13 @@ class MemoryCreditsStore:
             ]
             w.reserved_balance -= int(amount)
             w.current_balance -= int(amount)
+            promo_take = min(int(w.promotional_balance), int(amount))
+            if promo_take:
+                w.promotional_balance = int(w.promotional_balance) - promo_take
             w.updated_at = time.time()
             meta = dict(metadata or {})
             meta["captured"] = int(amount)
+            meta["promo_captured"] = int(promo_take)
             e = self._commit(
                 tenant_id=tenant_id, type_=type_, legs=legs,
                 reference_id=reference_id, idempotency_key=key,

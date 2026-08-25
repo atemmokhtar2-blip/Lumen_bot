@@ -339,12 +339,18 @@ class PostgresCreditsStore:
                         ok=False, reason=f"insufficient_balance:{cur - reserved}",
                         wallet=self._row_wallet(row),
                     )
+                promo = int(row.get("promotional_balance") or 0)
+                promo_take = min(promo, int(amount))
+                new_promo = promo - promo_take
                 upd = conn.execute(
                     """
-                    UPDATE credit_wallets SET current_balance = current_balance - %s, updated_at=%s
+                    UPDATE credit_wallets
+                    SET current_balance = current_balance - %s,
+                        promotional_balance = %s,
+                        updated_at=%s
                     WHERE tenant_id=%s AND (current_balance - reserved_balance) >= %s
                     """,
-                    (int(amount), now, tid, int(amount)),
+                    (int(amount), new_promo, now, tid, int(amount)),
                 )
                 if upd.rowcount == 0:
                     conn.rollback()
@@ -394,6 +400,25 @@ class PostgresCreditsStore:
                 row = conn.execute(
                     "SELECT * FROM credit_wallets WHERE tenant_id=%s FOR UPDATE", (tid,)
                 ).fetchone()
+                # Burn expired promotional under the same FOR UPDATE lock
+                promo = int(row.get("promotional_balance") or 0)
+                exp = float(row.get("promo_expires_at") or 0)
+                if promo > 0 and exp > 0 and now >= exp:
+                    burn = min(promo, int(row["current_balance"]))
+                    if burn > 0:
+                        conn.execute(
+                            """
+                            UPDATE credit_wallets
+                            SET current_balance = current_balance - %s,
+                                promotional_balance = 0, promo_expires_at = 0, updated_at=%s
+                            WHERE tenant_id=%s
+                            """,
+                            (burn, now, tid),
+                        )
+                        row = dict(row)
+                        row["current_balance"] = int(row["current_balance"]) - burn
+                        row["promotional_balance"] = 0
+                        row["promo_expires_at"] = 0
                 avail = int(row["current_balance"]) - int(row["reserved_balance"])
                 if avail < int(amount):
                     conn.rollback()

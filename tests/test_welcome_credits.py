@@ -81,13 +81,16 @@ def test_promo_expiration_burns_remaining():
         "tenant-exp-3",
         200,
         reason="welcome_grant",
-        idempotency_key="welcome-expired-0001",
+        idempotency_key="welcome-grant-tenant-exp-3-manual",
         promotional=True,
         promo_expires_at=time.time() - 10,
         metadata={"is_promotional": True},
     )
     assert r.ok
-    assert svc.get_wallet("tenant-exp-3").promotional_balance == 200
+    # store still holds expired promo until a gate runs
+    raw = svc._store.get_wallet("tenant-exp-3")
+    assert raw.promotional_balance == 200
+    assert raw.current_balance == 200
     exp = svc.expire_promotional("tenant-exp-3")
     assert exp.ok
     assert exp.reason == "promo_expired"
@@ -103,7 +106,7 @@ def test_deduct_auto_expires_before_spend():
         "tenant-exp-4",
         100,
         reason="welcome_grant",
-        idempotency_key="welcome-expired-0002",
+        idempotency_key="welcome-grant-tenant-exp-4-manual",
         promotional=True,
         promo_expires_at=time.time() - 5,
     )
@@ -145,3 +148,81 @@ def test_three_generations_fit_in_trial():
     w = svc.get_wallet("tenant-gens")
     assert w.current_balance == 400 - 150  # 250 left for hosting/messages
     assert w.promotional_balance == 250
+
+
+def test_reserve_cannot_use_expired_promo():
+    """Expired promotional credits must not be reservable for hosting."""
+    svc = CreditService(MemoryCreditsStore())
+    assert svc.credit_credits(
+        "tenant-res-exp",
+        200,
+        reason="welcome_grant",
+        idempotency_key="welcome-grant-tenant-res-exp",
+        promotional=True,
+        promo_expires_at=time.time() - 1,
+    ).ok
+    # After expiry, available should be 0
+    w = svc.get_wallet("tenant-res-exp")
+    assert w.current_balance == 0
+    assert w.promotional_balance == 0
+    r = svc.reserve_credits("tenant-res-exp", 50, idempotency_key="reserve-expired-0001")
+    assert not r.ok
+    assert "insufficient" in r.reason
+
+
+def test_promotional_requires_expiry_fail_closed():
+    svc = CreditService(MemoryCreditsStore())
+    r = svc.credit_credits(
+        "tenant-no-exp",
+        100,
+        reason="welcome_grant",
+        idempotency_key="welcome-grant-tenant-no-exp",
+        promotional=True,
+        promo_expires_at=0,
+    )
+    assert not r.ok
+    assert r.reason == "promotional_requires_expiry"
+
+
+def test_promotional_wrong_reason_rejected():
+    svc = CreditService(MemoryCreditsStore())
+    r = svc.credit_credits(
+        "tenant-bad-reason",
+        100,
+        reason="purchase",
+        idempotency_key="purchase-promo-flag-0001",
+        promotional=True,
+        promo_expires_at=time.time() + 86400,
+    )
+    assert not r.ok
+    assert r.reason == "promotional_requires_promo_reason"
+
+
+def test_welcome_grant_requires_key_prefix():
+    svc = CreditService(MemoryCreditsStore())
+    r = svc.credit_credits(
+        "tenant-bad-key",
+        100,
+        reason="welcome_grant",
+        idempotency_key="not-the-right-prefix-0001",
+        promotional=True,
+        promo_expires_at=time.time() + 86400,
+    )
+    assert not r.ok
+    assert r.reason == "welcome_grant_key_required"
+
+
+def test_get_wallet_auto_expires():
+    svc = CreditService(MemoryCreditsStore())
+    assert svc.credit_credits(
+        "tenant-auto-exp",
+        150,
+        reason="welcome_grant",
+        idempotency_key="welcome-grant-tenant-auto-exp",
+        promotional=True,
+        promo_expires_at=time.time() - 2,
+    ).ok
+    # store-level still has balance until get_wallet
+    w = svc.get_wallet("tenant-auto-exp")
+    assert w.current_balance == 0
+    assert w.promotional_balance == 0
