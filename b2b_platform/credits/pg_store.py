@@ -67,6 +67,17 @@ class PostgresCreditsStore:
             self._seed(conn)
             conn.commit()
 
+    def _ensure_promo_columns(self, conn) -> None:
+        try:
+            conn.execute(
+                "ALTER TABLE credit_wallets ADD COLUMN IF NOT EXISTS promotional_balance BIGINT NOT NULL DEFAULT 0"
+            )
+            conn.execute(
+                "ALTER TABLE credit_wallets ADD COLUMN IF NOT EXISTS promo_expires_at DOUBLE PRECISION NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+
     def _seed(self, conn) -> None:
         for acc, kind in [
             (SYSTEM_TREASURY, "system_treasury"),
@@ -104,6 +115,7 @@ class PostgresCreditsStore:
         aid = user_wallet_account(tid)
         now = time.time()
         with self._conn() as conn:
+            self._ensure_promo_columns(conn)
             conn.execute(
                 """
                 INSERT INTO credit_accounts (account_id, kind, tenant_id, currency, created_at)
@@ -138,6 +150,8 @@ class PostgresCreditsStore:
             currency=str(row.get("currency") or "credits"),
             updated_at=float(row.get("updated_at") or 0),
             account_id=str(row.get("account_id") or ""),
+            promotional_balance=int(row.get("promotional_balance") or 0),
+            promo_expires_at=float(row.get("promo_expires_at") or 0),
         )
 
     def _fetch_idem(self, conn, key: str, tid: str) -> Optional[CreditResult]:
@@ -238,7 +252,8 @@ class PostgresCreditsStore:
         return tx_id, prev, h
 
     def credit(self, tenant_id, amount, *, type_="purchase", reference_id="",
-               idempotency_key="", metadata=None) -> CreditResult:
+               idempotency_key="", metadata=None,
+               promotional: bool = False, promo_expires_at: float = 0.0) -> CreditResult:
         err = validate_amount(amount)
         if err:
             return CreditResult(ok=False, reason=err)
@@ -259,9 +274,17 @@ class PostgresCreditsStore:
                 ).fetchone()
                 bal = int(row["current_balance"]) + int(amount)
                 reserved = int(row["reserved_balance"])
+                promo = int(row.get("promotional_balance") or 0)
+                promo_exp = float(row.get("promo_expires_at") or 0)
+                if promotional:
+                    promo = promo + int(amount)
+                    if promo_expires_at and float(promo_expires_at) > 0:
+                        if not promo_exp or float(promo_expires_at) < promo_exp:
+                            promo_exp = float(promo_expires_at)
                 conn.execute(
-                    "UPDATE credit_wallets SET current_balance=%s, updated_at=%s WHERE tenant_id=%s",
-                    (bal, now, tid),
+                    "UPDATE credit_wallets SET current_balance=%s, promotional_balance=%s, "
+                    "promo_expires_at=%s, updated_at=%s WHERE tenant_id=%s",
+                    (bal, promo, promo_exp, now, tid),
                 )
                 wa = user_wallet_account(tid)
                 legs = [
@@ -543,6 +566,41 @@ class PostgresCreditsStore:
             metadata=dict(metadata or {}, captured=int(amount)), created_at=now,
         )
         return CreditResult(ok=True, wallet=w, entry=e, transaction_id=tx_id)
+
+    def expire_promotional(self, tenant_id: str) -> CreditResult:
+        """Burn expired promotional balance (PG)."""
+        import time as _time
+        tid = str(tenant_id)
+        w = self.ensure_wallet(tid)
+        if int(w.promotional_balance) <= 0:
+            return CreditResult(ok=True, reason="nothing_to_expire", wallet=w)
+        exp = float(w.promo_expires_at or 0)
+        if exp <= 0 or _time.time() < exp:
+            return CreditResult(ok=True, reason="nothing_to_expire", wallet=w)
+        amount = min(int(w.promotional_balance), int(w.current_balance))
+        if amount <= 0:
+            return CreditResult(ok=True, reason="nothing_to_expire", wallet=w)
+        # Reuse deduct path with special type
+        res = self.deduct(
+            tid, amount, type_="promo_expired",
+            reference_id=f"promo_expire:{tid}",
+            idempotency_key=f"promo-expire-{tid}-{int(exp)}",
+            metadata={"is_promotional": True, "expired_amount": amount},
+        )
+        if res.ok and res.wallet is not None:
+            # zero promo fields
+            try:
+                with self._conn() as conn:
+                    conn.execute(
+                        "UPDATE credit_wallets SET promotional_balance=0, promo_expires_at=0, updated_at=%s WHERE tenant_id=%s",
+                        (_time.time(), tid),
+                    )
+                    conn.commit()
+                res.wallet.promotional_balance = 0
+                res.wallet.promo_expires_at = 0.0
+            except Exception:
+                pass
+        return res
 
     def reconcile(self, tenant_id: str) -> ReconcileReport:
         tid = str(tenant_id)

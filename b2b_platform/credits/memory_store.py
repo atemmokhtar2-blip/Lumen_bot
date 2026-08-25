@@ -122,6 +122,7 @@ class MemoryCreditsStore:
         self, tenant_id: str, amount: int, *, type_: str = "purchase",
         reference_id: str = "", idempotency_key: str = "",
         metadata: Optional[dict[str, Any]] = None,
+        promotional: bool = False, promo_expires_at: float = 0.0,
     ) -> CreditResult:
         err = validate_amount(amount)
         if err:
@@ -142,6 +143,12 @@ class MemoryCreditsStore:
                 LedgerLeg(wa, "credit", int(amount)),
             ]
             w.current_balance += int(amount)
+            if promotional:
+                w.promotional_balance = int(w.promotional_balance) + int(amount)
+                if promo_expires_at and float(promo_expires_at) > 0:
+                    # keep the earliest non-zero expiry if already set
+                    if not w.promo_expires_at or float(promo_expires_at) < float(w.promo_expires_at):
+                        w.promo_expires_at = float(promo_expires_at)
             w.updated_at = time.time()
             e = self._commit(
                 tenant_id=tenant_id, type_=type_, legs=legs,
@@ -168,6 +175,8 @@ class MemoryCreditsStore:
             if hit:
                 return hit
             w = self.ensure_wallet(tenant_id)
+            # Auto-expire unused promo before spend
+            self._expire_promotional_unlocked(w, tenant_id)
             if w.available < amount:
                 return CreditResult(
                     ok=False, reason=f"insufficient_balance:{w.available}",
@@ -180,6 +189,10 @@ class MemoryCreditsStore:
                 LedgerLeg(SYSTEM_REVENUE, "credit", int(amount)),
             ]
             w.current_balance -= int(amount)
+            # Deduction priority: promotional first
+            promo_take = min(int(w.promotional_balance), int(amount))
+            if promo_take:
+                w.promotional_balance = int(w.promotional_balance) - promo_take
             w.updated_at = time.time()
             e = self._commit(
                 tenant_id=tenant_id, type_=type_, legs=legs,
@@ -313,6 +326,48 @@ class MemoryCreditsStore:
                 metadata=meta, wallet=w,
             )
             return CreditResult(ok=True, wallet=Wallet(**w.__dict__), entry=e, transaction_id=e.transaction_id)
+
+
+    def _expire_promotional_unlocked(self, w: Wallet, tenant_id: str) -> Optional[LedgerEntry]:
+        """If promo expired, burn remaining promotional_balance (already under lock)."""
+        if int(w.promotional_balance) <= 0:
+            return None
+        exp = float(w.promo_expires_at or 0)
+        if exp <= 0 or time.time() < exp:
+            return None
+        amount = int(w.promotional_balance)
+        if amount > int(w.current_balance):
+            amount = int(w.current_balance)
+        if amount <= 0:
+            w.promotional_balance = 0
+            w.promo_expires_at = 0.0
+            return None
+        wa = user_wallet_account(tenant_id)
+        legs = [
+            LedgerLeg(wa, "debit", amount),
+            LedgerLeg(SYSTEM_REVENUE, "credit", amount),
+        ]
+        w.current_balance -= amount
+        w.promotional_balance = 0
+        w.promo_expires_at = 0.0
+        w.updated_at = time.time()
+        key = f"promo-expire-{tenant_id}-{int(exp)}"
+        if key in self._idem:
+            return self._idem[key]
+        return self._commit(
+            tenant_id=tenant_id, type_="promo_expired", legs=legs,
+            reference_id=f"promo_expire:{tenant_id}", idempotency_key=key,
+            metadata={"is_promotional": True, "expired_amount": amount}, wallet=w,
+        )
+
+    def expire_promotional(self, tenant_id: str) -> CreditResult:
+        with self._lock:
+            w = self.ensure_wallet(tenant_id)
+            e = self._expire_promotional_unlocked(w, tenant_id)
+            if e is None:
+                return CreditResult(ok=True, reason="nothing_to_expire", wallet=Wallet(**w.__dict__))
+            return CreditResult(ok=True, reason="promo_expired", wallet=Wallet(**w.__dict__),
+                                entry=e, transaction_id=e.transaction_id)
 
     def reconcile(self, tenant_id: str) -> ReconcileReport:
         with self._lock:

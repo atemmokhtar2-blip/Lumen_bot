@@ -22,6 +22,7 @@ class CreditsStore(Protocol):
     def list_ledger(self, tenant_id: str, *, limit: int = 100) -> list[LedgerEntry]: ...
     def get_pricing(self, resource_type: str) -> Optional[PricingRule]: ...
     def list_pricing(self) -> list[PricingRule]: ...
+    def expire_promotional(self, tenant_id: str) -> CreditResult: ...
 
 
 class CreditService:
@@ -35,16 +36,18 @@ class CreditService:
         return self._store.ensure_wallet(str(tenant_id))
 
     def credit_credits(self, tenant_id, amount, *, reason="purchase", reference_id="",
-                       idempotency_key="", metadata=None) -> CreditResult:
+                       idempotency_key="", metadata=None,
+                       promotional: bool = False, promo_expires_at: float = 0.0) -> CreditResult:
         result = self._store.credit(
             str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
             idempotency_key=idempotency_key, metadata=metadata,
+            promotional=bool(promotional), promo_expires_at=float(promo_expires_at or 0),
         )
         if result.ok:
             try:
                 from b2b_platform.balance_lifecycle import get_balance_lifecycle
                 get_balance_lifecycle().clear_suspension_on_credit(str(tenant_id))
-                # refresh baseline for threshold % if purchase
+                # refresh baseline for threshold % if purchase (not pure welcome promo)
                 if reason in {"purchase", "topup", "stripe_credit"}:
                     w = result.wallet or self.get_wallet(str(tenant_id))
                     get_balance_lifecycle().set_baseline(str(tenant_id), int(w.current_balance))
@@ -92,6 +95,16 @@ class CreditService:
 
     def list_pricing(self) -> list[PricingRule]:
         return self._store.list_pricing()
+
+
+    def expire_promotional(self, tenant_id: str) -> CreditResult:
+        """Burn unused promotional balance past promo_expires_at."""
+        return self._store.expire_promotional(str(tenant_id))
+
+    def ensure_fresh_wallet(self, tenant_id: str) -> Wallet:
+        """Expire promo if needed, then return wallet."""
+        self.expire_promotional(str(tenant_id))
+        return self.get_wallet(str(tenant_id))
 
 
 _SVC: CreditService | None = None

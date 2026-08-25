@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS credit_wallets (
     current_balance BIGINT NOT NULL DEFAULT 0 CHECK (current_balance >= 0),
     reserved_balance BIGINT NOT NULL DEFAULT 0 CHECK (reserved_balance >= 0),
     currency TEXT NOT NULL DEFAULT 'credits',
+    promotional_balance BIGINT NOT NULL DEFAULT 0 CHECK (promotional_balance >= 0),
+    promo_expires_at DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at DOUBLE PRECISION NOT NULL DEFAULT 0,
     CONSTRAINT credit_wallets_reserved_le_current CHECK (reserved_balance <= current_balance)
 );

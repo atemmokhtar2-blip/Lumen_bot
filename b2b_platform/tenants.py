@@ -208,7 +208,14 @@ class TenantStore:
             self._by_id[tid] = t
             self._by_key_hash[t.api_key_hash] = tid
             return t, raw
-        return self._mutate(_do)
+        result = self._mutate(_do)
+        # World-class onboarding: smart-trial promotional credits (idempotent)
+        try:
+            from b2b_platform.credits.onboarding import grant_welcome_credits
+            grant_welcome_credits(tid)
+        except Exception:
+            pass
+        return result
 
     def rotate_key(self, tenant_id: str) -> str | None:
         t = self._by_id.get(tenant_id)

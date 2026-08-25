@@ -12,10 +12,18 @@ class Wallet:
     currency: str = "credits"
     updated_at: float = 0.0
     account_id: str = ""
+    # Promotional / trial credits (subset of current_balance)
+    promotional_balance: int = 0
+    promo_expires_at: float = 0.0  # unix ts; 0 = no expiry
 
     @property
     def available(self) -> int:
         return max(0, int(self.current_balance) - int(self.reserved_balance))
+
+    @property
+    def paid_balance(self) -> int:
+        """Non-promotional portion of current_balance."""
+        return max(0, int(self.current_balance) - int(self.promotional_balance))
 
 
 @dataclass

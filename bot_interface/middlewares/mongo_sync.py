@@ -42,6 +42,12 @@ def ensure_mongo_user(user) -> None:
                 getattr(tenant, "tenant_id", None),
                 getattr(tenant, "plan_id", None),
             )
+            try:
+                from b2b_platform.credits.onboarding import grant_welcome_credits
+                tid = str(getattr(tenant, "tenant_id", "") or f"tg:{int(user.id)}")
+                grant_welcome_credits(tid)
+            except Exception as grant_exc:
+                logger.warning("welcome credits grant failed tg=%s: %s", user.id, grant_exc)
         else:
             logger.debug("mongo user touched tg=%s", user.id)
     except Exception as exc:
