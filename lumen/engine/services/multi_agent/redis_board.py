@@ -33,19 +33,41 @@ _PREFIX = (os.environ.get("MULTI_AGENT_REDIS_PREFIX") or _DEFAULT_REDIS_PREFIX).
 _TTL = int(os.environ.get("MULTI_AGENT_REDIS_TTL_SEC") or str(7 * 24 * 3600))
 
 
+def _redis_url() -> str:
+    """Return a valid Redis URL or empty string (invalid schemes are ignored)."""
+    url = (os.environ.get("JOB_REDIS_URL") or os.environ.get("REDIS_URL") or "").strip()
+    if not url:
+        return ""
+    # strip accidental quotes from secret UIs
+    if len(url) >= 2 and url[0] == url[-1] and url[0] in {"'", '"'}:
+        url = url[1:-1].strip()
+    low = url.lower()
+    if not (
+        low.startswith("redis://")
+        or low.startswith("rediss://")
+        or low.startswith("unix://")
+    ):
+        logger.warning(
+            "REDIS_URL/JOB_REDIS_URL ignored — must start with redis://, rediss://, or unix:// (got %r)",
+            url[:48],
+        )
+        return ""
+    return url
+
+
 def redis_board_enabled() -> bool:
     if (os.environ.get("MULTI_AGENT_REDIS_BOARD") or "1").strip().lower() in {
         "0", "false", "no", "off",
     }:
         return False
-    return bool((os.environ.get("JOB_REDIS_URL") or os.environ.get("REDIS_URL") or "").strip())
+    return bool(_redis_url())
 
 
 def _client():
     import redis
-    url = (os.environ.get("JOB_REDIS_URL") or os.environ.get("REDIS_URL") or "").strip()
+    url = _redis_url()
     if not url:
-        raise RuntimeError("REDIS_URL required")
+        raise RuntimeError("REDIS_URL required (redis://, rediss://, or unix://)")
     return redis.Redis.from_url(url, decode_responses=True)
 
 

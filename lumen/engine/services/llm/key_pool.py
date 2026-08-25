@@ -1,6 +1,6 @@
 """Shared API-key pool with cooldown + ordered failover.
 
-Gemini: GEMINI_API_KEY / GOOGLE_* aliases + GEMINI_API_KEY_0 .. GEMINI_API_KEY_150
+Gemini: GEMINI_API_KEY / GOOGLE_* aliases + GEMINI_API_KEY_0..150 + GEMINI_API_KEYS bulk
 Groq:   GROQ_API_KEY + GROQ_API_KEY_0..100 + GROQ_API_KEYS
 Qwen:   QWEN_API_KEY / DASHSCOPE_API_KEY + QWEN_API_KEY_0..100 + QWEN_API_KEYS (sk-ws-)
 
@@ -112,7 +112,12 @@ def available_keys(
 
 
 def gemini_keys() -> list[tuple[str, str]]:
-    """GEMINI_API_KEY (+ aliases) and GEMINI_API_KEY_0 .. _150."""
+    """GEMINI_API_KEY (+ aliases) + GEMINI_API_KEY_0..150 + bulk GEMINI_API_KEYS.
+
+    Bulk formats (any one):
+      GEMINI_API_KEYS=key_a,key_b,key_c
+      GEMINI_API_KEYS multiline (one key per line)
+    """
     primary = (
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
@@ -127,27 +132,36 @@ def gemini_keys() -> list[tuple[str, str]]:
         numbered_start=0,
         numbered_end=150,
     )
-    if keys:
-        return keys
+    bulk = (os.getenv("GEMINI_API_KEYS") or os.getenv("GOOGLE_API_KEYS") or "").strip()
+    if bulk:
+        seen = {k for _, k in keys}
+        for i, line in enumerate(bulk.replace(",", "\n").splitlines()):
+            part = _normalize(line)
+            if part and part not in seen:
+                keys.append((f"GEMINI_API_KEYS[{i}]", part))
+                seen.add(part)
     # optional secret files (same as legacy gemini_client)
-    for path in (
+    for fpath in (
         (os.getenv("GEMINI_API_KEY_FILE") or "").strip(),
         (os.getenv("GOOGLE_API_KEY_FILE") or "").strip(),
         "/run/secrets/gemini_api_key",
         "/run/secrets/GEMINI_API_KEY",
     ):
-        if not path:
+        if not fpath:
             continue
         try:
-            from pathlib import Path
+            from pathlib import Path as _P
 
-            raw = Path(path).read_text(encoding="utf-8")
-            val = _normalize(raw.splitlines()[0] if raw else "")
-            if val:
-                return [(path, val)]
+            raw = _P(fpath).read_text(encoding="utf-8")
+            seen = {k for _, k in keys}
+            for i, line in enumerate(raw.splitlines()):
+                val = _normalize(line)
+                if val and val not in seen:
+                    keys.append((f"{fpath}:{i}", val))
+                    seen.add(val)
         except Exception:
             continue
-    return []
+    return keys
 
 
 def groq_keys() -> list[tuple[str, str]]:
