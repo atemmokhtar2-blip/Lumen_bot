@@ -1,0 +1,35 @@
+{
+  "source_language": "en",
+  "languages": {
+    "en": {
+      "name": "English",
+      "dir": "ltr",
+      "telegram_codes": [
+        "en"
+      ]
+    },
+    "ar": {
+      "name": "Arabic",
+      "dir": "rtl",
+      "telegram_codes": [
+        "ar",
+        "ara",
+        "arz"
+      ]
+    }
+  },
+  "crowdin": {
+    "base_path": "locales",
+    "files": [
+      {
+        "source": "/en.json",
+        "translation": "/%two_letters_code%.json"
+      }
+    ]
+  },
+  "weblate": {
+    "file_format": "json",
+    "filemask": "locales/*.json",
+    "template": "locales/en.json"
+  }
+}

@@ -13,10 +13,14 @@ _ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_ROOT / ".env", override=False)
 load_dotenv(override=False)
 
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
+try:
+    from lumen.platform.observability import setup_observability
+    setup_observability(service_name=os.getenv("OTEL_SERVICE_NAME") or "lumen-telegram")
+except Exception:
+    logging.basicConfig(
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        level=logging.INFO,
+    )
 logger = logging.getLogger("lumen_bot")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()

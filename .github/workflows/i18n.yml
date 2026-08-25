@@ -1,0 +1,60 @@
+# i18n quality gates — ready for Weblate / Crowdin sync
+name: i18n
+
+on:
+  push:
+    paths:
+      - "locales/**"
+      - "lumen/bot/i18n.py"
+      - ".github/workflows/i18n.yml"
+  pull_request:
+    paths:
+      - "locales/**"
+      - "lumen/bot/i18n.py"
+
+jobs:
+  catalog-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate locale JSON + key parity
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          locales = Path("locales")
+          en = json.loads((locales / "en.json").read_text(encoding="utf-8"))
+          assert isinstance(en, dict) and en, "en.json empty"
+          for path in sorted(locales.glob("*.json")):
+              if path.name == "i18n_meta.json":
+                  continue
+              data = json.loads(path.read_text(encoding="utf-8"))
+              missing = set(en) - set(data)
+              extra = set(data) - set(en)
+              if missing:
+                  raise SystemExit(f"{path.name} missing keys: {sorted(missing)[:20]}")
+              if extra:
+                  print(f"warn {path.name} extra keys: {sorted(extra)[:10]}")
+              print(path.name, "ok", len(data), "keys")
+          meta = json.loads((locales / "i18n_meta.json").read_text(encoding="utf-8"))
+          assert meta.get("source_language") == "en"
+          print("i18n catalogs valid")
+          PY
+
+  # Optional: enable when CROWDIN_TOKEN is configured in repo secrets
+  # crowdin-upload:
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/Lumen'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: crowdin/github-action@v2
+  #       with:
+  #         upload_sources: true
+  #         upload_translations: false
+  #         download_translations: false
+  #       env:
+  #         CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+  #         CROWDIN_PERSONAL_TOKEN: ${{ secrets.CROWDIN_TOKEN }}

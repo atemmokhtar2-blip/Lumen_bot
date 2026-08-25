@@ -1,9 +1,10 @@
-"""Lightweight i18n for the Telegram bot interface.
+"""i18n for Lumen — file-backed catalogs + RTL metadata.
 
-Goal: make the bot global — Arabic + English first, easy to extend.
+Catalogs live in repo-root ``locales/{lang}.json`` (Weblate / Crowdin friendly).
+In-code STRINGS remain as a bootstrap fallback if files are missing.
 
 Usage:
-    from .i18n import t, get_lang, set_lang
+    from .i18n import t, get_lang, set_lang, is_rtl, text_direction
 
     lang = get_lang(user, context)
     await message.reply_text(t("not_authorized", lang))
@@ -11,13 +12,78 @@ Usage:
 
 from __future__ import annotations
 
-from lumen.identity import WELCOME_AR, WELCOME_EN
-
+import json
+import logging
+from pathlib import Path
 from typing import Any, Optional
 
-# Supported languages (ISO 639-1). Add more by extending STRINGS.
+from lumen.identity import WELCOME_AR, WELCOME_EN
+
+logger = logging.getLogger(__name__)
+
+# Supported languages (ISO 639-1). Extend via locales/*.json + i18n_meta.json.
 SUPPORTED = ("en", "ar")
 DEFAULT_LANG = "en"  # Global default
+RTL_LANGS = frozenset({"ar", "he", "fa", "ur"})
+
+_LOCALES_DIR = Path(__file__).resolve().parents[2] / "locales"
+_FILE_CATALOGS: dict[str, dict[str, str]] = {}
+_META: dict[str, Any] = {}
+
+
+def _load_meta() -> dict[str, Any]:
+    global _META
+    if _META:
+        return _META
+    path = _LOCALES_DIR / "i18n_meta.json"
+    if path.is_file():
+        try:
+            _META = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("i18n meta load failed")
+            _META = {}
+    return _META
+
+
+def _load_file_catalog(lang: str) -> dict[str, str]:
+    if lang in _FILE_CATALOGS:
+        return _FILE_CATALOGS[lang]
+    path = _LOCALES_DIR / f"{lang}.json"
+    data: dict[str, str] = {}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = {str(k): str(v) for k, v in raw.items()}
+        except Exception:
+            logger.exception("locale file load failed: %s", path)
+    _FILE_CATALOGS[lang] = data
+    return data
+
+
+def reload_catalogs() -> None:
+    """Clear cache — call after CI pulls new translations."""
+    _FILE_CATALOGS.clear()
+    _META.clear()
+
+
+def is_rtl(lang: Optional[str] = None) -> bool:
+    """True when UI copy should use right-to-left direction."""
+    code = normalize_lang(lang) if lang else DEFAULT_LANG
+    meta = _load_meta().get("languages") or {}
+    entry = meta.get(code) if isinstance(meta, dict) else None
+    if isinstance(entry, dict) and entry.get("dir") in {"rtl", "ltr"}:
+        return entry["dir"] == "rtl"
+    return code in RTL_LANGS
+
+
+def text_direction(lang: Optional[str] = None) -> str:
+    return "rtl" if is_rtl(lang) else "ltr"
+
+
+def html_dir_attr(lang: Optional[str] = None) -> str:
+    """HTML attribute snippet: dir=\"rtl\" or dir=\"ltr\"."""
+    return f'dir="{text_direction(lang)}"'
 
 STRINGS: dict[str, dict[str, str]] = {
     # ── Auth / access ──────────────────────────────────────────────
@@ -219,10 +285,17 @@ def set_lang(context, lang: str) -> str:
 
 
 def t(key: str, lang: Optional[str] = None, **kwargs: Any) -> str:
-    """Translate *key* into *lang*. Falls back to English then to the key itself."""
+    """Translate *key* into *lang*. File catalog → STRINGS → English → key."""
     lang = normalize_lang(lang) if lang else DEFAULT_LANG
-    entry = STRINGS.get(key) or {}
-    text = entry.get(lang) or entry.get("en") or key
+    file_cat = _load_file_catalog(lang)
+    text = file_cat.get(key) or ""
+    if not text:
+        entry = STRINGS.get(key) or {}
+        text = entry.get(lang) or entry.get("en") or ""
+    if not text and lang != "en":
+        text = _load_file_catalog("en").get(key) or (STRINGS.get(key) or {}).get("en") or key
+    if not text:
+        text = key
     if kwargs:
         try:
             return text.format(**kwargs)

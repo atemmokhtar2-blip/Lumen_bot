@@ -21,3 +21,13 @@ psycopg[binary]==3.2.4
 
 redis==5.2.1
 rq==2.1.0
+
+# Observability (OpenTelemetry + Prometheus)
+opentelemetry-api==1.33.1
+opentelemetry-sdk==1.33.1
+opentelemetry-exporter-otlp-proto-http==1.33.1
+prometheus-client==0.21.1
+
+# Database migrations (Alembic + SQLAlchemy engine for migration runner only)
+SQLAlchemy==2.0.40
+alembic==1.15.2

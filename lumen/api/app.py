@@ -290,6 +290,11 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
+    try:
+        from lumen.platform.observability import setup_observability
+        setup_observability(service_name=os.getenv("OTEL_SERVICE_NAME") or "lumen-api")
+    except Exception:
+        logger.exception("observability setup failed")
     from lumen.platform.runtime_config import require_production_data_plane, is_dev
     if not is_dev():
         require_production_data_plane()
@@ -307,41 +312,96 @@ def create_app() -> web.Application:
         install_secret_log_filter()
     except Exception:
         pass
+    _mws = [
+        error_middleware,
+        body_size_guard_middleware,
+        json_body_middleware,
+        ip_rate_limit_middleware,
+        security_headers_middleware,
+        cors_middleware,
+    ]
+    try:
+        from lumen.platform.observability.metrics_http import instrument_app_middleware
+        _prom_mw = instrument_app_middleware()
+        if _prom_mw is not None:
+            _mws.insert(0, _prom_mw)
+    except Exception:
+        logger.exception("prometheus middleware skipped")
     app = web.Application(
-        middlewares=[
-            error_middleware,
-            body_size_guard_middleware,
-            json_body_middleware,
-            ip_rate_limit_middleware,
-            security_headers_middleware,
-            cors_middleware,
-        ],
+        middlewares=_mws,
         client_max_size=max(4096, max_size),
     )
     app.router.add_get("/health", health.health)
 
-    # OpenAPI / Swagger for B2B developers
+    # OpenAPI + interactive docs (Swagger UI + Redoc) for B2B developers
     async def _openapi_yaml(request):
         from pathlib import Path as _P
         path = _P(__file__).resolve().parent / "openapi.yaml"
-        return web.Response(text=path.read_text(encoding="utf-8"), content_type="application/yaml")
+        return web.Response(
+            text=path.read_text(encoding="utf-8"),
+            content_type="application/yaml",
+            headers={"Cache-Control": "public, max-age=60"},
+        )
 
     async def _swagger_ui(request):
+        # Pinned Swagger UI 5.x from unpkg (standard vendor distribution)
         html = """<!DOCTYPE html>
-<html><head><title>Lumen API</title>
-<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
-</head><body>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Lumen B2B API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"/>
+  <style>body{margin:0} .topbar{display:none}</style>
+</head>
+<body>
 <div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js" crossorigin></script>
+<script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js" crossorigin></script>
 <script>
-SwaggerUIBundle({ url: '/openapi.yaml', dom_id: '#swagger-ui' });
+window.ui = SwaggerUIBundle({
+  url: '/openapi.yaml',
+  dom_id: '#swagger-ui',
+  deepLinking: true,
+  presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+  layout: 'StandaloneLayout',
+  tryItOutEnabled: true,
+  persistAuthorization: true
+});
 </script>
 </body></html>"""
         return web.Response(text=html, content_type="text/html")
 
+    async def _redoc_ui(request):
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Lumen API Reference</title>
+  <style>body{margin:0;padding:0}</style>
+</head>
+<body>
+  <redoc spec-url="/openapi.yaml" hide-hostname="false" expand-responses="200,201"></redoc>
+  <script src="https://cdn.redoc.ly/redoc/v2.1.5/bundles/redoc.standalone.js"></script>
+</body></html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    async def _metrics(request):
+        try:
+            from lumen.platform.observability.metrics_http import metrics_payload, prometheus_available
+            if not prometheus_available():
+                return web.Response(text="prometheus_client not installed\n", status=501)
+            body, ctype = metrics_payload()
+            return web.Response(body=body, content_type=ctype)
+        except Exception as exc:
+            return web.Response(text=f"metrics_unavailable:{type(exc).__name__}\n", status=503)
+
     app.router.add_get("/openapi.yaml", _openapi_yaml)
     app.router.add_get("/docs", _swagger_ui)
     app.router.add_get("/swagger", _swagger_ui)
+    app.router.add_get("/redoc", _redoc_ui)
+    app.router.add_get("/metrics", _metrics)
 
     app.router.add_get("/ready", health.ready)
     # Public
