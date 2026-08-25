@@ -11,6 +11,7 @@ class Wallet:
     reserved_balance: int = 0
     currency: str = "credits"
     updated_at: float = 0.0
+    account_id: str = ""
 
     @property
     def available(self) -> int:
@@ -18,19 +19,35 @@ class Wallet:
 
 
 @dataclass
+class LedgerLeg:
+    account_id: str
+    side: str  # debit | credit
+    amount: int
+
+
+@dataclass
 class LedgerEntry:
+    """Transaction header + legs (double-entry)."""
     transaction_id: str
     tenant_id: str
-    amount: int  # effect on current_balance (+ in / - out)
-    balance_after: int
     type: str
+    legs: list[LedgerLeg]
+    balance_after: int  # user wallet current after tx
+    reserved_after: int = 0
     reference_id: str = ""
     idempotency_key: str = ""
-    reservation_delta: int = 0  # +hold / -release-or-capture
-    reserved_after: int = 0
-    counterparty: str = "system"
+    prev_hash: str = ""
+    entry_hash: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = 0.0
+
+    @property
+    def amount(self) -> int:
+        """Net effect on user wallet (credit positive / debit negative) for compatibility."""
+        for leg in self.legs:
+            if leg.account_id.startswith("wallet:"):
+                return leg.amount if leg.side == "credit" else -leg.amount
+        return 0
 
 
 @dataclass
@@ -56,8 +73,8 @@ class ReconcileReport:
     ok: bool
     tenant_id: str
     wallet_balance: int
-    ledger_sum: int
+    ledger_wallet_net: int
     wallet_reserved: int
-    ledger_reservation_sum: int
+    unbalanced_transactions: int = 0
     drift_balance: int = 0
-    drift_reserved: int = 0
+    notes: str = ""

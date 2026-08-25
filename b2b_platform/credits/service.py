@@ -1,4 +1,4 @@
-"""CreditService — sole application gate for credit mutations (hardened phase 1)."""
+"""CreditService — sole gate; double-entry stores only."""
 from __future__ import annotations
 
 import logging
@@ -34,53 +34,39 @@ class CreditService:
     def ensure_wallet(self, tenant_id: str) -> Wallet:
         return self._store.ensure_wallet(str(tenant_id))
 
-    def credit_credits(
-        self, tenant_id: str, amount: int, *, reason: str = "purchase",
-        reference_id: str = "", idempotency_key: str = "",
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> CreditResult:
+    def credit_credits(self, tenant_id, amount, *, reason="purchase", reference_id="",
+                       idempotency_key="", metadata=None) -> CreditResult:
         return self._store.credit(
-            str(tenant_id), int(amount), type_=reason,
-            reference_id=reference_id, idempotency_key=idempotency_key, metadata=metadata,
+            str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
+            idempotency_key=idempotency_key, metadata=metadata,
         )
 
-    def deduct_credits(
-        self, tenant_id: str, amount: int, *, reason: str = "generation_cost",
-        reference_id: str = "", idempotency_key: str = "",
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> CreditResult:
+    def deduct_credits(self, tenant_id, amount, *, reason="generation_cost",
+                       reference_id="", idempotency_key="", metadata=None) -> CreditResult:
         return self._store.deduct(
-            str(tenant_id), int(amount), type_=reason,
-            reference_id=reference_id, idempotency_key=idempotency_key, metadata=metadata,
+            str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
+            idempotency_key=idempotency_key, metadata=metadata,
         )
 
-    def reserve_credits(
-        self, tenant_id: str, amount: int, *, reference_id: str = "",
-        idempotency_key: str = "",
-    ) -> CreditResult:
+    def reserve_credits(self, tenant_id, amount, *, reference_id="",
+                        idempotency_key="") -> CreditResult:
         return self._store.reserve(
-            str(tenant_id), int(amount),
-            reference_id=reference_id, idempotency_key=idempotency_key,
+            str(tenant_id), int(amount), reference_id=reference_id,
+            idempotency_key=idempotency_key,
         )
 
-    def release_reservation(
-        self, tenant_id: str, amount: int, *, reference_id: str = "",
-        idempotency_key: str = "",
-    ) -> CreditResult:
+    def release_reservation(self, tenant_id, amount, *, reference_id="",
+                            idempotency_key="") -> CreditResult:
         return self._store.release_reservation(
-            str(tenant_id), int(amount),
-            reference_id=reference_id, idempotency_key=idempotency_key,
+            str(tenant_id), int(amount), reference_id=reference_id,
+            idempotency_key=idempotency_key,
         )
 
-    def capture_reservation(
-        self, tenant_id: str, amount: int, *, reason: str = "generation_cost",
-        reference_id: str = "", idempotency_key: str = "",
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> CreditResult:
-        """Spend a prior hold: atomic reserved_balance + current_balance reduction."""
+    def capture_reservation(self, tenant_id, amount, *, reason="generation_cost",
+                            reference_id="", idempotency_key="", metadata=None) -> CreditResult:
         return self._store.capture_reservation(
-            str(tenant_id), int(amount), type_=reason,
-            reference_id=reference_id, idempotency_key=idempotency_key, metadata=metadata,
+            str(tenant_id), int(amount), type_=reason, reference_id=reference_id,
+            idempotency_key=idempotency_key, metadata=metadata,
         )
 
     def reconcile(self, tenant_id: str) -> ReconcileReport:
@@ -91,9 +77,7 @@ class CreditService:
 
     def cost_for(self, resource_type: str, units: int) -> int:
         rule = self._store.get_pricing(resource_type)
-        if not rule:
-            return 0
-        return int(rule.cost_per_unit) * max(0, int(units))
+        return int(rule.cost_per_unit) * max(0, int(units)) if rule else 0
 
     def list_pricing(self) -> list[PricingRule]:
         return self._store.list_pricing()
@@ -106,19 +90,13 @@ def get_credit_service() -> CreditService:
     global _SVC
     if _SVC is not None:
         return _SVC
-    dsn = (
-        (os.getenv("DATABASE_URL") or "")
-        or (os.getenv("POSTGRES_URL") or "")
-        or (os.getenv("POSTGRESQL_URL") or "")
-    ).strip()
+    dsn = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or os.getenv("POSTGRESQL_URL") or "").strip()
     if dsn:
         from .pg_store import PostgresCreditsStore
         _SVC = CreditService(PostgresCreditsStore(dsn))
-        logger.info("CreditService using PostgreSQL")
         return _SVC
     from .memory_store import MemoryCreditsStore
     _SVC = CreditService(MemoryCreditsStore())
-    logger.info("CreditService using in-memory store (set DATABASE_URL for production)")
     return _SVC
 
 
