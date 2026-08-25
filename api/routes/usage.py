@@ -1,21 +1,25 @@
-"""Usage batch API — phase 2 telemetry ingest (no credit deduction)."""
+"""Usage batch API — hardened phase 2 telemetry (no credit deduction)."""
 from __future__ import annotations
 
 from aiohttp import web
 
 from api.auth import require_tenant
 from api.security import safe_json_body
-from b2b_platform.usage_batches import get_usage_batch_service
+from b2b_platform.usage_batches import get_usage_batch_service, register_bot
 
 
 async def post_batch(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     body = await safe_json_body(request, required=True, max_bytes=65536)
-    # Never trust tenant_id from body
-    body.pop("tenant_id", None)
-    result = get_usage_batch_service().ingest(tenant.tenant_id, body, source="api")
+    body.pop("tenant_id", None)  # never trust client tenant
+    result = get_usage_batch_service().ingest(
+        tenant.tenant_id, body, source="api", require_ownership=True
+    )
     if not result.ok:
-        return web.json_response({"ok": False, "error": result.reason}, status=400)
+        status = 429 if result.reason == "rate_limited" else 400
+        if result.reason == "bot_not_registered_for_tenant":
+            status = 403
+        return web.json_response({"ok": False, "error": result.reason}, status=status)
     b = result.batch
     assert b is not None
     return web.json_response(
@@ -32,12 +36,25 @@ async def post_batch(request: web.Request) -> web.Response:
                 "llm_tokens_used": b.llm_tokens_used,
                 "uptime_seconds": b.uptime_seconds,
                 "ram_mb": b.ram_mb,
+                "cpu_millicores": b.cpu_millicores,
                 "status": b.status,
+                "content_hash": b.content_hash,
                 "idempotency_key": b.idempotency_key,
             },
         },
         status=200 if result.replay else 201,
     )
+
+
+async def register_bot_route(request: web.Request) -> web.Response:
+    """Register bot_id under the authenticated tenant (call on host start)."""
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, required=True, max_bytes=4096)
+    bot_id = str(body.get("bot_id") or "").strip()[:120]
+    if not bot_id:
+        return web.json_response({"ok": False, "error": "bot_id_required"}, status=400)
+    register_bot(tenant.tenant_id, bot_id)
+    return web.json_response({"ok": True, "tenant_id": tenant.tenant_id, "bot_id": bot_id})
 
 
 async def list_batches(request: web.Request) -> web.Response:
@@ -61,8 +78,10 @@ async def list_batches(request: web.Request) -> web.Response:
                     "llm_tokens_used": b.llm_tokens_used,
                     "uptime_seconds": b.uptime_seconds,
                     "ram_mb": b.ram_mb,
+                    "cpu_millicores": b.cpu_millicores,
                     "status": b.status,
                     "source": b.source,
+                    "content_hash": b.content_hash,
                     "created_at": b.created_at,
                 }
                 for b in rows

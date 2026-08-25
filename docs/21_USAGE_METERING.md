@@ -1,35 +1,28 @@
-# Phase 2 — Usage batches (telemetry only)
+# Phase 2 — Usage batches (hardened)
 
-## Scope
+## Guarantees
 
-Ingest **metrics batches** from hosted bots / supervisors.
-**Does not** call `CreditService.deduct_*` (that is phase 3).
+| Rule | Enforcement |
+|------|-------------|
+| No credit debit | Ingest never imports deduct |
+| Tenant isolation | `tenant_id` from API auth only |
+| Bot ownership | `usage_bot_registry`; 403 if unknown bot |
+| Idempotency | unique `idempotency_key` |
+| Integrity | SHA-256 `content_hash` of metrics |
+| Window safety | reject future / stale / >24h span |
+| Immutability | PG trigger blocks UPDATE/DELETE |
+| Rate limit | `TBE_USAGE_INGEST_RPM` (default 60) |
+| Host samples | `docker stats` + inspect uptime when container_id set |
 
-## Batch contract
+## API
 
-```json
-{
-  "bot_id": "bot_xxx",
-  "window_start": 1710000000.0,
-  "window_end": 1710000300.0,
-  "messages_processed": 12,
-  "llm_tokens_used": 400,
-  "uptime_seconds": 300,
-  "ram_mb": 256,
-  "cpu_millicores": 100,
-  "idempotency_key": "batch-bot_xxx-1710000300"
-}
-```
+- `POST /v1/usage/register_bot` `{ "bot_id" }` — bind bot to tenant
+- `POST /v1/usage/batch` — ingest metrics
+- `GET /v1/usage/batches` — list
 
-`tenant_id` comes from authenticated API key (never trusted from body).
+## Supervisor
 
-## Storage
+`list_managed_containers` inspects labels (`tbe.tenant_id`, `tbe.bot_id`).
+`emit_host_heartbeat` registers bot, samples stats, writes batch.
 
-- `usage_batches` append-oriented rows
-- Unique `idempotency_key` → duplicate posts return replay, no double store
-- Status: `accepted` | `rated` (rated set in phase 3)
-
-## Emitters
-
-- Hosting worker / supervisor tick may call `emit_host_heartbeat(...)` locally
-- Bots may POST `/v1/usage/batch` with tenant API key
+Dev only: `TBE_USAGE_RELAX_OWNERSHIP=1` skips ownership check.

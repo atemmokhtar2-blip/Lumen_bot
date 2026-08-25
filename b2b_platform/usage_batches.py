@@ -1,17 +1,31 @@
-"""Phase 2 usage batch ingest — telemetry only, no credit deduction."""
+"""Phase 2 usage batches — hardened telemetry (no credit deduction).
+
+Security / integrity:
+- tenant_id only from auth layer (API) or trusted supervisor registry
+- bot must be registered to tenant (unless TBE_USAGE_RELAX_OWNERSHIP=1 in dev)
+- idempotency_key unique; content_hash of canonical metrics
+- window: not future, not older than max age, max span 24h
+- append-only table (PG trigger blocks UPDATE/DELETE)
+- per-tenant rate limit on ingest
+"""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-MAX_BATCH_METRICS = 1_000_000_000  # hard cap per metric field
+MAX_METRIC = 1_000_000_000
+MAX_WINDOW_SEC = 86400
+MAX_BATCH_AGE_SEC = int(os.getenv("TBE_USAGE_MAX_BATCH_AGE_SEC") or str(86400 * 2))
+INGEST_RPM = int(os.getenv("TBE_USAGE_INGEST_RPM") or "60")
 
 
 @dataclass
@@ -27,8 +41,10 @@ class UsageBatch:
     ram_mb: int = 0
     cpu_millicores: int = 0
     idempotency_key: str = ""
-    status: str = "accepted"  # accepted | rated
-    source: str = "api"  # api | supervisor | worker
+    content_hash: str = ""
+    status: str = "accepted"
+    source: str = "api"
+    sequence: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: float = 0.0
 
@@ -48,10 +64,26 @@ def _clamp_int(v: Any, default: int = 0) -> int:
         return default
     if n < 0:
         return 0
-    return min(n, MAX_BATCH_METRICS)
+    return min(n, MAX_METRIC)
 
 
-def validate_batch_payload(body: dict[str, Any]) -> tuple[Optional[dict], str]:
+def content_hash_for(fields: dict[str, Any]) -> str:
+    canonical = {
+        "bot_id": fields["bot_id"],
+        "window_start": round(float(fields["window_start"]), 3),
+        "window_end": round(float(fields["window_end"]), 3),
+        "messages_processed": int(fields["messages_processed"]),
+        "llm_tokens_used": int(fields["llm_tokens_used"]),
+        "uptime_seconds": int(fields["uptime_seconds"]),
+        "ram_mb": int(fields["ram_mb"]),
+        "cpu_millicores": int(fields.get("cpu_millicores") or 0),
+        "sequence": int(fields.get("sequence") or 0),
+    }
+    raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def validate_batch_payload(body: dict[str, Any], *, now: float | None = None) -> tuple[Optional[dict], str]:
     if not isinstance(body, dict):
         return None, "body_must_be_object"
     bot_id = str(body.get("bot_id") or "").strip()[:120]
@@ -65,11 +97,18 @@ def validate_batch_payload(body: dict[str, Any]) -> tuple[Optional[dict], str]:
         we = float(body.get("window_end") or 0)
     except Exception:
         return None, "window_invalid"
-    if we < ws:
+    if we <= ws:
         return None, "window_end_before_start"
-    if we - ws > 86400 * 7:
+    if we - ws > MAX_WINDOW_SEC:
         return None, "window_too_large"
-    return {
+    ts = float(now if now is not None else time.time())
+    # allow 120s clock skew future
+    if ws > ts + 120 or we > ts + 120:
+        return None, "window_in_future"
+    if ts - we > MAX_BATCH_AGE_SEC:
+        return None, "window_too_stale"
+    seq = _clamp_int(body.get("sequence"), 0)
+    fields = {
         "bot_id": bot_id,
         "window_start": ws,
         "window_end": we,
@@ -79,15 +118,115 @@ def validate_batch_payload(body: dict[str, Any]) -> tuple[Optional[dict], str]:
         "ram_mb": _clamp_int(body.get("ram_mb")),
         "cpu_millicores": _clamp_int(body.get("cpu_millicores")),
         "idempotency_key": key,
+        "sequence": seq,
         "metadata": body.get("metadata") if isinstance(body.get("metadata"), dict) else {},
-    }, "ok"
+    }
+    fields["content_hash"] = content_hash_for(fields)
+    return fields, "ok"
+
+
+# --- Bot ownership registry (tenant → bot_id) ---
+
+class MemoryBotRegistry:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._owned: dict[str, set[str]] = {}  # tenant -> bot ids
+
+    def register(self, tenant_id: str, bot_id: str) -> None:
+        with self._lock:
+            self._owned.setdefault(str(tenant_id), set()).add(str(bot_id)[:120])
+
+    def is_owned(self, tenant_id: str, bot_id: str) -> bool:
+        with self._lock:
+            return str(bot_id)[:120] in self._owned.get(str(tenant_id), set())
+
+
+_BOT_REG = MemoryBotRegistry()
+
+
+def register_bot(tenant_id: str, bot_id: str) -> None:
+    _BOT_REG.register(tenant_id, bot_id)
+    dsn = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
+    if dsn:
+        try:
+            PostgresBotRegistry(dsn).register(tenant_id, bot_id)
+        except Exception as exc:
+            logger.warning("pg bot register failed: %s", type(exc).__name__)
+
+
+def bot_owned(tenant_id: str, bot_id: str) -> bool:
+    if _BOT_REG.is_owned(tenant_id, bot_id):
+        return True
+    dsn = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
+    if dsn:
+        try:
+            return PostgresBotRegistry(dsn).is_owned(tenant_id, bot_id)
+        except Exception:
+            return False
+    return False
+
+
+_PG_BOT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS usage_bot_registry (
+    tenant_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (tenant_id, bot_id)
+);
+"""
+
+
+class PostgresBotRegistry:
+    def __init__(self, dsn: str) -> None:
+        import psycopg
+        from psycopg.rows import dict_row
+        self._psycopg = psycopg
+        self._dict_row = dict_row
+        self.dsn = dsn
+        with self._conn() as conn:
+            conn.execute(_PG_BOT_SCHEMA)
+            conn.commit()
+
+    def _conn(self):
+        return self._psycopg.connect(self.dsn, row_factory=self._dict_row)
+
+    def register(self, tenant_id: str, bot_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO usage_bot_registry (tenant_id, bot_id, created_at)
+                VALUES (%s,%s,%s) ON CONFLICT DO NOTHING
+                """,
+                (str(tenant_id), str(bot_id)[:120], time.time()),
+            )
+            conn.commit()
+
+    def is_owned(self, tenant_id: str, bot_id: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM usage_bot_registry WHERE tenant_id=%s AND bot_id=%s",
+                (str(tenant_id), str(bot_id)[:120]),
+            ).fetchone()
+        return bool(row)
+
+
+def _rate_limit_ok(tenant_id: str) -> bool:
+    if INGEST_RPM <= 0:
+        return True
+    try:
+        from b2b_platform.rate_limit import get_rate_limiter
+        return get_rate_limiter().allow(f"usage_batch:{tenant_id}", limit=INGEST_RPM, window_sec=60.0)
+    except Exception:
+        # fail-open only in explicit dev
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        return env in {"dev", "development", "local", "test"}
 
 
 class MemoryUsageBatchStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._by_id: dict[str, UsageBatch] = {}
-        self._idem: dict[str, str] = {}  # key -> batch_id
+        self._idem: dict[str, str] = {}
         self._order: list[str] = []
 
     def ingest(self, tenant_id: str, fields: dict[str, Any], *, source: str = "api") -> IngestResult:
@@ -108,10 +247,12 @@ class MemoryUsageBatchStore:
                 llm_tokens_used=int(fields["llm_tokens_used"]),
                 uptime_seconds=int(fields["uptime_seconds"]),
                 ram_mb=int(fields["ram_mb"]),
-                cpu_millicores=int(fields["cpu_millicores"]),
+                cpu_millicores=int(fields.get("cpu_millicores") or 0),
                 idempotency_key=key,
+                content_hash=str(fields.get("content_hash") or ""),
                 status="accepted",
                 source=source,
+                sequence=int(fields.get("sequence") or 0),
                 metadata=dict(fields.get("metadata") or {}),
                 created_at=time.time(),
             )
@@ -129,8 +270,7 @@ class MemoryUsageBatchStore:
 
     def list_unrated(self, *, limit: int = 100) -> list[UsageBatch]:
         with self._lock:
-            rows = [self._by_id[i] for i in self._order if self._by_id[i].status == "accepted"]
-            return rows[: int(limit)]
+            return [self._by_id[i] for i in self._order if self._by_id[i].status == "accepted"][: int(limit)]
 
 
 _USAGE_SCHEMA = """
@@ -146,33 +286,51 @@ CREATE TABLE IF NOT EXISTS usage_batches (
     ram_mb BIGINT NOT NULL DEFAULT 0,
     cpu_millicores BIGINT NOT NULL DEFAULT 0,
     idempotency_key TEXT NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'accepted',
     source TEXT NOT NULL DEFAULT 'api',
+    sequence BIGINT NOT NULL DEFAULT 0,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at DOUBLE PRECISION NOT NULL,
     CONSTRAINT usage_batches_idempotency UNIQUE (idempotency_key)
 );
-CREATE INDEX IF NOT EXISTS idx_usage_batches_tenant_time
-    ON usage_batches (tenant_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_usage_batches_status
-    ON usage_batches (status, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_usage_batches_tenant_time ON usage_batches (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_batches_status ON usage_batches (status, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_usage_batches_bot ON usage_batches (tenant_id, bot_id, window_end DESC);
+
+CREATE OR REPLACE FUNCTION usage_batches_immutable() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'usage_batches_immutable: % not allowed', TG_OP;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_usage_batches_no_update ON usage_batches;
+CREATE TRIGGER trg_usage_batches_no_update
+  BEFORE UPDATE OR DELETE ON usage_batches
+  FOR EACH ROW EXECUTE PROCEDURE usage_batches_immutable();
 """
 
 
 class PostgresUsageBatchStore:
     def __init__(self, dsn: str) -> None:
-        try:
-            import psycopg
-            from psycopg.rows import dict_row
-            from psycopg import errors as pg_errors
-        except ImportError as exc:
-            raise RuntimeError("psycopg required") from exc
+        import psycopg
+        from psycopg.rows import dict_row
+        from psycopg import errors as pg_errors
         self.dsn = dsn.strip()
         self._psycopg = psycopg
         self._dict_row = dict_row
         self._pg_errors = pg_errors
         with self._conn() as conn:
-            conn.execute(_USAGE_SCHEMA)
+            try:
+                conn.execute(_USAGE_SCHEMA)
+            except Exception:
+                for stmt in _USAGE_SCHEMA.split(";"):
+                    s = stmt.strip()
+                    if s:
+                        try:
+                            conn.execute(s)
+                        except Exception:
+                            pass
             conn.commit()
 
     def _conn(self):
@@ -181,7 +339,6 @@ class PostgresUsageBatchStore:
     def _row(self, r: dict) -> UsageBatch:
         meta = r.get("metadata") or {}
         if isinstance(meta, str):
-            import json
             try:
                 meta = json.loads(meta)
             except Exception:
@@ -198,14 +355,15 @@ class PostgresUsageBatchStore:
             ram_mb=int(r.get("ram_mb") or 0),
             cpu_millicores=int(r.get("cpu_millicores") or 0),
             idempotency_key=str(r.get("idempotency_key") or ""),
+            content_hash=str(r.get("content_hash") or ""),
             status=str(r.get("status") or "accepted"),
             source=str(r.get("source") or "api"),
+            sequence=int(r.get("sequence") or 0),
             metadata=dict(meta) if isinstance(meta, dict) else {},
             created_at=float(r.get("created_at") or 0),
         )
 
     def ingest(self, tenant_id: str, fields: dict[str, Any], *, source: str = "api") -> IngestResult:
-        import json
         tid = str(tenant_id)
         key = fields["idempotency_key"]
         bid = f"ub_{uuid.uuid4().hex}"
@@ -222,16 +380,18 @@ class PostgresUsageBatchStore:
                     INSERT INTO usage_batches (
                         batch_id, tenant_id, bot_id, window_start, window_end,
                         messages_processed, llm_tokens_used, uptime_seconds, ram_mb, cpu_millicores,
-                        idempotency_key, status, source, metadata, created_at
+                        idempotency_key, content_hash, status, source, sequence, metadata, created_at
                     ) VALUES (
-                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'accepted',%s,%s::jsonb,%s
+                        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'accepted',%s,%s,%s::jsonb,%s
                     )
                     """,
                     (
                         bid, tid, fields["bot_id"], fields["window_start"], fields["window_end"],
                         fields["messages_processed"], fields["llm_tokens_used"],
-                        fields["uptime_seconds"], fields["ram_mb"], fields["cpu_millicores"],
-                        key, source, json.dumps(fields.get("metadata") or {}), now,
+                        fields["uptime_seconds"], fields["ram_mb"], fields.get("cpu_millicores") or 0,
+                        key, fields.get("content_hash") or "", source,
+                        int(fields.get("sequence") or 0),
+                        json.dumps(fields.get("metadata") or {}), now,
                     ),
                 )
                 conn.commit()
@@ -249,8 +409,10 @@ class PostgresUsageBatchStore:
             messages_processed=int(fields["messages_processed"]),
             llm_tokens_used=int(fields["llm_tokens_used"]),
             uptime_seconds=int(fields["uptime_seconds"]),
-            ram_mb=int(fields["ram_mb"]), cpu_millicores=int(fields["cpu_millicores"]),
-            idempotency_key=key, status="accepted", source=source,
+            ram_mb=int(fields["ram_mb"]),
+            cpu_millicores=int(fields.get("cpu_millicores") or 0),
+            idempotency_key=key, content_hash=str(fields.get("content_hash") or ""),
+            status="accepted", source=source, sequence=int(fields.get("sequence") or 0),
             metadata=dict(fields.get("metadata") or {}), created_at=now,
         )
         return IngestResult(ok=True, batch=batch)
@@ -259,18 +421,12 @@ class PostgresUsageBatchStore:
         with self._conn() as conn:
             if status:
                 rows = conn.execute(
-                    """
-                    SELECT * FROM usage_batches WHERE tenant_id=%s AND status=%s
-                    ORDER BY created_at DESC LIMIT %s
-                    """,
+                    "SELECT * FROM usage_batches WHERE tenant_id=%s AND status=%s ORDER BY created_at DESC LIMIT %s",
                     (str(tenant_id), status, int(limit)),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """
-                    SELECT * FROM usage_batches WHERE tenant_id=%s
-                    ORDER BY created_at DESC LIMIT %s
-                    """,
+                    "SELECT * FROM usage_batches WHERE tenant_id=%s ORDER BY created_at DESC LIMIT %s",
                     (str(tenant_id), int(limit)),
                 ).fetchall()
         return [self._row(r) for r in rows]
@@ -278,10 +434,7 @@ class PostgresUsageBatchStore:
     def list_unrated(self, *, limit: int = 100) -> list[UsageBatch]:
         with self._conn() as conn:
             rows = conn.execute(
-                """
-                SELECT * FROM usage_batches WHERE status='accepted'
-                ORDER BY created_at ASC LIMIT %s
-                """,
+                "SELECT * FROM usage_batches WHERE status='accepted' ORDER BY created_at ASC LIMIT %s",
                 (int(limit),),
             ).fetchall()
         return [self._row(r) for r in rows]
@@ -291,10 +444,26 @@ class UsageBatchService:
     def __init__(self, store: Any) -> None:
         self._store = store
 
-    def ingest(self, tenant_id: str, body: dict[str, Any], *, source: str = "api") -> IngestResult:
+    def ingest(
+        self,
+        tenant_id: str,
+        body: dict[str, Any],
+        *,
+        source: str = "api",
+        require_ownership: bool = True,
+        skip_rate_limit: bool = False,
+    ) -> IngestResult:
         fields, reason = validate_batch_payload(body)
         if not fields:
             return IngestResult(ok=False, reason=reason)
+        relax = (os.getenv("TBE_USAGE_RELAX_OWNERSHIP") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if require_ownership and not relax:
+            if not bot_owned(str(tenant_id), fields["bot_id"]):
+                return IngestResult(ok=False, reason="bot_not_registered_for_tenant")
+        if not skip_rate_limit and not _rate_limit_ok(str(tenant_id)):
+            return IngestResult(ok=False, reason="rate_limited")
         return self._store.ingest(str(tenant_id), fields, source=source)
 
     def list_batches(self, tenant_id: str, *, limit: int = 50, status: str = "") -> list[UsageBatch]:
