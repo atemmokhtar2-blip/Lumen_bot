@@ -1,8 +1,5 @@
-# Phase 4 — Policy-as-Code (official engines only)
-# - Checkov (Prisma / Bridgecrew): Dockerfile, GitHub Actions, IaC misconfig
-# - Hadolint: Dockerfile best practices
-# - actionlint: GitHub Actions workflow correctness + security
-# No custom policy scanners.
+# Phase 4 — hardened Policy-as-Code (official engines only)
+# Hadolint, actionlint+shellcheck, Checkov, KICS, Conftest/OPA, Trivy misconfig, ShellCheck
 name: Policy as Code
 
 on:
@@ -24,46 +21,62 @@ concurrency:
 
 jobs:
   hadolint:
-    name: Hadolint (Dockerfile)
+    name: Hadolint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Hadolint official
+      - name: Hadolint (official)
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
-          failure-threshold: warning
+          # error threshold = fail on style issues that are errors; info ignored
+          failure-threshold: style
           format: tty
 
   actionlint:
-    name: actionlint (workflows)
+    name: actionlint + shellcheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download actionlint
-        run: |
-          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-      - name: Lint all workflows
-        run: ./actionlint -color -shellcheck=
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Install actionlint
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      - name: actionlint (with ShellCheck integration)
+        run: ./actionlint -color -shellcheck=$(command -v shellcheck)
+
+  shellcheck:
+    name: ShellCheck (scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck official action
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+          ignore_paths: third_party
+          scandir: scripts
+        env:
+          SHELLCHECK_OPTS: -e SC1091
 
   checkov:
     name: Checkov (Prisma)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkov official action
+      - name: Checkov (no soft-fail)
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
-          framework: dockerfile,github_actions,secrets
+          framework: dockerfile,github_actions,secrets,yaml,json
           soft_fail: false
+          compact: true
+          quiet: false
           output_format: cli,sarif
           output_file_path: console,checkov.sarif
-          skip_check: CKV_DOCKER_2
-          # CKV_DOCKER_2 = HEALTHCHECK — optional for long-running bot workers
-      - name: Upload Checkov SARIF
+          # No broad skip list — Dockerfile now has HEALTHCHECK + non-root
+      - uses: github/codeql-action/upload-sarif@v3
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov.sarif
           category: checkov
@@ -74,11 +87,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: KICS scan official
+      - name: KICS fail on MEDIUM+
         uses: checkmarx/kics-github-action@v2
         with:
           path: .
-          fail_on: high
+          fail_on: medium
           output_path: kics-results
           output_formats: json,sarif
           enable_comments: false
@@ -90,22 +103,68 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  conftest:
+    name: Conftest / OPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Conftest official image (Dockerfile policies)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/project" \
+            openpolicyagent/conftest:latest \
+            test /project/Dockerfile -p /project/policy --policy /project/policy
+      - name: Conftest on selected workflows
+        run: |
+          set -e
+          for f in .github/workflows/security.yml \
+                   .github/workflows/dast-zap.yml \
+                   .github/workflows/supply-chain.yml \
+                   .github/workflows/policy-as-code.yml; do
+            docker run --rm -v "${{ github.workspace }}:/project" \
+              openpolicyagent/conftest:latest \
+              test "/project/$f" -p /project/policy || true
+          done
+          # Dockerfile policies are mandatory (above). Workflow Rego is advisory until schemas stabilize.
+
+  trivy-config:
+    name: Trivy misconfig (Aqua)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy config scan (Dockerfile + YAML)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "1"
+          format: table
+
   phase4-gate:
     name: Phase-4 policy gate
     runs-on: ubuntu-latest
-    needs: [hadolint, actionlint, checkov, kics]
+    needs: [hadolint, actionlint, shellcheck, checkov, kics, conftest, trivy-config]
     if: always()
     steps:
-      - name: All policy engines must succeed
+      - name: All hardened policy engines must succeed
         run: |
+          echo "hadolint=${{ needs.hadolint.result }}"
+          echo "actionlint=${{ needs.actionlint.result }}"
+          echo "shellcheck=${{ needs.shellcheck.result }}"
+          echo "checkov=${{ needs.checkov.result }}"
+          echo "kics=${{ needs.kics.result }}"
+          echo "conftest=${{ needs.conftest.result }}"
+          echo "trivy-config=${{ needs.trivy-config.result }}"
           for r in \
             "${{ needs.hadolint.result }}" \
             "${{ needs.actionlint.result }}" \
+            "${{ needs.shellcheck.result }}" \
             "${{ needs.checkov.result }}" \
-            "${{ needs.kics.result }}"; do
-            echo "result=$r"
+            "${{ needs.kics.result }}" \
+            "${{ needs.conftest.result }}" \
+            "${{ needs.trivy-config.result }}"; do
             if [ "$r" != "success" ]; then
-              echo "PHASE4 DENIED"
+              echo "PHASE4 DENIED ($r)"
               exit 1
             fi
           done

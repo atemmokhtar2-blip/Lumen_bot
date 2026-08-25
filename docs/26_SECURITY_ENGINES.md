@@ -38,3 +38,6 @@ DAST العام = **ZAP فقط**. اختبارات IDOR = منطق المنتج.
 | **actionlint** | rhysd | `policy-as-code.yml` |
 | **Checkov** | Prisma Bridgecrew | `policy-as-code.yml` |
 | **KICS** | Checkmarx | `policy-as-code.yml` |
+| **Conftest / OPA** | Open Policy Agent | `policy-as-code.yml` |
+| **ShellCheck** | koalaman | `policy-as-code.yml` |
+| **Trivy config** | Aqua | `policy-as-code.yml` |
