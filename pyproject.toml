@@ -1,0 +1,7 @@
+[tool.bandit]
+exclude_dirs = ["tests", "sdks", ".git", "data"]
+skips = ["B101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

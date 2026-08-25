@@ -1,0 +1,18 @@
+title = "Maestro gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "maestro-allow-env-example"
+description = "Allow .env.example placeholders"
+path = '''\.env\.example$'''
+regex = '''(?i)(token|key|secret|password)\s*=\s*.+'''
+
+[allowlist]
+paths = [
+  '''tests/''',
+  '''docs/''',
+  '''\.env\.example$''',
+  '''sdks/''',
+]

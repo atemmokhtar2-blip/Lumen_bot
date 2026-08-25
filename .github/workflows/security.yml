@@ -1,0 +1,123 @@
+# Security monitoring — SAST, dependency CVEs, secrets, credits integrity
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Daily 03:00 UTC — promo expiry + drift sweep
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependencies:
+    name: Dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: pip install -U pip pip-audit
+      - name: Audit requirements.txt
+        run: |
+          pip-audit -r requirements.txt \
+            --progress-spinner off \
+            --desc on \
+            --format columns \
+            || { echo "::error::pip-audit found known vulnerabilities"; exit 1; }
+
+  sast:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: pip install -U bandit
+      - name: Bandit — critical paths
+        run: |
+          # Report medium+; fail the job only on HIGH severity (known B608 false positives
+          # on internal column allow-lists are medium).
+          bandit -r \
+            b2b_platform \
+            api \
+            telegram_bot_engine/security \
+            telegram_bot_engine/services/tool_runtime \
+            telegram_bot_engine/services/sandbox_runtime \
+            bot_interface/middlewares \
+            -c pyproject.toml \
+            -f txt \
+            -ll \
+            -s B101,B601 \
+            -o bandit-report.txt \
+            || true
+          if [ -f bandit-report.txt ]; then
+            echo "----- bandit report (tail) -----"
+            tail -80 bandit-report.txt
+          fi
+          bandit -r \
+            b2b_platform \
+            api \
+            telegram_bot_engine/security \
+            telegram_bot_engine/services/tool_runtime \
+            telegram_bot_engine/services/sandbox_runtime \
+            bot_interface/middlewares \
+            -c pyproject.toml \
+            -lll \
+            -s B101,B601 \
+            || { echo "::error::bandit HIGH severity findings"; exit 1; }
+
+  credits-integrity:
+    name: Credits integrity tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Welcome + ledger + privilege tests
+        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py -q --tb=short
+
+  credits-health-monitor:
+    name: Credits health monitor (promo + drift)
+    runs-on: ubuntu-latest
+    # Daily schedule + manual; also on main push for smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Run monitor (memory smoke + optional DATABASE_URL)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CREDITS_MONITOR_FAIL_ON_DRIFT: "1"
+        run: python scripts/security/credits_health_monitor.py
