@@ -1,0 +1,122 @@
+{
+  "version": "1.0",
+  "bot": {
+    "name": "staff_ops_bot",
+    "language": "ar",
+    "description": "إدارة مهام + صلاحيات مشرفين"
+  },
+  "actors": ["user", "admin"],
+  "entities": [
+    {
+      "name": "Task",
+      "fields": [
+        {"name": "title", "type": "str"},
+        {"name": "description", "type": "str"},
+        {"name": "priority", "type": "str"},
+        {"name": "done", "type": "bool"},
+        {"name": "user_id", "type": "int"}
+      ]
+    }
+  ],
+  "storage": {"type": "sqlite", "entities": ["Task"]},
+  "start_buttons": [
+    {"label": "إضافة مهمة", "callback_id": "task.add"},
+    {"label": "قائمة المهام", "callback_id": "task.list"}
+  ],
+  "features": [
+    {
+      "id": "start",
+      "feature": "start",
+      "actor": "any",
+      "trigger": {"type": "command", "id": "start"},
+      "action": {"service": "core", "method": "start"},
+      "messages": {"success": "مرحباً بك 👋"}
+    },
+    {
+      "id": "help",
+      "feature": "help",
+      "actor": "any",
+      "trigger": {"type": "command", "id": "help"},
+      "action": {"service": "core", "method": "help"}
+    },
+    {
+      "id": "ban",
+      "feature": "user_ban",
+      "actor": "admin",
+      "target": "telegram_user",
+      "trigger": {"type": "command", "id": "ban"},
+      "permissions": ["ban_users"],
+      "action": {"service": "moderation", "method": "ban_user"},
+      "success": {"message": "تم حظر المستخدم"},
+      "failure": {"message": "فشل الحظر — رد على رسالة المستخدم أو مرر user_id"}
+    },
+    {
+      "id": "mute",
+      "feature": "user_mute",
+      "actor": "admin",
+      "target": "telegram_user",
+      "trigger": {"type": "command", "id": "mute"},
+      "permissions": ["restrict_members"],
+      "action": {"service": "moderation", "method": "mute_user"},
+      "success": {"message": "تم كتم المستخدم"},
+      "failure": {"message": "فشل الكتم"}
+    },
+    {
+      "id": "task_add_cmd",
+      "feature": "task_add",
+      "actor": "user",
+      "trigger": {"type": "command", "id": "add"},
+      "action": {"service": "tasks", "method": "add_task"},
+      "messages": {
+        "prompt": "أرسل عنوان المهمة",
+        "success": "تمت إضافة المهمة",
+        "failure": "تعذر إضافة المهمة"
+      }
+    },
+    {
+      "id": "task_add_cb",
+      "feature": "task_add",
+      "actor": "user",
+      "trigger": {"type": "callback", "id": "task.add"},
+      "action": {"service": "tasks", "method": "add_task"},
+      "messages": {
+        "prompt": "أرسل عنوان المهمة",
+        "success": "تمت إضافة المهمة",
+        "failure": "تعذر إضافة المهمة"
+      }
+    },
+    {
+      "id": "task_list_cmd",
+      "feature": "task_list",
+      "actor": "user",
+      "trigger": {"type": "command", "id": "list"},
+      "action": {"service": "tasks", "method": "list_tasks"},
+      "messages": {"success": "قائمة المهام"}
+    },
+    {
+      "id": "task_list_cb",
+      "feature": "task_list",
+      "actor": "user",
+      "trigger": {"type": "callback", "id": "task.list"},
+      "action": {"service": "tasks", "method": "list_tasks"}
+    },
+    {
+      "id": "task_done_cmd",
+      "feature": "task_done",
+      "actor": "user",
+      "trigger": {"type": "command", "id": "done"},
+      "action": {"service": "tasks", "method": "done_task"},
+      "success": {"message": "تم تعليم المهمة كمكتملة"},
+      "failure": {"message": "رقم مهمة غير صالح"}
+    },
+    {
+      "id": "task_delete_cmd",
+      "feature": "task_delete",
+      "actor": "user",
+      "trigger": {"type": "command", "id": "delete"},
+      "action": {"service": "tasks", "method": "delete_task"},
+      "success": {"message": "تم حذف المهمة"},
+      "failure": {"message": "تعذر الحذف"}
+    }
+  ]
+}

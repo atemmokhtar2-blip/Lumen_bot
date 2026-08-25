@@ -1,0 +1,91 @@
+"""Real free-path provider — autonomous Cline agent (Phase 5 foundation).
+
+Does not compose catalog templates. Builds project via agent_loop + LLM + FS tools.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+from .agent_loop import run_agent
+from .model_router import describe_runtime
+
+logger = logging.getLogger(__name__)
+
+
+def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("raw_request", "user_request", "spec_request", "purpose", "goal"):
+        val = ir_dict.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+            break
+    feats = ir_dict.get("preferred_keys") or ir_dict.get("features_requested") or []
+    if isinstance(feats, list) and feats:
+        parts.append("Requested features: " + ", ".join(str(x) for x in feats[:40]))
+    gaps = ir_dict.get("capabilities_gap") or []
+    if isinstance(gaps, list) and gaps:
+        parts.append("Gaps / custom needs: " + ", ".join(str(x) for x in gaps[:30]))
+    lang = ir_dict.get("language") or "ar"
+    parts.append(f"Primary language: {lang}")
+    parts.append(
+        "Deliver a complete Telegram bot project under the workspace "
+        "(main entry, requirements, README, env example)."
+    )
+    return "\n".join(parts) if parts else (
+        "Build a complete Telegram bot project with main.py, requirements.txt, README."
+    )
+
+
+def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    goal = _goal_from_ir(ir_dict if isinstance(ir_dict, dict) else {})
+
+    logger.info("cline agent provider start work_dir=%s", work)
+    state = run_agent(work_dir=work, goal=goal, ir_dict=ir_dict)
+
+    project_path = str(work.resolve()) if state.ok or state.files_written else None
+
+    try:
+        audit = work / "CLINE_AGENT.md"
+        lines = [
+            "# Cline agent run",
+            "",
+            f"- ok: `{state.ok}`",
+            f"- stop_reason: `{state.stop_reason}`",
+            f"- model: `{describe_runtime()}`",
+            f"- files: `{state.files_written}`",
+            "",
+            "## Steps",
+            "",
+        ]
+        for s in state.steps:
+            lines.append(
+                f"{s.index}. tool=`{s.tool_name}` thought=`{(s.thought or '')[:180]}` "
+                f"result_ok=`{(s.tool_result or {}).get('ok')}`"
+            )
+        lines.append("")
+        audit.write_text("\n".join(lines), encoding="utf-8")
+    except Exception as exc:
+        state.warnings.append(f"audit_write:{type(exc).__name__}")
+
+    return {
+        "ok": bool(state.ok),
+        "project_path": project_path,
+        "engine": "cline_agent",
+        "errors": list(state.errors),
+        "warnings": list(state.warnings),
+        "metadata": {
+            **dict(state.metadata),
+            "stop_reason": state.stop_reason,
+            "files_written": list(state.files_written),
+            "steps": [s.to_dict() for s in state.steps],
+            "model": describe_runtime(),
+        },
+        "fallback_catalog": (not state.ok and not state.files_written),
+    }
+
+
+__all__ = ["build"]

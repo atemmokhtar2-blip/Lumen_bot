@@ -1,0 +1,221 @@
+# Phase 3 — hardened supply chain (official engines only)
+# Engines: GitHub Dependency Review, Google OSV-Scanner, Anchore Syft/Grype,
+#          Aqua Trivy (image + secrets), Sigstore Cosign, GitHub Artifact Attestation
+name: Supply Chain
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+  id-token: write
+  attestations: write
+  packages: write
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: lumen-supply
+  IMAGE_TAG: phase3-${{ github.sha }}
+
+jobs:
+  dependency-review:
+    name: GitHub Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review (official GitHub)
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          warn-on-openssf-scorecard-level: 5
+
+  osv-scanner:
+    name: Google OSV-Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: OSV-Scanner (official Google container)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src:ro"             ghcr.io/google/osv-scanner:latest             scan --recursive --skip-git /src
+
+  syft-sbom:
+    name: Syft SBOM (Anchore)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+      - name: CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+      - name: Require non-empty SBOMs
+        run: |
+          test -s sbom.spdx.json
+          test -s sbom.cdx.json
+          wc -c sbom.spdx.json sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom.spdx.json
+            sbom.cdx.json
+          retention-days: 90
+
+  grype:
+    name: Grype (Anchore) fail on HIGH+
+    runs-on: ubuntu-latest
+    needs: [syft-sbom]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grype directory scan
+        uses: anchore/scan-action@v6
+        id: grype
+        with:
+          path: "."
+          severity-cutoff: high
+          fail-build: true
+          output-format: sarif
+      - name: Upload Grype SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype
+        continue-on-error: true
+
+  trivy-secrets:
+    name: Trivy secret scan (Aqua)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Trivy filesystem secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "1"
+          format: table
+
+  build-sign-scan:
+    name: Build image + Trivy + Cosign + Attest
+    runs-on: ubuntu-latest
+    needs: [grype, trivy-secrets]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production image (hardened Dockerfile)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
+
+      - name: Trivy image CVE (CRITICAL/HIGH fail)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: false
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Trivy image secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          scanners: secret
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "1"
+          format: table
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+        continue-on-error: true
+
+      - name: Install Cosign (Sigstore official)
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Cosign keyless sign (OIDC)
+        if: github.event_name != 'pull_request'
+        run: |
+          # Sign local image digest reference (keyless via GitHub OIDC)
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" 2>/dev/null || true)
+          if [ -z "$DIGEST" ]; then
+            # Tag into a pseudo ref for local cosign save
+            docker tag "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" "ghcr.io/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+            cosign sign-blob --yes \
+              --bundle cosign-bundle.json \
+              <(docker save "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" | sha256sum | awk '{print $1}' | tr -d '\n' | tee image.sha256)
+            echo "signed blob of image checksum"
+            cat image.sha256
+          else
+            cosign sign --yes "$DIGEST"
+          fi
+
+      - name: Attest build provenance (GitHub official)
+        if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: sha256:${{ github.sha }}
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supply-chain-artifacts
+          path: |
+            trivy-image.sarif
+            cosign-bundle.json
+            image.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+  admission-gate:
+    name: Phase-3 admission gate
+    runs-on: ubuntu-latest
+    needs: [osv-scanner, grype, trivy-secrets, build-sign-scan, syft-sbom]
+    if: always()
+    steps:
+      - name: All required engines must succeed
+        run: |
+          echo "osv=${{ needs.osv-scanner.result }}"
+          echo "grype=${{ needs.grype.result }}"
+          echo "secrets=${{ needs.trivy-secrets.result }}"
+          echo "build=${{ needs.build-sign-scan.result }}"
+          echo "sbom=${{ needs.syft-sbom.result }}"
+          for r in "${{ needs.osv-scanner.result }}" "${{ needs.grype.result }}" \
+                    "${{ needs.trivy-secrets.result }}" "${{ needs.build-sign-scan.result }}" \
+                    "${{ needs.syft-sbom.result }}"; do
+            if [ "$r" != "success" ]; then
+              echo "ADMISSION DENIED: $r"
+              exit 1
+            fi
+          done
+          echo "ADMISSION OK"

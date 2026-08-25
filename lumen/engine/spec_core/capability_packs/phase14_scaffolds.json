@@ -1,0 +1,40 @@
+{
+  "id": "phase14_scaffolds",
+  "version": "1.1.0",
+  "name": "Phase 14 extended scaffolds",
+  "description": "Voice intake + payment info + FAQ scaffolds",
+  "source": "local",
+  "enabled": true,
+  "capabilities": [
+    {
+      "key": "scaffold_voice",
+      "service": "utils",
+      "method": "voice_intake",
+      "description_ar": "استقبال ملاحظة صوتية (scaffold)",
+      "description_en": "Voice note intake scaffold",
+      "category": "utils",
+      "default_actor": "user",
+      "keywords": ["صوت", "ملاحظة صوتية", "voice note", "speech", "تحويل صوت", "voice message", "رسالة صوتية"]
+    },
+    {
+      "key": "scaffold_payment_info",
+      "service": "utils",
+      "method": "payment_info",
+      "description_ar": "معلومات الدفع اليدوي",
+      "description_en": "Manual payment info",
+      "category": "payments",
+      "default_actor": "user",
+      "keywords": ["دفع يدوي", "تحويل بنكي", "vodafone cash", "فودافون كاش", "payment info", "طرق الدفع"]
+    },
+    {
+      "key": "scaffold_faq_bot",
+      "service": "content",
+      "method": "faq",
+      "description_ar": "أسئلة شائعة",
+      "description_en": "FAQ answers",
+      "category": "content",
+      "default_actor": "user",
+      "keywords": ["اسئلة شائعة", "faq", "سؤال وجواب", "مساعدة متكررة"]
+    }
+  ]
+}

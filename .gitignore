@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Output directories (but not the telegram_bot_engine/output package)
+outputs/
+tmp/
+*.log
+
+# Browser/agent data
+.browser_data/
+.agent_hooks/
+.summarized_conversations/
+.psiphon_data/
+
+# Secrets & env
+.env
+.env.local
+.env.*.local
+
+# Generated projects on the server
+/tmp/
+generated/
+data/*.sqlite3*
+data/*.sqlite3*
+
+# local memory DB
+/data/**
+!/data/.gitkeep
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+
+# Local audit / agent artifacts
+artifacts/
+audit_*/
+.ah_import_stub/
+*.bak
+*.orig
+*.tmp

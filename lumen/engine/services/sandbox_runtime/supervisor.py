@@ -1,0 +1,165 @@
+"""Sandbox supervisor — reap, lifetime, usage heartbeats with real labels/stats."""
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import time
+from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
+
+
+def _docker(args: List[str], timeout: float = 30.0) -> tuple[int, str]:
+    try:
+        p = subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return p.returncode, (p.stdout or "")
+    except Exception as exc:
+        return 1, f"{type(exc).__name__}:{exc}"
+
+
+def list_managed_containers() -> List[Dict[str, Any]]:
+    """List managed containers with full label map via inspect."""
+    code, out = _docker(
+        ["ps", "-a", "--filter", "label=tbe.managed=1", "--format", "{{.ID}}"]
+    )
+    rows: List[Dict[str, Any]] = []
+    if code != 0:
+        return rows
+    for cid in (out or "").splitlines():
+        cid = cid.strip()
+        if not cid:
+            continue
+        c2, insp = _docker(
+            [
+                "inspect",
+                "--format",
+                '{{json .}}',
+                cid,
+            ],
+            timeout=15.0,
+        )
+        labels: Dict[str, str] = {}
+        name = ""
+        status = ""
+        if c2 == 0 and insp.strip():
+            try:
+                import json
+                data = json.loads(insp)
+                labels = {str(k): str(v) for k, v in (data.get("Config", {}).get("Labels") or {}).items()}
+                name = (data.get("Name") or "").lstrip("/")
+                status = (data.get("State", {}) or {}).get("Status") or ""
+            except Exception:
+                pass
+        if not labels:
+            # fallback format
+            c3, line = _docker(
+                [
+                    "ps", "-a", "--filter", f"id={cid}",
+                    "--format",
+                    '{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Label "tbe.tenant_id"}}\t{{.Label "tbe.bot_id"}}\t{{.Label "tbe.user"}}',
+                ]
+            )
+            if c3 == 0 and line.strip():
+                parts = line.strip().split("\t")
+                name = parts[1] if len(parts) > 1 else ""
+                status = parts[2] if len(parts) > 2 else ""
+                if len(parts) > 3 and parts[3]:
+                    labels["tbe.tenant_id"] = parts[3]
+                if len(parts) > 4 and parts[4]:
+                    labels["tbe.bot_id"] = parts[4]
+                if len(parts) > 5 and parts[5]:
+                    labels["tbe.user"] = parts[5]
+        rows.append(
+            {
+                "id": cid,
+                "name": name,
+                "status": status,
+                "labels": labels,
+                "user": labels.get("tbe.user") or "",
+                "tenant_id": labels.get("tbe.tenant_id") or "",
+                "bot_id": labels.get("tbe.bot_id") or "",
+            }
+        )
+    return rows
+
+
+def reap_exited(*, remove: bool = True) -> int:
+    n = 0
+    for c in list_managed_containers():
+        st = (c.get("status") or "").lower()
+        if st.startswith("exited") or st.startswith("dead") or st == "exited":
+            if remove:
+                _docker(["rm", "-f", c["id"]])
+            n += 1
+    return n
+
+
+def enforce_max_lifetime() -> int:
+    max_sec = int((os.environ.get("TBE_BOT_MAX_LIFETIME_SEC") or "0").strip() or "0")
+    if max_sec <= 0:
+        return 0
+    killed = 0
+    for c in list_managed_containers():
+        cid = c.get("id") or ""
+        if not cid:
+            continue
+        c2, started = _docker(["inspect", "-f", "{{.State.StartedAt}}", cid])
+        if c2 != 0:
+            continue
+        try:
+            p = subprocess.run(
+                ["date", "-d", started.strip(), "+%s"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if p.returncode != 0:
+                continue
+            started_ts = int(p.stdout.strip())
+            if time.time() - started_ts > max_sec:
+                _docker(["rm", "-f", cid])
+                killed += 1
+                logger.warning("supervisor killed over-lifetime container %s", cid[:12])
+        except Exception:
+            continue
+    return killed
+
+
+def supervisor_tick() -> Dict[str, int]:
+    reaped = reap_exited(remove=True)
+    lifetime_killed = enforce_max_lifetime()
+    heartbeats = 0
+    try:
+        from lumen.engine.services.usage.heartbeat import emit_host_heartbeat
+        for c in list_managed_containers():
+            st = (c.get("status") or "").lower()
+            if st and st not in {"running", "up"} and not st.startswith("up"):
+                continue
+            labels = c.get("labels") if isinstance(c.get("labels"), dict) else {}
+            tenant_id = str(
+                labels.get("tbe.tenant_id") or c.get("tenant_id") or ""
+            ).strip()
+            bot_id = str(
+                labels.get("tbe.bot_id") or c.get("bot_id") or c.get("name") or c.get("id") or ""
+            ).strip()[:120]
+            if not tenant_id or not bot_id:
+                continue
+            r = emit_host_heartbeat(
+                tenant_id=tenant_id,
+                bot_id=bot_id,
+                container_id=str(c.get("id") or ""),
+            )
+            if r.get("ok"):
+                heartbeats += 1
+    except Exception:
+        logger.debug("usage heartbeat skipped", exc_info=True)
+    return {
+        "reaped": reaped,
+        "lifetime_killed": lifetime_killed,
+        "heartbeats": heartbeats,
+    }

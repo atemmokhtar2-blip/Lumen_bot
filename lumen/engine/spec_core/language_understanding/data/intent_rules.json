@@ -1,0 +1,51 @@
+{
+  "prefer_security_over_shop": {
+    "when": [
+      "security",
+      "shop"
+    ],
+    "prefer": "security",
+    "if_security_score_ratio_gte": 0.7
+  },
+  "prefer_shop_over_delivery": {
+    "when": [
+      "shop",
+      "delivery"
+    ],
+    "prefer": "shop",
+    "always": true
+  },
+  "prefer_shop_over_payments": {
+    "when": [
+      "shop",
+      "payments"
+    ],
+    "prefer": "shop",
+    "always": true
+  },
+  "prefer_clinic_over_booking": {
+    "when": [
+      "clinic",
+      "booking"
+    ],
+    "prefer": "clinic",
+    "if_clinic_present": true
+  },
+  "prefer_moderation_over_security": {
+    "when": [
+      "moderation",
+      "security"
+    ],
+    "prefer": "moderation",
+    "if_mod_keywords": [
+      "حظر",
+      "كتم",
+      "تحذير",
+      "ban",
+      "mute",
+      "warn",
+      "جروب",
+      "مجموعة"
+    ]
+  }
+}

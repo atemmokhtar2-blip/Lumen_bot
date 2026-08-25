@@ -1,0 +1,27 @@
+# Local stand-in for managed Postgres + private registry.
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tbe
+      POSTGRES_PASSWORD: tbe_change_me
+      POSTGRES_DB: tbe
+    ports:
+      - "5432:5432"
+    volumes:
+      - tbe_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tbe -d tbe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  registry:
+    image: registry:2
+    ports:
+      - "5000:5000"
+    volumes:
+      - tbe_registry:/var/lib/registry
+volumes:
+  tbe_pg:
+  tbe_registry:

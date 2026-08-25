@@ -1,0 +1,297 @@
+# World-class security pipeline — defense in depth
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"      # daily credits + surface scan
+    - cron: "0 6 * * 1"      # weekly deep (scorecard-oriented window)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Secrets ──────────────────────────────────────────
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 2. Dependency CVEs + SBOM ───────────────────────────
+  dependencies:
+    name: Dependencies (pip-audit + SBOM)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          pip install -U pip
+          pip install -r requirements-security.txt
+          pip install cyclonedx-bom
+      - name: pip-audit (fail on known CVE)
+        run: |
+          pip-audit -r requirements.txt \
+            --progress-spinner off \
+            --desc on \
+            --format json \
+            -o pip-audit.json \
+            || { echo "::error::pip-audit: known vulnerabilities in requirements.txt"; cat pip-audit.json || true; exit 1; }
+      - name: Generate CycloneDX SBOM
+        run: |
+          pip install -r requirements.txt -q 2>/dev/null || true
+          cyclonedx-py environment -o sbom.cdx.json 2>/dev/null \
+            || cyclonedx-py requirements requirements.txt -o sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-artifacts
+          path: |
+            pip-audit.json
+            sbom.cdx.json
+          retention-days: 30
+
+  # ── 3. SAST — Bandit (Python) ───────────────────────────
+  sast-bandit:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: pip install -U -r requirements-security.txt
+      - name: Bandit scan (report medium+, fail on HIGH)
+        run: |
+          TARGETS="lumen/platform lumen/api lumen/engine/security lumen/engine/services/tool_runtime lumen/engine/services/sandbox_runtime lumen/bot/middlewares"
+          bandit -r $TARGETS -c pyproject.toml -f txt -ll -s B101,B601 -o bandit-report.txt || true
+          tail -100 bandit-report.txt || true
+          bandit -r $TARGETS -c pyproject.toml -f json -ll -s B101,B601 -o bandit.json || true
+          bandit -r $TARGETS -c pyproject.toml -lll -s B101,B601 \
+            || { echo "::error::bandit HIGH severity findings"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-report
+          path: |
+            bandit-report.txt
+            bandit.json
+          retention-days: 30
+
+  # ── 4. SAST — Semgrep (custom + severity ERROR) ─────────
+  sast-semgrep:
+    name: SAST (semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install semgrep
+        run: pip install -U -r requirements-security.txt
+      - name: Custom Lumen rules (fail on match)
+        run: |
+          semgrep scan --config semgrep/ --error --metrics off \
+            --exclude tests --exclude sdks \
+            || { echo "::error::custom semgrep rules failed"; exit 1; }
+      - name: OWASP / security-audit (ERROR severity only)
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --severity ERROR \
+            --error \
+            --metrics off \
+            --exclude tests --exclude sdks \
+            --sarif -o semgrep.sarif \
+            || { echo "::error::semgrep ERROR findings"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 30
+
+  # ── 5. CodeQL ───────────────────────────────────────────
+  codeql:
+    name: CodeQL (Python)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
+  # ── 6. Container / filesystem (Trivy) ───────────────────
+  trivy:
+    name: Trivy (fs + Dockerfile)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem (CRITICAL/HIGH) — real engine, fail closed
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Trivy config (Dockerfile misconfig) — fail closed
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          format: table
+      - name: Upload Trivy SARIF
+        if: always() && github.actor != 'dependabot[bot]'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+        continue-on-error: true
+
+  # ── 7. OSSF Scorecard ───────────────────────────────────
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - name: Upload Scorecard SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: ossf-scorecard
+        continue-on-error: true
+
+  # ── 8. Credits integrity (logic bugs = money bugs) ──────
+  credits-integrity:
+    name: Credits integrity + privilege tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Ledger + welcome + privilege gates
+        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py tests/test_security_baseline.py tests/test_security_attack_surface.py tests/test_security_idor_dast.py -q --tb=short
+
+  # ── 9. Daily / on-demand credits health ─────────────────
+  credits-health-monitor:
+    name: Credits health monitor
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Promo burn + drift
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CREDITS_MONITOR_FAIL_ON_DRIFT: "1"
+        run: python scripts/security/credits_health_monitor.py
+
+  # ── 10. API security baseline script ────────────────────
+  api-baseline:
+    name: API & policy security baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt 2>/dev/null || true
+      - name: Static security baseline
+        run: |
+          python scripts/security/security_baseline_check.py --strict
+          python scripts/security/dast_api_probe.py
+
+
+  phase1-gate:
+    name: Phase-1 security gate
+    runs-on: ubuntu-latest
+    needs: [secrets, dependencies, sast-bandit, sast-semgrep, codeql, trivy, credits-integrity, api-baseline]
+    if: always()
+    steps:
+      - name: Required phase-1 engines must succeed
+        run: |
+          for r in \
+            "${{ needs.secrets.result }}" \
+            "${{ needs.dependencies.result }}" \
+            "${{ needs.sast-bandit.result }}" \
+            "${{ needs.sast-semgrep.result }}" \
+            "${{ needs.codeql.result }}" \
+            "${{ needs.trivy.result }}" \
+            "${{ needs.credits-integrity.result }}" \
+            "${{ needs.api-baseline.result }}"; do
+            echo "result=$r"
+            if [ "$r" != "success" ]; then echo "PHASE1 DENIED"; exit 1; fi
+          done
+          echo "PHASE1 OK"

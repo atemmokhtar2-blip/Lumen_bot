@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+# Dockerfile pins Python 3.10 and installs the bot runtime dependencies.
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

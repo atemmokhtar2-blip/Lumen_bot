@@ -1,0 +1,4 @@
+# Real security engines (CI + local) — not application runtime deps
+bandit>=1.7.9
+pip-audit>=2.7.3
+semgrep>=1.80.0

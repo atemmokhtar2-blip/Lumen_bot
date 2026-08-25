@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: Lumen B2B API  # identity: lumen.identity.API_TITLE
+  version: 1.1.0
+  description: |
+    Multi-tenant Telegram bot generation platform.
+    Auth: header `X-Api-Key` or `Authorization: Bearer <api_key>`.
+servers:
+  - url: /
+    description: API root
+tags:
+  - name: health
+  - name: tenants
+  - name: generate
+  - name: jobs
+  - name: hosts
+  - name: billing
+  - name: dashboard
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: OK
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness
+      security: []
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+  /openapi.yaml:
+    get:
+      tags: [health]
+      summary: OpenAPI document
+      security: []
+      responses:
+        "200":
+          description: YAML
+  /docs:
+    get:
+      tags: [health]
+      summary: Swagger UI
+      security: []
+      responses:
+        "200": { description: HTML }
+  /v1/plans:
+    get:
+      tags: [billing]
+      summary: List plans
+      security: []
+      responses:
+        "200": { description: OK }
+  /v1/tenants:
+    post:
+      tags: [tenants]
+      summary: Create tenant (admin)
+      responses:
+        "201": { description: Created }
+  /v1/me:
+    get:
+      tags: [tenants]
+      summary: Current tenant
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/me/rotate_key:
+    post:
+      tags: [tenants]
+      summary: Rotate API key
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: New key }
+  /v1/me/white-label:
+    patch:
+      tags: [tenants]
+      summary: Update white-label settings
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/generate:
+    post:
+      tags: [generate]
+      summary: Enqueue bot generation
+      security: [{ ApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description]
+              properties:
+                description: { type: string, minLength: 3, maxLength: 20000 }
+                wait: { type: boolean }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+        "402": { description: Quota / payment }
+        "429": { description: Rate limited }
+  /v1/jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Get job
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Job" }
+  /v1/hosts:
+    get:
+      tags: [hosts]
+      summary: Host status list
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/hosts/start:
+    post:
+      tags: [hosts]
+      summary: Start hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/hosts/stop:
+    post:
+      tags: [hosts]
+      summary: Stop hosted bot
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/hosts/diagnose:
+    post:
+      tags: [hosts]
+      summary: Diagnose host
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/usage:
+    get:
+      tags: [billing]
+      summary: Usage
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/invoices:
+    get:
+      tags: [billing]
+      summary: List invoices
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [billing]
+      summary: Create invoice
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "201": { description: Created }
+  /v1/billing/checkout:
+    post:
+      tags: [billing]
+      summary: Stripe checkout session
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/billing/portal:
+    post:
+      tags: [billing]
+      summary: Stripe customer portal
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+  /v1/dashboard:
+    get:
+      tags: [dashboard]
+      summary: Dashboard overview
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        "200": { description: OK }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+  schemas:
+    Job:
+      type: object
+      properties:
+        ok: { type: boolean }
+        job_id: { type: string }
+        status: { type: string }
+        message: { type: string }
+        tenant_id: { type: string }
+security:
+  - ApiKeyAuth: []

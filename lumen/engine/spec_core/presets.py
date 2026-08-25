@@ -1,0 +1,1593 @@
+"""Zero-AI presets: map plain-language requests to BotSpec packs.
+
+Used when the user asks for a common bot type (e.g. group management)
+without going through the button builder or any LLM.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Iterable
+
+from .acceptance_packs import tests_for_preset
+from .builder import BuilderSession
+from .schema import BotSpec
+from .seed_packs import seed_for_preset
+
+
+def _load_preset_data() -> dict[str, object]:
+    """Load keyword/caps catalogs from JSON (data lives outside this module).
+
+    Search order prefers non-gitignored package paths so the catalog survives
+    normal checkouts. Root ``/data`` remains a supported override for local ops.
+    """
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[1] / "data" / "preset_keywords.json",          # lumen.engine/data/
+        here.parents[2] / "data" / "preset_keywords.json",          # repo root /data/ (may be gitignored)
+        here.with_name("preset_keywords.json"),                     # beside this module
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                value = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(value, dict) and value:
+                    return value
+        except (OSError, ValueError, TypeError):
+            continue
+    return {}
+
+
+_PRESET_DATA = _load_preset_data()
+
+
+def _pack_from_prefixes(
+    prefixes: tuple[str, ...],
+    *,
+    limit: int = 64,
+    extra: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Real registry keys for a domain (prefix_action) — not phantom labels."""
+    from .registry import CAPABILITIES
+
+    out: list[str] = ["start", "help"]
+    for e in extra:
+        if e in CAPABILITIES or e in {"start", "help", "lang"}:
+            out.append(e)
+    prefer = (
+        "list", "view", "create", "search", "status", "stats", "track", "history",
+        "approve", "assign", "checkout", "buy", "sell", "ship", "deliver", "pay",
+        "transfer", "refund", "subscribe", "renew", "upgrade", "start_trial",
+        "dashboard", "balance", "invoice", "payout", "bid", "catalog",
+    )
+    for action in prefer:
+        for pref in prefixes:
+            key = f"{pref}_{action}"
+            if key in CAPABILITIES and key not in out:
+                out.append(key)
+                if len(out) >= limit:
+                    return tuple(dict.fromkeys(out))
+    for pref in prefixes:
+        for key in CAPABILITIES:
+            if key.startswith(pref + "_") and key not in out:
+                out.append(key)
+                if len(out) >= limit:
+                    return tuple(dict.fromkeys(out))
+    out.append("lang")
+    return tuple(dict.fromkeys(out))
+
+
+
+def _request_intensity(request: str, presets: list[str] | None = None) -> str:
+    """simple | medium | complex — drives pack size caps."""
+    presets = list(presets or [])
+    t = _norm(request or "")
+    complex_domains = {"saas", "marketplace", "logistics", "finance", "commerce_pro"}
+    n_complex = sum(1 for d in presets if d in complex_domains)
+    enterprise = any(
+        k in t
+        for k in (
+            "enterprise", "all-in-one", "all in one", "منصة", "suite", "operating system",
+            "متكامل", "شامل", "ضخم", "multi-tenant", "multi vendor", "multi-vendor",
+            "globally", "production grade", "6 month", "شهر", "platform",
+        )
+    )
+    rich = len(t) > 180 or t.count(",") + t.count("،") >= 4 or t.count("+") >= 2
+    if n_complex >= 2 or (enterprise and n_complex >= 1) or (enterprise and rich):
+        return "complex"
+    if n_complex == 1 or any(
+        d in presets
+        for d in ("shop", "crm", "education", "wallet", "subscriptions", "growth", "creator")
+    ):
+        # single domain / shop-scale → medium unless ultra-short simple phrase
+        if len(t) < 28 and n_complex == 0:
+            return "simple"
+        return "medium"
+    return "simple"
+
+
+def _pack_limit_for(intensity: str, *, primary: bool) -> int:
+    if intensity == "complex":
+        return 72 if primary else 48
+    if intensity == "medium":
+        return 28 if primary else 12
+    return 8 if primary else 0
+
+
+# keyword packs (Arabic + English), lowercase match
+_GROUP_KEYS = tuple(_PRESET_DATA.get("_GROUP_KEYS", ()))
+_TASK_KEYS = tuple(_PRESET_DATA.get("_TASK_KEYS", ()))
+_SUPPORT_KEYS = tuple(_PRESET_DATA.get("_SUPPORT_KEYS", ()))
+_NOTES_KEYS = tuple(_PRESET_DATA.get("_NOTES_KEYS", ()))
+_SHOP_KEYS = tuple(_PRESET_DATA.get("_SHOP_KEYS", ()))
+_SUB_KEYS = tuple(_PRESET_DATA.get("_SUB_KEYS", ()))
+_POINTS_KEYS = tuple(_PRESET_DATA.get("_POINTS_KEYS", ()))
+_CONTEST_KEYS = tuple(_PRESET_DATA.get("_CONTEST_KEYS", ()))
+_I18N_KEYS = tuple(_PRESET_DATA.get("_I18N_KEYS", ()))
+_BOOK_KEYS = tuple(_PRESET_DATA.get("_BOOK_KEYS", ()))
+_HR_KEYS = tuple(_PRESET_DATA.get("_HR_KEYS", ()))
+_SECURITY_KEYS = tuple(_PRESET_DATA.get("_SECURITY_KEYS", ()))
+
+_GROUP_CAPS = tuple(_PRESET_DATA.get("_GROUP_CAPS", ()))
+_TASK_CAPS = tuple(_PRESET_DATA.get("_TASK_CAPS", ()))
+_SUPPORT_CAPS = tuple(_PRESET_DATA.get("_SUPPORT_CAPS", ()))
+_NOTES_CAPS = tuple(_PRESET_DATA.get("_NOTES_CAPS", ()))
+_SECURITY_CAPS = tuple(_PRESET_DATA.get("_SECURITY_CAPS", ()))
+_SHOP_CAPS = tuple(_PRESET_DATA.get("_SHOP_CAPS", ()))
+_SUB_CAPS = tuple(_PRESET_DATA.get("_SUB_CAPS", ()))
+_POINTS_CAPS = tuple(_PRESET_DATA.get("_POINTS_CAPS", ()))
+_CONTEST_CAPS = tuple(_PRESET_DATA.get("_CONTEST_CAPS", ()))
+_GROWTH_CAPS = tuple(_PRESET_DATA.get("_GROWTH_CAPS", ()))
+_CRM_CAPS = tuple(_PRESET_DATA.get("_CRM_CAPS", ()))
+_SUPPORT_PRO_CAPS = tuple(_PRESET_DATA.get("_SUPPORT_PRO_CAPS", ()))
+_EDU_CAPS = tuple(_PRESET_DATA.get("_EDU_CAPS", ()))
+_RESTAURANT_CAPS = tuple(_PRESET_DATA.get("_RESTAURANT_CAPS", ()))
+_JOBS_CAPS = tuple(_PRESET_DATA.get("_JOBS_CAPS", ()))
+_MARKETPLACE_CAPS = tuple(_PRESET_DATA.get("_MARKETPLACE_CAPS", ()))
+_SAAS_CAPS = tuple(_PRESET_DATA.get("_SAAS_CAPS", ()))
+
+
+def _saas_pack(*, limit: int = 72) -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "saas", "seat", "plan3", "billing2", "meter", "quota", "subscription2",
+            "trial2", "addon2", "workspace2", "org", "team2", "rbac", "flag2",
+            "webhook3", "apikey", "oauth2",
+        ),
+        limit=limit,
+        extra=_SAAS_CAPS,
+    )
+
+
+def _marketplace_pack(*, limit: int = 72) -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "mkt", "listing2", "vendor2", "buyer", "offer2", "bid2", "escrow",
+            "payout2", "commission2", "catalog2", "storefront", "auction3",
+            "rfq2", "quote2", "dispute3", "review3",
+        ),
+        limit=limit,
+        extra=_MARKETPLACE_CAPS,
+    )
+
+
+def _logistics_pack(*, limit: int = 72) -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "logi", "ship4", "fleet2", "route3", "hub2", "dock2", "warehouse4",
+            "courier2", "manifest", "lane", "container", "lastmile", "pod2",
+            "eta2", "load2", "trip",
+        ),
+        limit=limit,
+        extra=("start", "help", "order_track", "order_status", "lang"),
+    )
+
+
+def _finance_pack(*, limit: int = 72) -> tuple[str, ...]:
+    return _pack_from_prefixes(
+        (
+            "fin", "ledger2", "journal", "payout3", "settle2", "recon", "treasury",
+            "fx", "card3", "wallet3", "loan2", "credit2", "limit2", "kyc2", "aml2",
+            "invoice4", "receivable", "payable", "tax3", "fee2",
+        ),
+        limit=limit,
+        extra=("start", "help", "wallet_balance", "wallet_topup", "lang"),
+    )
+
+_COMMUNITY_CAPS = tuple(_PRESET_DATA.get("_COMMUNITY_CAPS", ()))
+_EVENTS_CAPS = tuple(_PRESET_DATA.get("_EVENTS_CAPS", ()))
+_WALLET_CAPS = tuple(_PRESET_DATA.get("_WALLET_CAPS", ()))
+# Creator monetization (digital content + tips + membership gate)
+_CREATOR_CAPS = tuple(_PRESET_DATA.get("_CREATOR_CAPS", ()))
+# All-in-one commerce pro — densest market pack for launch day
+_COMMERCE_PRO_CAPS = tuple(dict.fromkeys(
+    list(_SHOP_CAPS)
+    + list(_SUB_CAPS)
+    + list(_POINTS_CAPS)
+    + list(_GROWTH_CAPS)
+    + list(_WALLET_CAPS)
+    + [
+        "payment_precheckout", "payment_success", "analytics_overview",
+        "analytics_revenue", "admin_users", "coupon_create", "refund_request",
+        "refund_approve", "stock_set", "broadcast_segment",
+    ]
+))
+
+_CREATOR_KEYS = tuple(_PRESET_DATA.get("_CREATOR_KEYS", ()))
+_COMMERCE_PRO_KEYS = tuple(_PRESET_DATA.get("_COMMERCE_PRO_KEYS", ()))
+
+_GROWTH_KEYS = tuple(_PRESET_DATA.get("_GROWTH_KEYS", ()))
+_CRM_KEYS = tuple(_PRESET_DATA.get("_CRM_KEYS", ()))
+_EDU_KEYS = tuple(_PRESET_DATA.get("_EDU_KEYS", ()))
+_RESTAURANT_KEYS = tuple(_PRESET_DATA.get("_RESTAURANT_KEYS", ()))
+_JOBS_KEYS = tuple(_PRESET_DATA.get("_JOBS_KEYS", ()))
+_MARKETPLACE_KEYS = tuple(_PRESET_DATA.get("_MARKETPLACE_KEYS", ()))
+_SAAS_KEYS = tuple(_PRESET_DATA.get("_SAAS_KEYS", ()))
+_LOGISTICS_KEYS = tuple(_PRESET_DATA.get("_LOGISTICS_KEYS", ()))
+_FINANCE_KEYS = tuple(_PRESET_DATA.get("_FINANCE_KEYS", ()))
+_COMMUNITY_KEYS = tuple(_PRESET_DATA.get("_COMMUNITY_KEYS", ()))
+_EVENTS_KEYS = tuple(_PRESET_DATA.get("_EVENTS_KEYS", ()))
+_WALLET_KEYS = tuple(_PRESET_DATA.get("_WALLET_KEYS", ()))
+_SUPPORT_PRO_KEYS = tuple(_PRESET_DATA.get("_SUPPORT_PRO_KEYS", ()))
+
+
+
+_FITNESS_CAPS = tuple(_PRESET_DATA.get("_FITNESS_CAPS", ()))
+_REALESTATE_CAPS = tuple(_PRESET_DATA.get("_REALESTATE_CAPS", ()))
+_CLINIC_CAPS = tuple(_PRESET_DATA.get("_CLINIC_CAPS", ()))
+_AUCTION_CAPS = tuple(_PRESET_DATA.get("_AUCTION_CAPS", ()))
+_DELIVERY_CAPS = tuple(_PRESET_DATA.get("_DELIVERY_CAPS", ()))
+
+_FITNESS_KEYS = tuple(_PRESET_DATA.get("_FITNESS_KEYS", ()))
+_REALESTATE_KEYS = tuple(_PRESET_DATA.get("_REALESTATE_KEYS", ()))
+_CLINIC_KEYS = tuple(_PRESET_DATA.get("_CLINIC_KEYS", ()))
+_AUCTION_KEYS = tuple(_PRESET_DATA.get("_AUCTION_KEYS", ()))
+_DELIVERY_KEYS = tuple(_PRESET_DATA.get("_DELIVERY_KEYS", ()))
+
+# Modern verticals (zero-AI keyword packs)
+_IOT_KEYS = tuple(_PRESET_DATA.get("_IOT_KEYS", ()))
+_BLOCKCHAIN_KEYS = tuple(_PRESET_DATA.get("_BLOCKCHAIN_KEYS", ()))
+_AI_KEYS = tuple(_PRESET_DATA.get("_AI_KEYS", ()))
+_DEVOPS_KEYS = tuple(_PRESET_DATA.get("_DEVOPS_KEYS", ()))
+_GAMING_KEYS = tuple(_PRESET_DATA.get("_GAMING_KEYS", ()))
+
+_IOT_CAPS = tuple(_PRESET_DATA.get("_IOT_CAPS", ()))
+_BLOCKCHAIN_CAPS = tuple(_PRESET_DATA.get("_BLOCKCHAIN_CAPS", ()))
+_AI_CAPS = tuple(_PRESET_DATA.get("_AI_CAPS", ()))
+_DEVOPS_CAPS = tuple(_PRESET_DATA.get("_DEVOPS_CAPS", ()))
+_GAMING_CAPS = tuple(_PRESET_DATA.get("_GAMING_CAPS", ()))
+
+
+def _norm(text: str) -> str:
+    """Normalize whitespace + light Arabic orthography (no heavy NLP deps)."""
+    t = (text or "").strip().lower()
+    # strip Arabic diacritics
+    t = re.sub(r"[\u064B-\u065F\u0670]", "", t)
+    # alef variants → ا
+    t = t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ٱ", "ا")
+    # taa marbuta → ه for matching flexibility
+    t = t.replace("ة", "ه")
+    # alef maqsura → ي
+    t = t.replace("ى", "ي")
+    return re.sub(r"\s+", " ", t)
+
+
+def _has_any(text: str, keys: Iterable[str]) -> bool:
+    t = _norm(text)
+    return any(k in t for k in keys)
+
+
+
+def _token_hit(t: str, k: str) -> bool:
+    k = (k or "").strip().lower()
+    if not k or k not in t:
+        return False
+    if len(k) <= 3:
+        idx = 0
+        while True:
+            i = t.find(k, idx)
+            if i < 0:
+                return False
+            before = t[i - 1] if i > 0 else " "
+            after = t[i + len(k)] if i + len(k) < len(t) else " "
+            def _wc(ch: str) -> bool:
+                return ch.isalnum() or ("؀" <= ch <= "ۿ")
+            if not _wc(before) and not _wc(after):
+                return True
+            idx = i + 1
+        return False
+    return True
+
+
+def _score_keys(text: str, keys: Iterable[str], weight: float = 1.0) -> float:
+    """Longest-phrase-first scoring with span neutralization.
+
+    Longer explicit phrases (e.g. «موعد المهمة», «حجز موعد») outrank short
+    shared tokens so booking cannot steal a pure tasks request.
+    """
+    t = _norm(text)
+    ordered = sorted({(k or "").strip().lower() for k in keys if k}, key=len, reverse=True)
+    matched: list[str] = []
+    mask = t
+    for k in ordered:
+        if not k:
+            continue
+        if len(k) <= 3:
+            if not _token_hit(mask, k):
+                continue
+        elif k not in mask:
+            continue
+        matched.append(k)
+        mask = mask.replace(k, " " * len(k), 1)
+    if not matched:
+        return 0.0
+    phrase_bonus = sum(min(len(k), 32) * 0.08 for k in matched)
+    return len(matched) * float(weight) + phrase_bonus
+
+
+
+# Presets that cannot coexist when a family has a clear winner.
+_EXCLUSIVE_FAMILIES: tuple[frozenset[str], ...] = (
+    frozenset({"tasks", "booking", "clinic"}),
+    frozenset({"shop", "commerce_pro", "marketplace", "clinic", "booking"}),
+    frozenset({"tasks", "shop", "commerce_pro", "restaurant"}),
+)
+
+_MEDICAL_ANCHORS = (
+    "عياده", "عيادة", "clinic", "دكتور", "طبيب", "مريض", "hospital", "مستشفي",
+    "مستشفى", "موعد طبي", "وصفه", "وصفة", "صيدليه", "صيدلية", "patient", "doctor",
+)
+_BOOKING_ANCHORS = (
+    "حجز", "booking", "احجز", "صالون", "حلاق", "salon", "باربر", "تجميل",
+)
+_TASK_ANCHORS = (
+    "مهام", "مهمه", "مهمة", "todo", "task", "tasks", "قائمه مهام", "قائمة مهام",
+    "حذف مهمه", "حذف مهمة", "اضافه مهمه", "اضافة مهمة", "إضافة مهمة",
+)
+
+
+def _apply_exclusive_intent_locks(scores: dict[str, float], request: str) -> dict[str, float]:
+    """Foundation conflict engine for preset scoring (Phase B root).
+
+    1) Honour domain_detector.decide() blocked presets (authority from Phase A).
+    2) Inside each exclusive family, keep the winner; zero the losers when
+       margin is clear OR when anchors prove the intent.
+    3) Pure tasks text (task anchors, no medical/booking anchors) always
+       zeroes clinic/booking regardless of residual keyword noise.
+    """
+    out = dict(scores)
+    t = _norm(request or "")
+
+    # Domain-layer vetoes
+    try:
+        from .domain_detector import decide as _domain_decide
+        dec = _domain_decide(request)
+        for bp in dec.blocked_presets:
+            out[bp] = 0.0
+        if dec.primary in {"tasks", "projects"} and dec.confidence >= 0.45:
+            for kill in (
+                "booking", "clinic", "shop", "commerce_pro", "marketplace",
+                "hr", "fitness", "restaurant", "auction", "delivery",
+            ):
+                out[kill] = 0.0
+            out["tasks"] = max(out.get("tasks", 0.0), 10.0)
+            return {k: v for k, v in out.items() if v > 0}
+    except Exception:
+        pass
+
+    task_n = sum(1 for k in _TASK_ANCHORS if k in t)
+    medical = any(k in t for k in _MEDICAL_ANCHORS)
+    booking_a = any(k in t for k in _BOOKING_ANCHORS)
+
+    if task_n >= 1 and not medical and not booking_a:
+        out["booking"] = 0.0
+        out["clinic"] = 0.0
+        out["tasks"] = max(out.get("tasks", 0.0), 6.0 + 2.0 * task_n)
+
+    # Winner-takes-family when one preset clearly leads
+    for family in _EXCLUSIVE_FAMILIES:
+        present = [(n, out.get(n, 0.0)) for n in family if out.get(n, 0.0) > 0]
+        if len(present) < 2:
+            continue
+        present.sort(key=lambda x: -x[1])
+        winner, wscore = present[0]
+        second = present[1][1]
+        # Clear margin OR tasks/clinic special cases
+        if wscore >= second * 1.15 or (winner == "tasks" and task_n >= 1 and not medical):
+            for n, _ in present[1:]:
+                if winner == "tasks" and n in {"booking", "clinic"}:
+                    out[n] = 0.0
+                elif winner == "clinic" and n == "tasks" and medical:
+                    out[n] = 0.0
+                elif wscore >= second * 1.25:
+                    out[n] = 0.0
+
+
+    # Hard gate: booking/clinic scores from LU/arabic_intent cannot stand
+    # without concrete anchors in the request text.
+    if not medical:
+        out["clinic"] = 0.0
+    if not booking_a and not medical:
+        out["booking"] = 0.0
+    return {k: v for k, v in out.items() if v > 0}
+
+
+def score_presets(request: str) -> list[tuple[str, float]]:
+    """Rank preset intents by keyword evidence (multi-intent aware)."""
+    scores: dict[str, float] = {}
+
+    def add(name: str, keys: Iterable[str], weight: float = 1.0) -> None:
+        s = _score_keys(request, keys, weight)
+        if s > 0:
+            scores[name] = scores.get(name, 0.0) + s
+
+    # Higher weights for explicit product packs
+    add("commerce_pro", _COMMERCE_PRO_KEYS, 3.0)
+    add("creator", _CREATOR_KEYS, 2.2)
+    add("saas", _SAAS_KEYS, 2.4)
+    add("marketplace", _MARKETPLACE_KEYS, 2.3)
+    add("logistics", _LOGISTICS_KEYS, 2.3)
+    add("finance", _FINANCE_KEYS, 2.2)
+    add("restaurant", _RESTAURANT_KEYS, 2.0)
+    add("jobs", _JOBS_KEYS, 1.8)
+    add("education", _EDU_KEYS, 1.8)
+    add("events", _EVENTS_KEYS, 1.6)
+    add("wallet", _WALLET_KEYS, 1.6)
+    add("growth", _GROWTH_KEYS, 1.6)
+    add("crm", _CRM_KEYS, 1.6)
+    add("community", _COMMUNITY_KEYS, 1.5)
+    add("contests", _CONTEST_KEYS, 1.5)
+    add("subscriptions", _SUB_KEYS, 1.5)
+    add("points", _POINTS_KEYS, 1.4)
+    add("shop", _SHOP_KEYS, 1.4)
+    add("community", ("اخبار", "أخبار", "news", "نشرة", "feed", "headline"), 1.3)
+    add("support_pro", _SUPPORT_PRO_KEYS, 1.5)
+    add("group_management", _GROUP_KEYS, 2.8)
+    add("support_tickets", _SUPPORT_KEYS, 1.2)
+    add("tasks", _TASK_KEYS, 2.6)
+    add("notes", _NOTES_KEYS, 1.2)
+    add("security_ops", _SECURITY_KEYS, 2.8)
+    add("booking", _BOOK_KEYS, 1.1)
+    add("hr", _HR_KEYS, 1.2)
+    add("fitness", _FITNESS_KEYS, 1.9)
+    add("realestate", _REALESTATE_KEYS, 1.9)
+    add("clinic", _CLINIC_KEYS, 1.9)
+    add("auction", _AUCTION_KEYS, 1.7)
+    add("delivery", _DELIVERY_KEYS, 1.6)
+    add("iot", _IOT_KEYS, 2.6)
+    add("blockchain", _BLOCKCHAIN_KEYS, 2.5)
+    add("ai_assist", _AI_KEYS, 2.2)
+    add("devops", _DEVOPS_KEYS, 2.4)
+    add("gaming", _GAMING_KEYS, 2.0)
+
+    # ── Composite commerce_pro detection (Arabic-first multi-domain) ──
+    # Count independent commerce pillars present in the request text.
+    text_l = (request or "").lower()
+    pillars = {
+        "shop": any(k in text_l for k in ("متجر", "shop", "store", "ecommerce")),
+        "catalog": any(k in text_l for k in ("كتالوج", "catalog", "منتجات", "product", "products")),
+        "cart": any(k in text_l for k in ("سلة", "cart", "checkout", "إتمام شراء")),
+        "orders": any(k in text_l for k in ("طلب", "طلبات", "تتبع", "إلغاء", "الغاء", "استرجاع", "استرداد", "order", "refund", "فاتورة", "فواتير")),
+        "payments": any(k in text_l for k in ("دفع", "مدفوعات", "payment", "invoice", "فواتير")),
+        "subs": any(k in text_l for k in ("اشتراك", "اشتراكات", "خطة", "خطط", "تجربة مجانية", "تجديد", "إهداء", "subscription", "trial", "renew")),
+        "points": any(k in text_l for k in ("نقاط", "ولاء", "متصدرين", "مستويات", "points", "loyalty", "leaderboard")),
+        "wallet": any(k in text_l for k in ("محفظة", "رصيد", "شحن", "wallet", "balance")),
+        "growth": any(k in text_l for k in ("إحالة", "احالة", "دعوة", "سلاسل", "تسجيل يومي", "referral", "streak", "check-in", "checkin")),
+        "contests": any(k in text_l for k in ("مسابقة", "مسابقات", "سحب", "contest", "giveaway", "raffle")),
+        "analytics": any(k in text_l for k in ("تحليلات", "إيرادات", "ايرادات", "إذاعة", "اذاعة", "شرائح", "broadcast", "segment", "analytics")),
+        "support": any(k in text_l for k in ("تذكرة", "تذاكر", "دعم", "قاعدة معرفة", "ticket", "knowledge")),
+        "i18n": any(k in text_l for k in (
+            "ترجمة", "تعدد لغات", "متعدد اللغات", "عربي وانجليزي", "انجليزي وعربي",
+            "/lang", "i18n", "multilingual", "language pack", "تبديل اللغة",
+        )),
+        "admin": any(k in text_l for k in ("أدمن", "ادمن", "صيانة", "مخزون", "admin", "maintenance")),
+    }
+    pillar_count = sum(1 for v in pillars.values() if v)
+    commerce_hits = sum(
+        1
+        for k in ("subscriptions", "points", "wallet", "growth", "contests", "support_tickets", "support_pro")
+        if scores.get(k, 0) > 0
+    )
+    # Explicit suite phrase or many pillars → strong commerce_pro
+    if scores.get("commerce_pro", 0) > 0 or pillar_count >= 4:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 4.0 + 1.5 * max(pillar_count, commerce_hits)
+    elif scores.get("shop", 0) > 0 and (commerce_hits >= 2 or pillar_count >= 3):
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 3.0 * max(commerce_hits, pillar_count - 1)
+    elif pillar_count >= 5:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 2.5 * pillar_count
+    elif commerce_hits >= 3 and scores.get("subscriptions", 0) > 0:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 2.0 * commerce_hits
+
+    # A multi-pillar commerce request must not lose to the raw shop keyword score.
+    # The composite signal is deliberately authoritative once catalog/cart/orders/
+    # payment pillars are independently present.
+    if scores.get("shop", 0.0) > 0 and pillar_count >= 3:
+        scores["commerce_pro"] = max(
+            scores.get("commerce_pro", 0.0),
+            scores["shop"] + 0.25,
+        )
+
+    try:
+        from .arabic_intent_engine import classify_intent, DOMAIN_TO_PRESET
+        for im in classify_intent(request)[:6]:
+            preset = DOMAIN_TO_PRESET.get(im.domain)
+            if preset:
+                scores[preset] = scores.get(preset, 0.0) + float(im.score)
+    except Exception:
+        pass
+
+    # Modern / security verticals: do not let weak commerce pillars steal the stack
+    try:
+        from .domain_detector import detect as _dom_detect
+        doms = set(_dom_detect(request))
+        if "cybersecurity" in doms:
+            sec = scores.get("security_ops", 0.0)
+            if sec > 0:
+                scores["security_ops"] = sec + 6.0
+            if scores.get("commerce_pro", 0):
+                scores["commerce_pro"] = max(0.0, scores["commerce_pro"] - 5.0)
+        # Boost explicit modern presets when domain detector fired
+        for domain, preset in (
+            ("iot", "iot"),
+            ("blockchain", "blockchain"),
+            ("ai_ml", "ai_assist"),
+            ("devops", "devops"),
+            ("gaming", "gaming"),
+            ("healthcare", "clinic"),
+        ):
+            if domain in doms:
+                scores[preset] = scores.get(preset, 0.0) + 5.0
+                if scores.get("commerce_pro", 0) and domain != "ecommerce":
+                    scores["commerce_pro"] = max(0.0, scores["commerce_pro"] - 4.0)
+                if scores.get("saas", 0) and domain in {"iot", "ai_ml", "gaming"}:
+                    scores["saas"] = max(0.0, scores["saas"] - 3.0)
+    except Exception:
+        pass
+
+    # Layer-1 Language Understanding soft boost (synonyms / fuzzy / entities)
+    try:
+        from .language_understanding import understand as _lu
+        from .language_understanding import DOMAIN_TO_PRESET as _LU_MAP
+        _res = _lu(request or "")
+        for d in (_res.domains or [])[:6]:
+            preset = _LU_MAP.get(d.domain)
+            if preset:
+                scores[preset] = scores.get(preset, 0.0) + float(d.score) * 0.85
+        if _res.entities.wants_delivery or _res.entities.payment_methods:
+            scores["shop"] = scores.get("shop", 0.0) + 1.5
+            if any(
+                p in (_res.entities.payment_methods or [])
+                for p in ("visa", "telegram_payments", "vodafone_cash")
+            ):
+                scores["shop"] = scores.get("shop", 0.0) + 1.0
+    except Exception:
+        pass
+
+    # Apply the composite decision after every domain/LU boost so a later raw
+    # shop score cannot undo an already proven multi-pillar commerce request.
+    if scores.get("shop", 0.0) > 0 and pillar_count >= 3:
+        scores["commerce_pro"] = max(
+            scores.get("commerce_pro", 0.0),
+            scores["shop"] + 0.25,
+        )
+
+    # ── Phase B root: exclusive intent families + domain veto ─────────
+    scores = _apply_exclusive_intent_locks(scores, request)
+
+    ranked = sorted(
+        ((n, s) for n, s in scores.items() if s > 0),
+        key=lambda x: (-x[1], x[0]),
+    )
+    return ranked
+
+
+def detect_preset(request: str) -> str | None:
+    """Return best preset id or None (uses ranked multi-intent scoring)."""
+    if _is_minimal_command_bot_request(request):
+        return "echo_basic"
+    ranked = score_presets(request)
+    if not ranked:
+        return None
+    return ranked[0][0]
+
+
+def _request_signals(request: str) -> dict[str, float]:
+    """Fine-grained intent signals for conflict resolution (not just pack scores)."""
+    t = _norm(request)
+    def n(keys: Iterable[str]) -> float:
+        return float(sum(1 for k in keys if _token_hit(t, k)))
+
+    return {
+        "vendor": n(("vendor", "vendors", "بائع", "بائعين", "multi-vendor", "متعدد البائعين", "storefront")),
+        "escrow": n(("escrow", "ضمان", "ضمانة")),
+        "cart": n(("سلة", "cart", "checkout", "إتمام شراء")),
+        "catalog": n(("كتالوج", "catalog", "متجر", "shop", "منتجات")),
+        "fleet": n(("أسطول", "fleet", "مندوب", "courier", "مستودع", "warehouse", "hub")),
+        "track_only": n(("تتبع", "track", "tracking", "شحنة")),
+        "ledger": n(("ledger", "دفتر", "محاسبة", "accounting", "kyc", "aml", "خزينة", "treasury")),
+        "wallet_only": n(("محفظة", "wallet", "شحن رصيد", "topup", "top-up")),
+        "seats": n(("مقعد", "seats", "seat", "tenant", "workspace", "rbac", "sso", "quota")),
+        "trial": n(("trial", "تجربة مجانية", "تجربة")),
+        "commerce_explicit": n((
+            "commerce pro", "متجر متكامل", "متجر احترافي", "متجر كامل", "متجر شامل",
+            "full ecommerce", "commerce suite", "منصة تجارة", "عالمي متكامل",
+            "commerce platform", "all-in-one shop",
+        )),
+        "commerce_rich": n((
+            "كتالوج", "سلة", "كوبون", "فواتير", "مدفوعات", "اشتراك", "نقاط", "محفظة",
+            "إحالة", "مسابقة", "تحليلات", "تذكرة", "استرجاع", "تجربة مجانية", "سلاسل",
+            "إذاعة", "قاعدة معرفة", "وضع صيانة", "ولاء", "متصدرين",
+        )),
+        "platform": n(("منصة", "platform", "operating system", "suite", "enterprise", "متكامل", "شامل")),
+        "saas_word": n(("saas", "ساس", "b2b")),
+        "logistics_word": n(("لوجستيات", "logistics", "last mile", "lastmile", "manifest",
+                            "shipment", "shipments", "pod", "warehouse", "مستودع", "شحنة", "شحنات")),
+        "finance_word": n(("مالية", "finance", "محاسبة", "accounting")),
+        "marketplace_word": n(("marketplace", "سوق", "classified", "سوق إلكتروني")),
+    }
+
+
+def prioritize_preset_stack(
+    ranked: list[tuple[str, float]],
+    request: str,
+    *,
+    limit: int = 6,
+) -> list[str]:
+    """Terrifyingly smart merge priority for overlapping domains.
+
+    Rules (highest impact first):
+    1) Explicit commerce_pro phrase wins pure shop-suite primary.
+    2) Marketplace beats shop when vendor/escrow/multi-vendor signals exist.
+    3) Logistics beats thin delivery when fleet/warehouse/route signals exist.
+    4) Finance beats wallet when ledger/KYC/accounting signals exist.
+    5) SaaS beats bare subscriptions when seats/trial/tenant/RBAC signals exist.
+    6) Never inject commerce_pro into pure SaaS / pure logistics / pure finance.
+    7) Secondary domains keep order by *adjusted* score, not raw keyword count only.
+    """
+    if not ranked:
+        return []
+
+    sig = _request_signals(request)
+    scores = {n: float(s) for n, s in ranked}
+
+    # Commerce Pro override: rich multi-feature Arabic commerce specs
+    # win over bare shop even without the exact phrase "commerce pro".
+    if sig.get("commerce_explicit", 0) >= 1 or sig.get("commerce_rich", 0) >= 6:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 8.0 + 0.8 * sig.get("commerce_rich", 0)
+        # Demote thin single-domain shop when suite is clearly intended
+        if scores.get("shop", 0) > 0:
+            scores["shop"] = max(0.1, scores.get("shop", 0) - 4.0)
+    elif sig.get("commerce_rich", 0) >= 4 and scores.get("shop", 0) > 0:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 5.0 + 0.5 * sig.get("commerce_rich", 0)
+
+    # Specificity bonuses / penalties
+    if sig["vendor"] or sig["escrow"] or sig["marketplace_word"]:
+        scores["marketplace"] = scores.get("marketplace", 0.0) + 4.0 + 1.5 * sig["vendor"] + 2.0 * sig["escrow"]
+        scores["shop"] = scores.get("shop", 0.0) - 2.5
+        if not sig["commerce_explicit"]:
+            scores["commerce_pro"] = scores.get("commerce_pro", 0.0) - 1.5
+
+    if sig["fleet"] or sig["logistics_word"]:
+        scores["logistics"] = scores.get("logistics", 0.0) + 4.0 + 1.2 * sig["fleet"]
+        scores["delivery"] = scores.get("delivery", 0.0) - 2.0
+
+    if sig["ledger"] or sig["finance_word"]:
+        scores["finance"] = scores.get("finance", 0.0) + 4.0 + 1.2 * sig["ledger"]
+        scores["wallet"] = scores.get("wallet", 0.0) - 1.5
+
+    if sig["seats"] or sig["trial"] or sig["saas_word"]:
+        scores["saas"] = scores.get("saas", 0.0) + 4.0 + 1.2 * sig["seats"] + 1.0 * sig["trial"]
+        scores["subscriptions"] = scores.get("subscriptions", 0.0) - 1.2
+
+    if sig["commerce_explicit"]:
+        scores["commerce_pro"] = scores.get("commerce_pro", 0.0) + 6.0
+
+    if sig["cart"] and not (sig["vendor"] or sig["escrow"]):
+        scores["shop"] = scores.get("shop", 0.0) + 3.5
+        # bare shop/cart — do NOT escalate to commerce_pro unless explicit
+        if not sig["commerce_explicit"]:
+            scores["commerce_pro"] = scores.get("commerce_pro", 0.0) - 3.0
+
+    # Wallet top-up phrasing often contains "شحن" — do not treat as logistics
+    # Keep logistics when shipment/POD/track signals exist (6-month potato platforms)
+    if (
+        sig["wallet_only"]
+        and not sig["logistics_word"]
+        and not sig["fleet"]
+        and not sig.get("track_only")
+    ):
+        scores["logistics"] = scores.get("logistics", 0.0) - 5.0
+        scores["delivery"] = scores.get("delivery", 0.0) - 3.0
+        scores["wallet"] = scores.get("wallet", 0.0) + 3.0
+
+    # Platform multi-domain: boost co-mentioned complex systems
+    if sig["platform"]:
+        for d in ("saas", "marketplace", "logistics", "finance"):
+            if scores.get(d, 0) > 0:
+                scores[d] += 1.5
+
+    # Order-of-mention: earlier domain keyword in the request wins ties
+    tnorm = _norm(request)
+    mention_pos: dict[str, int] = {}
+    markers = {
+        "saas": ("saas", "ساس", "workspace", "مقعد", "seats"),
+        "marketplace": ("marketplace", "سوق", "escrow", "multi-vendor", "بائعين"),
+        "logistics": ("logistics", "لوجستيات", "أسطول", "fleet", "مستودع"),
+        "finance": ("finance", "مالية", "ledger", "محاسبة", "kyc"),
+        "commerce_pro": ("commerce pro", "متجر متكامل", "commerce suite"),
+        "shop": ("سلة", "cart", "كتالوج", "catalog", "متجر"),
+        "wallet": ("محفظة", "wallet"),
+    }
+    for dom, words in markers.items():
+        positions = [tnorm.find(w) for w in words if w in tnorm]
+        positions = [x for x in positions if x >= 0]
+        if positions:
+            mention_pos[dom] = min(positions)
+            # slight bonus for appearing early
+            scores[dom] = scores.get(dom, 0.0) + max(0.0, 2.0 - (mention_pos[dom] / 40.0))
+
+    # Drop noise domains with non-positive adjusted score
+    # Tie-break: higher score, then earlier mention, then name
+    def _sort_key(item: tuple[str, float]) -> tuple:
+        name, sc = item
+        pos = mention_pos.get(name, 10_000)
+        return (-sc, pos, name)
+
+    ordered = sorted(scores.items(), key=_sort_key)
+    out = [n for n, s in ordered if s > 0]
+
+    primary = out[0] if out else None
+
+    # Conflict pruning
+    pure_complex = primary in {"saas", "logistics", "finance", "marketplace"}
+    if pure_complex and not sig["commerce_explicit"]:
+        # keep commerce_pro only if strong residual shop suite signal without marketplace primary
+        if primary != "marketplace":
+            out = [x for x in out if x != "commerce_pro"]
+        if primary == "marketplace":
+            out = [x for x in out if x not in {"shop"}]
+        if primary == "logistics":
+            out = [x for x in out if x != "delivery"]
+        if primary == "finance":
+            out = [x for x in out if x != "wallet"] or out
+            out = [x for x in out if x != "wallet"]
+        if primary == "saas":
+            out = [x for x in out if x != "subscriptions"]
+
+    if primary == "shop" and not sig["commerce_explicit"]:
+        out = [x for x in out if x != "commerce_pro"]
+
+    if "commerce_pro" in out:
+        out = [x for x in out if x not in {"shop", "subscriptions", "points", "growth"} or x == "commerce_pro"]
+
+    # Group moderation primary: only group_management (+ optional welcome/content)
+    if primary in {"group_management", "group_admin"}:
+        out = [x for x in out if x in {"group_management", "group_admin"}]
+        if "group_management" not in out:
+            out.insert(0, "group_management")
+        return out[: max(1, limit)]
+
+    # Phase B: pure tasks primary must not drag booking/clinic/shop
+    if primary == "tasks":
+        out = [
+            x for x in out
+            if x not in {
+                "booking", "clinic", "shop", "commerce_pro", "marketplace",
+                "restaurant", "hr", "fitness", "auction", "delivery",
+            }
+        ]
+        if "tasks" not in out:
+            out.insert(0, "tasks")
+
+    # Protect high-signal complex domains before soft backbone / cap
+    complex_domains = ("saas", "marketplace", "logistics", "finance", "commerce_pro")
+    hard = [x for x in out if x in complex_domains and scores.get(x, 0) >= 3.0]
+    soft = [x for x in out if x not in hard]
+
+    multi_complex = len(hard)
+    if multi_complex >= 2 or (sig.get("platform") and multi_complex >= 1):
+        for b in ("support_pro", "crm"):
+            if b not in soft and b not in hard:
+                soft.append(b)
+    elif primary in {"group_management", "support_tickets", "tasks"}:
+        pass
+    else:
+        soft = [x for x in soft if x not in {"education", "community", "events"} or scores.get(x, 0) >= 3.0]
+
+    # Hard complex domains first (preserve 6-month potatoes), then soft
+    merged = list(dict.fromkeys(hard + soft))
+    cap = max(1, min(limit, 8))
+    # Never drop a hard domain for backbone if we still have room pressure
+    if len(hard) >= cap:
+        return hard[:cap]
+    return merged[:cap]
+
+
+def detect_preset_stack(request: str, *, limit: int = 8) -> list[str]:
+    """Multi-domain stack — domain decision first, then ranked presets.
+
+    Phase B root: when domain lock says tasks-only, return ``["tasks"]``
+    without letting residual booking scores re-enter via prioritization.
+    """
+    try:
+        from .domain_detector import decide as _domain_decide
+        dec = _domain_decide(request)
+        if dec.primary in {"tasks", "projects"} and dec.confidence >= 0.45:
+            return ["tasks"]
+        if dec.primary == "group_moderation" and dec.confidence >= 0.45:
+            return ["group_management"]
+        ranked = score_presets(request)
+        ranked = [(n, s) for n, s in ranked if n not in dec.blocked_presets]
+        stack = prioritize_preset_stack(ranked, request, limit=limit)
+        stack = [p for p in stack if p not in dec.blocked_presets]
+        return stack[: max(1, limit)] or (["tasks"] if dec.primary == "tasks" else [])
+    except Exception:
+        ranked = score_presets(request)
+        return prioritize_preset_stack(ranked, request, limit=limit)
+
+
+
+def compose_session(
+    presets: list[str],
+    *,
+    user_id: int = 0,
+    bot_name: str = "",
+    request: str = "",
+) -> BuilderSession:
+    """Merge multiple preset capability sets into one intelligent session."""
+    if not presets:
+        return session_for_preset("echo_basic", user_id=user_id, bot_name=bot_name)
+
+    primary = presets[0]
+    s = session_for_preset(primary, user_id=user_id, bot_name=bot_name)
+    for extra in presets[1:]:
+        other = session_for_preset(extra, user_id=user_id)
+        s.selected |= other.selected
+
+    # Intensity-aware domain packs: medium bots get a hard ceiling
+    names = list(presets)
+    primary = names[0] if names else ""
+    secondary = set(names[1:])
+    intensity = _request_intensity(request, names)
+
+    def _take(pack: tuple[str, ...], n: int) -> list[str]:
+        core = ["start", "help", "lang"]
+        body = [x for x in pack if x not in core]
+        return list(dict.fromkeys(core + body[: max(0, n - len(core))]))
+
+    # Strip prior fat domain keys from session_for_preset so intensity can re-apply
+    _dom_prefixes = (
+        "saas_", "seat_", "plan3_", "billing2_", "meter_", "quota_", "subscription2_",
+        "trial2_", "addon2_", "workspace2_", "org_", "team2_", "rbac_", "flag2_",
+        "webhook3_", "apikey_", "oauth2_",
+        "mkt_", "listing2_", "vendor2_", "buyer_", "offer2_", "bid2_", "escrow_",
+        "payout2_", "commission2_", "catalog2_", "storefront_", "auction3_",
+        "rfq2_", "quote2_", "dispute3_", "review3_",
+        "logi_", "ship4_", "fleet2_", "route3_", "hub2_", "dock2_", "warehouse4_",
+        "courier2_", "manifest_", "lane_", "container_", "lastmile_", "pod2_",
+        "eta2_", "load2_", "trip_",
+        "fin_", "ledger2_", "journal_", "payout3_", "settle2_", "recon_", "treasury_",
+        "fx_", "card3_", "wallet3_", "loan2_", "credit2_", "limit2_", "kyc2_", "aml2_",
+        "invoice4_", "receivable_", "payable_", "tax3_", "fee2_",
+    )
+    if intensity in {"medium", "simple"} and any(
+        d in names for d in ("saas", "marketplace", "logistics", "finance")
+    ):
+        s.selected = {
+            x for x in s.selected
+            if not any(x.startswith(pref) for pref in _dom_prefixes)
+        }
+
+    def _apply_domain(name: str, builder) -> None:
+        if name not in names:
+            return
+        is_primary = primary == name
+        lim = _pack_limit_for(intensity, primary=is_primary)
+        if lim <= 0:
+            return
+        s.selected.update(builder(limit=lim))
+
+    _apply_domain("saas", _saas_pack)
+    _apply_domain("marketplace", _marketplace_pack)
+    _apply_domain("logistics", _logistics_pack)
+    _apply_domain("finance", _finance_pack)
+
+    if primary == "commerce_pro":
+        if intensity == "complex":
+            s.selected.update(_COMMERCE_PRO_CAPS)
+        else:
+            s.selected.update(_take(_COMMERCE_PRO_CAPS, 36))
+    elif "commerce_pro" in secondary:
+        s.selected.update(_take(_COMMERCE_PRO_CAPS, 24 if intensity != "complex" else 40))
+    elif primary == "shop" or "shop" in secondary:
+        s.selected.update(_SHOP_CAPS)
+
+    # Hard ceiling: medium stays lean; complex capped for runtime health
+    if intensity == "complex" and len(s.selected) > 72:
+        core = {"start", "help", "lang"}
+        ordered = [x for x in s.selected if x in core] + [x for x in s.selected if x not in core]
+        s.selected = set(list(dict.fromkeys(ordered))[:72])
+    if intensity == "medium" and len(s.selected) > 40:
+        # Prefer primary domain + core commands
+        core = {"start", "help", "lang"}
+        primary_prefs = {
+            "saas": ("saas_", "seat_", "plan3_", "quota_", "trial2_"),
+            "marketplace": ("mkt_", "listing2_", "vendor2_", "escrow_", "payout2_"),
+            "logistics": ("logi_", "ship4_", "fleet2_", "pod2_", "warehouse4_"),
+            "finance": ("fin_", "ledger2_", "kyc2_", "invoice4_", "wallet3_"),
+            "commerce_pro": ("shop_", "cart_", "coupon_", "wallet_", "sub"),
+            "shop": ("shop_", "cart_"),
+        }.get(primary, ())
+        kept = [x for x in s.selected if x in core]
+        rest = [x for x in s.selected if x not in core]
+        rest_pri = [x for x in rest if any(x.startswith(p) for p in primary_prefs)]
+        rest_other = [x for x in rest if x not in rest_pri]
+        ordered = list(dict.fromkeys(kept + rest_pri + rest_other))
+        s.selected = set(ordered[:40])
+
+    # Primary-aware bot identity (name + description)
+    _identity = {
+        "saas": ("saas_platform_bot", "SaaS platform: seats, trials, quotas, RBAC, billing"),
+        "marketplace": ("marketplace_platform_bot", "Marketplace: vendors, escrow, listings, payouts"),
+        "logistics": ("logistics_platform_bot", "Logistics: fleet, warehouses, routes, POD tracking"),
+        "finance": ("finance_ops_bot", "Finance ops: ledger, KYC, payouts, invoices"),
+        "commerce_pro": ("commerce_pro_bot", "Commerce pro: shop, cart, subs, points, wallet, growth"),
+        "shop": ("shop_bot", "Shop: catalog, cart, orders"),
+    }
+    if not bot_name and primary in _identity:
+        nm, desc = _identity[primary]
+        s.set_name(nm)
+        s.set_description(desc)
+    elif primary in _identity and (not s.bot_name or s.bot_name in {
+        "group_admin_bot", "custom_bot", "my_bot", "market_bot"
+    }):
+        nm, desc = _identity[primary]
+        s.set_name(nm)
+        s.set_description(desc)
+
+    # Intelligence: global / i18n language
+    if _has_any(request, _I18N_KEYS):
+        s.selected.add("lang")
+        if s.language in {"ar", ""}:
+            s.language = "en"
+
+    # Name from request tokens if still generic
+    if bot_name:
+        s.set_name(bot_name)
+    elif request:
+        token = re.sub(r"[^a-zA-Z0-9_\u0600-\u06FF]+", "_", request.strip())[:32].strip("_")
+        if token and s.bot_name in {
+            "group_admin_bot", "custom_bot", "my_bot", "market_bot", "shop_bot",
+        }:
+            s.set_name(f"bot_{token[:20]}" if not token[0].isalpha() else token[:24])
+
+    # Description reflects composition
+    if len(presets) > 1:
+        s.set_description(
+            f"Composed bot: {', '.join(presets)} — multi-intent zero-AI pack"
+        )
+
+    t = _norm(request)
+    complexity_hit = any(
+        k in t for k in (
+            "متكامل", "enterprise", "all-in-one", "all in one", "منصة", "suite",
+            "ضخم", "احترافي", "production", "operating system", "جاهز للسوق",
+            "rule them all", "كل شيء", "شامل",
+        )
+    )
+    multi_complex = sum(
+        1 for d in ("saas", "marketplace", "logistics", "finance", "commerce_pro")
+        if d in presets
+    )
+    # Only dump broad backbone when user clearly wants a huge multi-domain platform
+    if complexity_hit and multi_complex >= 2:
+        for pack in (
+            _SUPPORT_PRO_CAPS, _CRM_CAPS, _GROWTH_CAPS, _WALLET_CAPS,
+        ):
+            s.selected.update(pack)
+        s.selected.add("lang")
+    elif complexity_hit and multi_complex == 0 and len(presets) >= 3:
+        # legacy multi-intent without complex systems — light backbone only
+        s.selected.update(_SUPPORT_PRO_CAPS)
+        s.selected.add("lang")
+
+    # UI language: Arabic request → Arabic menu/welcome
+    if any("\u0600" <= ch <= "\u06FF" for ch in (request or "")):
+        s.language = "ar"
+    elif any(k in _norm(request) for k in ("english", "global en", "en only")):
+        s.language = "en"
+
+    # Phase C root: authoritative capability resolution replaces fat packs
+    if request:
+        try:
+            from .capability_extractor import resolve_capabilities
+            resolved = resolve_capabilities(request, presets=list(presets or []))
+            if resolved:
+                s.selected = set(resolved)
+            if "group_management" in (presets or []):
+                s.set_name("group_admin_bot")
+                s.set_description("بوت إدارة جروبات: حظر/كتم/طرد/تحذير/ترحيب/حماية")
+        except Exception:
+            pass
+
+    return s
+
+
+def is_bot_request(request: str) -> bool:
+    t = _norm(request)
+    keys = (
+        "بوت", "bot", "telegram", "تيليجرام", "تليجرام", "tg ",
+        "اعمل", "أنشئ", "انشئ", "سوي", "أبغى", "ابي", "أريد", "عايز", "عاوز",
+        "create", "make", "build",
+    )
+    return any(k in t for k in keys)
+
+
+# Full marketplace-grade default pack: group admin + welcome + tickets + basics
+_DEFAULT_CAPS = tuple(dict.fromkeys(
+    list(_GROUP_CAPS) + list(_SUPPORT_CAPS) + ["ping", "about"]
+))
+
+
+
+def _is_minimal_command_bot_request(request: str) -> bool:
+    """True when user only asks for a basic start/help/about bot (no vertical)."""
+    t = _norm(request or "")
+    if not t:
+        return False
+    vertical = (
+        "متجر", "shop", "store", "ecommerce", "سلة", "cart", "طلب", "طلبات",
+        "محفظة", "wallet", "دفع", "payment", "اشتراك", "subscription",
+        "نقاط", "points", "تذكرة", "تذاكر", "support", "ticket",
+        "مهام", "tasks", "ملاحظات", "notes", "مجموعة", "group", "حظر", "كتم",
+        "حجز", "booking", "عيادة", "مطعم", "توصيل", "delivery", "saas",
+        "marketplace", "لوجست", "finance", "محاسبة",
+    )
+    if any(v in t for v in vertical):
+        return False
+    basic = (
+        "/start", "start", "ترحيب", "/help", "help", "مساعدة",
+        "/about", "about", "اوامر", "أوامر", "بوت بسيط", "بوت تيليجرام",
+        "telegram bot", "simple bot", "basic bot",
+    )
+    return any(b in t for b in basic)
+
+
+
+def sanitize_spec_for_request(spec: "BotSpec", request: str) -> "BotSpec":
+    """Remove cross-domain bleed + junk features; ensure core intents are complete."""
+    req_n = _norm(request or "")
+    if not req_n or spec is None:
+        return spec
+
+    from .schema import Feature, Trigger, Action, Messages
+
+    def _feat(key: str, cmd: str | None = None) -> Feature:
+        c = cmd or key.replace("task_", "").replace("note_", "").replace("ticket_", "")
+        return Feature(
+            id=key,
+            feature=key,
+            trigger=Trigger("command", c),
+            action=Action("core", key),
+            messages=Messages(),
+        )
+
+    # Global junk — never ship unless user explicitly asked
+    JUNK = {
+        "explicit_command",
+        "deep_link_start",
+        "smart_help",
+        "form_start",
+    }
+    explicit_junk_ask = any(
+        k in req_n for k in ("deep link", "ديپ لينك", "نموذج", "form start", "smart help")
+    )
+
+    # _norm folds ة→ه so match both forms for Arabic nouns
+    taskish = any(k in req_n for k in ("مهام", "مهمه", "مهمة", "task", "todo", "to-do"))
+    notesish = any(k in req_n for k in ("ملاحظات", "ملاحظه", "ملاحظة", "notes", "note "))
+    supportish = any(
+        k in req_n
+        for k in ("دعم", "تذكرة", "تذاكره", "تذاكر", "تذاكيري", "support", "ticket", "mytickets")
+    )
+    shopish = any(
+        k in req_n
+        for k in ("متجر", "سلة", "سله", "كتالوج", "shop", "store", "cart", "catalog")
+    )
+    restaurantish = any(
+        k in req_n
+        for k in ("مطعم", "طاولة", "طاوله", "حجز طاولة", "restaurant", "طلبات المطعم")
+    )
+
+    feats = list(getattr(spec, "features", None) or [])
+    keep: list = []
+    for f in feats:
+        key = str(getattr(f, "feature", "") or "")
+        trig = str(getattr(getattr(f, "trigger", None), "id", "") or "")
+        # Drop junk capabilities
+        if key in JUNK and not explicit_junk_ask:
+            continue
+        if trig in {"explicitcommand", "deeplinkstart", "smarthelp"} and not explicit_junk_ask:
+            continue
+        # Tasks primary: drop restaurant/menu bleed
+        if taskish and not restaurantish:
+            if key.startswith(("menu_", "table_", "order_")) or key in {
+                "menu_order", "menu_view", "table_book", "order_status",
+            }:
+                continue
+        # Notes primary (without tasks keywords): drop task_* bleed
+        if notesish and not taskish:
+            if key.startswith("task_"):
+                continue
+        # Tasks primary without notes keywords: drop note_* bleed
+        if taskish and not notesish:
+            if key.startswith("note_"):
+                continue
+        keep.append(f)
+
+    have = {str(getattr(f, "feature", "")) for f in keep}
+
+    def _ensure(keys: list[str]) -> None:
+        nonlocal keep, have
+        for k in keys:
+            if k not in have:
+                cmd = {
+                    "task_add": "add",
+                    "task_list": "list",
+                    "task_done": "done",
+                    "task_delete": "delete",
+                    "task_clear": "clear",
+                    "note_add": "note",
+                    "note_list": "notes",
+                    "note_delete": "delnote",
+                    "ticket_open": "ticket",
+                    "ticket_my": "mytickets",
+                    "shop_catalog": "shop",
+                    "cart_view": "cart",
+                    "cart_add": "cartadd",
+                    "start": "start",
+                    "help": "help",
+                    "about": "about",
+                }.get(k, k.replace("_", ""))
+                keep.append(_feat(k, cmd))
+                have.add(k)
+
+    _ensure(["start", "help"])
+
+    if taskish:
+        _ensure(["task_add", "task_list"])
+        if any(k in req_n for k in ("حذف", "delete", "مسح")):
+            _ensure(["task_delete", "task_clear"])
+        if any(k in req_n for k in ("تم", "done", "إنهاء", "انهاء")):
+            _ensure(["task_done"])
+        if getattr(spec, "bot", None) is not None:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "tasks_bot"
+
+    if notesish:
+        _ensure(["note_add", "note_list"])
+        if getattr(spec, "bot", None) is not None and not taskish:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "notes_bot"
+
+    if supportish:
+        _ensure(["ticket_open", "ticket_my"])
+        if getattr(spec, "bot", None) is not None and not shopish:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "market_bot", "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "support_bot"
+
+    if shopish:
+        _ensure(["shop_catalog"])
+        if any(k in req_n for k in ("سلة", "سله", "cart", "اضافه للسله", "إضافة للسلة")):
+            _ensure(["cart_view", "cart_add"])
+        if getattr(spec, "bot", None) is not None:
+            if not getattr(spec.bot, "name", None) or spec.bot.name in {
+                "custom_bot", "my_bot", "basic_bot"
+            }:
+                spec.bot.name = "shop_bot"
+
+    # about when asked
+    if any(k in req_n for k in ("/about", "about", "عن البوت", "حول")):
+        _ensure(["about"])
+
+    # Support phrasing: تذاكري / my tickets
+    if supportish and any(k in req_n for k in ("تذاكري", "تذاكره", "mytickets", "my tickets", "تذاكري")):
+        _ensure(["ticket_my"])
+
+    # Dedup by feature key (keep first)
+    seen: set[str] = set()
+    deduped = []
+    for f in keep:
+        key = str(getattr(f, "feature", "") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(f)
+    spec.features = deduped
+    return spec
+
+def default_spec_from_request(request: str, *, user_id: int = 0) -> BotSpec:
+    """Always-on high-quality pack when the user asks for a bot.
+
+    Uses multi-intent scoring, dynamic capability extraction, and multi-domain
+    composition when several domains match.
+    """
+    # Minimal start/help/about requests must NOT expand into commerce_pro packs.
+    if _is_minimal_command_bot_request(request):
+        s = session_for_preset("echo_basic", user_id=user_id, bot_name="basic_bot")
+        # Optional /about when explicitly mentioned
+        rt = _norm(request or "")
+        if any(x in rt for x in ("/about", "about", "عن البوت", "حول")):
+            try:
+                s.selected.add("about")
+            except Exception:
+                pass
+        if any(x in rt for x in ("/lang", "lang", "لغة", "اللغة")) and "عربي وانجليزي" in rt:
+            try:
+                s.selected.add("lang")
+            except Exception:
+                pass
+        return s.to_spec()
+
+    # Dynamic composer handles cybersecurity / multi-domain extraction first
+    try:
+        from .domain_detector import detect as _detect_domains
+        from .dynamic_composer import compose_from_text
+
+        domains = _detect_domains(request)
+        modern = {
+            "cybersecurity", "iot", "blockchain", "ai_ml", "devops",
+            "healthcare", "gaming", "education", "marketplace",
+        }
+        # Prefer dynamic path for modern verticals / multi-domain requests
+        if (modern & set(domains)) or len(domains) >= 2:
+            return compose_from_text(request, user_id=user_id)
+    except Exception:
+        pass
+
+    stack = detect_preset_stack(request, limit=4)
+    if not stack:
+        # Intent engine (Arabic synonyms) before any hardcoded fallback
+        try:
+            from .arabic_intent_engine import smart_detect_preset, is_clearly_non_bot
+            if is_clearly_non_bot(request):
+                stack = ["echo_basic"]
+            else:
+                sp = smart_detect_preset(request)
+                stack = [sp] if sp else ["echo_basic"]
+        except Exception:
+            stack = ["echo_basic"]
+    s = compose_session(stack, user_id=user_id, request=request)
+
+    # Always enrich with extracted real keys (safe no-op if extractor fails)
+    try:
+        from .capability_extractor import extract_all
+        from .domain_detector import detect as _detect_domains
+
+        for key in extract_all(request, _detect_domains(request)):
+            from .registry import CAPABILITIES as _CAPS
+            if key in _CAPS:
+                s.selected.add(key)
+    except Exception:
+        pass
+
+    # Layer-2 Intent Analysis: multi-intent plan grounded in Layer-1 LU
+    try:
+        from .language_understanding import analyze_intent as _analyze_intent
+        from .language_understanding import understand as _lu_understand
+        from .registry import CAPABILITIES as _CAPS
+
+        if lu is None:
+            lu = _lu_understand(request or "")
+        intent = _analyze_intent(request or "", lu=lu)
+
+        # Feature plan from intent engine (already filtered against bleed)
+        for key in (intent.feature_plan or []):
+            if key in _CAPS:
+                s.selected.add(key)
+
+        # Prefer intent preset when stack is thin/generic
+        if intent.preset and (not stack or stack[0] in {"shop", "custom", "group_admin"}):
+            if intent.preset not in (stack or []):
+                stack = [intent.preset] + list(stack or [])
+        for sp in (intent.secondary_presets or [])[:3]:
+            if sp not in (stack or []):
+                stack = list(stack or []) + [sp]
+
+        # Stamp description with intent decision (debug + differentiation)
+        bits = []
+        if intent.primary:
+            bits.append(
+                f"intent={intent.primary.intent}:{intent.primary.confidence:.2f}"
+            )
+        if intent.secondary:
+            bits.append(
+                "sec=" + ",".join(f"{x.intent}:{x.weight:.2f}" for x in intent.secondary[:3])
+            )
+        bits.append(f"skill={intent.skill_level}")
+        bits.append(f"complexity={intent.complexity}")
+        bits.append(f"lang={intent.language}")
+        if intent.should_ask:
+            bits.append("ask=" + (intent.ask_reason or "yes"))
+        if lu and lu.entities.product:
+            bits.append(f"product={lu.entities.product}")
+        if lu and getattr(lu.entities, "security_checks", None):
+            bits.append("sec_checks=" + ",".join(lu.entities.security_checks[:4]))
+        if bits:
+            base = (s.description or "").strip()
+            s.set_description((base + " | " if base else "") + "L2: " + "; ".join(bits))
+
+        # Attach questions onto description tip for upstream UX (non-breaking)
+        if intent.should_ask and intent.questions:
+            tip = " | ask: " + " / ".join(intent.questions[:2])
+            s.set_description((s.description or "") + tip)
+        try:
+            from .language_understanding import suggest as _suggest
+            rep = _suggest(request or "", intent=intent, lu=lu, selected_features=list(s.selected) if hasattr(s, "selected") else None)
+            top = [x.feature for x in (rep.build or [])[:3]]
+            if top:
+                s.set_description((s.description or "") + " | suggest: " + ",".join(top))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Disambiguate Arabic "قائمة" (list vs restaurant menu) when tasks are primary
+    try:
+        req_n = _norm(request or "")
+        taskish = any(k in req_n for k in ("مهام", "مهمة", "task", "todo", "to-do"))
+        restaurantish = any(
+            k in req_n
+            for k in ("مطعم", "طاولة", "حجز طاولة", "restaurant", "menu order", "طلبات المطعم")
+        )
+        if taskish and not restaurantish and hasattr(s, "selected"):
+            drop = {
+                k
+                for k in list(s.selected)
+                if str(k).startswith(
+                    ("menu_", "table_", "order_", "restaurant", "form_")
+                )
+                or str(k) in {
+                    "menu_order", "menu_view", "table_book", "order_status",
+                    "form_start", "deep_link_start", "smart_help",
+                }
+            }
+            s.selected -= drop
+            s.selected.update({"start", "help", "task_add", "task_list"})
+    except Exception:
+        pass
+
+    if not s.bot_name or s.bot_name in {"group_admin_bot", "custom_bot", "my_bot", "market_bot"}:
+        # Prefer intent-based name
+        req_n = _norm(request or "")
+        if any(k in req_n for k in ("مهام", "مهمة", "task")):
+            s.set_name("tasks_bot")
+        elif any(k in req_n for k in ("جروب", "مجموعة", "حظر", "كتم", "مشرف", "pubg", "ببجي", "group admin")):
+            s.set_name("group_admin_bot")
+        elif any(k in req_n for k in ("متجر", "shop", "store")):
+            s.set_name("market_bot")
+        else:
+            s.set_name("basic_bot")
+    return s.to_spec()
+
+
+def session_for_preset(preset: str, *, user_id: int = 0, bot_name: str = "") -> BuilderSession:
+    s = BuilderSession(user_id=user_id)
+    if preset == "group_management":
+        s.set_name(bot_name or "group_admin_bot")
+        s.set_description("بوت إدارة مجموعات: حظر/كتم/طرد/ترحيب/قوانين")
+        for k in _GROUP_CAPS:
+            s.selected.add(k)
+    elif preset == "support_tickets":
+        s.set_name(bot_name or "support_bot")
+        s.set_description("بوت تذاكر دعم")
+        for k in _SUPPORT_CAPS:
+            s.selected.add(k)
+    elif preset == "tasks":
+        s.set_name(bot_name or "tasks_bot")
+        s.set_description("بوت مهام شخصية")
+        for k in _TASK_CAPS:
+            s.selected.add(k)
+    elif preset == "notes":
+        s.set_name(bot_name or "notes_bot")
+        s.set_description("بوت ملاحظات")
+        for k in _NOTES_CAPS:
+            s.selected.add(k)
+    elif preset == "security_ops":
+        s.set_name(bot_name or "security_ops_bot")
+        s.set_description(
+            "Cybersecurity ops: domain checks (DNS/TLS/HTTP/headers), "
+            "incident reports, projects, reports, audit notes"
+        )
+        for k in _SECURITY_CAPS:
+            s.selected.add(k)
+    elif preset == "shop":
+        s.set_name(bot_name or "shop_bot")
+        s.set_description(
+            "Global shop bot with Telegram Payments invoices, catalog, orders, and /lang (en/ar)"
+        )
+        for k in _SHOP_CAPS:
+            s.selected.add(k)
+    elif preset == "subscriptions":
+        s.set_name(bot_name or "subscription_bot")
+        s.set_description(
+            "Subscription bot for end-users: plans, subscribe, my_sub, admin grant/revoke, i18n"
+        )
+        for k in _SUB_CAPS:
+            s.selected.add(k)
+    elif preset == "points":
+        s.set_name(bot_name or "points_bot")
+        s.set_description(
+            "Loyalty/points bot: balance, leaderboard, admin grant_points, i18n"
+        )
+        for k in _POINTS_CAPS:
+            s.selected.add(k)
+    elif preset == "contests":
+        s.set_name(bot_name or "contest_bot")
+        s.set_description(
+            "Contests/giveaways bot: join, entries, admin create/end/draw, i18n"
+        )
+        for k in _CONTEST_CAPS:
+            s.selected.add(k)
+    elif preset == "growth":
+        s.set_name(bot_name or "growth_bot")
+        s.set_description("Referral, daily check-in, streaks, achievements — growth engine for end-users")
+        for k in _GROWTH_CAPS:
+            s.selected.add(k)
+    elif preset == "crm":
+        s.set_name(bot_name or "crm_bot")
+        s.set_description("Sales CRM: leads, pipeline, deals, follow-ups")
+        for k in _CRM_CAPS:
+            s.selected.add(k)
+    elif preset == "support_pro":
+        s.set_name(bot_name or "support_pro_bot")
+        s.set_description("Pro support: tickets, priority, assign, knowledge base, CSAT")
+        for k in _SUPPORT_PRO_CAPS:
+            s.selected.add(k)
+    elif preset == "education":
+        s.set_name(bot_name or "education_bot")
+        s.set_description("Courses, lessons, quizzes, homework, certificates")
+        for k in _EDU_CAPS:
+            s.selected.add(k)
+    elif preset == "restaurant":
+        s.set_name(bot_name or "restaurant_bot")
+        s.set_description("Restaurant menu, orders, table booking")
+        for k in _RESTAURANT_CAPS:
+            s.selected.add(k)
+    elif preset == "jobs":
+        s.set_name(bot_name or "jobs_bot")
+        s.set_description("Job board: list, apply, post (admin)")
+        for k in _JOBS_CAPS:
+            s.selected.add(k)
+    elif preset == "marketplace":
+        s.set_name(bot_name or "marketplace_bot")
+        s.set_description("Marketplace: vendors, listings, escrow, bids, payouts, disputes")
+        s.selected.update(_marketplace_pack(limit=28))
+    elif preset == "saas":
+        s.set_name(bot_name or "saas_bot")
+        s.set_description("SaaS: seats, trials, quotas, billing, RBAC, webhooks, flags")
+        s.selected.update(_saas_pack(limit=28))
+    elif preset == "logistics":
+        s.set_name(bot_name or "logistics_bot")
+        s.set_description("Logistics: shipments, fleet, routes, hubs, POD, last-mile")
+        s.selected.update(_logistics_pack(limit=28))
+    elif preset == "finance":
+        s.set_name(bot_name or "finance_bot")
+        s.set_description("Light finance: ledger, payouts, KYC, invoices, wallets")
+        s.selected.update(_finance_pack(limit=28))
+    elif preset == "community":
+        s.set_name(bot_name or "community_bot")
+        s.set_description("Community feed, profiles, posts, moderation queue")
+        for k in _COMMUNITY_CAPS:
+            s.selected.add(k)
+    elif preset == "events":
+        s.set_name(bot_name or "events_bot")
+        s.set_description("Events and RSVP management")
+        for k in _EVENTS_CAPS:
+            s.selected.add(k)
+    elif preset == "wallet":
+        s.set_name(bot_name or "wallet_bot")
+        s.set_description("User wallet: balance, top-up, transfer, history")
+        for k in _WALLET_CAPS:
+            s.selected.add(k)
+    elif preset == "creator":
+        s.set_name(bot_name or "creator_bot")
+        s.set_description(
+            "Creator monetization: paid content, tips, membership, referrals, global i18n"
+        )
+        for k in _CREATOR_CAPS:
+            s.selected.add(k)
+    elif preset == "commerce_pro":
+        s.set_name(bot_name or "commerce_pro_bot")
+        s.set_description(
+            "Full commerce suite: shop+cart+payments+subs+points+wallet+growth+analytics"
+        )
+        for k in _COMMERCE_PRO_CAPS:
+            s.selected.add(k)
+        # Keep session language (default ar); callers may set en for global EN packs
+
+    elif preset == "fitness":
+        s.set_name(bot_name or "fitness_bot")
+        s.set_description("Gym/fitness: schedule, book session, membership, check-in")
+        for k in _FITNESS_CAPS:
+            s.selected.add(k)
+    elif preset == "realestate":
+        s.set_name(bot_name or "realestate_bot")
+        s.set_description("Real estate listings, search, inquiries")
+        for k in _REALESTATE_CAPS:
+            s.selected.add(k)
+    elif preset == "clinic":
+        s.set_name(bot_name or "clinic_bot")
+        s.set_description("Clinic appointments: slots, book, cancel")
+        for k in _CLINIC_CAPS:
+            s.selected.add(k)
+    elif preset == "auction":
+        s.set_name(bot_name or "auction_bot")
+        s.set_description("Auctions: list, bid, create, my bids")
+        for k in _AUCTION_CAPS:
+            s.selected.add(k)
+    elif preset == "delivery":
+        s.set_name(bot_name or "delivery_bot")
+        s.set_description("Delivery tracking and shipment status")
+        for k in _DELIVERY_CAPS:
+            s.selected.add(k)
+    elif preset == "booking":
+        s.set_name(bot_name or "booking_bot")
+        s.set_description("بوت حجوزات")
+        for k in ("start", "help", "book_slot", "book_list", "book_cancel", "book_admin_list"):
+            s.selected.add(k)
+    elif preset == "hr":
+        s.set_name(bot_name or "hr_bot")
+        s.set_description("بوت موارد بشرية مبسط")
+        for k in ("start", "help", "hr_leave_request", "hr_leave_list", "hr_checkin"):
+            s.selected.add(k)
+    elif preset == "iot":
+        s.set_name(bot_name or "iot_bot")
+        s.set_description("IoT ops: devices, sensors, notes, tasks (sqlite registry)")
+        for k in _IOT_CAPS:
+            s.selected.add(k)
+    elif preset == "blockchain":
+        s.set_name(bot_name or "blockchain_bot")
+        s.set_description("Crypto wallet ops: balance, history, transfer (no chain RPC required)")
+        for k in _BLOCKCHAIN_CAPS:
+            s.selected.add(k)
+    elif preset == "ai_assist":
+        s.set_name(bot_name or "ai_assist_bot")
+        s.set_description("AI workspace: notes, tasks, projects (prompts logged locally)")
+        for k in _AI_CAPS:
+            s.selected.add(k)
+    elif preset == "devops":
+        s.set_name(bot_name or "devops_bot")
+        s.set_description("DevOps ops: deploys, envs, secrets, logs, tasks")
+        for k in _DEVOPS_CAPS:
+            s.selected.add(k)
+    elif preset == "gaming":
+        s.set_name(bot_name or "gaming_bot")
+        s.set_description("Gaming: leaderboard, contests, achievements, points")
+        for k in _GAMING_CAPS:
+            s.selected.add(k)
+    elif preset in {"echo_basic", "basic", "generic", "echo"}:
+        s.set_name(bot_name or "basic_bot")
+        s.set_description("بوت أساسي: /start و /help")
+        s.selected.update({"start", "help"})
+    else:
+        s.set_name(bot_name or "custom_bot")
+        s.selected.update({"start", "help"})
+    return s
+
+
+def spec_from_request(request: str, *, user_id: int = 0) -> BotSpec | None:
+    preset = detect_preset(request)
+    if not preset:
+        return None
+    return session_for_preset(preset, user_id=user_id).to_spec()
+
+
+__all__ = ["detect_preset", "detect_preset_stack", "score_presets", "compose_session", "session_for_preset", "spec_from_request", "is_bot_request", "default_spec_from_request", "sanitize_spec_for_request"]

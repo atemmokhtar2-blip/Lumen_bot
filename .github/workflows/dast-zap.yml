@@ -1,0 +1,194 @@
+# Real-engine DAST: official OWASP ZAP Docker + live API + authenticated IDOR
+name: DAST ZAP
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dast-zap-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENVIRONMENT: test
+  TBE_ENV: test
+  TBE_MULTI_TENANT: "0"
+  TBE_REQUIRE_DOCKER: "0"
+  TBE_ALLOW_LOCAL_PROCESS: "1"
+  PLATFORM_ADMIN_TOKEN: dast-live-admin-token-32chars-xx
+  STRIPE_WEBHOOK_SECRET: whsec_dast_live_secret
+  ALLOW_DEV_BILLING: "0"
+  API_HOST: 127.0.0.1
+  API_PORT: "8765"
+  DAST_BASE_URL: http://127.0.0.1:8765
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+
+jobs:
+  unit-idor:
+    name: Platform IDOR (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt
+      - run: |
+          pytest tests/test_security_idor_dast.py -q --tb=short
+          python scripts/security/dast_api_probe.py
+
+  live-zap-engine:
+    name: Live API + OWASP ZAP engine (docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install app
+        run: |
+          pip install -U pip
+          pip install -r requirements.txt
+
+      - name: Start live API
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/dast-api-out
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          nohup python scripts/security/start_api_dast.py >"$OUTPUT_DIR/api.log" 2>&1 &
+          echo $! >"$OUTPUT_DIR/api.pid"
+          for i in $(seq 1 45); do
+            curl -sf "$DAST_BASE_URL/health" && echo ready && exit 0
+            sleep 1
+          done
+          tail -200 "$OUTPUT_DIR/api.log" || true
+          exit 1
+
+      - name: Seed two tenants on live API
+        env:
+          DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+        run: python scripts/security/seed_dast_tenants.py
+
+      - name: Live IDOR (business logic over real HTTP)
+        env:
+          DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+        run: python scripts/security/live_idor_http.py
+
+      - name: Pull official OWASP ZAP image
+        run: docker pull "$ZAP_IMAGE"
+
+      - name: ZAP baseline — real engine (host network)
+        run: |
+          set +e
+          docker run --rm --user 0 --network host \
+            -v "${{ github.workspace }}:/zap/wrk:rw" \
+            -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
+            "$ZAP_IMAGE" \
+            zap-baseline.py -t "$DAST_BASE_URL" -a \
+              -c /zap/rules/rules.tsv \
+              -J /zap/wrk/zap-baseline-report.json \
+              -r /zap/wrk/zap-baseline-report.html
+          code=$?
+          echo "zap-baseline exit=$code"
+          test -f zap-baseline-report.json || { echo "missing ZAP baseline JSON report"; exit 1; }
+          # World-class: fail on warnings (1) and failures (2+)
+          if [ "$code" -ne 0 ]; then exit $code; fi
+
+      - name: ZAP API scan — real engine + OpenAPI
+        run: |
+          set +e
+          docker run --rm --user 0 --network host \
+            -v "${{ github.workspace }}:/zap/wrk:rw" \
+            -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
+            "$ZAP_IMAGE" \
+            zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a \
+              -c /zap/rules/rules.tsv \
+              -J /zap/wrk/zap-api-report.json \
+              -r /zap/wrk/zap-api-report.html
+          code=$?
+          echo "zap-api-scan exit=$code"
+          test -f zap-api-report.json || { echo "missing ZAP API JSON report"; exit 1; }
+          if [ "$code" -ne 0 ]; then exit $code; fi
+
+      - name: ZAP authenticated baseline (tenant A key via Replacer)
+        env:
+          DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+        run: |
+          set +e
+          KEY=$(python -c "import json;print(json.load(open('$DAST_SEED_FILE'))['tenant_a']['key'])")
+          docker run --rm --user 0 --network host \
+            -v "${{ github.workspace }}:/zap/wrk:rw" \
+            -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
+            "$ZAP_IMAGE" \
+            zap-baseline.py -t "$DAST_BASE_URL" -a \
+              -c /zap/rules/rules.tsv \
+              -J /zap/wrk/zap-auth-report.json \
+              -z "-config replacer.full_list(0).description=auth \
+                  -config replacer.full_list(0).enabled=true \
+                  -config replacer.full_list(0).matchtype=REQ_HEADER \
+                  -config replacer.full_list(0).matchstr=Authorization \
+                  -config replacer.full_list(0).replacement=Bearer ${KEY} \
+                  -config replacer.full_list(0).regex=false"
+          code=$?
+          echo "zap-auth exit=$code"
+          test -f zap-auth-report.json || { echo "missing ZAP auth JSON report"; exit 1; }
+          if [ "$code" -ne 0 ]; then exit $code; fi
+
+      - name: Fail on MEDIUM/HIGH in ZAP JSON (engine output)
+        run: |
+          set -e
+          status=0
+          for f in zap-baseline-report.json zap-api-report.json zap-auth-report.json; do
+            if [ -f "$f" ]; then
+              echo "=== parse $f ==="
+              python scripts/security/zap_fail_on_severity.py "$f" || status=1
+            else
+              echo "WARN missing $f"
+            fi
+          done
+          exit $status
+
+      - name: Upload ZAP engine artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-engine-reports
+          path: |
+            zap-baseline-report.json
+            zap-baseline-report.html
+            zap-api-report.json
+            zap-api-report.html
+            zap-auth-report.json
+            ${{ runner.temp }}/dast-tenants.json
+            ${{ runner.temp }}/dast-api-out/api.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop API
+        if: always()
+        run: kill "$(cat "${{ runner.temp }}/dast-api-out/api.pid")" 2>/dev/null || true
+
+  phase2-gate:
+    name: Phase-2 DAST gate
+    runs-on: ubuntu-latest
+    needs: [unit-idor, live-zap-engine]
+    if: always()
+    steps:
+      - name: Both IDOR unit and live ZAP engine must succeed
+        run: |
+          echo "unit-idor=${{ needs.unit-idor.result }}"
+          echo "live-zap=${{ needs.live-zap-engine.result }}"
+          for r in "${{ needs.unit-idor.result }}" "${{ needs.live-zap-engine.result }}"; do
+            if [ "$r" != "success" ]; then echo "PHASE2 DENIED"; exit 1; fi
+          done
+          echo "PHASE2 OK"

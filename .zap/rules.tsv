@@ -1,0 +1,31 @@
+# World-class thresholds — FAIL CI on HIGH; MEDIUM treated as fail via report parser
+# Only ignore alerts meaningless on plain HTTP localhost DAST
+# ruleId	threshold
+
+# HSTS only applies to HTTPS terminators — ignore on http://127.0.0.1
+10035	IGNORE
+# Timestamp on health — noise
+10096	IGNORE
+
+# Security headers MUST be present (we set them — fail if ZAP still flags HIGH elsewhere)
+10020	HIGH
+10021	HIGH
+10055	MEDIUM
+
+# Injection / XSS / command — always HIGH fail
+40012	HIGH
+40014	HIGH
+40018	HIGH
+40019	HIGH
+90019	HIGH
+90020	HIGH
+90021	HIGH
+90022	HIGH
+90023	HIGH
+
+# Path traversal / remote file
+6	HIGH
+7	HIGH
+
+# CSRF on state-changing without token — MEDIUM
+10202	MEDIUM

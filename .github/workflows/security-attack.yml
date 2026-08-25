@@ -1,0 +1,42 @@
+# Offensive security regression — attack surface must stay closed
+name: Security Attack Surface
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  attack-surface:
+    name: Offensive regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip pytest
+          pip install -r requirements.txt
+      - name: Attack surface + baseline + credits
+        env:
+          ENVIRONMENT: test
+          TBE_MULTI_TENANT: "0"
+          TBE_REQUIRE_DOCKER: "0"
+          TBE_ALLOW_LOCAL_PROCESS: "1"
+        run: |
+          pytest tests/test_security_attack_surface.py \
+                tests/test_security_idor_dast.py \
+                tests/test_security_baseline.py \
+                tests/test_welcome_credits.py \
+                tests/test_credits_ledger.py \
+                -q --tb=short
+      - name: Static baseline strict
+        run: python scripts/security/security_baseline_check.py --strict
+      - name: In-process DAST probe
+        run: python scripts/security/dast_api_probe.py
