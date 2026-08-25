@@ -6,7 +6,7 @@ pydantic==2.10.6
 pydantic-settings==2.7.1
 requests==2.32.3
 curl_cffi==0.7.4
-aiohttp==3.11.12
+aiohttp==3.14.3
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz==3.12.1
