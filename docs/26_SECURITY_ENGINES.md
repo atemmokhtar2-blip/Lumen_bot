@@ -11,6 +11,10 @@
 | Supply chain posture | **OpenSSF Scorecard** | `security.yml` |
 | Live DAST | **OWASP ZAP** image `ghcr.io/zaproxy/zaproxy:stable` | `dast-zap.yml` |
 | API DAST from contract | **ZAP `zap-api-scan.py`** + OpenAPI | `dast-zap.yml` |
+| PR dependency gate | **GitHub Dependency Review Action** | `supply-chain.yml` |
+| SBOM | **Anchore Syft** | `supply-chain.yml` |
+| SBOM/dir CVE | **Anchore Grype** | `supply-chain.yml` |
+| Container image | **Aqua Trivy** (image ref after `docker build`) | `supply-chain.yml` |
 
 ## ما ليس محركاً عاماً (مقصود)
 

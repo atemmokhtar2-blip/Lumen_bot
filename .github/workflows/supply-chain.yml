@@ -1,0 +1,118 @@
+# Phase 3 — Supply chain & release admission (official engines only)
+# No custom vulnerability scanners. Engines:
+#   - GitHub Dependency Review Action
+#   - Anchore Syft (SBOM)
+#   - Anchore Grype (SBOM / dir vuln scan)
+#   - Aqua Trivy (container image after docker build)
+name: Supply Chain
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Official GitHub engine — blocks known-vulnerable dependency changes on PRs
+  dependency-review:
+    name: GitHub Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review (official)
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # Anchore Syft — official SBOM generator
+  syft-sbom:
+    name: Syft SBOM (Anchore)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+      - name: Also CycloneDX via Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom.spdx.json
+            sbom.cdx.json
+          retention-days: 30
+
+  # Anchore Grype — official vulnerability matcher on directory / SBOM
+  grype:
+    name: Grype vulnerability scan (Anchore)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grype scan workspace
+        uses: anchore/scan-action@v6
+        id: grype
+        with:
+          path: "."
+          severity-cutoff: high
+          fail-build: true
+          output-format: sarif
+      - name: Upload Grype SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+          category: grype
+        continue-on-error: true
+
+  # Official Trivy — scan the real production image after docker build
+  trivy-image:
+    name: Trivy image scan (Aqua)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: |
+          docker build -t maestro:phase3-${{ github.sha }} .
+      - name: Trivy image (CRITICAL/HIGH fail)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: maestro:phase3-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image.sarif
+      - name: Upload Trivy image SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-image-sarif
+          path: trivy-image.sarif
+          retention-days: 14
+          if-no-files-found: ignore
