@@ -44,7 +44,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tools
-        run: pip install -U pip pip-audit cyclonedx-bom
+        run: |
+          pip install -U pip
+          pip install -r requirements-security.txt
+          pip install cyclonedx-bom
       - name: pip-audit (fail on known CVE)
         run: |
           pip-audit -r requirements.txt \
@@ -80,7 +83,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install bandit
-        run: pip install -U bandit
+        run: pip install -U -r requirements-security.txt
       - name: Bandit scan (report medium+, fail on HIGH)
         run: |
           TARGETS="b2b_platform api telegram_bot_engine/security telegram_bot_engine/services/tool_runtime telegram_bot_engine/services/sandbox_runtime bot_interface/middlewares"
@@ -108,7 +111,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install semgrep
-        run: pip install -U semgrep
+        run: pip install -U -r requirements-security.txt
       - name: Custom Maestro rules (fail on match)
         run: |
           semgrep scan --config semgrep/ --error --metrics off \
@@ -163,7 +166,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4
-      - name: Trivy filesystem (CRITICAL/HIGH)
+      - name: Trivy filesystem (CRITICAL/HIGH) — real engine, fail closed
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
@@ -173,7 +176,6 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-fs.sarif
-        continue-on-error: true
       - name: Trivy config (Dockerfile misconfig)
         uses: aquasecurity/trivy-action@0.28.0
         with:
