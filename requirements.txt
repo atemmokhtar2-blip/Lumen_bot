@@ -1,19 +1,19 @@
-# Runtime — Lumen (pinned for supply-chain / CVE control)
-# Bump deliberately after pip-audit / changelog review — do not use floating majors in prod.
+# Runtime — Lumen (exact pins; lockfile is requirements.lock)
+# Bump only after: pip-audit + pip-compile
 python-telegram-bot==21.10
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 pydantic==2.10.6
 pydantic-settings==2.7.1
-requests==2.32.3
-curl_cffi==0.7.4
-aiohttp==3.11.12
+requests==2.33.0
+curl_cffi==0.15.0
+aiohttp==3.14.3
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz==3.12.1
 pymongo==4.11.1
 
 # Security / hosting foundation
-cryptography==44.0.1
+cryptography==50.0.0
 # Optional object storage (S3/R2/MinIO)
 # boto3==1.36.16
 # Optional Postgres host state

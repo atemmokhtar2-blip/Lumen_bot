@@ -9,7 +9,7 @@
 
 aiohappyeyeballs==2.7.1
     # via aiohttp
-aiohttp==3.11.12
+aiohttp==3.14.3
     # via -r requirements.txt
 aiosignal==1.4.0
     # via aiohttp
@@ -33,9 +33,9 @@ charset-normalizer==3.5.1
     # via requests
 click==8.4.2
     # via rq
-cryptography==44.0.1
+cryptography==50.0.0
     # via -r requirements.txt
-curl-cffi==0.7.4
+curl-cffi==0.15.0
     # via -r requirements.txt
 dnspython==2.8.0
     # via pymongo
@@ -55,6 +55,10 @@ idna==3.19
     #   httpx
     #   requests
     #   yarl
+markdown-it-py==4.2.0
+    # via rich
+mdurl==0.1.2
+    # via markdown-it-py
 multidict==6.7.1
     # via
     #   aiohttp
@@ -77,9 +81,11 @@ pydantic-core==2.27.2
     # via pydantic
 pydantic-settings==2.7.1
     # via -r requirements.txt
+pygments==2.21.0
+    # via rich
 pymongo==4.11.1
     # via -r requirements.txt
-python-dotenv==1.0.1
+python-dotenv==1.2.2
     # via
     #   -r requirements.txt
     #   pydantic-settings
@@ -91,15 +97,17 @@ redis==5.2.1
     # via
     #   -r requirements.txt
     #   rq
-requests==2.32.3
+requests==2.33.0
     # via -r requirements.txt
+rich==15.0.0
+    # via curl-cffi
 rq==2.1.0
     # via -r requirements.txt
 typing-extensions==4.16.0
     # via
+    #   aiohttp
     #   aiosignal
     #   anyio
-    #   curl-cffi
     #   psycopg
     #   pydantic
     #   pydantic-core
