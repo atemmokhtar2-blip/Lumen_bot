@@ -115,6 +115,9 @@ class BuilderAgent(Agent):
                 meta = dict(ir.metadata or {})
                 meta["execution_plan"] = plan
                 meta["repair_directive"] = repair
+                # Phase A: findings must flow end-to-end via BuildIR.metadata
+                meta["findings"] = list((state.extensions or {}).get("findings") or [])[:40]
+                meta["mode"] = "incremental_repair" if repair else meta.get("mode") or "generate"
                 ir.metadata = meta
             except Exception:
                 pass
@@ -149,6 +152,16 @@ class BuilderAgent(Agent):
             "engine": meta.get("engine"),
             "cline_ok": bool((meta.get("cline") or {}).get("ok")) if isinstance(meta.get("cline"), dict) else None,
         }
+        # Phase A cost: surface cline agent usage onto orchestrator extensions
+        try:
+            cline = meta.get("cline") if isinstance(meta.get("cline"), dict) else {}
+            agent_usage = (cline.get("metadata") or {}).get("usage") if isinstance(cline.get("metadata"), dict) else None
+            if not agent_usage and isinstance(cline.get("usage"), dict):
+                agent_usage = cline.get("usage")
+            if agent_usage:
+                state.extensions["usage"] = dict(agent_usage)
+        except Exception:
+            pass
         state.record(
             AgentRole.BUILDER,
             "build_done",

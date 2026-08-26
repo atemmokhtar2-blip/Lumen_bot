@@ -66,6 +66,8 @@
 | [14_ENGINE_ROUTER_AND_IR.md](14_ENGINE_ROUTER_AND_IR.md) | IR + EngineRouter |
 | [15_ROADMAP_AND_AI_HANDOFF.md](15_ROADMAP_AND_AI_HANDOFF.md) | خارطة طريق وتسليم |
 | [18_LIVE_TOKEN_AND_UX.md](18_LIVE_TOKEN_AND_UX.md) | توكن التشغيل الحي + واجهة مختصرة |
+| [33_AGENTS_12_PHASES.md](33_AGENTS_12_PHASES.md) | نظام Agents — 12 مرحلة + قواعد |
+| [34_PHASE_A_SERVER_RUN.md](34_PHASE_A_SERVER_RUN.md) | تشغيل السيرفر Phase A (Cline) |
 
 ---
 

@@ -20,6 +20,39 @@ from .model_router import ModelChoice, select_model
 
 logger = logging.getLogger(__name__)
 
+# Last provider call usage (real API fields when present) — Phase A cost metering
+_LAST_CALL_USAGE: dict = {}
+
+
+def get_last_call_usage() -> dict:
+    """Return usage from the most recent provider call (may be empty)."""
+    return dict(_LAST_CALL_USAGE)
+
+
+def _record_usage(provider: str, model_id: str, body: dict | None = None, *, prompt_chars: int = 0) -> None:
+    """Extract real token usage from provider JSON; fall back to char estimate."""
+    global _LAST_CALL_USAGE
+    usage: dict = {"provider": provider, "model_id": model_id or ""}
+    body = body or {}
+    # Gemini
+    um = body.get("usageMetadata") or body.get("usage_metadata") or {}
+    if um:
+        usage["prompt_tokens"] = int(um.get("promptTokenCount") or um.get("prompt_tokens") or 0)
+        usage["completion_tokens"] = int(um.get("candidatesTokenCount") or um.get("completion_tokens") or 0)
+        usage["total_tokens"] = int(um.get("totalTokenCount") or um.get("total_tokens") or 0)
+    # OpenAI-compatible (Groq, xAI, llama)
+    ou = body.get("usage") or {}
+    if ou and not usage.get("total_tokens"):
+        usage["prompt_tokens"] = int(ou.get("prompt_tokens") or 0)
+        usage["completion_tokens"] = int(ou.get("completion_tokens") or 0)
+        usage["total_tokens"] = int(ou.get("total_tokens") or 0)
+    if not usage.get("total_tokens") and prompt_chars:
+        # rough estimate only when API omitted usage
+        usage["prompt_tokens_est"] = max(1, prompt_chars // 4)
+        usage["estimated"] = True
+    _LAST_CALL_USAGE = usage
+
+
 ALLOWED_TOOLS = {
     "list_dir",
     "read_file",
@@ -256,6 +289,10 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
             parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
             text = "".join(str(p.get("text") or "") for p in parts)
             if text.strip():
+                try:
+                    _record_usage("gemini", model, body, prompt_chars=len(prompt))
+                except Exception:
+                    pass
                 return text
             last_err = RuntimeError("gemini_empty_response")
     raise RuntimeError(str(last_err) if last_err else "gemini_exhausted")
@@ -287,7 +324,12 @@ def _call_xai(system: str, user: str, model_id: str) -> str:
     choices = body.get("choices") or []
     if not choices:
         raise RuntimeError("xai_empty_choices")
-    return str((choices[0].get("message") or {}).get("content") or "")
+    content = str((choices[0].get("message") or {}).get("content") or "")
+    try:
+        _record_usage("xai", model, body, prompt_chars=len(system) + len(user))
+    except Exception:
+        pass
+    return content
 
 
 def _call_groq(system: str, user: str, model_id: str) -> str:
@@ -426,6 +468,10 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
             logger.info(
                 "groq ok source=%s model=%s json_mode=%s", source, model, with_json
             )
+            try:
+                _record_usage("groq", model, body_j, prompt_chars=len(system) + len(user))
+            except Exception:
+                pass
             return content
 
     status = {}
@@ -732,6 +778,10 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
         decision["provider"] = provider
         decision["model_id"] = choice.model_id
         decision["attempts"] = attempt
+        try:
+            decision["usage"] = get_last_call_usage()
+        except Exception:
+            decision["usage"] = {}
         if decision.get("parse_ok") or decision.get("tool"):
             return decision
         # parse failed — nudge and retry with stronger instruction injected once

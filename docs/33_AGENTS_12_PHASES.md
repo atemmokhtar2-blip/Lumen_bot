@@ -40,7 +40,7 @@
 
 | # | المرحلة | الهدف | الحالة | ملاحظات |
 |---|---------|--------|--------|---------|
-| **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **جزئي قوي (A)** | موجود: roles، orchestrator، ExecutionPlan، findings، incremental_repair، deterministic_repair. ناقص: Task Tree عميق، Swarm، LangGraph اختياري |
+| **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **مغلق تشغيليًا (A)** | roles + orchestrator + plan/findings/repair + bot-bench + forced finish + cost. اختياري لاحقًا: Task Tree / Swarm / LangGraph |
 | **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **ضعيف / لم يبدأ كمرحلة C** | يوجد `repo_understanding` قديم — ليس Tree-sitter KG ولا blast-radius |
 | **3** | Self-Correction | Observe→Critique→Fix مغلق | **جزئي (داخل A)** | Critic + trajectory + repair_worker + smoke. ناقص: trajectory analytics ولوحة فشل |
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
@@ -77,13 +77,17 @@
 
 ### ناقص لإغلاق A قبل الانتقال لـ B
 
-1. **Bot-bench رسمي** (10 سيناريوهات ثابتة) + تقرير نجاح/فشل في CI أو سكربت pytest يستدعي العقود الرسمية فقط.
-2. **إجبار `finish`** أو قبول صريح بعد deliverables قبل `max_steps` (تقليل المشاريع الناقصة).
-3. **تمرير `execution_plan` / findings** بشكل مضمون عبر `BuildIR.metadata` في كل الطبقات (مراجعة end-to-end).
-4. **قياس التكلفة** (tokens/attempts) في `run_report` بشكل ثابت.
-5. **وثيقة تشغيل السيرفر**: `GEMINI_MODEL=gemini-3.6-flash` + `CLINE_LLM_PROVIDER=gemini` + حظر المسار الحتمي.
+| # | البند | الحالة بعد الإغلاق |
+|---|--------|-------------------|
+| 1 | Bot-bench رسمي (10 سيناريوهات) | **مغلق** — `tests/bot_bench/test_phase_a_contracts.py` (عقود رسمية فقط) |
+| 2 | إجبار `finish` بعد deliverables | **مغلق** — `agent_loop`: acceptance ok أو نَجمتين → finish إجباري |
+| 3 | تمرير `execution_plan` / findings عبر metadata | **مغلق** — `builder` يضع plan + findings + mode على `ir.metadata` |
+| 4 | قياس التكلفة في `run_report` | **مغلق** — حقل `cost` (attempts + usage tokens من المزود) |
+| 5 | وثيقة تشغيل السيرفر | **مغلق** — `docs/34_PHASE_A_SERVER_RUN.md` |
 
-> **قرار الانتقال:** لا تُفتح المرحلة B (Temporal/Scale) كأولوية منتج قبل بنود A الناقصة 1 و5 على الأقل.
+> **Phase A — مغلقة للإكمال التشغيلي أعلاه.**  
+> ما زال اختياريًا لاحقًا داخل محور 1 (Task Tree / Swarm / LangGraph) لكنه **ليس** مانع انتقال لـ B.  
+> **قرار الانتقال:** يمكن فتح المرحلة B (Temporal/Scale) بعد مراجعة إنتاجية قصيرة لمسار Planner→Worker→Critic.
 
 ---
 
@@ -156,4 +160,4 @@ MULTI_AGENT_MAX_ATTEMPTS=4
 
 ---
 
-*آخر تحديث متوافق مع فرع `Lumen` بعد مسار Phase A (plan/findings/repair/det/context/live Gemini).*
+*آخر تحديث: إغلاق بنود A المتبقية (bot-bench / forced finish / metadata / cost / server run doc).*

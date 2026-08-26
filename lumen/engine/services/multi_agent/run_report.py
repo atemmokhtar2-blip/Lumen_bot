@@ -32,6 +32,24 @@ _LOCK = threading.Lock()
 
 def write_run_report(state: AgentState) -> Path:
     """Persist a compact report JSON for this orchestration."""
+    # Phase A cost block: attempts + trajectory + real/estimated tokens when present
+    ext = state.extensions or {}
+    usage = dict(ext.get("usage") or {})
+    # also accept nested cline agent metadata
+    cline_meta = ext.get("cline") or ext.get("agent") or {}
+    if isinstance(cline_meta, dict):
+        for k, v in (cline_meta.get("usage") or {}).items():
+            usage.setdefault(k, v)
+    cost = {
+        "attempts": int(state.attempts or 0),
+        "max_attempts": int(getattr(state, "max_attempts", 0) or 0),
+        "qa_passed": bool(state.qa_passed),
+        "build_success": bool(state.build_success),
+        "usage": usage,
+        "trajectory_steps": ( _traj(state) or {}).get("steps")
+            if isinstance(_traj(state), dict)
+            else None,
+    }
     report = {
         "state_id": state.state_id,
         "user_id": state.user_id,
@@ -45,6 +63,9 @@ def write_run_report(state: AgentState) -> Path:
         "errors": list((state.qa_report or {}).get("errors") or state.build_errors or [])[:15],
         "trace": trace_summary(state),
         "trajectory": _traj(state),
+        "cost": cost,
+        "execution_plan_present": bool(ext.get("execution_plan")),
+        "findings_count": len(ext.get("findings") or []),
         "events_tail": [e.to_dict() for e in (state.events or [])[-12:]],
         "written_at": time.time(),
     }

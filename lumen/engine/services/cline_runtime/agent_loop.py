@@ -139,6 +139,22 @@ def run_agent(
     for i in range(limit):
         msgs = [m.to_dict() for m in state.messages]
         decision = decide(msgs, choice=choice)
+        # Phase A cost: accumulate real provider usage when present
+        try:
+            u = decision.get("usage") or {}
+            if u:
+                accu = dict(state.metadata.get("usage") or {})
+                accu["calls"] = int(accu.get("calls") or 0) + 1
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_est"):
+                    if u.get(k):
+                        accu[k] = int(accu.get(k) or 0) + int(u[k])
+                accu["last_provider"] = u.get("provider") or accu.get("last_provider")
+                accu["last_model"] = u.get("model_id") or accu.get("last_model")
+                if u.get("estimated"):
+                    accu["estimated"] = True
+                state.metadata["usage"] = accu
+        except Exception:
+            pass
         step = AgentStep(
             index=i,
             thought=str(decision.get("thought") or ""),
@@ -279,19 +295,63 @@ def run_agent(
             path = str(result["path"])
             if path not in state.files_written:
                 state.files_written.append(path)
-        # Nudge model to finish when core deliverables already on disk
+        # Phase A: force finish path when core deliverables already satisfy acceptance
         try:
             from pathlib import Path as _P
             root = _P(state.work_dir)
             core = [
-                (root / "main.py").is_file(),
+                (root / "main.py").is_file() or (root / "bot.py").is_file() or (root / "app.py").is_file(),
                 (root / "app" / "handlers.py").is_file() or (root / "handlers.py").is_file(),
-                (root / "requirements.txt").is_file(),
+                (root / "requirements.txt").is_file() or (root / "pyproject.toml").is_file(),
             ]
             if sum(1 for x in core if x) >= 2 and i >= 2:
+                acc_now = check_agent_project(state.work_dir, goal=goal)
+                state.metadata["acceptance_mid"] = acc_now
+                if acc_now.get("ok"):
+                    # Explicit finish — do not burn remaining max_steps
+                    fin = run_tool(state.work_dir, "finish", {"summary": "auto_finish_deliverables_ok"})
+                    state.steps.append(
+                        AgentStep(
+                            index=i + 1,
+                            thought="deliverables accepted — forced finish",
+                            tool_name="finish",
+                            tool_args={"summary": "auto_finish_deliverables_ok"},
+                            tool_result=fin,
+                        )
+                    )
+                    state.metadata["acceptance"] = acc_now
+                    state.metadata["forced_finish"] = True
+                    state.stop_reason = "completed"
+                    state.ok = True
+                    state.add_user("finish (forced after acceptance ok)")
+                    break
                 state.add_user(
-                    "Core files present. Add any missing README/.env.example if needed, then call finish."
+                    "Core files present. Add any missing README/.env.example if needed, then call finish NOW."
                 )
+                # second consecutive nudge without finish → force finish attempt next loop via flag
+                nudges = int(state.metadata.get("finish_nudges") or 0) + 1
+                state.metadata["finish_nudges"] = nudges
+                if nudges >= 2:
+                    fin = run_tool(state.work_dir, "finish", {"summary": "auto_finish_after_nudges"})
+                    state.steps.append(
+                        AgentStep(
+                            index=i + 1,
+                            thought="finish after repeated deliverable nudges",
+                            tool_name="finish",
+                            tool_args={"summary": "auto_finish_after_nudges"},
+                            tool_result=fin,
+                        )
+                    )
+                    acc2 = check_agent_project(state.work_dir, goal=goal)
+                    state.metadata["acceptance"] = acc2
+                    state.metadata["forced_finish"] = True
+                    if acc2.get("ok"):
+                        state.stop_reason = "completed"
+                        state.ok = True
+                        break
+                    state.stop_reason = "finish_forced_incomplete"
+                    state.ok = False
+                    break
         except Exception:
             pass
         if tool == "edit_file" and result.get("ok") and args.get("path"):
