@@ -58,3 +58,22 @@ journal.write(step) بعد كل agent
 ```bash
 PYTHONPATH=. pytest tests/test_phase_b_durability.py -q
 ```
+
+
+## Checklist إغلاق B
+
+| بند | الحالة |
+|------|--------|
+| Journal بعد كل خطوة agent | نعم — `_wf_checkpoint` |
+| `eng.start` عند أول خطوة (Temporal/memory/redis) | نعم |
+| Resume بعد crash (`resume_generate` / `scan_and_resume`) | نعم |
+| Pause+schedule عند 429 | نعم — `_pause_for_rate_limit` |
+| Worker pool + backpressure | نعم — `worker_pool` + `orchestration_slot` |
+| Temporal worker رسمي | نعم — يحتاج خادم Temporal حيّ للتحقق الكامل |
+| Drain loop | `python scripts/hosting/run_resume_workers.py --loop` |
+
+### تشغيل drain
+
+```bash
+python scripts/hosting/run_resume_workers.py --loop --interval 30
+```

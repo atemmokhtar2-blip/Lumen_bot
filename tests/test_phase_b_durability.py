@@ -132,3 +132,53 @@ def test_temporal_defs_importable_without_temporalio():
     # should not crash
     assert hasattr(td, "workflow_classes")
     assert hasattr(td, "activity_fns")
+
+
+def test_orchestrator_checkpoint_starts_workflow_engine(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_WORKFLOW_ENGINE", "memory")
+    monkeypatch.setenv("TBE_WORKFLOW_JOURNAL_DIR", str(tmp_path / "j"))
+    import lumen.engine.services.multi_agent.workflow_engine as we
+    import lumen.engine.services.multi_agent.durable_workflow as dw
+    we._ENGINE = None
+    dw._JOURNAL = None
+    from lumen.engine.services.multi_agent.orchestrator import Orchestrator
+    from lumen.engine.services.multi_agent.state import AgentState, AgentStatus
+    from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard
+
+    board = MemoryBlackboard()
+    orch = Orchestrator(board=board)
+    st = AgentState(state_id="cp-1", user_id=1, user_text="hi")
+    st.status = AgentStatus.BUILDING.value
+    board.put(st)
+    orch._wf_checkpoint(st, "architect")
+    assert st.extensions.get("workflow_id")
+    assert st.extensions.get("workflow_engine") == "MemoryWorkflowEngine"
+    eng = we.get_workflow_engine()
+    cp = eng.get_checkpoint(st.extensions["workflow_id"])
+    assert cp is not None
+    assert cp.step == "architect"
+
+
+def test_rate_limit_pause_marks_needs_resume(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_WORKFLOW_ENGINE", "memory")
+    monkeypatch.setenv("TBE_WORKFLOW_JOURNAL_DIR", str(tmp_path / "j2"))
+    import lumen.engine.services.multi_agent.workflow_engine as we
+    import lumen.engine.services.multi_agent.durable_workflow as dw
+    we._ENGINE = None
+    dw._JOURNAL = None
+    from lumen.engine.services.multi_agent.orchestrator import Orchestrator
+    from lumen.engine.services.multi_agent.state import AgentState
+    from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard
+
+    board = MemoryBlackboard()
+    orch = Orchestrator(board=board)
+    st = AgentState(state_id="rl-1", user_id=2, user_text="bot")
+    st.build_errors = ["gemini_http_429:rate limit exceeded"]
+    assert orch._rate_limit_errors(st) is True
+    st2 = orch._pause_for_rate_limit(st)
+    assert st2.extensions.get("needs_resume") is True
+    assert st2.extensions.get("paused_reason") == "rate_limit_429"
+    from lumen.engine.services.multi_agent.durable_workflow import get_journal
+    entry = get_journal().get_by_state("rl-1")
+    assert entry is not None
+    assert entry.step == "paused_429"

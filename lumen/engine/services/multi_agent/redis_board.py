@@ -305,9 +305,41 @@ def resume_interrupted_state(
     return Orchestrator(board=board).run(state, context=ctx)
 
 
-def scan_and_resume(*, limit: int = 10) -> list[dict[str, Any]]:
+def scan_and_resume(*, limit: int = 10, use_pool: bool | None = None) -> list[dict[str, Any]]:
+    """Resume interrupted states. Phase B: optional worker_pool for parallel drain."""
+    import os
     results = []
-    for sid in list_resumable_state_ids(limit=limit):
+    if use_pool is None:
+        use_pool = (os.environ.get("MULTI_AGENT_RESUME_USE_POOL") or "1").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    sids = list_resumable_state_ids(limit=limit)
+    if use_pool and sids:
+        try:
+            from .worker_pool import get_worker_pool
+            pool = get_worker_pool()
+            futs = []
+            for sid in sids:
+                fut = pool.submit(resume_interrupted_state, sid)
+                futs.append((sid, fut))
+            for sid, fut in futs:
+                if fut is None:
+                    results.append({"state_id": sid, "error": "backpressure"})
+                    continue
+                try:
+                    st = fut.result(timeout=float(os.environ.get("MULTI_AGENT_RESUME_TIMEOUT_SEC") or "600"))
+                    results.append({
+                        "state_id": sid,
+                        "status": st.status,
+                        "ok": bool(st.qa_passed or st.build_success),
+                        "path": st.generated_path or "",
+                    })
+                except Exception as exc:
+                    results.append({"state_id": sid, "error": f"{type(exc).__name__}:{exc}"})
+            return results
+        except Exception as exc:
+            logger.warning("scan_and_resume pool path failed: %s", type(exc).__name__)
+    for sid in sids:
         try:
             st = resume_interrupted_state(sid)
             results.append({

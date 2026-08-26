@@ -283,16 +283,16 @@ class TemporalWorkflowEngine(WorkflowEngine):
         wid = self._mirror.start(state_id, step=step, payload=payload)
         payload = dict(payload or {})
         payload["workflow_id"] = wid
-        if self._temporal_ok or True:
-            try:
-                self._run(self._start_temporal(wid, state_id, step, payload))
-                self._temporal_ok = True
-            except Exception as exc:
-                logger.warning(
-                    "temporal start_workflow failed id=%s (%s) — journal mirror active",
-                    wid,
-                    type(exc).__name__,
-                )
+        # Always attempt Temporal start when package present; mirror is source of local truth
+        try:
+            self._run(self._start_temporal(wid, state_id, step, payload))
+            self._temporal_ok = True
+        except Exception as exc:
+            logger.warning(
+                "temporal start_workflow failed id=%s (%s) — journal mirror active",
+                wid,
+                type(exc).__name__,
+            )
         logger.info("temporal workflow id=%s state=%s", wid, state_id)
         return wid
 

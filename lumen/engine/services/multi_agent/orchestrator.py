@@ -263,6 +263,9 @@ class Orchestrator:
                         "errors": list(state.build_errors or ["build_failed"]),
                         "attempt": state.attempts,
                     }
+                if self._rate_limit_errors(state):
+                    state = self._pause_for_rate_limit(state)
+                    return self._deliver(state)
                 try:
                     state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="no_build", force=True)
                 except Exception:
@@ -456,16 +459,90 @@ class Orchestrator:
         self.board.put(state)
         return self.run(state)
 
+
+    def _rate_limit_errors(self, state: AgentState) -> bool:
+        """True if build/QA errors look like provider 429 / rate limit / quota."""
+        blobs = []
+        blobs.extend(str(e) for e in (state.build_errors or [])[:20])
+        blobs.extend(str(e) for e in ((state.qa_report or {}).get("errors") or [])[:20])
+        text = " ".join(blobs).lower()
+        keys = (
+            "429",
+            "rate limit",
+            "rate_limit",
+            "ratelimit",
+            "quota",
+            "resource_exhausted",
+            "too many requests",
+            "tpm",
+            "rpm",
+        )
+        return any(k in text for k in keys)
+
+    def _pause_for_rate_limit(self, state: AgentState) -> AgentState:
+        """Phase B: durable pause on 429 — journal + schedule resume instead of hard fail-only."""
+        ext = dict(state.extensions or {})
+        ext["paused_reason"] = "rate_limit_429"
+        ext["needs_resume"] = True
+        state.extensions = ext
+        try:
+            state.status = AgentStatus.BUILDING.value  # resumable, not terminal success
+        except Exception:
+            state.status = "building"
+        state.record(AgentRole.ORCHESTRATOR, "pause_429", "durable pause — will resume")
+        self._wf_checkpoint(state, "paused_429")
+        self.board.put(state)
+        # Schedule resume via worker pool and/or Redis queue
+        try:
+            from .worker_pool import submit_resume_job
+            submit_resume_job(state.state_id)
+        except Exception:
+            pass
+        try:
+            from .redis_board import enqueue_resume_job, redis_board_enabled
+            if redis_board_enabled():
+                enqueue_resume_job(state.state_id)
+        except Exception:
+            pass
+        msg = (state.final_message or "").strip()
+        extra = "[Phase B] paused for provider rate limit (429) — resume scheduled"
+        state.final_message = (msg + "\n" + extra).strip() if msg else extra
+        return state
+
     def _wf_checkpoint(self, state: AgentState, step: str) -> None:
-        """Durable journal + Redis + workflow engine checkpoint after each agent step."""
+        """Durable journal + workflow engine start/checkpoint after each agent step (Phase B)."""
         try:
             from .durable_workflow import JournalEntry, get_journal
+            from .workflow_engine import get_workflow_engine
             ext = dict(state.extensions or {})
             wid = str(ext.get("workflow_id") or "")
+            eng = get_workflow_engine()
+            payload = {
+                "qa_passed": bool(state.qa_passed),
+                "generated_path": str(state.generated_path or "")[:500],
+                "capability_id": str(state.capability_id or ""),
+                "user_id": int(state.user_id or 0),
+                "attempts": int(state.attempts or 0),
+            }
             if not wid:
-                import uuid as _uuid
-                wid = f"wf_{_uuid.uuid4().hex[:16]}"
+                wid = eng.start(
+                    state.state_id,
+                    step=step,
+                    payload={
+                        **payload,
+                        "description": str(getattr(state, "user_text", "") or "")[:500],
+                    },
+                )
                 ext["workflow_id"] = wid
+                ext["workflow_engine"] = type(eng).__name__
+            else:
+                eng.checkpoint(
+                    wid,
+                    state_id=state.state_id,
+                    step=step,
+                    status=str(state.status or "running"),
+                    payload=payload,
+                )
             entry = JournalEntry(
                 workflow_id=wid,
                 state_id=state.state_id,
@@ -474,11 +551,7 @@ class Orchestrator:
                 user_id=int(state.user_id or 0),
                 description=str(getattr(state, "user_text", "") or getattr(state, "description", "") or ""),
                 attempts=int(state.attempts or 0),
-                payload={
-                    "qa_passed": bool(state.qa_passed),
-                    "generated_path": str(state.generated_path or "")[:500],
-                    "capability_id": str(state.capability_id or ""),
-                },
+                payload=payload,
             )
             get_journal().write(entry)
             state.extensions = ext
