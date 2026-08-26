@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from .bot_bench_runner import run_bot_bench_suite
+from .hard_generation import run_hard_generation_scenario, run_all_hard_scenarios
+from .quality_score import score_generated_project
 from .cost_model import estimate_cost_usd
 from .eval_store import append_eval_record, load_eval_records, summarize_evals
 from .live_bridge import persist_state_evaluation, record_from_agent_state, record_from_run_report
@@ -16,6 +18,9 @@ __all__ = [
     "load_eval_records",
     "summarize_evals",
     "run_bot_bench_suite",
+    "run_hard_generation_scenario",
+    "run_all_hard_scenarios",
+    "score_generated_project",
     "estimate_cost_usd",
     "persist_state_evaluation",
     "record_from_agent_state",

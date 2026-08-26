@@ -1,27 +1,26 @@
 {
-  "ok": true,
   "summary": {
-    "n": 10,
-    "success_rate": 1.0,
-    "avg_attempts": 1.0,
-    "avg_latency_s": 0.033,
-    "avg_cost_usd": 4.5e-05,
+    "n": 14,
+    "success_rate": 0.9286,
+    "avg_attempts": 2.1429,
+    "avg_latency_s": 1.2234,
+    "avg_cost_usd": 3.2e-05,
     "by_platform": {
       "telegram": {
-        "n": 4,
+        "n": 5,
         "success_rate": 1.0
       },
       "discord": {
-        "n": 2,
+        "n": 3,
         "success_rate": 1.0
       },
       "whatsapp": {
-        "n": 1,
+        "n": 2,
         "success_rate": 1.0
       },
       "web": {
-        "n": 1,
-        "success_rate": 1.0
+        "n": 2,
+        "success_rate": 0.5
       },
       "generic": {
         "n": 2,
@@ -29,226 +28,193 @@
       }
     }
   },
-  "records": [
+  "hard": [
     {
-      "run_id": "37180472c3e84e9e",
-      "scenario_id": "plat_telegram",
+      "run_id": "8da786eb36a04a2a",
+      "scenario_id": "hard_tg_support_tickets",
       "platform": "telegram",
       "success": true,
-      "attempts": 1,
-      "latency_s": 0.0006003379821777344,
+      "attempts": 5,
+      "latency_s": 16.349969387054443,
       "cost_usd": 0.0,
       "errors": [],
       "metrics": {
-        "written": [
-          "main.py",
-          "app/__init__.py",
-          "app/handlers.py",
-          "requirements.txt",
-          ".env.example",
-          "README.md",
-          "PLATFORM.md"
+        "scenario_id": "tg_support_tickets",
+        "platform": "telegram",
+        "quality_score": 1.0,
+        "quality_ok": true,
+        "quality_checks": {
+          "has_main": true,
+          "has_handlers": true,
+          "has_requirements": true,
+          "has_readme": true,
+          "has_env_example": true,
+          "all_syntax_ok": true,
+          "platform_marker": true,
+          "feature_coverage_half": true,
+          "multi_file": true
+        },
+        "critic_pass": true,
+        "critic_errors": [],
+        "repair_actions": [
+          "platform_scaffold:telegram"
         ],
-        "platform": "telegram"
+        "modules_written": [
+          "app/services/storage.py",
+          "app/modules/faq.py",
+          "app/modules/admin.py"
+        ],
+        "live_llm": {
+          "skipped": true
+        },
+        "difficulty": "medium_hard"
       },
-      "started_at": 1787745401.557406,
-      "finished_at": 1787745401.5604894
+      "started_at": 1787746599.6801527,
+      "finished_at": 1787746616.0301597
     },
     {
-      "run_id": "8e214fb781344089",
-      "scenario_id": "plat_discord",
+      "run_id": "4e2650d0a6d04988",
+      "scenario_id": "hard_discord_moderation",
       "platform": "discord",
       "success": true,
-      "attempts": 1,
-      "latency_s": 0.00038361549377441406,
+      "attempts": 5,
+      "latency_s": 0.17912817001342773,
       "cost_usd": 0.0,
       "errors": [],
       "metrics": {
-        "written": [
-          "main.py",
-          "app/__init__.py",
-          "app/handlers.py",
-          "requirements.txt",
-          ".env.example",
-          "README.md",
-          "PLATFORM.md"
+        "scenario_id": "discord_moderation",
+        "platform": "discord",
+        "quality_score": 1.0,
+        "quality_ok": true,
+        "quality_checks": {
+          "has_main": true,
+          "has_handlers": true,
+          "has_requirements": true,
+          "has_readme": true,
+          "has_env_example": true,
+          "all_syntax_ok": true,
+          "platform_marker": true,
+          "feature_coverage_half": true,
+          "multi_file": true
+        },
+        "critic_pass": false,
+        "critic_errors": [
+          "gen_verify: message_handler_missing",
+          "observe_smoke: import_handlers:ModuleNotFoundError:No module named 'discord'"
         ],
-        "platform": "discord"
-      },
-      "started_at": 1787745401.5607064,
-      "finished_at": 1787745401.5610995
-    },
-    {
-      "run_id": "5685d480e2e54f1f",
-      "scenario_id": "plat_whatsapp",
-      "platform": "whatsapp",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.0006148815155029297,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "written": [
-          "main.py",
-          "app/__init__.py",
-          "app/handlers.py",
-          "requirements.txt",
-          ".env.example",
-          "README.md",
-          "PLATFORM.md"
-        ],
-        "platform": "whatsapp"
-      },
-      "started_at": 1787745401.56124,
-      "finished_at": 1787745401.56189
-    },
-    {
-      "run_id": "95929f0b92a5465d",
-      "scenario_id": "plat_web",
-      "platform": "web",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.00024580955505371094,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "written": [
-          "main.py",
-          "requirements.txt",
-          ".env.example",
-          "README.md",
-          "PLATFORM.md"
-        ],
-        "platform": "web"
-      },
-      "started_at": 1787745401.5620117,
-      "finished_at": 1787745401.5622642
-    },
-    {
-      "run_id": "6cc94cfa45a5437e",
-      "scenario_id": "det_repair_discord",
-      "platform": "discord",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.0014617443084716797,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "actions": [
+        "repair_actions": [
           "platform_scaffold:discord"
         ],
-        "platform": "discord"
-      },
-      "started_at": 1787745401.5624535,
-      "finished_at": 1787745401.6361237
-    },
-    {
-      "run_id": "b5eaea3675234cc4",
-      "scenario_id": "code_intel_preflight",
-      "platform": "telegram",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.3111693859100342,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "risk": "low",
-        "engine": "preflight-jedi+tree-sitter+bm25"
-      },
-      "started_at": 1787745401.6363316,
-      "finished_at": 1787745402.0793548
-    },
-    {
-      "run_id": "a5ce5c72b674475d",
-      "scenario_id": "plan_findings",
-      "platform": "generic",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 3.1948089599609375e-05,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "goal": "whatsapp support bot",
-        "errors": [
-          "missing_deliverable @main.py: no main"
-        ]
-      },
-      "started_at": 1787745402.0796487,
-      "finished_at": 1787745402.0796947
-    },
-    {
-      "run_id": "48ca79abf4584a01",
-      "scenario_id": "code_intel_hybrid",
-      "platform": "telegram",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.0024662017822265625,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "engine": "hybrid-bm25-vector-rrf",
-        "hits": 5
-      },
-      "started_at": 1787745402.0798743,
-      "finished_at": 1787745402.0830092
-    },
-    {
-      "run_id": "e64b6f47b37b4b93",
-      "scenario_id": "edit_pre_post",
-      "platform": "telegram",
-      "success": true,
-      "attempts": 1,
-      "latency_s": 0.012747764587402344,
-      "cost_usd": 0.0,
-      "errors": [],
-      "metrics": {
-        "preflight": {
-          "risk": "low",
-          "impact_score": 0.05,
-          "impacted_files": [
-            "main.py"
-          ],
-          "symbol_hints": [
-            "main"
-          ],
-          "jedi_refs": [
-            {
-              "label": "main",
-              "line": 16,
-              "reference_count": 2,
-              "impacted_files": [
-                "main.py"
-              ]
-            }
-          ],
-          "engine": "preflight-jedi+tree-sitter+bm25"
+        "modules_written": [
+          "app/services/storage.py",
+          "app/modules/faq.py",
+          "app/modules/admin.py",
+          "app/modules/moderation.py"
+        ],
+        "live_llm": {
+          "skipped": true
         },
-        "postflight": {
-          "ok": true,
-          "syntax_ok": true,
-          "syntax_error": null,
-          "index_rebuilt": true,
-          "engine": "postflight"
-        }
+        "difficulty": "medium_hard"
       },
-      "started_at": 1787745402.083185,
-      "finished_at": 1787745402.1525419
+      "started_at": 1787746616.030398,
+      "finished_at": 1787746616.2095711
     },
     {
-      "run_id": "ec17140661504c2c",
-      "scenario_id": "cost_model",
-      "platform": "generic",
+      "run_id": "c92d71ec2ed54fcd",
+      "scenario_id": "hard_wa_catalog_orders",
+      "platform": "whatsapp",
       "success": true,
-      "attempts": 1,
-      "latency_s": 1.6450881958007812e-05,
-      "cost_usd": 0.00045,
+      "attempts": 5,
+      "latency_s": 0.3609340190887451,
+      "cost_usd": 0.0,
       "errors": [],
       "metrics": {
-        "cost_usd": 0.00045
+        "scenario_id": "wa_catalog_orders",
+        "platform": "whatsapp",
+        "quality_score": 1.0,
+        "quality_ok": true,
+        "quality_checks": {
+          "has_main": true,
+          "has_handlers": true,
+          "has_requirements": true,
+          "has_readme": true,
+          "has_env_example": true,
+          "all_syntax_ok": true,
+          "platform_marker": true,
+          "feature_coverage_half": true,
+          "multi_file": true
+        },
+        "critic_pass": false,
+        "critic_errors": [
+          "gen_verify: message_handler_missing",
+          "observe_smoke: no_async_handlers"
+        ],
+        "repair_actions": [
+          "platform_scaffold:whatsapp"
+        ],
+        "modules_written": [
+          "app/services/storage.py",
+          "app/modules/faq.py",
+          "app/modules/admin.py",
+          "app/modules/orders.py"
+        ],
+        "live_llm": {
+          "skipped": true
+        },
+        "difficulty": "medium_hard"
       },
-      "started_at": 1787745402.152774,
-      "finished_at": 1787745402.1528006
+      "started_at": 1787746616.2098126,
+      "finished_at": 1787746616.5707867
+    },
+    {
+      "run_id": "d6c87c5bdf764b81",
+      "scenario_id": "hard_web_status_dashboard",
+      "platform": "web",
+      "success": false,
+      "attempts": 5,
+      "latency_s": 0.02128767967224121,
+      "cost_usd": 0.0,
+      "errors": [
+        "missing_deliverable @app/handlers.py: Missing required file: app/handlers.py"
+      ],
+      "metrics": {
+        "scenario_id": "web_status_dashboard",
+        "platform": "web",
+        "quality_score": 1.0,
+        "quality_ok": true,
+        "quality_checks": {
+          "has_main": true,
+          "has_handlers": true,
+          "has_requirements": true,
+          "has_readme": true,
+          "has_env_example": true,
+          "all_syntax_ok": true,
+          "platform_marker": true,
+          "feature_coverage_half": true,
+          "multi_file": true
+        },
+        "critic_pass": false,
+        "critic_errors": [
+          "missing_deliverable @app/handlers.py: Missing required file: app/handlers.py",
+          "no_token_env @main.py: Entry does not reference bot token env",
+          "gen_verify: handlers_py_missing",
+          "observe_smoke: handlers_py_missing"
+        ],
+        "repair_actions": [],
+        "modules_written": [
+          "app/services/storage.py",
+          "app/modules/faq.py",
+          "app/modules/admin.py",
+          "app/modules/jobs_view.py",
+          "app/__init__.py"
+        ],
+        "live_llm": {
+          "skipped": true
+        },
+        "difficulty": "medium_hard"
+      },
+      "started_at": 1787746616.5710728,
+      "finished_at": 1787746616.5924008
     }
-  ],
-  "engine": "bot_bench_runner"
+  ]
 }

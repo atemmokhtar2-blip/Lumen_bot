@@ -143,6 +143,23 @@ def _scenario_cost_model() -> dict[str, Any]:
     }
 
 
+
+def _scenario_hard(item_id: str):
+    from .hard_generation import HARD_SPECS, run_hard_generation_scenario
+
+    item = next(x for x in HARD_SPECS if x["id"] == item_id)
+
+    def _fn(tmp: Path) -> dict[str, Any]:
+        return run_hard_generation_scenario(
+            tmp,
+            platform=item["platform"],
+            spec=item["spec"],
+            scenario_id=item["id"],
+        )
+
+    return _fn
+
+
 SCENARIOS = [
     ("plat_telegram", lambda tmp: _scenario_platform_scaffold(tmp, "telegram"), "telegram"),
     ("plat_discord", lambda tmp: _scenario_platform_scaffold(tmp, "discord"), "discord"),
@@ -154,7 +171,12 @@ SCENARIOS = [
     ("code_intel_hybrid", _scenario_hybrid_search, "telegram"),
     ("edit_pre_post", _scenario_edit_pre_post, "telegram"),
     ("cost_model", lambda tmp: _scenario_cost_model(), "generic"),
+    ("hard_tg_support_tickets", _scenario_hard("tg_support_tickets"), "telegram"),
+    ("hard_discord_moderation", _scenario_hard("discord_moderation"), "discord"),
+    ("hard_wa_catalog_orders", _scenario_hard("wa_catalog_orders"), "whatsapp"),
+    ("hard_web_status_dashboard", _scenario_hard("web_status_dashboard"), "web"),
 ]
+
 
 
 

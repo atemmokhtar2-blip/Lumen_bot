@@ -56,3 +56,16 @@ export LUMEN_EVAL_DIR=/var/lumen/eval
 ```
 
 آخر تشغيل مرجعي: `docs/eval/REPORT.md` و `docs/eval/baseline.json`.
+
+
+## Hard generation (تعميق D)
+
+مسار متوسط/صعب نهاية-لنهاية بدون ادعاء نجاح وهمي:
+
+1. platform scaffold  
+2. توسعة multi-module (worker-like)  
+3. Critic → deterministic_repair → Critic  
+4. `quality_score` (syntax + platform + features)  
+5. اختياري: `LUMEN_BENCH_LIVE_LLM=1` → `execute_ir`
+
+CI: `pytest tests/bot_bench/` كامل في `.github/workflows/ci.yml`.

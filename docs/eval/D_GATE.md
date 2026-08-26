@@ -20,3 +20,14 @@
 | Always-on eval dashboard | deferred to E metrics views |
 
 **Decision:** D accepted for transition to E on contract + instrumentation grounds — **not** claimed as closed global-SOTA evaluation.
+
+
+## Hard generation depth (follow-up)
+
+| Check | Result |
+|-------|--------|
+| Medium-hard multi-module E2E per platform | YES (`hard_generation.py`) |
+| quality_score 0..1 | YES |
+| Critic + repair loop in bench | YES |
+| CI runs full `tests/bot_bench/` | YES |
+| Live LLM generation in CI | optional via `LUMEN_BENCH_LIVE_LLM` |
