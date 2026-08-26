@@ -75,7 +75,20 @@ def hybrid_search(
             emb_provider = emb.get("provider") or emb.get("fallback") or "embed_texts"
         else:
             raise RuntimeError("embed_texts_incomplete")
-    except Exception:
+    except Exception as _emb_exc:
+        import os as _os
+        required = (_os.getenv("CODE_EMBEDDING_REQUIRED") or "").strip().lower() in {"1", "true", "yes"}
+        prod = (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}
+        if required or (prod and (_os.getenv("CODE_EMBEDDING_REQUIRED") or "1") != "0"):
+            # Production default: do not silently degrade to hash vectors
+            return {
+                "ok": False,
+                "hits": [],
+                "query": query,
+                "engine": "hybrid-bm25-vector-rrf-store",
+                "embed_provider": "unavailable",
+                "error": f"embeddings_required:{type(_emb_exc).__name__}:{_emb_exc}",
+            }
         q_vec = embed_text_local(query)
         doc_vecs = [embed_text_local(d["text"]) for d in docs]
         emb_provider = "hash_local_fallback"

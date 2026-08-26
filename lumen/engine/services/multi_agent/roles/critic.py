@@ -262,6 +262,31 @@ class CriticAgent(Agent):
         except Exception as _ef_exc:
             warnings.append(f"execution_feedback_skip:{type(_ef_exc).__name__}")
 
+        # Optional visual check via Playwright when browser tools enabled
+        try:
+            import os as _os
+            if (_os.getenv("BROWSER_USE_ENABLED") or "0").strip().lower() in {"1", "true", "yes"}:
+                from lumen.engine.services.browser_use import browse_url, screenshot, is_playwright_available
+                if is_playwright_available():
+                    url = (_os.getenv("CRITIC_VISUAL_URL") or "").strip()
+                    if url:
+                        br = browse_url(url)
+                        if br.get("ok"):
+                            shot = screenshot(str(br.get("session_id") or ""), path=str(Path(path) / "critic_shot.png"))
+                            details["visual_check"] = {"browse": br, "screenshot": shot}
+                            if not shot.get("ok"):
+                                findings.append(CritiqueFinding(
+                                    code="visual_screenshot_failed",
+                                    severity="warning",
+                                    message=str(shot.get("error") or "screenshot_failed")[:200],
+                                    fix_hint="Check Playwright browser install",
+                                ))
+                        else:
+                            details["visual_check"] = {"browse": br}
+        except Exception as _vis_exc:
+            warnings.append(f"visual_check_skip:{type(_vis_exc).__name__}")
+
+
         errors = findings_to_errors(findings)
         # warnings from findings
         for f in findings:

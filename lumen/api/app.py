@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from lumen.api.routes import audit, billing, dashboard, generate, health, hosts, jobs, tenants, usage, runs_ux
+from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, health, hosts, jobs, tenants, usage, runs_ux
 
 logger = logging.getLogger("lumen_api")
 
@@ -410,6 +410,7 @@ window.ui = SwaggerUIBundle({
     app.router.add_get("/v1/plans", tenants.list_plans)
     app.router.add_post("/v1/tenants", tenants.create_tenant)
     app.router.add_post("/v1/billing/webhook/stripe", billing.stripe_webhook)
+    app.router.add_post("/v1/integrations/github/webhook", github_webhooks.github_webhook)
     app.router.add_get("/v1/billing/checkout/success", billing.checkout_success)
     app.router.add_get("/v1/billing/checkout/cancel", billing.checkout_cancel)
     # Authenticated

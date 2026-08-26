@@ -160,6 +160,41 @@ def _scenario_hard(item_id: str):
     return _fn
 
 
+
+def _scenario_code_intel_gate(tmp: Path) -> dict[str, Any]:
+    """Real hybrid + repo_context gate (not scaffold-only)."""
+    t0 = time.time()
+    (tmp / "main.py").write_text(
+        "def main():\n    from handlers import on_start\n    return on_start()\n",
+        encoding="utf-8",
+    )
+    (tmp / "handlers.py").write_text(
+        "def on_start():\n    return \"ok\"\n",
+        encoding="utf-8",
+    )
+    from lumen.engine.services.evaluation.code_intel_gate import run_code_intel_gate
+    # gate uses its own temp dir; also verify hybrid on tmp
+    from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
+    from lumen.engine.services.code_intelligence.repo_context import pack_repo_context_for_goal
+    hs = hybrid_search(tmp, "on_start handler", top_k=5)
+    pack = pack_repo_context_for_goal(tmp, "on_start", extra_paths=["handlers.py"])
+    gate = run_code_intel_gate()
+    ok = bool(hs.get("hits")) and bool(pack.get("files")) and bool(gate.get("ok"))
+    return {
+        "success": ok,
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": 0.0,
+        "errors": [] if ok else ["code_intel_gate_or_hybrid_failed"],
+        "metrics": {
+            "embed_provider": hs.get("embed_provider"),
+            "hits": len(hs.get("hits") or []),
+            "pack_files": list((pack.get("files") or {}).keys()),
+            "gate": gate,
+        },
+    }
+
+
 SCENARIOS = [
     ("plat_telegram", lambda tmp: _scenario_platform_scaffold(tmp, "telegram"), "telegram"),
     ("plat_discord", lambda tmp: _scenario_platform_scaffold(tmp, "discord"), "discord"),
@@ -169,6 +204,7 @@ SCENARIOS = [
     ("code_intel_preflight", _scenario_code_intel_preflight, "telegram"),
     ("plan_findings", lambda tmp: _scenario_plan_and_findings(), "generic"),
     ("code_intel_hybrid", _scenario_hybrid_search, "telegram"),
+    ("code_intel_gate", _scenario_code_intel_gate, "telegram"),
     ("edit_pre_post", _scenario_edit_pre_post, "telegram"),
     ("cost_model", lambda tmp: _scenario_cost_model(), "generic"),
     ("hard_tg_support_tickets", _scenario_hard("tg_support_tickets"), "telegram"),
