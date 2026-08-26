@@ -176,6 +176,9 @@ def _emit_handlers(spec: BotSpec) -> str:
         imports.append("from app.services import pubg as pubg_svc")
     if need_extras:
         imports.append("from app.services import extras as extras_svc")
+    need_crm = any(_svc(f) == "crm" for f in spec.features)
+    if need_crm:
+        imports.append("from app.services import crm as crm_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -693,6 +696,13 @@ def _emit_handlers(spec: BotSpec) -> str:
             "compliance", "analytics", "admin", "notify",
         }:
             lines.extend(_market_handler_lines(cap, ok, fail))
+        elif cap.service == "crm":
+            lines.append("    from app.services import crm as crm_svc")
+            lines.append("    arg = ' '.join(context.args) if context.args else ''")
+            lines.append(
+                f"    result = crm_svc.act('crm', {cap.method!r}, user.id, arg)"
+            )
+            lines.append("    await message.reply_text(result)")
         elif cap.service == "booking":
             lines.append("    from app.services import booking as booking_svc")
             lines.append(

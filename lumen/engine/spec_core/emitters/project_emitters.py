@@ -371,6 +371,10 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/booking.py"] = _emit_booking_service()
     if "clinic" in svc_set or any(k.startswith("clinic_") for k in _fk_all):
         files["app/services/clinic.py"] = _emit_clinic_service()
+    if "crm" in svc_set or any(k.startswith(("lead_", "followup_")) for k in _fk_all):
+        _crm = Path(__file__).resolve().parents[1] / "runtime" / "crm_runtime.py"
+        if _crm.is_file():
+            files["app/services/crm.py"] = _crm.read_text(encoding="utf-8")
     if "security" in svc_set:
         files["app/services/security.py"] = _emit_security()
     if "content" in svc_set:

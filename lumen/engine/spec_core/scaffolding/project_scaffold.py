@@ -130,6 +130,26 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
         files["app/services/notes.py"] = _emit_notes()
     if needs_fat_tickets:
         files["app/services/tickets.py"] = _emit_tickets()
+    needs_fat_mod = bool(svc_set & {"moderation", "admin"}) or any(
+        str(k).startswith(p) for k in feat_keys
+        for p in ("user_ban", "user_warn", "user_mute", "user_kick", "delete_message", "purge", "rules")
+    ) or any(str(k) in {"user_ban","user_warn","user_mute","user_kick","delete_message","purge","rules"} for k in feat_keys)
+    if needs_fat_mod:
+        files["app/services/moderation.py"] = _emit_moderation()
+    needs_fat_content = bool(svc_set & {"content", "welcome"}) or any(
+        str(k).startswith(p) for k in feat_keys for p in ("welcome_", "faq_", "announce", "rules")
+    )
+    if needs_fat_content:
+        files["app/services/content.py"] = _emit_content(spec)
+        files["app/services/welcome.py"] = _emit_welcome()
+    needs_fat_crm = bool(svc_set & {"crm"}) or any(
+        str(k).startswith(p) for k in feat_keys for p in ("lead_", "followup_")
+    )
+    if needs_fat_crm:
+        from pathlib import Path as _P
+        _crm = _P(__file__).resolve().parents[1] / "runtime" / "crm_runtime.py"
+        if _crm.is_file():
+            files["app/services/crm.py"] = _crm.read_text(encoding="utf-8")
     if needs_booking:
         files["app/services/booking.py"] = _emit_booking_service()
     if needs_clinic:
