@@ -32,4 +32,5 @@ prometheus-client==0.21.1
 SQLAlchemy==2.0.40
 alembic==1.15.2
 
-# Phase B optional (Temporal): pip install temporalio
+# Phase B — durable workflows (official SDK)
+temporalio>=1.7.0,<2

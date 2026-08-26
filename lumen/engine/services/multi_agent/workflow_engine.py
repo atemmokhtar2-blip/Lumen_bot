@@ -259,15 +259,16 @@ class TemporalWorkflowEngine(WorkflowEngine):
 
     def _run(self, coro):
         import asyncio
+        import concurrent.futures
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(asyncio.run, coro).result(timeout=30)
-            return loop.run_until_complete(coro)
+            asyncio.get_running_loop()
+            running = True
         except RuntimeError:
-            return asyncio.run(coro)
+            running = False
+        if running:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result(timeout=30)
+        return asyncio.run(coro)
 
     async def _connect(self):
         from temporalio.client import Client
@@ -298,24 +299,34 @@ class TemporalWorkflowEngine(WorkflowEngine):
 
     async def _start_temporal(self, wid: str, state_id: str, step: str, payload: dict) -> None:
         from temporalio.client import Client
+        from temporalio.exceptions import WorkflowAlreadyStartedError
         from .temporal_defs import LumenMultiAgentGenerateWorkflow
 
         client = await self._client_async()
-        await client.start_workflow(
-            LumenMultiAgentGenerateWorkflow.run,
-            {
-                "state_id": state_id,
-                "workflow_id": wid,
-                "step": step,
-                "user_id": int(payload.get("user_id") or 0),
-                "description": str(payload.get("description") or "")[:2000],
-                "work_dir": str(payload.get("work_dir") or ""),
-                "auto_resume": bool(payload.get("auto_resume")),
-                "payload": payload,
-            },
-            id=wid,
-            task_queue=self._task_queue,
-        )
+        args = {
+            "state_id": state_id,
+            "workflow_id": wid,
+            "step": step,
+            "user_id": int(payload.get("user_id") or 0),
+            "description": str(payload.get("description") or "")[:2000],
+            "work_dir": str(payload.get("work_dir") or ""),
+            "auto_resume": bool(payload.get("auto_resume")),
+            "payload": payload,
+        }
+        try:
+            await client.start_workflow(
+                LumenMultiAgentGenerateWorkflow.run,
+                args,
+                id=wid,
+                task_queue=self._task_queue,
+            )
+        except WorkflowAlreadyStartedError:
+            # Idempotent start — signal checkpoint instead
+            handle = client.get_workflow_handle(wid)
+            await handle.signal(
+                "checkpoint",
+                {"state_id": state_id, "step": step, "status": "running", "payload": payload},
+            )
 
     def checkpoint(
         self,

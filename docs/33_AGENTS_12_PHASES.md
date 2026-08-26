@@ -46,7 +46,7 @@
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
 | **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |
 | **6** | Evaluation / Bot-bench | مقاييس نجاح ثابتة | **لم يبدأ رسميًا (D)** | تم اختبار حي يدوي؛ لا benchmark مُصدَّر في CI |
-| **7** | Scalability | Workers أفقية + backpressure | **Phase B نشطة** | journal + resume + Temporal workflow/worker رسمي + worker_pool backpressure — انظر `docs/35_PHASE_B_DURABILITY.md` |
+| **7** | Scalability | Workers أفقية + backpressure | **Phase B (Temporal SDK حيّ)** | journal + 429 pause + eng.start + temporalio WorkflowEnvironment tests + docker-compose رسمي — `docs/35_PHASE_B_DURABILITY.md` |
 | **8** | Computer Use / Browser | Playwright داخل sandbox | **لم يبدأ (F)** | |
 | **9** | Skills / MCP Registry | إضافات مفتوحة | **بدائي** | `mcp_bridge.py` رقيق |
 | **10** | Event-driven Agents | صحوة على أحداث | **لم يبدأ (F)** | resume/checkpoint فقط |

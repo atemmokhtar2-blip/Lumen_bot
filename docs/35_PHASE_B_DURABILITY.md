@@ -77,3 +77,20 @@ PYTHONPATH=. pytest tests/test_phase_b_durability.py -q
 ```bash
 python scripts/hosting/run_resume_workers.py --loop --interval 30
 ```
+
+
+## تحقق حيّ (أدوات رسمية)
+
+```bash
+pip install "temporalio>=1.7.0"
+PYTHONPATH=. pytest tests/test_phase_b_temporal_live.py -q
+# يستخدم temporalio.testing.WorkflowEnvironment (Time-skipping) — SDK رسمي، مش mock يدوي
+```
+
+تشغيل خادم Temporal على السيرفر:
+
+```bash
+docker compose -f deploy/temporal/docker-compose.yml up -d
+export TBE_WORKFLOW_ENGINE=temporal TEMPORAL_HOST=localhost:7233
+python -m lumen.engine.services.multi_agent.temporal_worker
+```
