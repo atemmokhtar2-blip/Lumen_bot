@@ -77,20 +77,11 @@ def _looks_like_generation_request(text: str) -> bool:
 
 
 def _free_agent_mode() -> bool:
-    """Cline free generation — always on while deterministic is hard-off.
+    """Cline is the sole generation path — always on.
 
-    No hosting env required. DETERMINISTIC_ENGINE=1 is the only override.
+    Deterministic engines are permanently purged from the product path.
     """
-    try:
-        from lumen.engine.services.engine_router import _deterministic_paused, _cline_only
-        if _deterministic_paused() or _cline_only():
-            return True
-    except Exception:
-        # Fail closed toward Cline if router import fails
-        eng = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
-        if eng not in {"1", "true", "yes", "on"}:
-            return True
-    return False
+    return True
 
 
 
