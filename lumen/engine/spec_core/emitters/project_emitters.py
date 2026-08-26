@@ -312,7 +312,11 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     )
     needs_flow = bool(svc_set & _FLOW_HINTS) or needs_market
     needs_generic = bool(svc_set & _GENERIC_HINTS)
-    needs_tickets = "tickets" in svc_set or "support" in svc_set
+    needs_tickets = (
+        "tickets" in svc_set
+        or "support" in svc_set
+        or any(str(k).startswith(("ticket_", "faq_")) for k in feat_keys_gen)
+    )
     needs_lang = any(
         (getattr(f, "feature", "") in {"lang", "language", "set_language"})
         or (getattr(getattr(f, "trigger", None), "id", "") == "lang")
@@ -352,14 +356,21 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         str(getattr(f, "feature", "")).startswith("pubg_") for f in (spec.features or [])
     ):
         files["app/services/pubg.py"] = _emit_pubg()
-    if "tasks" in svc_set:
+    _fk_all = {str(getattr(f, "feature", "") or "") for f in (spec.features or [])}
+    if "tasks" in svc_set or any(k.startswith("task_") for k in _fk_all):
         files["app/services/tasks.py"] = _emit_tasks()
-    if "notes" in svc_set:
+    if "notes" in svc_set or any(k.startswith("note_") for k in _fk_all):
         files["app/services/notes.py"] = _emit_notes()
     if "welcome" in svc_set:
         files["app/services/welcome.py"] = _emit_welcome()
-    if "tickets" in svc_set or "support" in svc_set:
+    if "tickets" in svc_set or "support" in svc_set or any(
+        k.startswith(("ticket_", "faq_")) for k in _fk_all
+    ):
         files["app/services/tickets.py"] = _emit_tickets()
+    if "booking" in svc_set or any(k.startswith("book_") for k in _fk_all):
+        files["app/services/booking.py"] = _emit_booking_service()
+    if "clinic" in svc_set or any(k.startswith("clinic_") for k in _fk_all):
+        files["app/services/clinic.py"] = _emit_clinic_service()
     if "security" in svc_set:
         files["app/services/security.py"] = _emit_security()
     if "content" in svc_set:

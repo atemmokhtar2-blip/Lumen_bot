@@ -90,7 +90,15 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     )
     needs_fat_generic = bool(svc_set & {"translate", "ocr", "scheduler"})
     needs_fat_flow = bool(svc_set & _FLOW_HINTS)
-    needs_fat_tickets = bool(svc_set & {"tickets", "support"})
+    needs_fat_tickets = bool(svc_set & {"tickets", "support"}) or any(
+        str(k).startswith(p) for k in feat_keys for p in ("ticket_", "faq_")
+    )
+    needs_fat_tasks = bool(svc_set & {"tasks", "notes"}) or any(
+        str(k).startswith(p) for k in feat_keys for p in ("task_", "note_")
+    )
+    needs_fat_booking = bool(svc_set & {"booking", "clinic"}) or any(
+        str(k).startswith(p) for k in feat_keys for p in ("book_", "clinic_", "gym_")
+    )
     if not needs_fat_market:
         files.pop("app/services/market.py", None)
     if not needs_fat_generic:
@@ -109,14 +117,19 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     if needs_reminders:
         files["app/services/reminders.py"] = _emit_reminders_service()
 
-    needs_booking = bool(
+    needs_booking = bool(needs_fat_booking) or bool(
         "booking" in svc_set
         or any(str(k).startswith("book_") for k in feat_keys)
     )
-    needs_clinic = bool(
+    needs_clinic = bool(needs_fat_booking) or bool(
         "clinic" in svc_set
         or any(str(k).startswith("clinic_") for k in feat_keys)
     )
+    if needs_fat_tasks:
+        files["app/services/tasks.py"] = _emit_tasks()
+        files["app/services/notes.py"] = _emit_notes()
+    if needs_fat_tickets:
+        files["app/services/tickets.py"] = _emit_tickets()
     if needs_booking:
         files["app/services/booking.py"] = _emit_booking_service()
     if needs_clinic:

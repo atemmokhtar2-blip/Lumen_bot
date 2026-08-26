@@ -1,33 +1,73 @@
-"""Emit service modules for generated bots (split package)."""
+"""Emit reminders + booking + clinic — booking/clinic from deep runtime."""
 from __future__ import annotations
+
+from pathlib import Path
 
 from ..schema import BotSpec
 
+
+def _booking_source() -> str:
+    path = Path(__file__).resolve().parents[1] / "runtime" / "booking_runtime.py"
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"booking_runtime missing: {path}")
+
+
+def _emit_booking_service() -> str:
+    return _booking_source()
+
+
+def _emit_clinic_service() -> str:
+    """Clinic uses same runtime with kind=clinic wrappers exposed at module level."""
+    src = _booking_source()
+    # Alias primary names so existing handlers calling clinic.book/slots work
+    aliases = """
+
+# ── Handler-compatible clinic module surface ──────────────────────────
+book = clinic_book
+slots = clinic_slots
+cancel = clinic_cancel
+my_appointments = clinic_my
+"""
+    return src + aliases
+
+
 def _emit_reminders_service() -> str:
-    """Lean, real reminders runtime — never a stub. Used when remind_* is selected."""
+    """Keep working reminders emitter (time parse + due_ts) — not generic_kv."""
     return (
-        '"""Reminders service — sqlite-backed due reminders."""\n'
+        '"""Reminders service — parse relative times, list due, mark fired."""\n'
         "from __future__ import annotations\n\n"
         "import re\n"
         "import time\n"
         "from datetime import datetime, timedelta, timezone\n\n"
         "from app.db import connect, init_db\n\n\n"
         "def ensure() -> None:\n"
-        "    init_db()\n\n\n"
-        "def _parse_due(text: str) -> tuple[str, int]:\n"
-        '    """Extract body + due unix ts. Default +1h if no time found."""\n'
+        "    init_db()\n"
+        "    with connect() as conn:\n"
+        "        conn.execute(\n"
+        "            'CREATE TABLE IF NOT EXISTS reminders ('\n"
+        "            'id INTEGER PRIMARY KEY AUTOINCREMENT, '\n"
+        "            'user_id INTEGER NOT NULL, '\n"
+        "            'chat_id INTEGER NOT NULL DEFAULT 0, '\n"
+        "            'body TEXT NOT NULL, '\n"
+        "            'due_ts INTEGER NOT NULL, '\n"
+        "            'fired INTEGER NOT NULL DEFAULT 0, '\n"
+        "            'created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)'\n"
+        "        )\n"
+        "        conn.commit()\n\n\n"
+        "def _parse_due(text: str):\n"
         "    raw = (text or '').strip()\n"
         "    now = int(time.time())\n"
         "    due = now + 3600\n"
         "    body = raw\n"
         "    m = re.search(\n"
-        "        r'(?:بعد\\s*)?(\\d+)\\s*(دقيقة|دقائق|minute|minutes|min|m|ساعة|ساعات|hour|hours|h|يوم|أيام|day|days|d)\\b',\n"
+        "        r'(?:بعد|in)\\s+(\\d+)\\s*(دقيقة|دقائق|minute|minutes|m|ساعة|ساعات|hour|hours|h|يوم|أيام|day|days|d)?',\n"
         "        raw, re.I,\n"
         "    )\n"
         "    if m:\n"
         "        n = int(m.group(1))\n"
-        "        unit = m.group(2).lower()\n"
-        "        if unit in {'دقيقة', 'دقائق', 'minute', 'minutes', 'min', 'm'}:\n"
+        "        unit = (m.group(2) or 'm').lower()\n"
+        "        if unit in {'دقيقة', 'دقائق', 'minute', 'minutes', 'm'}:\n"
         "            due = now + n * 60\n"
         "        elif unit in {'ساعة', 'ساعات', 'hour', 'hours', 'h'}:\n"
         "            due = now + n * 3600\n"
@@ -61,7 +101,7 @@ def _emit_reminders_service() -> str:
         "        )\n"
         "        conn.commit()\n"
         "        return int(cur.lastrowid)\n\n\n"
-        "def list_reminders(user_id: int) -> list[dict]:\n"
+        "def list_reminders(user_id: int) -> list:\n"
         "    ensure()\n"
         "    with connect() as conn:\n"
         "        rows = conn.execute(\n"
@@ -85,173 +125,29 @@ def _emit_reminders_service() -> str:
         "        )\n"
         "        conn.commit()\n"
         "        return int(cur.rowcount)\n\n\n"
-        "def list_due_reminders(now_ts: int | None = None, limit: int = 50) -> list[dict]:\n"
+        "def list_due_reminders(now_ts=None, limit: int = 50):\n"
         "    ensure()\n"
-        "    now = int(now_ts if now_ts is not None else time.time())\n"
-        "    lim = max(1, min(int(limit or 20), 50))\n"
+        "    now = int(now_ts or time.time())\n"
         "    with connect() as conn:\n"
         "        rows = conn.execute(\n"
         "            'SELECT id, user_id, chat_id, body, due_ts FROM reminders '\n"
-        "            'WHERE fired = 0 AND due_ts > 0 AND due_ts <= ? '\n"
-        "            'ORDER BY due_ts ASC LIMIT ?',\n"
-        "            (now, lim),\n"
+        "            'WHERE fired = 0 AND due_ts <= ? ORDER BY due_ts ASC LIMIT ?',\n"
+        "            (now, int(limit)),\n"
         "        ).fetchall()\n"
         "    return [dict(r) for r in rows]\n\n\n"
         "def mark_reminder_fired(reminder_id: int) -> bool:\n"
         "    ensure()\n"
         "    with connect() as conn:\n"
         "        cur = conn.execute(\n"
-        "            'UPDATE reminders SET fired = 1 WHERE id = ?',\n"
+        "            'UPDATE reminders SET fired = 1 WHERE id = ? AND fired = 0',\n"
         "            (int(reminder_id),),\n"
         "        )\n"
         "        conn.commit()\n"
         "        return cur.rowcount > 0\n\n\n"
-        "def act(entity: str, method: str, user_id: int, text: str = '') -> str:\n"
-        '    """Compat for handlers that call act(\'reminders\', ...)."""\n'
-        "    entity = (entity or '').lower()\n"
-        "    method = (method or '').lower()\n"
-        "    if entity not in {'reminders', 'reminder'}:\n"
-        "        return f'{method} is not available in this bot build'\n"
-        "    if method in {'set_reminder', 'set', 'add'}:\n"
-        "        rid = set_reminder(user_id, text or 'تذكير')\n"
-        "        return f'تم ضبط التذكير #{rid}'\n"
-        "    if method in {'list_reminders', 'list'}:\n"
-        "        items = list_reminders(user_id)\n"
-        "        if not items:\n"
-        "            return 'لا توجد تذكيرات مفتوحة'\n"
-        "        return '\\n'.join(f\"#{i['id']} خلال {i.get('remain_min', 0)} د — {i['body']}\" for i in items)\n"
-        "    if method in {'clear_reminders', 'clear'}:\n"
-        "        n = clear_reminders(user_id)\n"
-        "        return f'تم إغلاق {n} تذكير'\n"
-        "    return f'{method} is not available in this bot build'\n"
+        "def format_reminders(items) -> str:\n"
+        "    if not items:\n"
+        "        return 'لا تذكيرات'\n"
+        "    return '\\n'.join(\n"
+        "        f\"#{i['id']} بعد {i.get('remain_min', '?')} د — {i.get('body', '')}\" for i in items\n"
+        "    )\n"
     )
-
-
-
-def _emit_booking_service() -> str:
-    """Lean booking runtime (sqlite)."""
-    return (
-        '"""Booking service — simple slot bookings."""\n'
-        "from __future__ import annotations\n\n"
-        "from app.db import connect, init_db\n\n\n"
-        "def ensure() -> None:\n"
-        "    init_db()\n\n\n"
-        "def book_slot(user_id: int, text: str = '', chat_id: int = 0) -> str:\n"
-        "    ensure()\n"
-        "    body = (text or 'موعد').strip()[:300] or 'موعد'\n"
-        "    with connect() as conn:\n"
-        "        cur = conn.execute(\n"
-        "            'INSERT INTO bookings (user_id, chat_id, body, status) VALUES (?, ?, ?, ?)',\n"
-        "            (int(user_id), int(chat_id or user_id), body, 'open'),\n"
-        "        )\n"
-        "        conn.commit()\n"
-        "        return f'تم الحجز #{int(cur.lastrowid)}: {body}'\n\n\n"
-        "def list_bookings(user_id: int, text: str = '') -> str:\n"
-        "    ensure()\n"
-        "    with connect() as conn:\n"
-        "        rows = conn.execute(\n"
-        "            \"SELECT id, body, status FROM bookings WHERE user_id = ? AND status = 'open' ORDER BY id DESC\",\n"
-        "            (int(user_id),),\n"
-        "        ).fetchall()\n"
-        "    if not rows:\n"
-        "        return 'لا توجد حجوزات مفتوحة'\n"
-        "    return '\\n'.join(f\"#{r['id']} {r['body']}\" for r in rows)\n\n\n"
-        "def cancel_booking(user_id: int, text: str = '') -> str:\n"
-        "    ensure()\n"
-        "    try:\n"
-        "        bid = int((text or '').strip().split()[0])\n"
-        "    except (ValueError, IndexError):\n"
-        "        return 'الاستخدام: /bookcancel <رقم_الحجز>'\n"
-        "    with connect() as conn:\n"
-        "        cur = conn.execute(\n"
-        "            \"UPDATE bookings SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'open'\",\n"
-        "            (bid, int(user_id)),\n"
-        "        )\n"
-        "        conn.commit()\n"
-        "        return 'تم إلغاء الحجز' if cur.rowcount else 'الحجز غير موجود'\n\n\n"
-        "def admin_list(user_id: int = 0, text: str = '') -> str:\n"
-        "    ensure()\n"
-        "    with connect() as conn:\n"
-        "        rows = conn.execute(\n"
-        "            \"SELECT id, user_id, body, status FROM bookings ORDER BY id DESC LIMIT 30\"\n"
-        "        ).fetchall()\n"
-        "    if not rows:\n"
-        "        return 'لا حجوزات'\n"
-        "    return '\\n'.join(f\"#{r['id']} u{r['user_id']} [{r['status']}] {r['body']}\" for r in rows)\n\n\n"
-        "def act(entity: str, method: str, user_id: int, text: str = '') -> str:\n"
-        "    m = (method or '').lower()\n"
-        "    if m in {'book_slot', 'book', 'add'}:\n"
-        "        return book_slot(user_id, text)\n"
-        "    if m in {'list_bookings', 'list', 'my'}:\n"
-        "        return list_bookings(user_id, text)\n"
-        "    if m in {'cancel_booking', 'cancel'}:\n"
-        "        return cancel_booking(user_id, text)\n"
-        "    if m in {'admin_list'}:\n"
-        "        return admin_list(user_id, text)\n"
-        "    return f'{method} is not available in this bot build'\n"
-    )
-
-
-
-def _emit_clinic_service() -> str:
-    """Lean clinic appointments runtime (sqlite)."""
-    return (
-        '"""Clinic appointments service."""\n'
-        "from __future__ import annotations\n\n"
-        "from app.db import connect, init_db\n\n\n"
-        "def ensure() -> None:\n"
-        "    init_db()\n\n\n"
-        "def book(user_id: int, text: str = '', chat_id: int = 0) -> str:\n"
-        "    ensure()\n"
-        "    body = (text or 'موعد طبي').strip()[:300] or 'موعد طبي'\n"
-        "    with connect() as conn:\n"
-        "        cur = conn.execute(\n"
-        "            'INSERT INTO clinic_appts (user_id, chat_id, body, status) VALUES (?, ?, ?, ?)',\n"
-        "            (int(user_id), int(chat_id or user_id), body, 'open'),\n"
-        "        )\n"
-        "        conn.commit()\n"
-        "        return f'تم حجز الموعد الطبي #{int(cur.lastrowid)}: {body}'\n\n\n"
-        "def slots(user_id: int = 0, text: str = '') -> str:\n"
-        "    return (\n"
-        "        'المواعيد المتاحة (تجريبي):\\n'\n"
-        "        '• غداً 10:00\\n• غداً 12:00\\n• بعد غد 16:00\\n'\n"
-        "        'احجز بـ /clinicbook مع وصف الموعد'\n"
-        "    )\n\n\n"
-        "def cancel(user_id: int, text: str = '') -> str:\n"
-        "    ensure()\n"
-        "    try:\n"
-        "        aid = int((text or '').strip().split()[0])\n"
-        "    except (ValueError, IndexError):\n"
-        "        return 'الاستخدام: /cliniccancel <رقم_الموعد>'\n"
-        "    with connect() as conn:\n"
-        "        cur = conn.execute(\n"
-        "            \"UPDATE clinic_appts SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'open'\",\n"
-        "            (aid, int(user_id)),\n"
-        "        )\n"
-        "        conn.commit()\n"
-        "        return 'تم إلغاء الموعد' if cur.rowcount else 'الموعد غير موجود'\n\n\n"
-        "def my_appointments(user_id: int, text: str = '') -> str:\n"
-        "    ensure()\n"
-        "    with connect() as conn:\n"
-        "        rows = conn.execute(\n"
-        "            \"SELECT id, body, status FROM clinic_appts WHERE user_id = ? AND status = 'open' ORDER BY id DESC\",\n"
-        "            (int(user_id),),\n"
-        "        ).fetchall()\n"
-        "    if not rows:\n"
-        "        return 'لا مواعيد مفتوحة'\n"
-        "    return '\\n'.join(f\"#{r['id']} {r['body']}\" for r in rows)\n\n\n"
-        "def act(entity: str, method: str, user_id: int, text: str = '') -> str:\n"
-        "    m = (method or '').lower()\n"
-        "    if m in {'book', 'book_slot', 'add'}:\n"
-        "        return book(user_id, text)\n"
-        "    if m in {'slots', 'list_slots'}:\n"
-        "        return slots(user_id, text)\n"
-        "    if m in {'cancel'}:\n"
-        "        return cancel(user_id, text)\n"
-        "    if m in {'my_appointments', 'my', 'list'}:\n"
-        "        return my_appointments(user_id, text)\n"
-        "    return f'{method} is not available in this bot build'\n"
-    )
-
-
-
