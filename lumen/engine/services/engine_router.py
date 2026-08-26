@@ -1,7 +1,9 @@
-"""Core engine router — selects catalog | hybrid | cline from BuildIR.
+"""Core engine router — Cline SDK is the sole generation engine.
 
-Foundation is intentionally strict:
-  package → BuildIR → validate_and_normalize_ir → execute → IR acceptance check
+Deterministic engines (catalog / hybrid / infinite / spec_core generate_bot)
+are purged from the user-request path.
+
+  package → BuildIR → validate_and_normalize_ir → execute_cline_ir → IR acceptance
 """
 from __future__ import annotations
 
@@ -16,50 +18,44 @@ logger = logging.getLogger(__name__)
 
 
 def _env_force_mode() -> EngineMode | None:
+    """ENGINE_MODE_FORCE is ignored for catalog/hybrid/infinite — product is Cline-only."""
     raw = (os.getenv("ENGINE_MODE_FORCE") or "").strip().lower()
     if not raw:
         return None
     try:
-        return EngineMode(raw)
+        mode = EngineMode(raw)
     except ValueError:
         return None
+    if mode != EngineMode.CLINE:
+        logger.warning(
+            "ENGINE_MODE_FORCE=%s ignored — deterministic engines purged; forcing CLINE",
+            raw,
+        )
+        return EngineMode.CLINE
+    return mode
 
 
 def _deterministic_paused() -> bool:
-    """Deterministic engine is HARD-OFF in the product path.
+    """Deterministic engines (catalog / hybrid / infinite / spec_core) are permanently off.
 
-    No hosting env needed. Only an explicit DETERMINISTIC_ENGINE=1
-    (dev/emergency) re-enables catalog/infinite/hybrid.
+    DETERMINISTIC_ENGINE is ignored — product path is Cline SDK only.
+    Kept as a named API for call sites that still import it.
     """
-    raw = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
-    return raw not in {"1", "true", "yes", "on"}
+    return True
 
 
 def _cline_only() -> bool:
-    """Cline SDK is the only generation path while deterministic is hard-off."""
-    if _deterministic_paused():
-        return True
-    raw = os.getenv("CLINE_ONLY")
-    if raw is None or not str(raw).strip():
-        raw = os.getenv("CLINE_FORCE_AGENT")
-    if raw is None or not str(raw).strip():
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    """Cline SDK is the sole generation engine for user requests."""
+    return True
 
 
 def _infinite_primary() -> bool:
-    """Infinite path — disabled while deterministic is paused."""
-    if _deterministic_paused():
-        return False
-    if (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}:
-        return True
-    raw = (os.getenv("TBE_INFINITE_PRIMARY") or "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    """Infinite/spec_core path permanently disabled."""
+    return False
 
 
 def _infinite_preferred() -> bool:
-    """Back-compat alias for _infinite_primary."""
-    return _infinite_primary()
+    return False
 
 
 def decide_engine_mode(
@@ -70,42 +66,11 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Policy: **Cline SDK primary** (deterministic paused by default).
-
-    Order:
-      1. ENGINE_MODE_FORCE override (if set)
-      2. Cline when CLINE_ONLY or deterministic paused (default)
-      3. Else infinite / catalog / hybrid only if DETERMINISTIC_ENGINE=1
-    """
+    """Product policy: Cline SDK only. Deterministic engines are purged from the request path."""
     forced = _env_force_mode()
     if forced is not None:
-        if _deterministic_paused() and forced in {
-            EngineMode.CATALOG, EngineMode.HYBRID, EngineMode.INFINITE
-        }:
-            logger.warning(
-                "deterministic paused — ignoring ENGINE_MODE_FORCE=%s, using CLINE",
-                forced.value,
-            )
-            return EngineMode.CLINE
         return forced
-
-    if _cline_only() or _deterministic_paused():
-        return EngineMode.CLINE
-
-    if _infinite_primary():
-        return EngineMode.INFINITE
-
-    core = {"start", "help", "lang", "language", "cancel"}
-    non_core = [k for k in preferred_keys if k not in core]
-    gap = [g for g in capabilities_gap if str(g).strip()]
-
-    if non_core and not gap and not needs_ai_codegen:
-        return EngineMode.CATALOG
-    if non_core and (gap or looks_custom or needs_ai_codegen):
-        return EngineMode.HYBRID
-    if needs_ai_codegen or (looks_custom and not non_core):
-        return EngineMode.CLINE
-    return EngineMode.CATALOG
+    return EngineMode.CLINE
 
 
 def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> BuildIR:
@@ -121,25 +86,14 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
     needs_ai = bool(package.get("needs_ai_codegen"))
     conf = float(package.get("confidence") or 0.0)
 
+    # Product path: Cline SDK only — ignore package.engine_mode catalog/hybrid/infinite.
     mode_raw = package.get("engine_mode")
-    if mode_raw in {"catalog", "hybrid", "cline"}:
-        mode = EngineMode(str(mode_raw))
-    elif mode_raw in {"spec_core"}:
-        mode = EngineMode.CATALOG
-    elif mode_raw in {"ai_codegen"}:
-        mode = EngineMode.CLINE
-    elif mode_raw in {"infinite", "infinite_v1", "atomic", "dynamic"}:
-        mode = EngineMode.INFINITE
-    else:
-        mode = decide_engine_mode(
-            preferred_keys=preferred,
-            capabilities_gap=gap,
-            looks_custom=looks_custom,
-            needs_ai_codegen=needs_ai,
-            confidence=conf,
+    mode = EngineMode.CLINE
+    if mode_raw and str(mode_raw) not in {"cline", "ai_codegen", ""}:
+        logger.info(
+            "purged deterministic engine_mode=%s → cline",
+            mode_raw,
         )
-    if _cline_only():
-        mode = EngineMode.CLINE
 
     ir = BuildIR.from_dict(
         {
@@ -176,20 +130,7 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
         ir.status = IRStatus.REJECTED
         ir.notes = list(ir.notes) + [f"err:{e}" for e in v.errors]
     else:
-        # Preserve infinite when package/engine says so; else re-decide
-        eng = str(package.get("engine") or "")
-        if mode == EngineMode.INFINITE or eng.startswith("infinite") or mode_raw in {
-            "infinite", "infinite_v1", "atomic", "dynamic"
-        }:
-            ir.engine_mode = EngineMode.INFINITE
-        else:
-            ir.engine_mode = decide_engine_mode(
-                preferred_keys=ir.preferred_keys,
-                capabilities_gap=ir.capabilities_gap,
-                looks_custom=looks_custom,
-                needs_ai_codegen=needs_ai,
-                confidence=ir.confidence,
-            )
+        ir.engine_mode = EngineMode.CLINE
     return ir
 
 
@@ -222,195 +163,52 @@ def execute_ir(
             metadata={"ir": ir.to_dict(), "ir_warnings": v.warnings},
         )
 
-    mode = ir.engine_mode
-    if _deterministic_paused() and mode != EngineMode.CLINE:
-        logger.warning(
-            "deterministic paused — remapping mode %s → cline", mode.value
-        )
-        mode = EngineMode.CLINE
-        ir.engine_mode = EngineMode.CLINE
+    # ── Cline SDK only (deterministic catalog/hybrid/infinite purged) ──
+    mode = EngineMode.CLINE
+    ir.engine_mode = EngineMode.CLINE
 
     logger.info(
-        "engine_router mode=%s keys=%s gap=%s conf=%.2f domain=%s",
-        mode.value,
+        "engine_router mode=cline (sole engine) keys=%s gap=%s conf=%.2f domain=%s",
         ir.preferred_keys,
         ir.capabilities_gap,
         ir.confidence,
         (ir.metadata or {}).get("domain_primary"),
     )
 
-    if mode == EngineMode.INFINITE:
-        try:
-            from lumen.engine.spec_core.infinite.compose import try_compose_infinite
-            from lumen.engine.services.translator_client import translate_infinite_via_gemini
-            from lumen.engine.spec_core.pipeline import build_from_spec
-            from lumen.engine.spec_core.infinite.jit_compiler import compile_to_project
-        except Exception as exc:
-            logger.warning("infinite path unavailable (%s); falling back to hybrid/catalog", type(exc).__name__)
-            mode = EngineMode.HYBRID
-        else:
-            dyn_payload = (ir.metadata or {}).get("dynamic_spec")
-            bot_spec_dict = (ir.metadata or {}).get("bot_spec")
-            dyn = None
-            bot = None
-            if dyn_payload:
-                bot, dyn, err = try_compose_infinite(dyn_payload)
-            if bot is None:
-                # re-translate via infinite if needed
-                inf = translate_infinite_via_gemini(
-                    ir.original_text or ir.spec_request,
-                    context={"infinite": True, "looks_custom": True},
-                )
-                if inf and inf.get("ok"):
-                    dyn_payload = inf.get("dynamic_spec")
-                    bot_spec_dict = inf.get("bot_spec")
-                    bot, dyn, err = try_compose_infinite(dyn_payload or {})
-                else:
-                    err = (inf or {}).get("validation_error") if isinstance(inf, dict) else "infinite_translate_failed"
-                    logger.warning("infinite translate failed: %s — building deterministic DynamicBotSpec", err)
-                    # Deterministic atomic fallback so infinite path stays primary offline
-                    try:
-                        from lumen.engine.spec_core.dynamic_bot_spec import DynamicBotSpec
-                        req = (ir.original_text or ir.spec_request or "bot").strip()[:80]
-                        fallback = {
-                            "bot_name": (req[:40] or "infinite_bot").replace(" ", "_")[:40] or "infinite_bot",
-                            "description": req[:500],
-                            "language": "ar",
-                            "version": "infinite_v1",
-                            "nodes": [
-                                {
-                                    "id": "start_n",
-                                    "trigger": {"type": "on_start", "config": {"command": "start"}},
-                                    "actions": [{
-                                        "type": "send_message",
-                                        "config": {"text": f"مرحباً — {req[:120]}"},
-                                    }],
-                                },
-                                {
-                                    "id": "msg_n",
-                                    "trigger": {"type": "on_message", "config": {}},
-                                    "conditions": [{"type": "always", "config": {}}],
-                                    "actions": [{
-                                        "type": "send_message",
-                                        "config": {"text": "تم استلام رسالتك."},
-                                    }],
-                                },
-                            ],
-                        }
-                        # Add simple command nodes from preferred_keys
-                        for i, key in enumerate((ir.preferred_keys or [])[:8]):
-                            k = str(key).strip().lower().replace("-", "_")
-                            if not k or k in {"start", "help"}:
-                                continue
-                            fallback["nodes"].append({
-                                "id": f"cmd_{k}"[:32],
-                                "trigger": {"type": "on_command", "config": {"command": k}},
-                                "actions": [{
-                                    "type": "send_message",
-                                    "config": {"text": f"أمر /{k}"},
-                                }],
-                            })
-                        bot, dyn, err2 = try_compose_infinite(fallback)
-                        if bot is None and dyn is None:
-                            logger.warning("infinite deterministic fallback failed: %s", err2)
-                            mode = EngineMode.HYBRID
-                        else:
-                            dyn_payload = fallback
-                    except Exception as exc:
-                        logger.warning("infinite fallback error: %s", type(exc).__name__)
-                        mode = EngineMode.HYBRID
-            if mode == EngineMode.INFINITE and (bot is not None or bot_spec_dict or dyn is not None):
-                out = work_dir / "infinite_bot"
-                out.mkdir(parents=True, exist_ok=True)
-                project_path = None
-                errors: list[str] = []
-                try:
-                    if callable(compile_to_project) and dyn is not None:
-                        project_path = compile_to_project(dyn, out)
-                    if project_path is None:
-                        spec = bot_spec_dict or (bot.to_dict() if bot else {})
-                        br = build_from_spec(spec, out, request=ir.original_text or ir.spec_request)
-                        if br.ok:
-                            project_path = br.project_path
-                        else:
-                            errors = list(br.errors)
-                except Exception as exc:
-                    logger.exception("infinite compile failed")
-                    errors.append(type(exc).__name__)
-                if project_path:
-                    # promote successful macro
-                    try:
-                        if dyn is not None:
-                            from lumen.engine.spec_core.infinite.macro_registry import get_macro_registry
-                            get_macro_registry().promote(dyn, score=0.8)
-                    except Exception:
-                        pass
-                    result = GenerationResult(
-                        success=True,
-                        project_path=str(project_path),
-                        stages=[],
-                        validation_reports=[],
-                        errors=errors,
-                        metadata={
-                            "engine": "infinite_v1",
-                            "ir": ir.to_dict(),
-                            "dynamic_spec": dyn.model_dump() if dyn is not None else dyn_payload,
-                        },
-                    )
-                    return _finalize(result, ir)
-                logger.warning("infinite build failed: %s — fallback hybrid", errors[:3])
-                mode = EngineMode.HYBRID
+    from lumen.engine.services.cline_runtime import execute_cline_ir
 
-    if mode == EngineMode.CLINE:
-        from lumen.engine.services.cline_runtime import execute_cline_ir
+    cline_res = execute_cline_ir(ir, work_dir)
+    if cline_res.ok and cline_res.project_path:
+        result = GenerationResult(
+            success=True,
+            project_path=cline_res.project_path,
+            stages=[],
+            validation_reports=[],
+            errors=list(cline_res.errors),
+            metadata={
+                "engine": cline_res.engine,
+                "ir": ir.to_dict(),
+                "cline": cline_res.to_dict(),
+            },
+        )
+        return _finalize(result, ir)
 
-        cline_res = execute_cline_ir(ir, work_dir)
-        if cline_res.ok and cline_res.project_path:
-            result = GenerationResult(
-                success=True,
-                project_path=cline_res.project_path,
-                stages=[],
-                validation_reports=[],
-                errors=list(cline_res.errors),
-                metadata={
-                    "engine": cline_res.engine,
-                    "ir": ir.to_dict(),
-                    "cline": cline_res.to_dict(),
-                },
-            )
-            return _finalize(result, ir)
-        # Network/LLM failures must not brick generation: fall back to catalog
-        # unless operator explicitly disables it.
-        if (os.getenv("CLINE_NO_CATALOG_FALLBACK") or "0").strip().lower() in {
-            "1", "true", "yes", "on",
-        }:
-            logger.warning("cline failed and catalog fallback DISABLED: %s", cline_res.errors[:3])
-            return GenerationResult(
-                success=False,
-                project_path=cline_res.project_path,
-                stages=[],
-                validation_reports=[],
-                errors=list(cline_res.errors) or ["cline_failed_no_catalog_fallback"],
-                metadata={
-                    "engine": cline_res.engine,
-                    "ir": ir.to_dict(),
-                    "cline": cline_res.to_dict(),
-                    "catalog_fallback": False,
-                },
-            )
-        logger.warning("cline unavailable %s — catalog fallback", cline_res.errors[:2])
-        result = _run_catalog(ir, work_dir, uid)
-        try:
-            meta = dict(getattr(result, "metadata", None) or {})
-            meta["cline_fallback"] = cline_res.to_dict()
-            result.metadata = meta
-        except Exception:
-            pass
-        return _finalize(result, ir, hybrid=True)
+    logger.warning("cline failed — no deterministic fallback: %s", cline_res.errors[:5])
+    return GenerationResult(
+        success=False,
+        project_path=cline_res.project_path,
+        stages=[],
+        validation_reports=[],
+        errors=list(cline_res.errors) or ["cline_failed"],
+        metadata={
+            "engine": cline_res.engine,
+            "ir": ir.to_dict(),
+            "cline": cline_res.to_dict(),
+            "catalog_fallback": False,
+            "deterministic_purged": True,
+        },
+    )
 
-    # catalog or hybrid
-    result = _run_catalog(ir, work_dir, uid)
-    return _finalize(result, ir, hybrid=(mode == EngineMode.HYBRID))
 
 
 def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
@@ -508,13 +306,17 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
 
 
 def _run_catalog(ir: BuildIR, work_dir: Path, user_id: int) -> Any:
-    from lumen.engine import generate_bot
+    """Deterministic catalog path removed from product. Kept as a hard-fail stub."""
+    from lumen.engine.core.result import GenerationResult
 
-    return generate_bot(
-        ir.spec_request or ir.original_text,
-        work_dir=str(work_dir),
-        user_id=int(user_id or 0),
-        preferred_keys=list(ir.preferred_keys) or None,
+    logger.error("_run_catalog invoked — deterministic engine purged; refusing")
+    return GenerationResult(
+        success=False,
+        project_path=None,
+        stages=[],
+        validation_reports=[],
+        errors=["deterministic_engine_purged"],
+        metadata={"engine": "purged", "ir": ir.to_dict()},
     )
 
 
