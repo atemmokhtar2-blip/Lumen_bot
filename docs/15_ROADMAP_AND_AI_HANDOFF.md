@@ -2,18 +2,20 @@
 
 > **IMPORTANT FOR ANY AI / DEVELOPER CONTINUING THIS WORK**  
 > This platform is **in active construction**. Do not assume the stack is finished.  
-> Read this file first, then `docs/MASTER.md` and `docs/14_ENGINE_ROUTER_AND_IR.md`.  
+> **Agents / Cline path of record:** read `docs/33_AGENTS_12_PHASES.md` first.  
+> **Forbidden:** fake generator scripts, catalog-as-primary for general user requests.  
+> **Required:** official `multi_agent` + `cline_runtime` tools only.  
+> Read this file, then `docs/33_AGENTS_12_PHASES.md` and `docs/14_ENGINE_ROUTER_AND_IR.md`.  
 > Prefer **extending** existing contracts over inventing parallel paths.  
-> After every change: test catalog bots (shop/group/tasks) + push.
+> After every change: live Cline path test (limited keys) + Critic on output + push.
 
 ---
-
 ## Product intent (do not break)
 
 | Principle | Meaning |
 |-----------|---------|
 | Grok = chat/router only | Does not write bot code for the user product path |
-| Catalog first | Known bots use deterministic `spec_core` |
+| Cline first (general) | User generation path is Cline only; deterministic catalog purged from user path |
 | IR is control plane | `BuildIR` is a contract, not a “translator layer” |
 | Cline = general path | Under policy; default builtin tools, not blind shell |
 | Planning ≠ Generation | Validate IR before write |
@@ -30,9 +32,7 @@ USER (Telegram)
   → analyze_and_prepare (bridge rules + optional translation dict)
   → BuildIR + validate_and_normalize_ir
   → engine_router.execute_ir
-        ├─ catalog  → lumen.engine.generate_bot (spec_core)
-        ├─ hybrid   → catalog + hybrid_scaffolds
-        └─ cline    → cline_runtime (builtin provider or CLINE_PROVIDER)
+        └─ cline    → cline_runtime (multi_agent Planner/Worker/Critic when enabled)
   → control_plane (permission, plan, project, delivery_gate)
   → ZIP / host to user
 ```

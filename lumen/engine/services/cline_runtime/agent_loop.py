@@ -279,6 +279,21 @@ def run_agent(
             path = str(result["path"])
             if path not in state.files_written:
                 state.files_written.append(path)
+        # Nudge model to finish when core deliverables already on disk
+        try:
+            from pathlib import Path as _P
+            root = _P(state.work_dir)
+            core = [
+                (root / "main.py").is_file(),
+                (root / "app" / "handlers.py").is_file() or (root / "handlers.py").is_file(),
+                (root / "requirements.txt").is_file(),
+            ]
+            if sum(1 for x in core if x) >= 2 and i >= 2:
+                state.add_user(
+                    "Core files present. Add any missing README/.env.example if needed, then call finish."
+                )
+        except Exception:
+            pass
         if tool == "edit_file" and result.get("ok") and args.get("path"):
             path = str(args["path"])
             if path not in state.files_written:
