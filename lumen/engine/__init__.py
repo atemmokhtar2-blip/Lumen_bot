@@ -1429,11 +1429,36 @@ def _generate_bot_zero_ai(request: str, work_dir, t0: float, user_id: int = 0, *
 
 
 def generate_bot(request: str, work_dir=None, user_id: int = 0, preferred_keys=None):
-    """Generate a runnable Telegram bot using zero-AI engines only.
+    """Legacy entry — redirects to Cline SDK (deterministic path purged).
 
-    Runs L1→L6 intelligence (per user_id when provided) then deterministic codegen.
-    preferred_keys: optional capability keys from Capability Detection (Phase 2).
+    Do not use for new call sites; prefer engine_router.execute_ir / cline_runtime.
     """
+    import logging
+    from pathlib import Path as _Path
+    _log = logging.getLogger(__name__)
+    _log.warning("generate_bot called — redirecting to Cline-only execute_ir")
+    try:
+        from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
+        package = {
+            "original_text": request or "",
+            "spec_request": request or "",
+            "preferred_keys": list(preferred_keys or []),
+            "engine_mode": "cline",
+            "confidence": 0.5,
+        }
+        ir = build_ir_from_package(package, user_id=int(user_id or 0))
+        wd = work_dir if work_dir is not None else _Path("/tmp/lumen_output/cline_redirect")
+        return execute_ir(ir, wd, user_id=int(user_id or 0))
+    except Exception as exc:
+        _log.exception("cline redirect failed")
+        from .core.result import GenerationResult
+        return GenerationResult(
+            success=False,
+            errors=[f"deterministic_purged_cline_redirect_failed:{type(exc).__name__}"],
+            metadata={"deterministic_purged": True},
+        )
+    # Unreachable legacy deterministic body retained below for reference only —
+    # early return above means it never executes.
     import time
     from .core.result import GenerationResult
 
