@@ -41,7 +41,7 @@
 | # | المرحلة | الهدف | الحالة | ملاحظات |
 |---|---------|--------|--------|---------|
 | **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **مغلق تشغيليًا (A)** | roles + orchestrator + plan/findings/repair + bot-bench + forced finish + cost. اختياري لاحقًا: Task Tree / Swarm / LangGraph |
-| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **Phase C+** | multi-lang tree-sitter, incremental index, vector store, pre/postflight, RRF — scope: bots+apps+web |
+| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **C+ أساس قوي (ليس SOTA مغلق)** | tree-sitter/Jedi/Qdrant-Voyage path/platforms — منافسة عالمية مستمرة |
 | **3** | Self-Correction | Observe→Critique→Fix مغلق | **مغلق (A)** | Critic + trajectory + repair + smoke + `analyze_trajectory` + `failure_board` |
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
 | **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |
@@ -94,6 +94,13 @@
 
 ---
 
+## قاعدة المنافسة العالمية (ملزمة)
+
+1. أدوات حقيقية فقط (SDK/مكتبات رسمية) — ممنوع سكربتات وهمية كمسار إنتاج.
+2. كل مرحلة تُقاس: success / attempts / latency / cost حيث ينطبق.
+3. نطاق المنتج: بوتات متعددة المنصات + مسار تطبيقات/مواقع — ليس تيليجرام فقط.
+4. لا تُغلق مرحلة كـ "SOTA عالمي" إلا بعد مقاييس ومسار إنتاج مثبت — الأساس القوي ≠ إغلاق القمة.
+
 ## المراحل التالية (ملخص تنفيذي)
 
 ### B — Durability & Scale — **مُتحقق منها (11 pytest + Temporal SDK live)**
@@ -108,9 +115,10 @@
 - blast-radius قبل التعديل
 - توثيق: `docs/36_PHASE_C_CODE_INTELLIGENCE.md`
 
-### D — Evaluation
-- `tests/bot_bench/` سيناريوهات ثابتة
+### D — Evaluation — **مفعّلة**
+- `tests/bot_bench/` + `evaluation/bot_bench_runner.py` (متعدد المنصات)
 - مقاييس: success rate، attempts، latency، cost
+- توثيق: `docs/38_PHASE_D_EVALUATION.md`
 
 ### E — UX
 - Next.js: runs، agents، diff، pause/cancel

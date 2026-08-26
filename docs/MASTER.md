@@ -71,6 +71,7 @@
 | [35_PHASE_B_DURABILITY.md](35_PHASE_B_DURABILITY.md) | Phase B — Temporal / journal / scale |
 | [36_PHASE_C_CODE_INTELLIGENCE.md](36_PHASE_C_CODE_INTELLIGENCE.md) | Phase C — Tree-sitter / graph / retrieval |
 | [37_PLATFORM_AND_VECTORS.md](37_PLATFORM_AND_VECTORS.md) | Platforms + Voyage/Qdrant production path |
+| [38_PHASE_D_EVALUATION.md](38_PHASE_D_EVALUATION.md) | Phase D — bot-bench + metrics |
 
 ---
 

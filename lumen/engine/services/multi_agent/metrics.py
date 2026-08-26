@@ -96,3 +96,21 @@ def get_metrics() -> MetricsRegistry:
 
 def metrics_snapshot() -> dict[str, Any]:
     return _METRICS.snapshot()
+
+
+def record_cost_usd(amount: float, **labels: str) -> None:
+    """Accumulate estimated LLM/tool cost for Phase D evaluation."""
+    get_metrics().incr("cost_usd", float(amount or 0.0), **labels)
+
+
+def record_eval_outcome(*, success: bool, attempts: int = 1, latency_s: float = 0.0, cost_usd: float = 0.0, platform: str = "") -> None:
+    m = get_metrics()
+    m.incr("eval_runs", platform=platform or "unknown")
+    if success:
+        m.incr("eval_success", platform=platform or "unknown")
+    else:
+        m.incr("eval_failure", platform=platform or "unknown")
+    m.observe("eval_latency_s", float(latency_s or 0.0), platform=platform or "unknown")
+    if cost_usd:
+        record_cost_usd(cost_usd, platform=platform or "unknown")
+    m.gauge("eval_last_attempts", float(attempts or 0), platform=platform or "unknown")
