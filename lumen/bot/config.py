@@ -22,6 +22,11 @@ except Exception:
         level=logging.INFO,
     )
 logger = logging.getLogger("lumen_bot")
+try:
+    from lumen.bot.sanitize import install_secret_log_filter
+    install_secret_log_filter()
+except Exception:
+    pass
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED_USER_IDS = {
@@ -30,39 +35,51 @@ ALLOWED_USER_IDS = {
     if x.strip().isdigit()
 }
 
-# Public product default: open to ALL Telegram users (revenue / growth).
-# Optional lock: set ALLOWED_USER_IDS=1,2,3 to restrict,
-# or LOCK_BOT_TO_ALLOWLIST=1 with an allowlist.
+# Secure-by-default access control (closed unless explicitly opened).
+# - ALLOW_ALL_USERS=1  → public (still subject to credits / rate limits)
+# - ALLOWED_USER_IDS=1,2,3 → allowlist only
+# - production ENVIRONMENT refuses silent public open without ALLOW_ALL_USERS=1
 _LOCK_RAW = (os.getenv("LOCK_BOT_TO_ALLOWLIST") or "").strip().lower()
 LOCK_BOT_TO_ALLOWLIST = _LOCK_RAW in {"1", "true", "yes", "on"}
 
 _ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
-if _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
-    ALLOW_ALL_USERS = False
-elif _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
-    ALLOW_ALL_USERS = True
-else:
-    # Default OPEN for public SaaS-style bot unless explicitly locked
-    ALLOW_ALL_USERS = not LOCK_BOT_TO_ALLOWLIST and not ALLOWED_USER_IDS
+_ENV = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "dev").strip().lower()
+_IS_PROD = _ENV in {"production", "prod", "live"}
 
-if ALLOWED_USER_IDS and LOCK_BOT_TO_ALLOWLIST:
+if _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
+    ALLOW_ALL_USERS = True
+elif _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
+    ALLOW_ALL_USERS = False
+elif ALLOWED_USER_IDS:
+    # Explicit allowlist without ALLOW_ALL_USERS → closed to non-list users
+    ALLOW_ALL_USERS = False
+    LOCK_BOT_TO_ALLOWLIST = True
+else:
+    # Default CLOSED — no free LLM burn for random Telegram users
+    ALLOW_ALL_USERS = False
+
+if _IS_PROD and ALLOW_ALL_USERS and _ALLOW_ALL_RAW not in {"1", "true", "yes", "on"}:
+    # Never inherit accidental open from empty env in production
+    ALLOW_ALL_USERS = False
+    logger.critical(
+        "PRODUCTION: refused implicit public access. "
+        "Set ALLOW_ALL_USERS=1 explicitly (and credits) or ALLOWED_USER_IDS."
+    )
+
+if ALLOWED_USER_IDS and not ALLOW_ALL_USERS:
     logger.info(
         "Bot locked to ALLOWED_USER_IDS (%s users).",
         len(ALLOWED_USER_IDS),
     )
-elif ALLOWED_USER_IDS and not LOCK_BOT_TO_ALLOWLIST:
-    # List present but not locked → treat as open unless they only wanted admins
-    # Keep list for future admin features; access stays open.
-    ALLOW_ALL_USERS = True
-    logger.info(
-        "Public bot mode: all users allowed. ALLOWED_USER_IDS kept for admin hints only."
-    )
 elif ALLOW_ALL_USERS:
-    logger.info("Public bot mode: accepting all Telegram users (growth/revenue).")
+    logger.warning(
+        "Public bot mode ENABLED (ALLOW_ALL_USERS=1). "
+        "Ensure credits + rate limits are enforced."
+    )
 else:
     logger.warning(
-        "Bot access restricted (LOCK_BOT_TO_ALLOWLIST or ALLOW_ALL_USERS=0). "
-        "Set ALLOWED_USER_IDS or remove the lock for public access."
+        "Bot access CLOSED by default. "
+        "Set ALLOWED_USER_IDS=… or ALLOW_ALL_USERS=1 to accept users."
     )
 
 def _resolve_output_dir() -> Path:

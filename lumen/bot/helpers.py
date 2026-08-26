@@ -8,13 +8,14 @@ import zipfile
 from pathlib import Path
 
 from .config import ALLOWED_USER_IDS, ALLOW_ALL_USERS, logger
+from .resource_limits import run_with_engine_timeout, EngineTimeoutError, clamp_spec_request
 
 
 def is_allowed(user_id: int | None) -> bool:
-    """Public product: allow everyone by default.
+    """Access control — closed by default.
 
-    - ALLOW_ALL_USERS (default on for public launch) → any user_id.
-    - Only when LOCK_BOT_TO_ALLOWLIST=1 and ALLOWED_USER_IDS is set → allowlist only.
+    - ALLOW_ALL_USERS=1 (explicit) → any user_id (still credits/rate-limited).
+    - Default CLOSED: require ALLOWED_USER_IDS or ALLOW_ALL_USERS=1.
     """
     if user_id is None:
         return False
@@ -174,6 +175,7 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
     Phase A: when MULTI_AGENT_ORCHESTRATOR is enabled (default on), runs
     ROUTER→ARCHITECT→BUILDER→CRITIC blackboard pipeline then returns GenerationResult.
     """
+    request = clamp_spec_request(request or "")
     _bp_tenant = f"tg:{int(user_id or 0)}"
     _bp_acquired = False
     try:
@@ -325,24 +327,38 @@ def run_generation_with_bridge(
     from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
     from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
 
-    package = analyze_and_prepare(request, translation)
-    ir = build_ir_from_package(package, user_id=int(user_id or 0))
-    logger.info(
-        "IR mode=%s matched=%s gap=%s conf=%.2f",
-        ir.engine_mode.value,
-        ir.capabilities_matched,
-        ir.capabilities_gap,
-        ir.confidence,
-    )
-    result = execute_ir(ir, work_dir, user_id=int(user_id or 0))
+    request = clamp_spec_request(request or "")
+
+    def _bridge_exec():
+        package = analyze_and_prepare(request, translation)
+        ir = build_ir_from_package(package, user_id=int(user_id or 0))
+        logger.info(
+            "IR mode=%s matched=%s gap=%s conf=%.2f",
+            ir.engine_mode.value,
+            ir.capabilities_matched,
+            ir.capabilities_gap,
+            ir.confidence,
+        )
+        result = execute_ir(ir, work_dir, user_id=int(user_id or 0))
+        try:
+            meta = dict(getattr(result, "metadata", None) or {})
+            meta["bridge"] = package
+            meta["ir"] = ir.to_dict()
+            result.metadata = meta
+        except Exception:
+            pass
+        return result
+
     try:
-        meta = dict(getattr(result, "metadata", None) or {})
-        meta["bridge"] = package
-        meta["ir"] = ir.to_dict()
-        result.metadata = meta
-    except Exception:
-        pass
-    return result
+        return run_with_engine_timeout(_bridge_exec)
+    except EngineTimeoutError as exc:
+        from lumen.engine.core.result import GenerationResult
+        logger.warning("engine timeout user=%s: %s", user_id, exc)
+        return GenerationResult(
+            success=False,
+            errors=[f"engine_timeout:{exc}"],
+            metadata={"timeout": True},
+        )
 
 
 async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:

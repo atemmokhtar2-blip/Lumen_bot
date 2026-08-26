@@ -16,6 +16,13 @@ from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
 from ..sanitize import sanitize_error
+from ..resource_limits import (
+    clamp_user_text,
+    clamp_spec_request,
+    run_with_engine_timeout,
+    EngineTimeoutError,
+    MAX_USER_MESSAGE_CHARS,
+)
 from ..helpers import (
     is_allowed,
     looks_like_bot_token,
@@ -218,7 +225,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    request = message.text.strip()
+    request = clamp_user_text(message.text.strip())
+    if len((message.text or "").strip()) > MAX_USER_MESSAGE_CHARS:
+        await message.reply_text(
+            f"⚠️ الرسالة طويلة جداً. الحد الأقصى {MAX_USER_MESSAGE_CHARS} حرفاً."
+        )
+        # continue with truncated text rather than free DoS
     if not request:
         await _clear_thinking()
         return
@@ -460,7 +472,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await message.reply_text("استلمت الطلب ✅ جاري التوليد الآن…")
         except Exception:
             pass
-        gen_request = request
+        gen_request = clamp_spec_request(request)
         if not _looks_like_generation_request(gen_request):
             prior = _prior_bot_request(context.user_data)
             if prior:

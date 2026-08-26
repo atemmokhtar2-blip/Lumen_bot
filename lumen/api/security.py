@@ -106,7 +106,7 @@ def validate_tenant_project_path(tenant_id: str, project_path: str) -> Path:
     try:
         # Kernel authority: openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS) when available
         from lumen.engine.services.linux_path_open import verify_dir_beneath, PathOpenError
-        verified = verify_dir_beneath(sandbox, path, require_openat2=False)
+        verified = verify_dir_beneath(sandbox, path, require_openat2=_require_openat2())
     except Exception as exc:
         msg = str(exc).lower()
         if "not_a_directory" in msg or "enotdir" in msg:
@@ -136,7 +136,7 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
         raise ValueError("project_path_outside_sandbox")
     try:
         from lumen.engine.services.linux_path_open import verify_dir_beneath
-        verified = verify_dir_beneath(sandbox, path, require_openat2=False)
+        verified = verify_dir_beneath(sandbox, path, require_openat2=_require_openat2())
     except Exception as exc:
         msg = str(exc).lower()
         if "not_a_directory" in msg or "enotdir" in msg:

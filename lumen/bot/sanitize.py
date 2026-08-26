@@ -22,6 +22,14 @@ _STRIPE = re.compile(r"\b(sk_live_|sk_test_|pk_live_|pk_test_|whsec_)\s*[A-Za-z0
 _LLM_KEY = re.compile(
     r"\b(sk-[A-Za-z0-9]{20,}|gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{20,}|xai-[A-Za-z0-9]{20,})\b"
 )
+# Google AI Studio / Gemini access tokens (AQ.… form)
+_GOOGLE_AQ = re.compile(r"\bAQ\.[A-Za-z0-9_\-]{20,}\b")
+# Env-style KEY=value for common secret names (catches exception messages)
+_ENV_SECRET = re.compile(
+    r"(?i)\b(GEMINI_API_KEY|GOOGLE_API_KEY|GROQ_API_KEY|OPENAI_API_KEY|TELEGRAM_BOT_TOKEN|"
+    r"API_KEY_PEPPER|DATABASE_URL|REDIS_URL|CLINE_API_KEY|ANTHROPIC_API_KEY)"
+    r"\s*[=:]\s*[^\s'\"]{8,}"
+)
 # JWT-ish
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 # Generic bearer / api keys (allow spaces around = or :)
@@ -56,6 +64,8 @@ def sanitize_error(text: str, *, max_len: int = 200) -> str:
         s = _GH_TOKEN.sub("[REDACTED_GITHUB_TOKEN]", s)
         s = _STRIPE.sub("[REDACTED_STRIPE_KEY]", s)
         s = _LLM_KEY.sub("[REDACTED_LLM_KEY]", s)
+        s = _GOOGLE_AQ.sub("[REDACTED_GOOGLE_TOKEN]", s)
+        s = _ENV_SECRET.sub(lambda m: m.group(1) + "=[REDACTED]", s)
         s = _JWT.sub("[REDACTED_JWT]", s)
         s = _BEARER.sub(r"\1[REDACTED]", s)
         s = _API_KEY.sub(r"\1=[REDACTED]", s)
