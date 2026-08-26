@@ -41,6 +41,7 @@ from .run_report import write_run_report, recent_reports
 from .tracing import ensure_trace, trace_summary
 from .concurrency import active_count, orchestration_slot
 from .fallback_template import should_trigger_verified_fallback, build_verified_bot, run_verified_fallback_on_state
+from .trajectory import append_trajectory, load_trajectory, trajectory_summary
 from .redis_board import (
     RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
     scan_and_resume, redis_board_enabled, enqueue_pending_resumes, enqueue_resume_job,
@@ -104,6 +105,9 @@ __all__ = [
     "ensure_trace", "trace_summary",
     "active_count", "orchestration_slot",
     "should_trigger_verified_fallback", "build_verified_bot", "run_verified_fallback_on_state",
+    "append_trajectory",
+    "load_trajectory",
+    "trajectory_summary",
     "RedisLayeredBlackboard", "list_resumable_state_ids", "resume_interrupted_state",
     "scan_and_resume", "redis_board_enabled", "enqueue_pending_resumes", "enqueue_resume_job",
     "append_agent_event",

@@ -11,6 +11,14 @@ from typing import Any
 from .state import AgentState
 from .tracing import trace_summary
 
+def _traj(state):
+    try:
+        from .trajectory import trajectory_summary
+        return trajectory_summary(state)
+    except Exception:
+        return {}
+
+
 
 def _root() -> Path:
     base = Path(os.environ.get("OUTPUT_DIR") or (Path.home() / ".lumen"))
@@ -36,6 +44,7 @@ def write_run_report(state: AgentState) -> Path:
         "architect_source": (state.strict_spec or {}).get("source"),
         "errors": list((state.qa_report or {}).get("errors") or state.build_errors or [])[:15],
         "trace": trace_summary(state),
+        "trajectory": _traj(state),
         "events_tail": [e.to_dict() for e in (state.events or [])[-12:]],
         "written_at": time.time(),
     }

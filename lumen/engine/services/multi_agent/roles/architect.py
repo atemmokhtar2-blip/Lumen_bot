@@ -1,4 +1,6 @@
-"""Architect agent — writes StrictSpec only. Never chats with the user. Never builds."""
+"""Planner role (Architect) — Phase A: produces StrictSpec plan for the Worker.
+
+Architect agent — writes StrictSpec only. Never chats with the user. Never builds."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -15,6 +17,7 @@ from ..repair import build_repair_directive, apply_deterministic_repair, spec_ha
 class ArchitectAgent(Agent):
     role = AgentRole.ARCHITECT.value
     name = "architect"
+    role_alias = "planner"
     order = 20
 
     def __init__(self, backends: list[SpecBackend] | None = None) -> None:

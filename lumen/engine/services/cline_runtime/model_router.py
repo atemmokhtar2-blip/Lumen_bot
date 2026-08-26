@@ -153,23 +153,68 @@ def select_model(*, task: str = "build") -> ModelChoice:
         ),
     }
     if forced in table:
-        return table[forced]
-    # Prefer Qwen (sk-ws) when available — avoids Groq TPM walls; else Groq pool
-    for name in ("llamacpp", "qwen", "groq", "gemini", "xai", "ollama"):
-        choice = table[name]
-        if choice.key_present():
-            return choice
+        choice = table[forced]
+        return _apply_task_model_override(choice, task)
+
+    # Phase A: task-aware preference order
+    # plan/critique → stronger models first; build → cheaper/faster first
+    task_l = (task or "build").strip().lower()
+    if task_l in {"plan", "planner", "architect"}:
+        order = ("gemini", "xai", "qwen", "groq", "llamacpp", "ollama")
+    elif task_l in {"critique", "critic", "review", "qa"}:
+        order = ("gemini", "xai", "qwen", "groq", "llamacpp", "ollama")
+    else:
+        # build / worker — prefer fast local or high-RPM pools
+        order = ("llamacpp", "qwen", "groq", "gemini", "xai", "ollama")
+
+    for name in order:
+        choice = table.get(name)
+        if choice is not None and choice.key_present():
+            return _apply_task_model_override(choice, task_l)
     return ModelChoice("none", "", "")
 
 
+def _apply_task_model_override(choice: ModelChoice, task: str) -> ModelChoice:
+    """Optional per-task model id via env (Planner strong / Worker cheap)."""
+    task_l = (task or "build").strip().lower()
+    env_map = {
+        "plan": "CLINE_MODEL_PLAN",
+        "planner": "CLINE_MODEL_PLAN",
+        "architect": "CLINE_MODEL_PLAN",
+        "build": "CLINE_MODEL_BUILD",
+        "worker": "CLINE_MODEL_BUILD",
+        "critique": "CLINE_MODEL_CRITIQUE",
+        "critic": "CLINE_MODEL_CRITIQUE",
+        "review": "CLINE_MODEL_CRITIQUE",
+        "qa": "CLINE_MODEL_CRITIQUE",
+    }
+    env_name = env_map.get(task_l)
+    if not env_name:
+        return choice
+    override = (os.getenv(env_name) or "").strip()
+    if not override:
+        return choice
+    return ModelChoice(
+        choice.provider,
+        override,
+        choice.api_key_env,
+        base_url=choice.base_url,
+    )
+
+
 def describe_runtime() -> dict[str, Any]:
-    choice = select_model()
+    choice = select_model(task="build")
     return {
         "provider": choice.provider,
         "model_id": choice.model_id,
         "key_present": choice.key_present() if choice.provider != "none" else False,
         "base_url": choice.base_url,
         "forced": _forced_provider() or "auto",
+        "task_orders": {
+            "plan": "gemini>xai>qwen>groq>llamacpp>ollama",
+            "build": "llamacpp>qwen>groq>gemini>xai>ollama",
+            "critique": "gemini>xai>qwen>groq>llamacpp>ollama",
+        },
     }
 
 

@@ -1,4 +1,7 @@
-"""Critic agent — structural + static QA. Feeds repair loop via qa_report."""
+"""Critic / Reviewer agent — Phase A: Observe + structural QA + smoke feedback.
+
+Feeds the orchestrator repair loop via qa_report. Role alias: critic/reviewer.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -74,6 +77,27 @@ class CriticAgent(Agent):
             warnings.append(f"static_gate_skip:{type(exc).__name__}")
             details["static_dev_gate"] = {"skipped": type(exc).__name__}
 
+        # 3) Observe — execution feedback (smoke import / entry check)
+        try:
+            from lumen.bot.generation_steps.helpers import _smoke_test_project
+            smoke_ok, smoke_msg = _smoke_test_project(Path(path), seconds=3.0)
+            details["observe_smoke"] = {
+                "ok": bool(smoke_ok),
+                "message": str(smoke_msg)[:400],
+            }
+            if not smoke_ok:
+                errors.append(f"observe_smoke:{str(smoke_msg)[:160]}")
+        except Exception as exc:
+            # Fallback: entry file must exist
+            main = Path(path) / "main.py"
+            bot = Path(path) / "bot.py"
+            if not main.is_file() and not bot.is_file():
+                errors.append("observe_no_entry:main.py|bot.py")
+                details["observe_smoke"] = {"ok": False, "error": "no_entry"}
+            else:
+                warnings.append(f"observe_smoke_skip:{type(exc).__name__}")
+                details["observe_smoke"] = {"skipped": type(exc).__name__}
+
         state.qa_passed = len(errors) == 0
         state.qa_report = {
             "ok": state.qa_passed,
@@ -81,7 +105,20 @@ class CriticAgent(Agent):
             "warnings": warnings[:30],
             "details": details,
             "attempt": state.attempts,
+            "role_alias": "critic",
         }
+        try:
+            from ..trajectory import append_trajectory
+            append_trajectory(
+                state,
+                step="critic_qa",
+                role=AgentRole.CRITIC.value,
+                ok=state.qa_passed,
+                detail=f"errors={len(errors)}",
+                payload={"errors": errors[:8]},
+            )
+        except Exception:
+            pass
         state.record(
             AgentRole.CRITIC,
             "qa_done",

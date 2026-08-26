@@ -1,8 +1,9 @@
 """
-Extensible Multi-Agent Orchestrator.
+Extensible Multi-Agent Orchestrator — Phase A closed loop.
 
-Phase C: Critic repair loop — QA FAIL → Architect repair → Builder → Critic
-until PASSED or max_attempts.
+Roles: Planner (architect) → Worker (builder/Cline) → Critic (observe+QA)
+       → Repair → repeat until PASSED or max_attempts.
+Trajectory events are persisted for failed-path audit.
 """
 from __future__ import annotations
 
@@ -218,15 +219,42 @@ class Orchestrator:
                 state.status = AgentStatus.PLANNING.value
             state = self._run_agent("architect", state, ctx)
             self._wf_checkpoint(state, "architect")
+            try:
+                from .trajectory import append_trajectory
+                append_trajectory(state, step="planner_done", role="ARCHITECT", ok=True)
+            except Exception:
+                pass
 
             # Builder + gate
             state = self._builder_with_gate(state, ctx)
             self._wf_checkpoint(state, "builder")
+            try:
+                from .trajectory import append_trajectory
+                append_trajectory(
+                    state,
+                    step="worker_done",
+                    role="BUILDER",
+                    ok=bool(state.build_success),
+                    detail=(state.generated_path or "")[:120],
+                )
+            except Exception:
+                pass
 
             # Critic only if build produced a path
             if state.build_success and (state.generated_path or "").strip():
                 state = self._run_agent("critic", state, ctx)
                 self._wf_checkpoint(state, "critic")
+                try:
+                    from .trajectory import append_trajectory
+                    append_trajectory(
+                        state,
+                        step="critic_done",
+                        role="CRITIC",
+                        ok=bool(state.qa_passed),
+                        payload={"errors": list((state.qa_report or {}).get("errors") or [])[:6]},
+                    )
+                except Exception:
+                    pass
             else:
                 state.qa_passed = False
                 if not state.qa_report:
