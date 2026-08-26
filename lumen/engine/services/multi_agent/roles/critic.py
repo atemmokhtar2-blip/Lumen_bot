@@ -46,7 +46,7 @@ class CriticAgent(Agent):
         # --- 1) Deliverables vs execution plan ---
         plan = (state.extensions or {}).get("execution_plan") or {}
         deliverables = list(plan.get("deliverables") or [
-            "main.py", "requirements.txt", "README.md", ".env.example",
+            "main.py", "app/handlers.py", "requirements.txt", "README.md", ".env.example",
         ])
         missing_del = [d for d in deliverables if not (root / d).exists()]
         details["deliverables"] = {"required": deliverables, "missing": missing_del}

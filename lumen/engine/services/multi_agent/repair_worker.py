@@ -78,7 +78,24 @@ def run_incremental_repair(state: AgentState, *, work_dir: Path | None = None) -
         state.build_errors = ["incremental_repair_no_project"]
         return state
 
+    # Real workspace snapshot via agent_fs (not a fake script)
+    try:
+        from .project_context import pack_project_context, context_to_prompt_block
+        ctx = pack_project_context(project)
+        state.extensions["project_context"] = {
+            "ok": ctx.get("ok"),
+            "tree": (ctx.get("tree") or "")[:1500],
+            "file_list": list((ctx.get("files") or {}).keys()),
+            "errors": ctx.get("errors") or [],
+        }
+        snap = context_to_prompt_block(ctx)
+    except Exception as exc:
+        snap = ""
+        state.extensions["project_context_error"] = type(exc).__name__
+
     goal = build_repair_goal(state)
+    if snap:
+        goal = goal + "\n\n" + snap
     ir_dict: dict[str, Any] = {
         "spec_request": goal,
         "raw_request": goal,
@@ -88,6 +105,7 @@ def run_incremental_repair(state: AgentState, *, work_dir: Path | None = None) -
         "findings": list((state.extensions or {}).get("findings") or [])[:30],
         "metadata": {
             "mode": "incremental_repair",
+            "pre_read_files": list(((state.extensions or {}).get("project_context") or {}).get("file_list") or []),
             "execution_plan": (state.extensions or {}).get("execution_plan") or {},
             "repair_directive": (state.extensions or {}).get("last_repair") or {},
         },

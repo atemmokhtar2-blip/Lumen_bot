@@ -25,7 +25,7 @@ class ExecutionPlan:
     goal: str = ""
     language: str = "ar"
     deliverables: list[str] = field(default_factory=lambda: [
-        "main.py", "requirements.txt", "README.md", ".env.example",
+        "main.py", "app/handlers.py", "requirements.txt", "README.md", ".env.example",
     ])
     tasks: list[PlanTask] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
@@ -61,7 +61,7 @@ class ExecutionPlan:
             goal=str(d.get("goal") or ""),
             language=str(d.get("language") or "ar"),
             deliverables=list(d.get("deliverables") or [
-                "main.py", "requirements.txt", "README.md", ".env.example",
+                "main.py", "app/handlers.py", "requirements.txt", "README.md", ".env.example",
             ]),
             tasks=tasks,
             constraints=list(d.get("constraints") or []),
@@ -104,7 +104,7 @@ def build_plan_from_spec(
         PlanTask(
             id="scaffold",
             title="Create project scaffold and entrypoint",
-            files=["main.py", "requirements.txt", "README.md", ".env.example"],
+            files=["main.py", "app/handlers.py", "requirements.txt", "README.md", ".env.example"],
             acceptance=[
                 "main.py exists and is valid Python",
                 "requirements.txt lists telegram dependency",

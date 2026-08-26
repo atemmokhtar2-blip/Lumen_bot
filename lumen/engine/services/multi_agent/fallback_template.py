@@ -20,6 +20,16 @@ class FallbackBuild:
     preset: str | None = None
 
 
+def should_trigger_verified_fallback(
+    *,
+    attempts: int = 0,
+    stagnant: bool = False,
+    already_tried: bool = False,
+) -> bool:
+    """Catalog fallback purged — never auto-trigger a deterministic template."""
+    return False
+
+
 def build_verified_bot(
     request: str,
     *,
@@ -34,4 +44,26 @@ def build_verified_bot(
     )
 
 
-__all__ = ["FallbackBuild", "build_verified_bot"]
+def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path | None = None) -> Any:
+    """No-op path: mark extension and return state unchanged structurally."""
+    try:
+        state.extensions = dict(state.extensions or {})
+        state.extensions["fallback_template_tried"] = True
+        state.extensions["fallback_template_result"] = {
+            "ok": False,
+            "errors": ["deterministic_engine_purged"],
+        }
+        errs = list(state.build_errors or [])
+        errs.append("deterministic_engine_purged")
+        state.build_errors = errs[:20]
+    except Exception:
+        pass
+    return state
+
+
+__all__ = [
+    "FallbackBuild",
+    "build_verified_bot",
+    "should_trigger_verified_fallback",
+    "run_verified_fallback_on_state",
+]

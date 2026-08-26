@@ -112,9 +112,29 @@ def run_agent(
 
     limit = max_steps if max_steps is not None else _max_steps()
     state.add_system(_system_prompt(state.work_dir, goal, ir_dict))
-    state.add_user(
-        "Start building now. Inspect the workspace, then write the project files."
+    # Pre-mark files already packed into context as read (repair policy)
+    pre_read = []
+    if isinstance(ir_dict, dict):
+        meta = ir_dict.get("metadata") if isinstance(ir_dict.get("metadata"), dict) else {}
+        pre_read = list(meta.get("pre_read_files") or [])
+        for path in list((ir_dict.get("project_context") or {}).get("file_list") or []):
+            pre_read.append(path)
+    if pre_read:
+        state.metadata["read_files"] = sorted(set(str(x) for x in pre_read if x))
+    repair_mode = "MODE=INCREMENTAL_REPAIR" in (goal or "") or (
+        isinstance(ir_dict, dict)
+        and (ir_dict.get("metadata") or {}).get("mode") == "incremental_repair"
     )
+    if repair_mode:
+        state.add_user(
+            "REPAIR MODE: Workspace snapshot is in the system/goal. "
+            "Fix ERROR findings with edit_file/apply_patch. "
+            "If you need another file, read_file first. Then finish."
+        )
+    else:
+        state.add_user(
+            "Start building now. Inspect the workspace (list_dir/tree), then write the project files."
+        )
 
     for i in range(limit):
         msgs = [m.to_dict() for m in state.messages]
