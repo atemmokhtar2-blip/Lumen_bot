@@ -51,8 +51,10 @@ def run_with_engine_timeout(
     to continue the request path.
     """
     sec = float(timeout if timeout is not None else ENGINE_TIMEOUT_SEC)
-    sec = max(3.0, min(sec, 300.0))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+    sec = max(1.0, min(sec, 300.0))
+    # Do NOT wait on shutdown — a hung worker must not pin the request thread
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         fut = pool.submit(fn, *args, **kwargs)
         try:
             return fut.result(timeout=sec)
@@ -61,3 +63,9 @@ def run_with_engine_timeout(
             raise EngineTimeoutError(
                 f"engine exceeded {sec:.0f}s wall-clock limit"
             ) from exc
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            # Python <3.9: cancel_futures unsupported
+            pool.shutdown(wait=False)
