@@ -30,41 +30,66 @@ _RUNNING: Dict[str, dict] = {}
 
 
 def _apply_resource_limits() -> None:
-    """Apply strict resource limits to the child process (best-effort).
+    """Apply resource limits to the child process (best-effort).
 
-    LocalProcessDriver is a **dev fallback only**. Prefer Docker
-    (memory/cpu/pids/cgroup isolation). These rlimits reduce damage from
-    runaway or malicious generated code (infinite loops, fork bombs):
-    CPU time, address space, open files, process count, and file size.
+    LocalProcessDriver is a **fallback when Docker is unavailable**. Prefer Docker
+    (memory/cpu/pids/cgroup isolation). These rlimits still reduce damage from
+    runaway or malicious generated code (spin loops, fork bombs), but must remain
+    high enough for a real Telegram bot:
+
+      - python-telegram-bot / httpx / asyncio start worker threads
+      - RLIMIT_NPROC=16 caused RuntimeError: can't start new thread (NetworkError)
+      - RLIMIT_NOFILE=64 was too tight for concurrent HTTP sockets
+
+    Env overrides (soft=hard, never raised above current hard limit):
+      TBE_LOCAL_RLIMIT_CPU, TBE_LOCAL_RLIMIT_AS_MB, TBE_LOCAL_RLIMIT_NOFILE,
+      TBE_LOCAL_RLIMIT_NPROC, TBE_LOCAL_RLIMIT_FSIZE_MB
     """
     try:
         import resource
-        # CPU wall-ish: 120s hard (prevents pure spin loops monopolizing a core forever)
-        cpu = int(os.environ.get("TBE_LOCAL_RLIMIT_CPU", "120"))
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
-        # Address space ~128 MiB default
-        mem = int(os.environ.get("TBE_LOCAL_RLIMIT_AS_MB", "128")) * 1024 * 1024
-        try:
-            resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-        except (ValueError, OSError):
-            pass
-        # Open files
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # Max processes/threads — low to blunt fork bombs
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (16, 16))
-        except (ValueError, OSError):
-            pass
-        # Core dumps off
-        try:
-            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        except (ValueError, OSError):
-            pass
-        # Max file size written by the child (~32 MiB)
-        try:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
-        except (ValueError, OSError):
-            pass
+
+        def _clamp_set(limit: int, soft: int, hard: int | None = None) -> None:
+            """Set rlimit without exceeding the current hard ceiling."""
+            if hard is None:
+                hard = soft
+            try:
+                _cur_soft, cur_hard = resource.getrlimit(limit)
+            except (ValueError, OSError):
+                return
+            try:
+                if cur_hard != resource.RLIM_INFINITY and cur_hard >= 0:
+                    hard = min(int(hard), int(cur_hard))
+                soft = min(int(soft), int(hard) if hard != resource.RLIM_INFINITY else int(soft))
+                if soft < 0:
+                    return
+                resource.setrlimit(limit, (soft, hard if hard != resource.RLIM_INFINITY else soft))
+            except (ValueError, OSError) as exc:
+                _log.debug("rlimit %s not applied: %s", limit, exc)
+
+        # CPU seconds — long enough for install probe + polling session
+        cpu = int(os.environ.get("TBE_LOCAL_RLIMIT_CPU", "600"))
+        _clamp_set(resource.RLIMIT_CPU, cpu, cpu)
+
+        # Address space — PTB + deps need more than 128 MiB under load
+        mem_mb = int(os.environ.get("TBE_LOCAL_RLIMIT_AS_MB", "384"))
+        mem = max(128, mem_mb) * 1024 * 1024
+        _clamp_set(resource.RLIMIT_AS, mem, mem)
+
+        # Open files / sockets — 64 was starving httpx connection pools
+        nofile = int(os.environ.get("TBE_LOCAL_RLIMIT_NOFILE", "256"))
+        _clamp_set(resource.RLIMIT_NOFILE, max(64, nofile), max(64, nofile))
+
+        # Processes + threads (Linux counts threads toward NPROC for the UID).
+        # Default 128: enough for PTB network stack; still blocks fork bombs.
+        # Previous default 16 → immediate crash: can't start new thread.
+        nproc = int(os.environ.get("TBE_LOCAL_RLIMIT_NPROC", "128"))
+        _clamp_set(resource.RLIMIT_NPROC, max(32, nproc), max(32, nproc))
+
+        _clamp_set(resource.RLIMIT_CORE, 0, 0)
+
+        fsize_mb = int(os.environ.get("TBE_LOCAL_RLIMIT_FSIZE_MB", "64"))
+        fsize = max(16, fsize_mb) * 1024 * 1024
+        _clamp_set(resource.RLIMIT_FSIZE, fsize, fsize)
     except Exception as exc:
         _log.debug("resource limits not applied: %s", exc)
 
@@ -248,6 +273,19 @@ class LocalProcessDriver(DeploymentProvider):
             )
             if healed.status == DEPLOY_RUNNING:
                 return healed
+            # Root-cause hint for the common RLIMIT_NPROC trap
+            joined = " ".join(show) if show else ""
+            nproc_hint = ""
+            if (
+                "can't start new thread" in joined
+                or "cant start new thread" in joined.lower()
+                or "RuntimeError("can't start new thread")" in joined
+            ):
+                nproc_hint = (
+                    " Root cause: process/thread limit too low for python-telegram-bot "
+                    "(RLIMIT_NPROC). Platform defaults were raised; override with "
+                    "TBE_LOCAL_RLIMIT_NPROC=128+ if still failing. Prefer Docker isolation."
+                )
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
@@ -255,7 +293,7 @@ class LocalProcessDriver(DeploymentProvider):
                 message=(
                     f"Bot process exited immediately (code={rc}). "
                     f"Heal: {healed.message}. "
-                    f"Run log: {' | '.join(show) if show else 'empty'}"
+                    f"Run log: {' | '.join(show) if show else 'empty'}.{nproc_hint}"
                 ),
             )
 
