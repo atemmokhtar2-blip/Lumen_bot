@@ -216,6 +216,25 @@ class CriticAgent(Agent):
                 ))
                 warnings.append(f"feature_gap:{f}")
 
+        # Phase C: Tree-sitter/BM25 intelligence snapshot on the generated project
+        try:
+            from lumen.engine.services.code_intelligence import blast_radius, hybrid_search
+            br = blast_radius(str(root), path="main.py", max_depth=2)
+            q = (state.user_text or state.spec_request or "telegram bot")[:200]
+            hs = hybrid_search(str(root), q, top_k=5)
+            details["code_intelligence"] = {
+                "blast_radius_ok": br.get("ok"),
+                "impacted_files": (br.get("impacted_files") or [])[:20],
+                "impacted_count": br.get("impacted_count"),
+                "retrieval_hits": [
+                    {"name": h.get("name"), "path": h.get("path"), "score": h.get("score")}
+                    for h in (hs.get("hits") or [])[:5]
+                ],
+                "engine": "tree-sitter+jedi-ready+bm25",
+            }
+        except Exception as _ci_exc:
+            details["code_intelligence_error"] = type(_ci_exc).__name__
+
         return self._finish(state, findings, warnings, details)
 
     def _finish(

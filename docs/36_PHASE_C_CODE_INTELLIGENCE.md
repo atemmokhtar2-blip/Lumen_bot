@@ -38,3 +38,17 @@ impact = blast_radius("/path/to/repo", path="pkg/a.py", symbol_name="helper")
 pip install tree-sitter tree-sitter-python rank-bm25
 PYTHONPATH=. pytest tests/test_phase_c_code_intelligence.py -q
 ```
+
+
+## تعزيزات (أدوات حقيقية)
+
+| أداة | الدور |
+|------|------|
+| **tree-sitter Query** | استخراج calls/defs الرسمي |
+| **Jedi** | goto definition + find references على مستوى المشروع |
+| **rank-bm25** | retrieval معجمي |
+| **fastembed** (اختياري) | embeddings عصبية محلية |
+| **Voyage API** (اختياري) | embeddings كود متخصصة |
+| **persistent_index** | حفظ graph على القرص |
+
+Critic يرفق `details.code_intelligence` بعد فحص المشروع المولَّد.

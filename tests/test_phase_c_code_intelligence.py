@@ -83,3 +83,48 @@ def test_blast_radius_from_helper(sample_repo: Path):
     br = blast_radius(sample_repo, symbol_name="helper", graph=g, max_depth=3)
     assert br["ok"] is True
     assert br["impacted_count"] >= 1
+
+
+def test_tree_sitter_query_extracts_calls(sample_repo: Path):
+    from lumen.engine.services.code_intelligence.ts_queries import extract_calls_and_defs
+
+    src = (sample_repo / "pkg" / "a.py").read_text(encoding="utf-8")
+    out = extract_calls_and_defs(src, path="pkg/a.py")
+    assert out["engine"] == "tree-sitter-query"
+    names = {c["name"] for c in out["calls"]}
+    assert "helper" in names or "Greeter" in names or "hello" in names
+    assert any(d["kind"] in {"function", "class"} for d in out["defs"])
+
+
+def test_jedi_references_real(sample_repo: Path):
+    pytest.importorskip("jedi")
+    from lumen.engine.services.code_intelligence.jedi_analysis import find_references, names_in_module
+
+    names = names_in_module(sample_repo, "pkg/b.py")
+    assert names["ok"] is True
+    assert any(n["name"] == "helper" for n in names["names"])
+    # column of 'helper' in def helper
+    src = (sample_repo / "pkg" / "b.py").read_text(encoding="utf-8")
+    line = 2  # def helper
+    col = src.splitlines()[line - 1].index("helper")
+    refs = find_references(sample_repo, "pkg/b.py", line=line, column=col)
+    assert refs["ok"] is True
+    assert refs["engine"] == "jedi"
+    assert refs["reference_count"] >= 1
+
+
+def test_persistent_index_roundtrip(sample_repo: Path, tmp_path: Path):
+    from lumen.engine.services.code_intelligence.persistent_index import (
+        build_and_save_index,
+        get_or_build_graph,
+        load_index,
+    )
+
+    store = tmp_path / "idx"
+    info = build_and_save_index(sample_repo, store_dir=store)
+    assert info["ok"] is True
+    loaded = load_index(sample_repo, store_dir=store)
+    assert loaded is not None
+    g2 = get_or_build_graph(sample_repo, store_dir=store, rebuild=False)
+    assert g2.get("from_cache") is True
+    assert g2["stats"]["node_count"] >= 5

@@ -47,30 +47,43 @@ def build_symbol_graph(root: str | Path, *, max_files: int = 2000) -> dict[str, 
                 for tid in name_to_ids.get(mod, [])[:5]:
                     edges.append({"src": s["id"], "dst": tid, "rel": "imports"})
 
-    # call edges: naive scan of function bodies for Name(
-    by_path: dict[str, list[dict]] = defaultdict(list)
-    for s in symbols:
-        if s["kind"] in {"function", "method"}:
-            by_path[s["path"]].append(s)
-
-    for path, funcs in by_path.items():
-        fp = root_p / path
-        if not fp.is_file():
-            continue
-        try:
-            text = fp.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        lines = text.splitlines()
-        for fn in funcs:
-            body = "\n".join(lines[max(0, fn["start_line"] - 1) : fn["end_line"]])
-            for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", body):
-                callee = m.group(1)
-                if callee in {"if", "for", "while", "with", "print", "len", "range", "str", "int"}:
+    # call edges via official tree-sitter Query (not regex)
+    try:
+        from .ts_queries import extract_calls_and_defs
+    except Exception:
+        extract_calls_and_defs = None  # type: ignore
+    if extract_calls_and_defs is not None:
+        # map path -> list of function symbols covering lines
+        by_path_funcs: dict[str, list[dict]] = defaultdict(list)
+        for s in symbols:
+            if s["kind"] in {"function", "method"}:
+                by_path_funcs[s["path"]].append(s)
+        for path, funcs in by_path_funcs.items():
+            fp = root_p / path
+            if not fp.is_file():
+                continue
+            try:
+                raw = fp.read_bytes()
+            except OSError:
+                continue
+            extracted = extract_calls_and_defs(raw, path=path)
+            for call in extracted.get("calls") or []:
+                callee = call.get("name") or ""
+                if callee in {"print", "len", "range", "str", "int", "list", "dict", "set", "type"}:
                     continue
-                for tid in name_to_ids.get(callee, [])[:3]:
-                    if tid != fn["id"]:
-                        edges.append({"src": fn["id"], "dst": tid, "rel": "calls"})
+                line = int(call.get("line") or 0)
+                # attribute callee: take last segment
+                simple = callee.split(".")[-1]
+                caller_id = None
+                for fn in funcs:
+                    if int(fn["start_line"]) <= line <= int(fn["end_line"]):
+                        caller_id = fn["id"]
+                        break
+                if not caller_id:
+                    continue
+                for tid in name_to_ids.get(simple, [])[:3]:
+                    if tid != caller_id:
+                        edges.append({"src": caller_id, "dst": tid, "rel": "calls"})
 
     # dedupe edges
     seen = set()
