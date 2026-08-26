@@ -84,19 +84,42 @@ class CodeVectorStore:
             self.metas = list(metas)
             self.matrix = arr
         self.save()
-        return {
+        result = {
             "ok": True,
             "count": len(self.ids),
             "provider": emb.get("provider"),
             "dims": int(self.matrix.shape[1]) if self.matrix is not None else 0,
+            "backend": "numpy",
         }
+        # Production path: also mirror to Qdrant when configured
+        try:
+            import os
+            if (os.getenv("CODE_VECTOR_BACKEND") or "").strip().lower() in {"qdrant", "qdrant-client"}:
+                from .qdrant_backend import qdrant_upsert
+                q = qdrant_upsert(ids, [list(map(float, v)) for v in vectors], metas)
+                result["qdrant"] = q
+                if q.get("ok"):
+                    result["backend"] = "qdrant+numpy"
+        except Exception as exc:
+            result["qdrant_error"] = type(exc).__name__
+        return result
 
     def search(self, query: str, *, top_k: int = 10) -> list[dict[str, Any]]:
-        if self.matrix is None or not self.ids:
-            return []
         emb = embed_texts([query])
         qv = (emb.get("vectors") or [[]])[0]
         if not qv:
+            return []
+        # Prefer Qdrant in production when available
+        try:
+            import os
+            if (os.getenv("CODE_VECTOR_BACKEND") or "").strip().lower() in {"qdrant", "qdrant-client"}:
+                from .qdrant_backend import qdrant_search
+                hits = qdrant_search(qv, top_k=top_k)
+                if hits and not (len(hits) == 1 and hits[0].get("error")):
+                    return hits
+        except Exception:
+            pass
+        if self.matrix is None or not self.ids:
             return []
         q = np.array(qv, dtype=np.float32)
         # cosine via normalized dot

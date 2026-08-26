@@ -74,6 +74,9 @@ def embed_fastembed(texts: list[str]) -> dict[str, Any]:
 
 def embed_texts(texts: list[str], *, dims: int = 256) -> dict[str, Any]:
     provider = (os.getenv("CODE_EMBEDDING_PROVIDER") or "auto").strip().lower()
+    # auto: prefer Voyage when key present (production global path)
+    if provider == "auto" and (os.getenv("VOYAGE_API_KEY") or os.getenv("CODE_EMBEDDING_API_KEY") or "").strip():
+        provider = "voyage"
     if provider in {"voyage", "openai", "qwen"} and (
         os.getenv("CODE_EMBEDDING_API_KEY") or os.getenv("VOYAGE_API_KEY") or ""
     ).strip():
