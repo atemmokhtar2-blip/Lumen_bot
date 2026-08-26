@@ -42,8 +42,8 @@ _NUMBERED_KEY_ENV_NAMES = tuple(f"GEMINI_API_KEY_{idx}" for idx in range(1, 151)
 _KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 
 _MODEL_FALLBACKS = (
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.6-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-flash-latest",
@@ -121,7 +121,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def model_name() -> str:
-    return (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 
 
 def _normalize_secret(raw: str) -> str:

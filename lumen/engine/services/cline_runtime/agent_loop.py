@@ -286,7 +286,27 @@ def run_agent(
     else:
         state.stop_reason = "max_steps"
         state.warnings.append(f"hit_max_steps_{limit}")
-        state.ok = bool(state.files_written)
+        # Phase A: local deliverable fill before declaring partial success
+        try:
+            from lumen.engine.services.multi_agent.deterministic_repair import (
+                apply_deterministic_repairs,
+            )
+            det = apply_deterministic_repairs(state.work_dir)
+            state.metadata["deterministic_on_max_steps"] = det
+            if det.get("actions"):
+                state.warnings.append("det_fill:" + ",".join(det["actions"][:6]))
+        except Exception as exc:
+            state.warnings.append(f"det_max_skip:{type(exc).__name__}")
+        try:
+            acc = check_agent_project(state.work_dir, goal=goal)
+            state.metadata["acceptance"] = acc
+            if acc.get("ok"):
+                state.ok = True
+                state.stop_reason = "completed_after_max_steps_det"
+            else:
+                state.ok = bool(state.files_written)
+        except Exception:
+            state.ok = bool(state.files_written)
 
     if state.stop_reason == "completed" and not state.files_written:
         try:

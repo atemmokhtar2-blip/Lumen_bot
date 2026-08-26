@@ -199,7 +199,7 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     models = [
         (model_id or "").strip(),
         (os.getenv("GEMINI_MODEL") or "").strip(),
-        "gemini-2.0-flash",
+        "gemini-3.6-flash",
         "gemini-flash-latest",
         "gemini-1.5-flash",
     ]

@@ -216,16 +216,34 @@ class Msg:
         return True
 
 
+class _CallbackQuery:
+    def __init__(self, message, data="smoke"):
+        self.message = message
+        self.data = data
+        self.id = "smoke_cq"
+        self.from_user = SimpleNamespace(id=1, username="smoke", first_name="Smoke")
+    async def answer(self, *a, **k):
+        return True
+    async def edit_message_text(self, *a, **k):
+        return True
+    async def edit_message_reply_markup(self, *a, **k):
+        return True
+
+
 class Update:
-    def __init__(self, text="/start"):
+    def __init__(self, text="/start", *, for_callback=False):
         self.effective_user = SimpleNamespace(id=1, username="smoke", first_name="Smoke")
         self.effective_chat = SimpleNamespace(id=1, type="private")
         self.message = Msg(text)
         self.effective_message = self.message
-        self.callback_query = None
         self.pre_checkout_query = None
         self.chat_member = None
         self.my_chat_member = None
+        if for_callback:
+            self.callback_query = _CallbackQuery(self.message, data="smoke")
+            self.message = None  # typical callback updates have no message
+        else:
+            self.callback_query = None
 
 
 class Context:
@@ -241,7 +259,9 @@ class Context:
 
 async def invoke(name, fn, text):
     try:
-        await fn(Update(text), Context())
+        low = (name or "").lower()
+        for_cb = ("callback" in low) or low.endswith("_cb") or ("button" in low and "start" not in low)
+        await fn(Update(text, for_callback=for_cb), Context())
         return True, ""
     except Exception as e:
         return False, "%s:%s:%s" % (name, type(e).__name__, e)

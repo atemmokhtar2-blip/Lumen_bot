@@ -207,9 +207,30 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
+def _coerce_rel_path(work_dir: str, path: str) -> str:
+    """Coerce absolute/escaped paths into workspace-relative paths."""
+    raw = (path or ".").strip() or "."
+    if raw in {".", "./", ""}:
+        return "."
+    try:
+        p = Path(raw)
+        if p.is_absolute():
+            root = Path(work_dir).resolve()
+            try:
+                return p.resolve().relative_to(root).as_posix() or "."
+            except Exception:
+                # bare absolute outside workspace → use name only if under cwd-like
+                return p.name or "."
+    except Exception:
+        pass
+    return raw.lstrip("/") or "."
+
+
 def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     """Dispatch FS tool by name."""
     args = dict(args or {})
+    if "path" in args and args.get("path") is not None:
+        args["path"] = _coerce_rel_path(work_dir, str(args.get("path") or "."))
     if name == "list_dir":
         return list_dir(work_dir, str(args.get("path") or "."))
     if name == "read_file":
