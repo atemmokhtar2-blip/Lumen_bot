@@ -78,8 +78,21 @@ class GitHubClient:
         return self.request("GET", f"/repos/{owner}/{repo}/pulls/{int(number)}")
 
     def list_pull_files(self, owner: str, repo: str, number: int) -> list[dict]:
-        data = self.request("GET", f"/repos/{owner}/{repo}/pulls/{int(number)}/files")
-        return list(data or [])
+        """Paginate PR files (GitHub max 100 per page)."""
+        out: list[dict] = []
+        page = 1
+        while page <= 20:
+            data = self.request(
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{int(number)}/files",
+                params={"per_page": 100, "page": page},
+            )
+            batch = list(data or [])
+            out.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return out
 
     def create_pull_review(
         self,
