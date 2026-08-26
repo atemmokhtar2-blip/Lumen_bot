@@ -15,7 +15,7 @@ from .agent_acceptance import check_agent_project
 from .agent_brain import decide
 from .agent_fs import run_tool
 from .agent_state import AgentState, AgentStep
-from .model_router import describe_runtime, select_model
+from .model_router import describe_runtime, select_model, select_model_for_goal
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,22 @@ def run_agent(
     work.mkdir(parents=True, exist_ok=True)
     state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
     state.metadata["model"] = describe_runtime()
-    choice = select_model(task="build")
+    task = "repair" if (
+        "MODE=INCREMENTAL_REPAIR" in (goal or "")
+        or (isinstance(ir_dict, dict) and (ir_dict.get("metadata") or {}).get("mode") == "incremental_repair")
+    ) else "build"
+    findings_n = 0
+    feats: list = []
+    if isinstance(ir_dict, dict):
+        findings_n = len(ir_dict.get("findings") or (ir_dict.get("metadata") or {}).get("findings") or [])
+        feats = list(ir_dict.get("preferred_keys") or ir_dict.get("features_requested") or [])
+    choice, diff = select_model_for_goal(
+        task=task,
+        goal=goal or "",
+        features=feats,
+        findings_count=findings_n,
+    )
+    state.metadata["task_difficulty"] = diff
     if choice.provider == "none":
         state.stop_reason = "no_model"
         state.errors.append("no_llm_provider_configured")

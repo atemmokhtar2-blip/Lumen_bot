@@ -189,3 +189,58 @@ def test_10_model_router_select_by_task():
         assert choice is None or hasattr(choice, "model_id") or isinstance(choice, (str, dict))
     desc = describe_runtime()
     assert isinstance(desc, (str, dict))
+
+
+# ── 11. Trajectory analytics + failure board ─────────────────────────
+
+def test_11_trajectory_analytics_and_failure_board():
+    from lumen.engine.services.multi_agent.state import AgentState
+    from lumen.engine.services.multi_agent.trajectory import (
+        append_trajectory,
+        analyze_trajectory,
+        failure_board,
+        trajectory_summary,
+    )
+
+    st = AgentState(state_id="bench-analytics-1", user_id=7, user_text="analytics")
+    append_trajectory(st, step="planner_done", role="ARCHITECT", ok=True)
+    append_trajectory(st, step="critic_fail", role="CRITIC", ok=False, detail="syntax")
+    append_trajectory(st, step="repair", role="BUILDER", ok=True)
+    summ = trajectory_summary(st)
+    assert summ.get("fail_count", 0) >= 1
+    analysis = analyze_trajectory(st.state_id)
+    assert analysis.get("event_count", 0) >= 1
+    assert "by_step" in analysis
+    board = failure_board(limit=20)
+    assert isinstance(board, list)
+
+
+# ── 12. Model difficulty + cache ─────────────────────────────────────
+
+def test_12_model_difficulty_and_cache():
+    from lumen.engine.services.cline_runtime.model_router import (
+        estimate_task_difficulty,
+        cache_get,
+        cache_set,
+        cache_stats,
+        select_model_for_goal,
+    )
+
+    easy = estimate_task_difficulty(task="build", goal="hi")
+    hard = estimate_task_difficulty(
+        task="repair",
+        goal="أ" * 500 + " multi feature bot payments bookings admin",
+        features=["a", "b", "c", "d", "e", "f"],
+        findings_count=5,
+        file_count=20,
+    )
+    assert easy["band"] in {"easy", "medium", "hard"}
+    assert hard["score"] >= easy["score"]
+    payload = {"x": 1, "goal": "cache-test"}
+    assert cache_get("bench", payload) is None
+    cache_set("bench", payload, {"ok": True})
+    assert cache_get("bench", payload) == {"ok": True}
+    assert cache_stats()["entries"] >= 1
+    choice, diff = select_model_for_goal(task="build", goal="simple bot")
+    assert diff["band"] in {"easy", "medium", "hard"}
+    assert choice is not None

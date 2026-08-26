@@ -20,6 +20,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+import hashlib
+import json
+import threading
+import time
 
 
 @dataclass
@@ -70,7 +74,96 @@ def _forced_provider() -> str:
     return ""
 
 
+
+# ── Phase A: task difficulty + result cache ──────────────────────────
+
+_CACHE_LOCK = threading.Lock()
+_RESULT_CACHE: dict[str, dict[str, Any]] = {}
+_CACHE_MAX = 256
+
+
+def estimate_task_difficulty(
+    *,
+    task: str = "build",
+    goal: str = "",
+    features: list | None = None,
+    findings_count: int = 0,
+    file_count: int = 0,
+) -> dict[str, Any]:
+    """Heuristic difficulty for model routing (no external services).
+
+    Returns score 0.0..1.0 and band: easy | medium | hard.
+    """
+    task_l = (task or "build").strip().lower()
+    goal_s = (goal or "").strip()
+    feats = list(features or [])
+    score = 0.15
+    if task_l in {"plan", "planner", "architect"}:
+        score += 0.25
+    if task_l in {"critique", "critic", "review", "qa"}:
+        score += 0.2
+    if task_l in {"repair", "fix"}:
+        score += 0.3
+    score += min(0.25, len(goal_s) / 4000.0)
+    score += min(0.2, len(feats) * 0.03)
+    score += min(0.2, max(0, findings_count) * 0.04)
+    score += min(0.15, max(0, file_count) * 0.01)
+    # Arabic + multi-feature custom bots tend harder
+    if any(ord(c) > 0x600 for c in goal_s[:200]):
+        score += 0.05
+    score = max(0.0, min(1.0, score))
+    if score < 0.35:
+        band = "easy"
+    elif score < 0.65:
+        band = "medium"
+    else:
+        band = "hard"
+    return {"score": round(score, 3), "band": band, "task": task_l}
+
+
+def _cache_key(namespace: str, payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(f"{namespace}:{raw}".encode("utf-8")).hexdigest()
+
+
+def cache_get(namespace: str, payload: dict[str, Any], *, ttl_sec: int = 3600) -> Any | None:
+    """Return cached result if fresh; else None."""
+    key = _cache_key(namespace, payload)
+    with _CACHE_LOCK:
+        entry = _RESULT_CACHE.get(key)
+        if not entry:
+            return None
+        if time.time() - float(entry.get("ts") or 0) > max(30, ttl_sec):
+            _RESULT_CACHE.pop(key, None)
+            return None
+        entry["hits"] = int(entry.get("hits") or 0) + 1
+        return entry.get("value")
+
+
+def cache_set(namespace: str, payload: dict[str, Any], value: Any) -> str:
+    """Store result for repeated identical tasks (Phase A cost control)."""
+    key = _cache_key(namespace, payload)
+    with _CACHE_LOCK:
+        if len(_RESULT_CACHE) >= _CACHE_MAX:
+            # drop oldest
+            oldest = sorted(_RESULT_CACHE.items(), key=lambda kv: float(kv[1].get("ts") or 0))
+            for k, _ in oldest[: max(1, _CACHE_MAX // 10)]:
+                _RESULT_CACHE.pop(k, None)
+        _RESULT_CACHE[key] = {"ts": time.time(), "value": value, "hits": 0}
+    return key
+
+
+def cache_stats() -> dict[str, Any]:
+    with _CACHE_LOCK:
+        return {
+            "entries": len(_RESULT_CACHE),
+            "max": _CACHE_MAX,
+            "hits": sum(int(v.get("hits") or 0) for v in _RESULT_CACHE.values()),
+        }
+
+
 def select_model(*, task: str = "build") -> ModelChoice:
+
     forced = _forced_provider()
     table = {
         "gemini": ModelChoice(
@@ -202,6 +295,32 @@ def _apply_task_model_override(choice: ModelChoice, task: str) -> ModelChoice:
     )
 
 
+
+
+def select_model_for_goal(
+    *,
+    task: str = "build",
+    goal: str = "",
+    features: list | None = None,
+    findings_count: int = 0,
+    file_count: int = 0,
+) -> tuple[ModelChoice, dict[str, Any]]:
+    """Select model using task difficulty band (hard → stronger providers first)."""
+    diff = estimate_task_difficulty(
+        task=task,
+        goal=goal,
+        features=features,
+        findings_count=findings_count,
+        file_count=file_count,
+    )
+    # For hard repair/critique, force plan-like order by mapping task
+    task_eff = task
+    if diff["band"] == "hard" and (task or "").lower() in {"build", "worker"}:
+        task_eff = "plan"  # stronger order
+    choice = select_model(task=task_eff)
+    return choice, diff
+
+
 def describe_runtime() -> dict[str, Any]:
     choice = select_model(task="build")
     return {
@@ -215,7 +334,18 @@ def describe_runtime() -> dict[str, Any]:
             "build": "llamacpp>qwen>groq>gemini>xai>ollama",
             "critique": "gemini>xai>qwen>groq>llamacpp>ollama",
         },
+        "cache": cache_stats(),
+        "difficulty_sample": estimate_task_difficulty(task="build", goal="sample"),
     }
 
 
-__all__ = ["ModelChoice", "describe_runtime", "select_model"]
+__all__ = [
+    "ModelChoice",
+    "describe_runtime",
+    "select_model",
+    "select_model_for_goal",
+    "estimate_task_difficulty",
+    "cache_get",
+    "cache_set",
+    "cache_stats",
+]

@@ -42,9 +42,9 @@
 |---|---------|--------|--------|---------|
 | **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **مغلق تشغيليًا (A)** | roles + orchestrator + plan/findings/repair + bot-bench + forced finish + cost. اختياري لاحقًا: Task Tree / Swarm / LangGraph |
 | **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **ضعيف / لم يبدأ كمرحلة C** | يوجد `repo_understanding` قديم — ليس Tree-sitter KG ولا blast-radius |
-| **3** | Self-Correction | Observe→Critique→Fix مغلق | **جزئي (داخل A)** | Critic + trajectory + repair_worker + smoke. ناقص: trajectory analytics ولوحة فشل |
+| **3** | Self-Correction | Observe→Critique→Fix مغلق | **مغلق (A)** | Critic + trajectory + repair + smoke + `analyze_trajectory` + `failure_board` |
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
-| **5** | Model Router الذكي | plan/build/critique + تكلفة | **جزئي (A)** | `select_model(task=...)` + ترتيب مزودين + `CLINE_MODEL_*`. ناقص: تقدير صعوبة المهمة وcaching نتائج |
+| **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |
 | **6** | Evaluation / Bot-bench | مقاييس نجاح ثابتة | **لم يبدأ رسميًا (D)** | تم اختبار حي يدوي؛ لا benchmark مُصدَّر في CI |
 | **7** | Scalability | Workers أفقية + backpressure | **أساس فقط (B جزئي في الكود)** | `durable_workflow` / Temporal adapter موجودان نصًا — غير مفعّلين كمسار إنتاج مثبت |
 | **8** | Computer Use / Browser | Playwright داخل sandbox | **لم يبدأ (F)** | |
@@ -74,6 +74,9 @@
 | افتراضي Gemini: `gemini-3.6-flash` | `model_router` / `agent_brain` / `gemini_client` |
 | Smoke: mock `callback_query` | `bot/generation_steps/helpers.py` |
 | اختبار حي: decide + agent_loop + Critic PASS | تم محليًا بمفاتيح (غير مُلزمة في git) |
+| Trajectory analytics + failure board | `trajectory.analyze_trajectory` / `failure_board` |
+| Task difficulty + decision cache | `model_router.estimate_task_difficulty` / `cache_*` / `CLINE_DECISION_CACHE` |
+| Bot-bench في CI | `.github/workflows/ci.yml` → `tests/bot_bench/` |
 
 ### ناقص لإغلاق A قبل الانتقال لـ B
 

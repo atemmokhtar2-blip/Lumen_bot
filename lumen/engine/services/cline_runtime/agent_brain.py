@@ -690,6 +690,25 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
     if not system:
         system = "You are an autonomous coding agent building a software project."
 
+    # Phase A: optional decision cache for identical prompts (cost control)
+    cache_on = (os.getenv("CLINE_DECISION_CACHE") or "1").strip().lower() in {"1", "true", "yes", "on"}
+    cache_payload = {
+        "provider": choice.provider,
+        "model": choice.model_id,
+        "system": system[:4000],
+        "user": user[:6000],
+    }
+    if cache_on:
+        try:
+            from .model_router import cache_get, cache_set
+            hit = cache_get("decide", cache_payload, ttl_sec=int(os.getenv("CLINE_DECISION_CACHE_TTL") or "1800"))
+            if isinstance(hit, dict) and (hit.get("parse_ok") or hit.get("tool") or hit.get("finish")):
+                hit = dict(hit)
+                hit["cache_hit"] = True
+                return hit
+        except Exception:
+            pass
+
     try:
         max_attempts = max(1, min(4, int(os.getenv("CLINE_LLM_RETRIES") or "3")))
     except ValueError:
@@ -783,6 +802,12 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
         except Exception:
             decision["usage"] = {}
         if decision.get("parse_ok") or decision.get("tool"):
+            if cache_on:
+                try:
+                    from .model_router import cache_set
+                    cache_set("decide", cache_payload, {k: decision[k] for k in decision if k != "usage"})
+                except Exception:
+                    pass
             return decision
         # parse failed — nudge and retry with stronger instruction injected once
         logger.info("agent_brain parse fail attempt %s — retry", attempt)

@@ -15,6 +15,8 @@ jobs:
         run: |
           pip install -U pip pytest
           pip install -r requirements.txt 2>/dev/null || true
+      - name: Unit — Phase A bot-bench contracts
+        run: pytest tests/bot_bench/test_phase_a_contracts.py -q --tb=short
       - name: Unit — spec_core + durable workflow + isolation
         run: pytest tests/test_spec_core_unit.py -q --tb=short
       - name: Unit — credits ledger + welcome/promo security

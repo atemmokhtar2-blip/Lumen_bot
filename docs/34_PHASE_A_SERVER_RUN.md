@@ -70,3 +70,26 @@ python api_main.py
 - Mock LLM كبديل دائم في الإنتاج.
 - سكربتات تقليد تولّد ملفات بوت خارج `agent_fs` / Orchestrator.
 - فتح المرحلة B قبل إغلاق بنود A المتبقية في `33_AGENTS_12_PHASES.md`.
+
+
+## Analytics (Phase A)
+
+```python
+from lumen.engine.services.multi_agent.trajectory import failure_board, analyze_trajectory
+failure_board(limit=20)
+analyze_trajectory("<state_id>")
+```
+
+## Model difficulty + cache
+
+```bash
+# decision cache (default on)
+CLINE_DECISION_CACHE=1
+CLINE_DECISION_CACHE_TTL=1800
+```
+
+```python
+from lumen.engine.services.cline_runtime.model_router import (
+    estimate_task_difficulty, select_model_for_goal, cache_stats
+)
+```
