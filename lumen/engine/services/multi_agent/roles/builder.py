@@ -46,9 +46,38 @@ class BuilderAgent(Agent):
         try:
             from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
 
+            # Execution plan + repair directive → Cline goal enrichment
+            plan = (state.extensions or {}).get("execution_plan") or {}
+            repair = (state.extensions or {}).get("last_repair") or {}
+            brief_parts = [req]
+            try:
+                from ..plan_contract import ExecutionPlan
+                ep = ExecutionPlan.from_dict(plan) if plan else None
+                if ep and (ep.tasks or ep.goal):
+                    brief_parts.append("\n--- EXECUTION_PLAN ---\n" + ep.to_worker_brief())
+            except Exception:
+                if plan:
+                    brief_parts.append("\n--- EXECUTION_PLAN ---\n" + str(plan)[:1500])
+            if repair:
+                try:
+                    from ..repair import RepairDirective
+                    rd = RepairDirective(
+                        attempt=int(repair.get("attempt") or state.attempts or 0),
+                        blocking_errors=list(repair.get("blocking_errors") or []),
+                        soft_warnings=list(repair.get("soft_warnings") or []),
+                        actions=list(repair.get("actions") or []),
+                        drop_features=list(repair.get("drop_features") or []),
+                        add_constraints=list(repair.get("add_constraints") or []),
+                        force_spec_prefix=str(repair.get("force_spec_prefix") or ""),
+                    )
+                    brief_parts.append("\n--- REPAIR_DIRECTIVE ---\n" + rd.to_prompt_block())
+                except Exception:
+                    brief_parts.append("\n--- REPAIR ---\n" + str(repair)[:1200])
+            enriched = "\n".join(brief_parts)[:12000]
+
             package: dict[str, Any] = {
-                "original_text": req,
-                "spec_request": req,
+                "original_text": enriched,
+                "spec_request": enriched,
                 "purpose": str((view.get("strict_spec") or {}).get("purpose") or "")[:200],
                 "preferred_keys": list(preferred or []),
                 "capabilities_gap": list(
@@ -61,8 +90,19 @@ class BuilderAgent(Agent):
                 "looks_custom": True,
                 "needs_ai_codegen": True,
                 "user_id": user_id,
+                "execution_plan": plan,
+                "repair_directive": repair,
+                "findings": list((state.extensions or {}).get("findings") or [])[:20],
             }
             ir = build_ir_from_package(package, user_id=user_id)
+            # stash plan on IR metadata for agent_loop
+            try:
+                meta = dict(ir.metadata or {})
+                meta["execution_plan"] = plan
+                meta["repair_directive"] = repair
+                ir.metadata = meta
+            except Exception:
+                pass
             result = execute_ir(ir, work_dir, user_id=user_id)
         except Exception as exc:
             state.build_success = False

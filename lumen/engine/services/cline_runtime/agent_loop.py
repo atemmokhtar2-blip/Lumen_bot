@@ -30,28 +30,53 @@ def _max_steps() -> int:
 
 def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> str:
     hint = ""
+    plan_block = ""
+    repair_block = ""
     if ir_hint:
         slim = {
-            "request": (ir_hint.get("raw_request") or ir_hint.get("user_request") or "")[:500],
+            "request": (
+                ir_hint.get("raw_request")
+                or ir_hint.get("user_request")
+                or ir_hint.get("spec_request")
+                or ""
+            )[:500],
             "features": (ir_hint.get("preferred_keys") or ir_hint.get("features_requested") or [])[:20],
             "lang": ir_hint.get("language") or "ar",
         }
         hint = "\nHINT: " + json.dumps(slim, ensure_ascii=False)[:800]
-    goal_s = (goal or "")[:900]
-    return f"""You are Cline, an autonomous coding agent. Build a complete runnable Telegram bot from the GOAL.
-No templates — write real files under workspace (relative paths only).
+        meta = ir_hint.get("metadata") if isinstance(ir_hint.get("metadata"), dict) else {}
+        plan = ir_hint.get("execution_plan") or meta.get("execution_plan") or {}
+        repair = ir_hint.get("repair_directive") or meta.get("repair_directive") or {}
+        if plan:
+            plan_block = "\n\nEXECUTION_PLAN (follow tasks in order):\n" + json.dumps(
+                plan, ensure_ascii=False
+            )[:2000]
+        if repair:
+            repair_block = "\n\nREPAIR_DIRECTIVE (must resolve before finish):\n" + json.dumps(
+                repair, ensure_ascii=False
+            )[:1500]
+    goal_s = (goal or "")[:4000]
+    return f"""You are Cline, an autonomous coding agent operating as the Worker role.
+Build a complete runnable Telegram bot. No stub-only placeholders for required features.
 
 Workspace: {work_dir}
 
-Tools (one JSON per turn):
+Tools (exactly one JSON object per turn):
 list_dir, tree, read_file, write_file, edit_file, run_shell (if allowed), finish.
 
-Minimum deliverables: main.py, requirements.txt, README.md, .env.example
-Use BOT_TOKEN from env. Arabic UX if goal is Arabic. Call finish when coherent.
+Rules:
+1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example
+2. BOT_TOKEN / TELEGRAM_BOT_TOKEN from environment only — never hardcode secrets
+3. Valid Python syntax in every .py file; prefer telegram.ext.Application
+4. If REPAIR_DIRECTIVE is present, fix those items first (prefer edit_file)
+5. If EXECUTION_PLAN is present, complete priority-1 tasks before finish
+6. Arabic UX when goal/language is Arabic
+7. Call finish only when deliverables exist and repairs are addressed
 
 GOAL:
-{goal_s}{hint}
+{goal_s}{hint}{plan_block}{repair_block}
 """.strip()
+
 
 
 def run_agent(

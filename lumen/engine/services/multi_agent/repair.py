@@ -65,6 +65,14 @@ def build_repair_directive(state: AgentState) -> RepairDirective:
     details = rep.get("details") if isinstance(rep.get("details"), dict) else {}
 
     actions: list[str] = []
+    # Phase A+: prefer structured findings → precise worker actions
+    try:
+        from .findings import CritiqueFinding, findings_to_repair_actions
+        raw_f = list((state.extensions or {}).get("findings") or [])
+        findings = [CritiqueFinding.from_dict(x) for x in raw_f if isinstance(x, dict)]
+        actions.extend(findings_to_repair_actions(findings))
+    except Exception:
+        pass
     drop: list[str] = []
     constraints: list[str] = []
     prefix_bits: list[str] = []

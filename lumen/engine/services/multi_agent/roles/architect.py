@@ -67,6 +67,37 @@ class ArchitectAgent(Agent):
             "backend_chain": (spec.raw or {}).get("backend_chain"),
         }
 
+        # Phase A+: explicit ExecutionPlan for Worker (task tree + acceptance)
+        try:
+            from ..plan_contract import build_plan_from_spec
+            lang = str((spec.raw or {}).get("language") or state.extensions.get("language") or "ar")
+            plan = build_plan_from_spec(
+                goal=spec.spec_request or state.user_request or state.raw_request or "",
+                features=list(spec.features or state.preferred_keys or []),
+                constraints=list(getattr(spec, "constraints", None) or [])
+                or list((spec.raw or {}).get("constraints") or []),
+                language=lang,
+            )
+            if directive is not None and directive.actions:
+                plan.constraints = list(plan.constraints) + [
+                    f"REPAIR: {a}" for a in directive.actions[:10]
+                ]
+            state.extensions["execution_plan"] = plan.to_dict()
+            state.record(AgentRole.ARCHITECT, "plan_written", f"tasks={len(plan.tasks)}")
+            try:
+                from ..trajectory import append_trajectory
+                append_trajectory(
+                    state,
+                    step="planner_plan",
+                    role=AgentRole.ARCHITECT.value,
+                    ok=True,
+                    detail=f"tasks={len(plan.tasks)} features={len(plan.features)}",
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            state.extensions["execution_plan_error"] = type(exc).__name__
+
         ok, errors = validate_strict_spec(spec)
         state.record(
             AgentRole.ARCHITECT,

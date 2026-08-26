@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
+    import json
     parts: list[str] = []
     for key in ("raw_request", "user_request", "spec_request", "purpose", "goal"):
         val = ir_dict.get(key)
@@ -33,9 +34,17 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
         "Deliver a complete Telegram bot project under the workspace "
         "(main entry, requirements, README, env example)."
     )
+    meta = ir_dict.get("metadata") if isinstance(ir_dict.get("metadata"), dict) else {}
+    plan = ir_dict.get("execution_plan") or meta.get("execution_plan")
+    if plan:
+        parts.append("EXECUTION_PLAN_JSON=" + json.dumps(plan, ensure_ascii=False)[:1800])
+    repair = ir_dict.get("repair_directive") or meta.get("repair_directive")
+    if repair:
+        parts.append("REPAIR_DIRECTIVE_JSON=" + json.dumps(repair, ensure_ascii=False)[:1200])
     return "\n".join(parts) if parts else (
         "Build a complete Telegram bot project with main.py, requirements.txt, README."
     )
+
 
 
 def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
