@@ -255,40 +255,14 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                     user_id=int(user_id or 0),
                     preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
                 )
-        except Exception:
-            logger.exception(
-                "multi_agent orchestrator failed — verified template fallback (no bare engine loop)"
+        except Exception as _orch_exc:
+            logger.exception("multi_agent orchestrator failed — no template fallback")
+            from lumen.engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=[f"orchestrator_failed:{type(_orch_exc).__name__}:{_orch_exc}"],
+                metadata={"engine": "multi_agent", "template_fallback": False},
             )
-            try:
-                try:
-                    from lumen.engine.services.multi_agent.production_policy import allow_template_fallback
-                    if not allow_template_fallback():
-                        raise RuntimeError("template_fallback_forbidden")
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
-                from lumen.engine.services.multi_agent.fallback_template import (
-                    build_verified_bot,
-                )
-                fb = build_verified_bot(
-                    request or "",
-                    work_dir=work_dir,
-                    user_id=int(user_id or 0),
-                )
-                if fb.ok and fb.generation_result is not None:
-                    return fb.generation_result
-                if fb.ok and fb.project_path:
-                    from lumen.engine.core.result import GenerationResult
-                    return GenerationResult(
-                        success=True,
-                        project_path=fb.project_path,
-                        errors=[],
-                        warnings=list(fb.warnings or []) + ["verified_template_emergency"],
-                        metadata={"engine": "verified_template_fallback", "preset": fb.preset},
-                    )
-            except Exception:
-                logger.exception("verified template emergency fallback failed")
 
         # Cline via bridge/IR.
         try:

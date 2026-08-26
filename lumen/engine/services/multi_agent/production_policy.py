@@ -20,16 +20,11 @@ def is_production() -> bool:
 
 
 def require_langgraph() -> bool:
-    """Production: always. Dev: auto if installed unless explicitly off."""
-    flag = (os.getenv("MULTI_AGENT_LANGGRAPH") or "").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
-        if is_production():
-            # still required in production — ignore disable
-            return True
-        return False
-    if flag in {"1", "true", "yes", "on"}:
+    """Always required unless MULTI_AGENT_LANGGRAPH=0 in non-production."""
+    if is_production():
         return True
-    return is_production() or True  # prefer LangGraph everywhere when available
+    flag = (os.getenv("MULTI_AGENT_LANGGRAPH") or "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
 
 
 def allow_imperative_fallback() -> bool:

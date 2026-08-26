@@ -790,6 +790,48 @@ def orchestrate_generate(
         preferred_keys=list(preferred_keys or []),
     )
     state.extensions["work_dir"] = str(work)
+    # Production durability: prefer Temporal workflow when policy says so
+    try:
+        from .production_policy import is_production, required_workflow_engine
+        from .temporal_client_run import run_generate_via_temporal, temporal_configured
+        use_t = is_production() or (os.environ.get("TBE_WORKFLOW_ENGINE") or "").strip().lower() in {"temporal", "temporalio"}
+        use_t = use_t and temporal_configured() and (os.environ.get("LUMEN_GENERATE_VIA_TEMPORAL") or "1").strip().lower() not in {"0", "false", "no"}
+        if use_t and required_workflow_engine() in {"temporal", "temporalio"}:
+            # Avoid recursion: activity calls orchestrate_generate with LUMEN_GENERATE_VIA_TEMPORAL=0
+            if (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip() not in {"1", "true"}:
+                tr = run_generate_via_temporal(
+                    request=request or "",
+                    work_dir=str(work),
+                    user_id=int(user_id or 0),
+                    preferred_keys=list(preferred_keys or []) if preferred_keys else None,
+                    wait=True,
+                )
+                from lumen.engine.core.result import GenerationResult
+                if tr.get("ok"):
+                    res = (tr.get("result") or {}).get("result") or tr.get("result") or {}
+                    return GenerationResult(
+                        success=True,
+                        project_path=str(res.get("project_path") or "") or None,
+                        errors=[],
+                        metadata={"temporal": tr, "orchestration": "temporal+langgraph"},
+                    )
+                # If Temporal server down in production — hard fail (no silent local)
+                if is_production():
+                    return GenerationResult(
+                        success=False,
+                        errors=[f"temporal_required:{tr.get('error') or 'failed'}"],
+                        metadata={"temporal": tr},
+                    )
+                logger.warning("temporal generate failed; continuing local LangGraph (non-prod)")
+    except Exception:
+        logger.exception("temporal path error")
+        try:
+            from .production_policy import is_production
+            if is_production():
+                from lumen.engine.core.result import GenerationResult
+                return GenerationResult(success=False, errors=["temporal_path_exception"])
+        except Exception:
+            pass
     try:
         from lumen.engine.services.events import emit
         emit(

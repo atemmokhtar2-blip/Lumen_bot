@@ -26,17 +26,17 @@ def langgraph_available() -> bool:
 
 
 def use_langgraph_pipeline() -> bool:
-    """LangGraph is the orchestration source of truth when available.
+    """LangGraph is the only graph when the package is installed.
 
-    Production (see production_policy): required — missing package is a hard error upstream.
+    MULTI_AGENT_LANGGRAPH=0 disables only outside production (policy still forces prod).
     """
     try:
-        from .production_policy import require_langgraph, is_production
-        if require_langgraph():
-            return langgraph_available() or is_production()  # True in prod even if missing → upstream fails hard
+        from .production_policy import is_production
+        if is_production():
+            return True  # required; availability checked by orchestrator
     except Exception:
         pass
-    flag = (os.getenv("MULTI_AGENT_LANGGRAPH") or "auto").strip().lower()
+    flag = (os.getenv("MULTI_AGENT_LANGGRAPH") or "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
         return False
     return langgraph_available()
