@@ -6,6 +6,7 @@ from .client import (
     get_pull,
     list_issue_comments,
     list_pull_files,
+    create_pull_review,
     list_repo_issues,
 )
 
@@ -16,5 +17,6 @@ __all__ = [
     "get_pull",
     "list_issue_comments",
     "list_pull_files",
+    "create_pull_review",
     "list_repo_issues",
 ]

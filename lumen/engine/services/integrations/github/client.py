@@ -81,6 +81,26 @@ class GitHubClient:
         data = self.request("GET", f"/repos/{owner}/{repo}/pulls/{int(number)}/files")
         return list(data or [])
 
+    def create_pull_review(
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        body: str,
+        *,
+        event: str = "COMMENT",
+        comments: list[dict] | None = None,
+    ) -> dict:
+        """POST /repos/{owner}/{repo}/pulls/{number}/reviews (GitHub REST)."""
+        payload: dict = {"body": body or "", "event": event}
+        if comments:
+            payload["comments"] = comments
+        return self.request(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls/{int(number)}/reviews",
+            json=payload,
+        )
+
 
 def _client(token: str | None = None) -> GitHubClient:
     return GitHubClient(token=token)
@@ -110,6 +130,14 @@ def list_pull_files(owner: str, repo: str, number: int, **kw: Any) -> list[dict]
     return _client(kw.get("token")).list_pull_files(owner, repo, number)
 
 
+def create_pull_review(
+    owner: str, repo: str, number: int, body: str, **kw: Any
+) -> dict:
+    return _client(kw.get("token")).create_pull_review(
+        owner, repo, number, body, event=str(kw.get("event") or "COMMENT"), comments=kw.get("comments")
+    )
+
+
 __all__ = [
     "GitHubClient",
     "list_repo_issues",
@@ -118,4 +146,5 @@ __all__ = [
     "list_issue_comments",
     "get_pull",
     "list_pull_files",
+    "create_pull_review",
 ]
