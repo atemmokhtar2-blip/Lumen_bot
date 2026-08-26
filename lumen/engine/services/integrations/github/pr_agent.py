@@ -87,8 +87,17 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
     comment_resp = None
     if (os.getenv("GITHUB_PR_POST_REVIEW") or "1").strip().lower() not in {"0", "false", "no"}:
         try:
+            rev_event = event if event in {"COMMENT", "REQUEST_CHANGES", "APPROVE"} else "COMMENT"
+            # GitHub requires commit_id for REQUEST_CHANGES / APPROVE — without SHA use COMMENT
+            if rev_event in {"REQUEST_CHANGES", "APPROVE"} and not sha:
+                rev_event = "COMMENT"
             review_resp = create_pull_review(
-                owner, name_repo, number, body, event=event if event in {"COMMENT", "REQUEST_CHANGES", "APPROVE"} else "COMMENT"
+                owner,
+                name_repo,
+                number,
+                body,
+                event=rev_event,
+                commit_id=sha or None,
             )
         except Exception:
             logger.exception("create_pull_review failed; falling back to issue comment")
@@ -127,9 +136,9 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
         subprocess.run(cmd, check=True, capture_output=True, timeout=240)
 
         # 1) Critic-class execution feedback (real processes)
-        from lumen.engine.services.multi_agent.roles.critic import _execution_feedback_sandbox
+        from lumen.engine.services.multi_agent.execution_feedback import run_execution_feedback
 
-        execution = _execution_feedback_sandbox(root)
+        execution = run_execution_feedback(root)
 
         # 2) Code intel on changed paths
         from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
@@ -197,7 +206,7 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
                 }
                 # Re-run execution after repair
                 if repaired:
-                    execution = _execution_feedback_sandbox(root)
+                    execution = run_execution_feedback(root)
             except Exception as exc:
                 logger.exception("pr auto-repair failed")
                 repair_result = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}

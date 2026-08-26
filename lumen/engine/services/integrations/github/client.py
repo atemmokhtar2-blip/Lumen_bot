@@ -89,12 +89,20 @@ class GitHubClient:
         body: str,
         *,
         event: str = "COMMENT",
+        commit_id: str | None = None,
         comments: list[dict] | None = None,
     ) -> dict:
-        """POST /repos/{owner}/{repo}/pulls/{number}/reviews (GitHub REST)."""
+        """POST /repos/{owner}/{repo}/pulls/{number}/reviews (GitHub REST).
+
+        REQUEST_CHANGES / APPROVE require commit_id (head SHA) per GitHub API.
+        """
         payload: dict = {"body": body or "", "event": event}
+        if commit_id:
+            payload["commit_id"] = commit_id
         if comments:
             payload["comments"] = comments
+        if event in {"REQUEST_CHANGES", "APPROVE"} and not commit_id:
+            raise ValueError("commit_id required for REQUEST_CHANGES/APPROVE")
         return self.request(
             "POST",
             f"/repos/{owner}/{repo}/pulls/{int(number)}/reviews",
@@ -134,7 +142,13 @@ def create_pull_review(
     owner: str, repo: str, number: int, body: str, **kw: Any
 ) -> dict:
     return _client(kw.get("token")).create_pull_review(
-        owner, repo, number, body, event=str(kw.get("event") or "COMMENT"), comments=kw.get("comments")
+        owner,
+        repo,
+        number,
+        body,
+        event=str(kw.get("event") or "COMMENT"),
+        commit_id=kw.get("commit_id"),
+        comments=kw.get("comments"),
     )
 
 
