@@ -47,3 +47,12 @@ export LUMEN_COST_INPUT_PER_1M=0.15
 export LUMEN_COST_OUTPUT_PER_1M=0.60
 export LUMEN_EVAL_DIR=/var/lumen/eval
 ```
+
+
+## تشغيل حي
+
+```bash
+./scripts/hosting/run_phase_d_eval.sh
+```
+
+آخر تشغيل مرجعي: `docs/eval/REPORT.md` و `docs/eval/baseline.json`.

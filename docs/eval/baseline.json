@@ -1,0 +1,29 @@
+{
+  "n": 10,
+  "success_rate": 1.0,
+  "avg_attempts": 1.0,
+  "avg_latency_s": 0.033,
+  "avg_cost_usd": 4.5e-05,
+  "by_platform": {
+    "telegram": {
+      "n": 4,
+      "success_rate": 1.0
+    },
+    "discord": {
+      "n": 2,
+      "success_rate": 1.0
+    },
+    "whatsapp": {
+      "n": 1,
+      "success_rate": 1.0
+    },
+    "web": {
+      "n": 1,
+      "success_rate": 1.0
+    },
+    "generic": {
+      "n": 2,
+      "success_rate": 1.0
+    }
+  }
+}
