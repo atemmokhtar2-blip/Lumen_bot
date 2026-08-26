@@ -94,6 +94,34 @@ def run_incremental_repair(state: AgentState, *, work_dir: Path | None = None) -
         "language": (state.extensions or {}).get("language") or "ar",
     }
 
+    # 1) Fast local fixes (no LLM) — Cursor always has this layer
+    try:
+        from .deterministic_repair import apply_deterministic_repairs
+        det = apply_deterministic_repairs(
+            project,
+            findings=_findings(state),
+            extensions=state.extensions or {},
+        )
+        state.extensions["deterministic_repair"] = det
+        state.record(
+            AgentRole.BUILDER,
+            "deterministic_repair",
+            f"actions={len(det.get('actions') or [])}",
+        )
+        try:
+            from .trajectory import append_trajectory
+            append_trajectory(
+                state,
+                step="deterministic_repair",
+                role=AgentRole.BUILDER.value,
+                ok=True,
+                detail=",".join((det.get("actions") or [])[:8]),
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.debug("deterministic repair skip: %s", type(exc).__name__)
+
     try:
         from lumen.engine.services.cline_runtime.agent_loop import run_agent
 

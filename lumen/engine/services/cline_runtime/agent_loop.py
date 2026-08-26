@@ -162,6 +162,44 @@ def run_agent(
         tool = decision.get("tool")
         args = dict(decision.get("args") or {})
 
+        # Phase A policy: repair mode requires read_file before edit on same path
+        repair_mode = "MODE=INCREMENTAL_REPAIR" in (goal or "") or (
+            isinstance(ir_dict, dict)
+            and (
+                (ir_dict.get("metadata") or {}).get("mode") == "incremental_repair"
+                or bool(ir_dict.get("repair_directive") or ir_dict.get("findings"))
+            )
+        )
+        read_set = set(state.metadata.get("read_files") or [])
+        if tool in {"edit_file", "apply_patch", "search_replace"} and repair_mode:
+            target = str(args.get("path") or "")
+            if target and target not in read_set:
+                state.add_assistant(step.thought or "edit blocked")
+                state.add_user(
+                    f"POLICY: read_file path={target} before edit_file/apply_patch in repair mode."
+                )
+                step.tool_result = {"ok": False, "error": "read_before_edit_required", "path": target}
+                state.steps.append(step)
+                state.warnings.append(f"policy_read_before_edit:{target}")
+                continue
+        if tool == "read_file":
+            rp = str(args.get("path") or "")
+            if rp:
+                read_set.add(rp)
+                state.metadata["read_files"] = sorted(read_set)
+        if repair_mode and tool == "write_file":
+            wp = str(args.get("path") or "")
+            # allow write only for missing files; if exists, force edit
+            from pathlib import Path as _P
+            if wp and (_P(state.work_dir) / wp).is_file() and wp in {"main.py"}:
+                state.add_user(
+                    f"POLICY: {wp} exists — use edit_file/apply_patch, not write_file full overwrite."
+                )
+                step.tool_result = {"ok": False, "error": "prefer_edit_not_overwrite", "path": wp}
+                state.steps.append(step)
+                state.warnings.append(f"policy_prefer_edit:{wp}")
+                continue
+
         if decision.get("finish") or tool == "finish":
             if decision.get("summary"):
                 args.setdefault("summary", decision["summary"])
@@ -177,8 +215,22 @@ def run_agent(
                 state.ok = True
                 state.metadata["summary"] = args.get("summary") or decision.get("summary") or ""
                 break
-            # acceptance failed — push agent to fix instead of stopping if steps remain
+            # acceptance failed — deterministic local fix then re-check before LLM loop
             state.warnings.append("acceptance_soft_fail:" + ",".join(acc.get("missing") or [])[:200])
+            try:
+                from lumen.engine.services.multi_agent.deterministic_repair import (
+                    apply_deterministic_repairs,
+                )
+                det = apply_deterministic_repairs(state.work_dir)
+                state.metadata["deterministic_on_accept"] = det
+                acc2 = check_agent_project(state.work_dir, goal=goal)
+                state.metadata["acceptance"] = acc2
+                if acc2.get("ok"):
+                    state.stop_reason = "completed_by_deterministic"
+                    state.ok = True
+                    break
+            except Exception as exc:
+                state.warnings.append(f"det_accept_skip:{type(exc).__name__}")
             state.add_user(
                 "Acceptance failed. Missing: "
                 + ", ".join(acc.get("missing") or [])
