@@ -220,7 +220,7 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
             str(args.get("path") or ""),
             str(args.get("content") if args.get("content") is not None else ""),
         )
-    if name == "edit_file":
+    if name in {"edit_file", "apply_patch", "search_replace"}:
         return edit_file(
             work_dir,
             str(args.get("path") or ""),

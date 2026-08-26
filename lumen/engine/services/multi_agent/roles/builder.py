@@ -43,6 +43,21 @@ class BuilderAgent(Agent):
             state.transition(AgentStatus.FAILED, role=AgentRole.BUILDER, detail="empty_spec")
             return state
 
+        # Cursor-class path: patch existing project instead of full regenerate
+        try:
+            from ..repair_worker import should_incremental_repair, run_incremental_repair
+            if should_incremental_repair(state):
+                state.transition(AgentStatus.BUILDING, role=AgentRole.BUILDER)
+                state.attempts = int(state.attempts or 0)  # already incremented above
+                state = run_incremental_repair(state, work_dir=work_dir)
+                if state.build_success and (state.generated_path or "").strip():
+                    return state
+                # if incremental failed hard with no path, fall through to full generate once
+                if (state.generated_path or "").strip() and Path(state.generated_path).is_dir():
+                    return state
+        except Exception as exc:
+            state.record(AgentRole.BUILDER, "incremental_repair_fallback", type(exc).__name__)
+
         try:
             from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
 

@@ -44,6 +44,7 @@ from .fallback_template import should_trigger_verified_fallback, build_verified_
 from .trajectory import append_trajectory, load_trajectory, trajectory_summary
 from .plan_contract import ExecutionPlan, PlanTask, build_plan_from_spec
 from .findings import CritiqueFinding
+from .repair_worker import should_incremental_repair, run_incremental_repair
 from .redis_board import (
     RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
     scan_and_resume, redis_board_enabled, enqueue_pending_resumes, enqueue_resume_job,
@@ -114,6 +115,8 @@ __all__ = [
     "PlanTask",
     "build_plan_from_spec",
     "CritiqueFinding",
+    "should_incremental_repair",
+    "run_incremental_repair",
     "RedisLayeredBlackboard", "list_resumable_state_ids", "resume_interrupted_state",
     "scan_and_resume", "redis_board_enabled", "enqueue_pending_resumes", "enqueue_resume_job",
     "append_agent_event",

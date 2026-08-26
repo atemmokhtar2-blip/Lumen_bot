@@ -56,13 +56,26 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
                 repair, ensure_ascii=False
             )[:1500]
     goal_s = (goal or "")[:4000]
-    return f"""You are Cline, an autonomous coding agent operating as the Worker role.
+    repair_mode = "MODE=INCREMENTAL_REPAIR" in goal_s or (
+        isinstance(ir_hint, dict)
+        and (
+            (ir_hint.get("metadata") or {}).get("mode") == "incremental_repair"
+            or bool(ir_hint.get("repair_directive") or ir_hint.get("findings"))
+        )
+    )
+    role_line = (
+        "You are Cline in INCREMENTAL REPAIR mode. Edit the existing project. "
+        "Prefer edit_file. Never wipe the project. Fix ERROR findings only."
+        if repair_mode
+        else "You are Cline, an autonomous coding agent operating as the Worker role."
+    )
+    return f"""{role_line}
 Build a complete runnable Telegram bot. No stub-only placeholders for required features.
 
 Workspace: {work_dir}
 
 Tools (exactly one JSON object per turn):
-list_dir, tree, read_file, write_file, edit_file, run_shell (if allowed), finish.
+list_dir, tree, read_file, write_file, edit_file (or apply_patch), run_shell (if allowed), finish.
 
 Rules:
 1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example
@@ -140,7 +153,7 @@ def run_agent(
                 "INVALID. Reply with ONLY this JSON shape:\n"
                 '{"thought":"...","tool":"write_file","args":{"path":"main.py","content":"..."},'
                 '"finish":false,"summary":""}\n'
-                "Valid tools: list_dir, tree, read_file, write_file, edit_file, finish."
+                "Valid tools: list_dir, tree, read_file, write_file, edit_file, apply_patch, finish."
             )
             state.steps.append(step)
             state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")
