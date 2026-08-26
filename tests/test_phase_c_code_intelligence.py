@@ -128,3 +128,37 @@ def test_persistent_index_roundtrip(sample_repo: Path, tmp_path: Path):
     g2 = get_or_build_graph(sample_repo, store_dir=store, rebuild=False)
     assert g2.get("from_cache") is True
     assert g2["stats"]["node_count"] >= 5
+
+
+def test_preflight_and_edit_file_impact(sample_repo: Path):
+    from lumen.engine.services.code_intelligence.preflight import analyze_edit_preflight
+    from lumen.engine.services.cline_runtime.agent_fs import edit_file
+
+    pf = analyze_edit_preflight(
+        sample_repo,
+        "pkg/b.py",
+        old_string="def helper",
+        new_string="def helper",
+    )
+    assert pf.get("ok") is True
+    assert pf.get("risk") in {"low", "medium", "high"}
+    assert "engine" in pf
+
+    # edit should attach preflight
+    res = edit_file(
+        str(sample_repo),
+        "pkg/b.py",
+        "def helper(name: str) -> str:",
+        "def helper(name: str) -> str:  # touched",
+    )
+    assert res.get("ok") is True
+    assert "preflight" in res
+    assert res["preflight"].get("engine")
+
+
+def test_hybrid_rrf_engine_name(sample_repo: Path):
+    from lumen.engine.services.code_intelligence import hybrid_search
+
+    res = hybrid_search(sample_repo, "helper", top_k=3)
+    assert res["engine"] == "hybrid-bm25-vector-rrf"
+    assert res["hits"]

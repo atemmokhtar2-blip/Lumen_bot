@@ -52,3 +52,19 @@ PYTHONPATH=. pytest tests/test_phase_c_code_intelligence.py -q
 | **persistent_index** | حفظ graph على القرص |
 
 Critic يرفق `details.code_intelligence` بعد فحص المشروع المولَّد.
+
+
+## Preflight قبل التعديل (مسار Cursor-like)
+
+عند `edit_file` / `apply_patch` يُحسب:
+
+1. Tree-sitter blast radius للملف/الرموز
+2. Jedi `find_references` على الرموز المستهدفة
+3. Hybrid BM25 + vector مع **RRF**
+4. `risk`: low|medium|high + قائمة الملفات المتأثرة
+
+```bash
+CODE_INTEL_PREFLIGHT=1   # افتراضي
+```
+
+النتيجة داخل `tool_result.preflight` للـ agent.

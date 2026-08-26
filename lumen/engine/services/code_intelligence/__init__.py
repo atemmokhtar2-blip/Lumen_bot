@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .blast_radius import blast_radius
+from .preflight import analyze_edit_preflight
 from .hybrid_retrieval import hybrid_search
 from .persistent_index import build_and_save_index, get_or_build_graph, load_index
 from .symbol_graph import build_symbol_graph
@@ -20,6 +21,7 @@ __all__ = [
     "build_symbol_graph",
     "hybrid_search",
     "blast_radius",
+    "analyze_edit_preflight",
     "build_and_save_index",
     "get_or_build_graph",
     "load_index",

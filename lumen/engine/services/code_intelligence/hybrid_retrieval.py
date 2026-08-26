@@ -56,7 +56,7 @@ def hybrid_search(
     graph = graph or build_symbol_graph(root_p)
     docs = _corpus_from_graph(graph, root_p)
     if not docs:
-        return {"ok": True, "hits": [], "query": query, "engine": "hybrid-bm25-vector"}
+        return {"ok": True, "hits": [], "query": query, "engine": "hybrid-bm25-vector-rrf"}
 
     tokenized = [tokenize_code(d["text"]) for d in docs]
     bm25 = BM25Okapi(tokenized)
@@ -69,10 +69,26 @@ def hybrid_search(
     doc_vecs = [embed_text_local(d["text"]) for d in docs]
     vec_scores = [cosine(q_vec, v) for v in doc_vecs]
 
+    # Reciprocal Rank Fusion (RRF) — stronger hybrid than linear mix alone
+    bm25_order = sorted(range(len(docs)), key=lambda i: bm25_scores[i], reverse=True)
+    vec_order = sorted(range(len(docs)), key=lambda i: vec_scores[i], reverse=True)
+    bm25_rank = {i: r for r, i in enumerate(bm25_order, start=1)}
+    vec_rank = {i: r for r, i in enumerate(vec_order, start=1)}
+    k_rrf = 60
     ranked = []
     for i, d in enumerate(docs):
-        score = bm25_weight * (bm25_scores[i] / max_b) + vector_weight * max(0.0, vec_scores[i])
-        ranked.append({**d, "score": round(float(score), 6), "bm25": round(float(bm25_scores[i]), 4), "vec": round(float(vec_scores[i]), 4)})
+        rrf = 1.0 / (k_rrf + bm25_rank[i]) + 1.0 / (k_rrf + vec_rank[i])
+        linear = bm25_weight * (bm25_scores[i] / max_b) + vector_weight * max(0.0, vec_scores[i])
+        score = 0.7 * rrf + 0.3 * linear
+        ranked.append(
+            {
+                **d,
+                "score": round(float(score), 6),
+                "rrf": round(float(rrf), 6),
+                "bm25": round(float(bm25_scores[i]), 4),
+                "vec": round(float(vec_scores[i]), 4),
+            }
+        )
     ranked.sort(key=lambda x: x["score"], reverse=True)
     hits = ranked[: max(1, min(top_k, 50))]
     # strip heavy text from hits
@@ -83,7 +99,7 @@ def hybrid_search(
         "query": query,
         "hits": hits,
         "corpus_size": len(docs),
-        "engine": "hybrid-bm25-vector",
+        "engine": "hybrid-bm25-vector-rrf",
         "graph_stats": graph.get("stats"),
     }
 

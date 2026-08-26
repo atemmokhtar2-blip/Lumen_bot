@@ -121,8 +121,29 @@ def edit_file(
         else:
             updated = text.replace(old_string, new_string, 1)
             count = 1
+        preflight = None
+        try:
+            from lumen.engine.services.code_intelligence.preflight import analyze_edit_preflight
+            preflight = analyze_edit_preflight(
+                work_dir,
+                path,
+                old_string=old_string,
+                new_string=new_string,
+            )
+        except Exception as _pf_exc:
+            preflight = {"ok": False, "error": type(_pf_exc).__name__}
         safe_write_text(root, path, updated)
-        return {"ok": True, "path": path, "replacements": count}
+        out: dict[str, Any] = {"ok": True, "path": path, "replacements": count}
+        if isinstance(preflight, dict):
+            out["preflight"] = {
+                "risk": preflight.get("risk"),
+                "impact_score": preflight.get("impact_score"),
+                "impacted_files": (preflight.get("impacted_files_union") or [])[:20],
+                "symbol_hints": preflight.get("symbol_hints") or [],
+                "jedi_refs": (preflight.get("jedi") or {}).get("refs"),
+                "engine": preflight.get("engine"),
+            }
+        return out
     except UnsafePathError as exc:
         return {"ok": False, "error": f"unsafe:{exc}"}
     except Exception as exc:
