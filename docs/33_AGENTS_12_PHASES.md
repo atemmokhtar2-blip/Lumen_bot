@@ -41,7 +41,7 @@
 | # | المرحلة | الهدف | الحالة | ملاحظات |
 |---|---------|--------|--------|---------|
 | **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **مغلق تشغيليًا (A)** | roles + orchestrator + plan/findings/repair + bot-bench + forced finish + cost. اختياري لاحقًا: Task Tree / Swarm / LangGraph |
-| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **ضعيف / لم يبدأ كمرحلة C** | يوجد `repo_understanding` قديم — ليس Tree-sitter KG ولا blast-radius |
+| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **Phase C نشطة** | tree-sitter + symbol graph + BM25/vector hybrid + blast_radius — `docs/36_PHASE_C_CODE_INTELLIGENCE.md` |
 | **3** | Self-Correction | Observe→Critique→Fix مغلق | **مغلق (A)** | Critic + trajectory + repair + smoke + `analyze_trajectory` + `failure_board` |
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
 | **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |
@@ -96,16 +96,17 @@
 
 ## المراحل التالية (ملخص تنفيذي)
 
-### B — Durability & Scale (بعد A) — **قيد التنفيذ / مفعّلة في الكود**
+### B — Durability & Scale — **مُتحقق منها (11 pytest + Temporal SDK live)**
 - `TemporalWorkflowEngine` يبدأ workflow رسمي `LumenMultiAgentGenerate` + worker module
 - Redis/file journal + `resume_generate` بعد crash/429
 - `worker_pool` + `orchestration_slot` backpressure
 - توثيق: `docs/35_PHASE_B_DURABILITY.md`
 
-### C — Codebase Intelligence
-- Tree-sitter → symbol graph
-- hybrid retrieval (BM25 ثم embeddings)
+### C — Codebase Intelligence — **مفعّلة في الكود**
+- Tree-sitter → symbol graph (`code_intelligence`)
+- hybrid retrieval (BM25 + vectors)
 - blast-radius قبل التعديل
+- توثيق: `docs/36_PHASE_C_CODE_INTELLIGENCE.md`
 
 ### D — Evaluation
 - `tests/bot_bench/` سيناريوهات ثابتة

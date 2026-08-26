@@ -94,3 +94,19 @@ docker compose -f deploy/temporal/docker-compose.yml up -d
 export TBE_WORKFLOW_ENGINE=temporal TEMPORAL_HOST=localhost:7233
 python -m lumen.engine.services.multi_agent.temporal_worker
 ```
+
+
+## تقرير تحقق إغلاق B (آلي)
+
+| مقياس | النتيجة |
+|--------|---------|
+| ملفات Phase B الجوهرية | 11/11 موجودة |
+| `eng.start` من Orchestrator | نعم |
+| pause 429 + needs_resume | نعم |
+| `temporalio` في requirements | نعم |
+| docker-compose temporalio الرسمي | نعم |
+| pytest durability + temporal live | **11 passed** |
+| Temporal WorkflowEnvironment (SDK) | **2 passed** |
+| خادم Temporal Docker في بيئة CI الحالية | غير متاح (لا docker) — compose جاهز للسيرفر |
+
+**قرار انتقال:** B مقبولة للانتقال إلى C على أساس العقود + SDK حيّ. التحقق على cluster إنتاجي يبقى تشغيلي على السيرفر.

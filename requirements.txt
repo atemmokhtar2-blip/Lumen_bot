@@ -34,3 +34,8 @@ alembic==1.15.2
 
 # Phase B — durable workflows (official SDK)
 temporalio>=1.7.0,<2
+
+# Phase C — Codebase Intelligence
+tree-sitter>=0.22.0
+tree-sitter-python>=0.23.0
+rank-bm25>=0.2.2
