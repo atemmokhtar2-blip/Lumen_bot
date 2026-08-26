@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelJob,
   listJobs,
@@ -12,40 +12,43 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { ProgressBar } from "@/components/ProgressBar";
 
 export default function RunsPage() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState<string>("");
+  const qc = useQueryClient();
 
-  const refresh = useCallback(async () => {
-    try {
-      const data = await listJobs(50);
-      if (data?.ok) {
-        setJobs(data.jobs || []);
-        setError("");
-      } else setError(JSON.stringify(data));
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    }
-  }, []);
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: async () => {
+      const d = await listJobs(50);
+      if (!d?.ok) throw new Error(JSON.stringify(d));
+      return (d.jobs || []) as Job[];
+    },
+    refetchInterval: 3000,
+  });
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
-    return () => clearInterval(t);
-  }, [refresh]);
+  const mutate = useMutation({
+    mutationFn: async ({
+      id,
+      action,
+    }: {
+      id: string;
+      action: "pause" | "resume" | "cancel";
+    }) => {
+      if (action === "pause") return pauseJob(id);
+      if (action === "resume") return resumeJob(id);
+      return cancelJob(id);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
 
-  const act = async (id: string, fn: (id: string) => Promise<any>) => {
-    setBusy(id);
-    try {
-      await fn(id);
-      await refresh();
-    } finally {
-      setBusy("");
-    }
-  };
-
+  const jobs = jobsQuery.data || [];
   const terminal = (s: string) =>
     s === "succeeded" || s === "failed" || s === "cancelled";
+
+  const counts = {
+    running: jobs.filter((j) => j.status === "running").length,
+    paused: jobs.filter((j) => j.status === "paused").length,
+    queued: jobs.filter((j) => j.status === "queued").length,
+    failed: jobs.filter((j) => j.status === "failed").length,
+  };
 
   return (
     <div className="stack">
@@ -53,15 +56,43 @@ export default function RunsPage() {
         <div>
           <h1 className="h1">Runs</h1>
           <p className="muted" style={{ margin: 0 }}>
-            Jobs · live status · pause / resume / cancel · open detail
+            TanStack Query live list · JobRunner pause / resume / cancel · SSE detail
           </p>
         </div>
-        <button type="button" className="btn" onClick={() => refresh()}>
-          Refresh
+        <button
+          type="button"
+          className="btn"
+          onClick={() => jobsQuery.refetch()}
+          disabled={jobsQuery.isFetching}
+        >
+          {jobsQuery.isFetching ? "Refreshing…" : "Refresh"}
         </button>
       </div>
 
-      {error && <div className="error-box">{error}</div>}
+      <div className="row">
+        <div className="card" style={{ flex: 1 }}>
+          <div className="muted" style={{ fontSize: 12 }}>Running</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{counts.running}</div>
+        </div>
+        <div className="card" style={{ flex: 1 }}>
+          <div className="muted" style={{ fontSize: 12 }}>Queued</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{counts.queued}</div>
+        </div>
+        <div className="card" style={{ flex: 1 }}>
+          <div className="muted" style={{ fontSize: 12 }}>Paused</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{counts.paused}</div>
+        </div>
+        <div className="card" style={{ flex: 1 }}>
+          <div className="muted" style={{ fontSize: 12 }}>Failed</div>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{counts.failed}</div>
+        </div>
+      </div>
+
+      {jobsQuery.isError && (
+        <div className="error-box">
+          {String((jobsQuery.error as Error)?.message || jobsQuery.error)}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <table className="table">
@@ -78,15 +109,14 @@ export default function RunsPage() {
             {jobs.map((j) => {
               const done = terminal(j.status);
               const paused = j.status === "paused";
+              const busy = mutate.isPending && mutate.variables?.id === j.job_id;
               return (
                 <tr key={j.job_id}>
                   <td>
                     <a href={`/runs/${encodeURIComponent(j.job_id)}`} className="mono">
                       {j.job_id}
                     </a>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {j.kind || "—"}
-                    </div>
+                    <div className="muted" style={{ fontSize: 12 }}>{j.kind || "—"}</div>
                   </td>
                   <td>
                     <StatusBadge status={j.status} />
@@ -102,18 +132,15 @@ export default function RunsPage() {
                       <a className="btn btn-ghost" href={`/runs/${encodeURIComponent(j.job_id)}`}>
                         Open
                       </a>
-                      <a
-                        className="btn btn-ghost"
-                        href={`/diff?job=${encodeURIComponent(j.job_id)}`}
-                      >
+                      <a className="btn btn-ghost" href={`/diff?job=${encodeURIComponent(j.job_id)}`}>
                         Diff
                       </a>
                       {!done && !paused && (
                         <button
                           type="button"
                           className="btn"
-                          disabled={busy === j.job_id}
-                          onClick={() => act(j.job_id, pauseJob)}
+                          disabled={busy}
+                          onClick={() => mutate.mutate({ id: j.job_id, action: "pause" })}
                         >
                           Pause
                         </button>
@@ -122,8 +149,8 @@ export default function RunsPage() {
                         <button
                           type="button"
                           className="btn btn-primary"
-                          disabled={busy === j.job_id}
-                          onClick={() => act(j.job_id, resumeJob)}
+                          disabled={busy}
+                          onClick={() => mutate.mutate({ id: j.job_id, action: "resume" })}
                         >
                           Resume
                         </button>
@@ -132,8 +159,8 @@ export default function RunsPage() {
                         <button
                           type="button"
                           className="btn btn-danger"
-                          disabled={busy === j.job_id}
-                          onClick={() => act(j.job_id, cancelJob)}
+                          disabled={busy}
+                          onClick={() => mutate.mutate({ id: j.job_id, action: "cancel" })}
                         >
                           Cancel
                         </button>
@@ -145,9 +172,9 @@ export default function RunsPage() {
             })}
           </tbody>
         </table>
-        {!jobs.length && !error && (
+        {!jobs.length && !jobsQuery.isError && (
           <p className="muted" style={{ padding: 16 }}>
-            No jobs yet.
+            {jobsQuery.isLoading ? "Loading jobs…" : "No jobs yet."}
           </p>
         )}
       </div>

@@ -1,41 +1,29 @@
-# Lumen Web Console (Phase E — deepened)
+# Lumen Web Console — Phase E
 
-Next.js 14 + Monaco Editor console for runs, agents, live SSE, pause/resume/cancel, and side-by-side diff.
+## Official dependencies
+
+```text
+next
+react / react-dom
+@tanstack/react-query   # server state
+@xyflow/react           # React Flow agent graphs
+@monaco-editor/react    # VS Code editor + diff
+monaco-editor
+```
 
 ## Setup
 
 ```bash
-cd web
 npm install
 export NEXT_PUBLIC_LUMEN_API_URL=http://127.0.0.1:8080
 export NEXT_PUBLIC_LUMEN_API_KEY=your_key
 npm run dev
 ```
 
-## Official stack
-
-| Package | Role |
-|---------|------|
-| `next` | App Router UI |
-| `react` / `react-dom` | UI runtime |
-| `@monaco-editor/react` | Code viewer + DiffEditor (VS Code engine) |
-| Browser `EventSource` | SSE to `/v1/jobs/{id}/events` |
-
-## API used
-
-- `GET /v1/jobs` — list
-- `GET /v1/jobs/{id}` — detail
-- `GET /v1/jobs/{id}/events` — SSE
-- `POST /v1/jobs/{id}/cancel` — cancel
-- `POST /v1/jobs/{id}/pause` — pause
-- `POST /v1/jobs/{id}/resume` — resume
-- `GET /v1/jobs/{id}/files` — file tree
-- `GET /v1/jobs/{id}/file?path=` — file content
-- `GET /v1/runs/agent-reports` — multi-agent trajectory
-
 ## Routes
 
-- `/runs` — job table + controls
-- `/runs/[jobId]` — live timeline
-- `/agents` — agent reports window
-- `/diff` — Monaco viewer / side-by-side diff
+- `/` — live stats (TanStack Query)
+- `/runs` — jobs + pause/resume/cancel
+- `/runs/[jobId]` — SSE timeline
+- `/agents` — React Flow pipeline + reports
+- `/diff` — Monaco viewer / DiffEditor

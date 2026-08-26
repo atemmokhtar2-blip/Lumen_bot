@@ -1,38 +1,47 @@
-# Phase E — UX Console (deepened)
+# Phase E — UX Console (complete stack)
 
 ## الهدف
 
-واجهة Power-User عالمية المستوى لمراقبة وتشغيل الـ agents — ليست شاشة تجريبية.
+واجهة Power-User جاهزة للمنافسة: مراقبة agents، تحكم في jobs، diff احترافي، graph للـ pipeline.
 
-## المكوّنات
+## أدوات رسمية (إلزامي — ليست سكربتات)
 
-| سطح | تنفيذ رسمي |
-|------|------------|
-| API SSE | `GET /v1/jobs/{id}/events` (aiohttp StreamResponse, timeout افتراضي 600s) |
-| Cancel | `POST /v1/jobs/{id}/cancel` + `JobRunner.cancel` |
-| Pause | `POST /v1/jobs/{id}/pause` + `JobRunner.pause` (cooperative) |
-| Resume | `POST /v1/jobs/{id}/resume` + `JobRunner.resume` |
-| Files | `GET /v1/jobs/{id}/files` · `GET /v1/jobs/{id}/file?path=` |
-| Agent reports | `GET /v1/runs/agent-reports` |
-| Console | Next.js 14 App Router + **Monaco Editor** (`@monaco-editor/react`) |
+| الأداة | الحزمة / المنتج | الدور |
+|--------|------------------|--------|
+| Next.js 14 | `next` | App Router UI |
+| TanStack Query | `@tanstack/react-query` | server state · refetch · mutations |
+| React Flow | `@xyflow/react` | رسم pipeline الـ agents |
+| Monaco Editor | `@monaco-editor/react` | viewer + DiffEditor |
+| SSE | `EventSource` + aiohttp | بث حي لتقدّم الـ job |
+| JobRunner | `lumen.platform.jobs` | pause / resume / cancel |
 
-## صفحات الـ Console
+## API
+
+| Endpoint | الوظيفة |
+|----------|---------|
+| `GET /v1/jobs` | قائمة |
+| `GET /v1/jobs/{id}` | تفصيل |
+| `GET /v1/jobs/{id}/events` | SSE |
+| `POST /v1/jobs/{id}/cancel` | إلغاء |
+| `POST /v1/jobs/{id}/pause` | إيقاف مؤقت |
+| `POST /v1/jobs/{id}/resume` | استئناف |
+| `GET /v1/jobs/{id}/files` | شجرة ملفات |
+| `GET /v1/jobs/{id}/file?path=` | محتوى ملف |
+| `GET /v1/runs/agent-reports` | تقارير multi_agent |
+
+## صفحات
 
 | Route | الوظيفة |
 |-------|---------|
-| `/` | لوحة دخول + خريطة القدرات |
-| `/runs` | جدول jobs حي · Pause / Resume / Cancel · رابط التفصيل |
-| `/runs/[jobId]` | تفصيل job + **Live SSE timeline** + تحكم |
-| `/agents` | نافذة Agents · trajectory قابل للطي |
-| `/diff` | شجرة ملفات + **Monaco Viewer** + **side-by-side DiffEditor** |
+| `/` | لوحة إحصائيات (TanStack Query) |
+| `/runs` | جدول + mutations + عدّادات |
+| `/runs/[jobId]` | SSE timeline + تحكم |
+| `/agents` | React Flow graph + قائمة التقارير |
+| `/diff` | Monaco viewer / side-by-side |
 
 ## تشغيل
 
 ```bash
-# API
-python api_main.py
-
-# Console
 cd web
 npm install
 export NEXT_PUBLIC_LUMEN_API_URL=http://127.0.0.1:8080
@@ -40,22 +49,13 @@ export NEXT_PUBLIC_LUMEN_API_KEY=your_key
 npm run dev
 ```
 
-## أدوات رسمية مستخدمة
+## اكتمال Phase E
 
-- **Next.js 14** (App Router)
-- **React 18**
-- **Monaco Editor** عبر `@monaco-editor/react` (محرك VS Code)
-- **Server-Sent Events** أصلية (`EventSource`) + aiohttp stream
-- **JobRunner** في `lumen.platform.jobs` — لا سكربتات وهمية
+- [x] Live job list + detail SSE
+- [x] Pause / Resume / Cancel (JobRunner)
+- [x] Agents window + trajectory graph (React Flow)
+- [x] Monaco code + diff
+- [x] TanStack Query data layer
+- [x] توثيق محدث
 
-## حالات Job
-
-`queued` · `running` · `paused` · `succeeded` · `failed` · `cancelled`
-
-`paused` غير terminal؛ Resume يعيد `running` أو `queued` حسب `started_at`.
-
-## ملاحظات
-
-- Pause تعاوني (مثل soft-cancel): يحدّث الحالة في المتجر.
-- SSE يمرّر `api_key` في query لأن EventSource لا يدعم headers مخصصة.
-- مسار التوليد: Cline + multi_agent — ليس catalog.
+الخطوة التالية المقترحة (خارج E): Temporal Web UI signals، أو Phase F (MCP / Playwright).
