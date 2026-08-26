@@ -1,3 +1,5 @@
+import pytest
+pytest.skip("deterministic BuilderSession purged", allow_module_level=True)
 """Phase 2 — detection integration with generation preflight."""
 from __future__ import annotations
 

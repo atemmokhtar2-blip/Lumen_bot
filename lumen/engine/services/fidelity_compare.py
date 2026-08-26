@@ -323,7 +323,8 @@ def build_verify_repair(
     use_gemini: bool = True,
     max_rounds: int = 2,
 ):
-    from lumen.engine.spec_core.pipeline import build_from_spec
+    raise RuntimeError("deterministic_engine_purged")
+    from lumen.engine.spec_core.pipeline import build_from_spec  # noqa
     from lumen.engine.spec_core.schema import BotSpec
 
     if isinstance(spec, dict):

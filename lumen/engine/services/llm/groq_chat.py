@@ -125,7 +125,9 @@ def _product_brief() -> str:
 
 def _macro_prompt_suffix() -> str:
     try:
-        from lumen.engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        def macros_for_prompt(*a, **k):
+            return []
+        # purged: infinite.macro_discovery
         mb = macros_for_prompt(limit=8)
         return ("\n\n" + mb) if mb else ""
     except Exception:

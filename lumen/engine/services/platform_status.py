@@ -115,7 +115,8 @@ def system_prompt_block() -> str:
         lines.append(f"- ملاحظة آخر تحديث: {note}")
     lines.append("=== نهاية حالة المنصة ===")
     try:
-        from lumen.engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        macros_for_prompt = lambda *a, **k: []  # deterministic infinite purged
+        # from lumen.engine.spec_core.infinite.macro_discovery import macros_for_prompt
         mb = macros_for_prompt(limit=8)
         if mb:
             lines.append("")
@@ -156,7 +157,8 @@ __all__ = [
 def infinite_macro_prompt_block() -> str:
     """Inject discovered macros into chat system context."""
     try:
-        from lumen.engine.spec_core.infinite.macro_discovery import macros_for_prompt
+        macros_for_prompt = lambda *a, **k: []  # deterministic infinite purged
+        # from lumen.engine.spec_core.infinite.macro_discovery import macros_for_prompt
         return macros_for_prompt(limit=8)
     except Exception:
         return ""

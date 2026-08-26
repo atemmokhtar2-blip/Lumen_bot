@@ -1,9 +1,0 @@
-_header.py
-rate_and_schema.py
-catalog_products.py
-orders_payments.py
-cart_wishlist.py
-points_subs.py
-contests_wallet.py
-referral_lang_coupons.py
-enterprise.py

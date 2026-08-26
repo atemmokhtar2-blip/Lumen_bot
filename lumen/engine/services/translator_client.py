@@ -622,6 +622,10 @@ def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict
 
 
 def translate_infinite_via_gemini(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Infinite/spec_core path purged — always None (Cline SDK only)."""
+    logger.info("translate_infinite_via_gemini skipped: deterministic infinite purged")
+    return None
+    # --- dead code below retained for git history / never executed ---
     """LLM → DynamicBotSpec JSON only (no Python).
 
     Uses **Gemini only** (translate role). Validates via infinite AST validator.
@@ -646,7 +650,8 @@ def translate_infinite_via_gemini(text: str, context: dict[str, Any] | None = No
         return None
 
     try:
-        from lumen.engine.spec_core.infinite.llm_contract import (
+        raise ImportError("infinite_purged")
+        from lumen.engine.spec_core.infinite.llm_contract import (  # noqa
             SYSTEM_PROMPT_INFINITE,
             dynamic_spec_json_schema,
         )
