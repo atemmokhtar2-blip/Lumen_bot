@@ -407,21 +407,11 @@ class Orchestrator:
                 else:
                     break
 
-            # Repair decision — verified template beats endless text-simplify
+            # Repair decision — no template path; fail when exhausted
             from .repair import build_repair_directive, spec_hash, record_repair_history
-            try:
-                from .production_policy import allow_template_fallback
-                _block_template = not allow_template_fallback()
-            except Exception:
-                _block_template = True
-            from .fallback_template import (
-                should_trigger_verified_fallback,
-                run_verified_fallback_on_state,
-            )
             directive = build_repair_directive(state)
             hist = list((state.extensions or {}).get("repair_history") or [])
             cur_h = spec_hash(state.strict_spec)
-            # Stagnant if this hash already appeared in recent history OR matches last repair hash.
             prev_h = str(directive.previous_spec_hash or "")
             stagnant = bool(hist) and (
                 any(h.get("spec_hash") == cur_h for h in hist[-3:])
@@ -449,76 +439,20 @@ class Orchestrator:
                 pass
 
             exhausted = int(state.attempts or 0) >= max_att
-            already = bool((state.extensions or {}).get("fallback_template_tried"))
-            # Verified template wins: stagnant, attempt budget, or exhausted — never soft-loop forever.
-            if (not _block_template) and (should_trigger_verified_fallback(
-                attempts=int(state.attempts or 0),
-                stagnant=stagnant,
-                already_tried=already,
-            ) or (exhausted and not already)):
-                state.record(
-                    AgentRole.ORCHESTRATOR,
-                    "verified_fallback_trigger",
-                    f"stagnant={stagnant} attempts={state.attempts} exhausted={exhausted}",
-                )
-                self.board.put(state)
-                work = Path(
-                    ctx.get("work_dir")
-                    or (state.extensions or {}).get("work_dir")
-                    or ""
-                )
-                state = run_verified_fallback_on_state(state, work_dir=work)
-                self.board.put(state)
-                # Real QA: run Critic on verified build (do not fake qa_passed)
-                if state.build_success and (state.generated_path or "").strip():
-                    state = self._run_agent("critic", state, ctx)
-                    self.board.put(state)
-                    if state.status == AgentStatus.PASSED.value or state.qa_passed:
-                        break
-                    # Critic failed on verified template — stop (no more random repair)
-                    state.record(
-                        AgentRole.ORCHESTRATOR,
-                        "verified_fallback_qa_failed",
-                        str((state.qa_report or {}).get("errors") or state.build_errors)[:200],
-                    )
-                    break
-                # Build itself failed
-                state.record(
-                    AgentRole.ORCHESTRATOR,
-                    "repair_exhausted" if exhausted else "verified_fallback_build_failed",
-                    f"attempts={state.attempts} max={max_att} errs={state.build_errors[:3]}",
-                )
-                break
-
             if exhausted:
                 state.record(
                     AgentRole.ORCHESTRATOR,
                     "repair_exhausted",
                     f"attempts={state.attempts} max={max_att}",
                 )
-                break
+                try:
+                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+                except Exception:
+                    state.status = AgentStatus.FAILED.value
+                state.final_message = (state.final_message or "") + "\n[QA failed after max repair attempts]"
+                return self._deliver(state)
 
-            # Nuclear lock: never soft-loop after the first failed attempt.
-            # Verified template is the only continuation path.
-            if int(state.attempts or 0) >= 1 and not already:
-                state.record(
-                    AgentRole.ORCHESTRATOR,
-                    "force_verified_fallback_no_soft_loop",
-                    f"attempts={state.attempts} stagnant={stagnant}",
-                )
-                self.board.put(state)
-                work = Path(
-                    ctx.get("work_dir")
-                    or (state.extensions or {}).get("work_dir")
-                    or ""
-                )
-                state = run_verified_fallback_on_state(state, work_dir=work)
-                self.board.put(state)
-                if state.build_success and (state.generated_path or "").strip():
-                    state = self._run_agent("critic", state, ctx)
-                    self.board.put(state)
-                break
-
+            state.attempts = int(state.attempts or 0) + 1
             state.record(
                 AgentRole.ORCHESTRATOR,
                 "repair_loop",
@@ -535,6 +469,7 @@ class Orchestrator:
             self.board.put(state)
 
         return self._deliver(state)
+
 
 
 

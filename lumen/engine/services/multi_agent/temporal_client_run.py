@@ -11,11 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 def temporal_configured() -> bool:
+    """True only when temporalio is installed AND TEMPORAL_HOST is set (or explicit enable)."""
     try:
         import temporalio  # noqa: F401
     except Exception:
         return False
-    return bool((os.getenv("TEMPORAL_HOST") or "").strip() or True)  # default host ok
+    if (os.getenv("LUMEN_TEMPORAL_REQUIRED") or "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    host = (os.getenv("TEMPORAL_HOST") or "").strip()
+    # Require explicit host in production-style use; localhost only if TEMPORAL_HOST set
+    return bool(host)
 
 
 async def _start_and_wait(payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:

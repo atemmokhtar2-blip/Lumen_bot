@@ -792,24 +792,13 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
                 "errors": ["sandbox_path_invalid"],
             }
         runner.store.update(job.job_id, progress=0.15, message="generating")
-        # Production path: multi-agent LangGraph (+ Temporal when configured)
-        try:
-            from lumen.engine.services.multi_agent.orchestrator import orchestrate_generate
-            result = orchestrate_generate(
-                description,
-                str(work),
-                user_id=uid,
-                preferred_keys=preferred,
-            )
-        except Exception:
-            # Explicit fallback only if multi_agent import fails catastrophically
-            logging.getLogger(__name__).exception("orchestrate_generate failed in job handler")
-            result = generate_bot(
-                description,
-                str(work),
-                user_id=uid,
-                preferred_keys=preferred,
-            )
+        from lumen.engine.services.multi_agent.orchestrator import orchestrate_generate
+        result = orchestrate_generate(
+            description,
+            str(work),
+            user_id=uid,
+            preferred_keys=preferred,
+        )
         success = bool(getattr(result, "success", False))
         meta = getattr(result, "metadata", None) or {}
         project_path = getattr(result, "project_path", None)
