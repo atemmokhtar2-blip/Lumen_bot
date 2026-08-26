@@ -2,55 +2,55 @@
 
 منصة توليد واستضافة بوتات تيليجرام + B2B API.
 
-**التوثيق الكامل:** ابدأ من [`docs/MASTER.md`](docs/MASTER.md)
+التوثيق مبني على الكود الحالي فقط (ليس على وثائق قديمة).
 
 ## تشغيل سريع
 
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # TELEGRAM_BOT_TOKEN=...
-python main.py         # بوت التيليجرام
+python main.py         # بوت التيليجرام (افتراضي: API مغلق)
 # أو API فقط:
 python api_main.py
 ```
 
-## مبادئ سريعة
+تفعيل API مع البوت: `ENABLE_API=1`.
 
-| الطبقة | الدور |
-|--------|------|
-| شات (افتراضي Groq) | توجيه نية فقط — لا تنفيذ |
-| ترجمة (افتراضي Gemini) | عقد `spec_core` |
-| `spec_core` | توليد حتمي بدون هلوسة كود من النموذج |
-| `tool_runtime` | تنفيذ clone / host / repo / generate |
-| `active_repo` | مستودع مسحوب للأسئلة والقياس |
+## ما ينفّذ التوليد فعليًا؟
 
-## فهرس التوثيق
-
-| الملف | الموضوع |
-|-------|---------|
-| [docs/MASTER.md](docs/MASTER.md) | الخريطة الكاملة |
-| [docs/00_ARCHITECTURE.md](docs/00_ARCHITECTURE.md) | البنية |
-| [docs/03_MESSAGE_FLOW.md](docs/03_MESSAGE_FLOW.md) | تدفق الرسالة |
-| [docs/04_CHAT_AND_GROK.md](docs/04_CHAT_AND_GROK.md) | الشات وحدود Grok |
-| [docs/06_SPEC_CORE.md](docs/06_SPEC_CORE.md) | محرك التوليد |
-| [docs/08_REPO_AND_GIT.md](docs/08_REPO_AND_GIT.md) | المستودعات |
-| [docs/11_B2B_API.md](docs/11_B2B_API.md) | REST API |
-| [docs/13_CONFIG_ENV.md](docs/13_CONFIG_ENV.md) | متغيرات البيئة |
+| الطبقة | الدور في الكود |
+|--------|----------------|
+| `message_router` | توجيه رسالة تيليجرام، بوابات، force-generate |
+| Chat (Gemini / translator) | فهم نية وترجمة مواصفات — **لا يكتب كود مشروع** |
+| `BuildIR` + `engine_router` | عقد التوليد؛ يفرض مسار **Cline فقط** |
+| `cline_runtime` (agent) | محرك التوليد الوحيد: حلقة plan → tool → observe |
+| `tool_runtime` | تنفيذ أدوات: clone / host / repo_* / … |
+| `spec_core` | **ليس** محرك توليد. بقايا: registry، command_map، domain_detector، language_understanding لـ IR validation والـ UX |
 
 ## أسطح المنتج
 
 - **Consumer Bot** — `python main.py`
 - **B2B API** — `ENABLE_API=1` أو `python api_main.py`
-- **Managed Hosting** — أدوات host_* + `/v1/hosts/*`
-- **White-label** — خطط Business+ عبر API
+- **Web control plane** — مجلد `web/` (Next.js UX للـ jobs)
 
+## التوثيق
 
-## Package layout (foundation)
+| الملف | المحتوى |
+|-------|---------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | الحزم والتدفقات من الكود |
+| [docs/MESSAGE_FLOW.md](docs/MESSAGE_FLOW.md) | مسار رسالة تيليجرام |
+| [docs/GENERATION.md](docs/GENERATION.md) | IR → Cline agent |
+| [docs/API.md](docs/API.md) | مسارات B2B |
+| [docs/CONFIG.md](docs/CONFIG.md) | متغيرات بيئة أساسية |
+| [SECURITY.md](SECURITY.md) | سياسة الإبلاغ عن الثغرات |
 
-| Package | Role |
-|---------|------|
-| `lumen.identity` | Brand — Lumen only |
-| `lumen.engine` | Generation, LLM, tools, hosting |
-| `lumen.platform` | Credits, tenants, billing |
-| `lumen.bot` | Telegram consumer UI |
-| `lumen.api` | B2B HTTP API |
+## هيكل الحزم
+
+```
+main.py / api_main.py
+lumen/
+  bot/          # واجهة تيليجرام فقط
+  engine/       # IR، Cline، tools، خدمات
+  api/          # aiohttp B2B
+  platform/     # خطط، credits، jobs، rate limit
+```
