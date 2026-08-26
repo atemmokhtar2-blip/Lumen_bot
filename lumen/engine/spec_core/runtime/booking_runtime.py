@@ -55,6 +55,30 @@ def ensure() -> None:
                 conn.execute(stmt)
             except Exception:
                 pass
+        # If still missing slot_ts (corrupt partial table), rebuild empty tables
+        for table in ("bookings", "clinic_appts"):
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if cols and "slot_ts" not in cols:
+                conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
+                # re-run create via executescript path: create fresh
+                if table == "bookings":
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS bookings ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                        "chat_id INTEGER NOT NULL DEFAULT 0, slot_ts INTEGER NOT NULL DEFAULT 0, "
+                        "slot_label TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', "
+                        "status TEXT NOT NULL DEFAULT 'open', kind TEXT NOT NULL DEFAULT 'booking', "
+                        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                    )
+                else:
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS clinic_appts ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                        "chat_id INTEGER NOT NULL DEFAULT 0, slot_ts INTEGER NOT NULL DEFAULT 0, "
+                        "slot_label TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', "
+                        "status TEXT NOT NULL DEFAULT 'open', "
+                        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                    )
         conn.commit()
 
 

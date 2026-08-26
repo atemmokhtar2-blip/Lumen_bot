@@ -190,13 +190,7 @@ def _emit_db(spec: BotSpec) -> str:
     ]
     if need_tasks:
         table_sql.append(
-            "CREATE TABLE IF NOT EXISTS tasks ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "user_id INTEGER NOT NULL, "
-            "title TEXT NOT NULL, "
-            "description TEXT NOT NULL DEFAULT '', "
-            "priority TEXT NOT NULL DEFAULT 'medium', "
-            "done INTEGER NOT NULL DEFAULT 0)"
+            "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'normal', due_ts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
     if need_notes:
         table_sql.append(
@@ -222,8 +216,11 @@ def _emit_db(spec: BotSpec) -> str:
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "user_id INTEGER NOT NULL, "
             "chat_id INTEGER NOT NULL DEFAULT 0, "
-            "body TEXT NOT NULL, "
+            "slot_ts INTEGER NOT NULL DEFAULT 0, "
+            "slot_label TEXT NOT NULL DEFAULT '', "
+            "body TEXT NOT NULL DEFAULT '', "
             "status TEXT NOT NULL DEFAULT 'open', "
+            "kind TEXT NOT NULL DEFAULT 'booking', "
             "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
     if need_clinic:
@@ -232,7 +229,9 @@ def _emit_db(spec: BotSpec) -> str:
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "user_id INTEGER NOT NULL, "
             "chat_id INTEGER NOT NULL DEFAULT 0, "
-            "body TEXT NOT NULL, "
+            "slot_ts INTEGER NOT NULL DEFAULT 0, "
+            "slot_label TEXT NOT NULL DEFAULT '', "
+            "body TEXT NOT NULL DEFAULT '', "
             "status TEXT NOT NULL DEFAULT 'open', "
             "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
@@ -251,7 +250,10 @@ def _emit_db(spec: BotSpec) -> str:
             "chat_id INTEGER NOT NULL DEFAULT 0, "
             "subject TEXT NOT NULL, "
             "status TEXT NOT NULL DEFAULT 'open', "
-            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            "priority TEXT NOT NULL DEFAULT 'normal', "
+            "assignee_id INTEGER NOT NULL DEFAULT 0, "
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
         table_sql.append(
             "CREATE TABLE IF NOT EXISTS ticket_messages ("

@@ -184,6 +184,13 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
                         "auction", "delivery", "crm", "booking", "community", "hr",
                         "marketplace", "fitness", "realestate", "shop", "cart", "wallet"}):
         files.pop("app/services/extras.py", None)
+
+    needs_fat_security = bool(svc_set & {"security"}) or any(
+        str(k).startswith(("sec_", "report_")) for k in feat_keys
+    )
+    if needs_fat_security:
+        files["app/services/security.py"] = _emit_security()
+
     written: list[str] = []
     from lumen.engine.services.safe_fs import UnsafePathError, safe_write_text
     for rel, content in files.items():
