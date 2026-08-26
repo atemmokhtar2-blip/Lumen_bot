@@ -76,7 +76,39 @@ class GeminiTranslateAdapter:
             return None
         if not isinstance(raw, dict):
             return None
-        return self._flatten(raw)
+        flat = self._flatten(raw)
+        # High-precision rules override weak/wrong Gemini capability picks
+        try:
+            from lumen.engine.services.translator_client import (
+                _rule_features_from_text,
+                _spec_core_capabilities,
+                _merge_features,
+            )
+            caps = set(_spec_core_capabilities() or [])
+            rules = _rule_features_from_text(text or "", caps)
+            model_feats = list(flat.get("features_requested") or [])
+            merged = _merge_features(rules, model_feats, caps)
+            if merged:
+                flat["features_requested"] = merged
+                flat["rule_features"] = list(rules)
+                if rules and len(rules) >= 2:
+                    flat["clarification_needed"] = False
+                    flat["clarification_questions"] = []
+                    if float(flat.get("confidence") or 0) < 0.8:
+                        flat["confidence"] = 0.9
+                    # Ensure spec_request mentions real features when model drifted
+                    if rules and not any(
+                        str(x).startswith("pdf") or str(x) == "images_to_pdf"
+                        for x in model_feats
+                    ):
+                        flat["spec_request"] = (
+                            (flat.get("spec_request") or flat.get("purpose") or "Telegram bot")
+                            + " | features: "
+                            + ", ".join(merged)
+                        )
+        except Exception as exc:
+            logger.warning("Gemini rule-merge skipped: %s", exc)
+        return flat
 
     @staticmethod
     def _flatten(raw: dict[str, Any]) -> dict[str, Any]:

@@ -374,13 +374,70 @@ def _canonicalize_features(features: list[str], allowed: set[str]) -> list[str]:
 
 
 def _merge_features(rule: list[str], model: list[str], allowed: set[str]) -> list[str]:
-    """Prefer rule hits; keep valid model extras that are not conflicting aliases."""
+    """Prefer high-precision rule hits; drop model keys that conflict with a known domain pack."""
+    rule_c = _canonicalize_features(list(rule), allowed)
+    model_c = _canonicalize_features(list(model), allowed)
+    # Domain packs: when rules lock a vertical, model must not replace it with unrelated keys
+    domain_prefixes = (
+        "pdf_", "shop_", "cart_", "ticket_", "task_", "note_", "clinic_", "book_",
+        "lead_", "followup_", "user_", "welcome_", "sec_",
+    )
+    rule_domain = [k for k in rule_c if any(k.startswith(p) or k in {
+        "images_to_pdf", "rules", "echo", "faq_show"
+    } for p in domain_prefixes) or k == "images_to_pdf"]
+    if rule_domain:
+        # Keep rule pack + start/help; only allow model keys from same domain family
+        families = set()
+        for k in rule_domain:
+            if k.startswith("pdf") or k == "images_to_pdf":
+                families.add("pdf")
+            elif k.startswith(("shop", "cart")):
+                families.add("shop")
+            elif k.startswith("ticket"):
+                families.add("ticket")
+            elif k.startswith(("task", "note")):
+                families.add("task")
+            elif k.startswith(("clinic", "book")):
+                families.add("book")
+            elif k.startswith(("lead", "followup")):
+                families.add("crm")
+            elif k.startswith(("user_", "welcome", "rules")) or k in {"rules"}:
+                families.add("mod")
+            elif k.startswith("sec_"):
+                families.add("sec")
+        def _same_family(k: str) -> bool:
+            if k in {"start", "help", "cancel", "lang", "language", "about"}:
+                return True
+            if "pdf" in families and (k.startswith("pdf") or k == "images_to_pdf"):
+                return True
+            if "shop" in families and k.startswith(("shop", "cart", "wallet")):
+                return True
+            if "ticket" in families and k.startswith("ticket"):
+                return True
+            if "task" in families and k.startswith(("task", "note")):
+                return True
+            if "book" in families and k.startswith(("book", "clinic")):
+                return True
+            if "crm" in families and k.startswith(("lead", "followup")):
+                return True
+            if "mod" in families and (k.startswith(("user_", "welcome")) or k in {"rules", "delete_message"}):
+                return True
+            if "sec" in families and k.startswith("sec_"):
+                return True
+            return False
+        merged = list(rule_c)
+        for k in model_c:
+            if k not in merged and _same_family(k):
+                merged.append(k)
+        noise = {"echo", "announce", "lang", "my_id", "content_upload", "digital_deliver"}
+        if any(k.startswith("pdf") or k == "images_to_pdf" for k in merged):
+            merged = [k for k in merged if k not in noise]
+        return merged[:12]
     merged = _canonicalize_features(list(rule) + list(model), allowed)
-    # If rules found welcome/ban family, drop weak echo-like noise if present
     noise = {"echo", "announce", "lang", "my_id"}
     if any(k in merged for k in ("welcome_set", "user_ban", "user_mute", "user_warn", "rules")):
         merged = [k for k in merged if k not in noise] or merged
-    return merged[:8]
+    return merged[:12]
 
 
 def translate_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
