@@ -380,32 +380,45 @@ def _run_clone_review_repair(
                     },
                     max_steps=int(os.getenv("GITHUB_PR_REPAIR_STEPS") or "16"),
                 )
-                repaired = bool(getattr(state, "ok", False))
+                written = list(getattr(state, "files_written", None) or [])
+                # Real dirty check — do not trust agent.ok alone
+                dirty = _git_is_dirty(root)
+                execution_before_ok = bool(execution.get("ok"))
+                execution = run_execution_feedback(root)
+                execution_after_ok = bool(execution.get("ok"))
+                # "repaired" only if disk changed AND execution now passes
+                repaired = bool(dirty or written) and execution_after_ok and not execution_before_ok
+                # If already was going to fail and still fails but files changed → attempted only
                 repair_result = {
                     "ok": repaired,
+                    "attempted": True,
+                    "agent_ok": bool(getattr(state, "ok", False)),
+                    "files_written": written[:20],
+                    "git_dirty": dirty,
+                    "execution_before_ok": execution_before_ok,
+                    "execution_after_ok": execution_after_ok,
                     "stop_reason": getattr(state, "stop_reason", ""),
                     "errors": list(getattr(state, "errors", None) or [])[:5],
                 }
-                if repaired:
-                    execution = run_execution_feedback(root)
-                    try:
-                        deep = deep_review_pr_files(root, files_meta)
-                    except Exception:
-                        pass
-                    line_comments = _build_line_comments(files_meta, execution, preflights)
-                    try:
-                        from lumen.engine.services.integrations.github.pr_deep_review import findings_to_line_comments
-                        deep_comments = findings_to_line_comments(list((deep or {}).get("findings") or []))
-                        seen = {(c["path"], c["line"]) for c in deep_comments}
-                        for c in line_comments:
-                            if (c["path"], c["line"]) not in seen:
-                                deep_comments.append(c)
-                        line_comments = deep_comments[:25]
-                    except Exception:
-                        pass
-                # Push only if working tree dirty (real file changes)
-                if do_push and ref:
+                try:
+                    deep = deep_review_pr_files(root, files_meta)
+                except Exception:
+                    pass
+                line_comments = _build_line_comments(files_meta, execution, preflights)
+                try:
+                    from lumen.engine.services.integrations.github.pr_deep_review import findings_to_line_comments
+                    deep_comments = findings_to_line_comments(list((deep or {}).get("findings") or []))
+                    seen = {(c["path"], c["line"]) for c in deep_comments}
+                    for c in line_comments:
+                        if (c["path"], c["line"]) not in seen:
+                            deep_comments.append(c)
+                    line_comments = deep_comments[:25]
+                except Exception:
+                    pass
+                # Push only with real dirty tree (never on agent.ok alone)
+                if do_push and ref and dirty:
                     pushed, pushed_sha = _git_commit_and_push(root, ref)
+                    repair_result["pushed"] = pushed
             except Exception as exc:
                 logger.exception("pr auto-repair failed")
                 repair_result = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
@@ -436,7 +449,22 @@ def _run_clone_review_repair(
         }
 
 
+def _git_is_dirty(root: Path) -> bool:
+    try:
+        st = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return bool((st.stdout or "").strip())
+    except Exception:
+        return False
+
+
 def _git_commit_and_push(root: Path, ref: str) -> tuple[bool, str | None]:
+
     try:
         subprocess.run(
             ["git", "config", "user.email", os.getenv("LUMEN_GIT_EMAIL") or "lumen-bot@users.noreply.github.com"],

@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import ast
 import logging
-import py_compile
 import re
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -73,81 +71,44 @@ def analyze_changed_python_file(
                 "evidence": (se.text or "")[:200],
             }
         )
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".py", delete=True) as tmp:
-            tmp.write(source.encode("utf-8", errors="replace"))
-            tmp.flush()
-            py_compile.compile(tmp.name, doraise=True)
-    except py_compile.PyCompileError as pe:
-        findings.append(
-            {
-                "path": rel_path,
-                "line": getattr(pe, "lineno", None) or 1,
-                "severity": "error",
-                "code": "py_compile",
-                "message": str(pe)[:300],
-            }
-        )
-    except Exception:
-        pass
-
-    # 2) Tree-sitter symbols overlapping added lines
+    # 2) Pattern checks only on lines **added** in this PR (from patch)
     added = extract_added_lines(patch)
     added_line_set = {ln for ln, _ in added}
-    try:
-        from lumen.engine.services.code_intelligence.tree_sitter_index import parse_python_source
-
-        symbols = parse_python_source(source, path=rel_path)
-        for sym in symbols:
-            d = sym.to_dict() if hasattr(sym, "to_dict") else dict(sym)
-            start = int(d.get("start_line") or 0)
-            end = int(d.get("end_line") or start)
-            if not added_line_set:
-                continue
-            if any(start <= ln <= end for ln in added_line_set):
-                # only report if body of added lines looks risky
-                pass
-            # flag empty except / bare except in added lines within symbol range
-        for ln, content in added:
-            s = content.strip()
-            if s == "except:" or s.startswith("except:"):
-                findings.append(
-                    {
-                        "path": rel_path,
-                        "line": ln,
-                        "severity": "warning",
-                        "code": "bare_except",
-                        "message": "Bare except: in added code",
-                        "evidence": content[:120],
-                    }
-                )
-            if "eval(" in s or "exec(" in s:
-                findings.append(
-                    {
-                        "path": rel_path,
-                        "line": ln,
-                        "severity": "warning",
-                        "code": "dynamic_exec",
-                        "message": "eval/exec in added code",
-                        "evidence": content[:120],
-                    }
-                )
-            if "password" in s.lower() and ("=" in s) and not s.strip().startswith("#"):
-                findings.append(
-                    {
-                        "path": rel_path,
-                        "line": ln,
-                        "severity": "warning",
-                        "code": "possible_secret",
-                        "message": "Possible hardcoded secret assignment",
-                        "evidence": content[:120],
-                    }
-                )
-        # unused: symbols list used for hybrid seed
-        _ = symbols
-    except Exception as exc:
-        logger.debug("tree-sitter skip: %s", type(exc).__name__)
-
+    for ln, content in added:
+        s = content.strip()
+        if s == "except:" or s.startswith("except:"):
+            findings.append(
+                {
+                    "path": rel_path,
+                    "line": ln,
+                    "severity": "warning",
+                    "code": "bare_except",
+                    "message": "Bare except: in added code",
+                    "evidence": content[:120],
+                }
+            )
+        if "eval(" in s or "exec(" in s:
+            findings.append(
+                {
+                    "path": rel_path,
+                    "line": ln,
+                    "severity": "warning",
+                    "code": "dynamic_exec",
+                    "message": "eval/exec in added code",
+                    "evidence": content[:120],
+                }
+            )
+        if "password" in s.lower() and ("=" in s) and not s.strip().startswith("#"):
+            findings.append(
+                {
+                    "path": rel_path,
+                    "line": ln,
+                    "severity": "warning",
+                    "code": "possible_secret",
+                    "message": "Possible hardcoded secret assignment",
+                    "evidence": content[:120],
+                }
+            )
     # 3) AST: detect obvious issues in whole module (undefined name is hard without full graph)
     try:
         tree = ast.parse(source, filename=rel_path)
