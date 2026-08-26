@@ -175,6 +175,16 @@ def recent_jobs(limit: int = 10) -> list[dict[str, Any]]:
     if not init.exists():
         init.write_text('"""App package."""\n', encoding="utf-8")
         written.append("app/__init__.py")
+    handlers = root / "app" / "handlers.py"
+    if not handlers.is_file():
+        handlers.write_text(
+            '"""Platform handlers shim for unified QA layout."""\n'
+            "from __future__ import annotations\n\n"
+            "def message_handler(*_a, **_k):\n    return None\n\n"
+            "def start(*_a, **_k):\n    return None\n",
+            encoding="utf-8",
+        )
+        written.append("app/handlers.py")
     return written
 
 
