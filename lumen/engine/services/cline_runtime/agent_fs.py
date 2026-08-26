@@ -133,9 +133,22 @@ def edit_file(
         except Exception as _pf_exc:
             preflight = {"ok": False, "error": type(_pf_exc).__name__}
         if isinstance(preflight, dict) and (os.getenv("CODE_INTEL_STRICT") or "").strip().lower() in {"1", "true", "yes"}:
-            impact = int((preflight.get("impacted_count") or preflight.get("blast_impacted") or 0) or 0)
-            if impact >= int(os.getenv("CODE_INTEL_STRICT_MAX_IMPACT") or "25"):
-                return {"ok": False, "error": "preflight_blast_radius_too_large", "preflight": preflight}
+            union = preflight.get("impacted_files_union") or preflight.get("impacted_files") or []
+            impact = len(union) if isinstance(union, (list, tuple, set)) else 0
+            score = float(preflight.get("impact_score") or 0.0)
+            max_files = int(os.getenv("CODE_INTEL_STRICT_MAX_IMPACT") or "25")
+            max_score = float(os.getenv("CODE_INTEL_STRICT_MAX_SCORE") or "0.85")
+            if impact >= max_files or score >= max_score:
+                return {
+                    "ok": False,
+                    "error": "preflight_blast_radius_too_large",
+                    "preflight": {
+                        "impact_score": score,
+                        "impacted_count": impact,
+                        "impacted_files_union": list(union)[:30],
+                        "engine": preflight.get("engine"),
+                    },
+                }
 
         safe_write_text(root, path, updated)
         out: dict[str, Any] = {"ok": True, "path": path, "replacements": count}

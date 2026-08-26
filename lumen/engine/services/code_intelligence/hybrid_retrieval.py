@@ -6,7 +6,7 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
-from .embeddings import cosine, embed_text_local, tokenize_code
+from .embeddings import cosine, embed_text_local, embed_texts, tokenize_code
 from .symbol_graph import build_symbol_graph
 
 
@@ -65,8 +65,20 @@ def hybrid_search(
     # normalize bm25
     max_b = max(bm25_scores) if bm25_scores else 1.0
     max_b = max_b or 1.0
-    q_vec = embed_text_local(query)
-    doc_vecs = [embed_text_local(d["text"]) for d in docs]
+    # Prefer real embeddings (Voyage / fastembed) via embed_texts; hash only as last resort
+    try:
+        emb = embed_texts([query] + [d["text"] for d in docs])
+        vectors = list(emb.get("vectors") or [])
+        if len(vectors) == 1 + len(docs) and all(isinstance(v, (list, tuple)) and v for v in vectors):
+            q_vec = list(map(float, vectors[0]))
+            doc_vecs = [list(map(float, v)) for v in vectors[1:]]
+            emb_provider = emb.get("provider") or emb.get("fallback") or "embed_texts"
+        else:
+            raise RuntimeError("embed_texts_incomplete")
+    except Exception:
+        q_vec = embed_text_local(query)
+        doc_vecs = [embed_text_local(d["text"]) for d in docs]
+        emb_provider = "hash_local_fallback"
     vec_scores = [cosine(q_vec, v) for v in doc_vecs]
 
     # Reciprocal Rank Fusion (RRF) — stronger hybrid than linear mix alone
@@ -132,6 +144,7 @@ def hybrid_search(
         "ok": True,
         "query": query,
         "hits": hits,
+        "embed_provider": emb_provider,
         "corpus_size": len(docs),
         "engine": "hybrid-bm25-vector-rrf",
         "graph_stats": graph.get("stats"),
