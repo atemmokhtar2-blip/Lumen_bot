@@ -32,6 +32,26 @@ from .parts.requirements_pip import *
 from .parts.project_patch import *
 from .parts.runner import *
 
+
+# Explicit re-exports (import * skips leading-underscore names)
+from .parts.runtime_bootstrap import (
+    _ensure_runtime,
+    _find_requirements,
+    _find_entry,
+    _venv_python,
+    _deps_dir,
+)
+from .parts.requirements_pip import (
+    _pip_install,
+    _preflight_ensure_deps,
+    _sanitize_requirements,
+    _extract_errors,
+    _extract_missing_modules,
+    _ensure_packages_in_requirements,
+    _pip_install_packages_direct,
+    _module_to_package,
+)
+
 __all__ = [
     "LiveRunReport",
     "validate_telegram_token",

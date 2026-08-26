@@ -77,29 +77,21 @@ def _looks_like_generation_request(text: str) -> bool:
 
 
 def _free_agent_mode() -> bool:
-    """True → force Cline free generation (skip catalog chat / deterministic).
+    """Cline free generation — always on while deterministic is hard-off.
 
-    Default ON while DETERMINISTIC_PAUSED (default). Set DETERMINISTIC_ENGINE=1
-    and CLINE_ONLY=0 to restore catalog path.
+    No hosting env required. DETERMINISTIC_ENGINE=1 is the only override.
     """
     try:
         from lumen.engine.services.engine_router import _deterministic_paused, _cline_only
         if _deterministic_paused() or _cline_only():
             return True
     except Exception:
-        pass
-    raw = os.getenv("CLINE_ONLY")
-    if raw is None or not str(raw).strip():
-        raw = os.getenv("CLINE_FORCE_AGENT")
-    if raw is None or not str(raw).strip():
-        # Default to Cline-primary when deterministic is paused (env default)
-        paused = (os.getenv("DETERMINISTIC_PAUSED") or "1").strip().lower()
-        if paused not in {"0", "false", "off", "no"}:
-            eng = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
-            if eng not in {"1", "true", "yes", "on"}:
-                return True
-        return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+        # Fail closed toward Cline if router import fails
+        eng = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
+        if eng not in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
 
 
 

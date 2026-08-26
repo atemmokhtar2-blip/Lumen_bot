@@ -26,28 +26,18 @@ def _env_force_mode() -> EngineMode | None:
 
 
 def _deterministic_paused() -> bool:
-    """Pause catalog / infinite / hybrid (spec_core deterministic path).
+    """Deterministic engine is HARD-OFF in the product path.
 
-    Default ON (paused). Re-enable only with DETERMINISTIC_ENGINE=1.
+    No hosting env needed. Only an explicit DETERMINISTIC_ENGINE=1
+    (dev/emergency) re-enables catalog/infinite/hybrid.
     """
     raw = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return False
-    paused = (os.getenv("DETERMINISTIC_PAUSED") or "1").strip().lower()
-    return paused not in {"0", "false", "off", "no"}
+    return raw not in {"1", "true", "yes", "on"}
 
 
 def _cline_only() -> bool:
-    """Force free Cline agent path (skip catalog / infinite / hybrid).
-
-    Default ON while deterministic is paused. Set CLINE_ONLY=0 only together
-    with DETERMINISTIC_ENGINE=1 to restore the old catalog path.
-    """
+    """Cline SDK is the only generation path while deterministic is hard-off."""
     if _deterministic_paused():
-        # Explicit opt-out of Cline while paused is still allowed via ENGINE_MODE_FORCE
-        raw = os.getenv("CLINE_ONLY")
-        if raw is not None and str(raw).strip():
-            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
         return True
     raw = os.getenv("CLINE_ONLY")
     if raw is None or not str(raw).strip():

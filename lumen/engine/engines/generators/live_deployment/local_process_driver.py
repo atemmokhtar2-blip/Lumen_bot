@@ -338,9 +338,11 @@ class LocalProcessDriver(DeploymentProvider):
 
     def _ensure_runtime_and_deps(self, project_path: Path, install_log: Path) -> tuple[str, str, Path]:
         """Reuse LiveRunner robust installer."""
-        from lumen.engine.services.live_runner.service import (
+        from lumen.engine.services.live_runner.parts.runtime_bootstrap import (
             _ensure_runtime,
             _find_requirements,
+        )
+        from lumen.engine.services.live_runner.parts.requirements_pip import (
             _pip_install,
             _preflight_ensure_deps,
         )
@@ -414,13 +416,21 @@ class LocalProcessDriver(DeploymentProvider):
             )
 
         from lumen.engine.services.error_intelligence import analyze_logs
-        from lumen.engine.services.live_runner.service import (
+        from lumen.engine.services.live_runner.parts.runtime_bootstrap import (
             _ensure_runtime,
+        )
+        from lumen.engine.services.live_runner.parts.requirements_pip import (
             _ensure_packages_in_requirements,
             _pip_install_packages_direct,
-            _resolve_missing_via_source,
             _module_to_package,
         )
+        try:
+            from lumen.engine.services.live_runner.parts.requirements_pip import (
+                _resolve_missing_via_source,
+            )
+        except ImportError:
+            def _resolve_missing_via_source(*a, **k):
+                return []
         from lumen.engine.services.live_runner.source_fix import (
             discover_token_env_names,
         )
