@@ -24,6 +24,12 @@ def _root() -> Path:
     base = Path(os.environ.get("OUTPUT_DIR") or (Path.home() / ".lumen"))
     path = base / "multi_agent_reports"
     path.mkdir(parents=True, exist_ok=True)
+    # Phase D: also append evaluation record (success/latency/cost)
+    try:
+        from lumen.engine.services.evaluation.live_bridge import persist_state_evaluation
+        persist_state_evaluation(state, scenario_id="orchestration_report")
+    except Exception:
+        pass
     return path
 
 

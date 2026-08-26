@@ -30,3 +30,20 @@ PYTHONPATH=. pytest tests/bot_bench/ -q
 - `avg_latency_s`
 - `avg_cost_usd`
 - `by_platform`
+
+
+## تعزيز D (مسار حي)
+
+| طبقة | الوظيفة |
+|------|---------|
+| `cost_model` | تقدير USD من tokens (أسعار عبر env) |
+| `live_bridge` | AgentState / run_report → EvalRunRecord |
+| `write_run_report` | يكتب أيضًا سجل تقييم تلقائيًا |
+| `regression` | مقارنة مع baseline ورفض الانحدار |
+| `markdown_report` | تقرير CI مقروء |
+
+```bash
+export LUMEN_COST_INPUT_PER_1M=0.15
+export LUMEN_COST_OUTPUT_PER_1M=0.60
+export LUMEN_EVAL_DIR=/var/lumen/eval
+```

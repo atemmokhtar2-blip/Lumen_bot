@@ -85,6 +85,64 @@ def _scenario_plan_and_findings() -> dict[str, Any]:
     }
 
 
+
+def _scenario_hybrid_search(tmp: Path) -> dict[str, Any]:
+    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    from lumen.engine.services.code_intelligence import hybrid_search
+
+    apply_platform_scaffold(tmp, platform="telegram")
+    t0 = time.time()
+    res = hybrid_search(tmp, "main start handler bot", top_k=5)
+    ok = bool(res.get("ok")) and bool(res.get("hits") is not None)
+    return {
+        "success": ok,
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": 0.0,
+        "errors": [] if ok else ["hybrid_failed"],
+        "metrics": {"engine": res.get("engine"), "hits": len(res.get("hits") or [])},
+    }
+
+
+def _scenario_edit_pre_post(tmp: Path) -> dict[str, Any]:
+    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    from lumen.engine.services.cline_runtime.agent_fs import edit_file
+
+    apply_platform_scaffold(tmp, platform="telegram")
+    main = (tmp / "main.py").read_text(encoding="utf-8")
+    # safe no-op-ish replace
+    old = "def main"
+    if old not in main:
+        old = "main"
+    t0 = time.time()
+    res = edit_file(str(tmp), "main.py", old, old)
+    ok = bool(res.get("ok")) and "preflight" in res
+    return {
+        "success": ok,
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": 0.0,
+        "errors": [] if ok else ["edit_preflight_missing"],
+        "metrics": {"preflight": res.get("preflight"), "postflight": res.get("postflight")},
+    }
+
+
+def _scenario_cost_model() -> dict[str, Any]:
+    from .cost_model import estimate_cost_usd
+
+    t0 = time.time()
+    c = estimate_cost_usd({"prompt_tokens": 1000, "completion_tokens": 500})
+    ok = c > 0
+    return {
+        "success": ok,
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": c,
+        "errors": [] if ok else ["cost_zero"],
+        "metrics": {"cost_usd": c},
+    }
+
+
 SCENARIOS = [
     ("plat_telegram", lambda tmp: _scenario_platform_scaffold(tmp, "telegram"), "telegram"),
     ("plat_discord", lambda tmp: _scenario_platform_scaffold(tmp, "discord"), "discord"),
@@ -93,7 +151,11 @@ SCENARIOS = [
     ("det_repair_discord", _scenario_det_repair_discord, "discord"),
     ("code_intel_preflight", _scenario_code_intel_preflight, "telegram"),
     ("plan_findings", lambda tmp: _scenario_plan_and_findings(), "generic"),
+    ("code_intel_hybrid", _scenario_hybrid_search, "telegram"),
+    ("edit_pre_post", _scenario_edit_pre_post, "telegram"),
+    ("cost_model", lambda tmp: _scenario_cost_model(), "generic"),
 ]
+
 
 
 def run_bot_bench_suite(*, work_root: Path | None = None, persist: bool = True) -> dict[str, Any]:
