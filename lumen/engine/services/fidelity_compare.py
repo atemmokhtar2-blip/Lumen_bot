@@ -323,28 +323,10 @@ def build_verify_repair(
     use_gemini: bool = True,
     max_rounds: int = 2,
 ):
-    raise RuntimeError("deterministic_engine_purged")
-    from lumen.engine.spec_core.pipeline import build_from_spec  # noqa
-    from lumen.engine.spec_core.schema import BotSpec
-
-    if isinstance(spec, dict):
-        spec = BotSpec.from_dict(spec)
-    last = FidelityReport(ok=False, score=0.0, summary_ar="none")
-    for i in range(max(1, max_rounds)):
-        result = build_from_spec(spec, out_dir=out_dir, request=user_request)
-        if not result.ok or not result.project_path:
-            last = FidelityReport(
-                ok=False,
-                score=0.0,
-                mismatches=[Mismatch("build_failed", "error", str(result.errors[:2]))],
-                summary_ar="فشل البناء",
-            )
-            break
-        last = compare_generated_to_request(
-            user_request, result.project_path, use_gemini=use_gemini and i == 0
-        )
-        if last.ok:
-            break
-        spec = apply_repairs_to_spec(spec, last.repair_directive or {})
-        logger.info("fidelity repair round=%s score=%s", i + 1, last.score)
+    """Removed with the deterministic engine. Always returns a failed report."""
+    last = FidelityReport(
+        ok=False,
+        score=0.0,
+        summary_ar="مسار التحقق الحتمي أُزيل — استخدم Cline فقط",
+    )
     return spec, last

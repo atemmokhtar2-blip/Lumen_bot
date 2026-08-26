@@ -1,8 +1,5 @@
 """Core engine router — Cline SDK is the sole generation engine.
 
-Deterministic engines (catalog / hybrid / infinite / spec_core generate_bot)
-are purged from the user-request path.
-
   package → BuildIR → validate_and_normalize_ir → execute_cline_ir → IR acceptance
 """
 from __future__ import annotations
@@ -18,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _env_force_mode() -> EngineMode | None:
-    """ENGINE_MODE_FORCE is ignored for catalog/hybrid/infinite — product is Cline-only."""
+    """ENGINE_MODE_FORCE is ignored for non-Cline modes — product is Cline-only."""
     raw = (os.getenv("ENGINE_MODE_FORCE") or "").strip().lower()
     if not raw:
         return None
@@ -28,7 +25,7 @@ def _env_force_mode() -> EngineMode | None:
         return None
     if mode != EngineMode.CLINE:
         logger.warning(
-            "ENGINE_MODE_FORCE=%s ignored — deterministic engines purged; forcing CLINE",
+            "ENGINE_MODE_FORCE=%s ignored — product is Cline-only; forcing CLINE",
             raw,
         )
         return EngineMode.CLINE
@@ -36,11 +33,7 @@ def _env_force_mode() -> EngineMode | None:
 
 
 def _deterministic_paused() -> bool:
-    """Deterministic engines (catalog / hybrid / infinite / spec_core) are permanently off.
-
-    DETERMINISTIC_ENGINE is ignored — product path is Cline SDK only.
-    Kept as a named API for call sites that still import it.
-    """
+    """Always True. Kept as a named API for call sites that still import it."""
     return True
 
 
@@ -50,7 +43,7 @@ def _cline_only() -> bool:
 
 
 def _infinite_primary() -> bool:
-    """Infinite/spec_core path permanently disabled."""
+    """Always False."""
     return False
 
 
@@ -66,7 +59,7 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Product policy: Cline SDK only. Deterministic engines are purged from the request path."""
+    """Product policy: Cline SDK only."""
     forced = _env_force_mode()
     if forced is not None:
         return forced
@@ -86,14 +79,11 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
     needs_ai = bool(package.get("needs_ai_codegen"))
     conf = float(package.get("confidence") or 0.0)
 
-    # Product path: Cline SDK only — ignore package.engine_mode catalog/hybrid/infinite.
+    # Product path: Cline SDK only.
     mode_raw = package.get("engine_mode")
     mode = EngineMode.CLINE
     if mode_raw and str(mode_raw) not in {"cline", "ai_codegen", ""}:
-        logger.info(
-            "purged deterministic engine_mode=%s → cline",
-            mode_raw,
-        )
+        logger.info("ignoring engine_mode=%s → cline", mode_raw)
 
     ir = BuildIR.from_dict(
         {
@@ -163,12 +153,12 @@ def execute_ir(
             metadata={"ir": ir.to_dict(), "ir_warnings": v.warnings},
         )
 
-    # ── Cline SDK only (deterministic catalog/hybrid/infinite purged) ──
+    # Cline SDK only
     mode = EngineMode.CLINE
     ir.engine_mode = EngineMode.CLINE
 
     logger.info(
-        "engine_router mode=cline (sole engine) keys=%s gap=%s conf=%.2f domain=%s",
+        "engine_router mode=cline keys=%s gap=%s conf=%.2f domain=%s",
         ir.preferred_keys,
         ir.capabilities_gap,
         ir.confidence,
@@ -193,7 +183,7 @@ def execute_ir(
         )
         return _finalize(result, ir)
 
-    logger.warning("cline failed — no deterministic fallback: %s", cline_res.errors[:5])
+    logger.warning("cline failed: %s", cline_res.errors[:5])
     return GenerationResult(
         success=False,
         project_path=cline_res.project_path,
@@ -204,8 +194,6 @@ def execute_ir(
             "engine": cline_res.engine,
             "ir": ir.to_dict(),
             "cline": cline_res.to_dict(),
-            "catalog_fallback": False,
-            "deterministic_purged": True,
         },
     )
 
@@ -303,21 +291,6 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
     except Exception:
         pass
     return result
-
-
-def _run_catalog(ir: BuildIR, work_dir: Path, user_id: int) -> Any:
-    """Deterministic catalog path removed from product. Kept as a hard-fail stub."""
-    from lumen.engine.core.result import GenerationResult
-
-    logger.error("_run_catalog invoked — deterministic engine purged; refusing")
-    return GenerationResult(
-        success=False,
-        project_path=None,
-        stages=[],
-        validation_reports=[],
-        errors=["deterministic_engine_purged"],
-        metadata={"engine": "purged", "ir": ir.to_dict()},
-    )
 
 
 __all__ = [

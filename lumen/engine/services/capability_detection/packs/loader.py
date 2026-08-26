@@ -87,7 +87,7 @@ def register_pack(
         CAPABILITIES[pc.key] = _to_capability(pc)
         _OVERLAY_KEYS.add(pc.key)
         registered.append(pc.key)
-        # Ensure friendly command ids for BuilderSession.to_spec
+        # Ensure friendly command ids in DEFAULT_COMMANDS
         try:
             from ....spec_core.builder import DEFAULT_COMMANDS
             _METHOD_CMD = {

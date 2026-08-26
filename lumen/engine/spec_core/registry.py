@@ -576,16 +576,8 @@ def by_category() -> dict[str, list[Capability]]:
 
 
 def load_scale_capabilities(*, target: int | None = None) -> int:
-    """Opt-in lazy loading for the large capability catalog.
-
-    Normal bot generation uses the curated registry and must not pay the
-    import-time cost of constructing tens of thousands of synthetic entries.
-    Callers that explicitly need the scale catalog can load it once.
-    """
-    from . import registry_scale
-    return registry_scale.expand_scale_capabilities(
-        target=int(target or os.getenv("TBE_SCALE_REGISTRY_TARGET") or "30000")
-    )
+    """Scale registry was removed. Always returns 0 (no-op)."""
+    return 0
 
 
 __all__ = [
@@ -597,11 +589,6 @@ __all__ = [
     "by_category",
     "load_scale_capabilities",
 ]
-
-# The scale catalog is deliberately lazy. Set TBE_ENABLE_SCALE_REGISTRY=1 or
-# call load_scale_capabilities() explicitly for workloads that need it.
-if os.getenv("TBE_ENABLE_SCALE_REGISTRY", "0").strip().lower() in {"1", "true", "yes", "on"}:
-    load_scale_capabilities()
 
 _add(
     _c("payment_receipt", "payments", "receipt", "إيصال دفع", "Payment receipt", cat="payments"),
@@ -617,6 +604,4 @@ _add(
     _c("pdf_status", "pdf", "status", "حالة جلسة التحويل", "PDF session status", cat="media"),
     _c("images_to_pdf", "pdf", "build_pdf", "تحويل الصور إلى PDF", "Convert images to PDF", cat="media"),
 )
-
-from . import registry_scale as _registry_scale  # noqa: E402,F401
 

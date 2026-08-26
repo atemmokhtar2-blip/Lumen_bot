@@ -77,10 +77,7 @@ def _looks_like_generation_request(text: str) -> bool:
 
 
 def _free_agent_mode() -> bool:
-    """Cline is the sole generation path — always on.
-
-    Deterministic engines are permanently purged from the product path.
-    """
+    """Cline is the sole generation path — always on."""
     return True
 
 
@@ -1319,10 +1316,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             or bool(_translated_generation_request)
         )
         if _generation_like:
-            # A model outage must not block an explicit bot build request. The
-            # deterministic spec_core path can still parse and generate it.
+            # A model outage must not block an explicit bot build request.
             logger.warning(
-                "Gemini chat unavailable for generation request; continuing with spec_core fallback"
+                "Gemini chat unavailable for generation request; continuing with Cline path"
             )
         elif _state_question:
             await message.reply_text(
@@ -1348,7 +1344,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         if _generation_like:
             # Do not send the generic chat outage message for a build request;
-            # continue below so spec_core can perform deterministic generation.
+            # continue below so Cline can generate.
             pass
         else:
             await message.reply_text(

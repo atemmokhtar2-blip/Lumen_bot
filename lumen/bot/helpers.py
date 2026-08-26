@@ -166,12 +166,11 @@ def split_file_for_telegram(path: str | Path, max_mb: float = 45.0) -> list[Path
 
 
 def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_keys=None):
-    """Synchronous generation — Cline SDK only (deterministic engines purged).
+    """Synchronous generation — Cline SDK only.
 
     Order:
       1) multi-agent orchestrator when enabled
       2) Cline via run_generation_with_bridge / execute_ir
-    No catalog / spec_core / generate_bot fallback on the product path.
     """
     request = clamp_spec_request(request or "")
     _bp_tenant = f"tg:{int(user_id or 0)}"
@@ -283,14 +282,14 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             except Exception:
                 logger.exception("verified template emergency fallback failed")
 
-        # Deterministic catalog purged — sole remaining path is Cline via bridge/IR.
+        # Cline via bridge/IR.
         try:
             if (preferred_keys is not None) and isinstance(preferred_keys, dict):
                 preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
         except Exception:
             pass
 
-        logger.info("run_generation → Cline-only path (deterministic purged)")
+        logger.info("run_generation → Cline path")
         return run_generation_with_bridge(
             request,
             work_dir,
@@ -317,7 +316,7 @@ def run_generation_with_bridge(
     """Analyze → BuildIR → engine_router (Cline SDK only).
 
     Translation is optional input to the bridge, not a required independent layer.
-    Cline is the sole engine (CLINE_ENABLED defaults on). Deterministic catalog is purged.
+    Cline is the sole engine (CLINE_ENABLED defaults on).
     """
     from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
     from lumen.engine.services.engine_router import build_ir_from_package, execute_ir

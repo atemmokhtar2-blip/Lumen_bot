@@ -1,8 +1,8 @@
 """
 Generators package — working engines only.
 
-Formal understanding / formal generation engines removed permanently.
-Generation is AI plan + codegen via generate_bot.
+Generation is performed by the Cline SDK path.
+These engines support planning, structure, workspace, git, and related tasks.
 """
 
 from .project_planner import ProjectPlanningEngine

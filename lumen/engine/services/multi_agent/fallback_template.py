@@ -36,10 +36,10 @@ def build_verified_bot(
     work_dir: str | Path,
     user_id: int = 0,
 ) -> FallbackBuild:
-    """Deterministic catalog fallback purged — use Cline only."""
+    """No deterministic fallback — Cline SDK only."""
     return FallbackBuild(
         ok=False,
-        errors=["deterministic_engine_purged"],
+        errors=["no_deterministic_fallback"],
         warnings=["use_cline_sdk_only"],
     )
 
@@ -51,10 +51,10 @@ def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path | None = 
         state.extensions["fallback_template_tried"] = True
         state.extensions["fallback_template_result"] = {
             "ok": False,
-            "errors": ["deterministic_engine_purged"],
+            "errors": ["no_deterministic_fallback"],
         }
         errs = list(state.build_errors or [])
-        errs.append("deterministic_engine_purged")
+        errs.append("no_deterministic_fallback")
         state.build_errors = errs[:20]
     except Exception:
         pass

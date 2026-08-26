@@ -50,7 +50,7 @@ def feature_keys(report: DetectionReport, *, include_core: bool = True, synthesi
 
 
 def apply_detection_to_session(session: Any, report: DetectionReport) -> list[str]:
-    """Merge detection matches into BuilderSession.selected. Returns keys added."""
+    """Merge detection matches into session.selected. Returns keys added."""
     if session is None or not hasattr(session, "selected"):
         return []
     added: list[str] = []

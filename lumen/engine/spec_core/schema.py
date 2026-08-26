@@ -278,24 +278,3 @@ __all__ = [
     "StorageSpec",
     "AcceptanceTest",
 ]
-
-# =============================================================================
-# Infinite Atomic Engine (architecture plan) — primary DynamicBotSpec surface
-# LLM emits JSON → DynamicBotSpec.validate → rule_engine.run_rule_engine
-# =============================================================================
-from .dynamic_bot_spec import (  # noqa: E402
-    Action as DynAction,
-    Condition as DynCondition,
-    DynamicBotSpec,
-    FlowNode,
-    Transformer as DynTransformer,
-    Trigger as DynTrigger,
-    parse_dynamic_spec,
-    ALLOWED_ACTIONS as INFINITE_ALLOWED_ACTIONS,
-    ALLOWED_CONDITIONS as INFINITE_ALLOWED_CONDITIONS,
-    ALLOWED_TRIGGERS as INFINITE_ALLOWED_TRIGGERS,
-    ALLOWED_TRANSFORMERS as INFINITE_ALLOWED_TRANSFORMERS,
-    MAX_DAG_DEPTH,
-    MAX_NODES,
-)
-from .rule_engine import run_rule_engine  # noqa: E402

@@ -106,12 +106,12 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
 
     allowed, reason = _policy_allows_cline(ir)
     if not allowed:
-        logger.error("cline path blocked: %s — no deterministic fallback", reason)
+        logger.error("cline path blocked: %s", reason)
         return ClineExecutionResult(
             ok=False,
             engine="cline_blocked",
             errors=[reason],
-            warnings=["deterministic_purged_no_fallback"],
+            warnings=["cline_blocked_by_policy"],
             metadata={
                 "policy": reason,
                 "ir_mode": getattr(getattr(ir, "engine_mode", None), "value", None),
