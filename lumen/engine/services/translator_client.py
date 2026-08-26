@@ -335,6 +335,41 @@ _AR_RULES: list[tuple[str, list[str]]] = [
         r"ملفات\s*pdf|ملف\s*pdf",
         ["pdf_start", "pdf_done", "pdf_clear", "pdf_status", "images_to_pdf"],
     ),
+    # Restaurant / delivery → market cart pack
+    (
+        r"مطعم|منيو|توصيل\s*طلب|restaurant|food\s*order|delivery\s*bot",
+        ["shop_catalog", "cart_add", "cart_view", "cart_checkout", "shop_my_orders"],
+    ),
+    # Fitness / gym → booking + optional shop
+    (
+        r"نادي\s*رياضي|جيم|fitness|gym\s*bot|اشتراك\s*رياضي",
+        ["book_slot", "book_list", "book_cancel", "shop_catalog"],
+    ),
+    # Forms / data collection → tickets as intake + notes
+    (
+        r"نموذج|تسجيل\s*بيانات|form\s*bot|collect\s*data|استمارة",
+        ["ticket_open", "ticket_my", "note_add", "note_list"],
+    ),
+    # Quiz / contest → contests pack if available else points
+    (
+        r"مسابق|أسئلة\s*وأجوبة|quiz|trivia|contest",
+        ["task_add", "task_list", "note_add"],  # fallback until contests rules deep
+    ),
+    # School
+    (
+        r"مدرس|واجبات|درجات|school\s*bot|homework",
+        ["task_add", "task_list", "task_done", "note_add", "remind_set"],
+    ),
+    # Channel publisher → content announce
+    (
+        r"قناة|نشر\s*محتوى|channel\s*bot|auto\s*post",
+        ["announce", "rules", "faq_show"],
+    ),
+    # Invoice / billing
+    (
+        r"فواتير|مدفوعات|invoice|billing",
+        ["shop_catalog", "cart_checkout", "shop_my_orders", "payment_receipt"],
+    ),
 ]
 
 

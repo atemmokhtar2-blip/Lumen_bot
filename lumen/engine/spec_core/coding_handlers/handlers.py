@@ -1466,6 +1466,6 @@ def _emit_handlers(spec: BotSpec) -> str:
             "",
         ]
 
-        return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n"
 
 
