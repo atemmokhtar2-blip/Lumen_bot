@@ -321,7 +321,29 @@ def _run_clone_review_repair(
             except Exception as exc:
                 preflights.append({"path": rel, "error": type(exc).__name__})
 
+        # Deep per-hunk analysis (ast / tree-sitter / py_compile on changed files)
+        deep = {}
+        try:
+            from lumen.engine.services.integrations.github.pr_deep_review import (
+                deep_review_pr_files,
+                findings_to_line_comments,
+            )
+            deep = deep_review_pr_files(root, files_meta)
+        except Exception as _deep_exc:
+            deep = {"ok": False, "error": type(_deep_exc).__name__, "findings": []}
+
         line_comments = _build_line_comments(files_meta, execution, preflights)
+        # Merge deep findings as line comments (signal-only)
+        try:
+            deep_comments = findings_to_line_comments(list(deep.get("findings") or []))
+            # prefer deep comments first
+            seen = {(c["path"], c["line"]) for c in deep_comments}
+            for c in line_comments:
+                if (c["path"], c["line"]) not in seen:
+                    deep_comments.append(c)
+            line_comments = deep_comments[:25]
+        except Exception:
+            pass
 
         repaired = False
         pushed = False
@@ -366,7 +388,21 @@ def _run_clone_review_repair(
                 }
                 if repaired:
                     execution = run_execution_feedback(root)
+                    try:
+                        deep = deep_review_pr_files(root, files_meta)
+                    except Exception:
+                        pass
                     line_comments = _build_line_comments(files_meta, execution, preflights)
+                    try:
+                        from lumen.engine.services.integrations.github.pr_deep_review import findings_to_line_comments
+                        deep_comments = findings_to_line_comments(list((deep or {}).get("findings") or []))
+                        seen = {(c["path"], c["line"]) for c in deep_comments}
+                        for c in line_comments:
+                            if (c["path"], c["line"]) not in seen:
+                                deep_comments.append(c)
+                        line_comments = deep_comments[:25]
+                    except Exception:
+                        pass
                 # Push only if working tree dirty (real file changes)
                 if do_push and ref:
                     pushed, pushed_sha = _git_commit_and_push(root, ref)
@@ -375,7 +411,7 @@ def _run_clone_review_repair(
                 repair_result = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
         return {
-            "ok": bool(execution.get("ok", True)),
+            "ok": bool(execution.get("ok", True)) and bool(deep.get("ok", True)),
             "execution": execution,
             "embed_provider": hs.get("embed_provider"),
             "hybrid_hits": [
@@ -386,6 +422,13 @@ def _run_clone_review_repair(
             "context_files": list((pack.get("files") or {}).keys())[:12],
             "preflights": preflights,
             "line_comments": line_comments,
+            "deep_review": {
+                "ok": deep.get("ok"),
+                "analyzed_files": deep.get("analyzed_files"),
+                "findings_count": len(deep.get("findings") or []),
+                "findings": list(deep.get("findings") or [])[:20],
+                "hybrid": deep.get("hybrid"),
+            },
             "repaired": repaired,
             "repair": repair_result,
             "pushed": pushed,
