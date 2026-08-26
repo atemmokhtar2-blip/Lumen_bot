@@ -27,6 +27,34 @@ def _safe_user_text(request: str) -> str:
 logger = logging.getLogger(__name__)
 
 
+def _phase_d_e_finalize(state: AgentState) -> None:
+    """Production evaluation record + platform events (Phases D/E)."""
+    try:
+        from lumen.engine.services.evaluation.live_bridge import persist_state_evaluation
+        persist_state_evaluation(state)
+    except Exception:
+        logger.exception("persist_state_evaluation failed")
+    try:
+        from lumen.engine.services.events import emit
+        status = getattr(state, "status", None)
+        status_v = getattr(status, "value", status)
+        success = bool(getattr(state, "qa_passed", False)) or str(status_v).upper() in {"PASSED", "DELIVERED"}
+        emit(
+            "generation.finished" if success else "generation.failed",
+            {
+                "state_id": getattr(state, "state_id", None) or getattr(state, "id", None),
+                "user_id": getattr(state, "user_id", 0),
+                "status": str(status_v),
+                "attempts": getattr(state, "attempts", 0),
+                "path": getattr(state, "generated_path", None),
+            },
+            source="multi_agent",
+        )
+    except Exception:
+        logger.exception("generation event emit failed")
+
+
+
 def orchestrator_enabled() -> bool:
     return (os.environ.get("MULTI_AGENT_ORCHESTRATOR") or "1").strip().lower() not in {
         "0", "false", "no", "off",
@@ -649,6 +677,10 @@ class Orchestrator:
             "orchestrator done id=%s status=%s path=%s qa=%s attempts=%s",
             state.state_id, state.status, state.generated_path, state.qa_passed, state.attempts,
         )
+        try:
+            _phase_d_e_finalize(state)
+        except Exception:
+            logger.exception("phase D/E finalize failed")
         return state
 
 
@@ -690,6 +722,15 @@ def orchestrate_generate(
         preferred_keys=list(preferred_keys or []),
     )
     state.extensions["work_dir"] = str(work)
+    try:
+        from lumen.engine.services.events import emit
+        emit(
+            "generation.started",
+            {"user_id": int(user_id or 0), "request": (request or "")[:200]},
+            source="multi_agent",
+        )
+    except Exception:
+        logger.exception("generation.started emit failed")
     orch = Orchestrator(registry=registry, board=board)
     state = orch.run(state, context={"work_dir": work})
 

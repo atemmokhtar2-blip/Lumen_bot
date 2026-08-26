@@ -44,3 +44,14 @@ fastembed>=0.4.0
 numpy>=1.24
 tree-sitter-javascript>=0.23.0
 qdrant-client>=1.9.0
+
+# Computer use / browser agent (real Playwright)
+playwright>=1.40.0,<2
+
+# Optional tree-sitter languages (code intelligence multi-lang)
+tree-sitter-typescript>=0.23.0
+tree-sitter-go>=0.23.0
+tree-sitter-java>=0.23.0
+tree-sitter-rust>=0.23.0
+tree-sitter-c>=0.23.0
+tree-sitter-cpp>=0.23.0

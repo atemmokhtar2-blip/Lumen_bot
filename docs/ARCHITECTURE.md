@@ -61,3 +61,14 @@ Risk tiers drive HITL confirmation for high/critical actions.
 - Credits ledger, metering, rating, balance lifecycle under `lumen/platform/`.
 - Per-user sandbox under `OUTPUT_DIR` via `user_sandbox`.
 - Job queue + backpressure for heavy work (especially API generate).
+
+
+## Platform extensions (post Phase E)
+
+| Module | Role |
+|--------|------|
+| `services/browser_use` | Playwright Chromium computer-use |
+| `services/skills` | Skill registry + MCP HTTP JSON-RPC client |
+| `services/events` | Redis/in-process event bus |
+| `services/integrations/github` | GitHub REST Issues/PRs |
+| `multi_agent/swarm` | Parallel worker partitions |

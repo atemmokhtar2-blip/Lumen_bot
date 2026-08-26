@@ -61,6 +61,12 @@ ALLOWED_TOOLS = {
     "tree",
     "run_shell",
     "finish",
+    "browser_navigate",
+    "browser_content",
+    "browser_click",
+    "browser_fill",
+    "browser_screenshot",
+    "run_skill",
 }
 
 _JSON_SCHEMA_HINT = (

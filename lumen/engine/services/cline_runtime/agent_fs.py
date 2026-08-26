@@ -265,6 +265,12 @@ def _coerce_rel_path(work_dir: str, path: str) -> str:
 def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     """Dispatch FS tool by name."""
     args = dict(args or {})
+    if name in {
+        "browser_navigate", "browser_content", "browser_click",
+        "browser_fill", "browser_screenshot", "run_skill",
+    }:
+        args.setdefault("work_dir", work_dir)
+        return _dispatch_browser_or_skill(name, args)
     if "path" in args and args.get("path") is not None:
         args["path"] = _coerce_rel_path(work_dir, str(args.get("path") or "."))
     if name == "list_dir":
@@ -314,3 +320,48 @@ __all__ = [
     "tree",
     "write_file",
 ]
+
+
+def run_skill_tool(name: str, arguments: dict | None = None) -> dict:
+    """Dispatch to Skills registry (browser/MCP/local plugins)."""
+    try:
+        from lumen.engine.services.skills import run_skill
+        return run_skill(name, arguments or {})
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+
+
+def _dispatch_browser_or_skill(tool_name: str, args: dict) -> dict:
+    """Real Playwright / Skills registry dispatch from agent loop."""
+    args = dict(args or {})
+    name = (tool_name or "").strip()
+    try:
+        if name == "browser_navigate":
+            from lumen.engine.services.browser_use import browse_url
+            return browse_url(
+                str(args.get("url") or ""),
+                session_id=args.get("session_id"),
+                work_dir=str(args.get("work_dir") or ""),
+            )
+        if name == "browser_content":
+            from lumen.engine.services.browser_use import get_content
+            return get_content(str(args.get("session_id") or ""))
+        if name == "browser_click":
+            from lumen.engine.services.browser_use import click
+            return click(str(args.get("session_id") or ""), str(args.get("selector") or ""))
+        if name == "browser_fill":
+            from lumen.engine.services.browser_use import fill
+            return fill(
+                str(args.get("session_id") or ""),
+                str(args.get("selector") or ""),
+                str(args.get("value") or ""),
+            )
+        if name == "browser_screenshot":
+            from lumen.engine.services.browser_use import screenshot
+            return screenshot(str(args.get("session_id") or ""), path=args.get("path"))
+        if name == "run_skill":
+            from lumen.engine.services.skills import run_skill
+            return run_skill(str(args.get("name") or ""), dict(args.get("arguments") or args))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+    return {"ok": False, "error": f"unknown_tool:{name}"}
