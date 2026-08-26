@@ -42,14 +42,14 @@ def _code_intel_preflight(work_dir: str, state) -> None:
 
 
 def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
-    """If execution_plan has multiple independent tasks, run via official swarm pool."""
+    """If execution_plan has multiple independent tasks, run parallel Cline workers."""
     import os
     if (os.getenv("MULTI_AGENT_SWARM") or "1").strip().lower() in {"0", "false", "off", "no"}:
         return None
+    # Real parallel codegen is expensive; enable when MULTI_AGENT_SWARM_CODEGEN=1 (default on for >=3 tasks)
     tasks = list((plan or {}).get("tasks") or [])
     if len(tasks) < 2:
         return None
-    # Independent = no deps or empty deps
     independent = []
     for t in tasks:
         if not isinstance(t, dict):
@@ -59,21 +59,18 @@ def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
             independent.append(t)
     if len(independent) < 2:
         return None
+    codegen = (os.getenv("MULTI_AGENT_SWARM_CODEGEN") or "1").strip().lower() not in {"0", "false", "no"}
+    if not codegen:
+        return None
     try:
         from ..swarm import run_swarm
-        from pathlib import Path as P
-
-        def worker_fn(part, root, idx):
-            # Record partition only — actual codegen stays single Cline run below;
-            # swarm marks parallel ownership of task ids on state for trajectory.
-            return {
-                "ok": True,
-                "worker": idx,
-                "task_ids": [x.get("id") or x.get("title") for x in part],
-                "count": len(part),
-            }
-
-        result = run_swarm(work_dir=work_dir, tasks=independent, worker_fn=worker_fn)
+        goal = (state.user_text or state.spec_request or plan.get("goal") or "")[:2000]
+        result = run_swarm(
+            work_dir=work_dir or "",
+            tasks=independent,
+            base_goal=goal,
+            ir_dict={"execution_plan": plan, "preferred_keys": list(state.preferred_keys or [])},
+        )
         return result
     except Exception:
         return None
