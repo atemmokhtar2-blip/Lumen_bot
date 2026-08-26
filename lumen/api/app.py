@@ -411,6 +411,13 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/tenants", tenants.create_tenant)
     app.router.add_post("/v1/billing/webhook/stripe", billing.stripe_webhook)
     app.router.add_post("/v1/integrations/github/webhook", github_webhooks.github_webhook)
+    # Real consumer for GitHub PR webhooks (not emit-only)
+    try:
+        from lumen.engine.services.integrations.github.pr_agent import register_event_handlers
+        register_event_handlers()
+    except Exception:
+        logging.getLogger(__name__).exception("github pr_agent register failed")
+
     app.router.add_get("/v1/billing/checkout/success", billing.checkout_success)
     app.router.add_get("/v1/billing/checkout/cancel", billing.checkout_cancel)
     # Authenticated

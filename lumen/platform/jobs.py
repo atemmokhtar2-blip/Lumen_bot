@@ -857,6 +857,21 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
 
     runner.register("multi_agent_resume", handle_multi_agent_resume)
 
+    def handle_github_pr_review(job: Job) -> dict[str, Any]:
+        """Durable record of PR analysis triggered by webhook."""
+        data = dict(job.input or {})
+        return {
+            "ok": True,
+            "repo": data.get("repo"),
+            "number": data.get("number"),
+            "files": data.get("files") or [],
+            "analysis": data.get("analysis") or {},
+            "source": "github_webhook",
+        }
+
+    runner.register("github_pr_review", handle_github_pr_review)
+
+
 
 
 

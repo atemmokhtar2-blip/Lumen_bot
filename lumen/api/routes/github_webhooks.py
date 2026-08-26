@@ -74,26 +74,35 @@ async def github_webhook(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("emit github event failed")
 
-    # Optional: trigger multi-agent resume / analysis hook for PR opened
+    # Direct PR agent (not emit-only): analysis + optional clone/hybrid + comment
+    agent_result = None
     if event == "pull_request" and action in {"opened", "synchronize", "reopened"}:
         try:
-            from lumen.engine.services.integrations.github.client import list_pull_files, get_pull
+            from lumen.engine.services.integrations.github.pr_agent import handle_pr_event
             pr = payload.get("pull_request") or {}
-            number = int(pr.get("number") or 0)
-            full = str(repo)
-            if "/" in full and number and (os.getenv("GITHUB_TOKEN") or "").strip():
-                owner, name = full.split("/", 1)
-                files = list_pull_files(owner, name, number)
-                logger.info("github pr %s#%s files=%s", full, number, len(files or []))
-                emit(
-                    "github.pr.files",
-                    {"repo": full, "number": number, "files": [f.get("filename") for f in (files or [])[:50]]},
-                    source="github_webhook",
-                )
+            agent_result = handle_pr_event({
+                "name": event_name,
+                "payload": {
+                    "repo": repo,
+                    "number": (pr.get("number") or payload.get("number")),
+                    "action": action,
+                    "title": pr.get("title"),
+                },
+            })
+            logger.info("github pr_agent result=%s", {k: agent_result.get(k) for k in ("ok", "files", "comment_id", "job_id")})
         except Exception:
-            logger.exception("github pr follow-up failed")
+            logger.exception("github pr_agent failed")
 
-    return web.json_response({"ok": True, "event": event_name, "delivery": delivery})
+    out = {"ok": True, "event": event_name, "delivery": delivery}
+    if agent_result is not None:
+        out["agent"] = {
+            "ok": agent_result.get("ok"),
+            "files": agent_result.get("files"),
+            "comment_id": agent_result.get("comment_id"),
+            "job_id": agent_result.get("job_id"),
+            "code_intel_ok": (agent_result.get("code_intel") or {}).get("ok"),
+        }
+    return web.json_response(out)
 
 
 __all__ = ["github_webhook", "verify_signature"]
