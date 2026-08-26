@@ -38,9 +38,9 @@ export default function RunsPage() {
   };
 
   const onStream = (id: string) => {
-    setStreamLog(`subscribing ${id}…`);
+    setStreamLog(`subscribing ${id}…\n`);
     const es = subscribeJobEvents(id, (ev) => {
-      setStreamLog((prev) => prev + "\n" + (ev as MessageEvent).data);
+      setStreamLog((prev) => prev + (ev as MessageEvent).data + "\n");
     });
     setTimeout(() => es.close(), 120000);
   };
@@ -48,7 +48,7 @@ export default function RunsPage() {
   return (
     <div>
       <h1>Runs</h1>
-      <p>Live job list · SSE · cancel</p>
+      <p>Jobs · SSE stream · cancel · open diff</p>
       {error && <pre style={{ color: "#f88" }}>{error}</pre>}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
@@ -68,16 +68,21 @@ export default function RunsPage() {
               </td>
               <td>{j.status}</td>
               <td>{Math.round((j.progress || 0) * 100)}%</td>
-              <td style={{ display: "flex", gap: 8 }}>
+              <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button type="button" onClick={() => onStream(j.job_id)}>SSE</button>
                 <button type="button" onClick={() => onCancel(j.job_id)}>Cancel</button>
+                <a href={`/diff?job=${encodeURIComponent(j.job_id)}`} style={{ color: "#8ab4ff" }}>
+                  Diff
+                </a>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       {streamLog && (
-        <pre style={{ marginTop: 16, background: "#111820", padding: 12, overflow: "auto" }}>{streamLog}</pre>
+        <pre style={{ marginTop: 16, background: "#111820", padding: 12, overflow: "auto", maxHeight: 280 }}>
+          {streamLog}
+        </pre>
       )}
     </div>
   );

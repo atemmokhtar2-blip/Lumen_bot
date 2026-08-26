@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from lumen.api.routes import audit, billing, dashboard, generate, health, hosts, jobs, tenants, usage
+from lumen.api.routes import audit, billing, dashboard, generate, health, hosts, jobs, tenants, usage, runs_ux
 
 logger = logging.getLogger("lumen_api")
 
@@ -421,6 +421,9 @@ window.ui = SwaggerUIBundle({
     app.router.add_get("/v1/jobs", jobs.list_jobs)
     app.router.add_post("/v1/jobs/{job_id}/cancel", jobs.cancel_job)
     app.router.add_get("/v1/jobs/{job_id}/events", jobs.stream_job)
+    app.router.add_get("/v1/jobs/{job_id}/files", runs_ux.job_diff_files)
+    app.router.add_get("/v1/jobs/{job_id}/file", runs_ux.job_file_content)
+    app.router.add_get("/v1/runs/agent-reports", runs_ux.list_agent_reports)
     app.router.add_post("/v1/hosts/start", hosts.host_start)
     app.router.add_post("/v1/hosts/stop", hosts.host_stop)
     app.router.add_get("/v1/hosts", hosts.host_status)

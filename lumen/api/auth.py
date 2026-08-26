@@ -15,7 +15,16 @@ def extract_bearer(request: web.Request) -> str:
     auth = request.headers.get("Authorization") or ""
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    return (request.headers.get("X-Api-Key") or "").strip()
+    header = (request.headers.get("X-Api-Key") or "").strip()
+    if header:
+        return header
+    # EventSource cannot set headers — allow api_key query on SSE paths only.
+    path = request.path or ""
+    if path.endswith("/events") or path.rstrip("/").endswith("/events"):
+        q = (request.rel_url.query.get("api_key") or request.rel_url.query.get("key") or "").strip()
+        if q:
+            return q
+    return ""
 
 
 def require_tenant(request: web.Request) -> Tenant:
