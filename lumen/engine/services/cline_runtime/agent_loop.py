@@ -126,7 +126,40 @@ def run_agent(
         return state
 
     limit = max_steps if max_steps is not None else _max_steps()
-    state.add_system(_system_prompt(state.work_dir, goal, ir_dict))
+    # Large-repo quality: pack hybrid retrieval context into the system prompt
+    repo_ctx = None
+    try:
+        from lumen.engine.services.code_intelligence.repo_context import (
+            pack_repo_context_for_goal,
+            context_to_agent_block,
+        )
+        extra = []
+        if isinstance(ir_dict, dict):
+            extra = list((ir_dict.get("metadata") or {}).get("pre_read_files") or [])
+            extra += list((ir_dict.get("project_context") or {}).get("file_list") or [])
+        repo_ctx = pack_repo_context_for_goal(state.work_dir, goal or "", extra_paths=extra)
+        state.metadata["repo_context"] = {
+            "ok": repo_ctx.get("ok"),
+            "file_list": list(repo_ctx.get("file_list") or [])[:20],
+            "py_file_count": repo_ctx.get("py_file_count"),
+            "graph_stats": repo_ctx.get("graph_stats"),
+        }
+        # Mark retrieved files as pre-read for repair policy
+        state.metadata.setdefault("read_files", [])
+        for fp in repo_ctx.get("file_list") or []:
+            if fp not in state.metadata["read_files"]:
+                state.metadata["read_files"].append(fp)
+    except Exception as _rc_exc:
+        state.metadata["repo_context_error"] = type(_rc_exc).__name__
+        repo_ctx = None
+    sys_prompt = _system_prompt(state.work_dir, goal, ir_dict)
+    if repo_ctx and repo_ctx.get("files"):
+        try:
+            from lumen.engine.services.code_intelligence.repo_context import context_to_agent_block
+            sys_prompt = sys_prompt + "\n\n" + context_to_agent_block(repo_ctx)
+        except Exception:
+            pass
+    state.add_system(sys_prompt)
     # Pre-mark files already packed into context as read (repair policy)
     pre_read = []
     if isinstance(ir_dict, dict):

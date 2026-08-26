@@ -182,6 +182,15 @@ class BuilderAgent(Agent):
             except Exception:
                 if plan:
                     brief_parts.append("\n--- EXECUTION_PLAN ---\n" + str(plan)[:1500])
+            # Closed-loop: surface Critic execution_feedback in the worker goal
+            exec_fb = (state.extensions or {}).get("execution_feedback") or {}
+            if exec_fb and not exec_fb.get("ok", True):
+                lines = ["\n--- EXECUTION_FEEDBACK (must fix) ---"]
+                for ch in exec_fb.get("checks") or []:
+                    if ch.get("ok"):
+                        continue
+                    lines.append(f"- {ch.get('name')}: {(ch.get('stderr') or ch.get('error') or '')[:300]}")
+                brief_parts.append("\n".join(lines)[:2000])
             if repair:
                 try:
                     from ..repair import RepairDirective
@@ -218,6 +227,30 @@ class BuilderAgent(Agent):
                 "repair_directive": repair,
                 "findings": list((state.extensions or {}).get("findings") or [])[:20],
             }
+            # Large-repo: attach hybrid context into IR metadata for agent_loop
+            try:
+                from lumen.engine.services.code_intelligence.repo_context import pack_repo_context_for_goal
+                _wd2 = str(work_dir or (state.extensions or {}).get("work_dir") or "")
+                _rc = pack_repo_context_for_goal(_wd2, enriched or req, extra_paths=list(preferred or [])[:0])
+                state.extensions["repo_context"] = {
+                    "file_list": list(_rc.get("file_list") or [])[:20],
+                    "py_file_count": _rc.get("py_file_count"),
+                }
+                package.setdefault("metadata", {})
+                if not isinstance(package.get("metadata"), dict):
+                    package["metadata"] = {}
+                package["metadata"]["pre_read_files"] = list(_rc.get("file_list") or [])[:16]
+                package["metadata"]["repo_context_stats"] = {
+                    "py_file_count": _rc.get("py_file_count"),
+                    "graph_stats": _rc.get("graph_stats"),
+                }
+                package["project_context"] = {
+                    "file_list": list(_rc.get("file_list") or [])[:16],
+                    "files": dict(list((_rc.get("files") or {}).items())[:8]),
+                }
+            except Exception as _rc_b:
+                state.extensions["repo_context_error"] = type(_rc_b).__name__
+            
             ir = build_ir_from_package(package, user_id=user_id)
             # stash plan on IR metadata for agent_loop
             try:

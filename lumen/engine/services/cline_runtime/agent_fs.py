@@ -132,6 +132,11 @@ def edit_file(
             )
         except Exception as _pf_exc:
             preflight = {"ok": False, "error": type(_pf_exc).__name__}
+        if isinstance(preflight, dict) and (os.getenv("CODE_INTEL_STRICT") or "").strip().lower() in {"1", "true", "yes"}:
+            impact = int((preflight.get("impacted_count") or preflight.get("blast_impacted") or 0) or 0)
+            if impact >= int(os.getenv("CODE_INTEL_STRICT_MAX_IMPACT") or "25"):
+                return {"ok": False, "error": "preflight_blast_radius_too_large", "preflight": preflight}
+
         safe_write_text(root, path, updated)
         out: dict[str, Any] = {"ok": True, "path": path, "replacements": count}
         if isinstance(preflight, dict):

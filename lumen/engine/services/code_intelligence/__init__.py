@@ -38,3 +38,9 @@ __all__ = [
     "goto_definition",
     "names_in_module",
 ]
+
+try:
+    from .repo_context import pack_repo_context_for_goal, context_to_agent_block
+except Exception:  # pragma: no cover
+    pack_repo_context_for_goal = None  # type: ignore
+    context_to_agent_block = None  # type: ignore
