@@ -419,6 +419,8 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/generate", generate.generate)
     app.router.add_get("/v1/jobs/{job_id}", jobs.get_job)
     app.router.add_get("/v1/jobs", jobs.list_jobs)
+    app.router.add_post("/v1/jobs/{job_id}/cancel", jobs.cancel_job)
+    app.router.add_get("/v1/jobs/{job_id}/events", jobs.stream_job)
     app.router.add_post("/v1/hosts/start", hosts.host_start)
     app.router.add_post("/v1/hosts/stop", hosts.host_stop)
     app.router.add_get("/v1/hosts", hosts.host_status)

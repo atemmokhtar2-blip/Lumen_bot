@@ -436,6 +436,23 @@ class JobRunner:
     def register(self, kind: str, handler: Callable[[Job], dict[str, Any]]) -> None:
         self._handlers[kind] = handler
 
+    def cancel(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Mark job cancelled if not already terminal. Soft-cancel (worker may still finish)."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        self.store.update(
+            job_id,
+            status=STATUS_CANCELLED,
+            finished_at=time.time(),
+            message="cancelled_by_user",
+        )
+        return self.store.get(job_id)
+
     def _count_active(self, tenant_id: str | None = None) -> int:
         """Count non-terminal jobs (queued + running)."""
         try:
@@ -755,6 +772,8 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
         }
 
     runner.register("multi_agent_resume", handle_multi_agent_resume)
+
+
 
 
 def get_job_runner() -> JobRunner:

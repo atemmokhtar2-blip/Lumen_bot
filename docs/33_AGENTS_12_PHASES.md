@@ -120,9 +120,11 @@
 - مقاييس: success rate، attempts، latency، cost
 - توثيق: `docs/38_PHASE_D_EVALUATION.md`
 
-### E — UX
-- Next.js: runs، agents، diff، pause/cancel
-- SSE من API
+### E — UX — **مفعّلة في الأساس**
+- Next.js `web/`: runs، agents
+- SSE: `GET /v1/jobs/{id}/events`
+- cancel: `POST /v1/jobs/{id}/cancel`
+- توثيق: `docs/39_PHASE_E_UX.md`
 
 ### F — Skills, Browser, Events, Integrations
 - Skills registry + MCP servers
