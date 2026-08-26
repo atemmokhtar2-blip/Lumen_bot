@@ -860,6 +860,13 @@ def orchestrate_generate(
             if not state.qa_passed and getattr(result, "success", False):
                 meta["qa_failed_after_retries"] = True
                 result.metadata = meta
+                try:
+                    result.success = False
+                    errs = list(getattr(result, "errors", None) or [])
+                    errs.append("qa_failed_after_retries")
+                    result.errors = errs
+                except Exception:
+                    pass
         except Exception:
             pass
         return result
