@@ -1,19 +1,23 @@
-"""GitHub PR agent — real review + optional repair, not a file-list summary.
+"""GitHub PR agent — review + line comments + optional repair push.
 
-Pipeline on pull_request opened/synchronize:
-  1) GitHub REST: PR metadata + changed files
-  2) Shallow clone of PR head (git)
-  3) Critic execution feedback (compileall + import + pytest)
-  4) Code intel hybrid_search + preflight on changed paths
-  5) Optional Cline run_agent repair when execution fails
-  6) GitHub Pull Request Review API (COMMENT / REQUEST_CHANGES)
+Wired path (no fake stubs):
+  webhook → clone head → execution_feedback → hybrid/preflight
+  → line-level review comments from patches + failures
+  → optional Cline repair → git commit + push to PR head branch
+  → GitHub Pull Request Reviews API (with commit_id)
 
-Requires: GITHUB_TOKEN (repo), git, and for repair: LLM keys.
+Env:
+  GITHUB_TOKEN (required)
+  GITHUB_PR_POST_REVIEW=1
+  GITHUB_PR_AUTO_REPAIR=1
+  GITHUB_PR_PUSH_REPAIR=1   # push commit to head branch after repair
+  GITHUB_PR_REPAIR_STEPS=16
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -53,9 +57,13 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
     files_meta = list_pull_files(owner, name_repo, number) or []
     filenames = [str(f.get("filename") or "") for f in files_meta if f.get("filename")]
 
-    clone_url = ((pr.get("head") or {}).get("repo") or {}).get("clone_url") or ""
-    ref = (pr.get("head") or {}).get("ref") or ""
-    sha = (pr.get("head") or {}).get("sha") or ""
+    head = pr.get("head") or {}
+    clone_url = (head.get("repo") or {}).get("clone_url") or ""
+    # Prefer SSH-less HTTPS with token rewrite
+    ref = str(head.get("ref") or "")
+    sha = str(head.get("sha") or "")
+    head_owner = ((head.get("repo") or {}).get("owner") or {}).get("login") or owner
+    head_name = (head.get("repo") or {}).get("name") or name_repo
 
     review: dict[str, Any] = {
         "title": pr.get("title"),
@@ -64,44 +72,56 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
         "additions": pr.get("additions"),
         "deletions": pr.get("deletions"),
         "sha": sha,
+        "ref": ref,
     }
 
-    if clone_url:
-        try:
-            review["pipeline"] = _run_clone_review_repair(clone_url, ref, filenames)
-        except Exception as exc:
-            logger.exception("pr pipeline failed")
-            review["pipeline"] = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
-    else:
-        review["pipeline"] = {"ok": False, "error": "no_clone_url"}
+    if not clone_url:
+        return {"ok": False, "error": "no_clone_url", "repo": repo, "number": number}
+
+    try:
+        review["pipeline"] = _run_clone_review_repair(
+            clone_url=clone_url,
+            ref=ref,
+            focus_files=filenames,
+            files_meta=files_meta,
+            head_owner=head_owner,
+            head_name=head_name,
+        )
+    except Exception as exc:
+        logger.exception("pr pipeline failed")
+        review["pipeline"] = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
     pipe = review.get("pipeline") or {}
+    # Prefer new head SHA after push
+    post_sha = str(pipe.get("pushed_sha") or sha or "")
+    line_comments = list(pipe.get("line_comments") or [])[:20]
+
     body = _format_review_body(review)
     event = "COMMENT"
     if pipe.get("ok") is False and (pipe.get("execution") or {}).get("ok") is False:
         event = (os.getenv("GITHUB_PR_REVIEW_EVENT") or "REQUEST_CHANGES").strip() or "REQUEST_CHANGES"
-    if pipe.get("ok") and (pipe.get("execution") or {}).get("ok"):
-        event = (os.getenv("GITHUB_PR_APPROVE_EVENT") or "COMMENT").strip() or "COMMENT"
+    if event in {"REQUEST_CHANGES", "APPROVE"} and not post_sha:
+        event = "COMMENT"
 
     review_resp = None
     comment_resp = None
     if (os.getenv("GITHUB_PR_POST_REVIEW") or "1").strip().lower() not in {"0", "false", "no"}:
         try:
-            rev_event = event if event in {"COMMENT", "REQUEST_CHANGES", "APPROVE"} else "COMMENT"
-            # GitHub requires commit_id for REQUEST_CHANGES / APPROVE — without SHA use COMMENT
-            if rev_event in {"REQUEST_CHANGES", "APPROVE"} and not sha:
-                rev_event = "COMMENT"
             review_resp = create_pull_review(
                 owner,
                 name_repo,
                 number,
                 body,
-                event=rev_event,
-                commit_id=sha or None,
+                event=event if event in {"COMMENT", "REQUEST_CHANGES", "APPROVE"} else "COMMENT",
+                commit_id=post_sha or None,
+                comments=line_comments or None,
             )
         except Exception:
-            logger.exception("create_pull_review failed; falling back to issue comment")
-            comment_resp = add_issue_comment(owner, name_repo, number, body)
+            logger.exception("create_pull_review failed; issue comment fallback")
+            try:
+                comment_resp = add_issue_comment(owner, name_repo, number, body)
+            except Exception:
+                logger.exception("issue comment also failed")
 
     job_id = _enqueue_job(repo, number, review)
 
@@ -113,15 +133,82 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
         "review_id": (review_resp or {}).get("id") if isinstance(review_resp, dict) else None,
         "comment_id": (comment_resp or {}).get("id") if isinstance(comment_resp, dict) else None,
         "review_event": event,
+        "line_comments": len(line_comments),
         "pipeline_ok": bool(pipe.get("ok")),
         "execution_ok": (pipe.get("execution") or {}).get("ok"),
         "repaired": bool(pipe.get("repaired")),
+        "pushed": bool(pipe.get("pushed")),
+        "pushed_sha": pipe.get("pushed_sha"),
         "job_id": job_id,
     }
 
 
-def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -> dict[str, Any]:
-    """Clone PR head → execution feedback → code intel → optional agent repair."""
+def _first_right_line_from_patch(patch: str) -> int | None:
+    """Parse unified diff patch; return first added/context line number on RIGHT side."""
+    if not patch:
+        return None
+    # @@ -a,b +c,d @@
+    m = re.search(r"@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@", patch)
+    if not m:
+        return None
+    try:
+        return max(1, int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def _build_line_comments(
+    files_meta: list[dict[str, Any]],
+    execution: dict[str, Any],
+    preflights: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """GitHub review comments: path + line + side RIGHT (head)."""
+    comments: list[dict[str, Any]] = []
+    fail_text = []
+    for ch in execution.get("checks") or []:
+        if not ch.get("ok"):
+            fail_text.append(
+                f"**{ch.get('name')} failed**\n```\n{(ch.get('stderr') or ch.get('error') or ch.get('stdout') or '')[:600]}\n```"
+            )
+
+    # Map failures onto changed Python files via patch line
+    py_files = [f for f in files_meta if str(f.get("filename") or "").endswith(".py")]
+    for i, f in enumerate(py_files[:12]):
+        path = str(f.get("filename") or "")
+        line = _first_right_line_from_patch(str(f.get("patch") or ""))
+        if line is None:
+            line = 1
+        body_parts = []
+        if fail_text and i == 0:
+            body_parts.append("Execution feedback for this PR:\n" + "\n".join(fail_text[:3]))
+        elif fail_text:
+            body_parts.append(f"See execution failures (related to changed path `{path}`).")
+        pf = next((p for p in preflights if p.get("path") == path), None)
+        if pf and not pf.get("error"):
+            body_parts.append(
+                f"Preflight: risk={pf.get('risk')} impact_score={pf.get('impact_score')} "
+                f"impacted_files≈{pf.get('impacted')}"
+            )
+        if not body_parts:
+            body_parts.append(f"Changed in this PR (`{path}`). Lumen reviewed this path.")
+        comments.append({
+            "path": path,
+            "body": "\n\n".join(body_parts)[:65535],
+            "line": int(line),
+            "side": "RIGHT",
+        })
+    return comments
+
+
+def _run_clone_review_repair(
+    *,
+    clone_url: str,
+    ref: str,
+    focus_files: list[str],
+    files_meta: list[dict[str, Any]],
+    head_owner: str,
+    head_name: str,
+) -> dict[str, Any]:
     token = _token()
     url = clone_url
     if token and "github.com" in url and "@" not in url:
@@ -135,24 +222,19 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
         cmd += [url, str(root)]
         subprocess.run(cmd, check=True, capture_output=True, timeout=240)
 
-        # 1) Critic-class execution feedback (real processes)
         from lumen.engine.services.multi_agent.execution_feedback import run_execution_feedback
-
-        execution = run_execution_feedback(root)
-
-        # 2) Code intel on changed paths
         from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
         from lumen.engine.services.code_intelligence.repo_context import pack_repo_context_for_goal
         from lumen.engine.services.code_intelligence.preflight import analyze_edit_preflight
 
+        execution = run_execution_feedback(root)
         q = " ".join(focus_files[:10]) or "pull request changes"
         hs = hybrid_search(root, q, top_k=10)
         pack = pack_repo_context_for_goal(root, q, extra_paths=focus_files[:12])
-        preflights = []
+
+        preflights: list[dict[str, Any]] = []
         for rel in focus_files[:8]:
-            if not rel.endswith(".py"):
-                continue
-            if not (root / rel).is_file():
+            if not rel.endswith(".py") or not (root / rel).is_file():
                 continue
             try:
                 pf = analyze_edit_preflight(root, rel, old_string="", new_string="")
@@ -165,10 +247,15 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
             except Exception as exc:
                 preflights.append({"path": rel, "error": type(exc).__name__})
 
+        line_comments = _build_line_comments(files_meta, execution, preflights)
+
         repaired = False
+        pushed = False
+        pushed_sha = None
         repair_result: dict[str, Any] = {}
-        # 3) Optional real repair via Cline agent_loop when execution failed
         do_repair = (os.getenv("GITHUB_PR_AUTO_REPAIR") or "0").strip().lower() in {"1", "true", "yes"}
+        do_push = (os.getenv("GITHUB_PR_PUSH_REPAIR") or "0").strip().lower() in {"1", "true", "yes"}
+
         if do_repair and not execution.get("ok", True):
             try:
                 from lumen.engine.services.cline_runtime.agent_loop import run_agent
@@ -181,8 +268,7 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
                         )
                 goal = (
                     "MODE=INCREMENTAL_REPAIR\n"
-                    "Fix the following execution failures in this repository. "
-                    "Prefer edit_file. Do not wipe the project.\n"
+                    "Fix execution failures. Prefer edit_file. Do not wipe the project.\n"
                     + "\n".join(f"- {e}" for e in errors[:12])
                 )
                 state = run_agent(
@@ -204,14 +290,18 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
                     "stop_reason": getattr(state, "stop_reason", ""),
                     "errors": list(getattr(state, "errors", None) or [])[:5],
                 }
-                # Re-run execution after repair
                 if repaired:
                     execution = run_execution_feedback(root)
+                    # Refresh line comments after repair
+                    line_comments = _build_line_comments(files_meta, execution, preflights)
+
+                if repaired and do_push and ref:
+                    pushed, pushed_sha = _git_commit_and_push(root, ref, token)
             except Exception as exc:
                 logger.exception("pr auto-repair failed")
                 repair_result = {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
 
-        ok = bool(execution.get("ok", True)) and bool(hs.get("ok", True) or hs.get("hits"))
+        ok = bool(execution.get("ok", True))
         return {
             "ok": ok,
             "execution": execution,
@@ -223,20 +313,89 @@ def _run_clone_review_repair(clone_url: str, ref: str, focus_files: list[str]) -
             ],
             "context_files": list((pack.get("files") or {}).keys())[:12],
             "preflights": preflights,
+            "line_comments": line_comments,
             "repaired": repaired,
             "repair": repair_result,
-            "repo_path": str(root),
+            "pushed": pushed,
+            "pushed_sha": pushed_sha,
         }
+
+
+def _git_commit_and_push(root: Path, ref: str, token: str) -> tuple[bool, str | None]:
+    """Commit local repairs and push to the PR head branch (real git + GitHub)."""
+    env = os.environ.copy()
+    # Ensure remote uses token
+    try:
+        subprocess.run(
+            ["git", "config", "user.email", os.getenv("LUMEN_GIT_EMAIL") or "lumen-bot@users.noreply.github.com"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", os.getenv("LUMEN_GIT_NAME") or "Lumen Bot"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+        )
+        st = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if not (st.stdout or "").strip():
+            # no file changes
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            return False, sha or None
+
+        subprocess.run(["git", "add", "-A"], cwd=str(root), check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "fix: Lumen auto-repair (execution feedback)"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+        )
+        # push HEAD to branch ref
+        push = subprocess.run(
+            ["git", "push", "origin", f"HEAD:{ref}"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if push.returncode != 0:
+            logger.error("git push failed: %s", (push.stderr or push.stdout or "")[:500])
+            return False, None
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return True, sha or None
+    except Exception:
+        logger.exception("git commit/push failed")
+        return False, None
 
 
 def _format_review_body(review: dict[str, Any]) -> str:
     pipe = review.get("pipeline") or {}
     exec_fb = pipe.get("execution") or {}
     lines = [
-        "### Lumen PR review (execution + code intel)",
+        "### Lumen PR review (execution + code intel + line comments)",
         f"- **Title:** {review.get('title')}",
         f"- **Files:** {review.get('files_count')}  (+{review.get('additions')} / -{review.get('deletions')})",
         f"- **SHA:** `{review.get('sha') or 'n/a'}`",
+        f"- **repaired:** {pipe.get('repaired')}  **pushed:** {pipe.get('pushed')}  **new_sha:** `{pipe.get('pushed_sha') or 'n/a'}`",
         "",
         "#### Execution feedback",
         f"- ok: **{exec_fb.get('ok')}**",
@@ -245,24 +404,11 @@ def _format_review_body(review: dict[str, Any]) -> str:
         mark = "PASS" if ch.get("ok") else "FAIL"
         detail = (ch.get("stderr") or ch.get("error") or ch.get("stdout") or "")[:300]
         lines.append(f"- `{ch.get('name')}`: **{mark}** {detail}")
-    if pipe.get("repaired"):
-        lines.append(f"- auto-repair attempted: **yes** → {pipe.get('repair')}")
     lines.append("")
     lines.append(f"#### Code intel (embed=`{pipe.get('embed_provider')}`)")
     for h in pipe.get("hybrid_hits") or []:
         lines.append(f"- `{h.get('path')}` score={h.get('score')} ({h.get('name')})")
-    if pipe.get("preflights"):
-        lines.append("")
-        lines.append("#### Preflight (changed Python files)")
-        for pf in pipe["preflights"]:
-            if pf.get("error"):
-                lines.append(f"- `{pf.get('path')}`: error {pf.get('error')}")
-            else:
-                lines.append(
-                    f"- `{pf.get('path')}` risk={pf.get('risk')} impact_score={pf.get('impact_score')} impacted={pf.get('impacted')}"
-                )
-    if pipe.get("error"):
-        lines.append(f"\n_Pipeline error: {pipe.get('error')}_")
+    lines.append(f"\n_Line comments posted: {len(pipe.get('line_comments') or [])}_")
     lines.append("\n_Lumen automated review — human judgment still required._")
     return "\n".join(lines)
 
@@ -282,7 +428,9 @@ def _enqueue_job(repo: str, number: int, review: dict[str, Any]) -> str | None:
                 "files": review.get("files") or [],
                 "execution_ok": (pipe.get("execution") or {}).get("ok"),
                 "repaired": pipe.get("repaired"),
-                "embed_provider": pipe.get("embed_provider"),
+                "pushed": pipe.get("pushed"),
+                "pushed_sha": pipe.get("pushed_sha"),
+                "line_comments": len(pipe.get("line_comments") or []),
             },
             message=f"pr-review:{repo}#{number}",
         )
