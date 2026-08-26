@@ -166,15 +166,12 @@ def split_file_for_telegram(path: str | Path, max_mb: float = 45.0) -> list[Path
 
 
 def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_keys=None):
-    """Synchronous generation. Engine (spec_core) is primary.
+    """Synchronous generation — Cline SDK only (deterministic engines purged).
 
-    Groq is a helper:
-      - preferred_keys / brief come from translator + rules (bridge)
-      - full AI codegen only when GROQ_CODEGEN_ENABLED=1 (manual force)
-        OR when bridge marks the request out-of-catalog (GROQ_ASSIST_OUT_OF_SCOPE=1)
-
-    Phase A: when MULTI_AGENT_ORCHESTRATOR is enabled (default on), runs
-    ROUTER→ARCHITECT→BUILDER→CRITIC blackboard pipeline then returns GenerationResult.
+    Order:
+      1) multi-agent orchestrator when enabled
+      2) Cline via run_generation_with_bridge / execute_ir
+    No catalog / spec_core / generate_bot fallback on the product path.
     """
     request = clamp_spec_request(request or "")
     _bp_tenant = f"tg:{int(user_id or 0)}"
@@ -286,22 +283,19 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             except Exception:
                 logger.exception("verified template emergency fallback failed")
 
-        # Auto-assist: only for out-of-catalog requests (bridge decides upstream)
+        # Deterministic catalog purged — sole remaining path is Cline via bridge/IR.
         try:
             if (preferred_keys is not None) and isinstance(preferred_keys, dict):
-                # Legacy misuse guard — preferred_keys must be a list
                 preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
         except Exception:
             pass
 
-        # Last resort: deterministic catalog engine only (never open-ended LLM codegen here).
-        from lumen.engine import generate_bot
-
-        return generate_bot(
+        logger.info("run_generation → Cline-only path (deterministic purged)")
+        return run_generation_with_bridge(
             request,
-            work_dir=str(work_dir),
+            work_dir,
             user_id=int(user_id or 0),
-            preferred_keys=preferred_keys,
+            preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
         )
 
 
@@ -320,10 +314,10 @@ def run_generation_with_bridge(
     user_id: int = 0,
     translation: dict | None = None,
 ):
-    """Analyze → BuildIR → engine_router (catalog | hybrid | cline).
+    """Analyze → BuildIR → engine_router (Cline SDK only).
 
     Translation is optional input to the bridge, not a required independent layer.
-    Cline path is gated by CLINE_ENABLED + policies; falls back to catalog safely.
+    Cline is the sole engine (CLINE_ENABLED defaults on). Deterministic catalog is purged.
     """
     from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
     from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
