@@ -1,4 +1,4 @@
-"""Bridge between Groq translation and the deterministic spec_core engine.
+"""Bridge between Groq translation and BuildIR / Cline generation.
 
 Goal: engine stays primary; Groq supplies intent/features and only assists
 when the request is outside the capability catalog.
@@ -38,7 +38,7 @@ def _rule_features(text: str) -> list[str]:
 
 def _slash_features_from_text(text: str, catalog: set[str]) -> list[str]:
     """User-written /commands → features (canonical command_map only)."""
-    from lumen.engine.spec_core.command_map import features_from_text
+    from lumen.engine.services.capability_detection.catalog import features_from_text
     feats = features_from_text(text or "", include_core=False)
     return [f for f in feats if f in catalog] if catalog else feats
 

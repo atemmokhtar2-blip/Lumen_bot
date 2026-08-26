@@ -758,7 +758,7 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
                 "anti_hallucination": {},
                 "errors": [pre.get("user_message") or "capability_blocked"],
                 "metadata": {
-                    "engine": "spec_core",
+                    "engine": "cline",
                     "zero_ai": True,
                     "blocked_by": "capability_detection",
                     "capability_detection": {

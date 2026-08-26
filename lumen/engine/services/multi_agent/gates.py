@@ -11,7 +11,7 @@ def filter_features_to_catalog(features: list[str]) -> tuple[list[str], list[str
     """Keep only known capability keys when registry is available."""
     known: set[str] = set()
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
         known = set(CAPABILITIES.keys())
     except Exception:
         return list(features or []), []

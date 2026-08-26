@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-from ...spec_core.registry import CAPABILITIES, Capability, by_category, get_capability
+from .catalog import CAPABILITIES, Capability, by_category, get_capability
 
 _STOP = frozenset(
     {

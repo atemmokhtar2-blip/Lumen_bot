@@ -104,7 +104,7 @@ def _min_confidence() -> float:
 
 def _spec_core_capabilities() -> list[str]:
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
         return sorted(str(key) for key in CAPABILITIES.keys())
     except Exception as exc:
         logger.warning("spec_core capability list unavailable: %s", exc)

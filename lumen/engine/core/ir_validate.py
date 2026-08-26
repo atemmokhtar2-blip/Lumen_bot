@@ -17,7 +17,7 @@ class IRValidation:
 
 def _catalog_keys() -> set[str]:
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
 
         return set(CAPABILITIES.keys())
     except Exception:
@@ -121,7 +121,7 @@ def check_project_against_ir(project_path: str, ir: BuildIR) -> dict[str, Any]:
     cmds = set(re.findall(r"CommandHandler\(\s*['\"]([^'\"]+)", text))
     core = {"start", "help", "lang", "language", "cancel"}
     try:
-        from lumen.engine.spec_core.command_map import primary_commands
+        from lumen.engine.services.capability_detection.catalog import primary_commands
 
         prim = primary_commands()
     except Exception:

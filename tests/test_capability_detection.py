@@ -11,7 +11,7 @@ from lumen.engine.services.capability_detection import (
     search_capabilities,
 )
 from lumen.engine.services.capability_detection.search import is_bulk_key
-from lumen.engine.spec_core.registry import CAPABILITIES
+from lumen.engine.services.capability_detection.catalog import CAPABILITIES
 
 
 def test_registry_not_empty():

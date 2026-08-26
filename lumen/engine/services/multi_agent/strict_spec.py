@@ -33,7 +33,7 @@ class StrictSpec:
         text = (self.spec_request or self.purpose or "").strip()
         if len(text) < 8:
             return False
-        # Must look like a bot build request for spec_core
+        # Must look like a bot build request for generation
         low = text.lower()
         return any(k in low for k in ("بوت", "bot", "telegram")) or bool(self.features)
 
@@ -100,7 +100,7 @@ def validate_strict_spec(spec: StrictSpec | dict[str, Any] | None) -> tuple[bool
 
 
 def merge_spec_request(spec: StrictSpec) -> str:
-    """Produce a single deterministic request string for Builder/spec_core."""
+    """Produce a single deterministic request string for Cline generation."""
     if (spec.spec_request or "").strip():
         return spec.spec_request.strip()[:20000]
     parts = []

@@ -19,7 +19,7 @@ from lumen.engine.services.capability_detection import (
     DetectionStatus,
 )
 from lumen.engine.spec_core.registry import get_capability
-from lumen.engine.spec_core.builder import DEFAULT_COMMANDS
+from lumen.engine.services.capability_detection.catalog import DEFAULT_COMMANDS
 from lumen.engine import generate_bot
 
 

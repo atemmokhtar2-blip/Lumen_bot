@@ -33,5 +33,5 @@ Kill switch: `CLINE_ENABLED=0`.
 ## What is not the generator
 
 - Telegram chat models
-- `spec_core` package (helpers only)
-- Catalog / infinite modes (present in enums and legacy metadata; not selected by router)
+- ~~`spec_core`~~ — package **deleted** from the tree
+- Catalog / infinite modes (enum leftovers only; router never selects them)

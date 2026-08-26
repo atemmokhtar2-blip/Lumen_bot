@@ -49,7 +49,7 @@ class GeminiSpecBackend(SpecBackend):
                 "previous_strict_spec": view.get("previous_strict_spec"),
             }
             try:
-                from lumen.engine.spec_core.registry import CAPABILITIES
+                from lumen.engine.services.capability_detection.catalog import CAPABILITIES
                 ctx["spec_core_capabilities"] = sorted(list(CAPABILITIES.keys()))[:200]
             except Exception:
                 ctx["spec_core_capabilities"] = []

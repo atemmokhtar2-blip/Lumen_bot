@@ -263,14 +263,18 @@ def compare_generated_to_request(
 
 
 def apply_repairs_to_spec(spec: Any, repair_directive: dict[str, Any]) -> Any:
-    from lumen.engine.spec_core.schema import BotSpec, Feature, Trigger, UxCopy
+    try:
+        from lumen.engine.spec_core.schema import BotSpec, Feature, Trigger, UxCopy
+    except Exception:
+        # spec_core removed — pass through unchanged
+        return spec
 
     if isinstance(spec, dict):
         spec = BotSpec.from_dict(spec)
     inject = [str(x).strip() for x in (repair_directive.get("inject_features") or []) if str(x).strip()]
     existing = {f.feature for f in (spec.features or [])}
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
     except Exception:
         CAPABILITIES = {}
     for feat in inject:

@@ -1,6 +1,6 @@
 """Generate a minimal Telegram bot project via Groq Chat Completions.
 
-Activated only when GROQ_CODEGEN_ENABLED=1. Does not delete or modify spec_core;
+Activated only when GROQ_CODEGEN_ENABLED=1. Optional experimental path;
 callers choose this path instead of generate_bot() when the flag is on.
 """
 from __future__ import annotations

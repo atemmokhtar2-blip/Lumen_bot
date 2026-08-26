@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ....spec_core.registry import CAPABILITIES, Capability
+from ..catalog import CAPABILITIES, Capability
 from .schema import CapabilityPack, PackCapability, validate_pack
 
 logger = logging.getLogger("lumen_bot.capability_packs")
@@ -33,7 +33,7 @@ def _default_pack_dirs() -> list[Path]:
     roots: list[Path] = []
     # Ship-with-repo packs
     here = Path(__file__).resolve()
-    roots.append(here.parents[3] / "spec_core" / "capability_packs")
+    # spec_core capability_packs removed
     # Runtime overlay under OUTPUT_DIR
     out = os.getenv("OUTPUT_DIR") or _cm_default_output_dir()
     roots.append(Path(out) / "platform" / "capability_packs")
@@ -89,7 +89,7 @@ def register_pack(
         registered.append(pc.key)
         # Ensure friendly command ids in DEFAULT_COMMANDS
         try:
-            from ....spec_core.builder import DEFAULT_COMMANDS
+            from ..catalog import DEFAULT_COMMANDS
             _METHOD_CMD = {
                 "translate": "translate",
                 "translate_toggle": "tr_toggle",
@@ -221,7 +221,7 @@ def keyword_hits(text: str) -> list[str]:
 def _inject_extractor_keywords(pack: CapabilityPack) -> int:
     """Add pack keywords into capability_extractor._PATTERNS (dict[str, tuple[str,...]])."""
     try:
-        from ....spec_core import capability_extractor as ce
+        from .. import catalog as ce
     except Exception:
         return 0
     patterns = getattr(ce, "_PATTERNS", None)

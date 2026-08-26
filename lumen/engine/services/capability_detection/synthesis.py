@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from ...spec_core.registry import CAPABILITIES, get_capability
+from .catalog import CAPABILITIES, get_capability
 from .models import DetectionReport, DetectionStatus, MatchedCapability
 from .search import PRIMARY_CATEGORIES, is_bulk_key
 

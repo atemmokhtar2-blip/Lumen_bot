@@ -87,10 +87,10 @@ def _force_safe_capability(c: PackCapability) -> PackCapability:
 
 def verify_installed(keys: list[str]) -> dict[str, Any]:
     """Confirm keys live in registry + extractor patterns + command map."""
-    from ...spec_core.registry import get_capability
-    from ...spec_core import capability_extractor as ce
+    from .catalog import get_capability
+    from . import catalog as ce
     try:
-        from ...spec_core.builder import DEFAULT_COMMANDS
+        from .catalog import DEFAULT_COMMANDS
     except Exception:
         DEFAULT_COMMANDS = {}
 

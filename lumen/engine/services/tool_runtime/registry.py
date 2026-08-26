@@ -63,7 +63,7 @@ except Exception:
         "requires_confirmation": False,
     },
     "generate_bot": {
-        "description": "توليد بوت تيليجرام من مواصفات المستخدم عبر محرك spec_core",
+        "description": "توليد بوت تيليجرام من مواصفات المستخدم عبر محرك Cline",
         "params": {
             "spec_request": "وصف البوت بالعربية أو الإنجليزية",
         },

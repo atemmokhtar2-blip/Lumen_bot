@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...spec_core.registry import CAPABILITIES
+from .catalog import CAPABILITIES
 from .engine import detect_capabilities
 from .models import DetectionReport, DetectionStatus
 

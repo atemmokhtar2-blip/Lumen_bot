@@ -39,7 +39,7 @@ def pipeline_trace(request: str, *, include_research: bool = True) -> dict[str, 
     for key in plan.keys:
         if key in {"start", "help"}:
             continue
-        from ...spec_core.registry import get_capability
+        from .catalog import get_capability
         cap = get_capability(key)
         if not cap:
             emit_rows.append({"key": key, "safe": False, "level": "missing", "notes": ["not in registry"]})
@@ -111,7 +111,7 @@ def pipeline_trace(request: str, *, include_research: bool = True) -> dict[str, 
     else:
         # map keys to friendly commands when possible
         try:
-            from ...spec_core.builder import DEFAULT_COMMANDS
+            from .catalog import DEFAULT_COMMANDS
             cmds = []
             for k in plan.keys:
                 if k in {"start", "help"}:

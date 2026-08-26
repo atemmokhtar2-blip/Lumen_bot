@@ -26,17 +26,13 @@ Last aligned with tree under `lumen/` on branch `Lumen`.
 
 `EngineMode` enum still lists `catalog`, `hybrid`, `cline`, `infinite` for legacy IR shapes; product path is Cline-only.
 
-## `spec_core` status
+## `spec_core` — removed permanently
 
-Package still exists under `lumen/engine/spec_core/`.
+The entire `lumen/engine/spec_core` package has been **deleted**.
 
-Its own `__init__.py` states: generation is performed exclusively by the Cline SDK path; this package keeps modules used by IR validation, capability detection, chat UX, and delivery personalization.
-
-`builder.py` is a re-export stub; old Spec Builder / BuilderSession is removed.
-
-Live uses include: `registry.CAPABILITIES`, `command_map`, `domain_detector`, `lean_packs`, `language_understanding/*` (imported from IR validate, capability_detection, message_router, etc.).
-
-It is **not** the code-writing engine.
+- Generation is **Cline-only** (`engine_router` → `execute_cline_ir`).
+- Capability detection uses an empty local catalog: `lumen/engine/services/capability_detection/catalog.py`.
+- Language-understanding / template-builder paths that depended on `spec_core` fail soft (try/except) and are no longer product paths.
 
 ## Cline path
 

@@ -100,7 +100,7 @@ def _product_brief() -> str:
         system_identity_line(),
         (
             "ماذا تفعل: تفهم طلب المستخدم بالعربي/الإنجليزي، تترجم المواصفات لقدرات حقيقية "
-            "(spec_core)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته."
+            "(Cline)، تولّد مشروع بوت جاهز (handlers + services + zip)، ويمكن استضافته."
         ),
         (
             "دورك: تفهم نية المستخدم وتختار أداة من قائمة الأدوات فقط. "
@@ -137,7 +137,7 @@ def _macro_prompt_suffix() -> str:
 def _build_system(context: dict[str, Any]) -> str:
     caps: list[str] = []
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
 
         caps = sorted(CAPABILITIES.keys())[:80]
     except Exception:

@@ -15,8 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
-from ...spec_core.capability_extractor import extract_all
-from ...spec_core.registry import CAPABILITIES, get_capability
+from .catalog import extract_all
+from .catalog import CAPABILITIES, get_capability
 from ..feasibility_gate import ComplexityLevel, FeasibilityResult, check_feasibility
 from .models import (
     DetectionReport,
@@ -263,12 +263,8 @@ def _classify(
 def _resolve_domains(request: str, domains: Iterable[str] | None) -> list[str]:
     if domains:
         return [d for d in domains if d]
-    try:
-        from ...spec_core.domain_detector import detect
-
-        return list(detect(request) or [])
-    except Exception:
-        return []
+    # domain_detector removed with spec_core
+    return []
 
 
 def detect_capabilities(

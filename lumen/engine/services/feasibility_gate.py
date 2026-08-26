@@ -76,7 +76,7 @@ _SUPPORTED_HINTS = [
 def check_feasibility(request: str) -> FeasibilityResult:
     text = (request or "").strip()
     try:
-        from ..spec_core.arabic_intent_engine import is_clearly_non_bot
+        raise ImportError('spec_core removed')
         if is_clearly_non_bot(text):
             return FeasibilityResult(
                 can_generate=False,

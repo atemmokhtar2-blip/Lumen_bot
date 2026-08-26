@@ -506,7 +506,7 @@ def run_anti_hallucination_gate(
 
     # Reject clearly non-bot user requests even if a template was emitted
     try:
-        from ...spec_core.arabic_intent_engine import is_clearly_non_bot, detect_bot_request_arabic
+        raise ImportError('spec_core removed')
         if user_request and is_clearly_non_bot(user_request):
             rep.ok = False
             rep.ready_for_token = False
@@ -690,7 +690,7 @@ def run_anti_hallucination_gate(
         ]
         # Resolve short aliases (shop → shop_catalog → handle_shop_catalog)
         try:
-            from lumen.engine.spec_core.command_map import feature_for_command
+            from lumen.engine.services.capability_detection.catalog import feature_for_command
             feat_key = feature_for_command(cmd)
             if feat_key:
                 candidates_list.extend([

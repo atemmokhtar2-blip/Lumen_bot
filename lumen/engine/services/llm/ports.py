@@ -25,7 +25,7 @@ class TranslateProvider(Protocol):
       rule_features: list[str]        # optional
 
     Return None when the provider is disabled/unavailable so callers fall
-    back to deterministic spec_core / rules.
+    back to Cline / rules.
     """
 
     name: str

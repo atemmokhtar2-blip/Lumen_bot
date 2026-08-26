@@ -25,7 +25,7 @@ python api_main.py
 | `BuildIR` + `engine_router` | عقد التوليد؛ يفرض مسار **Cline فقط** |
 | `cline_runtime` (agent) | محرك التوليد الوحيد: حلقة plan → tool → observe |
 | `tool_runtime` | تنفيذ أدوات: clone / host / repo_* / … |
-| `spec_core` | **ليس** محرك توليد. بقايا: registry، command_map، domain_detector، language_understanding لـ IR validation والـ UX |
+| ~~`spec_core`~~ | **محذوف نهائيًا** — لا يوجد مسار توليد حتمي/قوالب |
 
 ## أسطح المنتج
 

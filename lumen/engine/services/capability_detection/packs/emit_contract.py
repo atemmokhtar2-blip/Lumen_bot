@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ....spec_core.registry import CAPABILITIES
+from ..catalog import CAPABILITIES
 
 # Services that coding.py / handlers can emit real modules for
 KNOWN_SERVICES: frozenset[str] = frozenset({

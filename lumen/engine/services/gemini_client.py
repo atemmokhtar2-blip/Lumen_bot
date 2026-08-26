@@ -268,7 +268,7 @@ USER_INPUT_END
     context = dict(context or {})
     if not context.get("spec_core_capabilities"):
         try:
-            from lumen.engine.spec_core.registry import CAPABILITIES
+            from lumen.engine.services.capability_detection.catalog import CAPABILITIES
             # Keep the chat prompt small for speed; full registry is used by
             # the translator / spec_core path, not every chat turn.
             context["spec_core_capabilities"] = sorted(CAPABILITIES.keys())[:80]
@@ -285,7 +285,7 @@ USER_INPUT_END
         context.setdefault("platform_under_development", True)
     facts = json.dumps(context, ensure_ascii=False, sort_keys=True)
     operation = (
-        "ترجمة الطلب إلى spec_core" if mode == "translate" else "الرد الطبيعي على المستخدم"
+        "ترجمة الطلب إلى عقد التوليد" if mode == "translate" else "الرد الطبيعي على المستخدم"
     )
     try:
         from lumen.engine.services.platform_status import system_prompt_block
@@ -296,7 +296,7 @@ USER_INPUT_END
         )
     return f"""
 {system_identity_line(long=True)}
-تفهم الطلب، تترجم لقدرات spec_core، وتولّد بوت جاهز (zip/استضافة).
+تفهم الطلب، تترجم لقدرات المنصة، وتولّد بوت جاهز (zip/استضافة).
 {_status_block}
 
 نفّذ هذه المهمة: {operation}.
@@ -312,8 +312,8 @@ USER_INPUT_END
     8. flows يجب أن تكون مسارات مستخرجة من طلب المستخدم، وليست قائمة افتراضية.
     9. confidence رقم بين 0 و1.
     10. إذا لم يكتمل وصف البوت بعد، اجعل clarification_needed=true وspec_request فارغًا.
-    11. إذا اكتملت المواصفات أو قال المستخدم «ابدأ/نفّذ/ولّد» بعد اكتمالها، اجعل action.name="generate_bot" أو "refine_bot" عند تعديل بوت موجود، وclarification_needed=false، واكتب spec_request كطلب واحد مستقل يفهمه spec_core ويحتوي على عبارة «بوت» أو «Telegram bot» وعلى features_requested الدقيقة فقط.
-    12. spec_request ليس ردًا للمستخدم؛ هو عقد داخلي لإرساله إلى spec_core.
+    11. إذا اكتملت المواصفات أو قال المستخدم «ابدأ/نفّذ/ولّد» بعد اكتمالها، اجعل action.name="generate_bot" أو "refine_bot" عند تعديل بوت موجود، وclarification_needed=false، واكتب spec_request كطلب واحد مستقل يفهمه محرك التوليد (Cline) ويحتوي على عبارة «بوت» أو «Telegram bot» وعلى features_requested الدقيقة فقط.
+    12. spec_request ليس ردًا للمستخدم؛ هو عقد داخلي لإرساله إلى محرك التوليد.
     13. إن وُجد conversation_summary أو conversation_history في SERVER_CONTEXT فأكمل منه؛ تبديل المفتاح/المزود لا يلغي سياق المستخدم.
 
 SERVER_CONTEXT:
@@ -431,7 +431,7 @@ def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
     if not isinstance(features, list):
         return False
     try:
-        from lumen.engine.spec_core.registry import CAPABILITIES
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
         known = set(CAPABILITIES)
     except Exception:
         return False

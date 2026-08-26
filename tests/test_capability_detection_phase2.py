@@ -11,7 +11,7 @@ from lumen.engine.services.capability_detection import (
     run_detection,
     telegram_preflight,
 )
-from lumen.engine.spec_core.builder import BuilderSession
+BuilderSession = None  # removed with spec_core
 
 
 def test_preflight_blocks_impossible():

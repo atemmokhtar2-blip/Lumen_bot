@@ -716,7 +716,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
     # NEVER intercept bot generation/specs here — those must reach:
-    #   Gemini (understand) → translator (spec_core contract) → engine
+    #   Gemini (understand) → translator (generation contract) → engine
     try:
         _ar0 = (context.user_data or {}).get("active_repo") if context.user_data else None
         _path0 = ""
@@ -999,7 +999,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Two-stage understanding pipeline:
         # Gemini understands the user and produces a structured intent;
-        # Qwen translates that intent into the validated spec_core contract.
+        # Qwen translates that intent into the validated generation contract.
         # If Gemini is unavailable for an explicit build request, Qwen is the
         # direct translation rescue path; ordinary chat never uses Qwen.
         _direct_qwen_translation = None
@@ -1079,7 +1079,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         _translation_source = "gemini_fallback_qwen_unavailable"
                         logger.warning("Qwen handoff unavailable; using validated Gemini contract")
             except Exception:
-                logger.exception("Gemini-to-Qwen-to-spec_core handoff failed")
+                logger.exception("Gemini-to-Qwen generation handoff failed")
 
         if _translated_generation_request:
             request = _translated_generation_request
@@ -1097,7 +1097,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         # map commands → features via command_map when features_hint empty
                         if not prior and _ins.commands:
                             try:
-                                from lumen.engine.spec_core.command_map import feature_for_command
+                                from lumen.engine.services.capability_detection.catalog import feature_for_command
                                 for c in _ins.commands:
                                     f = feature_for_command(c)
                                     if f and f not in prior:

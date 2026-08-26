@@ -165,7 +165,7 @@ class GeminiTranslateAdapter:
             "spec_request": spec_request,
             "model": str(raw.get("model") or nested.get("model") or "gemini"),
             "source": str(raw.get("source") or "gemini"),
-            "engine_mode": str(_get("engine_mode") or "spec_core"),
+            "engine_mode": str(_get("engine_mode") or "cline"),
             # keep chat fields for message_router dual-use paths
             "ok": bool(raw.get("ok", True)),
             "answered": bool(raw.get("answered", True)),

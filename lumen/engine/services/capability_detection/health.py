@@ -75,8 +75,8 @@ def capability_system_health() -> dict[str, Any]:
 
     try:
         from .packs.loader import load_all_packs
-        from ...spec_core.registry import get_capability
-        from ...spec_core.builder import DEFAULT_COMMANDS
+        from .catalog import get_capability
+        from .catalog import DEFAULT_COMMANDS
 
         info = load_all_packs()
         for key in (
@@ -155,7 +155,7 @@ def capability_system_health() -> dict[str, Any]:
 
 def _command_for_key(key: str) -> str:
     try:
-        from ...spec_core.builder import DEFAULT_COMMANDS
+        from .catalog import DEFAULT_COMMANDS
         return str(DEFAULT_COMMANDS.get(key) or key.replace("_", "")[:32])
     except Exception:
         return key.replace("_", "")[:32]

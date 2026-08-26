@@ -51,7 +51,7 @@ def init_db():
 )
 sys.path.insert(0, str(_TMP))
 
-from lumen.engine.spec_core.registry import CAPABILITIES, load_scale_capabilities  # noqa: E402
+from lumen.engine.services.capability_detection.catalog import CAPABILITIES, load_scale_capabilities  # noqa: E402
 from lumen.engine.spec_core import templates_generic as g  # noqa: E402
 
 # Reset ensure cache if re-imported
