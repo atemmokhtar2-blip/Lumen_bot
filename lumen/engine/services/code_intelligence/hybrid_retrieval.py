@@ -56,7 +56,7 @@ def hybrid_search(
     graph = graph or build_symbol_graph(root_p)
     docs = _corpus_from_graph(graph, root_p)
     if not docs:
-        return {"ok": True, "hits": [], "query": query, "engine": "hybrid-bm25-vector-rrf"}
+        return {"ok": True, "hits": [], "query": query, "engine": "hybrid-bm25-vector-rrf-store"}
 
     tokenized = [tokenize_code(d["text"]) for d in docs]
     bm25 = BM25Okapi(tokenized)
@@ -91,6 +91,40 @@ def hybrid_search(
         )
     ranked.sort(key=lambda x: x["score"], reverse=True)
     hits = ranked[: max(1, min(top_k, 50))]
+    # Merge persistent vector store hits (world-class path)
+    try:
+        from .vector_store import CodeVectorStore
+        store = CodeVectorStore(root_p)
+        vhits = store.search(query, top_k=top_k)
+        # RRF merge with existing hits
+        k = 60
+        scores: dict[str, float] = {}
+        meta: dict[str, dict] = {}
+        for r, h in enumerate(hits, start=1):
+            key = str(h.get("id") or f"{h.get('path')}:{h.get('name')}")
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + r)
+            meta[key] = h
+        for r, h in enumerate(vhits, start=1):
+            key = str(h.get("id") or f"{h.get('path')}:{h.get('name')}")
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + r)
+            if key not in meta:
+                meta[key] = {
+                    "id": h.get("id"),
+                    "name": h.get("name"),
+                    "path": h.get("path"),
+                    "kind": h.get("kind"),
+                    "score": h.get("score"),
+                    "start_line": h.get("start_line"),
+                }
+        merged = []
+        for key, sc in sorted(scores.items(), key=lambda kv: -kv[1]):
+            row = dict(meta[key])
+            row["score"] = round(sc, 6)
+            row.pop("text", None)
+            merged.append(row)
+        hits = merged[: max(1, min(top_k, 50))]
+    except Exception:
+        pass
     # strip heavy text from hits
     for h in hits:
         h.pop("text", None)

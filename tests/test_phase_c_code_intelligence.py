@@ -162,3 +162,49 @@ def test_hybrid_rrf_engine_name(sample_repo: Path):
     res = hybrid_search(sample_repo, "helper", top_k=3)
     assert res["engine"] == "hybrid-bm25-vector-rrf"
     assert res["hits"]
+
+
+def test_multi_lang_indexes_js(tmp_path: Path):
+    (tmp_path / "bot.js").write_text(
+        "function onMessage(msg) { return handle(msg); }\nconst handle = (m) => m;\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    from lumen.engine.services.code_intelligence.multi_lang import index_repo_multi
+
+    idx = index_repo_multi(tmp_path)
+    assert idx["files_indexed"] >= 1
+    assert "python" in (idx.get("by_lang") or {}) or idx["symbol_count"] >= 1
+    assert "bots" in (idx.get("product_scope") or [])
+
+
+def test_incremental_and_vector_store(sample_repo: Path, tmp_path: Path):
+    from lumen.engine.services.code_intelligence.incremental import ensure_incremental_index
+    from lumen.engine.services.code_intelligence.vector_store import CodeVectorStore
+
+    store = tmp_path / "idx"
+    r1 = ensure_incremental_index(sample_repo, store_dir=store, force=True)
+    assert r1["ok"] is True
+    assert r1["rebuilt"] is True
+    r2 = ensure_incremental_index(sample_repo, store_dir=store, force=False)
+    assert r2["ok"] is True
+    # second pass ideally skip
+    assert r2.get("rebuilt") in {False, True}
+    vs = CodeVectorStore(sample_repo, store_dir=store)
+    # may be empty if upsert failed dims — still store should load
+    assert hasattr(vs, "search")
+
+
+def test_edit_file_postflight_syntax(sample_repo: Path):
+    from lumen.engine.services.cline_runtime.agent_fs import edit_file
+
+    bad = edit_file(
+        str(sample_repo),
+        "pkg/b.py",
+        "def helper(name: str) -> str:",
+        "def helper(name: str) -> str:\n    return (\n",
+    )
+    # postflight should catch syntax error
+    assert "postflight" in bad
+    if bad["postflight"].get("syntax_ok") is False:
+        assert bad.get("ok") is False

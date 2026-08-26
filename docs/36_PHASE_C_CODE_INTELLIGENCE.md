@@ -68,3 +68,21 @@ CODE_INTEL_PREFLIGHT=1   # افتراضي
 ```
 
 النتيجة داخل `tool_result.preflight` للـ agent.
+
+
+## C+ اتجاه المنافسة العالمية (نطاق المنتج)
+
+المنتج **مش تيليجرام فقط**: بوتات (Telegram / Discord / WhatsApp) + تطبيقات + مواقع — نفس طبقة فهم الكود.
+
+| طبقة | أداة |
+|------|------|
+| AST متعدد | tree-sitter Python + JavaScript |
+| فهرسة تزايدية | `ensure_incremental_index` (mtime) |
+| Vector store | numpy persistent (`.lumen_code_index/`) |
+| Hybrid | BM25 + vectors + RRF + vector store |
+| قبل التعديل | preflight (Jedi + blast) |
+| بعد التعديل | postflight (syntax + reindex) |
+
+```bash
+PYTHONPATH=. pytest tests/test_phase_c_code_intelligence.py -q
+```

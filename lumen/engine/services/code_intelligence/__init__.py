@@ -1,12 +1,16 @@
-"""Phase C — Codebase Intelligence (Tree-sitter + Jedi + hybrid retrieval + blast radius)."""
+"""Phase C+ — global codebase intelligence for bots, apps, and web projects."""
 from __future__ import annotations
 
 from .blast_radius import blast_radius
-from .preflight import analyze_edit_preflight
 from .hybrid_retrieval import hybrid_search
+from .incremental import ensure_incremental_index
+from .multi_lang import index_repo_multi
 from .persistent_index import build_and_save_index, get_or_build_graph, load_index
+from .postflight import analyze_edit_postflight
+from .preflight import analyze_edit_preflight
 from .symbol_graph import build_symbol_graph
 from .tree_sitter_index import index_python_repo, parse_python_source
+from .vector_store import CodeVectorStore, build_vector_index_from_symbols
 
 try:
     from .jedi_analysis import find_references, goto_definition, names_in_module
@@ -18,13 +22,18 @@ except Exception:  # pragma: no cover
 __all__ = [
     "index_python_repo",
     "parse_python_source",
+    "index_repo_multi",
     "build_symbol_graph",
     "hybrid_search",
     "blast_radius",
-    "analyze_edit_preflight",
     "build_and_save_index",
     "get_or_build_graph",
     "load_index",
+    "ensure_incremental_index",
+    "analyze_edit_preflight",
+    "analyze_edit_postflight",
+    "CodeVectorStore",
+    "build_vector_index_from_symbols",
     "find_references",
     "goto_definition",
     "names_in_module",

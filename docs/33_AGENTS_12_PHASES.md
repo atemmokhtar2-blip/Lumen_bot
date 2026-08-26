@@ -41,7 +41,7 @@
 | # | المرحلة | الهدف | الحالة | ملاحظات |
 |---|---------|--------|--------|---------|
 | **1** | Agents متكامل (Planner/Worker/Critic) | أدوار مفصولة + حلقة إصلاح | **مغلق تشغيليًا (A)** | roles + orchestrator + plan/findings/repair + bot-bench + forced finish + cost. اختياري لاحقًا: Task Tree / Swarm / LangGraph |
-| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **Phase C نشطة** | tree-sitter + symbol graph + BM25/vector hybrid + blast_radius — `docs/36_PHASE_C_CODE_INTELLIGENCE.md` |
+| **2** | فهم المستودع (Codebase Intelligence) | AST/Graph + retrieval | **Phase C+** | multi-lang tree-sitter, incremental index, vector store, pre/postflight, RRF — scope: bots+apps+web |
 | **3** | Self-Correction | Observe→Critique→Fix مغلق | **مغلق (A)** | Critic + trajectory + repair + smoke + `analyze_trajectory` + `failure_board` |
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
 | **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |

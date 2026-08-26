@@ -143,6 +143,21 @@ def edit_file(
                 "jedi_refs": (preflight.get("jedi") or {}).get("refs"),
                 "engine": preflight.get("engine"),
             }
+        try:
+            from lumen.engine.services.code_intelligence.postflight import analyze_edit_postflight
+            post = analyze_edit_postflight(work_dir, path)
+            out["postflight"] = {
+                "ok": post.get("ok"),
+                "syntax_ok": post.get("syntax_ok"),
+                "syntax_error": post.get("syntax_error"),
+                "index_rebuilt": (post.get("index") or {}).get("rebuilt"),
+                "engine": post.get("engine"),
+            }
+            if post.get("syntax_ok") is False:
+                out["ok"] = False
+                out["error"] = post.get("syntax_error") or "postflight_syntax_error"
+        except Exception as _post_exc:
+            out["postflight"] = {"ok": False, "error": type(_post_exc).__name__}
         return out
     except UnsafePathError as exc:
         return {"ok": False, "error": f"unsafe:{exc}"}
