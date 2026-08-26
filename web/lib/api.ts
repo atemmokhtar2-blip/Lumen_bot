@@ -1,4 +1,7 @@
-/** Lumen API client — jobs, SSE, pause/resume/cancel, agent reports, files/diff. */
+/**
+ * Lumen Phase E API client.
+ * Official surface only: jobs control plane, SSE, agent reports, file/diff.
+ */
 
 export type JobStatus =
   | "queued"
@@ -8,6 +11,11 @@ export type JobStatus =
   | "failed"
   | "cancelled"
   | string;
+
+export type SteerNote = {
+  ts: number;
+  message: string;
+};
 
 export type Job = {
   job_id: string;
@@ -21,6 +29,8 @@ export type Job = {
   started_at?: number | null;
   finished_at?: number | null;
   result?: Record<string, unknown>;
+  steer_notes?: SteerNote[];
+  last_steer?: SteerNote | null;
 };
 
 export type AgentReport = {
@@ -39,10 +49,9 @@ export type AgentReport = {
 export type JobFile = { path: string; size: number };
 
 export function apiBase(): string {
-  if (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LUMEN_API_URL) {
-    return process.env.NEXT_PUBLIC_LUMEN_API_URL.replace(/\/$/, "");
-  }
-  return "http://127.0.0.1:8080";
+  const raw =
+    typeof process !== "undefined" ? process.env.NEXT_PUBLIC_LUMEN_API_URL : undefined;
+  return (raw || "http://127.0.0.1:8080").replace(/\/$/, "");
 }
 
 export function apiKey(): string {
@@ -52,69 +61,80 @@ export function apiKey(): string {
   return "";
 }
 
-function headers(): HeadersInit {
+function authHeaders(json = false): HeadersInit {
   const k = apiKey();
-  return {
-    "X-Api-Key": k,
-    Authorization: k ? `Bearer ${k}` : "",
+  const h: Record<string, string> = {
     Accept: "application/json",
+    "X-Api-Key": k,
   };
+  if (k) h.Authorization = `Bearer ${k}`;
+  if (json) h["Content-Type"] = "application/json";
+  return h;
 }
 
-async function jsonFetch(url: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { ...headers(), ...(init?.headers || {}) },
+async function request<T = any>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${apiBase()}${path}`, {
     cache: "no-store",
+    ...init,
+    headers: {
+      ...authHeaders(init?.method === "POST" && !!init.body),
+      ...(init?.headers || {}),
+    },
   });
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
-export async function listJobs(limit = 40): Promise<{ ok: boolean; jobs: Job[] }> {
-  return jsonFetch(`${apiBase()}/v1/jobs?limit=${limit}`);
+export function isTerminal(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
-export async function getJob(jobId: string): Promise<{ ok: boolean } & Job> {
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}`);
+export async function listJobs(limit = 40) {
+  return request<{ ok: boolean; jobs: Job[] }>(`/v1/jobs?limit=${limit}`);
 }
 
-export async function cancelJob(jobId: string): Promise<any> {
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {
+export async function getJob(jobId: string) {
+  return request<{ ok: boolean } & Job>(`/v1/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function cancelJob(jobId: string) {
+  return request(`/v1/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+}
+
+export async function pauseJob(jobId: string) {
+  return request(`/v1/jobs/${encodeURIComponent(jobId)}/pause`, { method: "POST" });
+}
+
+export async function resumeJob(jobId: string) {
+  return request(`/v1/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+}
+
+export async function steerJob(jobId: string, message: string) {
+  return request(`/v1/jobs/${encodeURIComponent(jobId)}/steer`, {
     method: "POST",
+    body: JSON.stringify({ message }),
   });
 }
 
-export async function pauseJob(jobId: string): Promise<any> {
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/pause`, {
-    method: "POST",
-  });
+export async function listAgentReports(limit = 30) {
+  return request<{ ok: boolean; reports: AgentReport[] }>(
+    `/v1/runs/agent-reports?limit=${limit}`
+  );
 }
 
-export async function resumeJob(jobId: string): Promise<any> {
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/resume`, {
-    method: "POST",
-  });
+export async function listJobFiles(jobId: string) {
+  return request<{ ok: boolean; files: JobFile[] }>(
+    `/v1/jobs/${encodeURIComponent(jobId)}/files`
+  );
 }
 
-export async function listAgentReports(
-  limit = 30
-): Promise<{ ok: boolean; reports: AgentReport[] }> {
-  return jsonFetch(`${apiBase()}/v1/runs/agent-reports?limit=${limit}`);
-}
-
-export async function listJobFiles(jobId: string): Promise<{ ok: boolean; files: JobFile[] }> {
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/files`);
-}
-
-export async function getJobFile(
-  jobId: string,
-  path: string
-): Promise<{ ok: boolean; path: string; content: string; truncated?: boolean }> {
+export async function getJobFile(jobId: string, path: string) {
   const q = new URLSearchParams({ path });
-  return jsonFetch(`${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/file?${q}`);
+  return request<{ ok: boolean; path: string; content: string; truncated?: boolean }>(
+    `/v1/jobs/${encodeURIComponent(jobId)}/file?${q}`
+  );
 }
 
-/** Browser SSE — api_key via query (EventSource cannot set custom headers). */
+/** Browser EventSource — api_key in query (headers not supported by EventSource). */
 export function subscribeJobEvents(
   jobId: string,
   onEvent: (ev: MessageEvent) => void,
@@ -122,9 +142,7 @@ export function subscribeJobEvents(
   timeoutSec = 600
 ): EventSource {
   const key = encodeURIComponent(apiKey());
-  const url = `${apiBase()}/v1/jobs/${encodeURIComponent(
-    jobId
-  )}/events?api_key=${key}&timeout=${timeoutSec}`;
+  const url = `${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/events?api_key=${key}&timeout=${timeoutSec}`;
   const es = new EventSource(url);
   es.addEventListener("job", onEvent as EventListener);
   es.addEventListener("done", onEvent as EventListener);

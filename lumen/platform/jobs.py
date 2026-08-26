@@ -64,6 +64,13 @@ class Job:
     error: str = ""
 
     def public_dict(self) -> dict[str, Any]:
+        # Steer notes belong to the live control plane (Phase E) — visible mid-run.
+        raw = []
+        try:
+            raw = list((self.result or {}).get("steer_notes") or [])
+        except Exception:
+            raw = []
+        notes = [n for n in raw if isinstance(n, dict)][-20:]
         return {
             "job_id": self.job_id,
             "tenant_id": self.tenant_id,
@@ -76,6 +83,8 @@ class Job:
             "message": self.message,
             "result": self.result if self.status in TERMINAL else {},
             "error": self.error if self.status == STATUS_FAILED else "",
+            "steer_notes": notes,
+            "last_steer": notes[-1] if notes else None,
             "poll_after_ms": 1500 if self.status not in TERMINAL else 0,
         }
 
@@ -487,6 +496,41 @@ class JobRunner:
             job_id,
             status=next_status,
             message="resumed_by_user",
+        )
+        return self.store.get(job_id)
+
+    def steer(
+        self,
+        job_id: str,
+        message: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> Job | None:
+        """Append a steer instruction for a non-terminal job (Phase E intervention).
+
+        Workers may read ``result['steer_notes']`` / ``last_steer`` cooperatively.
+        Does not change status by itself.
+        """
+        text = (message or "").strip()
+        if not text:
+            return None
+        if len(text) > 2000:
+            text = text[:2000]
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        result = dict(job.result or {})
+        notes = list(result.get("steer_notes") or [])
+        notes.append({"ts": time.time(), "message": text})
+        result["steer_notes"] = notes[-20:]
+        self.store.update(
+            job_id,
+            result=result,
+            message=f"steer:{text[:120]}",
         )
         return self.store.get(job_id)
 

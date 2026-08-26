@@ -91,6 +91,42 @@ async def resume_job(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **data})
 
 
+async def steer_job(request: web.Request) -> web.Response:
+    """POST /v1/jobs/{job_id}/steer — human steer instruction (Phase E).
+
+    Body JSON: ``{"message": "..."}`` (required, max 2000 chars).
+    """
+    tenant = require_tenant(request)
+    job_id = (request.match_info.get("job_id") or "").strip()
+    if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    message = body.get("message") if isinstance(body.get("message"), str) else ""
+    message = message.strip()
+    if not message:
+        raise web.HTTPBadRequest(
+            text='{"error":"message_required"}',
+            content_type="application/json",
+        )
+    runner = get_job_runner()
+    job = runner.store.get(job_id)
+    assert_job_owned(job, tenant.tenant_id)
+    updated = runner.steer(job_id, message, tenant_id=tenant.tenant_id)
+    if not updated:
+        raise web.HTTPBadRequest(
+            text='{"error":"steer_rejected"}',
+            content_type="application/json",
+        )
+    data = updated.public_dict()
+    data["input"] = {}
+    return web.json_response({"ok": True, **data})
+
+
 async def stream_job(request: web.Request) -> web.StreamResponse:
     """GET /v1/jobs/{job_id}/events — Server-Sent Events progress stream (Phase E)."""
     import asyncio
@@ -126,6 +162,7 @@ async def stream_job(request: web.Request) -> web.StreamResponse:
             await resp.write(b"event: error\ndata: {\"error\":\"gone\"}\n\n")
             break
         assert_job_owned(job, tenant.tenant_id)
+        pub = job.public_dict()
         payload = {
             "job_id": job.job_id,
             "kind": job.kind,
@@ -133,9 +170,10 @@ async def stream_job(request: web.Request) -> web.StreamResponse:
             "progress": job.progress,
             "message": job.message,
             "error": job.error if job.status == "failed" else "",
+            "last_steer": pub.get("last_steer"),
             "ts": _time.time(),
         }
-        sig = f"{job.status}:{job.progress}:{job.message}:{job.error}"
+        sig = f"{job.status}:{job.progress}:{job.message}:{job.error}:{pub.get('last_steer')}"
         if sig != last_sig:
             last_sig = sig
             line = f"event: job\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"

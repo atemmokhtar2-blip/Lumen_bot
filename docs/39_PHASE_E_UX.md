@@ -1,61 +1,58 @@
-# Phase E — UX Console (complete stack)
+# Phase E — UX Console
 
-## الهدف
+> **Scope only:** Dashboard · Agents window · Pause / Steer / Cancel · Diff viewer · Live status (SSE).  
+> No Phase F (MCP / Playwright / external integrations).
 
-واجهة Power-User جاهزة للمنافسة: مراقبة agents، تحكم في jobs، diff احترافي، graph للـ pipeline.
+## Official tools
 
-## أدوات رسمية (إلزامي — ليست سكربتات)
+| Tool | Package / surface | Role |
+|------|-------------------|------|
+| Next.js 14 | `next` | App Router console |
+| TanStack Query | `@tanstack/react-query` | Live server state |
+| React Flow | `@xyflow/react` | Agent pipeline graph |
+| Monaco | `@monaco-editor/react` | Code + side-by-side diff |
+| SSE | `EventSource` + aiohttp | Live job stream |
+| JobRunner | `lumen.platform.jobs` | pause · resume · cancel · **steer** |
 
-| الأداة | الحزمة / المنتج | الدور |
-|--------|------------------|--------|
-| Next.js 14 | `next` | App Router UI |
-| TanStack Query | `@tanstack/react-query` | server state · refetch · mutations |
-| React Flow | `@xyflow/react` | رسم pipeline الـ agents |
-| Monaco Editor | `@monaco-editor/react` | viewer + DiffEditor |
-| SSE | `EventSource` + aiohttp | بث حي لتقدّم الـ job |
-| JobRunner | `lumen.platform.jobs` | pause / resume / cancel |
+## Control plane API
 
-## API
+| Method | Path | Role |
+|--------|------|------|
+| GET | `/v1/jobs` | List |
+| GET | `/v1/jobs/{id}` | Detail (+ `steer_notes`, `last_steer`) |
+| GET | `/v1/jobs/{id}/events` | SSE (includes `last_steer`) |
+| POST | `/v1/jobs/{id}/pause` | Cooperative pause |
+| POST | `/v1/jobs/{id}/resume` | Resume |
+| POST | `/v1/jobs/{id}/cancel` | Soft cancel |
+| POST | `/v1/jobs/{id}/steer` | Body: `{"message":"..."}` — human intervention |
+| GET | `/v1/jobs/{id}/files` | Generated tree |
+| GET | `/v1/jobs/{id}/file?path=` | File content |
+| GET | `/v1/runs/agent-reports` | multi_agent reports |
 
-| Endpoint | الوظيفة |
-|----------|---------|
-| `GET /v1/jobs` | قائمة |
-| `GET /v1/jobs/{id}` | تفصيل |
-| `GET /v1/jobs/{id}/events` | SSE |
-| `POST /v1/jobs/{id}/cancel` | إلغاء |
-| `POST /v1/jobs/{id}/pause` | إيقاف مؤقت |
-| `POST /v1/jobs/{id}/resume` | استئناف |
-| `GET /v1/jobs/{id}/files` | شجرة ملفات |
-| `GET /v1/jobs/{id}/file?path=` | محتوى ملف |
-| `GET /v1/runs/agent-reports` | تقارير multi_agent |
+## Console routes
 
-## صفحات
+| Route | Role |
+|-------|------|
+| `/` | Dashboard stats |
+| `/runs` | Job table + live counts |
+| `/runs/[jobId]` | SSE timeline + Pause/Resume/Cancel/**Steer** |
+| `/agents` | Agents window + React Flow graph |
+| `/diff` | Monaco viewer / DiffEditor |
 
-| Route | الوظيفة |
-|-------|---------|
-| `/` | لوحة إحصائيات (TanStack Query) |
-| `/runs` | جدول + mutations + عدّادات |
-| `/runs/[jobId]` | SSE timeline + تحكم |
-| `/agents` | React Flow graph + قائمة التقارير |
-| `/diff` | Monaco viewer / side-by-side |
-
-## تشغيل
+## Run
 
 ```bash
-cd web
-npm install
+cd web && npm install
 export NEXT_PUBLIC_LUMEN_API_URL=http://127.0.0.1:8080
 export NEXT_PUBLIC_LUMEN_API_KEY=your_key
 npm run dev
 ```
 
-## اكتمال Phase E
+## Phase E checklist
 
-- [x] Live job list + detail SSE
-- [x] Pause / Resume / Cancel (JobRunner)
-- [x] Agents window + trajectory graph (React Flow)
-- [x] Monaco code + diff
-- [x] TanStack Query data layer
-- [x] توثيق محدث
-
-الخطوة التالية المقترحة (خارج E): Temporal Web UI signals، أو Phase F (MCP / Playwright).
+- [x] Dashboard
+- [x] Agents window + trajectory graph
+- [x] Pause / Resume / Cancel
+- [x] **Steer** (API + detail UI)
+- [x] Diff viewer (Monaco)
+- [x] Live status (SSE + TanStack Query)
