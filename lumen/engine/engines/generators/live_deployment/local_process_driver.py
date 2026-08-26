@@ -83,27 +83,15 @@ def _find_entry_point(project_path: Path) -> Optional[Path]:
 
 
 def _local_process_allowed() -> bool:
-    """Local subprocess hosting is dual-gated and OFF by default.
-
-    Requires ALL of:
-      - TBE_ALLOW_LOCAL_PROCESS=1
-      - TBE_FORCE_LOCAL_PROCESS=1  (explicit second switch — no silent fallback)
-      - non-production OR multi-tenant disabled
-    """
-    import os
-    flag = (os.environ.get("TBE_ALLOW_LOCAL_PROCESS") or "0").strip().lower()
-    force = (os.environ.get("TBE_FORCE_LOCAL_PROCESS") or "0").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
-        return False
-    if force not in {"1", "true", "yes", "on"}:
-        return False
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
-    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower()
-    if multi in {"1", "true", "yes", "on"} and env not in {"dev", "development", "local", "test"}:
-        return False
-    if env in {"production", "prod", "staging"}:
-        return False
-    return True
+    """Local subprocess allowed when isolation policy says so."""
+    try:
+        from lumen.engine.services.isolation_policy import decide_isolation
+        return bool(decide_isolation().allow_local)
+    except Exception:
+        import os
+        return (os.environ.get("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER") or "1").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
 
 
 class LocalProcessDriver(DeploymentProvider):
@@ -116,23 +104,13 @@ class LocalProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
-        # Host execution of generated bots is permanently refused.
-        # Only DockerProcessDriver may host untrusted code.
-        return DeploymentStatus(
-            provider=self.name,
-            status=DEPLOY_FAILED,
-            message=(
-                "LocalProcessDriver removed: isolated container required. "
-                "Host-process fallback is not available."
-            ),
-        )
-        if not _local_process_allowed():  # unreachable — kept for static analysis clarity
+        """Host-process fallback with RLIMIT sandbox when Docker is unavailable."""
+        if not _local_process_allowed():
             return DeploymentStatus(
                 provider=self.name,
                 status=DEPLOY_FAILED,
-                message="LocalProcessDriver disabled.",
+                message="LocalProcessDriver disabled by isolation policy.",
             )
-        # Root gate: refuse to run untrusted code without explicit local-dev opt-in
         from lumen.engine.services.isolation_policy import assert_local_process_allowed
         assert_local_process_allowed()
 

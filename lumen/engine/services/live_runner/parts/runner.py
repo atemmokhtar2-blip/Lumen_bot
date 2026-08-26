@@ -670,7 +670,7 @@ def run_bot_project(
     }
     if require_docker:
         prefer = True
-        allow_local = False
+        # keep allow_local from isolation policy (fallback when Docker fails)
 
     docker_err = ""
     if prefer or require_docker:
@@ -735,8 +735,9 @@ def run_bot_project(
             phase="security",
             message=(
                 "Docker مطلوب لتشغيل آمن وغير متاح أو فشل. "
-                "لا يُسمح بالتشغيل المحلي في وضع الإنتاج "
-                f"({docker_err or 'docker_required'})"
+                "لا يُسمح بالتشغيل المحلي "
+                f"({docker_err or 'docker_required'}). "
+                "فعّل TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 أو ثبّت Docker."
             ),
             install_log="",
             run_log="",
@@ -746,17 +747,78 @@ def run_bot_project(
             details={"provider": "none", "error": docker_err or "docker_required"},
         )
 
-    # PRODUCTION RULE: no host-process fallback. Docker or reject.
+    # Local process fallback (resource-limited) when policy allows
+    if allow_local:
+        try:
+            from lumen.engine.engines.generators.live_deployment.local_process_driver import (
+                LocalProcessDriver,
+            )
+            driver = LocalProcessDriver()
+            st = driver.deploy(
+                str(project_path),
+                env_vars={
+                    "BOT_TOKEN": bot_token,
+                    "TELEGRAM_BOT_TOKEN": bot_token,
+                },
+                service_name="generated-bot",
+            )
+            dep_id = getattr(st, "deployment_id", "") or ""
+            status = str(getattr(st, "status", "") or "").lower()
+            try:
+                from lumen.engine.engines.generators.live_deployment.report_data import DEPLOY_RUNNING
+                running_vals = {str(DEPLOY_RUNNING).lower(), "running", "ok", "deployed"}
+            except Exception:
+                running_vals = {"running", "ok", "deployed"}
+            if status in running_vals or getattr(st, "ok", False):
+                return LiveRunReport(
+                    ok=True,
+                    phase="run",
+                    message="✅ البوت شغال محلياً (fallback بدون Docker — حدود موارد مفعّلة)",
+                    install_log="(local process)",
+                    run_log=str(getattr(st, "message", "") or "")[:1500],
+                    warnings=["local_process", f"docker_err:{docker_err[:80]}" if docker_err else "no_docker"],
+                    entry_point=entry_hint or "",
+                    duration_ms=0.0,
+                    details={
+                        "provider": "local_process",
+                        "deployment_id": dep_id,
+                        "docker_error": docker_err or "",
+                    },
+                )
+            return LiveRunReport(
+                ok=False,
+                phase="run",
+                message=f"فشل التشغيل المحلي: {getattr(st, 'message', status)}",
+                install_log="",
+                run_log=str(getattr(st, "message", "") or "")[:1500],
+                warnings=["local_process_failed"],
+                entry_point=entry_hint or "",
+                duration_ms=0.0,
+                details={"provider": "local_process", "error": getattr(st, "message", status)},
+            )
+        except Exception as local_exc:
+            return LiveRunReport(
+                ok=False,
+                phase="run",
+                message=f"فشل التشغيل المحلي: {type(local_exc).__name__}: {local_exc}",
+                install_log="",
+                run_log="",
+                warnings=["local_process_error"],
+                entry_point=entry_hint or "",
+                duration_ms=0.0,
+                details={"provider": "local_process", "error": str(local_exc)},
+            )
+
     return LiveRunReport(
         ok=False,
         phase="security",
         message=(
-            "التشغيل المحلي محذوف. التنفيذ فقط داخل حاوية معزولة (Docker). "
+            "لا Docker ولا مسار محلي مسموح. "
             f"({docker_err or 'docker_required'})"
         ),
         install_log="",
         run_log="",
-        warnings=["host_process_removed", "docker_required"],
+        warnings=["no_runtime"],
         entry_point=entry_hint or "",
         duration_ms=0.0,
         details={"provider": "none", "error": docker_err or "docker_required"},

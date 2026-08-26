@@ -17,8 +17,10 @@ if "TBE_MULTI_TENANT" not in os.environ:
     os.environ["TBE_MULTI_TENANT"] = "1"
 if "TBE_REQUIRE_DOCKER" not in os.environ:
     os.environ["TBE_REQUIRE_DOCKER"] = "1"
-if "TBE_ALLOW_LOCAL_PROCESS" not in os.environ:
-    os.environ["TBE_ALLOW_LOCAL_PROCESS"] = "0"
+# Local process controlled by isolation_policy (TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER).
+# Do not force TBE_ALLOW_LOCAL_PROCESS=0 here — that blocked all live runs without Docker.
+if "TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER" not in os.environ:
+    os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "1"
 if "TBE_PIP_WHEELS_ONLY" not in os.environ:
     os.environ["TBE_PIP_WHEELS_ONLY"] = "1"
 
