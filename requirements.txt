@@ -30,7 +30,7 @@ prometheus-client==0.21.1
 
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
 SQLAlchemy==2.0.40
-alembic==1.15.2
+alembic==1.19.1
 
 # Phase B — durable workflows (official SDK)
 temporalio>=1.7.0,<2
