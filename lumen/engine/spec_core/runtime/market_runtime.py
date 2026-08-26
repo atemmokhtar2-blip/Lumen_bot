@@ -225,6 +225,31 @@ def ensure() -> None:
             """
         )
         conn.commit()
+        _migrate_schema(conn)
+
+
+
+def _migrate_schema(conn) -> None:
+    """Additive migrations for deeper commerce (safe on existing DBs)."""
+    alters = [
+        "ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN qty INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE orders ADD COLUMN stock_reserved INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE cart_items ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "CREATE INDEX IF NOT EXISTS idx_products_active ON products(active, id)",
+        "CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_cart_user ON cart_items(user_id)",
+    ]
+    for stmt in alters:
+        try:
+            conn.execute(stmt)
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
 
 
 def catalog() -> str:
@@ -374,24 +399,38 @@ def add_item_structured(
 
 
 def seed_demo_catalog() -> int:
-    """Insert a few demo products if catalog empty. Returns count added."""
+    """Seed a usable commerce catalog when empty (multi-category, real stock)."""
     ensure()
     with connect() as conn:
         n = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
         if int(n) > 0:
             return 0
+        # title, price_cents, currency, stock, category, description
         demo = [
-            ("Starter Pack", 499, "USD", 50),
-            ("Pro Pack", 1499, "USD", 30),
-            ("VIP Access", 2999, "USD", 10),
+            ("Starter Pack", 499, "USD", 50, "packs", "حزمة بداية للمستخدمين الجدد"),
+            ("Pro Pack", 1499, "USD", 30, "packs", "حزمة احترافية بمزايا إضافية"),
+            ("VIP Access", 2999, "USD", 10, "membership", "وصول VIP لمدة 30 يوماً"),
+            ("Digital Course", 1999, "USD", 100, "digital", "دورة رقمية تُسلَّم فوراً بعد الدفع"),
+            ("Support Credit", 999, "USD", 200, "services", "رصيد دعم فني قابل للاستخدام"),
+            ("Flash Deal", 299, "USD", 15, "deals", "عرض محدود الكمية"),
         ]
-        for title, price, cur, stock in demo:
-            conn.execute(
-                "INSERT INTO products (title, price_cents, currency, stock) VALUES (?,?,?,?)",
-                (title, price, cur, stock),
-            )
+        added = 0
+        for title, price, cur, stock, cat, desc in demo:
+            try:
+                conn.execute(
+                    "INSERT INTO products (title, price_cents, currency, stock, active, category, description) "
+                    "VALUES (?,?,?,?,1,?,?)",
+                    (title, price, cur, stock, cat, desc),
+                )
+            except Exception:
+                conn.execute(
+                    "INSERT INTO products (title, price_cents, currency, stock, active) VALUES (?,?,?,?,1)",
+                    (title, price, cur, stock),
+                )
+            added += 1
         conn.commit()
-        return len(demo)
+        return added
+
 
 
 def recommend_products(user_id: int = 0, limit: int = 5) -> str:
@@ -503,20 +542,46 @@ def vfcash_approve(admin_id: int, payment_id: int) -> str:
     return f"✅ اعتمدت عملية فودافون #{payment_id} وتم شحن المحفظة"
 
 
+# Allowed order status transitions (commerce state machine)
+_ORDER_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset({"paid", "cancelled", "expired"}),
+    "paid": frozenset({"processing", "shipped", "refunded", "cancelled"}),
+    "processing": frozenset({"shipped", "cancelled", "refunded"}),
+    "shipped": frozenset({"delivered", "refunded"}),
+    "delivered": frozenset({"refunded"}),
+    "cancelled": frozenset(),
+    "expired": frozenset(),
+    "refunded": frozenset(),
+}
+
+
 def place_order(user_id: int, text: str) -> int:
-    """Create pending order with atomic stock reservation (prevents overselling)."""
-    ensure()
-    seed_demo_catalog()
+    """Create pending order qty=1 with atomic stock reservation."""
+    parts = (text or "").split()
     try:
-        pid = int((text or "").split()[0])
+        pid = int(parts[0])
     except Exception:
         return 0
+    qty = 1
+    if len(parts) >= 2:
+        try:
+            qty = max(1, min(99, int(parts[1])))
+        except Exception:
+            qty = 1
+    return place_order_qty(int(user_id), pid, qty)
+
+
+def place_order_qty(user_id: int, product_id: int, qty: int = 1) -> int:
+    """Atomic multi-qty order: reserve stock, write stock_moves, create pending order."""
+    ensure()
+    seed_demo_catalog()
+    pid = int(product_id)
+    qty = max(1, min(99, int(qty or 1)))
     with connect() as conn:
-        # Atomic: only decrement if stock still > 0
         cur = conn.execute(
-            "UPDATE products SET stock = stock - 1 "
-            "WHERE id=? AND active=1 AND stock > 0",
-            (pid,),
+            "UPDATE products SET stock = stock - ? "
+            "WHERE id=? AND active=1 AND stock >= ?",
+            (qty, pid, qty),
         )
         if cur.rowcount != 1:
             conn.rollback()
@@ -527,17 +592,21 @@ def place_order(user_id: int, text: str) -> int:
         if not prod:
             conn.rollback()
             return 0
+        amount = int(prod["price_cents"]) * qty
+        currency = prod["currency"] or "USD"
         try:
             cur = conn.execute(
-                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload, stock_reserved) "
-                "VALUES (?,?,?,?,?,?,1)",
+                "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload, stock_reserved, qty) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 (
-                    user_id,
+                    int(user_id),
                     pid,
-                    int(prod["price_cents"]),
-                    prod["currency"],
+                    amount,
+                    currency,
                     "pending",
-                    f"order:{user_id}:{pid}",
+                    f"order:{user_id}:{pid}:q{qty}",
+                    qty,
+                    qty,
                 ),
             )
         except Exception:
@@ -545,12 +614,12 @@ def place_order(user_id: int, text: str) -> int:
                 "INSERT INTO orders (user_id, product_id, amount_cents, currency, status, payload) "
                 "VALUES (?,?,?,?,?,?)",
                 (
-                    user_id,
+                    int(user_id),
                     pid,
-                    int(prod["price_cents"]),
-                    prod["currency"],
+                    amount,
+                    currency,
                     "pending",
-                    f"order:{user_id}:{pid}",
+                    f"order:{user_id}:{pid}:q{qty}",
                 ),
             )
         oid = int(cur.lastrowid)
@@ -558,8 +627,75 @@ def place_order(user_id: int, text: str) -> int:
             "UPDATE orders SET payload=? WHERE id=?",
             (f"order:{oid}", oid),
         )
+        try:
+            conn.execute(
+                "INSERT INTO stock_moves (product_id, delta, reason, actor_id) VALUES (?,?,?,?)",
+                (pid, -qty, f"reserve:order:{oid}", int(user_id)),
+            )
+        except Exception:
+            try:
+                conn.execute(
+                    "INSERT INTO stock_moves (product_id, delta, reason) VALUES (?,?,?)",
+                    (pid, -qty, f"reserve:order:{oid}"),
+                )
+            except Exception:
+                pass
+        try:
+            conn.execute(
+                "INSERT INTO order_events (order_id, event, note) VALUES (?,?,?)",
+                (oid, "created", f"qty={qty} amount={amount}"),
+            )
+        except Exception:
+            pass
         conn.commit()
         return oid
+
+
+def order_transition(order_id: int, new_status: str, *, actor_id: int = 0, note: str = "") -> str:
+    """Enforce commerce state machine; release stock on cancel/expire from pending."""
+    ensure()
+    new_status = (new_status or "").strip().lower()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM orders WHERE id=?", (int(order_id),)).fetchone()
+        if not row:
+            return f"❌ طلب #{order_id} غير موجود"
+        cur_status = (row["status"] or "pending").lower()
+        allowed = _ORDER_TRANSITIONS.get(cur_status, frozenset())
+        if new_status not in allowed:
+            return f"❌ انتقال غير مسموح: {cur_status} → {new_status}"
+        conn.execute(
+            "UPDATE orders SET status=? WHERE id=?",
+            (new_status, int(order_id)),
+        )
+        try:
+            conn.execute(
+                "INSERT INTO order_events (order_id, event, note) VALUES (?,?,?)",
+                (int(order_id), new_status, (note or f"by:{actor_id}")[:200]),
+            )
+        except Exception:
+            pass
+        # Release reserved stock when cancelling/expiring a pending reservation
+        if cur_status == "pending" and new_status in {"cancelled", "expired"}:
+            qty = 1
+            try:
+                qty = int(row["qty"] or row["stock_reserved"] or 1)
+            except Exception:
+                qty = 1
+            pid = int(row["product_id"] or 0)
+            if pid and qty > 0:
+                conn.execute(
+                    "UPDATE products SET stock = stock + ? WHERE id=?",
+                    (qty, pid),
+                )
+                try:
+                    conn.execute(
+                        "INSERT INTO stock_moves (product_id, delta, reason) VALUES (?,?,?)",
+                        (pid, qty, f"release:order:{order_id}:{new_status}"),
+                    )
+                except Exception:
+                    pass
+        conn.commit()
+    return f"✅ طلب #{order_id}: {cur_status} → {new_status}"
 
 
 def list_orders(
@@ -605,23 +741,33 @@ def mark_paid(order_id: int, charge_id: str) -> bool:
     """Only transitions pending → paid. Never invents success."""
     ensure()
     with connect() as conn:
-        cur = conn.execute(
-            "UPDATE orders SET status='paid', charge_id=? WHERE id=? AND status='pending'",
-            ((charge_id or "")[:200], order_id),
-        )
+        row = conn.execute(
+            "SELECT status FROM orders WHERE id=?", (int(order_id),)
+        ).fetchone()
+        if not row or (row["status"] or "") != "pending":
+            return False
+        try:
+            conn.execute(
+                "UPDATE orders SET charge_id=? WHERE id=?",
+                ((charge_id or "")[:200], int(order_id)),
+            )
+        except Exception:
+            pass
         conn.commit()
-        return cur.rowcount > 0
+    msg = order_transition(int(order_id), "paid", note=f"charge:{(charge_id or '')[:40]}")
+    return msg.startswith("✅")
 
 
 def cancel_order(user_id: int, order_id: int) -> bool:
+    """Cancel own pending order and release reserved stock via state machine."""
     ensure()
-    with connect() as conn:
-        cur = conn.execute(
-            "UPDATE orders SET status='cancelled' WHERE id=? AND user_id=? AND status='pending'",
-            (order_id, user_id),
-        )
-        conn.commit()
-        return cur.rowcount > 0
+    order = get_user_order(int(user_id), int(order_id))
+    if not order:
+        return False
+    if (order.get("status") or "") != "pending":
+        return False
+    msg = order_transition(int(order_id), "cancelled", actor_id=int(user_id), note="user_cancel")
+    return msg.startswith("✅")
 
 
 def track_order(user_id: int, order_id: int) -> str:
@@ -772,20 +918,51 @@ def payment_receipt(user_id: int, payment_id: int) -> str:
 
 
 def cart_add(user_id: int, product_id: int, qty: int = 1) -> bool:
+    """Add to cart with stock-aware clamp. True if at least one unit added."""
+    msg = cart_add_msg(user_id, product_id, qty)
+    return msg.startswith("✅")
+
+
+def cart_add_msg(user_id: int, product_id: int, qty: int = 1) -> str:
+    """Stock-aware cart add with human message (preferred for handlers)."""
     ensure()
     seed_demo_catalog()
-    qty = max(1, int(qty))
-    prod = get_product(product_id)
-    if not prod:
-        return False
+    qty = max(1, min(99, int(qty or 1)))
+    prod = get_product(int(product_id))
+    if not prod or not int(prod.get("active") or 1):
+        return f"❌ المنتج #{product_id} غير موجود"
+    stock = int(prod.get("stock") or 0)
+    if stock <= 0:
+        return f"❌ نفد المخزون للمنتج #{product_id}"
     with connect() as conn:
-        conn.execute(
-            "INSERT INTO cart_items (user_id, product_id, qty) VALUES (?,?,?) "
-            "ON CONFLICT(user_id, product_id) DO UPDATE SET qty=qty+excluded.qty",
-            (user_id, product_id, qty),
-        )
+        row = conn.execute(
+            "SELECT qty FROM cart_items WHERE user_id=? AND product_id=?",
+            (int(user_id), int(product_id)),
+        ).fetchone()
+        already = int(row["qty"]) if row else 0
+        new_qty = min(stock, already + qty)
+        if new_qty <= already:
+            return f"❌ لا يمكن إضافة المزيد (المخزون {stock}، في السلة {already})"
+        if row:
+            conn.execute(
+                "UPDATE cart_items SET qty=? WHERE user_id=? AND product_id=?",
+                (new_qty, int(user_id), int(product_id)),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO cart_items (user_id, product_id, qty) VALUES (?,?,?)",
+                (int(user_id), int(product_id), new_qty),
+            )
         conn.commit()
-    return True
+    added = new_qty - already
+    title = prod.get("title") or f"#{product_id}"
+    price = int(prod.get("price_cents") or 0) / 100.0
+    cur = prod.get("currency") or "USD"
+    return (
+        f"✅ أُضيف {added} × {title} (في السلة: {new_qty})\n"
+        f"السعر: {price:.2f} {cur}\n"
+        f"اعرض السلة: /cartview — إتمام: /cartcheckout"
+    )
 
 
 def cart_view(user_id: int) -> str:
@@ -820,52 +997,50 @@ def cart_clear(user_id: int) -> int:
 
 
 def cart_checkout(user_id: int) -> str:
-    """Create pending orders for cart lines. Only clear lines that succeeded.
+    """Create pending orders per cart line (multi-qty atomic). Partial success keeps failed lines.
 
-    Stock is reserved atomically inside place_order — partial success keeps
-    failed lines in the cart (no silent overselling + wipe).
+    Uses place_order_qty so stock is reserved in one UPDATE ... WHERE stock >= qty.
     """
     ensure()
     seed_demo_catalog()
     with connect() as conn:
         rows = conn.execute(
             "SELECT product_id, qty FROM cart_items WHERE user_id=?",
-            (user_id,),
+            (int(user_id),),
         ).fetchall()
     if not rows:
-        return "Cart empty — add items with /cartadd <product_id>"
+        return "🛒 السلة فارغة — أضف بمنتج: /cartadd <id>"
     order_ids: list[int] = []
     failed: list[str] = []
+    total_cents = 0
     for r in rows:
         pid = int(r["product_id"])
-        qty = int(r["qty"] or 1)
-        ok_qty = 0
-        for _ in range(max(1, qty)):
-            oid = place_order(user_id, str(pid))
-            if oid:
-                order_ids.append(oid)
-                ok_qty += 1
-            else:
-                failed.append(f"#{pid}")
-                break
-        with connect() as conn:
-            if ok_qty >= max(1, qty):
+        qty = max(1, int(r["qty"] or 1))
+        oid = place_order_qty(int(user_id), pid, qty)
+        if oid:
+            order_ids.append(oid)
+            o = get_order(oid)
+            if o:
+                total_cents += int(o.get("amount_cents") or 0)
+            with connect() as conn:
                 conn.execute(
                     "DELETE FROM cart_items WHERE user_id=? AND product_id=?",
-                    (user_id, pid),
+                    (int(user_id), pid),
                 )
-            elif ok_qty > 0:
-                conn.execute(
-                    "UPDATE cart_items SET qty = qty - ? WHERE user_id=? AND product_id=?",
-                    (ok_qty, user_id, pid),
-                )
-            conn.commit()
+                conn.commit()
+        else:
+            failed.append(f"#{pid}×{qty}")
     if not order_ids:
-        return "Checkout failed — stock unavailable for cart items"
-    msg = f"Checkout OK — orders: {', '.join(f'#{i}' for i in order_ids)}"
+        return "❌ فشل الدفع — المخزون غير كافٍ لعناصر السلة"
+    lines = [
+        f"✅ تم إنشاء {len(order_ids)} طلب(ات) بحالة pending",
+        f"الأرقام: {', '.join(f'#{i}' for i in order_ids)}",
+        f"الإجمالي: {total_cents/100:.2f}",
+        "ادفع عبر /buy أو حافظ على الطلب معلقاً حتى التأكيد",
+    ]
     if failed:
-        msg += f" | partial fail (no stock): {', '.join(sorted(set(failed)))}"
-    return msg
+        lines.append(f"⚠️ لم يُكتمل (مخزون): {', '.join(failed)}")
+    return "\n".join(lines)
 
 
 def wishlist_add(user_id: int, product_id: int) -> str:

@@ -266,8 +266,13 @@ def _feature_services(spec: BotSpec) -> set[str]:
 _MARKET_SERVICES = {
     "shop", "payments", "subscriptions", "points", "contests",
     "cart", "growth", "wallet", "analytics", "admin",
-    "creator",
+    "creator", "marketplace", "restaurant", "delivery",
 }
+# Feature-id prefixes that always require full market_runtime (not lean generic)
+_MARKET_FEATURE_PREFIXES = (
+    "shop_", "cart_", "wallet_", "mkt_", "coupon_", "order_",
+    "product_", "checkout", "wishlist_", "refund_",
+)
 _FLOW_HINTS = {
     "shop", "payments", "cart", "wallet", "booking", "tickets", "crm",
 }
@@ -300,7 +305,11 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
     files["tests/__init__.py"] = ""
     svc_set = set(services) | _feature_services(spec)
     # Feature-gated heavy modules (avoid dumping full market pack on simple bots)
-    needs_market = bool(svc_set & _MARKET_SERVICES)
+    feat_keys_gen = {str(getattr(f, "feature", "") or "") for f in (spec.features or [])}
+    needs_market = bool(svc_set & _MARKET_SERVICES) or any(
+        any(k.startswith(p) or k == p.rstrip("_") for p in _MARKET_FEATURE_PREFIXES)
+        for k in feat_keys_gen
+    )
     needs_flow = bool(svc_set & _FLOW_HINTS) or needs_market
     needs_generic = bool(svc_set & _GENERIC_HINTS)
     needs_tickets = "tickets" in svc_set or "support" in svc_set

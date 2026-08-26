@@ -246,8 +246,11 @@ def _market_handler_lines(cap, ok: str, fail: str) -> list[str]:
             "    except ValueError:",
             f"        await message.reply_text({fail!r} + ' — Usage: /cartadd <product_id> [qty]')",
             "        return",
-            "    ok_c = market_svc.cart_add(user.id, pid, qty)",
-            "    await message.reply_text(f'Added product #{pid} x{qty} to cart' if ok_c else 'Product not found — try /shop')",
+            "    if hasattr(market_svc, 'cart_add_msg'):",
+            "        await message.reply_text(market_svc.cart_add_msg(user.id, pid, qty))",
+            "    else:",
+            "        ok_c = market_svc.cart_add(user.id, pid, qty)",
+            "        await message.reply_text(f'Added product #{pid} x{qty} to cart' if ok_c else 'Product not found — try /shop')",
         ]
     elif method in {"view", "view_cart"} and svc in {"cart", "shop"}:
         L.append("    await message.reply_text(market_svc.cart_view(user.id))")

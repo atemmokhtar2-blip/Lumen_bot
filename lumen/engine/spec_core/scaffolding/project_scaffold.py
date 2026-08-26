@@ -83,7 +83,11 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     svc_set = feat_services | plan_svcs
     # Never ship fat runtimes unless the selected services truly need them
     feat_keys = {getattr(f, "feature", "") for f in (spec.features or [])}
-    needs_fat_market = bool(svc_set & _MARKET_SERVICES)
+    needs_fat_market = bool(svc_set & _MARKET_SERVICES) or any(
+        str(k).startswith(p)
+        for k in feat_keys
+        for p in ("shop_", "cart_", "wallet_", "mkt_", "coupon_", "order_", "product_", "wishlist_", "refund_")
+    )
     needs_fat_generic = bool(svc_set & {"translate", "ocr", "scheduler"})
     needs_fat_flow = bool(svc_set & _FLOW_HINTS)
     needs_fat_tickets = bool(svc_set & {"tickets", "support"})
