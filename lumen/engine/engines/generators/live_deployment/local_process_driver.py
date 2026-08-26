@@ -279,7 +279,7 @@ class LocalProcessDriver(DeploymentProvider):
             if (
                 "can't start new thread" in joined
                 or "cant start new thread" in joined.lower()
-                or "RuntimeError("can't start new thread")" in joined
+                or "start new thread" in joined
             ):
                 nproc_hint = (
                     " Root cause: process/thread limit too low for python-telegram-bot "
