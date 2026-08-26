@@ -57,9 +57,45 @@ async def cancel_job(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **data})
 
 
+async def pause_job(request: web.Request) -> web.Response:
+    """POST /v1/jobs/{job_id}/pause — cooperative pause (non-terminal)."""
+    tenant = require_tenant(request)
+    job_id = (request.match_info.get("job_id") or "").strip()
+    if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    runner = get_job_runner()
+    job = runner.store.get(job_id)
+    assert_job_owned(job, tenant.tenant_id)
+    updated = runner.pause(job_id, tenant_id=tenant.tenant_id)
+    if not updated:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    data = updated.public_dict()
+    data["input"] = {}
+    return web.json_response({"ok": True, **data})
+
+
+async def resume_job(request: web.Request) -> web.Response:
+    """POST /v1/jobs/{job_id}/resume — resume a paused job."""
+    tenant = require_tenant(request)
+    job_id = (request.match_info.get("job_id") or "").strip()
+    if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    runner = get_job_runner()
+    job = runner.store.get(job_id)
+    assert_job_owned(job, tenant.tenant_id)
+    updated = runner.resume(job_id, tenant_id=tenant.tenant_id)
+    if not updated:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    data = updated.public_dict()
+    data["input"] = {}
+    return web.json_response({"ok": True, **data})
+
+
 async def stream_job(request: web.Request) -> web.StreamResponse:
     """GET /v1/jobs/{job_id}/events — Server-Sent Events progress stream (Phase E)."""
     import asyncio
+    import json as _json
+    import time as _time
 
     tenant = require_tenant(request)
     job_id = (request.match_info.get("job_id") or "").strip()
@@ -81,11 +117,8 @@ async def stream_job(request: web.Request) -> web.StreamResponse:
     )
     await resp.prepare(request)
 
-    # poll job status and push SSE events until terminal or timeout
-    import json as _json
-    import time as _time
-
-    deadline = _time.time() + float(request.rel_url.query.get("timeout") or "120")
+    # Longer default for long-running agent jobs; client can pass ?timeout=
+    deadline = _time.time() + float(request.rel_url.query.get("timeout") or "600")
     last_sig = ""
     while _time.time() < deadline:
         job = runner.store.get(job_id)
@@ -95,21 +128,21 @@ async def stream_job(request: web.Request) -> web.StreamResponse:
         assert_job_owned(job, tenant.tenant_id)
         payload = {
             "job_id": job.job_id,
+            "kind": job.kind,
             "status": job.status,
             "progress": job.progress,
             "message": job.message,
             "error": job.error if job.status == "failed" else "",
+            "ts": _time.time(),
         }
-        # STATUS_FAILED import - use string
-        if job.status == "failed":
-            payload["error"] = job.error
-        sig = f"{job.status}:{job.progress}:{job.message}"
+        sig = f"{job.status}:{job.progress}:{job.message}:{job.error}"
         if sig != last_sig:
             last_sig = sig
             line = f"event: job\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
             await resp.write(line.encode("utf-8"))
         if job.status in {"succeeded", "failed", "cancelled"}:
-            await resp.write(b"event: done\ndata: {\"ok\":true}\n\n")
+            done = _json.dumps({"ok": True, "status": job.status, "ts": _time.time()})
+            await resp.write(f"event: done\ndata: {done}\n\n".encode("utf-8"))
             break
-        await asyncio.sleep(0.75)
+        await asyncio.sleep(0.5)
     return resp

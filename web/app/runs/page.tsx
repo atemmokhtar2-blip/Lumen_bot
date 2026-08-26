@@ -1,26 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { cancelJob, listJobs, subscribeJobEvents } from "@/lib/api";
-
-type Job = {
-  job_id: string;
-  status: string;
-  progress?: number;
-  message?: string;
-  kind?: string;
-};
+import {
+  cancelJob,
+  listJobs,
+  pauseJob,
+  resumeJob,
+  type Job,
+} from "@/lib/api";
+import { StatusBadge } from "@/components/StatusBadge";
+import { ProgressBar } from "@/components/ProgressBar";
 
 export default function RunsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [error, setError] = useState<string>("");
-  const [streamLog, setStreamLog] = useState<string>("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<string>("");
 
   const refresh = useCallback(async () => {
     try {
-      const data = await listJobs(30);
-      if (data?.ok) setJobs(data.jobs || []);
-      else setError(JSON.stringify(data));
+      const data = await listJobs(50);
+      if (data?.ok) {
+        setJobs(data.jobs || []);
+        setError("");
+      } else setError(JSON.stringify(data));
     } catch (e: any) {
       setError(String(e?.message || e));
     }
@@ -28,62 +30,127 @@ export default function RunsPage() {
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 4000);
+    const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
   }, [refresh]);
 
-  const onCancel = async (id: string) => {
-    await cancelJob(id);
-    await refresh();
+  const act = async (id: string, fn: (id: string) => Promise<any>) => {
+    setBusy(id);
+    try {
+      await fn(id);
+      await refresh();
+    } finally {
+      setBusy("");
+    }
   };
 
-  const onStream = (id: string) => {
-    setStreamLog(`subscribing ${id}…\n`);
-    const es = subscribeJobEvents(id, (ev) => {
-      setStreamLog((prev) => prev + (ev as MessageEvent).data + "\n");
-    });
-    setTimeout(() => es.close(), 120000);
-  };
+  const terminal = (s: string) =>
+    s === "succeeded" || s === "failed" || s === "cancelled";
 
   return (
-    <div>
-      <h1>Runs</h1>
-      <p>Jobs · SSE stream · cancel · open diff</p>
-      {error && <pre style={{ color: "#f88" }}>{error}</pre>}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th align="left">job</th>
-            <th align="left">status</th>
-            <th align="left">progress</th>
-            <th align="left">actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {jobs.map((j) => (
-            <tr key={j.job_id} style={{ borderTop: "1px solid #1e2a3a" }}>
-              <td>
-                <code>{j.job_id}</code>
-                <div style={{ opacity: 0.7, fontSize: 12 }}>{j.kind}</div>
-              </td>
-              <td>{j.status}</td>
-              <td>{Math.round((j.progress || 0) * 100)}%</td>
-              <td style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => onStream(j.job_id)}>SSE</button>
-                <button type="button" onClick={() => onCancel(j.job_id)}>Cancel</button>
-                <a href={`/diff?job=${encodeURIComponent(j.job_id)}`} style={{ color: "#8ab4ff" }}>
-                  Diff
-                </a>
-              </td>
+    <div className="stack">
+      <div className="card-header" style={{ marginBottom: 0 }}>
+        <div>
+          <h1 className="h1">Runs</h1>
+          <p className="muted" style={{ margin: 0 }}>
+            Jobs · live status · pause / resume / cancel · open detail
+          </p>
+        </div>
+        <button type="button" className="btn" onClick={() => refresh()}>
+          Refresh
+        </button>
+      </div>
+
+      {error && <div className="error-box">{error}</div>}
+
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Message</th>
+              <th>Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {streamLog && (
-        <pre style={{ marginTop: 16, background: "#111820", padding: 12, overflow: "auto", maxHeight: 280 }}>
-          {streamLog}
-        </pre>
-      )}
+          </thead>
+          <tbody>
+            {jobs.map((j) => {
+              const done = terminal(j.status);
+              const paused = j.status === "paused";
+              return (
+                <tr key={j.job_id}>
+                  <td>
+                    <a href={`/runs/${encodeURIComponent(j.job_id)}`} className="mono">
+                      {j.job_id}
+                    </a>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {j.kind || "—"}
+                    </div>
+                  </td>
+                  <td>
+                    <StatusBadge status={j.status} />
+                  </td>
+                  <td>
+                    <ProgressBar value={j.progress} />
+                  </td>
+                  <td className="muted" style={{ maxWidth: 220 }}>
+                    {(j.message || j.error || "—").slice(0, 80)}
+                  </td>
+                  <td>
+                    <div className="row">
+                      <a className="btn btn-ghost" href={`/runs/${encodeURIComponent(j.job_id)}`}>
+                        Open
+                      </a>
+                      <a
+                        className="btn btn-ghost"
+                        href={`/diff?job=${encodeURIComponent(j.job_id)}`}
+                      >
+                        Diff
+                      </a>
+                      {!done && !paused && (
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={busy === j.job_id}
+                          onClick={() => act(j.job_id, pauseJob)}
+                        >
+                          Pause
+                        </button>
+                      )}
+                      {paused && (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={busy === j.job_id}
+                          onClick={() => act(j.job_id, resumeJob)}
+                        >
+                          Resume
+                        </button>
+                      )}
+                      {!done && (
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          disabled={busy === j.job_id}
+                          onClick={() => act(j.job_id, cancelJob)}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!jobs.length && !error && (
+          <p className="muted" style={{ padding: 16 }}>
+            No jobs yet.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

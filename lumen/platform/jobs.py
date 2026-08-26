@@ -39,11 +39,13 @@ logger = logging.getLogger("lumen.platform.jobs")
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
+STATUS_PAUSED = "paused"
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
 TERMINAL = {STATUS_SUCCEEDED, STATUS_FAILED, STATUS_CANCELLED}
+ACTIVE = {STATUS_QUEUED, STATUS_RUNNING, STATUS_PAUSED}
 
 
 @dataclass
@@ -450,6 +452,41 @@ class JobRunner:
             status=STATUS_CANCELLED,
             finished_at=time.time(),
             message="cancelled_by_user",
+        )
+        return self.store.get(job_id)
+
+    def pause(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Cooperative pause — marks job paused (non-terminal). Workers should honor status."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        if job.status == STATUS_PAUSED:
+            return job
+        self.store.update(
+            job_id,
+            status=STATUS_PAUSED,
+            message="paused_by_user",
+        )
+        return self.store.get(job_id)
+
+    def resume(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Resume a paused job back to running (or queued if never started)."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status != STATUS_PAUSED:
+            return job
+        next_status = STATUS_RUNNING if job.started_at else STATUS_QUEUED
+        self.store.update(
+            job_id,
+            status=next_status,
+            message="resumed_by_user",
         )
         return self.store.get(job_id)
 
