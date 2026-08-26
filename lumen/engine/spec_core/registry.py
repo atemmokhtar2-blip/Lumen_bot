@@ -609,5 +609,14 @@ _add(
     _c("invoice_preview", "payments", "preview", "معاينة فاتورة", "Invoice preview", cat="payments"),
 )
 
+
+_add(
+    _c("pdf_start", "pdf", "start_session", "بدء جمع صور لـ PDF", "Start image→PDF session", cat="media"),
+    _c("pdf_done", "pdf", "build_pdf", "إنهاء وإنشاء ملف PDF", "Finish and build PDF", cat="media"),
+    _c("pdf_clear", "pdf", "clear_session", "مسح الصور المجمّعة", "Clear collected images", cat="media"),
+    _c("pdf_status", "pdf", "status", "حالة جلسة التحويل", "PDF session status", cat="media"),
+    _c("images_to_pdf", "pdf", "build_pdf", "تحويل الصور إلى PDF", "Convert images to PDF", cat="media"),
+)
+
 from . import registry_scale as _registry_scale  # noqa: E402,F401
 

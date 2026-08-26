@@ -14,6 +14,7 @@ from .reminders_booking import (
 )
 from .lean_services import _emit_lean_generic_service, _emit_lean_named_service
 from .pubg import _emit_pubg
+from .pdf_emit import _emit_pdf_service
 
 __all__ = [
     "_emit_moderation",
@@ -30,4 +31,5 @@ __all__ = [
     "_emit_lean_generic_service",
     "_emit_lean_named_service",
     "_emit_pubg",
+    "_emit_pdf_service",
 ]

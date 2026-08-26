@@ -19,6 +19,7 @@ from ..coding_emit_services import (
     _emit_tickets,
     _emit_welcome,
     _emit_pubg,
+    _emit_pdf_service,
 )
 from ..templates_sentry import emit_sentry_setup
 from ..coding_handlers import _emit_handlers, _emit_keyboards, _emit_main
@@ -190,6 +191,13 @@ def write_project(spec: BotSpec, out_dir: str | Path) -> list[str]:
     )
     if needs_fat_security:
         files["app/services/security.py"] = _emit_security()
+
+
+    needs_fat_pdf = bool(svc_set & {"pdf"}) or any(
+        str(k).startswith("pdf_") or str(k) == "images_to_pdf" for k in feat_keys
+    )
+    if needs_fat_pdf:
+        files["app/services/pdf.py"] = _emit_pdf_service()
 
     written: list[str] = []
     from lumen.engine.services.safe_fs import UnsafePathError, safe_write_text

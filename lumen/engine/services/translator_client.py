@@ -285,6 +285,11 @@ _FEATURE_ALIASES = {
     "leads": "lead_list",
     "echo_message": "echo",
     "reply": "echo",
+    "pdf": "images_to_pdf",
+    "image_to_pdf": "images_to_pdf",
+    "images_to_pdf": "images_to_pdf",
+    "photo_to_pdf": "images_to_pdf",
+    "img2pdf": "images_to_pdf",
 }
 
 _AR_RULES: list[tuple[str, list[str]]] = [
@@ -323,6 +328,13 @@ _AR_RULES: list[tuple[str, list[str]]] = [
         r"بوت\s*بسيط|يرد\s*على\s*(أي|اي)?\s*رسال|echo\s*bot|simple\s*bot",
         ["echo"],
     ),
+    # Images → PDF (must win over bare "بسيط")
+    (
+        r"صور(?:ة|ات)?\s*(?:إلى|الي|ل|to)\s*pdf|تحويل\s*الصور|image[s]?\s*to\s*pdf|"
+        r"img2pdf|photo[s]?\s*to\s*pdf|pdf\s*from\s*image|اجمع\s*الصور|"
+        r"ملفات\s*pdf|ملف\s*pdf",
+        ["pdf_start", "pdf_done", "pdf_clear", "pdf_status", "images_to_pdf"],
+    ),
 ]
 
 
@@ -344,6 +356,10 @@ def _rule_features_from_text(text: str, allowed: set[str]) -> list[str]:
         for core in ("start", "help"):
             if core in allowed and core not in found:
                 found.append(core)
+        # Domain packs win over bare echo (e.g. "بوت بسيط … تحويل صور لـ PDF")
+        domain = [k for k in found if k not in {"echo", "start", "help", "lang", "language", "cancel"}]
+        if domain and "echo" in found:
+            found = [k for k in found if k != "echo"]
     # Shop pack alone is 5 keys + start/help — allow up to 12
     return found[:12]
 

@@ -5,6 +5,7 @@ from typing import Any
 
 from ..coding_emit_foundation import _emit_config, _emit_db, _emit_models
 from ..coding_emit_services import (
+    _emit_pdf_service,
     _emit_reminders_service,
     _emit_booking_service,
     _emit_clinic_service,
@@ -371,6 +372,12 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
         files["app/services/booking.py"] = _emit_booking_service()
     if "clinic" in svc_set or any(k.startswith("clinic_") for k in _fk_all):
         files["app/services/clinic.py"] = _emit_clinic_service()
+    _need_pdf = (
+        "pdf" in svc_set
+        or any(k.startswith("pdf_") or k == "images_to_pdf" for k in _fk_all)
+    )
+    if _need_pdf:
+        files["app/services/pdf.py"] = _emit_pdf_service()
     if "crm" in svc_set or any(k.startswith(("lead_", "followup_")) for k in _fk_all):
         _crm = Path(__file__).resolve().parents[1] / "runtime" / "crm_runtime.py"
         if _crm.is_file():
@@ -488,6 +495,16 @@ def generate_files(spec: BotSpec) -> dict[str, str]:
             "For LibreTranslate: `TRANSLATE_API_URL` + optional `TRANSLATE_API_KEY`.",
             "Check status: `/translate status`",
         ]
+    needs_pdf = bool(
+        "pdf" in svc_set
+        or any(
+            str(getattr(f, "feature", "")).startswith("pdf_")
+            or str(getattr(f, "feature", "")) == "images_to_pdf"
+            for f in (spec.features or [])
+        )
+    )
+    if needs_pdf and "Pillow>=10.0.0" not in req_lines:
+        req_lines.append("Pillow>=10.0.0")
     if needs_ocr:
         opt_req += ["pytesseract>=0.3.10", "Pillow>=10.0.0"]
         env_lines += [

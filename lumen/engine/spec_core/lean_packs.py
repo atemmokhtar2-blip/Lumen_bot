@@ -65,6 +65,13 @@ LEAN_PACKS: dict[str, tuple[str, ...]] = {
     "echo": (
         "echo",
     ),
+    "pdf": (
+        "pdf_start",
+        "pdf_done",
+        "pdf_clear",
+        "pdf_status",
+        "images_to_pdf",
+    ),
     "fitness": (
         "gym_book",
         "gym_schedule",

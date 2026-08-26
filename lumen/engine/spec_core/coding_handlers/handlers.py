@@ -145,6 +145,7 @@ def _emit_handlers(spec: BotSpec) -> str:
         }
         for f in spec.features
     )
+    need_pdf = any(_svc(f) == 'pdf' for f in spec.features)
     _extra_set = {"shop", "booking", "crm", "community", "edu", "hr", "utils", "gate"}
     need_extras = any(_svc(f) in _extra_set for f in spec.features)
 
@@ -179,6 +180,8 @@ def _emit_handlers(spec: BotSpec) -> str:
     need_crm = any(_svc(f) == "crm" for f in spec.features)
     if need_crm:
         imports.append("from app.services import crm as crm_svc")
+    if need_pdf:
+        imports.append("from app.services import pdf as pdf_svc")
 
     lines: list[str] = imports + ["", ""]
 
@@ -703,6 +706,21 @@ def _emit_handlers(spec: BotSpec) -> str:
                 f"    result = crm_svc.act('crm', {cap.method!r}, user.id, arg)"
             )
             lines.append("    await message.reply_text(result)")
+        elif cap.service == "pdf":
+            lines.append("    from app.services import pdf as pdf_svc")
+            lines.append("    arg = ' '.join(context.args) if context.args else ''")
+            lines.append(f"    if {cap.method!r} in {{'build_pdf', 'done', 'finish', 'convert'}}:")
+            lines.append("        msg, path = pdf_svc.build_pdf(user.id, arg)")
+            lines.append("        await message.reply_text(msg)")
+            lines.append("        if path:")
+            lines.append("            try:")
+            lines.append("                with open(path, 'rb') as fh:")
+            lines.append("                    await message.reply_document(document=fh, filename='images.pdf')")
+            lines.append("            except Exception as _pdf_send:")
+            lines.append("                await message.reply_text(f'تعذر إرسال الملف: {_pdf_send}')")
+            lines.append("    else:")
+            lines.append(f"        result = pdf_svc.act('pdf', {cap.method!r}, user.id, arg)")
+            lines.append("        await message.reply_text(result)")
         elif cap.service == "booking":
             lines.append("    from app.services import booking as booking_svc")
             lines.append(
@@ -1425,6 +1443,29 @@ def _emit_handlers(spec: BotSpec) -> str:
             "",
         ]
 
-    return "\n".join(lines) + "\n"
+
+    if need_pdf:
+        lines += [
+            "async def photo_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:",
+            "    message = update.effective_message",
+            "    user = update.effective_user",
+            "    if message is None or user is None or not message.photo:",
+            "        return",
+            "    from app.services import pdf as pdf_svc",
+            "    photo = message.photo[-1]",
+            "    try:",
+            "        tg_file = await context.bot.get_file(photo.file_id)",
+            "        import os, tempfile",
+            "        dest = os.path.join(tempfile.gettempdir(), f'pdf_{user.id}_{photo.file_id}.jpg')",
+            "        await tg_file.download_to_drive(dest)",
+            "        msg = pdf_svc.add_image(user.id, dest)",
+            "        await message.reply_text(msg)",
+            "    except Exception as exc:",
+            "        await message.reply_text(f'تعذر حفظ الصورة: {type(exc).__name__}')",
+            "",
+            "",
+        ]
+
+        return "\n".join(lines) + "\n"
 
 

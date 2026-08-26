@@ -96,6 +96,11 @@ def _emit_main(spec: BotSpec) -> str:
         )
         for f in spec.features
     )
+    need_pdf = any(
+        (get_capability(f.feature) and get_capability(f.feature).service == "pdf")
+        for f in spec.features
+    )
+
     need_voice = any(
         (
             get_capability(f.feature)
@@ -161,7 +166,7 @@ def _emit_main(spec: BotSpec) -> str:
     imports_handlers += ", text_router, cancel_handler"
     if need_mod:
         imports_handlers += ", anti_abuse_filter"
-    if need_ocr:
+    if need_ocr or need_pdf:
         if "photo_router" not in imports_handlers:
             imports_handlers += ", photo_router"
     if need_voice:
@@ -204,7 +209,7 @@ def _emit_main(spec: BotSpec) -> str:
     )
     if need_mod:
         text_handler += "\n    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, anti_abuse_filter), group=0)"
-    if need_ocr:
+    if need_ocr or need_pdf:
         text_handler += "\n    app.add_handler(MessageHandler(filters.PHOTO, photo_router))"
     if need_voice:
         text_handler += (
