@@ -75,7 +75,7 @@ Build a complete runnable Telegram bot. No stub-only placeholders for required f
 Workspace: {work_dir}
 
 Tools (exactly one JSON object per turn):
-list_dir, tree, read_file, write_file, edit_file (or apply_patch), run_shell (if allowed), finish.
+list_dir, tree, read_file, write_file, edit_file (or apply_patch), run_shell (if allowed), browser_navigate, browser_content, browser_click, browser_fill, browser_screenshot, run_skill, finish.
 
 Rules:
 1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example
@@ -204,7 +204,7 @@ def run_agent(
                 "INVALID. Reply with ONLY this JSON shape:\n"
                 '{"thought":"...","tool":"write_file","args":{"path":"main.py","content":"..."},'
                 '"finish":false,"summary":""}\n'
-                "Valid tools: list_dir, tree, read_file, write_file, edit_file, apply_patch, finish."
+                "Valid tools: list_dir, tree, read_file, write_file, edit_file, apply_patch, browser_navigate, browser_content, browser_click, browser_fill, browser_screenshot, run_skill, finish."
             )
             state.steps.append(step)
             state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")

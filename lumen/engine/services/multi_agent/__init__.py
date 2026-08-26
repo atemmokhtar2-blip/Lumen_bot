@@ -135,3 +135,14 @@ try:
 except Exception:  # pragma: no cover
     get_worker_pool = None  # type: ignore
     submit_resume_job = None  # type: ignore
+
+# Official LangGraph orchestration (optional when installed)
+try:
+    from .langgraph_pipeline import langgraph_available, run_langgraph_pipeline, use_langgraph_pipeline
+except Exception:  # pragma: no cover
+    def langgraph_available() -> bool:
+        return False
+    def use_langgraph_pipeline() -> bool:
+        return False
+    def run_langgraph_pipeline(*a, **k):
+        raise RuntimeError("langgraph_not_installed")

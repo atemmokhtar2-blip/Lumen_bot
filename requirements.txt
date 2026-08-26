@@ -55,3 +55,10 @@ tree-sitter-java>=0.23.0
 tree-sitter-rust>=0.23.0
 tree-sitter-c>=0.23.0
 tree-sitter-cpp>=0.23.0
+
+# Official agent orchestration (LangGraph)
+langgraph>=0.2.0,<1
+langchain-core>=0.3.0,<1
+
+# Official MCP Python SDK
+mcp>=1.0.0,<2

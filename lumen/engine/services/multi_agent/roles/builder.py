@@ -14,6 +14,45 @@ from ..state import AgentRole, AgentState, AgentStatus
 from ..strict_spec import StrictSpec, merge_spec_request
 
 
+
+def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
+    """If execution_plan has multiple independent tasks, run via official swarm pool."""
+    import os
+    if (os.getenv("MULTI_AGENT_SWARM") or "1").strip().lower() in {"0", "false", "off", "no"}:
+        return None
+    tasks = list((plan or {}).get("tasks") or [])
+    if len(tasks) < 2:
+        return None
+    # Independent = no deps or empty deps
+    independent = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        deps = t.get("deps") or t.get("depends_on") or []
+        if not deps:
+            independent.append(t)
+    if len(independent) < 2:
+        return None
+    try:
+        from ..swarm import run_swarm
+        from pathlib import Path as P
+
+        def worker_fn(part, root, idx):
+            # Record partition only — actual codegen stays single Cline run below;
+            # swarm marks parallel ownership of task ids on state for trajectory.
+            return {
+                "ok": True,
+                "worker": idx,
+                "task_ids": [x.get("id") or x.get("title") for x in part],
+                "count": len(part),
+            }
+
+        result = run_swarm(work_dir=work_dir, tasks=independent, worker_fn=worker_fn)
+        return result
+    except Exception:
+        return None
+
+
 class BuilderAgent(Agent):
     """Worker role — materializes StrictSpec / request via Cline execute_ir."""
 
@@ -63,6 +102,15 @@ class BuilderAgent(Agent):
 
             # Execution plan + repair directive → Cline goal enrichment
             plan = (state.extensions or {}).get("execution_plan") or {}
+
+            try:
+                _wd = (state.extensions or {}).get("work_dir") or ""
+                _swarm = _try_swarm_independent_tasks(state, plan if isinstance(plan, dict) else {}, _wd)
+                if _swarm:
+                    state.extensions["swarm"] = _swarm
+                    state.record("BUILDER", "swarm_partition", str(_swarm.get("workers")))
+            except Exception:
+                pass
             repair = (state.extensions or {}).get("last_repair") or {}
             brief_parts = [req]
             try:

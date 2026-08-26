@@ -237,6 +237,28 @@ class SkillRegistry:
                 logger.exception("skill module load failed: %s", mod_name)
 
     def _sync_mcp_servers(self) -> None:
+        # Prefer official MCP SDK stdio servers when MCP_SERVER_COMMAND is set
+        try:
+            from .mcp_official import list_tools_sync, mcp_sdk_available
+            if mcp_sdk_available() and (os.getenv("MCP_SERVER_COMMAND") or "").strip():
+                for tool in list_tools_sync():
+                    name = str(tool.get("name") or "").strip()
+                    if not name:
+                        continue
+                    self.register(
+                        Skill(
+                            name=f"mcp.{name}",
+                            description=str(tool.get("description") or name),
+                            input_schema=dict(tool.get("inputSchema") or {}),
+                            tags=["mcp", "official_sdk"],
+                            source="mcp",
+                            mcp_server="stdio",
+                            mcp_tool=name,
+                        )
+                    )
+        except Exception:
+            logger.exception("official MCP SDK sync failed")
+
         """Discover tools from MCP_SERVER_URLS=url1,url2 and register as skills."""
         raw = (
             os.getenv("MCP_SERVER_URLS")

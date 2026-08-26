@@ -16,6 +16,7 @@ class PlanTask:
     files: list[str] = field(default_factory=list)
     acceptance: list[str] = field(default_factory=list)
     priority: int = 1  # 1 = must, 2 = should, 3 = nice
+    depends_on: list[str] = field(default_factory=list)  # task ids this depends on
 
 
 @dataclass

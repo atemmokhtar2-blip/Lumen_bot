@@ -191,6 +191,37 @@ class Orchestrator:
         ensure_trace(state)
         ctx = dict(context or {})
         self.board.put(state)
+        # Official LangGraph path (no re-architecture: same roles inside nodes)
+        try:
+            from .langgraph_pipeline import use_langgraph_pipeline, run_langgraph_pipeline
+            if use_langgraph_pipeline():
+                metrics.incr("orchestrator_langgraph")
+                # Keep router for tool selection when not mid-resume
+                _resume_statuses = {
+                    AgentStatus.PLANNING.value,
+                    AgentStatus.BUILDING.value,
+                    AgentStatus.QA.value,
+                    AgentStatus.FAILED.value,
+                }
+                skip_router = (
+                    state.status in _resume_statuses
+                    and bool(state.capability_id or (state.extensions or {}).get("selected_tool") or state.user_text)
+                )
+                if not skip_router:
+                    state = self._run_agent("router", state, ctx)
+                if state.status == AgentStatus.CANCELLED.value:
+                    return self._deliver(state)
+                tool = str((state.extensions or {}).get("selected_tool") or state.capability_id or "")
+                if tool and tool not in {"generate_bot", "refine_bot", "cline", ""}:
+                    # non-generate tools: keep legacy path below by falling through
+                    pass
+                else:
+                    state = run_langgraph_pipeline(
+                        state, context=ctx, registry=self.registry, board=self.board
+                    )
+                    return state
+        except Exception:
+            logger.exception("langgraph pipeline failed — falling back to imperative loop")
         max_att = _max_attempts(state)
         state.max_attempts = max_att
         state.record(
@@ -346,6 +377,12 @@ class Orchestrator:
 
             # Repair decision — verified template beats endless text-simplify
             from .repair import build_repair_directive, spec_hash, record_repair_history
+            import os as _os_fb
+            _allow_fb = (_os_fb.getenv("MULTI_AGENT_ALLOW_TEMPLATE_FALLBACK") or "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            _env = (_os_fb.getenv("ENVIRONMENT") or "").strip().lower()
+            _block_template = (not _allow_fb) and _env in {"production", "prod", "staging"}
             from .fallback_template import (
                 should_trigger_verified_fallback,
                 run_verified_fallback_on_state,
@@ -383,11 +420,11 @@ class Orchestrator:
             exhausted = int(state.attempts or 0) >= max_att
             already = bool((state.extensions or {}).get("fallback_template_tried"))
             # Verified template wins: stagnant, attempt budget, or exhausted — never soft-loop forever.
-            if should_trigger_verified_fallback(
+            if (not _block_template) and (should_trigger_verified_fallback(
                 attempts=int(state.attempts or 0),
                 stagnant=stagnant,
                 already_tried=already,
-            ) or (exhausted and not already):
+            ) or (exhausted and not already)):
                 state.record(
                     AgentRole.ORCHESTRATOR,
                     "verified_fallback_trigger",
