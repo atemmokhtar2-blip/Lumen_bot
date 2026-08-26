@@ -153,6 +153,7 @@ def validate_user_project_path(user_id: int, project_path: str) -> Path:
 RAW_BODY_PATHS = frozenset(
     {
         "/v1/billing/webhook/stripe",
+        "/v1/integrations/github/webhook",
         "/v1/generate",
     }
 )
