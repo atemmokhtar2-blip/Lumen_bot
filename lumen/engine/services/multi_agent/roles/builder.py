@@ -14,6 +14,32 @@ from ..state import AgentRole, AgentState, AgentStatus
 from ..strict_spec import StrictSpec, merge_spec_request
 
 
+def _code_intel_preflight(work_dir: str, state) -> None:
+    """On large/existing trees: hybrid index + blast hints for worker context."""
+    from pathlib import Path as P
+    root = P(work_dir or "")
+    if not root.is_dir():
+        return
+    py_files = list(root.rglob("*.py"))[:5000]
+    if len(py_files) < 8:
+        return
+    try:
+        from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
+        from lumen.engine.services.code_intelligence.symbol_graph import build_symbol_graph
+        goal = (state.user_text or state.spec_request or "")[:500]
+        graph = build_symbol_graph(root, max_files=800)
+        state.extensions["code_intel_graph_stats"] = {
+            "files": (graph or {}).get("files") or (graph or {}).get("file_count"),
+            "symbols": len((graph or {}).get("symbols") or (graph or {}).get("nodes") or []),
+        }
+        if goal:
+            hits = hybrid_search(str(root), goal, top_k=8)
+            state.extensions["code_intel_retrieval"] = hits if isinstance(hits, dict) else {"hits": hits}
+    except Exception as exc:
+        state.extensions["code_intel_preflight_error"] = type(exc).__name__
+
+
+
 
 def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
     """If execution_plan has multiple independent tasks, run via official swarm pool."""
@@ -53,6 +79,8 @@ def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
         return None
 
 
+
+
 class BuilderAgent(Agent):
     """Worker role — materializes StrictSpec / request via Cline execute_ir."""
 
@@ -69,6 +97,14 @@ class BuilderAgent(Agent):
         work_dir = Path(ctx.get("work_dir") or state.extensions.get("work_dir") or ".")
         work_dir.mkdir(parents=True, exist_ok=True)
 
+
+        try:
+            _wd = str((state.extensions or {}).get("work_dir") or context.get("work_dir") if context else "")
+            if not _wd and context:
+                _wd = str(context.get("work_dir") or "")
+            _code_intel_preflight(_wd, state)
+        except Exception:
+            pass
         view = builder_view(state)
         spec = StrictSpec.from_dict(view.get("strict_spec") or {})
         req = str(view.get("spec_request") or "").strip() or merge_spec_request(spec)

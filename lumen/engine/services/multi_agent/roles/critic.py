@@ -244,6 +244,24 @@ class CriticAgent(Agent):
         warnings: list[str],
         details: dict[str, Any],
     ) -> AgentState:
+        
+        try:
+            exec_fb = _execution_feedback_sandbox(Path(path))
+            details["execution_feedback"] = exec_fb
+            state.extensions["execution_feedback"] = exec_fb
+            if not exec_fb.get("ok", True):
+                for ch in exec_fb.get("checks") or []:
+                    if ch.get("ok"):
+                        continue
+                    findings.append(CritiqueFinding(
+                        code=f"exec_{ch.get('name') or 'check'}",
+                        severity="error",
+                        message=(ch.get("stderr") or ch.get("error") or ch.get("stdout") or "execution_failed")[:400],
+                        fix_hint="Fix runtime/import/test errors then re-run",
+                    ))
+        except Exception as _ef_exc:
+            warnings.append(f"execution_feedback_skip:{type(_ef_exc).__name__}")
+
         errors = findings_to_errors(findings)
         # warnings from findings
         for f in findings:
@@ -292,3 +310,79 @@ ReviewerAgent = CriticAgent
 run_reviewer = run_critic
 
 __all__ = ["CriticAgent", "ReviewerAgent", "run_critic", "run_reviewer"]
+
+
+def _execution_feedback_sandbox(root: Path) -> dict:
+    """Run real process checks: compileall + import entry + optional pytest.
+
+    This is the closed-loop signal for repair (not AST-only).
+    """
+    import os
+    import subprocess
+    import sys
+    out: dict = {"ok": True, "checks": []}
+    # 1) compileall
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", str(root)],
+            capture_output=True,
+            text=True,
+            timeout=int(os.getenv("CRITIC_COMPILE_TIMEOUT") or "60"),
+            cwd=str(root),
+        )
+        ok = r.returncode == 0
+        out["checks"].append({"name": "compileall", "ok": ok, "stderr": (r.stderr or "")[:500]})
+        if not ok:
+            out["ok"] = False
+    except Exception as exc:
+        out["ok"] = False
+        out["checks"].append({"name": "compileall", "ok": False, "error": f"{type(exc).__name__}:{exc}"})
+    # 2) import main if present
+    main_py = root / "main.py"
+    if main_py.is_file():
+        try:
+            r = subprocess.run(
+                [sys.executable, "-c", "import runpy; runpy.run_path('main.py', run_name='__not_main__')"],
+                capture_output=True,
+                text=True,
+                timeout=int(os.getenv("CRITIC_IMPORT_TIMEOUT") or "20"),
+                cwd=str(root),
+                env={**os.environ, "LUMEN_CRITIC_IMPORT": "1"},
+            )
+            # run_path as __not_main__ avoids starting bot loops if guarded by __main__
+            ok = r.returncode == 0
+            out["checks"].append({
+                "name": "import_main",
+                "ok": ok,
+                "stderr": (r.stderr or "")[:600],
+                "stdout": (r.stdout or "")[:200],
+            })
+            if not ok:
+                out["ok"] = False
+        except Exception as exc:
+            out["ok"] = False
+            out["checks"].append({"name": "import_main", "ok": False, "error": f"{type(exc).__name__}:{exc}"})
+    # 3) pytest if tests exist
+    tests = list(root.glob("test_*.py")) + list(root.glob("tests/test_*.py"))
+    if tests and (os.getenv("CRITIC_RUN_PYTEST") or "1").strip().lower() not in {"0", "false", "no"}:
+        try:
+            r = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "--tb=line", "-x"],
+                capture_output=True,
+                text=True,
+                timeout=int(os.getenv("CRITIC_PYTEST_TIMEOUT") or "90"),
+                cwd=str(root),
+            )
+            ok = r.returncode == 0
+            out["checks"].append({
+                "name": "pytest",
+                "ok": ok,
+                "stderr": (r.stderr or "")[:400],
+                "stdout": (r.stdout or "")[:400],
+            })
+            if not ok:
+                out["ok"] = False
+        except Exception as exc:
+            out["checks"].append({"name": "pytest", "ok": False, "error": f"{type(exc).__name__}:{exc}"})
+    return out
+

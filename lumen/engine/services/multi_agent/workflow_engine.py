@@ -423,12 +423,16 @@ def get_workflow_engine() -> WorkflowEngine:
     with _LOCK:
         if _ENGINE is not None:
             return _ENGINE
-        kind = (os.getenv("TBE_WORKFLOW_ENGINE") or "").strip().lower()
-        if not kind:
-            if (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip():
-                kind = "redis_streams"
-            else:
-                kind = "memory"
+        try:
+            from .production_policy import is_production, required_workflow_engine
+            kind = required_workflow_engine()
+        except Exception:
+            kind = (os.getenv("TBE_WORKFLOW_ENGINE") or "").strip().lower()
+            if not kind:
+                if (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip():
+                    kind = "redis_streams"
+                else:
+                    kind = "memory"
         try:
             if kind in {"temporal", "temporalio"}:
                 _ENGINE = TemporalWorkflowEngine()
@@ -439,7 +443,19 @@ def get_workflow_engine() -> WorkflowEngine:
             else:
                 _ENGINE = MemoryWorkflowEngine()
         except Exception as exc:
-            logger.warning("workflow engine %s failed (%s) — memory fallback", kind, type(exc).__name__)
+            logger.warning("workflow engine %s failed (%s)", kind, type(exc).__name__)
+            try:
+                from .production_policy import is_production
+                if is_production() and kind in {"temporal", "temporalio"}:
+                    # Production: do NOT silently fall back to memory — re-raise
+                    raise RuntimeError(
+                        f"Temporal required in production but failed: {type(exc).__name__}:{exc}"
+                    ) from exc
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            logger.warning("workflow engine fallback to memory (non-production)")
             _ENGINE = MemoryWorkflowEngine()
         logger.info("workflow engine backend=%s", type(_ENGINE).__name__)
         return _ENGINE

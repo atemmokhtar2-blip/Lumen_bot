@@ -260,6 +260,14 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                 "multi_agent orchestrator failed — verified template fallback (no bare engine loop)"
             )
             try:
+                try:
+                    from lumen.engine.services.multi_agent.production_policy import allow_template_fallback
+                    if not allow_template_fallback():
+                        raise RuntimeError("template_fallback_forbidden")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
                 from lumen.engine.services.multi_agent.fallback_template import (
                     build_verified_bot,
                 )

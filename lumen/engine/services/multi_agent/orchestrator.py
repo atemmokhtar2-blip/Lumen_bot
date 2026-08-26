@@ -193,10 +193,29 @@ class Orchestrator:
         self.board.put(state)
         # Official LangGraph path (no re-architecture: same roles inside nodes)
         try:
-            from .langgraph_pipeline import use_langgraph_pipeline, run_langgraph_pipeline
-            if use_langgraph_pipeline():
+            from .langgraph_pipeline import (
+                langgraph_available,
+                use_langgraph_pipeline,
+                run_langgraph_pipeline,
+            )
+            from .production_policy import (
+                allow_imperative_fallback,
+                is_production,
+                policy_snapshot,
+            )
+            state.extensions = dict(state.extensions or {})
+            state.extensions["production_policy"] = policy_snapshot()
+            if use_langgraph_pipeline() or is_production():
+                if not langgraph_available():
+                    metrics.incr("orchestrator_langgraph_missing")
+                    state.final_message = "LangGraph required (production source of truth) — pip install langgraph"
+                    try:
+                        state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="langgraph_required", force=True)
+                    except Exception:
+                        state.status = AgentStatus.FAILED.value
+                    self.board.put(state)
+                    return state
                 metrics.incr("orchestrator_langgraph")
-                # Keep router for tool selection when not mid-resume
                 _resume_statuses = {
                     AgentStatus.PLANNING.value,
                     AgentStatus.BUILDING.value,
@@ -213,15 +232,28 @@ class Orchestrator:
                     return self._deliver(state)
                 tool = str((state.extensions or {}).get("selected_tool") or state.capability_id or "")
                 if tool and tool not in {"generate_bot", "refine_bot", "cline", ""}:
-                    # non-generate tools: keep legacy path below by falling through
-                    pass
+                    pass  # non-generate: legacy tool path below
                 else:
                     state = run_langgraph_pipeline(
                         state, context=ctx, registry=self.registry, board=self.board
                     )
                     return state
-        except Exception:
-            logger.exception("langgraph pipeline failed — falling back to imperative loop")
+        except Exception as _lg_exc:
+            logger.exception("langgraph pipeline failed")
+            try:
+                from .production_policy import allow_imperative_fallback
+                if not allow_imperative_fallback():
+                    metrics.incr("orchestrator_langgraph_hard_fail")
+                    state.final_message = f"LangGraph failed (no imperative fallback): {type(_lg_exc).__name__}"
+                    try:
+                        state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="langgraph_hard_fail", force=True)
+                    except Exception:
+                        state.status = AgentStatus.FAILED.value
+                    self.board.put(state)
+                    return state
+            except Exception:
+                pass
+            logger.exception("langgraph pipeline failed — falling back to imperative loop (dev only)")
         max_att = _max_attempts(state)
         state.max_attempts = max_att
         state.record(
@@ -377,12 +409,11 @@ class Orchestrator:
 
             # Repair decision — verified template beats endless text-simplify
             from .repair import build_repair_directive, spec_hash, record_repair_history
-            import os as _os_fb
-            _allow_fb = (_os_fb.getenv("MULTI_AGENT_ALLOW_TEMPLATE_FALLBACK") or "0").strip().lower() in {
-                "1", "true", "yes", "on",
-            }
-            _env = (_os_fb.getenv("ENVIRONMENT") or "").strip().lower()
-            _block_template = (not _allow_fb) and _env in {"production", "prod", "staging"}
+            try:
+                from .production_policy import allow_template_fallback
+                _block_template = not allow_template_fallback()
+            except Exception:
+                _block_template = True
             from .fallback_template import (
                 should_trigger_verified_fallback,
                 run_verified_fallback_on_state,
