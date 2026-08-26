@@ -216,6 +216,11 @@ class RedisStreamsWorkflowEngine(WorkflowEngine):
 class TemporalWorkflowEngine(WorkflowEngine):
     """Temporal.io adapter — requires temporalio + TEMPORAL_HOST.
 
+    Production path (Phase B):
+      - start() starts official workflow LumenMultiAgentGenerate on the task queue
+      - checkpoint() dual-writes to durable mirror + signals the Temporal workflow
+      - Worker process: python -m lumen.engine.services.multi_agent.temporal_worker
+
     When temporalio is not installed, raises at construction so callers
     fall back via get_workflow_engine().
     """
@@ -230,27 +235,87 @@ class TemporalWorkflowEngine(WorkflowEngine):
         self._host = (os.getenv("TEMPORAL_HOST") or "localhost:7233").strip()
         self._namespace = (os.getenv("TEMPORAL_NAMESPACE") or "default").strip()
         self._task_queue = (os.getenv("TEMPORAL_TASK_QUEUE") or "tbe-generate").strip()
-        # Local durable mirror for checkpoint API parity
+        # Durable mirror always on (file journal via durable_workflow + memory index)
         self._mirror = MemoryWorkflowEngine()
         self._client = None
+        self._temporal_ok = False
+        # Probe connectivity once (non-fatal if server down — mirror still works)
+        try:
+            self._run(self._connect())
+            self._temporal_ok = True
+        except Exception as exc:
+            logger.warning(
+                "Temporal connect failed host=%s (%s) — mirror-only until server up",
+                self._host,
+                type(exc).__name__,
+            )
         logger.info(
-            "TemporalWorkflowEngine configured host=%s ns=%s queue=%s",
+            "TemporalWorkflowEngine host=%s ns=%s queue=%s connected=%s",
             self._host,
             self._namespace,
             self._task_queue,
+            self._temporal_ok,
         )
+
+    def _run(self, coro):
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    return pool.submit(asyncio.run, coro).result(timeout=30)
+            return loop.run_until_complete(coro)
+        except RuntimeError:
+            return asyncio.run(coro)
+
+    async def _connect(self):
+        from temporalio.client import Client
+        self._client = await Client.connect(self._host, namespace=self._namespace)
+        return self._client
 
     async def _client_async(self):
         if self._client is None:
-            from temporalio.client import Client
-            self._client = await Client.connect(self._host, namespace=self._namespace)
+            await self._connect()
         return self._client
 
     def start(self, state_id: str, *, step: str = "start", payload: dict | None = None) -> str:
-        # Sync API: mirror + optional async start scheduled by worker process
         wid = self._mirror.start(state_id, step=step, payload=payload)
-        logger.info("temporal workflow registered id=%s state=%s (worker must pick up)", wid, state_id)
+        payload = dict(payload or {})
+        payload["workflow_id"] = wid
+        if self._temporal_ok or True:
+            try:
+                self._run(self._start_temporal(wid, state_id, step, payload))
+                self._temporal_ok = True
+            except Exception as exc:
+                logger.warning(
+                    "temporal start_workflow failed id=%s (%s) — journal mirror active",
+                    wid,
+                    type(exc).__name__,
+                )
+        logger.info("temporal workflow id=%s state=%s", wid, state_id)
         return wid
+
+    async def _start_temporal(self, wid: str, state_id: str, step: str, payload: dict) -> None:
+        from temporalio.client import Client
+        from .temporal_defs import LumenMultiAgentGenerateWorkflow
+
+        client = await self._client_async()
+        await client.start_workflow(
+            LumenMultiAgentGenerateWorkflow.run,
+            {
+                "state_id": state_id,
+                "workflow_id": wid,
+                "step": step,
+                "user_id": int(payload.get("user_id") or 0),
+                "description": str(payload.get("description") or "")[:2000],
+                "work_dir": str(payload.get("work_dir") or ""),
+                "auto_resume": bool(payload.get("auto_resume")),
+                "payload": payload,
+            },
+            id=wid,
+            task_queue=self._task_queue,
+        )
 
     def checkpoint(
         self,
@@ -261,8 +326,33 @@ class TemporalWorkflowEngine(WorkflowEngine):
         status: str,
         payload: dict | None = None,
     ) -> WorkflowCheckpoint:
-        return self._mirror.checkpoint(
+        cp = self._mirror.checkpoint(
             workflow_id, state_id=state_id, step=step, status=status, payload=payload
+        )
+        try:
+            self._run(
+                self._signal_checkpoint(
+                    workflow_id, state_id=state_id, step=step, status=status, payload=payload or {}
+                )
+            )
+        except Exception as exc:
+            logger.debug("temporal signal skipped: %s", type(exc).__name__)
+        return cp
+
+    async def _signal_checkpoint(
+        self,
+        workflow_id: str,
+        *,
+        state_id: str,
+        step: str,
+        status: str,
+        payload: dict,
+    ) -> None:
+        client = await self._client_async()
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.signal(
+            "checkpoint",
+            {"state_id": state_id, "step": step, "status": status, "payload": payload},
         )
 
     def get_checkpoint(self, workflow_id: str) -> Optional[WorkflowCheckpoint]:

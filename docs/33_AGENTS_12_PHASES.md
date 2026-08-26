@@ -46,7 +46,7 @@
 | **4** | UX Power-User | Dashboard / Diff / Pause | **لم يبدأ (E)** | تيليجرام فقط |
 | **5** | Model Router الذكي | plan/build/critique + تكلفة | **مغلق (A)** | `select_model` + `estimate_task_difficulty` + `select_model_for_goal` + `cache_get/set` + usage cost |
 | **6** | Evaluation / Bot-bench | مقاييس نجاح ثابتة | **لم يبدأ رسميًا (D)** | تم اختبار حي يدوي؛ لا benchmark مُصدَّر في CI |
-| **7** | Scalability | Workers أفقية + backpressure | **أساس فقط (B جزئي في الكود)** | `durable_workflow` / Temporal adapter موجودان نصًا — غير مفعّلين كمسار إنتاج مثبت |
+| **7** | Scalability | Workers أفقية + backpressure | **Phase B نشطة** | journal + resume + Temporal workflow/worker رسمي + worker_pool backpressure — انظر `docs/35_PHASE_B_DURABILITY.md` |
 | **8** | Computer Use / Browser | Playwright داخل sandbox | **لم يبدأ (F)** | |
 | **9** | Skills / MCP Registry | إضافات مفتوحة | **بدائي** | `mcp_bridge.py` رقيق |
 | **10** | Event-driven Agents | صحوة على أحداث | **لم يبدأ (F)** | resume/checkpoint فقط |
@@ -96,10 +96,11 @@
 
 ## المراحل التالية (ملخص تنفيذي)
 
-### B — Durability & Scale (بعد A)
-- تفعيل `TemporalWorkflowEngine` أو Redis journal كمسار إنتاج مختبَر
-- resume بعد crash/429
-- worker pool + backpressure
+### B — Durability & Scale (بعد A) — **قيد التنفيذ / مفعّلة في الكود**
+- `TemporalWorkflowEngine` يبدأ workflow رسمي `LumenMultiAgentGenerate` + worker module
+- Redis/file journal + `resume_generate` بعد crash/429
+- `worker_pool` + `orchestration_slot` backpressure
+- توثيق: `docs/35_PHASE_B_DURABILITY.md`
 
 ### C — Codebase Intelligence
 - Tree-sitter → symbol graph

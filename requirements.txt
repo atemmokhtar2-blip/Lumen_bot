@@ -31,3 +31,5 @@ prometheus-client==0.21.1
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
 SQLAlchemy==2.0.40
 alembic==1.15.2
+
+# Phase B optional (Temporal): pip install temporalio

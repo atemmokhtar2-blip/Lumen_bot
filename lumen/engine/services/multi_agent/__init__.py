@@ -127,3 +127,11 @@ try:
 except Exception:
     resume_generate = None  # type: ignore
     get_journal = None  # type: ignore
+
+
+# Phase B
+try:
+    from .worker_pool import get_worker_pool, submit_resume_job
+except Exception:  # pragma: no cover
+    get_worker_pool = None  # type: ignore
+    submit_resume_job = None  # type: ignore
