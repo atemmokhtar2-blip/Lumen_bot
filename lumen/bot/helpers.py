@@ -12,10 +12,11 @@ from .resource_limits import run_with_engine_timeout, EngineTimeoutError, clamp_
 
 
 def is_allowed(user_id: int | None) -> bool:
-    """Access control — closed by default.
+    """Telegram bot access: public by default.
 
-    - ALLOW_ALL_USERS=1 (explicit) → any user_id (still credits/rate-limited).
-    - Default CLOSED: require ALLOWED_USER_IDS or ALLOW_ALL_USERS=1.
+    - Default OPEN (ALLOW_ALL_USERS effective True).
+    - LOCK_BOT_TO_ALLOWLIST=1 + ALLOWED_USER_IDS → allowlist only.
+    - ALLOW_ALL_USERS=0 → closed.
     """
     if user_id is None:
         return False
