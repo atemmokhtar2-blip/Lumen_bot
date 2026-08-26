@@ -77,14 +77,27 @@ def _looks_like_generation_request(text: str) -> bool:
 
 
 def _free_agent_mode() -> bool:
-    """True → skip Gemini catalog chat; force Cline free generation.
+    """True → force Cline free generation (skip catalog chat / deterministic).
 
-    Default OFF (catalog / deterministic path). Set CLINE_ONLY=1 for pure agent.
+    Default ON while DETERMINISTIC_PAUSED (default). Set DETERMINISTIC_ENGINE=1
+    and CLINE_ONLY=0 to restore catalog path.
     """
+    try:
+        from lumen.engine.services.engine_router import _deterministic_paused, _cline_only
+        if _deterministic_paused() or _cline_only():
+            return True
+    except Exception:
+        pass
     raw = os.getenv("CLINE_ONLY")
     if raw is None or not str(raw).strip():
         raw = os.getenv("CLINE_FORCE_AGENT")
     if raw is None or not str(raw).strip():
+        # Default to Cline-primary when deterministic is paused (env default)
+        paused = (os.getenv("DETERMINISTIC_PAUSED") or "1").strip().lower()
+        if paused not in {"0", "false", "off", "no"}:
+            eng = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
+            if eng not in {"1", "true", "yes", "on"}:
+                return True
         return False
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 

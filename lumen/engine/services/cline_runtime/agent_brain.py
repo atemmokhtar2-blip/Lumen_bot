@@ -45,6 +45,14 @@ def _timeout() -> float:
 
 
 def _gemini_key() -> str:
+    """First Gemini key — same pool as chat/translate (key_pool)."""
+    try:
+        from lumen.engine.services.llm.key_pool import gemini_keys
+        keys = gemini_keys()
+        if keys:
+            return keys[0][1]
+    except Exception:
+        pass
     for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"):
         k = (os.getenv(name) or "").strip()
         if k and k.lower() not in {"none", "null", "changeme"}:
@@ -177,14 +185,29 @@ def _system_and_user(messages: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 def _call_gemini(system: str, user: str, model_id: str) -> str:
-    key = _gemini_key()
-    if not key:
+    """Gemini generateContent with the same multi-key pool as translator/chat."""
+    from lumen.engine.services.llm.key_pool import gemini_available, mark_gemini_cooldown
+
+    keys = gemini_available()
+    if not keys:
+        # fallback single key
+        k = _gemini_key()
+        keys = [("GEMINI_API_KEY", k)] if k else []
+    if not keys:
         raise RuntimeError("no_gemini_key")
-    model = model_id or (os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip()
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
-    )
+
+    models = [
+        (model_id or "").strip(),
+        (os.getenv("GEMINI_MODEL") or "").strip(),
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+        "gemini-1.5-flash",
+    ]
+    models = [m for m in models if m]
+    # dedupe
+    seen: set[str] = set()
+    models = [m for m in models if not (m in seen or seen.add(m))]
+
     prompt = f"{system}\n\n---\n\n{user}\n\n{_JSON_SCHEMA_HINT}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -194,18 +217,48 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
             "maxOutputTokens": 2048,
         },
     }
-    resp = requests.post(
-        url,
-        params={"key": key},
-        json=payload,
-        timeout=_timeout(),
-        headers={"Content-Type": "application/json"},
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"gemini_http_{resp.status_code}:{(resp.text or '')[:300]}")
-    body = resp.json()
-    parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
-    return "".join(str(p.get("text") or "") for p in parts)
+    last_err: Exception | None = None
+    for source, key in keys:
+        for model in models:
+            url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model}:generateContent"
+            )
+            try:
+                resp = requests.post(
+                    url,
+                    params={"key": key},
+                    json=payload,
+                    timeout=_timeout(),
+                    headers={"Content-Type": "application/json"},
+                )
+            except requests.RequestException as exc:
+                last_err = exc
+                continue
+            if resp.status_code in {401, 403, 429, 503}:
+                try:
+                    mark_gemini_cooldown(source, reason=f"http_{resp.status_code}")
+                except Exception:
+                    pass
+                last_err = RuntimeError(
+                    f"gemini_http_{resp.status_code}:{(resp.text or '')[:200]}"
+                )
+                break  # next key
+            if resp.status_code == 404:
+                last_err = RuntimeError(f"gemini_model_404:{model}")
+                continue  # next model
+            if resp.status_code >= 400:
+                last_err = RuntimeError(
+                    f"gemini_http_{resp.status_code}:{(resp.text or '')[:300]}"
+                )
+                continue
+            body = resp.json()
+            parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+            text = "".join(str(p.get("text") or "") for p in parts)
+            if text.strip():
+                return text
+            last_err = RuntimeError("gemini_empty_response")
+    raise RuntimeError(str(last_err) if last_err else "gemini_exhausted")
 
 
 def _call_xai(system: str, user: str, model_id: str) -> str:

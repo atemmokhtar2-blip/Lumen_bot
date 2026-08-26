@@ -25,12 +25,30 @@ def _env_force_mode() -> EngineMode | None:
         return None
 
 
-def _cline_only() -> bool:
-    """Force free Cline agent path (skip catalog).
+def _deterministic_paused() -> bool:
+    """Pause catalog / infinite / hybrid (spec_core deterministic path).
 
-    Default OFF — catalog/hybrid first for known capabilities.
-    Set CLINE_ONLY=1 only when you want pure agent generation with a live LLM.
+    Default ON (paused). Re-enable only with DETERMINISTIC_ENGINE=1.
     """
+    raw = (os.getenv("DETERMINISTIC_ENGINE") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return False
+    paused = (os.getenv("DETERMINISTIC_PAUSED") or "1").strip().lower()
+    return paused not in {"0", "false", "off", "no"}
+
+
+def _cline_only() -> bool:
+    """Force free Cline agent path (skip catalog / infinite / hybrid).
+
+    Default ON while deterministic is paused. Set CLINE_ONLY=0 only together
+    with DETERMINISTIC_ENGINE=1 to restore the old catalog path.
+    """
+    if _deterministic_paused():
+        # Explicit opt-out of Cline while paused is still allowed via ENGINE_MODE_FORCE
+        raw = os.getenv("CLINE_ONLY")
+        if raw is not None and str(raw).strip():
+            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+        return True
     raw = os.getenv("CLINE_ONLY")
     if raw is None or not str(raw).strip():
         raw = os.getenv("CLINE_FORCE_AGENT")
@@ -40,15 +58,13 @@ def _cline_only() -> bool:
 
 
 def _infinite_primary() -> bool:
-    """Infinite atomic engine is the default generation path (ON by default).
-
-    Set TBE_INFINITE_PRIMARY=0 to use legacy catalog/hybrid policy.
-    TBE_INFINITE_SPEC=1 also forces infinite.
-    """
+    """Infinite path — disabled while deterministic is paused."""
+    if _deterministic_paused():
+        return False
     if (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
-    raw = (os.getenv("TBE_INFINITE_PRIMARY") or "1").strip().lower()
-    return raw not in {"0", "false", "off", "no"}
+    raw = (os.getenv("TBE_INFINITE_PRIMARY") or "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _infinite_preferred() -> bool:
@@ -64,21 +80,27 @@ def decide_engine_mode(
     needs_ai_codegen: bool,
     confidence: float,
 ) -> EngineMode:
-    """Policy: **infinite atomic engine first** for bot generation.
+    """Policy: **Cline SDK primary** (deterministic paused by default).
 
     Order:
-      1. CLINE_ONLY / ENGINE_MODE_FORCE overrides
-      2. Infinite primary (default ON) → EngineMode.INFINITE
-      3. Else catalog when pure known keys + no gap
-      4. Else hybrid / cline
-
-    Catalog via ENGINE_MODE_FORCE=catalog or TBE_INFINITE_PRIMARY=0.
+      1. ENGINE_MODE_FORCE override (if set)
+      2. Cline when CLINE_ONLY or deterministic paused (default)
+      3. Else infinite / catalog / hybrid only if DETERMINISTIC_ENGINE=1
     """
-    if _cline_only():
-        return EngineMode.CLINE
     forced = _env_force_mode()
     if forced is not None:
+        if _deterministic_paused() and forced in {
+            EngineMode.CATALOG, EngineMode.HYBRID, EngineMode.INFINITE
+        }:
+            logger.warning(
+                "deterministic paused — ignoring ENGINE_MODE_FORCE=%s, using CLINE",
+                forced.value,
+            )
+            return EngineMode.CLINE
         return forced
+
+    if _cline_only() or _deterministic_paused():
+        return EngineMode.CLINE
 
     if _infinite_primary():
         return EngineMode.INFINITE
@@ -211,6 +233,13 @@ def execute_ir(
         )
 
     mode = ir.engine_mode
+    if _deterministic_paused() and mode != EngineMode.CLINE:
+        logger.warning(
+            "deterministic paused — remapping mode %s → cline", mode.value
+        )
+        mode = EngineMode.CLINE
+        ir.engine_mode = EngineMode.CLINE
+
     logger.info(
         "engine_router mode=%s keys=%s gap=%s conf=%.2f domain=%s",
         mode.value,
