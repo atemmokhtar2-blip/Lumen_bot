@@ -43,8 +43,12 @@ class ClineExecutionResult:
 
 
 def is_cline_available() -> bool:
-    flag = (os.getenv("CLINE_ENABLED") or "0").strip().lower()
-    return flag in {"1", "true", "yes", "on"}
+    """Cline is the sole product generation engine — enabled by default.
+
+    Set CLINE_ENABLED=0 only for emergency kill-switch.
+    """
+    flag = (os.getenv("CLINE_ENABLED") or "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
 
 
 def _cline_mode() -> str:
@@ -92,7 +96,7 @@ def _call_external_provider(ir: Any, work_dir: Path) -> ClineExecutionResult | N
         return ClineExecutionResult(
             ok=False,
             errors=[f"provider_error:{type(exc).__name__}:{exc}"],
-            fallback_catalog=True,
+            fallback_catalog=False,
         )
 
 
@@ -102,17 +106,17 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
 
     allowed, reason = _policy_allows_cline(ir)
     if not allowed:
-        logger.info("cline path blocked: %s — fallback catalog", reason)
+        logger.error("cline path blocked: %s — no deterministic fallback", reason)
         return ClineExecutionResult(
             ok=False,
             engine="cline_blocked",
             errors=[reason],
-            warnings=["falling_back_to_catalog"],
+            warnings=["deterministic_purged_no_fallback"],
             metadata={
                 "policy": reason,
                 "ir_mode": getattr(getattr(ir, "engine_mode", None), "value", None),
             },
-            fallback_catalog=True,
+            fallback_catalog=False,
         )
 
     external = _call_external_provider(ir, work)
@@ -144,7 +148,7 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
                 ok=False,
                 engine="cline_agent_error",
                 errors=[f"{type(exc).__name__}:{exc}"],
-                fallback_catalog=True,
+                fallback_catalog=False,
             )
 
     try:
@@ -168,7 +172,7 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
             ok=False,
             engine="cline_builtin_error",
             errors=[f"{type(exc).__name__}:{exc}"],
-            fallback_catalog=True,
+            fallback_catalog=False,
         )
 
 
