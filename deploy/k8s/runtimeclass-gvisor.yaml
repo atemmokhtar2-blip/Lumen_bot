@@ -1,0 +1,22 @@
+# Official gVisor RuntimeClass for Kubernetes.
+# Requires node-level install of runsc + containerd-shim-runsc-v1
+# (see scripts/hosting/install_gvisor.sh and https://gvisor.dev/docs/user_guide/containerd/quick_start/).
+#
+# Apply:
+#   kubectl apply -f deploy/k8s/runtimeclass-gvisor.yaml
+#
+# Pod usage:
+#   spec:
+#     runtimeClassName: gvisor
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+  labels:
+    app.kubernetes.io/name: lumen
+    app.kubernetes.io/component: sandbox-runtime
+handler: runsc
+# Optional: schedule only on nodes that advertise gVisor support.
+# scheduling:
+#   nodeSelector:
+#     gvisor: "true"

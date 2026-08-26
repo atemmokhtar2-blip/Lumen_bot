@@ -1,0 +1,16 @@
+# Official containerd runtime handler for gVisor (runsc).
+# Merge into /etc/containerd/config.toml then: systemctl restart containerd
+# Source: https://gvisor.dev/docs/user_guide/containerd/quick_start/
+#
+# [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+#   runtime_type = "io.containerd.runsc.v1"
+#
+# Full minimal example (version = 2):
+
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
