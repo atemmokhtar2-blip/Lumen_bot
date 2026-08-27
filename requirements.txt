@@ -33,7 +33,7 @@ SQLAlchemy==2.0.40
 alembic==1.15.2
 
 # Phase B — durable workflows (official SDK)
-temporalio>=1.7.0,<2
+temporalio[langgraph]>=1.27.0,<2
 
 # Phase C — Codebase Intelligence
 tree-sitter>=0.22.0
@@ -57,7 +57,7 @@ tree-sitter-c>=0.23.0
 tree-sitter-cpp>=0.23.0
 
 # Official agent orchestration (LangGraph)
-langgraph>=0.2.0,<1
+langgraph>=1.0.0,<2
 langchain-core>=0.3.0,<1
 
 # Official MCP Python SDK

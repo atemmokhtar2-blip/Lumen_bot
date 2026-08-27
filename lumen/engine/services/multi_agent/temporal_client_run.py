@@ -1,4 +1,8 @@
-"""Start LumenMultiAgentGenerate on Temporal and wait for result (sync helper)."""
+"""Start Lumen generate on Temporal and wait for result (sync helper).
+
+Prefers LumenPluginGenerateWorkflow (official LangGraph Plugin, per-node Activities).
+Falls back to LumenMultiAgentGenerateWorkflow (legacy single-activity) if forced.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -19,29 +23,52 @@ def temporal_configured() -> bool:
     if (os.getenv("LUMEN_TEMPORAL_REQUIRED") or "").strip().lower() in {"1", "true", "yes"}:
         return True
     host = (os.getenv("TEMPORAL_HOST") or "").strip()
-    # Require explicit host in production-style use; localhost only if TEMPORAL_HOST set
     return bool(host)
+
+
+def _prefer_plugin() -> bool:
+    """Use official LangGraph Plugin workflow unless explicitly disabled."""
+    if (os.getenv("LUMEN_TEMPORAL_LEGACY") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    try:
+        from .temporal_plugin_graph import plugin_available
+        return plugin_available()
+    except Exception:
+        return False
 
 
 async def _start_and_wait(payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:
     from temporalio.client import Client
-    from .temporal_defs import LumenMultiAgentGenerateWorkflow
+    from .temporal_defs import LumenMultiAgentGenerateWorkflow, LumenPluginGenerateWorkflow
 
     host = (os.getenv("TEMPORAL_HOST") or "localhost:7233").strip()
     namespace = (os.getenv("TEMPORAL_NAMESPACE") or "default").strip()
     task_queue = (os.getenv("TEMPORAL_TASK_QUEUE") or "tbe-generate").strip()
     client = await Client.connect(host, namespace=namespace)
     wid = str(payload.get("workflow_id") or f"lumen-gen-{uuid.uuid4().hex[:16]}")
+
+    if _prefer_plugin():
+        wf = LumenPluginGenerateWorkflow.run
+        engine = "temporal_langgraph_plugin"
+    else:
+        wf = LumenMultiAgentGenerateWorkflow.run
+        engine = "temporal_legacy"
+
     handle = await client.start_workflow(
-        LumenMultiAgentGenerateWorkflow.run,
+        wf,
         payload,
         id=wid,
         task_queue=task_queue,
     )
     if not wait:
-        return {"ok": True, "workflow_id": wid, "async": True}
+        return {"ok": True, "workflow_id": wid, "async": True, "engine": engine}
     result = await handle.result()
-    return {"ok": bool((result or {}).get("ok")), "workflow_id": wid, "result": result}
+    return {
+        "ok": bool((result or {}).get("ok")),
+        "workflow_id": wid,
+        "result": result,
+        "engine": (result or {}).get("engine") or engine,
+    }
 
 
 def run_generate_via_temporal(
