@@ -258,21 +258,30 @@ def _make_builder(registry: Any, board: Any):
                 ir_hint=ir_hint,
                 repair=bool((state.extensions or {}).get("repair_mode")),
             )
-            if result.get("ok") or result.get("files_written"):
+            # Professional gate: files_written alone is NOT success — acceptance must pass
+            from .acceptance_check import evaluate_task
+            acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
+            result["acceptance_report"] = acc_rep
+            session_ok = bool(result.get("ok")) and bool(acc_rep.get("ok"))
+            if session_ok:
                 tree.mark(tid, TaskStatus.DONE, result={
                     "files": result.get("files_written"),
                     "steps": result.get("steps"),
                     "stop": result.get("stop_reason"),
+                    "acceptance": acc_rep,
                 })
                 state.generated_path = str(work)
                 state.build_success = True
                 notes.append(f"{tid}:done:steps={result.get('steps')}")
             else:
-                err = "; ".join(result.get("errors") or ["build_failed"])[:500]
-                tree.mark(tid, TaskStatus.FAILED, error=err)
-                state.build_errors = list(state.build_errors or []) + list(result.get("errors") or [])
+                fails = [f.get("id") or f.get("detail") for f in (acc_rep.get("failed") or [])][:8]
+                err = "; ".join(
+                    list(result.get("errors") or []) + [f"acceptance:{x}" for x in fails] or ["build_or_acceptance_failed"]
+                )[:500]
+                tree.mark(tid, TaskStatus.FAILED, error=err, result={"acceptance": acc_rep})
+                state.build_errors = list(state.build_errors or []) + list(result.get("errors") or []) + fails
                 state.build_success = False
-                notes.append(f"{tid}:failed")
+                notes.append(f"{tid}:failed:{err[:80]}")
 
         _save_tree(state, tree)
         ctx["work_dir"] = str(work)

@@ -109,25 +109,47 @@ def build_worker_context(work_dir: Path, goal: str, target_files: list[str] | No
         ctx["errors"].append(f"repo_context:{type(exc).__name__}")
         logger.debug("repo_context failed: %s", exc)
 
-    # Symbol outline via official agent_code_intel / graph
+    # Symbol outline from official tree-sitter symbol graph (not keyword guessing)
     try:
-        from lumen.engine.services.cline_runtime.agent_code_intel import find_symbol
-        for seed in ("main", "start", "handle", "Application", "Bot"):
-            r = find_symbol(str(work_dir), seed, max_results=5)
-            if r.get("ok") and r.get("symbols"):
-                ctx["symbol_outline"].extend(r["symbols"][:5])
-        # de-dupe by id
-        seen: set[str] = set()
-        uniq = []
-        for s in ctx["symbol_outline"]:
-            sid = str(s.get("id") or f"{s.get('path')}:{s.get('name')}")
-            if sid in seen:
-                continue
-            seen.add(sid)
-            uniq.append(s)
-        ctx["symbol_outline"] = uniq[:20]
+        from lumen.engine.services.code_intelligence.symbol_graph import build_symbol_graph
+        g = build_symbol_graph(work_dir, max_files=200)
+        nodes = list(g.get("nodes") or [])
+        # Prefer functions/classes; skip pure modules
+        ranked = [
+            n for n in nodes
+            if n.get("kind") in {"function", "method", "class"}
+        ]
+        # Entry-file bias
+        def _score(n: dict) -> int:
+            path = str(n.get("path") or "")
+            s = 0
+            if path.endswith("main.py") or path.endswith("bot.py") or path.endswith("app.py"):
+                s += 10
+            if n.get("kind") == "class":
+                s += 2
+            return -s
+        ranked.sort(key=_score)
+        ctx["symbol_outline"] = [
+            {
+                "id": n.get("id"),
+                "name": n.get("name"),
+                "kind": n.get("kind"),
+                "path": n.get("path"),
+                "start_line": n.get("start_line"),
+                "end_line": n.get("end_line"),
+            }
+            for n in ranked[:25]
+        ]
     except Exception as exc:
         ctx["errors"].append(f"symbols:{type(exc).__name__}")
+        try:
+            from lumen.engine.services.cline_runtime.agent_code_intel import find_symbol
+            for seed in ("main", "start", "handle"):
+                r = find_symbol(str(work_dir), seed, max_results=5)
+                if r.get("ok"):
+                    ctx["symbol_outline"].extend(r.get("symbols") or [])
+        except Exception as exc2:
+            ctx["errors"].append(f"symbols_fallback:{type(exc2).__name__}")
 
     return ctx
 

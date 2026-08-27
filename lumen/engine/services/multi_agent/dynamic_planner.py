@@ -62,9 +62,12 @@ def classify_intent(goal: str, *, preferred_keys: Iterable[str] | None = None) -
     if _LIB.search(blob):
         return PlanIntent("library", confidence=0.75, reasons=("library_keyword",))
 
-    # Default: messaging bot if Arabic "بوت" without platform → telegram (product default)
-    if re.search(r"\bبوت\b|bot\b", blob, re.I):
-        return PlanIntent("telegram_bot", platform="telegram", confidence=0.55, reasons=("bot_word_default_telegram",))
+    # Ambiguous "bot" without platform → still telegram only if product signals present
+    if re.search(r"\bبوت\b|\bbot\b", blob, re.I):
+        if re.search(r"handler|/start|token|telegram|تيلي", blob, re.I):
+            return PlanIntent("telegram_bot", platform="telegram", confidence=0.65, reasons=("bot_with_product_signals",))
+        # Prefer general_app plan over forcing telegram-only template
+        return PlanIntent("general_app", confidence=0.55, reasons=("bot_ambiguous_general",))
 
     return PlanIntent("general_app", confidence=0.5, reasons=("fallback_general",))
 

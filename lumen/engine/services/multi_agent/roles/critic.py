@@ -289,6 +289,56 @@ class CriticAgent(Agent):
             warnings.append(f"visual_check_skip:{type(_vis_exc).__name__}")
 
 
+        # Acceptance (AST) BEFORE qa_passed — official gate
+        try:
+            from ..acceptance_check import evaluate_tree, evaluate_task
+            from ..task_tree import TaskTree
+            work = Path(
+                state.generated_path
+                or (state.extensions or {}).get("work_dir")
+                or "."
+            )
+            tree_raw = (state.extensions or {}).get("task_tree")
+            acc = None
+            if isinstance(tree_raw, dict) and tree_raw.get("nodes"):
+                tree = TaskTree.from_dict(tree_raw)
+                acc = evaluate_tree(work, tree, strict=True)
+            else:
+                acc = evaluate_task(
+                    work,
+                    files=["main.py"],
+                    acceptance=["main.py exists", "compileall passes"],
+                    strict=True,
+                )
+            state.extensions = dict(state.extensions or {})
+            state.extensions["acceptance_report"] = acc
+            details["acceptance"] = {
+                "ok": acc.get("ok"),
+                "failed_count": acc.get("failed_count") if "failed_count" in acc else sum(
+                    1 for tr in (acc.get("tasks") or {}).values() for _ in (tr.get("failed") or [])
+                ),
+            }
+            if not acc.get("ok"):
+                # fold into findings as errors so qa_passed stays false
+                failed_items = list(acc.get("failed") or [])
+                if not failed_items:
+                    for tid, tr in (acc.get("tasks") or {}).items():
+                        for f in tr.get("failed") or []:
+                            failed_items.append({**f, "task": tid})
+                for f in failed_items[:20]:
+                    findings.append(CritiqueFinding(
+                        code="acceptance_failed",
+                        severity="error",
+                        message=str(f.get("id") or f.get("detail") or f)[:300],
+                        path=str(f.get("path") or ""),
+                        fix_hint="Satisfy task acceptance criteria before deliver",
+                    ))
+                state.record(AgentRole.CRITIC, "acceptance_failed", f"n={len(failed_items)}")
+            else:
+                state.record(AgentRole.CRITIC, "acceptance_passed", "ok")
+        except Exception:
+            logger.exception("acceptance_check failed")
+
         errors = findings_to_errors(findings)
         # warnings from findings
         for f in findings:
@@ -326,37 +376,6 @@ class CriticAgent(Agent):
             state.transition(AgentStatus.PASSED, role=AgentRole.CRITIC)
         else:
             state.transition(AgentStatus.FAILED, role=AgentRole.CRITIC, detail="qa_failed")
-        # Layered behavioral acceptance against task criteria
-        try:
-            from ..acceptance_check import evaluate_tree, evaluate_task
-            work = Path(ctx.get("work_dir") or state.generated_path or state.extensions.get("work_dir") or ".")
-            tree_raw = (state.extensions or {}).get("task_tree")
-            if tree_raw:
-                from ..task_tree import TaskTree
-                tree = TaskTree.from_dict(tree_raw) if isinstance(tree_raw, dict) else None
-                if tree is not None:
-                    acc = evaluate_tree(work, tree)
-                    state.extensions = dict(state.extensions or {})
-                    state.extensions["acceptance_report"] = acc
-                    if not acc.get("ok"):
-                        state.qa_passed = False
-                        fails = []
-                        for tid, tr in (acc.get("tasks") or {}).items():
-                            for f in tr.get("failed") or []:
-                                fails.append(f"{tid}:{f.get('check')}:{f.get('criterion') or f.get('path')}")
-                        state.build_errors = list(state.build_errors or []) + fails[:20]
-                        state.record(AgentRole.CRITIC, "acceptance_failed", f"fails={len(fails)}")
-                    else:
-                        state.record(AgentRole.CRITIC, "acceptance_passed", "tree_ok")
-            else:
-                # no tree — still structural check
-                acc = evaluate_task(work, files=["main.py"], acceptance=["main.py exists", "compileall passes"])
-                state.extensions = dict(state.extensions or {})
-                state.extensions["acceptance_report"] = acc
-                if not acc.get("ok"):
-                    state.qa_passed = False
-        except Exception as _acc_exc:
-            logger.exception("acceptance_check failed")
 
         return state
 
