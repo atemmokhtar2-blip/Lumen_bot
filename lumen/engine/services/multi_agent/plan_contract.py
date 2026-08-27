@@ -17,6 +17,7 @@ class PlanTask:
     acceptance: list[str] = field(default_factory=list)
     priority: int = 1  # 1 = must, 2 = should, 3 = nice
     depends_on: list[str] = field(default_factory=list)  # task ids this depends on
+    parallel_group: str = ""  # non-empty → eligible for LangGraph Send fan-out
 
 
 @dataclass
@@ -58,6 +59,7 @@ class ExecutionPlan:
                     acceptance=list(t.get("acceptance") or []),
                     priority=int(t.get("priority") or 1),
                     depends_on=list(t.get("depends_on") or []),
+                    parallel_group=str(t.get("parallel_group") or ""),
                 ))
         return cls(
             goal=str(d.get("goal") or ""),

@@ -250,7 +250,13 @@ class TaskTree:
         tasks = list(getattr(plan, "tasks", None) or [])
         prev_id: str | None = None
         for i, t in enumerate(tasks):
-            raw = t.to_dict() if hasattr(t, "to_dict") else (dict(t) if isinstance(t, dict) else {})
+            if hasattr(t, "to_dict"):
+                raw = t.to_dict()
+            elif hasattr(t, "__dataclass_fields__"):
+                from dataclasses import asdict
+                raw = asdict(t)
+            else:
+                raw = dict(t) if isinstance(t, dict) else {}
             if not raw:
                 continue
             tid = str(raw.get("id") or f"t{i+1}")

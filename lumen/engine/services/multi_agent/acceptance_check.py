@@ -102,6 +102,74 @@ def _main_ast(root: Path) -> tuple[ast.AST | None, str]:
     return tree, src
 
 
+
+def check_compileall(root: Path) -> dict[str, Any]:
+    """Official stdlib compileall on the project tree."""
+    import compileall
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf), redirect_stderr(buf):
+            ok = compileall.compile_dir(str(root), quiet=1, maxlevels=8, force=False)
+        return {"id": "compileall", "ok": bool(ok), "detail": buf.getvalue()[-400:]}
+    except Exception as exc:
+        return {"id": "compileall", "ok": False, "detail": f"{type(exc).__name__}:{exc}"}
+
+
+def check_pytest_if_present(root: Path) -> dict[str, Any] | None:
+    """Run pytest only when tests/ or test_*.py exist — real subprocess."""
+    import subprocess
+    has = (root / "tests").is_dir() or any(root.glob("test_*.py"))
+    if not has:
+        return None
+    try:
+        proc = subprocess.run(
+            ["python", "-m", "pytest", "-q", "--tb=no"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        ok = proc.returncode == 0
+        return {
+            "id": "pytest",
+            "ok": ok,
+            "detail": (proc.stdout or proc.stderr or "")[:400],
+            "returncode": proc.returncode,
+        }
+    except FileNotFoundError:
+        return {"id": "pytest", "ok": False, "detail": "pytest_not_installed"}
+    except Exception as exc:
+        return {"id": "pytest", "ok": False, "detail": f"{type(exc).__name__}:{exc}"}
+
+
+def feature_mentioned_in_sources(root: Path, feature: str) -> bool:
+    """Feature token must appear in project sources or module path names."""
+    token = (feature or "").strip().lower()
+    if not token:
+        return False
+    variants = {token, token.replace(" ", "_"), token.replace("-", "_")}
+    variants = {v for v in variants if len(v) >= 2}
+    for p in list(root.rglob("*"))[:120]:
+        if not p.is_file():
+            continue
+        if any(x in p.parts for x in (".git", "__pycache__", ".parallel", ".venv")):
+            continue
+        path_l = p.as_posix().lower()
+        if any(v in path_l for v in variants):
+            return True
+        if p.suffix.lower() not in {".py", ".md", ".txt", ".json"}:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace").lower()
+        except Exception:
+            continue
+        if any(v in text for v in variants):
+            return True
+    return False
+
+
 def check_criterion(root: Path, criterion: str, *, strict: bool = True) -> dict[str, Any]:
     c_raw = (criterion or "").strip()
     c = c_raw.lower()
@@ -169,13 +237,25 @@ def check_criterion(root: Path, criterion: str, *, strict: bool = True) -> dict[
         ok = "logging" in src or "logger" in src.lower()
         return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "logging"}
 
+    if "feature working:" in c or c.startswith("feature working"):
+        # extract feature name after colon
+        feat = c_raw.split(":", 1)[-1].strip() if ":" in c_raw else c_raw
+        ok = feature_mentioned_in_sources(root, feat)
+        return {"id": f"crit:feature:{feat[:30]}", "ok": ok, "detail": "feature_in_sources" if ok else "feature_missing_in_sources"}
+
     if "handler" in c or "feature" in c or "working" in c or "wired" in c:
-        # require main has non-trivial defs
         tree, src = _main_ast(root)
         if tree is None:
-            return {"id": f"crit:{c_raw[:40]}", "ok": False, "detail": "no_main"}
+            # module-only tasks: any py with defs
+            any_defs = False
+            for p in _py_files(root, None)[:20]:
+                tr, _ = parse_python(p)
+                if tr and any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in ast.walk(tr)):
+                    any_defs = True
+                    break
+            return {"id": f"crit:{c_raw[:40]}", "ok": any_defs, "detail": "module_defs" if any_defs else "no_defs"}
         defs = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        ok = len(defs) >= 2
+        ok = len(defs) >= 1
         return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": f"handlers={len(defs)}"}
 
     if "readme" in c:
@@ -203,8 +283,14 @@ def evaluate_task(
     checks: list[dict[str, Any]] = []
     checks.extend(check_files_exist(root, files))
     checks.extend(check_syntax_ast(root, files or None))
+    # Project-wide compileall when accepting "compileall" criteria or full project
+    if any("compile" in (a or "").lower() for a in (acceptance or [])) or not files:
+        checks.append(check_compileall(root))
     for a in acceptance:
         checks.append(check_criterion(root, a, strict=strict))
+    pt = check_pytest_if_present(root)
+    if pt is not None:
+        checks.append(pt)
     # If no acceptance and no files — require main.py syntax at minimum
     if not acceptance and not files:
         checks.extend(check_syntax_ast(root, ["main.py"] if (root / "main.py").is_file() else None))

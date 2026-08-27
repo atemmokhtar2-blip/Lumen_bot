@@ -240,6 +240,7 @@ def _make_builder(registry: Any, board: Any):
             "metadata": dict(state.strict_spec or {}),
         }
 
+        import shutil
         for tid in active:
             if tree.get(tid) is None:
                 continue
@@ -249,15 +250,50 @@ def _make_builder(registry: Any, board: Any):
             state.extensions["active_task_id"] = tid
             _acc = list(getattr(task, "acceptance", None) or []) if task is not None else []
             _files = list(getattr(task, "files", None) or []) if task is not None else []
+            # Isolated workspace for parallel_group tasks (avoid concurrent writes on main.py)
+            use_iso = bool(getattr(task, "parallel_group", "") or "") and len(active) > 1
+            session_dir = work
+            if use_iso:
+                session_dir = work / ".parallel" / tid
+                if session_dir.exists():
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                session_dir.mkdir(parents=True, exist_ok=True)
+                # snapshot current tree into isolation (copy2)
+                for src in work.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    if ".parallel" in src.parts or ".git" in src.parts or "__pycache__" in src.parts:
+                        continue
+                    rel = src.relative_to(work)
+                    dest = session_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(src, dest)
+                    except Exception:
+                        pass
             result = run_coding_session(
                 acceptance=_acc,
                 target_files=_files,
-                work_dir=work,
+                work_dir=session_dir,
                 goal=base_goal,
                 task_brief=brief,
                 ir_hint=ir_hint,
                 repair=bool((state.extensions or {}).get("repair_mode")),
             )
+            # Merge isolation → work for declared task files only
+            if use_iso and result.get("ok"):
+                for rel in _files or []:
+                    src = session_dir / rel
+                    if src.is_file():
+                        dest = work / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src, dest)
+                # re-evaluate acceptance on merged work
+                from .acceptance_check import evaluate_task
+                acc_merged = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
+                result["acceptance_report"] = acc_merged
+                if not acc_merged.get("ok"):
+                    result["ok"] = False
             # Professional gate: files_written alone is NOT success — acceptance must pass
             from .acceptance_check import evaluate_task
             acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)

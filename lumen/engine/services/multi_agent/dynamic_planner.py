@@ -186,16 +186,37 @@ def _tasks_telegram(feats: list[str], *, refine: bool) -> list[PlanTask]:
             priority=1,
         ),
     ]
+    feat_ids: list[str] = []
     if feats:
+        for i, f in enumerate(feats[:8]):
+            fid = f"feat_{re.sub(r'[^a-zA-Z0-9_]+', '_', f)[:24] or i}"
+            if fid in feat_ids:
+                fid = f"{fid}_{i}"
+            feat_ids.append(fid)
+            safe = re.sub(r"[^a-zA-Z0-9_]+", "_", f)[:32] or f"f{i}"
+            tasks.append(PlanTask(
+                id=fid,
+                title=f"Implement feature module: {f}",
+                files=[f"modules/{safe}.py"],
+                acceptance=[
+                    f"modules/{safe}.py exists",
+                    "compileall passes",
+                    f"feature working: {f}",
+                ],
+                priority=1,
+                depends_on=["scaffold"],
+                parallel_group="feature_modules",
+            ))
         tasks.append(PlanTask(
-            id="features",
-            title="Implement features: " + ", ".join(feats[:12]),
-            files=["main.py"] + [f"modules/{f}.py" for f in feats[:8]],
-            acceptance=[f"feature working: {f}" for f in feats[:12]],
+            id="wire_features",
+            title="Wire feature modules into main handlers",
+            files=["main.py"],
+            acceptance=["/start handler registered", "compileall passes"]
+            + [f"feature working: {f}" for f in feats[:8]],
             priority=1,
-            depends_on=["scaffold"],
+            depends_on=list(feat_ids),
         ))
-        dep = ["features"]
+        dep = ["wire_features"]
     else:
         dep = ["scaffold"]
     tasks.append(PlanTask(
@@ -408,6 +429,7 @@ def assemble_plan(
     constraints_l.append(f"intent:{intent.kind}")
     if intent.platform:
         constraints_l.append(f"platform:{intent.platform}")
+        constraints_l.append(f"scaffold_engine:platform_generators/{intent.platform}")
     if refine:
         constraints_l.append("mode:incremental_repair")
 

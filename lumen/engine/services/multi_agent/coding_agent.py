@@ -192,7 +192,21 @@ def run_coding_session(
     )
     wctx = build_worker_context(work, packet, target_files=target_files)
     outline = _outline_block(list(wctx.get("symbol_outline") or []))
+    # Blast-radius advisory for repair / multi-file (official code_intelligence)
+    blast_block = ""
+    if repair or (target_files and len(target_files) > 1):
+        try:
+            from lumen.engine.services.code_intelligence.blast_radius import blast_radius
+            seeds = list(target_files or [])[:3]
+            br = blast_radius(str(work), path=seeds[0] if seeds else "", symbol_name="", max_depth=2)
+            if br.get("ok"):
+                imp = br.get("impacted_files") or []
+                blast_block = "BLAST RADIUS (impacted files):\n" + "\n".join(f"- {x}" for x in list(imp)[:15])
+        except Exception:
+            pass
     full_goal = packet
+    if blast_block:
+        full_goal = full_goal + "\n\n" + blast_block
     if wctx.get("repo_block"):
         full_goal = full_goal + "\n\n" + str(wctx["repo_block"])[:6000]
     if outline:
@@ -236,6 +250,22 @@ def run_coding_session(
             ][:80]
         except Exception:
             pass
+        # Layer: post-session acceptance (AST) — session claims are not enough
+        acc_rep = {"ok": True, "skipped": True}
+        try:
+            from .acceptance_check import evaluate_task
+            acc_rep = evaluate_task(
+                work,
+                files=list(target_files or []),
+                acceptance=list(acceptance or []),
+                strict=True,
+            )
+            if not acc_rep.get("ok"):
+                ok = False
+        except Exception as _acc_exc:
+            acc_rep = {"ok": False, "error": type(_acc_exc).__name__}
+            ok = False
+
         return {
             "ok": ok,
             "path": str(work),
@@ -245,8 +275,9 @@ def run_coding_session(
             "stop_reason": str(getattr(state, "stop_reason", "") or ""),
             "errors": list(getattr(state, "errors", None) or [])[:20],
             "acceptance": list(acceptance or []),
+            "acceptance_report": acc_rep,
             "context_errors": list(wctx.get("errors") or []),
-            "engine": "cline_agent_loop+layered_context",
+            "engine": "cline_agent_loop+layered_context+acceptance",
         }
     except Exception as exc:
         logger.exception("run_coding_session failed")
