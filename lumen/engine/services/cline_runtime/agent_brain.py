@@ -76,13 +76,21 @@ ALLOWED_TOOLS = {
     "browser_fill",
     "browser_screenshot",
     "run_skill",
+    "find_symbol",
+    "get_symbol_source",
+    "find_references",
+    "find_refs",
+    "blast_radius",
+    "symbol_blast_radius",
+    "code_search",
+    "hybrid_search",
 }
 
 _JSON_SCHEMA_HINT = (
     "Respond with ONE JSON object only (no markdown fences). Schema:\n"
     '{"thought": "short plan", '
     '"tool": "list_dir|read_file|read_files|write_file|edit_file|apply_edits|apply_patch|'
-    'grep_codebase|glob_files|tree|run_shell|finish", '
+    'grep_codebase|glob_files|find_symbol|get_symbol_source|find_references|blast_radius|code_search|tree|run_shell|finish", '
     '"args": {}, "finish": false, "summary": ""}'
 )
 

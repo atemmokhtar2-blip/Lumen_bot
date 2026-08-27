@@ -159,7 +159,7 @@ def run_agent(
         "- apply_edits(edits=[{path,old_string,new_string}, ...]) atomic multi-file\n"
         "- apply_patch(patch=unified diff or *** Update File blocks)\n"
         "- edit_file requires unique old_string unless replace_all=true\n"
-        "Prefer apply_edits/apply_patch for changes spanning multiple files.\n"
+        "Prefer apply_edits/apply_patch for changes spanning multiple files.\nCODE INTEL: find_symbol(name), get_symbol_source(name), find_references(name), blast_radius(name|path), code_search(query) — use BEFORE large multi-file edits.\n"
     )
     if repo_ctx and repo_ctx.get("files"):
         try:

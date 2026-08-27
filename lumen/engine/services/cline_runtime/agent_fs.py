@@ -733,6 +733,45 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
         except (TypeError, ValueError):
             t = 30.0
         return run_shell(work_dir, str(args.get("command") or ""), timeout=t)
+    if name == "find_symbol":
+        from lumen.engine.services.cline_runtime.agent_code_intel import find_symbol
+        return find_symbol(
+            work_dir,
+            str(args.get("name") or args.get("symbol") or ""),
+            kind=str(args.get("kind") or ""),
+            path_prefix=str(args.get("path_prefix") or args.get("path") or ""),
+            max_results=int(args.get("max_results") or 30),
+        )
+    if name == "get_symbol_source":
+        from lumen.engine.services.cline_runtime.agent_code_intel import get_symbol_source
+        return get_symbol_source(
+            work_dir,
+            name=str(args.get("name") or args.get("symbol") or ""),
+            path=str(args.get("path") or ""),
+            symbol_id=str(args.get("symbol_id") or args.get("id") or ""),
+        )
+    if name in {"find_references", "find_refs"}:
+        from lumen.engine.services.cline_runtime.agent_code_intel import find_references
+        return find_references(
+            work_dir,
+            str(args.get("name") or args.get("symbol") or ""),
+            max_results=int(args.get("max_results") or 40),
+        )
+    if name in {"blast_radius", "symbol_blast_radius"}:
+        from lumen.engine.services.cline_runtime.agent_code_intel import symbol_blast_radius
+        return symbol_blast_radius(
+            work_dir,
+            name=str(args.get("name") or args.get("symbol") or ""),
+            path=str(args.get("path") or ""),
+            max_depth=int(args.get("max_depth") or 3),
+        )
+    if name in {"code_search", "hybrid_search"}:
+        from lumen.engine.services.cline_runtime.agent_code_intel import code_search
+        return code_search(
+            work_dir,
+            str(args.get("query") or args.get("pattern") or ""),
+            top_k=int(args.get("top_k") or 10),
+        )
     if name == "finish":
         return {
             "ok": True,
@@ -744,6 +783,8 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
 
 
 __all__ = [
+    # code intel tools dispatched via run_tool
+
     "apply_edits",
     "apply_patch",
     "edit_file",
