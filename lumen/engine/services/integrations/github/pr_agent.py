@@ -272,6 +272,87 @@ def _build_line_comments(
     return comments[:20]
 
 
+def _safe_https_github_clone_url(clone_url: str) -> str:
+    """Accept only https://github.com/... without embedded credentials."""
+    from urllib.parse import urlparse, urlunparse
+    raw = (clone_url or "").strip()
+    if not raw:
+        raise ValueError("empty_clone_url")
+    # Strip any accidental userinfo before parse
+    if "://" in raw and "@" in raw.split("://", 1)[1].split("/", 1)[0]:
+        # Reject URLs that already embed credentials
+        raise ValueError("clone_url_must_not_embed_credentials")
+    parsed = urlparse(raw)
+    if parsed.scheme != "https":
+        raise ValueError("clone_url_must_be_https")
+    host = (parsed.hostname or "").lower()
+    if host not in {"github.com", "www.github.com"}:
+        raise ValueError(f"clone_url_host_not_github:{host}")
+    # Rebuild without userinfo/query/fragment
+    path = parsed.path or ""
+    if not path.endswith(".git"):
+        path = path.rstrip("/") + ".git"
+    return urlunparse(("https", "github.com", path, "", "", ""))
+
+
+def _git_clone_authenticated(clone_url: str, dest: Path, *, ref: str = "") -> None:
+    """Clone via GIT_ASKPASS — token never appears in argv or remote URL."""
+    token = (_token() or "").strip()
+    url = _safe_https_github_clone_url(clone_url)
+    cmd = ["git", "-c", "credential.helper=", "clone", "--depth", "1"]
+    if ref:
+        cmd += ["--branch", ref]
+    cmd += [url, str(dest)]
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    askpass_path = None
+    try:
+        if token:
+            # Askpass script: never logs; token only in env LUMEN_GIT_TOKEN
+            fd, askpass_path = tempfile.mkstemp(prefix="lumen_askpass_", suffix=".sh")
+            os.close(fd)
+            Path(askpass_path).write_text(
+                (
+                    "#!/bin/sh\n"
+                    "case \"$1\" in\n"
+                    "  *Username*|username*) printf '%s\\n' 'x-access-token' ;;\n"
+                    "  *Password*|password*) printf '%s\\n' \"$LUMEN_GIT_TOKEN\" ;;\n"
+                    "  *) printf '\\n' ;;\n"
+                    "esac\n"
+                ),
+                encoding="utf-8",
+            )
+
+            os.chmod(askpass_path, 0o700)
+            env["GIT_ASKPASS"] = askpass_path
+            env["SSH_ASKPASS"] = askpass_path
+            env["LUMEN_GIT_TOKEN"] = token
+            env["GIT_ASKPASS_REQUIRE"] = "force"
+        # Never pass token-bearing URL; redact in CalledProcessError paths
+        proc = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=240,
+            check=False,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "")[:400]
+            # Defense: strip token if somehow echoed
+            if token:
+                err = err.replace(token, "***")
+            raise RuntimeError(f"git_clone_failed:rc={proc.returncode}:{err}")
+    finally:
+        if askpass_path:
+            try:
+                os.unlink(askpass_path)
+            except OSError:
+                pass
+        env.pop("LUMEN_GIT_TOKEN", None)
+
+
 def _run_clone_review_repair(
     *,
     clone_url: str,
@@ -281,18 +362,9 @@ def _run_clone_review_repair(
     head_owner: str,
     head_name: str,
 ) -> dict[str, Any]:
-    token = _token()
-    url = clone_url
-    if token and "github.com" in url and "@" not in url:
-        url = url.replace("https://", f"https://x-access-token:{token}@")
-
     with tempfile.TemporaryDirectory(prefix="lumen_pr_") as td:
         root = Path(td) / "repo"
-        cmd = ["git", "clone", "--depth", "1"]
-        if ref:
-            cmd += ["--branch", ref]
-        cmd += [url, str(root)]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=240)
+        _git_clone_authenticated(clone_url, root, ref=ref or "")
 
         from lumen.engine.services.multi_agent.execution_feedback import run_execution_feedback
         from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
