@@ -73,7 +73,7 @@ jobs:
           test -s sbom.spdx.json
           test -s sbom.cdx.json
           wc -c sbom.spdx.json sbom.cdx.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: |
@@ -186,7 +186,7 @@ jobs:
           subject-digest: sha256:${{ github.sha }}
         continue-on-error: true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: supply-chain-artifacts
