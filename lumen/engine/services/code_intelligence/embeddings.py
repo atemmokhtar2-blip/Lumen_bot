@@ -117,7 +117,7 @@ def _embed_external(texts: list[str], *, provider: str, dims: int) -> dict[str, 
     key = (os.getenv("CODE_EMBEDDING_API_KEY") or os.getenv("VOYAGE_API_KEY") or "").strip()
     if provider == "voyage":
         url = "https://api.voyageai.com/v1/embeddings"
-        model = (os.getenv("CODE_EMBEDDING_MODEL") or "voyage-code-3").strip()
+        model = (os.getenv("CODE_EMBEDDING_MODEL") or "voyage-code-4").strip()
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
