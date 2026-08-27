@@ -74,6 +74,3 @@ class DeliverAgent(Agent):
         state.record("DELIVER", "message_composed", state.status)
         return state
 
-
-def run_deliver(state: AgentState) -> AgentState:
-    return DeliverAgent().run(state)

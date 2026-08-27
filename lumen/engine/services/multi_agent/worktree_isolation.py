@@ -137,7 +137,7 @@ def acquire_task_workspace(
     *,
     use_isolation: bool = True,
 ) -> TaskWorkspace:
-    """Create isolated workspace. Prefers git worktree; falls back to .parallel copy."""
+    """Create isolated workspace. Real git worktree only (copy requires LUMEN_ALLOW_COPY_ISOLATION=1)."""
     root = Path(work_dir)
     root.mkdir(parents=True, exist_ok=True)
     tid = _safe_task_id(task_id)

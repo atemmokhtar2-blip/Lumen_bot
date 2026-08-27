@@ -8,12 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass
-class _Timer:
-    name: str
-    start: float
-    labels: dict[str, str] = field(default_factory=dict)
-
 
 class MetricsRegistry:
     def __init__(self) -> None:

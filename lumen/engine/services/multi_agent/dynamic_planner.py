@@ -475,10 +475,6 @@ def assemble_plan(
     )
 
 
-def plan_to_task_tree(plan: ExecutionPlan):
-    from .task_tree import TaskTree
-    return TaskTree.from_execution_plan(plan, goal=plan.goal)
-
 
 __all__ = [
     "PlanIntent",
@@ -488,5 +484,4 @@ __all__ = [
     "probe_workspace",
     "build_task_list",
     "assemble_plan",
-    "plan_to_task_tree",
 ]

@@ -230,12 +230,6 @@ class AgentState:
         self.status = target
         self.touch()
 
-    def set_status(self, status: AgentStatus | str, *, role: AgentRole | str = AgentRole.ORCHESTRATOR, detail: str = "") -> None:
-        """Backward-compatible: prefer transition(); falls back to force on illegal edge."""
-        try:
-            self.transition(status, role=role, detail=detail, force=False)
-        except InvalidTransition:
-            self.transition(status, role=role, detail=f"forced:{detail}", force=True)
 
     def to_dict(self) -> dict[str, Any]:
         # Never embed non-JSON objects

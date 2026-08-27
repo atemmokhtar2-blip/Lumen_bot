@@ -365,7 +365,6 @@ def _make_builder(registry: Any, board: Any):
             "metadata": dict(state.strict_spec or {}),
         }
 
-        import shutil
         for tid in active:
             # Reload tree under lock so parallel Send workers see latest marks
             with _TREE_LOCK:

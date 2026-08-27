@@ -125,22 +125,6 @@ class Orchestrator:
         self.board.put(state)
         return state
 
-    def _builder_with_gate(self, state: AgentState, ctx: dict[str, Any]) -> AgentState:
-        from .gates import architect_gate, apply_catalog_filter_to_state
-        state = apply_catalog_filter_to_state(state)
-        ok, errors = architect_gate(state)
-        if not ok:
-            state.build_success = False
-            state.build_errors = list(errors)
-            state.record(AgentRole.ORCHESTRATOR, "builder_blocked", ",".join(errors[:5]))
-            try:
-                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="spec_gate", force=True)
-            except Exception:
-                state.status = AgentStatus.FAILED.value
-            self.board.put(state)
-            return state
-        return self._run_agent("builder", state, ctx)
-
     def run(
         self,
         state: AgentState,
@@ -290,82 +274,6 @@ class Orchestrator:
         return self._deliver(state)
 
 
-    def resume_run(self, state: AgentState, *, from_step: str = "architect") -> AgentState:
-        """Continue a crashed/paused generation from last durable checkpoint."""
-        state.record(AgentRole.ORCHESTRATOR, "resume_run", from_step)
-        # Force status so _run_inner skips router when appropriate
-        if from_step in {"builder", "critic", "deliver"}:
-            try:
-                state.transition(AgentStatus.BUILDING, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.BUILDING.value
-        elif from_step == "architect":
-            try:
-                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.PLANNING.value
-        self.board.put(state)
-        return self.run(state)
-
-
-    def _rate_limit_errors(self, state: AgentState) -> bool:
-        """True if build/QA errors look like provider 429 / rate limit / quota."""
-        blobs = []
-        blobs.extend(str(e) for e in (state.build_errors or [])[:20])
-        blobs.extend(str(e) for e in ((state.qa_report or {}).get("errors") or [])[:20])
-        text = " ".join(blobs).lower()
-        keys = (
-            "429",
-            "rate limit",
-            "rate_limit",
-            "ratelimit",
-            "quota",
-            "resource_exhausted",
-            "too many requests",
-            "tpm",
-            "rpm",
-        )
-        return any(k in text for k in keys)
-
-    def _pause_for_rate_limit(self, state: AgentState) -> AgentState:
-        """Phase B: durable pause on 429 — journal + schedule resume instead of hard fail-only."""
-        ext = dict(state.extensions or {})
-        ext["paused_reason"] = "rate_limit_429"
-        ext["needs_resume"] = True
-        state.extensions = ext
-        try:
-            state.status = AgentStatus.BUILDING.value  # resumable, not terminal success
-        except Exception:
-            state.status = "building"
-        state.record(AgentRole.ORCHESTRATOR, "pause_429", "durable pause — will resume")
-        self._wf_checkpoint(state, "paused_429")
-        self.board.put(state)
-        # Schedule resume via worker pool and/or Redis queue
-        self.board.put(state)
-        try:
-            from .metrics import get_metrics
-            from .run_report import write_run_report
-            from .tracing import trace_summary
-            m = get_metrics()
-            m.incr("orchestrator_done", status=str(state.status))
-            if state.qa_passed:
-                m.incr("orchestrator_qa_passed")
-            else:
-                m.incr("orchestrator_qa_failed")
-            path = write_run_report(state)
-            state.extensions["run_report_path"] = str(path)
-            state.extensions["trace_summary"] = trace_summary(state)
-        except Exception:
-            logger.exception("run report failed")
-        logger.info(
-            "orchestrator done id=%s status=%s path=%s qa=%s attempts=%s",
-            state.state_id, state.status, state.generated_path, state.qa_passed, state.attempts,
-        )
-        try:
-            _phase_d_e_finalize(state)
-        except Exception:
-            logger.exception("phase D/E finalize failed")
-        return state
 
 
 def save_state(state: AgentState) -> AgentState:
