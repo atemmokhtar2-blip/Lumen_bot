@@ -22,19 +22,44 @@ logger = logging.getLogger(__name__)
 _SHARED_CHECKPOINTER = None
 
 
+def _checkpoint_db_path() -> Path:
+    raw = (os.getenv("LANGGRAPH_CHECKPOINT_PATH") or "").strip()
+    if raw:
+        return Path(raw)
+    base = (os.getenv("OUTPUT_DIR") or os.getenv("LUMEN_OUTPUT_DIR") or "/tmp/lumen_output").strip()
+    return Path(base) / "langgraph_checkpoints.sqlite"
+
+
 def _shared_checkpointer():
-    """Official LangGraph MemorySaver singleton (required for HITL resume)."""
+    """Official durable checkpointer: SqliteSaver first, MemorySaver fallback.
+
+    Sqlite is process+restart durable (same machine). Required for real HITL resume
+    after worker restart — Memory alone is not world-class.
+    """
     global _SHARED_CHECKPOINTER
     if _SHARED_CHECKPOINTER is not None:
         return _SHARED_CHECKPOINTER
     if (os.getenv("MULTI_AGENT_CHECKPOINT") or "1").strip().lower() in {"0", "false", "no", "off"}:
         return None
+    # Prefer official SqliteSaver
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        import sqlite3
+        db = _checkpoint_db_path()
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db), check_same_thread=False)
+        _SHARED_CHECKPOINTER = SqliteSaver(conn)
+        logger.info("LangGraph SqliteSaver at %s", db)
+        return _SHARED_CHECKPOINTER
+    except Exception as exc:
+        logger.warning("SqliteSaver unavailable (%s) — trying MemorySaver", exc)
     try:
         from langgraph.checkpoint.memory import MemorySaver
         _SHARED_CHECKPOINTER = MemorySaver()
+        logger.warning("LangGraph using MemorySaver (not durable across process restart)")
         return _SHARED_CHECKPOINTER
     except Exception as exc:
-        logger.warning("MemorySaver unavailable: %s", exc)
+        logger.warning("No checkpointer: %s", exc)
         return None
 
 
@@ -603,7 +628,29 @@ def run_langgraph_pipeline(
                 out.status = AgentStatus.AWAITING_CONFIRMATION.value
             except Exception:
                 out.status = "waiting_confirm"
-        out.final_message = out.final_message or "بانتظار موافقة الخطة (LangGraph HITL)"
+        # Wire Telegram HITL token path to the same interrupt (official dual surface)
+        try:
+            from .hitl import request_confirmation
+            pending = request_confirmation(
+                out,
+                "langgraph_plan_approve",
+                params={"thread_id": tid, "goal": (out.user_text or "")[:200]},
+                reason="موافقة خطة LangGraph قبل البناء",
+                board=bd,
+            )
+            out.extensions["langgraph_interrupt"] = True
+            out.extensions["hitl_status"] = "awaiting_approval"
+            out.final_message = (
+                f"📋 الخطة جاهزة — موافقة مطلوبة (LangGraph HITL)\n"
+                f"الهدف: {(out.user_text or '')[:180]}\n"
+                f"المعرّف: `{pending.action_id}`\n"
+                f"للتأكيد: `تأكيد {pending.action_id} {pending.confirm_token}`\n"
+                f"للرفض: `رفض {pending.action_id}`\n"
+                f"thread: `{tid}`"
+            )
+        except Exception as _hitl_exc:
+            logger.warning("attach pending_action failed: %s", _hitl_exc)
+            out.final_message = out.final_message or "بانتظار موافقة الخطة (LangGraph HITL)"
     try:
         bd.put(out)
     except Exception:
@@ -622,7 +669,7 @@ def resume_langgraph_hitl(
 ) -> AgentState:
     """Resume after official interrupt via Command(resume=...).
 
-    Requires the same process MemorySaver + thread_id from the paused run.
+    Requires SqliteSaver/MemorySaver + same thread_id from the paused run.
     """
     if not langgraph_available():
         raise RuntimeError("langgraph_not_installed")

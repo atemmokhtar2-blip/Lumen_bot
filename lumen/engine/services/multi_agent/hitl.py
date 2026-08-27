@@ -112,6 +112,13 @@ def tool_requires_confirmation(tool: str) -> bool:
 
 
 def tool_risk(tool: str) -> str:
+    t = (tool or "").strip().lower()
+    if t in {"langgraph_plan_approve", "approve_plan"}:
+        return "medium"
+    return _tool_risk_impl(tool)
+
+
+def _tool_risk_impl(tool: str) -> str:
     try:
         from lumen.engine.services.tool_runtime.registry import tool_risk_level
         return tool_risk_level(tool)

@@ -628,16 +628,21 @@ def orchestrate_generate(
     except Exception:
         logger.exception("finalize failed")
 
-    success = bool(out.qa_passed) or str(out.status).upper() in {"PASSED", "DELIVERED"}
+    status_u = str(out.status).upper()
+    awaiting = status_u == "AWAITING_CONFIRMATION" or bool((out.extensions or {}).get("langgraph_interrupt"))
+    success = bool(out.qa_passed) or status_u in {"PASSED", "DELIVERED"}
+    # HITL pause is not a hard failure — surface message for the user to confirm
     errors = list(out.build_errors or [])
-    if not success and out.final_message:
+    if not success and not awaiting and out.final_message:
         errors.append(out.final_message[:500])
+    pending = (out.extensions or {}).get("pending_action") or {}
     return GenerationResult(
-        success=success,
+        success=success or awaiting,  # awaiting counts as handled success path
         project_path=out.generated_path or None,
         validation_reports=[out.qa_report] if out.qa_report else [],
         errors=errors[:30],
         metadata={
+            "final_message": (out.final_message or "")[:2000],
             "engine": "langgraph+cline",
             "orchestration": "langgraph+cline",
             "state_id": out.state_id,
@@ -645,23 +650,42 @@ def orchestrate_generate(
             "attempts": out.attempts,
             "task_tree": (out.extensions or {}).get("task_tree_summary"),
             "qa_passed": out.qa_passed,
+            "langgraph_interrupt": bool((out.extensions or {}).get("langgraph_interrupt")),
+            "hitl_status": (out.extensions or {}).get("hitl_status"),
+            "langgraph_thread_id": (out.extensions or {}).get("langgraph_thread_id"),
+            "pending_action_id": pending.get("action_id"),
+            "confirm_token": pending.get("confirm_token"),
+            "awaiting_hitl": awaiting,
         },
     )
 
 
 
 
-def _resume_or_rerun(state, ctx, board, orch):
+def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
     """Prefer official LangGraph Command(resume) when an interrupt is pending."""
     ext = state.extensions or {}
-    if ext.get("langgraph_interrupt") or ext.get("hitl_status") == "awaiting_approval":
+    pending = ext.get("pending_action") or {}
+    tool = str(pending.get("tool") or state.capability_id or "")
+    is_lg = (
+        ext.get("langgraph_interrupt")
+        or ext.get("hitl_status") == "awaiting_approval"
+        or tool == "langgraph_plan_approve"
+    )
+    if is_lg:
         try:
             from .langgraph_pipeline import resume_langgraph_hitl
-            return resume_langgraph_hitl(state, "approved", context=ctx, board=board)
+            return resume_langgraph_hitl(state, decision, context=ctx, board=board)
         except Exception as exc:
             state.extensions = dict(ext)
             state.extensions["hitl_resume_error"] = f"{type(exc).__name__}:{exc}"
+            if str(decision).lower() in {"rejected", "reject", "no", "cancel"}:
+                state.status = "FAILED"
+                state.final_message = state.final_message or f"HITL reject failed: {exc}"
+                return state
     return orch.run(state, context=ctx)
+
+
 
 
 def resume_after_confirm(
@@ -689,8 +713,8 @@ def resume_after_confirm(
     ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
     orch = Orchestrator(board=board)
     # For generate tools after confirm, run full build loop
-    if tool in {"generate_bot", "refine_bot"}:
-        return _resume_or_rerun(state, ctx, board, orch)
+    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve"}:
+        return _resume_or_rerun(state, ctx, board, orch, decision="approved")
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
     board.put(state)
@@ -717,8 +741,8 @@ def continue_after_confirm(
     tool = str(pending.get("tool") or state.capability_id or "")
     ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
     orch = Orchestrator(board=board)
-    if tool in {"generate_bot", "refine_bot"}:
-        return _resume_or_rerun(state, ctx, board, orch)
+    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve"}:
+        return _resume_or_rerun(state, ctx, board, orch, decision="approved")
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
     board.put(state)

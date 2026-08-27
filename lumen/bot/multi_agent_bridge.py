@@ -58,6 +58,19 @@ def try_handle_hitl_message(
 
     if verb == "reject":
         ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))
+        if ok and state is not None:
+            ext = getattr(state, "extensions", None) or {}
+            pending = ext.get("pending_action") or {}
+            if (
+                ext.get("langgraph_interrupt")
+                or pending.get("tool") == "langgraph_plan_approve"
+                or ext.get("hitl_status") == "awaiting_approval"
+            ):
+                try:
+                    from lumen.engine.services.multi_agent.langgraph_pipeline import resume_langgraph_hitl
+                    state = resume_langgraph_hitl(state, "rejected")
+                except Exception:
+                    logger.exception("langgraph reject resume failed")
         if isinstance(user_data, dict):
             user_data.pop("multi_agent_pending", None)
             user_data.pop("multi_agent_state_id", None)
@@ -95,12 +108,14 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
     if not isinstance(user_data, dict) or state is None:
         return
     try:
-        pending = (getattr(state, "extensions", None) or {}).get("pending_action") or {}
-        if pending:
+        ext = getattr(state, "extensions", None) or {}
+        pending = ext.get("pending_action") or {}
+        if pending or ext.get("langgraph_interrupt"):
             user_data["multi_agent_pending"] = {
                 "action_id": pending.get("action_id"),
                 "state_id": getattr(state, "state_id", "") or pending.get("state_id"),
-                "tool": pending.get("tool"),
+                "tool": pending.get("tool") or "langgraph_plan_approve",
+                "langgraph_thread_id": ext.get("langgraph_thread_id"),
             }
             user_data["multi_agent_state_id"] = (
                 getattr(state, "state_id", "") or pending.get("state_id")

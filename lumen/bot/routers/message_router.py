@@ -2097,6 +2097,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
             return
 
+        # LangGraph HITL: park confirm token on user_data + show plan approval message
+        try:
+            meta = getattr(result, "metadata", None) or {}
+            if meta.get("awaiting_hitl") or meta.get("langgraph_interrupt"):
+                from ..multi_agent_bridge import remember_hitl_pending
+                class _St:
+                    pass
+                st = _St()
+                st.state_id = meta.get("state_id")
+                st.extensions = {
+                    "pending_action": {
+                        "action_id": meta.get("pending_action_id"),
+                        "state_id": meta.get("state_id"),
+                        "tool": "langgraph_plan_approve",
+                        "confirm_token": meta.get("confirm_token"),
+                    },
+                    "langgraph_interrupt": True,
+                    "langgraph_thread_id": meta.get("langgraph_thread_id"),
+                    "hitl_status": "awaiting_approval",
+                }
+                remember_hitl_pending(context.user_data, st)
+                msg = (meta.get("final_message") or "").strip()
+                if msg:
+                    await status_msg.edit_text(msg[:4000])
+                    return
+        except Exception:
+            logger.exception("langgraph HITL surface failed")
+
         # Explorer watermark + plan post-process (server-side, cannot be skipped by client)
         try:
             if result and getattr(result, "success", False) and getattr(result, "project_path", None):
