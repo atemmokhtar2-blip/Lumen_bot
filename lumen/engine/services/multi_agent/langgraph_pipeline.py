@@ -148,9 +148,73 @@ def _run_named(registry: Any, name: str, state: AgentState, ctx: dict) -> AgentS
     return agent.run(state, context=ctx)
 
 
+
+def _merge_agent_state(left: AgentState | None, right: AgentState | None) -> AgentState:
+    """Reducer for parallel LangGraph Send — merge task trees without dropping DONE marks."""
+    if left is None:
+        return right  # type: ignore
+    if right is None:
+        return left
+    try:
+        lext = dict(left.extensions or {})
+        rext = dict(right.extensions or {})
+        lt = TaskTree.from_dict(lext.get("task_tree") or {})
+        rt = TaskTree.from_dict(rext.get("task_tree") or {})
+        # Prefer terminal statuses from either side
+        for nid, node in rt.nodes.items():
+            if nid not in lt.nodes:
+                lt.nodes[nid] = node
+                continue
+            cur = lt.nodes[nid]
+            # DONE/FAILED from right wins; RUNNING only if left still pending
+            if node.status in {TaskStatus.DONE.value, TaskStatus.FAILED.value, TaskStatus.SKIPPED.value}:
+                lt.nodes[nid] = node
+            elif cur.status in {TaskStatus.PENDING.value, TaskStatus.READY.value} and node.status == TaskStatus.RUNNING.value:
+                lt.nodes[nid] = node
+        lext["task_tree"] = lt.to_dict()
+        lext["task_tree_summary"] = lt.summary()
+        # merge notes-like extension keys
+        for k in ("last_worker_notes", "plan_intent"):
+            lv = lext.get(k)
+            rv = rext.get(k)
+            if isinstance(lv, list) and isinstance(rv, list):
+                lext[k] = list(lv) + [x for x in rv if x not in lv]
+            elif rv and not lv:
+                lext[k] = rv
+        left.extensions = lext
+        if right.generated_path:
+            left.generated_path = right.generated_path
+        if right.build_success:
+            left.build_success = True
+        if right.build_errors:
+            left.build_errors = list(left.build_errors or []) + list(right.build_errors or [])
+        if right.qa_passed:
+            left.qa_passed = True
+        if right.qa_report:
+            left.qa_report = right.qa_report
+        # prefer more advanced status
+        order = ["pending", "planning", "building", "awaiting_confirmation", "passed", "delivered", "failed"]
+        try:
+            if order.index(str(right.status).lower()) >= order.index(str(left.status).lower()):
+                left.status = right.status
+        except ValueError:
+            if right.status:
+                left.status = right.status
+        return left
+    except Exception:
+        logger.exception("merge_agent_state failed — preferring right")
+        return right
+
+
+def _merge_context(left: dict | None, right: dict | None) -> dict:
+    out = dict(left or {})
+    out.update(dict(right or {}))
+    return out
+
+
 class GraphState(TypedDict, total=False):
-    agent: AgentState
-    context: dict[str, Any]
+    agent: Annotated[AgentState, _merge_agent_state]
+    context: Annotated[dict[str, Any], _merge_context]
     last_node: str
     active_task_ids: list[str]
     wave: int
