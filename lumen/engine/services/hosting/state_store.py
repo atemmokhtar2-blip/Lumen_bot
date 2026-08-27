@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS instances (
     bot_username TEXT DEFAULT '',
     status TEXT NOT NULL,
     deployment_id TEXT DEFAULT '',
+    sandbox_backend TEXT DEFAULT '',
     pid INTEGER,
     started_at REAL DEFAULT 0,
     last_error TEXT DEFAULT '',
@@ -71,6 +72,10 @@ class HostingStateStore:
     def _init_db(self) -> None:
         conn = self._conn()
         conn.executescript(_SCHEMA)
+        try:
+            conn.execute("ALTER TABLE instances ADD COLUMN sandbox_backend TEXT DEFAULT ''")
+        except Exception:
+            pass
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
@@ -137,6 +142,7 @@ class HostingStateStore:
                     inst.get("bot_username") or "",
                     inst.get("status") or "stopped",
                     inst.get("deployment_id") or "",
+                    inst.get("sandbox_backend") or "",
                     inst.get("pid"),
                     float(inst.get("started_at") or 0),
                     inst.get("last_error") or "",

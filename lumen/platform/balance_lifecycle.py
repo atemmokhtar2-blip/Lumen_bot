@@ -251,12 +251,13 @@ def _notify(tenant_id: str, level: str, message: str, extra: Optional[dict] = No
 
 
 def _snapshot_and_stop(tenant_id: str) -> dict[str, Any]:
-    """Capture running bot list then graceful stop."""
+    """Capture running bot list then graceful stop (containers + Firecracker VMs)."""
     stopped = 0
     bots: list[dict[str, str]] = []
     try:
         from lumen.engine.services.sandbox_runtime.supervisor import (
             list_managed_containers,
+            list_managed_firecracker_vms,
             _docker,
         )
         for c in list_managed_containers():
@@ -266,15 +267,39 @@ def _snapshot_and_stop(tenant_id: str) -> dict[str, Any]:
                 continue
             cid = str(c.get("id") or "")
             bot_id = str(labels.get("tbe.bot_id") or c.get("bot_id") or c.get("name") or cid)[:120]
-            bots.append({"container_id": cid[:64], "bot_id": bot_id, "status": str(c.get("status") or "")})
+            bots.append({"container_id": cid[:64], "bot_id": bot_id, "status": str(c.get("status") or ""), "backend": "docker"})
             if cid:
                 code, _ = _docker(["stop", "-t", "20", cid], timeout=35)
                 _docker(["rm", "-f", cid], timeout=20)
-                if code == 0:
+                stopped += 1
+        # Firecracker: match by user_id if tenant_id is numeric, or stop all FC metas tagged
+        try:
+            from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                FirecrackerSandboxBackend,
+            )
+            fc = FirecrackerSandboxBackend()
+            tid_str = str(tenant_id)
+            for vm in list_managed_firecracker_vms():
+                uid = str(vm.get("user_id") or "")
+                # tenant_id may equal user_id in consumer path
+                if uid and uid != tid_str and tid_str not in str(vm.get("id") or ""):
+                    continue
+                vid = str(vm.get("id") or "")
+                if not vid:
+                    continue
+                bots.append({
+                    "container_id": vid[:64],
+                    "bot_id": vid[:120],
+                    "status": str(vm.get("status") or ""),
+                    "backend": "firecracker",
+                })
+                try:
+                    fc.stop(vid)
                     stopped += 1
-                else:
-                    # force path already rm -f
-                    stopped += 1
+                except Exception:
+                    pass
+        except Exception as fc_exc:
+            logger.warning("fc snapshot_stop: %s", type(fc_exc).__name__)
     except Exception as exc:
         logger.warning("snapshot_stop failed: %s", type(exc).__name__)
         return {"ok": False, "stopped": stopped, "bots": bots, "error": type(exc).__name__}

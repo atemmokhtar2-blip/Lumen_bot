@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tbe_host_instances (
   bot_username TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'stopped',
   deployment_id TEXT NOT NULL DEFAULT '',
+  sandbox_backend TEXT NOT NULL DEFAULT '',
   pid BIGINT,
   started_at DOUBLE PRECISION NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL DEFAULT '',
@@ -62,6 +63,10 @@ class PgHostStateStore:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(_SCHEMA)
+                try:
+                    cur.execute("ALTER TABLE tbe_host_instances ADD COLUMN IF NOT EXISTS sandbox_backend TEXT NOT NULL DEFAULT ''")
+                except Exception:
+                    pass
             conn.commit()
 
     def _row_to_dict(self, row) -> dict[str, Any]:
@@ -69,7 +74,7 @@ class PgHostStateStore:
             return dict(row)
         keys = [
             "instance_id", "user_id", "project_path", "entry_point", "bot_username",
-            "status", "deployment_id", "pid", "started_at", "last_error",
+            "status", "deployment_id", "sandbox_backend", "pid", "started_at", "last_error",
             "last_diagnosis", "token_fp", "updated_at",
         ]
         return {k: row[i] for i, k in enumerate(keys)}
@@ -77,7 +82,7 @@ class PgHostStateStore:
     def list_all(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT instance_id, user_id, project_path, entry_point, bot_username, status, deployment_id, pid, started_at, last_error, last_diagnosis, token_fp, updated_at FROM tbe_host_instances")
+                cur.execute("SELECT instance_id, user_id, project_path, entry_point, bot_username, status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, token_fp, updated_at FROM tbe_host_instances")
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -91,11 +96,11 @@ class PgHostStateStore:
                     """
                     INSERT INTO tbe_host_instances (
                       instance_id, user_id, project_path, entry_point, bot_username,
-                      status, deployment_id, pid, started_at, last_error, last_diagnosis,
+                      status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
                       token_fp, updated_at
                     ) VALUES (
                       %(instance_id)s, %(user_id)s, %(project_path)s, %(entry_point)s, %(bot_username)s,
-                      %(status)s, %(deployment_id)s, %(pid)s, %(started_at)s, %(last_error)s, %(last_diagnosis)s,
+                      %(status)s, %(deployment_id)s, %(sandbox_backend)s, %(pid)s, %(started_at)s, %(last_error)s, %(last_diagnosis)s,
                       %(token_fp)s, %(updated_at)s
                     )
                     ON CONFLICT (instance_id) DO UPDATE SET
@@ -105,6 +110,7 @@ class PgHostStateStore:
                       bot_username=EXCLUDED.bot_username,
                       status=EXCLUDED.status,
                       deployment_id=EXCLUDED.deployment_id,
+                      sandbox_backend=EXCLUDED.sandbox_backend,
                       pid=EXCLUDED.pid,
                       started_at=EXCLUDED.started_at,
                       last_error=EXCLUDED.last_error,
@@ -120,6 +126,7 @@ class PgHostStateStore:
                         "bot_username": inst.get("bot_username") or "",
                         "status": inst.get("status") or "stopped",
                         "deployment_id": inst.get("deployment_id") or "",
+                        "sandbox_backend": inst.get("sandbox_backend") or "",
                         "pid": inst.get("pid"),
                         "started_at": float(inst.get("started_at") or 0),
                         "last_error": inst.get("last_error") or "",
@@ -144,7 +151,7 @@ class PgHostStateStore:
                 cur.execute(
                     """
                     SELECT instance_id, user_id, project_path, entry_point, bot_username,
-                           status, deployment_id, pid, started_at, last_error, last_diagnosis,
+                           status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
                            token_fp, updated_at
                     FROM tbe_host_instances
                     WHERE status = 'running'

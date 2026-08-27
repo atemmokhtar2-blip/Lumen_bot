@@ -42,14 +42,17 @@ _log = logging.getLogger("engine.live_deployment")
 
 
 def _select_primary_provider():
-    """Select runtime isolation driver via central isolation policy (fail-closed)."""
-    from lumen.engine.services.isolation_policy import select_process_driver
-    try:
-        driver, decision = select_process_driver()
-    except RuntimeError as exc:
-        _log.error("Isolation policy blocked deployment provider: %s", exc)
-        raise
-    _log.info("Live deployment provider=%s (%s)", getattr(driver, "name", type(driver).__name__), decision.reason)
+    """Production path: sandbox_runtime only (Firecracker > gVisor > DinD > Docker)."""
+    from lumen.engine.engines.generators.live_deployment.sandbox_process_driver import (
+        SandboxProcessDriver,
+    )
+    from lumen.engine.services.isolation_policy import decide_isolation, require_strong_isolation
+
+    decision = decide_isolation()
+    if decision.require_strong_isolation:
+        require_strong_isolation()
+    driver = SandboxProcessDriver()
+    _log.info("Live deployment provider=%s (%s)", driver.name, decision.reason)
     return driver
 
 
@@ -75,7 +78,7 @@ class LiveDeploymentEngine(BaseEngine):
         self._token_validator = TokenValidator()
         self._secrets = get_secrets_manager()
         self._env_gen = EnvironmentGenerator()
-        # Prefer Docker for strong per-user isolation; fall back to local process
+        # Strong isolation only via sandbox_runtime
         self._provider = _select_primary_provider()
         self._railway = RailwayDriver()
         self._health = HealthChecker()
