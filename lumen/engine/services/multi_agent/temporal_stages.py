@@ -161,8 +161,28 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
 
         def _runner(task, session):
             brief = tree.worker_brief(task.id)
+            # Prefer on-disk task tree brief if present (planner → worker contract)
+            try:
+                from .worktree_isolation import read_task_tree_disk
+                from .task_tree import TaskTree as _TT
+                disk = read_task_tree_disk(work)
+                if disk:
+                    brief = _TT.from_dict(disk).worker_brief(task.id) or brief
+            except Exception:
+                pass
+            from .context_views import worker_task_view
             acc = list(getattr(task, "acceptance", None) or [])
             files = list(getattr(task, "files", None) or [])
+            wview = worker_task_view(
+                goal=agent.spec_request or agent.user_text or "",
+                task_brief=brief,
+                target_files=files,
+                constraints=list(
+                    ((agent.extensions or {}).get("execution_plan") or {}).get("constraints")
+                    or []
+                )[:12],
+            )
+            brief = (wview.get("task_brief") or brief)
             result = run_coding_session(
                 work_dir=session.path,
                 goal=agent.spec_request or agent.user_text or "",
@@ -192,10 +212,30 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
             }
 
         if multi:
-            # Concurrent worktrees (world-class parallel agents)
-            for t in wave:
+            # Disjoint ownership → parallel; overlapping files → serial (Cursor rule)
+            from .worktree_isolation import partition_wave_by_ownership, prune_worktrees
+            parallel_safe, serial = partition_wave_by_ownership(wave)
+            batch = []
+            if parallel_safe:
+                for t in parallel_safe:
+                    tree.mark(t.id, TaskStatus.RUNNING)
+                batch.extend(
+                    run_tasks_in_parallel(work, parallel_safe, _runner, max_workers=cap)
+                )
+            for t in serial:
                 tree.mark(t.id, TaskStatus.RUNNING)
-            batch = run_tasks_in_parallel(work, wave, _runner, max_workers=cap)
+                session = acquire_task_workspace(work, str(t.id), use_isolation=True)
+                try:
+                    batch.append(_runner(t, session))
+                finally:
+                    try:
+                        release_task_workspace(session)
+                    except Exception:
+                        pass
+            try:
+                prune_worktrees(work)
+            except Exception:
+                pass
             for item in batch:
                 tid = str(item.get("task_id") or "")
                 if item.get("ok"):

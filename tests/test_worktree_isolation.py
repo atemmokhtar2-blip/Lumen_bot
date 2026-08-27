@@ -90,3 +90,43 @@ def test_no_isolation_returns_main():
         assert s.path == wd
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_ownership_overlap_partition():
+    from lumen.engine.services.multi_agent.worktree_isolation import (
+        owned_files_overlap,
+        partition_wave_by_ownership,
+    )
+
+    class T:
+        def __init__(self, i, files):
+            self.id = i
+            self.files = files
+
+    tasks = [T("a", ["x.py"]), T("b", ["x.py", "y.py"]), T("c", ["z.py"])]
+    ov = owned_files_overlap(tasks)
+    assert any(o[0] == "x.py" for o in ov)
+    safe, serial = partition_wave_by_ownership(tasks)
+    assert [t.id for t in safe] == ["c"]
+    assert set(t.id for t in serial) == {"a", "b"}
+
+
+def test_prune_worktrees():
+    from lumen.engine.services.multi_agent.worktree_isolation import (
+        ensure_git_repo,
+        acquire_task_workspace,
+        release_task_workspace,
+        prune_worktrees,
+    )
+
+    wd = Path(tempfile.mkdtemp(prefix="wt_prune_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        ensure_git_repo(wd)
+        s = acquire_task_workspace(wd, "z1", use_isolation=True)
+        assert s.kind == "worktree"
+        release_task_workspace(s)
+        out = prune_worktrees(wd)
+        assert out.get("ok") is True
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)

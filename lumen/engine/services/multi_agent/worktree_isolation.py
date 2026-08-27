@@ -365,6 +365,70 @@ def run_tasks_in_parallel(
     return results
 
 
+
+
+
+def owned_files_overlap(tasks: list) -> list:
+    """Return list of (file, task_a, task_b) for overlapping owned files."""
+    claim = {}
+    overlaps = []
+    for task in tasks:
+        tid = str(getattr(task, "id", "") or "")
+        for f in list(getattr(task, "files", None) or []):
+            rel = str(f).replace(chr(92), "/").lstrip("./")
+            if not rel:
+                continue
+            if rel in claim and claim[rel] != tid:
+                overlaps.append((rel, claim[rel], tid))
+            else:
+                claim[rel] = tid
+    return overlaps
+
+
+def partition_wave_by_ownership(tasks: list) -> tuple:
+    """Split wave into (parallel_safe, must_run_serial) by file ownership overlap."""
+    overlaps = owned_files_overlap(tasks)
+    if not overlaps:
+        return list(tasks), []
+    contested = set()
+    for _rel, a, b in overlaps:
+        contested.add(a)
+        contested.add(b)
+    parallel_safe = [t for t in tasks if str(getattr(t, "id", "")) not in contested]
+    serial = [t for t in tasks if str(getattr(t, "id", "")) in contested]
+    return parallel_safe, serial
+
+
+def prune_worktrees(work_dir) -> dict:
+    """Remove stale agent/* worktrees and branches under work_dir."""
+    root = Path(work_dir)
+    removed = []
+    if not is_git_repo(root):
+        return {"ok": True, "removed": []}
+    with _repo_lock(root):
+        r = _run_git(root, "worktree", "list", "--porcelain")
+        lines = (r.stdout or "").splitlines()
+        path = None
+        for ln in lines:
+            if ln.startswith("worktree "):
+                path = ln.split(" ", 1)[1].strip()
+            elif ln.startswith("branch ") and path:
+                br = ln.split(" ", 1)[1].strip()
+                norm = path.replace(chr(92), "/")
+                if "/.worktrees/" in norm or br.startswith("refs/heads/agent/"):
+                    _run_git(root, "worktree", "remove", "--force", path)
+                    removed.append(path)
+                path = None
+        _run_git(root, "worktree", "prune")
+        br = _run_git(root, "branch", "--list", "agent/*")
+        for ln in (br.stdout or "").splitlines():
+            name = ln.replace("*", "").strip()
+            if name.startswith("agent/"):
+                _run_git(root, "branch", "-D", name)
+                removed.append("branch:" + name)
+    return {"ok": True, "removed": removed}
+
+
 __all__ = [
     "TaskWorkspace",
     "git_available",
@@ -376,4 +440,7 @@ __all__ = [
     "write_task_tree_disk",
     "read_task_tree_disk",
     "run_tasks_in_parallel",
+    "owned_files_overlap",
+    "partition_wave_by_ownership",
+    "prune_worktrees",
 ]

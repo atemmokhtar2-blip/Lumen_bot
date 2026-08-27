@@ -98,10 +98,28 @@ def _qa_summary(state: AgentState) -> dict[str, Any] | None:
     }
 
 
+
+
+def worker_task_view(
+    *,
+    goal: str,
+    task_brief: str,
+    target_files: list | None = None,
+    constraints: list | None = None,
+) -> dict[str, Any]:
+    """Minimal context for a parallel worker — brief + owned files only (no full AgentState)."""
+    return {
+        "goal": (goal or "")[:4000],
+        "task_brief": (task_brief or "")[:8000],
+        "target_files": list(target_files or [])[:40],
+        "constraints": list(constraints or [])[:20],
+    }
+
 __all__ = [
     "router_view",
     "architect_view",
     "builder_view",
     "critic_view",
     "deliver_view",
+    "worker_task_view",
 ]
