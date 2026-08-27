@@ -23,18 +23,31 @@ logger = logging.getLogger(__name__)
 
 
 def set_tenant_context(conn, tenant_id: str) -> None:
-    """SET LOCAL app.tenant_id for PostgreSQL RLS."""
+    """SET LOCAL app.tenant_id for PostgreSQL RLS (required non-empty)."""
     tid = str(tenant_id or "").strip()
     if not tid:
-        return
+        raise ValueError("tenant_id_required_for_rls")
     try:
         conn.execute("SELECT set_config('app.tenant_id', %s, true)", (tid,))
+        conn.execute("SELECT set_config('app.rls_bypass', %s, true)", ("off",))
     except Exception:
         try:
             cur = conn.cursor()
             cur.execute("SELECT set_config(%s, %s, true)", ("app.tenant_id", tid))
+            cur.execute("SELECT set_config(%s, %s, true)", ("app.rls_bypass", "off"))
         except Exception:
             logger.debug("set_tenant_context failed", exc_info=True)
+            raise
+
+
+def set_rls_bypass(conn, enabled: bool = True) -> None:
+    """Maintenance-only: allow schema ops without a tenant GUC. Never use for user requests."""
+    flag = "on" if enabled else "off"
+    try:
+        conn.execute("SELECT set_config('app.rls_bypass', %s, true)", (flag,))
+    except Exception:
+        cur = conn.cursor()
+        cur.execute("SELECT set_config(%s, %s, true)", ("app.rls_bypass", flag))
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -67,12 +80,16 @@ class PostgresCreditsStore:
         return conn
 
     def _tenant_conn(self, tenant_id: str):
-        """Connection with app.tenant_id set for PostgreSQL RLS."""
+        """Connection with app.tenant_id set for PostgreSQL RLS (fail-closed)."""
         from contextlib import contextmanager
+
+        tid = str(tenant_id or "").strip()
+        if not tid:
+            raise ValueError("tenant_id_required_for_rls")
 
         @contextmanager
         def _cm():
-            with self._conn(tenant_id) as conn:
+            with self._conn(tid) as conn:
                 yield conn
 
         return _cm()
@@ -81,6 +98,10 @@ class PostgresCreditsStore:
         sql = _SCHEMA_PATH.read_text(encoding="utf-8")
         # PG11-13: EXECUTE PROCEDURE; try whole schema and log trigger errors
         with self._conn() as conn:
+            try:
+                set_rls_bypass(conn, True)
+            except Exception:
+                pass
             try:
                 conn.execute(sql)
             except Exception as exc:

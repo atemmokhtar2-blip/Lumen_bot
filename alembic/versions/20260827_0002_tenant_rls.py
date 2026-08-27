@@ -38,14 +38,18 @@ def upgrade() -> None:
             CREATE POLICY tenant_isolation ON "{table}"
             FOR ALL
             USING (
-                tenant_id = current_setting('app.tenant_id', true)
-                OR current_setting('app.tenant_id', true) IS NULL
-                OR current_setting('app.tenant_id', true) = ''
+                current_setting('app.rls_bypass', true) = 'on'
+                OR (
+                    COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '') <> ''
+                    AND tenant_id = current_setting('app.tenant_id', true)
+                )
             )
             WITH CHECK (
-                tenant_id = current_setting('app.tenant_id', true)
-                OR current_setting('app.tenant_id', true) IS NULL
-                OR current_setting('app.tenant_id', true) = ''
+                current_setting('app.rls_bypass', true) = 'on'
+                OR (
+                    COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '') <> ''
+                    AND tenant_id = current_setting('app.tenant_id', true)
+                )
             )
             """
         )
@@ -58,14 +62,18 @@ def upgrade() -> None:
         CREATE POLICY tenant_isolation ON tenants
         FOR ALL
         USING (
-            tenant_id = current_setting('app.tenant_id', true)
-            OR current_setting('app.tenant_id', true) IS NULL
-            OR current_setting('app.tenant_id', true) = ''
+            current_setting('app.rls_bypass', true) = 'on'
+            OR (
+                COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '') <> ''
+                AND tenant_id = current_setting('app.tenant_id', true)
+            )
         )
         WITH CHECK (
-            tenant_id = current_setting('app.tenant_id', true)
-            OR current_setting('app.tenant_id', true) IS NULL
-            OR current_setting('app.tenant_id', true) = ''
+            current_setting('app.rls_bypass', true) = 'on'
+            OR (
+                COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '') <> ''
+                AND tenant_id = current_setting('app.tenant_id', true)
+            )
         )
         """
     )
