@@ -58,7 +58,7 @@ tree-sitter-cpp>=0.23.0
 
 # Official agent orchestration (LangGraph)
 langgraph>=1.0.0,<2
-langchain-core>=0.3.0,<1
+langchain-core>=1.4.0,<2
 
 # Official MCP Python SDK
 mcp>=1.0.0,<2

@@ -15,7 +15,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+        libcurl4-openssl-dev libssl-dev \
+        gcc g++ make \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 appuser \
     && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
