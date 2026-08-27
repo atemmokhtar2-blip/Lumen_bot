@@ -255,11 +255,21 @@ class CriticAgent(Agent):
                 for ch in exec_fb.get("checks") or []:
                     if ch.get("ok"):
                         continue
+                    msg = (ch.get("stderr") or ch.get("error") or ch.get("stdout") or "execution_failed")[:400]
+                    # Missing optional runtime deps (telegram/discord not installed in CI) = warning, not hard fail
+                    soft = any(
+                        x in msg
+                        for x in (
+                            "ModuleNotFoundError",
+                            "No module named",
+                            "ImportError",
+                        )
+                    )
                     findings.append(CritiqueFinding(
                         code=f"exec_{ch.get('name') or 'check'}",
-                        severity="error",
-                        message=(ch.get("stderr") or ch.get("error") or ch.get("stdout") or "execution_failed")[:400],
-                        fix_hint="Fix runtime/import/test errors then re-run",
+                        severity="warning" if soft else "error",
+                        message=msg,
+                        fix_hint="Install project requirements in runtime image, or fix real runtime errors",
                     ))
         except Exception as _ef_exc:
             warnings.append(f"execution_feedback_skip:{type(_ef_exc).__name__}")

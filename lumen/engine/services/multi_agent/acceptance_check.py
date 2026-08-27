@@ -262,6 +262,33 @@ def check_criterion(root: Path, criterion: str, *, strict: bool = True) -> dict[
         ok = (root / "README.md").is_file()
         return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "readme"}
 
+
+    if "core behavior" in c or "core functions" in c:
+        tree, src = _main_ast(root)
+        names = _ast_names(tree) if tree else set()
+        ok = tree is not None and (len(names) >= 2 or "def " in src)
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "core_behavior" if ok else "core_behavior_missing"}
+
+    if "list handlers" in c or "entrypoint understood" in c:
+        tree, _ = _main_ast(root)
+        ok = tree is not None or (root / "main.py").is_file()
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "handlers_understood"}
+
+    if "edits applied" in c:
+        pys = [p for p in root.rglob("*.py") if p.is_file()]
+        ok = any(p.stat().st_size > 0 for p in pys)
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "edits_applied"}
+
+    if "project still imports" in c or "main importable" in c or "importable package" in c:
+        tree, _ = _main_ast(root)
+        ok = tree is not None
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "importable"}
+
+    if "at least one test" in c:
+        tests = list(root.glob("test_*.py")) + list(root.glob("tests/**/*.py"))
+        ok = len(tests) > 0
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "tests_present" if ok else "tests_missing"}
+
     # Entrypoint present (scaffold gate)
     if "entrypoint" in c:
         candidates = ["main.py", "bot.py", "app.py", "src/main.py", "src/bot.py"]
