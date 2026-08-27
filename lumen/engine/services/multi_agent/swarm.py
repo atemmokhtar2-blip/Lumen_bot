@@ -94,6 +94,14 @@ def run_swarm(
     base_goal: str = "",
     ir_dict: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .production_policy import allow_swarm
+    if not allow_swarm():
+        return {
+            "ok": False,
+            "error": "swarm_disabled: set MULTI_AGENT_SWARM=1 to enable experimental parallel workers",
+            "engine": "swarm_disabled",
+            "workers": [],
+        }
     root = Path(work_dir)
     root.mkdir(parents=True, exist_ok=True)
     n = max_workers or _max_workers()

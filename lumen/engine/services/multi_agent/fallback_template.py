@@ -1,69 +1,50 @@
-"""Verified template fallback — deterministic catalog path removed.
+"""DEAD PATH — verified template fallback is permanently disabled.
 
-Returns explicit failure so callers surface Cline errors instead of silent
-legacy generate_bot. Kept as import-stable stub for multi_agent orchestrator.
+Kept as an import-stable module so old callers fail loudly instead of
+silently producing a fake bot. Do not re-enable without a real engine.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-@dataclass
-class FallbackBuild:
-    ok: bool = False
-    project_path: str | None = None
-    generation_result: Any = None
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    preset: str | None = None
+_DISABLED_MSG = (
+    "verified_template_fallback_disabled: use LangGraph + coding_agent (Cline agent_loop) only"
+)
 
 
-def should_trigger_verified_fallback(
-    *,
-    attempts: int = 0,
-    stagnant: bool = False,
-    already_tried: bool = False,
-) -> bool:
-    """Catalog fallback purged — never auto-trigger a deterministic template."""
+def should_trigger_verified_fallback(*_a: Any, **_k: Any) -> bool:
+    """Always False — template fallback is dead."""
     return False
 
 
-def build_verified_bot(
-    request: str,
-    *,
-    work_dir: str | Path,
-    user_id: int = 0,
-) -> FallbackBuild:
-    """No deterministic fallback — Cline SDK only."""
-    return FallbackBuild(
-        ok=False,
-        errors=["no_deterministic_fallback"],
-        warnings=["use_cline_sdk_only"],
-    )
+def build_verified_bot(*_a: Any, **_k: Any) -> dict[str, Any]:
+    """Refuses to run. Returns explicit failure (never writes a fake bot)."""
+    return {
+        "ok": False,
+        "error": _DISABLED_MSG,
+        "engine": "disabled_template_fallback",
+        "project_path": None,
+    }
 
 
 def run_verified_fallback_on_state(state: Any, *, work_dir: str | Path | None = None) -> Any:
-    """No-op path: mark extension and return state unchanged structurally."""
-    try:
-        state.extensions = dict(state.extensions or {})
-        state.extensions["fallback_template_tried"] = True
-        state.extensions["fallback_template_result"] = {
-            "ok": False,
-            "errors": ["no_deterministic_fallback"],
-        }
-        errs = list(state.build_errors or [])
-        errs.append("no_deterministic_fallback")
-        state.build_errors = errs[:20]
-    except Exception:
-        pass
+    """Marks state with explicit refusal — does not generate code."""
+    if state is not None and hasattr(state, "extensions"):
+        try:
+            state.extensions["fallback_template_tried"] = False
+            state.extensions["fallback_template_disabled"] = True
+            state.extensions["fallback_template_result"] = {
+                "ok": False,
+                "error": _DISABLED_MSG,
+            }
+        except Exception:
+            pass
     return state
 
 
 __all__ = [
-    "FallbackBuild",
-    "build_verified_bot",
     "should_trigger_verified_fallback",
+    "build_verified_bot",
     "run_verified_fallback_on_state",
 ]

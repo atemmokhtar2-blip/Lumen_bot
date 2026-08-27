@@ -40,10 +40,12 @@ from .health import health_snapshot, liveness, readiness
 from .run_report import write_run_report, recent_reports
 from .tracing import ensure_trace, trace_summary
 from .concurrency import active_count, orchestration_slot
-from .fallback_template import should_trigger_verified_fallback, build_verified_bot, run_verified_fallback_on_state
+# fallback_template is DEAD — not re-exported (import path still works for fail-loud)
 from .trajectory import append_trajectory, load_trajectory, trajectory_summary
 from .plan_contract import ExecutionPlan, PlanTask, build_plan_from_spec
 from .findings import CritiqueFinding
+from .event_wake import temporal_enabled, signal_wake, schedule_wake_cron
+from .production_policy import policy_snapshot, allow_swarm, allow_template_fallback
 from .repair_worker import should_incremental_repair, run_incremental_repair
 from .redis_board import (
     RedisLayeredBlackboard, list_resumable_state_ids, resume_interrupted_state,
@@ -52,6 +54,9 @@ from .redis_board import (
 )
 
 __all__ = [
+    "policy_snapshot", "allow_swarm", "allow_template_fallback",
+    "temporal_enabled", "signal_wake", "schedule_wake_cron",
+
     "SCHEMA_VERSION",
     "AgentState",
     "AgentStatus",
@@ -107,7 +112,7 @@ __all__ = [
     "write_run_report", "recent_reports",
     "ensure_trace", "trace_summary",
     "active_count", "orchestration_slot",
-    "should_trigger_verified_fallback", "build_verified_bot", "run_verified_fallback_on_state",
+    
     "append_trajectory",
     "load_trajectory",
     "trajectory_summary",

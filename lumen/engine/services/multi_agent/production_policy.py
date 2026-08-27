@@ -1,9 +1,12 @@
 """Single source of truth for production agent runtime policy.
 
 World-class gate (no silent degradation):
-  - LangGraph is the only orchestration graph in production
-  - Temporal is the only durable workflow engine in production
-  - Verified template fallback is forbidden in production
+  - LangGraph is the only orchestration graph
+  - Temporal is the preferred durable shell (when TEMPORAL_HOST set)
+  - Verified template fallback is FORBIDDEN always
+  - Imperative while-True generate path is FORBIDDEN always
+  - CLINE_MODE=builtin catalog path is FORBIDDEN in production
+  - Swarm is OFF unless MULTI_AGENT_SWARM=1 (experimental)
 """
 from __future__ import annotations
 
@@ -33,47 +36,65 @@ def allow_imperative_fallback() -> bool:
 
 
 def allow_template_fallback() -> bool:
+    """Always False — template/stub bots are dead."""
+    return False
+
+
+def allow_cline_builtin() -> bool:
+    """Catalog compose path. Forbidden in production; opt-in only in dev."""
     if is_production():
         return False
-    return (os.getenv("MULTI_AGENT_ALLOW_TEMPLATE_FALLBACK") or "0").strip().lower() in {
+    return (os.getenv("CLINE_ALLOW_BUILTIN") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def allow_swarm() -> bool:
+    """Parallel swarm is experimental (weak merge). Off by default."""
+    return (os.getenv("MULTI_AGENT_SWARM") or "0").strip().lower() in {
         "1", "true", "yes", "on",
     }
 
 
 def required_workflow_engine() -> str:
-    """Production forces temporal unless explicitly overridden with non-empty TBE_WORKFLOW_ENGINE
-    that is still temporal* — only temporal is accepted in production.
-    """
-    forced = (os.getenv("TBE_WORKFLOW_ENGINE") or "").strip().lower()
+    """Prefer temporal when host is set; otherwise memory (dev only)."""
     if is_production():
-        if forced and forced not in {"temporal", "temporalio"}:
-            # reject memory/redis as primary in production
+        override = (os.getenv("TBE_WORKFLOW_ENGINE") or "").strip().lower()
+        if override and not override.startswith("temporal"):
+            # refuse non-temporal in production naming
             return "temporal"
         return "temporal"
-    return forced or (
-        "redis_streams"
-        if (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
-        else "memory"
-    )
+    return (os.getenv("TBE_WORKFLOW_ENGINE") or "memory").strip().lower() or "memory"
+
+
+def force_cline_agent_mode() -> bool:
+    """True when builtin must not run."""
+    return not allow_cline_builtin()
 
 
 def policy_snapshot() -> dict[str, Any]:
     return {
-        "environment": env_name(),
+        "env": env_name(),
         "is_production": is_production(),
         "require_langgraph": require_langgraph(),
         "allow_imperative_fallback": allow_imperative_fallback(),
         "allow_template_fallback": allow_template_fallback(),
+        "allow_cline_builtin": allow_cline_builtin(),
+        "allow_swarm": allow_swarm(),
         "workflow_engine": required_workflow_engine(),
+        "force_cline_agent_mode": force_cline_agent_mode(),
     }
 
 
 __all__ = [
-    "allow_imperative_fallback",
-    "allow_template_fallback",
     "env_name",
     "is_production",
-    "policy_snapshot",
     "require_langgraph",
+    "allow_imperative_fallback",
+    "allow_template_fallback",
+    "allow_cline_builtin",
+    "allow_swarm",
     "required_workflow_engine",
+    "force_cline_agent_mode",
+    "policy_snapshot",
 ]

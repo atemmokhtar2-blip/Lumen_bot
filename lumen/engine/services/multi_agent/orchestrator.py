@@ -62,7 +62,7 @@ def orchestrator_enabled() -> bool:
 
 
 def _max_attempts(state: AgentState) -> int:
-    """Hard cap: 1 dynamic attempt + verified-template path (default 2 total)."""
+    """Hard cap: dynamic agent attempts only (template path is dead)."""
     try:
         env = int(os.environ.get("MULTI_AGENT_MAX_ATTEMPTS") or state.max_attempts or 4)
     except ValueError:

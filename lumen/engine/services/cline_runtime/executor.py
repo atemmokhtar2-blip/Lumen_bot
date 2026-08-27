@@ -124,6 +124,32 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
         return external
 
     mode = _cline_mode()
+    # Production policy: catalog builtin is dead unless CLINE_ALLOW_BUILTIN=1 (dev only)
+    try:
+        from lumen.engine.services.multi_agent.production_policy import allow_cline_builtin
+        if mode == "builtin" and not allow_cline_builtin():
+            logger.error("cline builtin blocked by production policy")
+            return ClineExecutionResult(
+                ok=False,
+                engine="cline_builtin_blocked",
+                errors=["cline_builtin_disabled: set CLINE_MODE=agent (or CLINE_ALLOW_BUILTIN=1 in non-prod)"],
+                warnings=["builtin_path_removed"],
+                metadata={"policy": "force_agent"},
+                fallback_catalog=False,
+            )
+    except Exception as _pol_exc:
+        if mode == "builtin":
+            # Fail closed if policy import fails and mode is builtin
+            logger.warning("policy check failed (%s); refusing builtin", _pol_exc)
+            return ClineExecutionResult(
+                ok=False,
+                engine="cline_builtin_blocked",
+                errors=["cline_builtin_disabled_policy_unavailable"],
+                warnings=["builtin_path_removed"],
+                metadata={},
+                fallback_catalog=False,
+            )
+
     ir_dict = ir.to_dict() if hasattr(ir, "to_dict") else dict(ir)
 
     if mode == "agent":

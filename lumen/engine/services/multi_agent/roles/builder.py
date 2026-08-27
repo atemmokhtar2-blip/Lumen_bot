@@ -65,6 +65,9 @@ def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
     if not codegen:
         return None
     try:
+        from ..production_policy import allow_swarm
+        if not allow_swarm():
+            return None
         from ..swarm import run_swarm
         goal = (state.user_text or state.spec_request or plan.get("goal") or "")[:2000]
         result = run_swarm(
