@@ -213,7 +213,15 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
 
         if multi:
             # Disjoint ownership → parallel; overlapping files → serial (Cursor rule)
-            from .worktree_isolation import partition_wave_by_ownership, prune_worktrees
+            from .worktree_isolation import (
+                partition_wave_by_ownership,
+                prune_worktrees,
+                snapshot_base_commit,
+            )
+            try:
+                snapshot_base_commit(work)
+            except Exception:
+                pass
             parallel_safe, serial = partition_wave_by_ownership(wave)
             batch = []
             if parallel_safe:

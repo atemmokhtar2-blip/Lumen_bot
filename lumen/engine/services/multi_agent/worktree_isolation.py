@@ -368,6 +368,27 @@ def run_tasks_in_parallel(
 
 
 
+
+def snapshot_base_commit(work_dir, message: str = "chore: lumen parallel base snapshot") -> str | None:
+    """Commit current main tree so all worktrees share the same base SHA (Cursor pattern)."""
+    root = Path(work_dir)
+    if not ensure_git_repo(root):
+        return None
+    with _repo_lock(root):
+        _run_git(root, "add", "-A")
+        r = _run_git(
+            root,
+            "-c", "user.email=lumen@local",
+            "-c", "user.name=Lumen",
+            "commit", "-m", message,
+            "--allow-empty",
+        )
+        h = _run_git(root, "rev-parse", "HEAD")
+        if h.returncode == 0:
+            return (h.stdout or "").strip() or None
+        return None
+
+
 def owned_files_overlap(tasks: list) -> list:
     """Return list of (file, task_a, task_b) for overlapping owned files."""
     claim = {}
@@ -440,6 +461,7 @@ __all__ = [
     "write_task_tree_disk",
     "read_task_tree_disk",
     "run_tasks_in_parallel",
+    "snapshot_base_commit",
     "owned_files_overlap",
     "partition_wave_by_ownership",
     "prune_worktrees",

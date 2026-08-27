@@ -329,12 +329,21 @@ def _make_builder(registry: Any, board: Any):
                 _files = list(getattr(task, "files", None) or [])
             state.extensions = dict(state.extensions or {})
             state.extensions["active_task_id"] = tid
-            # Isolated workspace for parallel_group tasks — real git worktree (Cursor pattern)
-            use_iso = bool(getattr(task, "parallel_group", "") or "")
+            # Isolate on parallel wave (Send) OR parallel_group — always real worktree
+            use_iso = bool(
+                getattr(task, "parallel_group", "")
+                or ctx.get("isolate")
+                or ctx.get("parallel_wave")
+                or gs.get("isolate")
+            )
             session_dir = work
             _wt_session = None
             if use_iso:
-                from .worktree_isolation import acquire_task_workspace
+                from .worktree_isolation import acquire_task_workspace, snapshot_base_commit
+                try:
+                    snapshot_base_commit(work)
+                except Exception:
+                    pass
                 _wt_session = acquire_task_workspace(work, tid, use_isolation=True)
                 session_dir = _wt_session.path
             _constraints = list(((state.extensions or {}).get("execution_plan") or {}).get("constraints") or [])[:12]
@@ -639,27 +648,81 @@ def _make_builder(registry: Any, board: Any):
             except ValueError:
                 max_par = 8
         if parallel and len(ids) > 1:
-            ids = ids[:max_par]  # swarm-style concurrency cap (official LangGraph Send)
+            ids = ids[:max_par]
+            # Ownership exclusivity: only disjoint-file tasks fan-out in parallel
             try:
-                from langgraph.types import Send
-                return [
-                    Send(
-                        "work",
-                        {
-                            "agent": gs["agent"],
-                            "context": dict(gs.get("context") or {}),
-                            "last_node": "schedule",
-                            "active_task_ids": [tid],
-                            "wave": int(gs.get("wave") or 0),
-                            "done": False,
-                            "notes": [],
-                            "hitl_decision": str(gs.get("hitl_decision") or ""),
-                        },
-                    )
-                    for tid in ids
-                ]
+                from .worktree_isolation import (
+                    partition_wave_by_ownership,
+                    snapshot_base_commit,
+                )
+                tree = _load_tree(gs["agent"])
+                nodes = [tree.get(i) for i in ids]
+                nodes = [n for n in nodes if n is not None]
+                safe, serial = partition_wave_by_ownership(nodes)
+                ids = [n.id for n in safe] + [n.id for n in serial]
+                # First max_par of safe in parallel; serial remain for next schedule loops
+                parallel_ids = [n.id for n in safe][:max_par]
+                if not parallel_ids and serial:
+                    # all contested → one at a time
+                    parallel_ids = [serial[0].id]
+                    serial_rest = True
+                else:
+                    serial_rest = False
+                try:
+                    work = _work_dir(gs["agent"], dict(gs.get("context") or {}))
+                    snapshot_base_commit(work)
+                except Exception:
+                    pass
+                if len(parallel_ids) > 1:
+                    from langgraph.types import Send
+                    base_ctx = dict(gs.get("context") or {})
+                    base_ctx["isolate"] = True
+                    base_ctx["parallel_wave"] = True
+                    return [
+                        Send(
+                            "work",
+                            {
+                                "agent": gs["agent"],
+                                "context": dict(base_ctx),
+                                "last_node": "schedule",
+                                "active_task_ids": [tid],
+                                "wave": int(gs.get("wave") or 0),
+                                "done": False,
+                                "notes": [],
+                                "hitl_decision": str(gs.get("hitl_decision") or ""),
+                                "isolate": True,
+                            },
+                        )
+                        for tid in parallel_ids
+                    ]
+                # single remaining
+                ids = parallel_ids or ids[:1]
             except Exception as exc:
-                logger.warning("Send fan-out failed (%s) — sequential work", exc)
+                logger.warning("parallel ownership partition failed (%s)", exc)
+                try:
+                    from langgraph.types import Send
+                    base_ctx = dict(gs.get("context") or {})
+                    base_ctx["isolate"] = True
+                    base_ctx["parallel_wave"] = True
+                    return [
+                        Send(
+                            "work",
+                            {
+                                "agent": gs["agent"],
+                                "context": dict(base_ctx),
+                                "last_node": "schedule",
+                                "active_task_ids": [tid],
+                                "wave": int(gs.get("wave") or 0),
+                                "done": False,
+                                "notes": [],
+                                "hitl_decision": str(gs.get("hitl_decision") or ""),
+                                "isolate": True,
+                            },
+                        )
+                        for tid in ids[:max_par]
+                    ]
+                except Exception as exc2:
+                    logger.warning("Send fan-out failed (%s) — sequential work", exc2)
         return "work"
 
     def after_work(gs: GraphState) -> Literal["schedule", "critique"]:
