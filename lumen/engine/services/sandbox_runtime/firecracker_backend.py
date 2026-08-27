@@ -550,32 +550,55 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 message="jailer_required_but_missing",
             )
 
+        warm_used = False
         try:
-            if use_jailer:
-                pid = self._start_with_jailer(
-                    vm_id=vm_id,
-                    uid=uid,
-                    gid=gid,
-                    sock=sock,
-                    log_path=log_path,
-                    kernel=_kernel(),
-                    drives=drives,
-                    machine_cfg=machine_cfg,
-                    boot_args=boot_args,
-                    network_ifaces=network_ifaces,
-                    netns_path=netns_path,
-                )
-            else:
-                pid = self._start_direct(
-                    sock=sock,
-                    log_path=log_path,
-                    kernel=_kernel(),
-                    drives=drives,
-                    machine_cfg=machine_cfg,
-                    boot_args=boot_args,
-                    network_ifaces=network_ifaces,
-                )
+            # Warm pool (optional): resume base snapshot instead of cold boot
+            if not use_jailer:
+                from .fc_warm_start import try_warm_start, warm_pool_enabled
+                if warm_pool_enabled():
+                    wp = try_warm_start(
+                        firecracker_bin=_bin(),
+                        sock=sock,
+                        log_path=log_path,
+                        label=(os.environ.get("TBE_FC_SNAPSHOT_LABEL") or "base"),
+                    )
+                    if wp is not None:
+                        pid = wp
+                        warm_used = True
+            if not warm_used:
+                if use_jailer:
+                    pid = self._start_with_jailer(
+                        vm_id=vm_id,
+                        uid=uid,
+                        gid=gid,
+                        sock=sock,
+                        log_path=log_path,
+                        kernel=_kernel(),
+                        drives=drives,
+                        machine_cfg=machine_cfg,
+                        boot_args=boot_args,
+                        network_ifaces=network_ifaces,
+                        netns_path=netns_path,
+                        mmds_payload=mmds_payload,
+                    )
+                else:
+                    pid = self._start_direct(
+                        sock=sock,
+                        log_path=log_path,
+                        kernel=_kernel(),
+                        drives=drives,
+                        machine_cfg=machine_cfg,
+                        boot_args=boot_args,
+                        network_ifaces=network_ifaces,
+                        mmds_payload=mmds_payload,
+                    )
         except Exception as exc:
+            if net_plan is not None:
+                try:
+                    from .fc_network import destroy_vm_network
+                    destroy_vm_network(net_plan)
+                except Exception:
+                    pass
             self._cleanup_files(vm_id)
             return SandboxHandle(
                 self.name,
@@ -606,6 +629,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 "bridge": getattr(net_plan, "bridge", ""),
             } if net_plan is not None else {},
             "claim": "vm_process_started_not_bot_health",
+            "warm_start": warm_used,
         }
         self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
         return SandboxHandle(
@@ -677,6 +701,23 @@ class FirecrackerSandboxBackend(SandboxBackend):
                     raise RuntimeError(f"mmds_required_failed:{mmds_exc}") from mmds_exc
         for iface in network_ifaces:
             _api_put(sock, f"/network-interfaces/{iface['iface_id']}", iface)
+        # virtio-vsock — guest agent health channel (CID unique per VM)
+        if _flag("TBE_FC_VSOCK", "1"):
+            try:
+                # guest_cid must be >= 3; derive from sock name hash
+                import hashlib
+                cid = 3 + (int(hashlib.sha256(str(sock).encode()).hexdigest()[:6], 16) % 100000)
+                vsock_uds = str(sock).replace(".sock", ".vsock")
+                _api_put(
+                    sock,
+                    "/vsock",
+                    {
+                        "guest_cid": cid,
+                        "uds_path": vsock_uds,
+                    },
+                )
+            except Exception as vsock_exc:
+                logger.warning("fc vsock optional failed: %s", type(vsock_exc).__name__)
         # Logger/metrics system (optional)
         if _flag("TBE_FC_METRICS", "1"):
             try:
