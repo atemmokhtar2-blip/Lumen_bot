@@ -31,23 +31,15 @@ if activity is not None:
 
     @activity.defn(name="lumen_register_generate_job")
     async def register_generate_job(data: dict[str, Any]) -> dict[str, Any]:
-        JournalEntry = None  # durable_workflow removed; Temporal workflow is source of truth
-        get_journal = None
-        import uuid
-        state_id = str(data.get("state_id") or "")
-        wid = str(data.get("workflow_id") or f"twf-{uuid.uuid4().hex[:16]}")
-        entry = JournalEntry(
-            workflow_id=wid,
-            state_id=state_id,
-            step=str(data.get("step") or "start"),
-            status=str(data.get("status") or "running"),
-            user_id=int(data.get("user_id") or 0),
-            description=str(data.get("description") or "")[:2000],
-            attempts=int(data.get("attempts") or 0),
-            payload=dict(data.get("payload") or {}),
-        )
-        get_journal().write(entry)
-        return entry.to_dict()
+        # durable_workflow removed — activity is a no-op marker for Temporal history
+        return {
+            "ok": True,
+            "engine": "temporal_history_only",
+            "workflow_id": str(data.get("workflow_id") or ""),
+            "state_id": str(data.get("state_id") or ""),
+            "step": str(data.get("step") or ""),
+            "status": str(data.get("status") or "running"),
+        }
 
     @activity.defn(name="lumen_run_langgraph_generate")
     async def run_langgraph_generate_activity(data: dict[str, Any]) -> dict[str, Any]:

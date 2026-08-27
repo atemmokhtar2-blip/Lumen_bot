@@ -246,6 +246,31 @@ def sc_acceptance_feature_in_module_path(tmp: Path) -> ScenarioResult:
 # Runner
 # ---------------------------------------------------------------------------
 
+
+def sc_graph_compile_and_hitl_routes() -> ScenarioResult:
+    """LangGraph HITL deliver routes are wired (static + callable checks)."""
+    r = ScenarioResult("durability.graph_compile_hitl_routes", True)
+    try:
+        from .langgraph_pipeline import (
+            langgraph_available,
+            hitl_deliver_enabled,
+            hitl_interrupt_enabled,
+        )
+        r.add("langgraph_available_fn", callable(langgraph_available))
+        r.add("hitl_plan_fn", callable(hitl_interrupt_enabled))
+        r.add("hitl_deliver_fn", callable(hitl_deliver_enabled))
+        src = Path(__file__).with_name("langgraph_pipeline.py").read_text(encoding="utf-8")
+        r.add(
+            "after_critique_routes_deliver_gate",
+            'return "human_deliver_gate"' in src and "hitl_deliver_enabled()" in src,
+        )
+        r.add("pending_deliver_tool", "langgraph_deliver_approve" in src)
+        r.add("approve_deliver_payload", '"approve_deliver"' in src or "'approve_deliver'" in src)
+    except Exception as exc:
+        r.add("graph_smoke", False, type(exc).__name__)
+    return r
+
+
 def run_all_layer_scenarios(tmp_root: Path | None = None) -> dict[str, Any]:
     import tempfile
     root = Path(tmp_root) if tmp_root else Path(tempfile.mkdtemp(prefix="lumen_sc_"))
@@ -274,6 +299,7 @@ def run_all_layer_scenarios(tmp_root: Path | None = None) -> dict[str, Any]:
     results.append(sc_acceptance_compileall_bad_syntax(root / "bad"))
     (root / "feat").mkdir(parents=True, exist_ok=True)
     results.append(sc_acceptance_feature_in_module_path(root / "feat"))
+    results.append(sc_graph_compile_and_hitl_routes())
 
     passed = sum(1 for x in results if x.ok)
     return {

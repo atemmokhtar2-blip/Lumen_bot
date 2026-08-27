@@ -63,8 +63,8 @@ def try_handle_hitl_message(
             pending = ext.get("pending_action") or {}
             if (
                 ext.get("langgraph_interrupt")
-                or pending.get("tool") == "langgraph_plan_approve"
-                or ext.get("hitl_status") == "awaiting_approval"
+                or pending.get("tool") in {"langgraph_plan_approve", "langgraph_deliver_approve"}
+                or ext.get("hitl_status") in {"awaiting_approval", "awaiting_deliver_approval"}
             ):
                 try:
                     from lumen.engine.services.multi_agent.langgraph_pipeline import resume_langgraph_hitl
@@ -114,7 +114,7 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
             user_data["multi_agent_pending"] = {
                 "action_id": pending.get("action_id"),
                 "state_id": getattr(state, "state_id", "") or pending.get("state_id"),
-                "tool": pending.get("tool") or "langgraph_plan_approve",
+                "tool": pending.get("tool") or ("langgraph_deliver_approve" if (ext.get("hitl_pending") or {}).get("type") == "approve_deliver" else "langgraph_plan_approve"),
                 "langgraph_thread_id": ext.get("langgraph_thread_id"),
             }
             user_data["multi_agent_state_id"] = (

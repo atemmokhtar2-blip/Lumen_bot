@@ -593,7 +593,7 @@ def _make_builder(registry: Any, board: Any):
         tree.refresh_readiness()
         return "schedule" if tree.ready_tasks() else "critique"
 
-    def after_critique(gs: GraphState) -> Literal["deliver", "repair", "schedule", "fail"]:
+    def after_critique(gs: GraphState) -> Literal["deliver", "human_deliver_gate", "repair", "schedule", "fail"]:
         state: AgentState = gs["agent"]
         tree = _load_tree(state)
         max_att = _max_attempts(state)
@@ -602,6 +602,9 @@ def _make_builder(registry: Any, board: Any):
                 state.transition(AgentStatus.PASSED, role=AgentRole.ORCHESTRATOR, force=True)
             except Exception:
                 state.status = AgentStatus.PASSED.value
+            # Real deliver HITL — was dead (always returned "deliver")
+            if hitl_deliver_enabled():
+                return "human_deliver_gate"
             return "deliver"
         if tree.ready_tasks() and int(state.attempts or 0) < max_att:
             return "schedule"
@@ -791,17 +794,29 @@ def run_langgraph_pipeline(
         # Wire Telegram HITL token path to the same interrupt (official dual surface)
         try:
             from .hitl import request_confirmation
+            pending_payload = out.extensions.get("hitl_pending") or {}
+            hitl_type = str(pending_payload.get("type") or "approve_plan")
+            if hitl_type == "approve_deliver":
+                tool = "langgraph_deliver_approve"
+                reason = "موافقة تسليم المشروع (LangGraph HITL deliver)"
+                status = "awaiting_deliver_approval"
+                header = "📦 المشروع جاهز — موافقة التسليم مطلوبة (HITL)"
+            else:
+                tool = "langgraph_plan_approve"
+                reason = "موافقة خطة LangGraph قبل البناء"
+                status = "awaiting_approval"
+                header = "📋 الخطة جاهزة — موافقة مطلوبة (LangGraph HITL)"
             pending = request_confirmation(
                 out,
-                "langgraph_plan_approve",
-                params={"thread_id": tid, "goal": (out.user_text or "")[:200]},
-                reason="موافقة خطة LangGraph قبل البناء",
+                tool,
+                params={"thread_id": tid, "goal": (out.user_text or "")[:200], "hitl_type": hitl_type},
+                reason=reason,
                 board=bd,
             )
             out.extensions["langgraph_interrupt"] = True
-            out.extensions["hitl_status"] = "awaiting_approval"
+            out.extensions["hitl_status"] = status
             out.final_message = (
-                f"📋 الخطة جاهزة — موافقة مطلوبة (LangGraph HITL)\n"
+                f"{header}\n"
                 f"الهدف: {(out.user_text or '')[:180]}\n"
                 f"المعرّف: `{pending.action_id}`\n"
                 f"للتأكيد: `تأكيد {pending.action_id} {pending.confirm_token}`\n"
@@ -810,7 +825,7 @@ def run_langgraph_pipeline(
             )
         except Exception as _hitl_exc:
             logger.warning("attach pending_action failed: %s", _hitl_exc)
-            out.final_message = out.final_message or "بانتظار موافقة الخطة (LangGraph HITL)"
+            out.final_message = out.final_message or "بانتظار موافقة HITL (LangGraph)"
     try:
         bd.put(out)
     except Exception:

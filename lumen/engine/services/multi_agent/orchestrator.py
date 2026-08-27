@@ -508,7 +508,7 @@ def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
     is_lg = (
         ext.get("langgraph_interrupt")
         or ext.get("hitl_status") == "awaiting_approval"
-        or tool == "langgraph_plan_approve"
+        or tool in {"langgraph_plan_approve", "langgraph_deliver_approve"}
     )
     if is_lg:
         try:
@@ -551,7 +551,7 @@ def resume_after_confirm(
     ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
     orch = Orchestrator(board=board)
     # For generate tools after confirm, run full build loop
-    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve"}:
+    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve", "langgraph_deliver_approve"}:
         return _resume_or_rerun(state, ctx, board, orch, decision="approved")
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
@@ -579,7 +579,7 @@ def continue_after_confirm(
     tool = str(pending.get("tool") or state.capability_id or "")
     ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
     orch = Orchestrator(board=board)
-    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve"}:
+    if tool in {"generate_bot", "refine_bot", "langgraph_plan_approve", "langgraph_deliver_approve"}:
         return _resume_or_rerun(state, ctx, board, orch, decision="approved")
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
