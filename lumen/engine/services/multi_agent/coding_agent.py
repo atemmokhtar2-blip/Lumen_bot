@@ -272,7 +272,7 @@ def run_coding_session(
             "path": str(work),
             "files": files,
             "files_written": files,
-            "steps": int(getattr(state, "steps", 0) or 0),
+            "steps": len(getattr(state, "steps", None) or []),
             "stop_reason": str(getattr(state, "stop_reason", "") or ""),
             "errors": list(getattr(state, "errors", None) or [])[:20],
             "acceptance": list(acceptance or []),
