@@ -195,73 +195,6 @@ def _scenario_code_intel_gate(tmp: Path) -> dict[str, Any]:
     }
 
 
-SCENARIOS = [
-    ("plat_telegram", lambda tmp: _scenario_platform_scaffold(tmp, "telegram"), "telegram"),
-    ("plat_discord", lambda tmp: _scenario_platform_scaffold(tmp, "discord"), "discord"),
-    ("plat_whatsapp", lambda tmp: _scenario_platform_scaffold(tmp, "whatsapp"), "whatsapp"),
-    ("plat_web", lambda tmp: _scenario_platform_scaffold(tmp, "web"), "web"),
-    ("det_repair_discord", _scenario_det_repair_discord, "discord"),
-    ("code_intel_preflight", _scenario_code_intel_preflight, "telegram"),
-    ("plan_findings", lambda tmp: _scenario_plan_and_findings(), "generic"),
-    ("code_intel_hybrid", _scenario_hybrid_search, "telegram"),
-    ("code_intel_gate", _scenario_code_intel_gate, "telegram"),
-    ("edit_pre_post", _scenario_edit_pre_post, "telegram"),
-    ("cost_model", lambda tmp: _scenario_cost_model(), "generic"),
-    ("hard_tg_support_tickets", _scenario_hard("tg_support_tickets"), "telegram"),
-    ("hard_discord_moderation", _scenario_hard("discord_moderation"), "discord"),
-    ("hard_wa_catalog_orders", _scenario_hard("wa_catalog_orders"), "whatsapp"),
-    ("hard_web_status_dashboard", _scenario_hard("web_status_dashboard"), "web"),
-]
-
-
-
-
-# registered agent-layer scenarios
-AGENT_LAYER_SCENARIOS = [
-    ("agent_layer_contracts", _scenario_agent_layer_contracts),
-    ("planner_to_acceptance_tree", _scenario_planner_to_acceptance_tree),
-]
-
-
-def run_bot_bench_suite(*, work_root: Path | None = None, persist: bool = True) -> dict[str, Any]:
-    import tempfile
-
-    records: list[EvalRunRecord] = []
-    base = work_root or Path(tempfile.mkdtemp(prefix="lumen_bot_bench_"))
-    base.mkdir(parents=True, exist_ok=True)
-
-    for scenario_id, fn, platform in SCENARIOS:
-        tmp = base / scenario_id
-        tmp.mkdir(parents=True, exist_ok=True)
-        rec = EvalRunRecord(scenario_id=scenario_id, platform=platform)
-        try:
-            result = fn(tmp)
-            rec.attempts = int(result.get("attempts") or 1)
-            rec.cost_usd = float(result.get("cost_usd") or 0.0)
-            rec.metrics = dict(result.get("metrics") or {})
-            # trust scenario latency if provided, else finalize computes
-            if result.get("latency_s") is not None:
-                rec.latency_s = float(result["latency_s"])
-            finalize_record(rec, success=bool(result.get("success")), errors=list(result.get("errors") or []))
-            if result.get("latency_s") is not None:
-                rec.latency_s = float(result["latency_s"])
-        except Exception as exc:
-            finalize_record(rec, success=False, errors=[f"{type(exc).__name__}:{exc}"])
-        records.append(rec)
-        if persist:
-            append_eval_record(rec)
-
-    summary = summarize_evals([r.to_dict() for r in records])
-    return {
-        "ok": summary["success_rate"] >= 0.85,
-        "summary": summary,
-        "records": [r.to_dict() for r in records],
-        "engine": "bot_bench_runner",
-    }
-
-
-__all__ = ["run_bot_bench_suite", "SCENARIOS"]
-
 
 def _scenario_agent_layer_contracts() -> dict[str, Any]:
     """E2E offline: all four agent layers + market scenarios (no LLM)."""
@@ -304,3 +237,69 @@ def _scenario_planner_to_acceptance_tree() -> dict[str, Any]:
         "errors": [] if ok else ["wave_or_acceptance"],
         "metrics": {"wave": [n.id for n in wave]},
     }
+
+
+SCENARIOS = [
+    ("plat_telegram", lambda tmp: _scenario_platform_scaffold(tmp, "telegram"), "telegram"),
+    ("plat_discord", lambda tmp: _scenario_platform_scaffold(tmp, "discord"), "discord"),
+    ("plat_whatsapp", lambda tmp: _scenario_platform_scaffold(tmp, "whatsapp"), "whatsapp"),
+    ("plat_web", lambda tmp: _scenario_platform_scaffold(tmp, "web"), "web"),
+    ("det_repair_discord", _scenario_det_repair_discord, "discord"),
+    ("code_intel_preflight", _scenario_code_intel_preflight, "telegram"),
+    ("plan_findings", lambda tmp: _scenario_plan_and_findings(), "generic"),
+    ("code_intel_hybrid", _scenario_hybrid_search, "telegram"),
+    ("code_intel_gate", _scenario_code_intel_gate, "telegram"),
+    ("edit_pre_post", _scenario_edit_pre_post, "telegram"),
+    ("cost_model", lambda tmp: _scenario_cost_model(), "generic"),
+    ("hard_tg_support_tickets", _scenario_hard("tg_support_tickets"), "telegram"),
+    ("hard_discord_moderation", _scenario_hard("discord_moderation"), "discord"),
+    ("hard_wa_catalog_orders", _scenario_hard("wa_catalog_orders"), "whatsapp"),
+    ("hard_web_status_dashboard", _scenario_hard("web_status_dashboard"), "web"),
+    ("agent_layer_contracts", lambda tmp: _scenario_agent_layer_contracts(), "generic"),
+    ("planner_to_acceptance_tree", lambda tmp: _scenario_planner_to_acceptance_tree(), "generic"),
+]
+
+
+
+
+
+def run_bot_bench_suite(*, work_root: Path | None = None, persist: bool = True) -> dict[str, Any]:
+    import tempfile
+
+    records: list[EvalRunRecord] = []
+    base = work_root or Path(tempfile.mkdtemp(prefix="lumen_bot_bench_"))
+    base.mkdir(parents=True, exist_ok=True)
+
+    for scenario_id, fn, platform in SCENARIOS:
+        tmp = base / scenario_id
+        tmp.mkdir(parents=True, exist_ok=True)
+        rec = EvalRunRecord(scenario_id=scenario_id, platform=platform)
+        try:
+            result = fn(tmp)
+            rec.attempts = int(result.get("attempts") or 1)
+            rec.cost_usd = float(result.get("cost_usd") or 0.0)
+            rec.metrics = dict(result.get("metrics") or {})
+            # trust scenario latency if provided, else finalize computes
+            if result.get("latency_s") is not None:
+                rec.latency_s = float(result["latency_s"])
+            finalize_record(rec, success=bool(result.get("success")), errors=list(result.get("errors") or []))
+            if result.get("latency_s") is not None:
+                rec.latency_s = float(result["latency_s"])
+        except Exception as exc:
+            finalize_record(rec, success=False, errors=[f"{type(exc).__name__}:{exc}"])
+        records.append(rec)
+        if persist:
+            append_eval_record(rec)
+
+    summary = summarize_evals([r.to_dict() for r in records])
+    return {
+        "ok": summary["success_rate"] >= 0.85,
+        "summary": summary,
+        "records": [r.to_dict() for r in records],
+        "engine": "bot_bench_runner",
+    }
+
+
+__all__ = ["run_bot_bench_suite", "SCENARIOS"]
+
+
