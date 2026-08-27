@@ -218,6 +218,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _clear_thinking()
         return
 
+    # Cooperative cancel of in-flight generation (agent_loop checks each step)
+    _low_req = request.lower().strip()
+    if _low_req in {"/cancel", "cancel", "إلغاء", "الغاء", "الغي", "stop", "/stop"}:
+        try:
+            from lumen.engine.services.generation_cancel import request_cancel
+
+            request_cancel(int(user.id) if user else 0)
+        except Exception:
+            logger.exception("request_cancel failed")
+        if context.user_data is not None:
+            context.user_data.pop("force_generate_once", None)
+            context.user_data.pop("pending_clarify", None)
+        await message.reply_text("تم إرسال طلب الإلغاء. إذا كان هناك توليد جارٍ فسيتوقف عند أقرب خطوة.")
+        return
+
     # Platform under development: deterministic reply on error/bug complaints
     try:
         from lumen.engine.services.platform_status import (

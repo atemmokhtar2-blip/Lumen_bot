@@ -203,6 +203,25 @@ def main() -> None:
         )
         raise SystemExit(1)
 
+    # Validate token is live before acquiring exclusive polling lease
+    try:
+        import urllib.request
+        import json as _json
+
+        _url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+        with urllib.request.urlopen(_url, timeout=15) as _resp:
+            _body = _json.load(_resp)
+        if not _body.get("ok") or not (_body.get("result") or {}).get("id"):
+            logger.error("TELEGRAM_BOT_TOKEN rejected by Telegram getMe: %s", _body)
+            raise SystemExit(1)
+        _bot_username = (_body.get("result") or {}).get("username") or "?"
+        logger.info("Telegram token valid — @%s", _bot_username)
+    except SystemExit:
+        raise
+    except Exception as _tok_exc:
+        logger.error("TELEGRAM_BOT_TOKEN validation failed: %s", _tok_exc)
+        raise SystemExit(1)
+
     # ── Single poller only (prevents 409 Conflict on getUpdates) ──
     from lumen.bot.singleton import acquire_bot_singleton, clear_telegram_webhook
 

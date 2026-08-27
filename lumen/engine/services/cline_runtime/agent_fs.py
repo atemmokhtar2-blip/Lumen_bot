@@ -90,7 +90,29 @@ def write_file(work_dir: str, path: str, content: str) -> dict[str, Any]:
     try:
         root = _root(work_dir)
         root.mkdir(parents=True, exist_ok=True)
-        target = safe_write_text(root, path, content if isinstance(content, str) else str(content))
+        text = content if isinstance(content, str) else str(content)
+        # Per-user disk quota (best-effort): walk up to users/<id> sandbox root
+        try:
+            extra = len(text.encode("utf-8"))
+            user_root = None
+            cur = root
+            for _ in range(8):
+                if cur.name and (cur.parent / cur.name).exists():
+                    # Convention: OUTPUT_DIR/users/<uid>/...
+                    if cur.parent.name == "users":
+                        user_root = cur
+                        break
+                if cur.parent == cur:
+                    break
+                cur = cur.parent
+            if user_root is not None:
+                from lumen.engine.services.disk_quota import enforce_user_quota
+                enforce_user_quota(user_root, extra_bytes=extra)
+        except RuntimeError as qexc:
+            return {"ok": False, "error": str(qexc)}
+        except Exception:
+            pass
+        target = safe_write_text(root, path, text)
         rel = target.relative_to(root).as_posix()
         return {"ok": True, "path": rel, "bytes": target.stat().st_size}
     except UnsafePathError as exc:
@@ -234,28 +256,102 @@ def tree(work_dir: str, path: str = ".", max_depth: int = 4) -> dict[str, Any]:
 
 
 def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str, Any]:
-    """Run a shell command inside work_dir only when CLINE_ALLOW_SHELL=1."""
+    """Run a command inside work_dir only when CLINE_ALLOW_SHELL=1.
+
+    Hardened path (default):
+      - never uses shell=True (no injection via metacharacters)
+      - argv via shlex.split
+      - allowlist of base binaries only
+      - stripped child env (no API tokens / Telegram secrets)
+    """
+    import shlex
+    import shutil
+
     flag = (os.getenv("CLINE_ALLOW_SHELL") or "0").strip().lower()
     if flag not in {"1", "true", "yes", "on"}:
         return {"ok": False, "error": "shell_disabled_set_CLINE_ALLOW_SHELL=1"}
     cmd = (command or "").strip()
     if not cmd:
         return {"ok": False, "error": "empty_command"}
-    # block obvious destructive absolute system paths
-    banned = ("rm -rf /", "mkfs", ":(){", "shutdown", "reboot")
+    if len(cmd) > 2000:
+        return {"ok": False, "error": "command_too_long"}
+
+    banned_substrings = (
+        "rm -rf /", "mkfs", ":(){", "shutdown", "reboot", "dd if=",
+        "curl ", "wget ", "nc ", "ncat ", "ssh ", "scp ",
+        "/etc/passwd", "/etc/shadow", "chmod 777",
+        ">(", "<(", "`", "$(",  # process/command substitution
+    )
     low = cmd.lower()
-    if any(b in low for b in banned):
+    if any(b in low for b in banned_substrings):
         return {"ok": False, "error": "command_blocked_policy"}
+
+    # Reject shell metacharacters — we never invoke a shell.
+    if any(ch in cmd for ch in (";", "|", "&", "\n", "\r", ">", "<")):
+        return {"ok": False, "error": "shell_metacharacters_forbidden"}
+
+    try:
+        argv = shlex.split(cmd)
+    except ValueError as exc:
+        return {"ok": False, "error": f"command_parse:{exc}"}
+    if not argv:
+        return {"ok": False, "error": "empty_argv"}
+
+    allowed = {
+        "python", "python3", "pip", "pip3", "pytest", "ls", "cat", "head",
+        "tail", "wc", "echo", "true", "false", "pwd", "which", "test",
+        "mkdir", "cp", "mv", "rm", "touch", "find", "grep", "sed", "awk",
+        "git", "node", "npm", "npx",
+    }
+    # Allow env override of extra binaries (comma-separated)
+    extra = (os.getenv("CLINE_SHELL_ALLOW_BINARIES") or "").strip()
+    if extra:
+        allowed |= {x.strip() for x in extra.split(",") if x.strip()}
+
+    binary = Path(argv[0]).name
+    if binary not in allowed:
+        return {"ok": False, "error": f"binary_not_allowlisted:{binary}"}
+
+    resolved = shutil.which(argv[0]) if "/" not in argv[0] else (
+        argv[0] if Path(argv[0]).is_file() else None
+    )
+    if not resolved:
+        return {"ok": False, "error": f"binary_not_found:{argv[0]}"}
+    argv[0] = resolved
+
+    # rm: only allow relative paths under work_dir (no leading /)
+    if binary == "rm":
+        for a in argv[1:]:
+            if a.startswith("-"):
+                continue
+            if a.startswith("/") or a.startswith("~") or ".." in a.split("/"):
+                return {"ok": False, "error": "rm_path_outside_workspace"}
+
     root = _root(work_dir)
+    # Minimal env — drop secrets
+    _secret_keys = (
+        "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "GEMINI_API_KEYS", "GROQ_API_KEY",
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "MONGODB_URI",
+        "REDIS_URL", "STRIPE_SECRET_KEY", "API_KEY_PEPPER", "TBE_TOKEN_SECRET",
+    )
+    child_env = {
+        k: v for k, v in os.environ.items()
+        if k not in _secret_keys and not k.startswith("GEMINI_API_KEY_")
+        and not k.startswith("GROQ_API_KEY_")
+    }
+    child_env["PWD"] = str(root)
+    child_env["HOME"] = str(root)
+    child_env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+
     try:
         proc = subprocess.run(
-            cmd,
-            shell=True,
+            argv,
+            shell=False,
             cwd=str(root),
             capture_output=True,
             text=True,
             timeout=max(5.0, min(120.0, float(timeout))),
-            env={**os.environ, "PWD": str(root)},
+            env=child_env,
         )
         out = (proc.stdout or "")[-8000:]
         err = (proc.stderr or "")[-4000:]
@@ -264,6 +360,7 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
             "exit_code": proc.returncode,
             "stdout": out,
             "stderr": err,
+            "argv": argv[:8],
         }
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout"}

@@ -146,6 +146,19 @@ def run_agent(
         return state
 
     limit = max_steps if max_steps is not None else _max_steps()
+    user_id = 0
+    if isinstance(ir_dict, dict):
+        try:
+            user_id = int(ir_dict.get("user_id") or 0)
+        except (TypeError, ValueError):
+            user_id = 0
+    state.metadata["user_id"] = user_id
+    try:
+        from lumen.engine.services.generation_cancel import clear_cancel
+
+        clear_cancel(user_id)
+    except Exception:
+        pass
     # Large-repo quality: pack hybrid retrieval context into the system prompt
     repo_ctx = None
     try:
@@ -213,6 +226,17 @@ def run_agent(
         )
 
     for i in range(limit):
+        try:
+            from lumen.engine.services.generation_cancel import is_cancelled
+
+            if is_cancelled(user_id):
+                state.stop_reason = "cancelled_by_user"
+                state.ok = False
+                state.warnings.append("generation_cancelled")
+                state.metadata["cancelled"] = True
+                return state
+        except Exception:
+            pass
         msgs = [m.to_dict() for m in state.messages]
         decision = decide(msgs, choice=choice)
         # Phase A cost: accumulate real provider usage when present
@@ -356,8 +380,21 @@ def run_agent(
             state.steps.append(step)
             continue
 
+        import time as _time
+
+        _t0 = _time.monotonic()
         result = run_tool(state.work_dir, str(tool), args)
+        _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
+        if isinstance(result, dict):
+            result = dict(result)
+            result["elapsed_ms"] = _elapsed_ms
         step.tool_result = result
+        try:
+            timings = list(state.metadata.get("tool_timings") or [])
+            timings.append({"step": i, "tool": str(tool), "elapsed_ms": _elapsed_ms, "ok": bool((result or {}).get("ok"))})
+            state.metadata["tool_timings"] = timings[-40:]
+        except Exception:
+            pass
         state.steps.append(step)
         state.add_assistant(
             json.dumps(
