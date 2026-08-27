@@ -15,7 +15,11 @@ from .verify import structural_validate, count_files
 
 
 def _run(argv: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str, str]:
-    env = os.environ.copy()
+    try:
+        from lumen.engine.services.secure_exec import clean_child_environ
+        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    except Exception:
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         from lumen.engine.services.secure_exec import clean_child_environ

@@ -41,6 +41,14 @@ class ToolRunner:
                 "on",
             }:
                 return False, "CLINE_ALLOW_WEB required"
+        if name.startswith("browser_"):
+            if (os.getenv("BROWSER_USE_ENABLED") or "0").strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                return False, "BROWSER_USE_ENABLED required"
         return True, "ok"
 
     def run(self, name: str, **kwargs: Any) -> dict[str, Any]:

@@ -68,6 +68,10 @@ def clean_child_environ(
         "PLATFORM_ADMIN_TOKEN", "SECRET_KEY", "TBE_TOKEN_SECRET",
         "DATABASE_URL", "MONGODB_URI", "AWS_SECRET_ACCESS_KEY",
         "GITHUB_TOKEN", "GH_TOKEN", "API_KEY",
+        "GEMINI_API_KEY", "GEMINI_API_KEYS", "GOOGLE_API_KEY", "GROQ_API_KEY",
+        "XAI_API_KEY", "CLINE_API_KEY", "REDIS_URL", "JOB_REDIS_URL",
+        "API_KEY_PEPPER", "POSTGRES_URL", "POSTGRESQL_URL",
+        "AWS_ACCESS_KEY_ID", "CAPABILITY_OPS_ADMINS",
     }
     for b in blocked:
         env.pop(b, None)

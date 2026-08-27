@@ -31,7 +31,11 @@ def mirror_path_for(url: str) -> Path:
 
 
 def _run(argv: list[str], *, cwd: Optional[Path] = None, timeout: int = 300) -> tuple[int, str]:
-    env = os.environ.copy()
+    try:
+        from lumen.engine.services.secure_exec import clean_child_environ
+        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    except Exception:
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         from lumen.engine.services.secure_exec import run_git

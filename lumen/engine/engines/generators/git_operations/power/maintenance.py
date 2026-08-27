@@ -48,7 +48,11 @@ def git_gc(repo: Path, *, prune: bool = True) -> tuple[bool, str]:
     repo = Path(repo)
     if not (repo / ".git").exists() and not (repo / "HEAD").exists():
         return False, "not_git"
-    env = os.environ.copy()
+    try:
+        from lumen.engine.services.secure_exec import clean_child_environ
+        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    except Exception:
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     env["GIT_TERMINAL_PROMPT"] = "0"
     argv = ["git", "-C", str(repo), "gc"]
     if prune:

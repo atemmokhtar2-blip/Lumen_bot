@@ -70,20 +70,17 @@ def package_project(project_path: Path, job_id: str) -> tuple[Path, str]:
     if not root.is_dir():
         raise FileNotFoundError(f"project_missing:{root}")
     dest = artifact_root() / f"{job_id}.zip"
+    from lumen.engine.services.safe_zip import write_project_zip
+
+    out = write_project_zip(root, dest)
+    if out is None or not out.is_file():
+        raise RuntimeError(f"artifact_zip_failed:{root}")
+    # Hash archive for integrity sidecar
     h = hashlib.sha256()
-    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for p in sorted(root.rglob("*")):
-            if not p.is_file() or _should_skip(p, root):
-                continue
-            arc = p.relative_to(root).as_posix()
-            data = p.read_bytes()
-            h.update(arc.encode())
-            h.update(data)
-            zf.writestr(arc, data)
+    h.update(out.read_bytes())
     digest = h.hexdigest()
-    # write sidecar checksum
     (artifact_root() / f"{job_id}.sha256").write_text(digest + "\n", encoding="utf-8")
-    return dest, digest
+    return out, digest
 
 
 def publish_artifact(local_zip: Path, job_id: str) -> str:

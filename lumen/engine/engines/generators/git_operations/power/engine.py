@@ -35,7 +35,11 @@ from .workflow import (
 
 
 def _run(argv: list[str], cwd: Optional[Path] = None, timeout: int = 180, token: Optional[str] = None) -> tuple[int, str, str]:
-    env = os.environ.copy()
+    try:
+        from lumen.engine.services.secure_exec import clean_child_environ
+        env = clean_child_environ(extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+    except Exception:
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         from lumen.engine.services.secure_exec import run_git

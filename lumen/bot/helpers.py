@@ -100,78 +100,12 @@ async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> No
 
 
 def make_zip_from_path(project_path: str | Path) -> Path | None:
-    """Create a clean, safe ZIP containing only deliverable project files.
-
-    TOCTOU-hardened: refuse symlinks (lstat), re-check containment after
-    open with O_NOFOLLOW, write file bytes (not path) into the archive so a
-    race cannot swap a regular file for a symlink to /etc/passwd.
-    """
-    project_path = Path(project_path).resolve()
-    if not project_path.is_dir():
-        return None
-
-    zip_path = project_path.parent / f"{project_path.name}.zip"
+    """Create a clean, safe ZIP containing only deliverable project files."""
     try:
-        zip_path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        logger.exception("zip parent mkdir failed")
-        return None
-    excluded_dirs = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
-    excluded_names = {".env", ".env.local", ".env.production", "secrets.json", ".tbe_bot_token"}
-    tmp_zip = zip_path.with_suffix(".zip.tmp")
-    try:
-        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-            for root, dirs, files in os.walk(project_path, followlinks=False):
-                # Never follow directory symlinks
-                dirs[:] = [
-                    d for d in dirs
-                    if d not in excluded_dirs
-                    and not d.startswith(".")
-                    and not (Path(root) / d).is_symlink()
-                ]
-                for name in files:
-                    if name in excluded_names or name.endswith((".pyc", ".pyo", ".log")):
-                        continue
-                    full = Path(root) / name
-                    try:
-                        st = full.lstat()
-                    except OSError:
-                        continue
-                    # Skip symlinks and non-regular files (TOCTOU + escape)
-                    if not stat.S_ISREG(st.st_mode):
-                        logger.warning("Skipping non-regular/symlink in zip: %s", full)
-                        continue
-                    try:
-                        resolved = full.resolve()
-                        arc = resolved.relative_to(project_path)
-                    except ValueError:
-                        logger.warning("Skipping path outside project: %s", full)
-                        continue
-                    # Open with O_NOFOLLOW so a symlink swap between lstat and read fails
-                    try:
-                        flags = os.O_RDONLY
-                        if hasattr(os, "O_NOFOLLOW"):
-                            flags |= os.O_NOFOLLOW
-                        fd = os.open(str(full), flags)
-                        try:
-                            data = os.read(fd, st.st_size + 1)
-                        finally:
-                            os.close(fd)
-                    except OSError as exc:
-                        logger.warning("zip skip open failed %s: %s", full, exc)
-                        continue
-                    # Cap individual file size in zip (DoS)
-                    if len(data) > 8 * 1024 * 1024:
-                        logger.warning("zip skip oversized file %s (%s bytes)", full, len(data))
-                        continue
-                    zf.writestr(arc.as_posix(), data)
-        os.replace(tmp_zip, zip_path)
-        return zip_path
+        from lumen.engine.services.safe_zip import write_project_zip
+
+        return write_project_zip(project_path)
     except Exception as e:
-        try:
-            tmp_zip.unlink(missing_ok=True)
-        except Exception:
-            pass
         logger.exception("Failed to create zip: %s", e)
         return None
 

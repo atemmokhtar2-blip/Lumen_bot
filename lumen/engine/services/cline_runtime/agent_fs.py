@@ -909,6 +909,10 @@ def _dispatch_browser_or_skill(tool_name: str, args: dict) -> dict:
     """Real Playwright / Skills registry dispatch from agent loop."""
     args = dict(args or {})
     name = (tool_name or "").strip()
+    if name.startswith("browser_"):
+        flag = (os.getenv("BROWSER_USE_ENABLED") or "0").strip().lower()
+        if flag not in {"1", "true", "yes", "on"}:
+            return {"ok": False, "error": "browser_use_disabled: set BROWSER_USE_ENABLED=1"}
     try:
         if name == "browser_navigate":
             from lumen.engine.services.browser_use import browse_url
