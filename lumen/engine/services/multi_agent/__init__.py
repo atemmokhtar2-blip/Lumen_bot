@@ -59,7 +59,12 @@ from .plan_contract import ExecutionPlan, PlanTask, build_plan_from_spec
 from .findings import CritiqueFinding
 from .event_wake import temporal_enabled, signal_wake, schedule_wake_cron, handle_agent_event, EVENT_ROUTES
 from .langgraph_pipeline import resume_langgraph_hitl, hitl_interrupt_enabled
-from .production_policy import policy_snapshot, allow_template_fallback
+from .production_policy import (
+    policy_snapshot,
+    allow_template_fallback,
+    temporal_preferred,
+    max_parallel_workers,
+)
 from .repair_worker import should_incremental_repair, run_incremental_repair
 from .dynamic_planner import assemble_plan, classify_intent
 from .acceptance_check import evaluate_task, evaluate_tree
@@ -161,6 +166,8 @@ __all__ = [
     "hitl_interrupt_enabled",
     "policy_snapshot",
     "allow_template_fallback",
+    "temporal_preferred",
+    "max_parallel_workers",
     "should_incremental_repair",
     "run_incremental_repair",
     "assemble_plan",

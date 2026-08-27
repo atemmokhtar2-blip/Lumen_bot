@@ -31,10 +31,14 @@ if activity is not None:
 
     @activity.defn(name="lumen_register_generate_job")
     async def register_generate_job(data: dict[str, Any]) -> dict[str, Any]:
-        # durable_workflow removed — activity is a no-op marker for Temporal history
+        """Marker activity for Temporal Event History (audit trail of job start).
+
+        Not a second workflow engine — durable state lives in Temporal history
+        + LangGraph SqliteSaver. Kept intentional for ops visibility.
+        """
         return {
             "ok": True,
-            "engine": "temporal_history_only",
+            "engine": "temporal_history_marker",
             "workflow_id": str(data.get("workflow_id") or ""),
             "state_id": str(data.get("state_id") or ""),
             "step": str(data.get("step") or ""),
@@ -43,9 +47,20 @@ if activity is not None:
 
     @activity.defn(name="lumen_run_langgraph_generate")
     async def run_langgraph_generate_activity(data: dict[str, Any]) -> dict[str, Any]:
+        """Long-running activity: LangGraph + Cline inside Temporal.
+
+        Heartbeats keep the activity alive for multi-hour agent runs (world-class
+        Temporal pattern 2026). Worker crashes → Temporal retries from last policy.
+        """
         import asyncio
         import os
         from pathlib import Path
+
+        # Heartbeat early so Temporal knows the activity is alive
+        try:
+            activity.heartbeat({"phase": "start", "state_id": str((data or {}).get("state_id") or "")})
+        except Exception:
+            pass
 
         def _run() -> dict[str, Any]:
             os.environ["LUMEN_INSIDE_TEMPORAL_ACTIVITY"] = "1"
@@ -74,7 +89,15 @@ if activity is not None:
                 preferred_keys=preferred,
                 status=AgentStatus.PENDING.value,
             )
-            state.extensions = {"work_dir": work_dir, "orchestration": "temporal+langgraph+cline"}
+            state.extensions = {
+                "work_dir": work_dir,
+                "orchestration": "temporal+langgraph+cline",
+                "durable_shell": "temporal",
+            }
+            try:
+                activity.heartbeat({"phase": "langgraph_start", "state_id": state_id})
+            except Exception:
+                pass
             out = run_langgraph_pipeline(
                 state,
                 context={"work_dir": work_dir, "user_id": user_id},
@@ -82,6 +105,15 @@ if activity is not None:
                 board=get_blackboard(),
                 thread_id=state_id,
             )
+            try:
+                activity.heartbeat({
+                    "phase": "langgraph_done",
+                    "state_id": out.state_id,
+                    "status": out.status,
+                    "qa_passed": bool(out.qa_passed),
+                })
+            except Exception:
+                pass
             ok = bool(out.qa_passed) or str(out.status).upper() in {"PASSED", "DELIVERED"}
             return {
                 "ok": ok,
@@ -91,6 +123,7 @@ if activity is not None:
                 "qa_passed": out.qa_passed,
                 "attempts": out.attempts,
                 "task_tree": (out.extensions or {}).get("task_tree_summary"),
+                "swarm": (out.extensions or {}).get("swarm"),
                 "state": out.to_dict(),
             }
 

@@ -653,11 +653,15 @@ def _make_builder(registry: Any, board: Any):
 
         parallel = (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower() not in {"0", "false", "no", "off"}
         try:
-            max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
-        except ValueError:
-            max_par = 8
+            from .production_policy import max_parallel_workers
+            max_par = max_parallel_workers()
+        except Exception:
+            try:
+                max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
+            except ValueError:
+                max_par = 8
         if parallel and len(ids) > 1:
-            ids = ids[:max_par]  # swarm-style concurrency cap (LangGraph Send)
+            ids = ids[:max_par]  # swarm-style concurrency cap (official LangGraph Send)
             try:
                 from langgraph.types import Send
                 return [
@@ -840,9 +844,24 @@ def run_langgraph_pipeline(
     state.extensions["langgraph_thread_id"] = tid
     state.extensions["orchestration"] = "langgraph+cline"
     state.record(AgentRole.ORCHESTRATOR, "langgraph_start", f"max_attempts={max_att};hitl={hitl_interrupt_enabled()}")
-    cfg: dict[str, Any] = {"recursion_limit": max(40, max_att * 12)}
+    # Official LangGraph concurrency throttle (forum best practice 2025+):
+    # max_concurrency bounds parallel Send workers to host + provider limits.
+    try:
+        max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
+    except ValueError:
+        max_par = 8
+    cfg: dict[str, Any] = {
+        "recursion_limit": max(40, max_att * 12),
+        "max_concurrency": max_par,
+    }
     if checkpointer is not None:
         cfg["configurable"] = {"thread_id": tid}
+    state.extensions["swarm"] = {
+        "max_concurrency": max_par,
+        "parallel_enabled": (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower()
+        not in {"0", "false", "no", "off"},
+        "engine": "langgraph_send",
+    }
     result = graph.invoke(
         {
             "agent": state,

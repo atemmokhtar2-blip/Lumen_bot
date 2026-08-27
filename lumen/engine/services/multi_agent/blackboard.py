@@ -209,11 +209,9 @@ def get_blackboard() -> BlackboardStore:
             elif mode == "file":
                 _default_board = FileBlackboard()
             else:
+                # Redis board removed permanently — Layered (file+memory) only.
                 try:
-                    if False:  # redis_board removed — File/Memory blackboard only
-                        _default_board = RedisLayeredBlackboard()
-                    else:
-                        _default_board = LayeredBlackboard()
+                    _default_board = LayeredBlackboard()
                 except Exception:
                     _default_board = LayeredBlackboard()
         return _default_board
