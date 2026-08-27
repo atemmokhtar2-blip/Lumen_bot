@@ -145,6 +145,64 @@ def probe_workspace(work_dir: str | Path | None) -> WorkspaceSnapshot:
 # Layer 4 — Task graph per intent
 # ---------------------------------------------------------------------------
 
+
+def _safe_id(name: str, idx: int = 0) -> str:
+    s = re.sub(r"[^a-zA-Z0-9_]+", "_", (name or "").strip())[:28].strip("_")
+    return s or f"f{idx}"
+
+
+def _parallel_feature_module_tasks(
+    feats: list[str],
+    *,
+    scaffold_id: str = "scaffold",
+    module_dir: str = "modules",
+    wire_id: str = "wire_features",
+    wire_files: list[str] | None = None,
+    wire_extra_acceptance: list[str] | None = None,
+) -> tuple[list[PlanTask], list[str]]:
+    """Split features into isolated module tasks (parallel_group) + a wire task.
+
+    Returns (tasks, dependency_ids_for_next_stage).
+    """
+    tasks: list[PlanTask] = []
+    feat_ids: list[str] = []
+    for i, f in enumerate(feats[:8]):
+        safe = _safe_id(f, i)
+        fid = f"feat_{safe}"
+        if fid in feat_ids:
+            fid = f"{fid}_{i}"
+        feat_ids.append(fid)
+        mod = f"{module_dir}/{safe}.py"
+        tasks.append(PlanTask(
+            id=fid,
+            title=f"Implement feature module: {f}",
+            files=[mod],
+            acceptance=[
+                f"{mod} exists",
+                "compileall passes",
+                f"feature working: {f}",
+            ],
+            priority=1,
+            depends_on=[scaffold_id],
+            parallel_group="feature_modules",
+        ))
+    if feat_ids:
+        tasks.append(PlanTask(
+            id=wire_id,
+            title="Wire feature modules into application entrypoint",
+            files=list(wire_files or ["main.py"]),
+            acceptance=(
+                list(wire_extra_acceptance or [])
+                + ["compileall passes"]
+                + [f"feature working: {f}" for f in feats[:8]]
+            ),
+            priority=1,
+            depends_on=list(feat_ids),
+        ))
+        return tasks, [wire_id]
+    return tasks, [scaffold_id]
+
+
 def _tasks_telegram(feats: list[str], *, refine: bool) -> list[PlanTask]:
     if refine:
         return [
@@ -186,39 +244,11 @@ def _tasks_telegram(feats: list[str], *, refine: bool) -> list[PlanTask]:
             priority=1,
         ),
     ]
-    feat_ids: list[str] = []
-    if feats:
-        for i, f in enumerate(feats[:8]):
-            fid = f"feat_{re.sub(r'[^a-zA-Z0-9_]+', '_', f)[:24] or i}"
-            if fid in feat_ids:
-                fid = f"{fid}_{i}"
-            feat_ids.append(fid)
-            safe = re.sub(r"[^a-zA-Z0-9_]+", "_", f)[:32] or f"f{i}"
-            tasks.append(PlanTask(
-                id=fid,
-                title=f"Implement feature module: {f}",
-                files=[f"modules/{safe}.py"],
-                acceptance=[
-                    f"modules/{safe}.py exists",
-                    "compileall passes",
-                    f"feature working: {f}",
-                ],
-                priority=1,
-                depends_on=["scaffold"],
-                parallel_group="feature_modules",
-            ))
-        tasks.append(PlanTask(
-            id="wire_features",
-            title="Wire feature modules into main handlers",
-            files=["main.py"],
-            acceptance=["/start handler registered", "compileall passes"]
-            + [f"feature working: {f}" for f in feats[:8]],
-            priority=1,
-            depends_on=list(feat_ids),
-        ))
-        dep = ["wire_features"]
-    else:
-        dep = ["scaffold"]
+    extra, dep = _parallel_feature_module_tasks(
+        feats,
+        wire_extra_acceptance=["/start handler registered", "token from environment"],
+    )
+    tasks.extend(extra)
     tasks.append(PlanTask(
         id="harden",
         title="Error handling, logging, unknown-message fallback",
@@ -241,87 +271,88 @@ def _tasks_telegram(feats: list[str], *, refine: bool) -> list[PlanTask]:
 def _tasks_discord(feats: list[str], *, refine: bool) -> list[PlanTask]:
     if refine:
         return _tasks_telegram(feats, refine=True)
-    return [
+    tasks = [
         PlanTask(
             id="scaffold",
             title="Scaffold Discord bot (discord.py)",
             files=["main.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=["discord.py in requirements", "bot client setup", "DISCORD_TOKEN from env"],
+            acceptance=[
+                "requirements lists discord",
+                "discord client setup",
+                "token from environment",
+                "compileall passes",
+            ],
             priority=1,
-        ),
-        PlanTask(
-            id="commands",
-            title="Implement commands/events: " + (", ".join(feats[:10]) if feats else "ping, help"),
-            files=["main.py"],
-            acceptance=["at least one command responds"],
-            priority=1,
-            depends_on=["scaffold"],
-        ),
-        PlanTask(
-            id="verify",
-            title="Verify project compiles",
-            files=["main.py"],
-            acceptance=["compileall passes"],
-            priority=1,
-            depends_on=["commands"],
         ),
     ]
+    extra, dep = _parallel_feature_module_tasks(
+        feats or ["ping"],
+        wire_extra_acceptance=["discord client setup"],
+    )
+    tasks.extend(extra)
+    tasks.append(PlanTask(
+        id="verify",
+        title="Verify project compiles",
+        files=["main.py"],
+        acceptance=["compileall passes"],
+        priority=1,
+        depends_on=list(dep),
+    ))
+    return tasks
 
 
 def _tasks_whatsapp(feats: list[str], *, refine: bool) -> list[PlanTask]:
-    return [
+    tasks = [
         PlanTask(
             id="scaffold",
             title="Scaffold WhatsApp webhook bot",
             files=["main.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=["webhook endpoint", "token/secrets from env"],
+            acceptance=["token from environment", "compileall passes"],
             priority=1,
-        ),
-        PlanTask(
-            id="handlers",
-            title="Message handlers: " + (", ".join(feats[:10]) if feats else "echo"),
-            files=["main.py"],
-            acceptance=["inbound message handled"],
-            priority=1,
-            depends_on=["scaffold"],
-        ),
-        PlanTask(
-            id="verify",
-            title="Verify project compiles",
-            files=["main.py"],
-            acceptance=["compileall passes"],
-            priority=1,
-            depends_on=["handlers"],
         ),
     ]
+    extra, dep = _parallel_feature_module_tasks(
+        feats or ["echo"],
+        wire_extra_acceptance=["compileall passes"],
+    )
+    tasks.extend(extra)
+    tasks.append(PlanTask(
+        id="verify",
+        title="Verify project compiles",
+        files=["main.py"],
+        acceptance=["compileall passes"],
+        priority=1,
+        depends_on=list(dep),
+    ))
+    return tasks
 
 
 def _tasks_web_api(feats: list[str], *, refine: bool) -> list[PlanTask]:
-    return [
+    tasks = [
         PlanTask(
             id="scaffold",
             title="Scaffold FastAPI/Flask application",
             files=["main.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=["app entrypoint", "requirements list web framework"],
+            acceptance=["compileall passes", "health or root route exists"],
             priority=1,
-        ),
-        PlanTask(
-            id="routes",
-            title="Implement routes/features: " + (", ".join(feats[:10]) if feats else "health, root"),
-            files=["main.py"],
-            acceptance=["health or root route exists"],
-            priority=1,
-            depends_on=["scaffold"],
-        ),
-        PlanTask(
-            id="verify",
-            title="Verify project compiles and imports",
-            files=["main.py"],
-            acceptance=["compileall passes"],
-            priority=1,
-            depends_on=["routes"],
         ),
     ]
+    use_feats = feats or ["health"]
+    extra, dep = _parallel_feature_module_tasks(
+        use_feats,
+        module_dir="routers",
+        wire_extra_acceptance=["health or root route exists"],
+    )
+    tasks.extend(extra)
+    tasks.append(PlanTask(
+        id="verify",
+        title="Verify project compiles and imports",
+        files=["main.py"],
+        acceptance=["compileall passes"],
+        priority=1,
+        depends_on=list(dep),
+    ))
+    return tasks
 
 
 def _tasks_library(feats: list[str], *, refine: bool) -> list[PlanTask]:

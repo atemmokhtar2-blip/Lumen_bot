@@ -251,7 +251,7 @@ def _make_builder(registry: Any, board: Any):
             _acc = list(getattr(task, "acceptance", None) or []) if task is not None else []
             _files = list(getattr(task, "files", None) or []) if task is not None else []
             # Isolated workspace for parallel_group tasks (avoid concurrent writes on main.py)
-            use_iso = bool(getattr(task, "parallel_group", "") or "") and len(active) > 1
+            use_iso = bool(getattr(task, "parallel_group", "") or "")  # always isolate parallel_group (Send-safe)
             session_dir = work
             if use_iso:
                 session_dir = work / ".parallel" / tid
@@ -271,6 +271,7 @@ def _make_builder(registry: Any, board: Any):
                         shutil.copy2(src, dest)
                     except Exception:
                         pass
+            _constraints = list(((state.extensions or {}).get("execution_plan") or {}).get("constraints") or [])[:12]
             result = run_coding_session(
                 acceptance=_acc,
                 target_files=_files,
@@ -279,6 +280,7 @@ def _make_builder(registry: Any, board: Any):
                 task_brief=brief,
                 ir_hint=ir_hint,
                 repair=bool((state.extensions or {}).get("repair_mode")),
+                constraints=_constraints,
             )
             # Merge isolation → work for declared task files only
             if use_iso and result.get("ok"):
@@ -309,6 +311,10 @@ def _make_builder(registry: Any, board: Any):
                 state.generated_path = str(work)
                 state.build_success = True
                 notes.append(f"{tid}:done:steps={result.get('steps')}")
+                try:
+                    board.put(state)
+                except Exception:
+                    pass
             else:
                 fails = [f.get("id") or f.get("detail") for f in (acc_rep.get("failed") or [])][:8]
                 err = "; ".join(
@@ -489,39 +495,34 @@ def _make_builder(registry: Any, board: Any):
         return {"agent": state, "last_node": "fail", "done": True}
 
     def after_schedule(gs: GraphState):
-        """Fan-out ready tasks via official LangGraph Send when parallel-safe."""
+        """Fan-out parallel_group / disjoint tasks via official LangGraph Send."""
         ids = list(gs.get("active_task_ids") or [])
         tree = _load_tree(gs["agent"])
         if not ids:
             if tree.is_complete():
                 return "critique"
-            ready = tree.ready_tasks()
-            if not ready:
-                return "critique"
-            ids = [n.id for n in ready]
+            wave = tree.parallel_wave()
+            if not wave:
+                ready = tree.ready_tasks()
+                if not ready:
+                    return "critique"
+                ids = [ready[0].id]
+            else:
+                ids = [n.id for n in wave]
+                # ensure schedule marked them running
+                for n in wave:
+                    if n.status != "running":
+                        tree.mark(n.id, "running")
+                _save_tree(gs["agent"], tree)
 
-        # Parallel only when enabled and 2+ tasks with disjoint file sets
         parallel = (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower() not in {"0", "false", "no", "off"}
         if parallel and len(ids) > 1:
             try:
                 from langgraph.types import Send
-                nodes = [tree.get(i) for i in ids]
-                file_sets = [set(getattr(n, "files", None) or []) for n in nodes if n]
-                # disjoint if no pairwise overlap (empty files = conflict with all)
-                disjoint = True
-                for i, a in enumerate(file_sets):
-                    if not a:
-                        disjoint = False
-                        break
-                    for b in file_sets[i + 1:]:
-                        if not b or (a & b):
-                            disjoint = False
-                            break
-                    if not disjoint:
-                        break
-                if disjoint:
-                    return [
-                        Send("work", {
+                return [
+                    Send(
+                        "work",
+                        {
                             "agent": gs["agent"],
                             "context": dict(gs.get("context") or {}),
                             "last_node": "schedule",
@@ -530,9 +531,10 @@ def _make_builder(registry: Any, board: Any):
                             "done": False,
                             "notes": [],
                             "hitl_decision": str(gs.get("hitl_decision") or ""),
-                        })
-                        for tid in ids
-                    ]
+                        },
+                    )
+                    for tid in ids
+                ]
             except Exception as exc:
                 logger.warning("Send fan-out failed (%s) — sequential work", exc)
         return "work"

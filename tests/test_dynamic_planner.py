@@ -63,7 +63,7 @@ def test_web_plan_routes():
     plan = assemble_plan(goal="FastAPI app with health endpoint")
     ids = [t.id for t in plan.tasks]
     assert "scaffold" in ids
-    assert "routes" in ids or "implement" in ids
+    assert "wire_features" in ids or "routes" in ids or "implement" in ids
 
 
 def test_depends_on_honored():
