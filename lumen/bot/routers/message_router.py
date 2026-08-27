@@ -136,17 +136,7 @@ def _prior_bot_request(user_data: dict | None) -> str:
 
 
 def _qwen_rescue_translation(request: str, context: dict) -> dict | None:
-    """Translate an explicit bot build when Gemini chat is unavailable."""
-    if not _looks_like_generation_request(request):
-        return None
-    try:
-        from lumen.engine.services.gemini_client import validate_spec_translation
-        from lumen.engine.services.translator_client import translate_request
-        result = translate_request(request, {**(context or {}), "gemini_unavailable": True})
-        if isinstance(result, dict) and validate_spec_translation(result):
-            return result
-    except Exception:
-        logger.exception("Direct Qwen rescue translation failed")
+    """Retired — engine (multi-agent/Cline) owns understanding. Kept as no-op for callers."""
     return None
 
 
@@ -478,43 +468,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
 
+        # Engine owns understanding + keys + generation (no translator/bridge layer).
+        # Multi-agent / Cline reads LLM keys itself via model_router + key_pool.
         preferred_keys = None
-        _bridge_pkg = None
-        try:
-            from lumen.engine.services.translator_client import translate_request
-            from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
-            _tr = translate_request(
-                gen_request,
-                {
-                    "conversation_history": list((context.user_data or {}).get("chat_history") or [])[-8:],
-                    "server_facts": {"project": "Lumen"},
-                },
-            )
-            _bridge_pkg = analyze_and_prepare(gen_request, _tr if isinstance(_tr, dict) else None)
-            gen_request = str(_bridge_pkg.get("spec_request") or gen_request).strip()
-            preferred_keys = list(_bridge_pkg.get("preferred_keys") or []) or None
-            if context.user_data is not None:
-                context.user_data["last_bridge"] = {
-                    "mode": _bridge_pkg.get("engine_mode"),
-                    "keys": preferred_keys,
-                    "model": _bridge_pkg.get("model"),
-                }
-            logger.info(
-                "generate-now bridge mode=%s features=%s model=%s",
-                _bridge_pkg.get("engine_mode"),
-                preferred_keys,
-                _bridge_pkg.get("model"),
-            )
-        except Exception:
-            logger.exception("generate-now translate/bridge failed; continuing with raw request")
-
         if context.user_data is not None:
             context.user_data.pop("force_generate_once", None)
             context.user_data.pop("skip_clarify_once", None)
-            context.user_data["translated_spec_request"] = gen_request
-            if preferred_keys:
-                context.user_data["translated_preferred_keys"] = preferred_keys
-            context.user_data["translated_source"] = "generate_now_fastpath"
+            context.user_data["engine_direct_request"] = gen_request
+            context.user_data["translated_source"] = "engine_direct"
+        logger.info("generate-now engine-direct path (no translate/bridge layer) request_len=%s", len(gen_request))
 
         await _clear_thinking()
         status_msg = await message.reply_text("⚙️ جاري توليد البوت الآن…")
@@ -544,68 +506,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 work_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            try:
-                from lumen.platform.plan_gate import filter_preferred_keys
-                preferred_keys = filter_preferred_keys(
-                    list(preferred_keys) if preferred_keys else None,
-                    user_id=int(user.id) if user else 0,
-                )
-            except Exception:
-                pass
-
-            # Control plane: BuildIR → engine_router (infinite primary | catalog | hybrid | cline)
-            try:
-                from lumen.engine.services.engine_router import (
-                    build_ir_from_package,
-                    execute_ir,
-                )
-                _pkg = dict(_bridge_pkg or {})
-                if preferred_keys is not None:
-                    _pkg["preferred_keys"] = list(preferred_keys)
-                if not _pkg.get("spec_request"):
-                    _pkg["spec_request"] = gen_request
-                if not _pkg.get("original_text"):
-                    _pkg["original_text"] = gen_request
-                # Free-agent / custom path: infinite atomic engine (not cline)
-                if _free_agent_mode() or (context.user_data or {}).get("free_agent_path"):
-                    _pkg["engine_mode"] = "infinite"
-                    _pkg["needs_ai_codegen"] = True
-                    _pkg["looks_custom"] = True
-                    _pkg["preferred_keys"] = list(_pkg.get("preferred_keys") or [])
-                    gaps = list(_pkg.get("capabilities_gap") or [])
-                    if "free_agent" not in gaps:
-                        gaps.append("free_agent")
-                    _pkg["capabilities_gap"] = gaps
-                    logger.info("Free-agent IR forced: engine_mode=infinite")
-                # Always prefer infinite as product default unless package already set
-                if not _pkg.get("engine_mode"):
-                    _pkg["engine_mode"] = "infinite"
-                if not _pkg.get("engine") and _pkg.get("engine_mode") == "infinite":
-                    _pkg["engine"] = "infinite_v1"
-                ir = build_ir_from_package(_pkg, user_id=int(user.id) if user else 0)
-                logger.info(
-                    "force_generate IR mode=%s matched=%s gap=%s",
-                    ir.engine_mode.value,
-                    ir.capabilities_matched,
-                    ir.capabilities_gap,
-                )
-                result = await run_with_heartbeat(
-                    execute_ir,
-                    ir,
-                    work_dir,
-                    status_msg=status_msg,
-                    user_id=int(user.id) if user else 0,
-                )
-            except Exception:
-                logger.exception("IR router failed; falling back to run_generation")
-                result = await run_with_heartbeat(
-                    run_generation,
-                    gen_request,
-                    work_dir,
-                    int(user.id) if user else 0,
-                    status_msg=status_msg,
-                    preferred_keys=preferred_keys,
-                )
+            # Engine-direct: Multi-Agent Orchestrator + Cline owns understanding,
+            # key reading, planning, coding, and acceptance. No translator/bridge layer.
+            result = await run_with_heartbeat(
+                run_generation,
+                gen_request,
+                work_dir,
+                int(user.id) if user else 0,
+                status_msg=status_msg,
+                preferred_keys=preferred_keys,
+            )
             if result is None:
                 await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
                 return
@@ -807,52 +717,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # User confirmed generation — skip Gemini entirely (slow / failing).
         logger.info("Skipping chat layer; force_generate_once active free_agent=%s", _free_agent_mode())
         if _free_agent_mode():
-            # Keep raw user text — do not map to catalog capability keys.
+            # Engine-direct: raw user text goes to multi-agent/Cline. No translate/bridge.
             if context.user_data is not None:
-                context.user_data["translated_spec_request"] = request
+                context.user_data["engine_direct_request"] = request
                 context.user_data["translated_preferred_keys"] = []
-                context.user_data["last_bridge"] = {
-                    "mode": "cline",
-                    "keys": [],
-                    "needs_ai_codegen": True,
-                    "looks_custom": True,
-                }
+                context.user_data["translated_source"] = "engine_direct"
                 context.user_data["free_agent_path"] = True
-            # Fall through without Gemini translate / catalog bridge.
             pass
         else:
-            try:
-                from lumen.engine.services.translator_client import translate_request
-                _hist = []
-                if context.user_data is not None:
-                    _hist = list(context.user_data.get("chat_history") or [])[-8:]
-                _tr = translate_request(
-                    request,
-                    {"conversation_history": _hist, "server_facts": {"project": "Lumen"}},
-                )
-                if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
-                    request = str(_tr.get("spec_request")).strip()
-                    if context.user_data is not None:
-                        context.user_data["translated_spec_request"] = request
-                        try:
-                            from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
-                            _pkg = analyze_and_prepare(request, _tr)
-                            context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
-                            context.user_data["last_bridge"] = {"mode": _pkg.get("engine_mode"), "keys": _pkg.get("preferred_keys")}
-                        except Exception:
-                            context.user_data["translated_preferred_keys"] = [
-                                str(x) for x in (_tr.get("features_requested") or []) if str(x).strip()
-                            ]
-                        context.user_data["translated_source"] = "groq_confirm_fastpath"
-                        context.user_data["skip_clarify_once"] = True
-                    logger.info(
-                        "Confirm fast-path Groq translation features=%s",
-                        _tr.get("features_requested"),
-                    )
-                else:
-                    logger.warning("Confirm fast-path: Groq returned no spec; using raw request")
-            except Exception:
-                logger.exception("Confirm fast-path Groq failed; continuing with raw request")
+            # Engine owns understanding — pass raw request through.
+            if context.user_data is not None:
+                context.user_data["engine_direct_request"] = request
+                context.user_data["translated_source"] = "engine_direct"
+                context.user_data["skip_clarify_once"] = True
+            logger.info("Confirm/force path engine-direct (no translate/bridge)")
         try:
             await message.reply_text("جاري تجهيز البوت الآن…")
         except Exception:
@@ -1023,63 +901,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _translation_source = "qwen_direct_after_gemini_failure"
         elif isinstance(chat_result, dict):
             try:
-                from lumen.engine.services.gemini_client import validate_spec_translation
-                from lumen.engine.services.translator_client import translate_request
+                # Engine-direct policy: do not use Gemini/Qwen translation layers
+                # to produce generation contracts. Multi-agent/Cline owns understanding.
                 _translation = chat_result.get("translation")
                 _action = chat_result.get("action") if isinstance(chat_result.get("action"), dict) else {}
-                if (
-                    str(_action.get("name") or "") in {"generate_bot", "refine_bot"}
-                    and isinstance(_translation, dict)
-                    and validate_spec_translation(_translation)
-                ):
-                    _gemini_keys = [
-                        str(key).strip()
-                        for key in (_translation.get("features_requested") or [])
-                        if str(key).strip()
-                    ]
-                    _gemini_understanding = {
-                        "purpose": str(_translation.get("purpose") or ""),
-                        "features_requested": _gemini_keys,
-                        "flows": [
-                            str(flow).strip()
-                            for flow in (_translation.get("flows") or [])
-                            if str(flow).strip()
-                        ],
-                        "strict_spec": bool(_translation.get("strict_spec")),
-                        "confidence": float(_translation.get("confidence") or 0.0),
-                        "spec_request": str(_translation.get("spec_request") or ""),
-                        "source": "gemini",
-                    }
-                    _qwen_context = dict(chat_context)
-                    _qwen_context["server_facts"] = dict(live_context or {})
-                    _qwen_context["server_facts"]["gemini_understanding"] = _gemini_understanding
-                    _qwen_context["gemini_understanding"] = _gemini_understanding
-                    _qwen_translation = translate_request(request, _qwen_context)
-                    if isinstance(_qwen_translation, dict):
-                        _translated_generation_request = str(
-                            _qwen_translation.get("spec_request") or ""
-                        ).strip()
-                        _translated_preferred_keys = [
-                            str(key).strip()
-                            for key in (_qwen_translation.get("features_requested") or [])
-                            if str(key).strip()
-                        ]
-                        _translation_source = "qwen_after_gemini"
-                        logger.info(
-                            "Gemini understanding handed off to Qwen: features=%s",
-                            _translated_preferred_keys,
-                        )
-                    else:
-                        # Qwen is an enhancement, not a reason to block a valid
-                        # Gemini contract; keep the deterministic path available.
-                        _translated_generation_request = str(
-                            _translation.get("spec_request") or ""
-                        ).strip()
-                        _translated_preferred_keys = _gemini_keys
-                        _translation_source = "gemini_fallback_qwen_unavailable"
-                        logger.warning("Qwen handoff unavailable; using validated Gemini contract")
+                if str(_action.get("name") or "") in {"generate_bot", "refine_bot"}:
+                    # Signal force-generate with raw user text; engine handles the rest.
+                    if context.user_data is not None:
+                        context.user_data["force_generate_once"] = True
+                        context.user_data["engine_direct_request"] = request
+                        context.user_data["translated_source"] = "engine_direct_from_chat_action"
+                    _translated_generation_request = request
+                    _translation_source = "engine_direct"
+                    logger.info("Chat action generate_bot → engine-direct (no translate layer)")
             except Exception:
-                logger.exception("Gemini-to-Qwen generation handoff failed")
+                logger.exception("engine-direct generation handoff failed")
 
         if _translated_generation_request:
             request = _translated_generation_request
@@ -1140,46 +976,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _force_generate = True
 
         if _force_generate and not _translated_generation_request:
-            # Ensure we generate the original bot request, not the confirm phrase.
+            # Engine-direct: use prior bot request or current text. No translate/bridge.
             prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
             gen_src = prior if prior else (request if _looks_like_generation_request(request) else "")
             if gen_src:
-                try:
-                    from lumen.engine.services.translator_client import translate_request
-                    _tr = translate_request(gen_src, chat_context)
-                    if isinstance(_tr, dict) and str(_tr.get("spec_request") or "").strip():
-                        request = str(_tr.get("spec_request")).strip()
-                        if context.user_data is not None:
-                            context.user_data["translated_spec_request"] = request
-                            try:
-                                from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
-                                _pkg = analyze_and_prepare(request, _tr)
-                                context.user_data["translated_preferred_keys"] = list(_pkg.get("preferred_keys") or [])
-                                context.user_data["last_bridge"] = {
-                                    "mode": _pkg.get("engine_mode"),
-                                    "keys": _pkg.get("preferred_keys"),
-                                }
-                            except Exception:
-                                context.user_data["translated_preferred_keys"] = list(
-                                    _tr.get("features_requested") or []
-                                )
-                            context.user_data["translated_source"] = "groq_on_force_generate"
-                            context.user_data["skip_clarify_once"] = True
-                        _translated_generation_request = request
-                        logger.info(
-                            "Force-generate via Groq translation features=%s",
-                            _tr.get("features_requested"),
-                        )
-                    else:
-                        request = gen_src
-                        if context.user_data is not None:
-                            context.user_data["skip_clarify_once"] = True
-                        _translated_generation_request = gen_src
-                        logger.warning("Force-generate without Groq; using raw prior request")
-                except Exception:
-                    logger.exception("Force-generate Groq translation failed")
-                    request = gen_src
-                    _translated_generation_request = gen_src
+                request = gen_src
+                if context.user_data is not None:
+                    context.user_data["engine_direct_request"] = gen_src
+                    context.user_data["translated_source"] = "engine_direct"
+                    context.user_data["skip_clarify_once"] = True
+                _translated_generation_request = gen_src
+                logger.info("Force-generate engine-direct (no translate/bridge) len=%s", len(gen_src))
 
         # Chat answers that are NOT a generate-now signal stay as chat only.
         if (

@@ -264,14 +264,14 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                 metadata={"engine": "multi_agent", "template_fallback": False},
             )
 
-        # Cline via bridge/IR.
+        # Cline engine-direct fallback (no translator/bridge layer).
         try:
             if (preferred_keys is not None) and isinstance(preferred_keys, dict):
                 preferred_keys = preferred_keys.get("preferred_keys")  # type: ignore
         except Exception:
             pass
 
-        logger.info("run_generation → Cline path")
+        logger.info("run_generation → Cline engine-direct path")
         return run_generation_with_bridge(
             request,
             work_dir,
@@ -294,22 +294,40 @@ def run_generation_with_bridge(
     work_dir: Path,
     user_id: int = 0,
     translation: dict | None = None,
+    preferred_keys: list | None = None,
 ):
-    """Analyze → BuildIR → engine_router (Cline SDK only).
+    """Engine-direct fallback: raw request → BuildIR → Cline (no translator/bridge layer).
 
-    Translation is optional input to the bridge, not a required independent layer.
-    Cline is the sole engine (CLINE_ENABLED defaults on).
+    Multi-agent is preferred by run_generation. This path is only the Cline fallback.
+    Engine reads its own LLM keys via model_router + key_pool.
     """
-    from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
     from lumen.engine.services.engine_router import build_ir_from_package, execute_ir
 
     request = clamp_spec_request(request or "")
 
-    def _bridge_exec():
-        package = analyze_and_prepare(request, translation)
+    def _engine_direct_exec():
+        # Minimal package — engine owns understanding. No analyze_and_prepare.
+        package: dict = {
+            "original_text": request,
+            "spec_request": request,
+            "preferred_keys": list(preferred_keys or []),
+            "capabilities_matched": [],
+            "capabilities_gap": ["free_agent"],
+            "needs_ai_codegen": True,
+            "looks_custom": True,
+            "confidence": 0.0,
+            "engine_mode": "cline",
+        }
+        if isinstance(translation, dict) and translation:
+            # Optional residual hints only; never required.
+            if translation.get("spec_request"):
+                package["spec_request"] = str(translation.get("spec_request") or request).strip()
+            feats = translation.get("features_requested") or translation.get("preferred_keys")
+            if isinstance(feats, list) and feats:
+                package["preferred_keys"] = [str(x).strip() for x in feats if str(x).strip()]
         ir = build_ir_from_package(package, user_id=int(user_id or 0))
         logger.info(
-            "IR mode=%s matched=%s gap=%s conf=%.2f",
+            "engine-direct IR mode=%s matched=%s gap=%s conf=%.2f",
             ir.engine_mode.value,
             ir.capabilities_matched,
             ir.capabilities_gap,
@@ -318,7 +336,7 @@ def run_generation_with_bridge(
         result = execute_ir(ir, work_dir, user_id=int(user_id or 0))
         try:
             meta = dict(getattr(result, "metadata", None) or {})
-            meta["bridge"] = package
+            meta["engine_direct"] = True
             meta["ir"] = ir.to_dict()
             result.metadata = meta
         except Exception:
@@ -326,7 +344,7 @@ def run_generation_with_bridge(
         return result
 
     try:
-        return run_with_engine_timeout(_bridge_exec)
+        return run_with_engine_timeout(_engine_direct_exec)
     except EngineTimeoutError as exc:
         from lumen.engine.core.result import GenerationResult
         logger.warning("engine timeout user=%s: %s", user_id, exc)
