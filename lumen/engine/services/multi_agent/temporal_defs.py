@@ -1,21 +1,16 @@
-"""Official Temporal.io workflow + activities — production path for generation.
-
-Worker: python -m lumen.engine.services.multi_agent.temporal_worker
-Env: TEMPORAL_HOST, TEMPORAL_NAMESPACE, TEMPORAL_TASK_QUEUE
-
-The workflow ALWAYS runs run_generate_activity (LangGraph orchestrator), not
-signal-only bookkeeping. Signals still support pause/cancel/steer.
-"""
+"""Official Temporal workflow + activities wrapping LangGraph + Cline."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import timedelta
+import logging
+from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from temporalio import activity, workflow
     from temporalio.common import RetryPolicy
-except ImportError:  # pragma: no cover
+except Exception:
     activity = None  # type: ignore
     workflow = None  # type: ignore
     RetryPolicy = None  # type: ignore
@@ -23,11 +18,13 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class GenerateJobInput:
-    state_id: str
+    state_id: str = ""
     user_id: int = 0
     description: str = ""
     work_dir: str = ""
-    payload: dict | None = None
+    preferred_keys: list[str] = field(default_factory=list)
+    payload: dict[str, Any] = field(default_factory=dict)
+    workflow_id: str = ""
 
 
 if activity is not None:
@@ -36,7 +33,6 @@ if activity is not None:
     async def register_generate_job(data: dict[str, Any]) -> dict[str, Any]:
         from .durable_workflow import JournalEntry, get_journal
         import uuid
-
         state_id = str(data.get("state_id") or "")
         wid = str(data.get("workflow_id") or f"twf-{uuid.uuid4().hex[:16]}")
         entry = JournalEntry(
@@ -52,206 +48,112 @@ if activity is not None:
         get_journal().write(entry)
         return entry.to_dict()
 
-    @activity.defn(name="lumen_run_generate")
-    async def run_generate_activity(data: dict[str, Any]) -> dict[str, Any]:
-        """Primary activity: full multi-agent generate via LangGraph orchestrator."""
+    @activity.defn(name="lumen_run_langgraph_generate")
+    async def run_langgraph_generate_activity(data: dict[str, Any]) -> dict[str, Any]:
         import asyncio
+        import os
         from pathlib import Path
 
-        request = str(data.get("request") or data.get("description") or data.get("user_text") or "")
-        work_dir = str(data.get("work_dir") or "")
-        user_id = int(data.get("user_id") or 0)
-        preferred = data.get("preferred_keys")
-        if not request.strip():
-            return {"ok": False, "error": "empty_request"}
-        if not work_dir:
-            return {"ok": False, "error": "missing_work_dir"}
-        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        def _run() -> dict[str, Any]:
+            os.environ["LUMEN_INSIDE_TEMPORAL_ACTIVITY"] = "1"
+            from .state import AgentState, AgentStatus
+            from .langgraph_pipeline import run_langgraph_pipeline, langgraph_available
+            from .blackboard import get_blackboard
+            from .registry import get_registry
+            import uuid
 
-        def _run():
-            import os as _os
-            _os.environ["LUMEN_INSIDE_TEMPORAL_ACTIVITY"] = "1"
-            _os.environ["LUMEN_GENERATE_VIA_TEMPORAL"] = "0"
-            from .orchestrator import orchestrate_generate
+            if not langgraph_available():
+                return {"ok": False, "error": "langgraph_not_installed", "status": "FAILED"}
 
-            return orchestrate_generate(
-                request,
-                work_dir,
+            request = str(data.get("request") or data.get("description") or "")
+            work_dir = str(data.get("work_dir") or "")
+            user_id = int(data.get("user_id") or 0)
+            preferred = [str(x) for x in (data.get("preferred_keys") or []) if str(x).strip()]
+            state_id = str(data.get("state_id") or uuid.uuid4().hex[:16])
+            if work_dir:
+                Path(work_dir).mkdir(parents=True, exist_ok=True)
+
+            state = AgentState(
+                state_id=state_id,
                 user_id=user_id,
-                preferred_keys=list(preferred) if isinstance(preferred, list) else None,
-                spec_request=str(data.get("spec_request") or request),
+                user_text=request,
+                spec_request=request,
+                preferred_keys=preferred,
+                status=AgentStatus.PENDING.value,
             )
-
-        # Activity must not block the event loop
-        result = await asyncio.to_thread(_run)
-        success = bool(getattr(result, "success", False))
-        path = str(getattr(result, "project_path", None) or getattr(result, "path", None) or "")
-        errors = list(getattr(result, "errors", None) or [])
-        meta = dict(getattr(result, "metadata", None) or {})
-        return {
-            "ok": success,
-            "success": success,
-            "project_path": path[:1000],
-            "errors": [str(e)[:300] for e in errors[:20]],
-            "metadata": {
-                k: meta[k]
-                for k in list(meta.keys())[:30]
-                if isinstance(meta.get(k), (str, int, float, bool, type(None)))
-            },
-            "orchestration": meta.get("multi_agent", {}).get("extensions", {}).get("orchestration")
-            if isinstance(meta.get("multi_agent"), dict)
-            else meta.get("orchestration"),
-        }
-
-    @activity.defn(name="lumen_resume_generate")
-    async def resume_generate_activity(data: dict[str, Any]) -> dict[str, Any]:
-        from .durable_workflow import resume_generate
-
-        state_id = str(data.get("state_id") or "")
-        if not state_id:
-            return {"ok": False, "error": "missing_state_id"}
-        try:
-            state = resume_generate(state_id)
-            if state is None:
-                return {"ok": False, "error": "no_checkpoint"}
+            state.extensions = {"work_dir": work_dir, "orchestration": "temporal+langgraph+cline"}
+            out = run_langgraph_pipeline(
+                state,
+                context={"work_dir": work_dir, "user_id": user_id},
+                registry=get_registry(),
+                board=get_blackboard(),
+                thread_id=state_id,
+            )
+            ok = bool(out.qa_passed) or str(out.status).upper() in {"PASSED", "DELIVERED"}
             return {
-                "ok": True,
-                "state_id": state.state_id,
-                "status": state.status,
-                "attempts": state.attempts,
-                "qa_passed": bool(state.qa_passed),
-                "generated_path": str(state.generated_path or "")[:500],
+                "ok": ok,
+                "status": out.status,
+                "state_id": out.state_id,
+                "generated_path": out.generated_path,
+                "qa_passed": out.qa_passed,
+                "attempts": out.attempts,
+                "task_tree": (out.extensions or {}).get("task_tree_summary"),
+                "state": out.to_dict(),
             }
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+
+        return await asyncio.to_thread(_run)
+
+    @activity.defn(name="lumen_run_generate")
+    async def run_generate_activity(data: dict[str, Any]) -> dict[str, Any]:
+        return await run_langgraph_generate_activity(data)
 
 
 if workflow is not None:
 
-    @workflow.defn(name="LumenMultiAgentGenerate")
+    @workflow.defn(name="LumenMultiAgentGenerateWorkflow")
     class LumenMultiAgentGenerateWorkflow:
-        """Runs generate activity under Temporal; survives worker crash/restart."""
-
         def __init__(self) -> None:
-            self._step = "start"
-            self._status = "running"
-            self._done = False
+            self._steer: dict[str, Any] = {}
             self._cancelled = False
-            self._last_payload: dict[str, Any] = {}
-            self._steer: str = ""
+
+        @workflow.signal
+        def steer(self, payload: dict[str, Any]) -> None:
+            self._steer = dict(payload or {})
+
+        @workflow.signal
+        def cancel(self) -> None:
+            self._cancelled = True
+
+        @workflow.query
+        def status_view(self) -> dict[str, Any]:
+            return {"steer": dict(self._steer), "cancelled": self._cancelled}
 
         @workflow.run
         async def run(self, data: dict[str, Any]) -> dict[str, Any]:
-            retry = RetryPolicy(maximum_attempts=3)
-            long_retry = RetryPolicy(maximum_attempts=2)
-
-            reg = await workflow.execute_activity(
-                register_generate_job,
-                {**data, "step": "start", "status": "running"},
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=retry,
+            from datetime import timedelta
+            payload = dict(data or {})
+            retry = RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=60),
+                maximum_attempts=3,
             )
-            self._step = "registered"
-            workflow.logger.info("journal %s", reg.get("workflow_id"))
-
-            if self._cancelled:
-                self._status = "cancelled"
-                self._done = True
-                return {"ok": False, "status": "cancelled", "register": reg}
-
-            # Crash recovery path
-            if data.get("auto_resume") and data.get("state_id"):
-                self._step = "resume"
-                result = await workflow.execute_activity(
-                    resume_generate_activity,
-                    data,
-                    start_to_close_timeout=timedelta(hours=2),
-                    heartbeat_timeout=timedelta(minutes=5),
-                    retry_policy=long_retry,
-                )
-                self._status = "done" if result.get("ok") else "failed"
-                self._done = True
-                self._last_payload = dict(result)
-                return {"ok": bool(result.get("ok")), "step": self._step, "result": result, "register": reg}
-
-            # PRIMARY: full generate (LangGraph inside orchestrate_generate)
-            self._step = "generate"
-            payload = dict(data)
-            if self._steer:
-                payload["request"] = f"{payload.get('request') or payload.get('description') or ''}\n\nSTEER: {self._steer}"
-            result = await workflow.execute_activity(
-                run_generate_activity,
-                payload,
-                start_to_close_timeout=timedelta(hours=4),
-                heartbeat_timeout=timedelta(minutes=10),
-                retry_policy=long_retry,
-            )
-            self._last_payload = dict(result)
-            self._status = "done" if result.get("ok") else "failed"
-            self._step = "finished"
-            self._done = True
-
             await workflow.execute_activity(
                 register_generate_job,
-                {
-                    **data,
-                    "workflow_id": reg.get("workflow_id"),
-                    "step": self._step,
-                    "status": self._status,
-                    "payload": {"result_ok": bool(result.get("ok")), "path": result.get("project_path")},
-                },
-                start_to_close_timeout=timedelta(minutes=2),
+                {**payload, "step": "start", "status": "running"},
+                start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=retry,
             )
-            return {
-                "ok": bool(result.get("ok")),
-                "step": self._step,
-                "status": self._status,
-                "result": result,
-                "register": reg,
-            }
-
-        @workflow.signal(name="checkpoint")
-        def checkpoint(self, data: dict[str, Any]) -> None:
-            self._step = str(data.get("step") or self._step)
-            self._status = str(data.get("status") or self._status)
-            self._last_payload = dict(data.get("payload") or {})
-            if self._status.lower() in {
-                "done", "passed", "failed", "completed", "error", "cancelled",
-            }:
-                self._done = True
-
-        @workflow.signal(name="cancel")
-        def cancel(self) -> None:
-            self._cancelled = True
-            self._status = "cancelled"
-            self._done = True
-
-        @workflow.signal(name="steer")
-        def steer(self, data: dict[str, Any]) -> None:
-            self._steer = str((data or {}).get("message") or data or "")[:2000]
-
-        @workflow.query(name="status")
-        def status(self) -> dict[str, Any]:
-            return {
-                "step": self._step,
-                "status": self._status,
-                "done": self._done,
-                "payload": self._last_payload,
-                "steer": self._steer[:200],
-            }
-
-
-def workflow_classes() -> list:
-    if workflow is None:
-        return []
-    return [LumenMultiAgentGenerateWorkflow]
-
-
-def activity_fns() -> list:
-    if activity is None:
-        return []
-    return [register_generate_job, run_generate_activity, resume_generate_activity]
+            if self._cancelled:
+                return {"ok": False, "status": "CANCELLED"}
+            result = await workflow.execute_activity(
+                run_langgraph_generate_activity,
+                payload,
+                start_to_close_timeout=timedelta(hours=2),
+                heartbeat_timeout=timedelta(minutes=5),
+                retry_policy=retry,
+            )
+            return dict(result or {})
 
 
 __all__ = [
@@ -259,7 +161,5 @@ __all__ = [
     "LumenMultiAgentGenerateWorkflow",
     "register_generate_job",
     "run_generate_activity",
-    "resume_generate_activity",
-    "workflow_classes",
-    "activity_fns",
+    "run_langgraph_generate_activity",
 ]

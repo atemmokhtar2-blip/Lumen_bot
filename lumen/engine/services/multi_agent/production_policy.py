@@ -28,12 +28,8 @@ def require_langgraph() -> bool:
 
 
 def allow_imperative_fallback() -> bool:
-    """Never in production. Dev only if MULTI_AGENT_ALLOW_IMPERATIVE_FALLBACK=1."""
-    if is_production():
-        return False
-    return (os.getenv("MULTI_AGENT_ALLOW_IMPERATIVE_FALLBACK") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    """Always False — LangGraph + Cline agent_loop only."""
+    return False
 
 
 def allow_template_fallback() -> bool:

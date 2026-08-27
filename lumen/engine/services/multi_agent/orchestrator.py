@@ -301,176 +301,19 @@ class Orchestrator:
                 state.status = AgentStatus.DELIVERED.value
             return self._deliver(state)
 
-        # 2) Build–QA loop (Phase C) for generate_bot / refine_bot
-        while True:
-            # Architect (fresh plan or repair using qa_summary in architect_view)
-            try:
-                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.PLANNING.value
-            state = self._run_agent("architect", state, ctx)
-            self._wf_checkpoint(state, "architect")
-            try:
-                from .trajectory import append_trajectory
-                append_trajectory(state, step="planner_done", role="ARCHITECT", ok=True)
-            except Exception:
-                pass
-
-            # Builder + gate
-            state = self._builder_with_gate(state, ctx)
-            self._wf_checkpoint(state, "builder")
-            try:
-                from .trajectory import append_trajectory
-                append_trajectory(
-                    state,
-                    step="worker_done",
-                    role="BUILDER",
-                    ok=bool(state.build_success),
-                    detail=(state.generated_path or "")[:120],
-                )
-            except Exception:
-                pass
-
-            # Critic only if build produced a path
-            if state.build_success and (state.generated_path or "").strip():
-                state = self._run_agent("critic", state, ctx)
-                self._wf_checkpoint(state, "critic")
-                try:
-                    from .trajectory import append_trajectory
-                    append_trajectory(
-                        state,
-                        step="critic_done",
-                        role="CRITIC",
-                        ok=bool(state.qa_passed),
-                        payload={"errors": list((state.qa_report or {}).get("errors") or [])[:6]},
-                    )
-                except Exception:
-                    pass
-            else:
-                state.qa_passed = False
-                if not state.qa_report:
-                    state.qa_report = {
-                        "ok": False,
-                        "errors": list(state.build_errors or ["build_failed"]),
-                        "attempt": state.attempts,
-                    }
-                if self._rate_limit_errors(state):
-                    state = self._pause_for_rate_limit(state)
-                    return self._deliver(state)
-                try:
-                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="no_build", force=True)
-                except Exception:
-                    state.status = AgentStatus.FAILED.value
-                self.board.put(state)
-
-            if state.status == AgentStatus.PASSED.value or state.qa_passed:
-                # Independent automated gate — do not trust Critic alone
-                try:
-                    from .generated_tests import run_generated_unit_gate
-                    gate = run_generated_unit_gate(state.generated_path or "")
-                    ext = dict(state.extensions or {})
-                    ext["unit_gate"] = gate
-                    state.extensions = ext
-                    if not gate.get("ok"):
-                        state.qa_passed = False
-                        state.qa_report = {
-                            "ok": False,
-                            "errors": list(gate.get("errors") or ["unit_gate_failed"]),
-                            "attempt": state.attempts,
-                            "unit_gate": gate,
-                        }
-                        try:
-                            state.transition(
-                                AgentStatus.FAILED,
-                                role=AgentRole.ORCHESTRATOR,
-                                detail="unit_gate_failed",
-                                force=True,
-                            )
-                        except Exception:
-                            state.status = AgentStatus.FAILED.value
-                        self.board.put(state)
-                        # continue repair loop instead of accepting
-                    else:
-                        break
-                except Exception as _ug_exc:
-                    logger.exception("unit gate crashed")
-                    state.qa_passed = False
-                    state.qa_report = {
-                        "ok": False,
-                        "errors": [f"unit_gate_error:{type(_ug_exc).__name__}"],
-                        "attempt": state.attempts,
-                    }
-                if state.qa_passed and state.status == AgentStatus.PASSED.value:
-                    break
-                if not state.qa_passed:
-                    pass  # fall through to repair
-                else:
-                    break
-
-            # Repair decision — no template path; fail when exhausted
-            from .repair import build_repair_directive, spec_hash, record_repair_history
-            directive = build_repair_directive(state)
-            hist = list((state.extensions or {}).get("repair_history") or [])
-            cur_h = spec_hash(state.strict_spec)
-            prev_h = str(directive.previous_spec_hash or "")
-            stagnant = bool(hist) and (
-                any(h.get("spec_hash") == cur_h for h in hist[-3:])
-                or (bool(prev_h) and prev_h == cur_h)
-            )
-            directive.stagnant = stagnant
-            state.extensions["last_repair"] = directive.to_dict()
-            try:
-                record_repair_history(state, directive, cur_h)
-            except Exception:
-                pass
-            try:
-                from .redis_board import append_agent_event
-                append_agent_event(
-                    state.state_id,
-                    "repair_decision",
-                    {
-                        "attempts": int(state.attempts or 0),
-                        "stagnant": stagnant,
-                        "spec_hash": cur_h,
-                        "qa_errors": list((state.qa_report or {}).get("errors") or [])[:5],
-                    },
-                )
-            except Exception:
-                pass
-
-            exhausted = int(state.attempts or 0) >= max_att
-            if exhausted:
-                state.record(
-                    AgentRole.ORCHESTRATOR,
-                    "repair_exhausted",
-                    f"attempts={state.attempts} max={max_att}",
-                )
-                try:
-                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
-                except Exception:
-                    state.status = AgentStatus.FAILED.value
-                state.final_message = (state.final_message or "") + "\n[QA failed after max repair attempts]"
-                return self._deliver(state)
-
-            state.attempts = int(state.attempts or 0) + 1
-            state.record(
-                AgentRole.ORCHESTRATOR,
-                "repair_loop",
-                f"attempt={state.attempts} stagnant={stagnant} errors={(state.qa_report or {}).get('errors', [])[:3]}",
-            )
-            try:
-                state.transition(AgentStatus.PLANNING, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.PLANNING.value
-            state.build_success = False
-            state.extensions["last_failed_path"] = state.generated_path
-            state.generated_path = ""
-            state.qa_passed = False
-            self.board.put(state)
-
+        # Generate must use LangGraph + Cline only — no imperative loop.
+        from .metrics import get_metrics as _gm
+        _gm().incr("orchestrator_langgraph_required")
+        state.final_message = (
+            "LangGraph + Cline agent_loop required for generate. "
+            "pip install langgraph langchain-core"
+        )
+        try:
+            state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="langgraph_required", force=True)
+        except Exception:
+            state.status = AgentStatus.FAILED.value
+        self.board.put(state)
         return self._deliver(state)
-
-
 
 
     def resume_run(self, state: AgentState, *, from_step: str = "architect") -> AgentState:
@@ -687,6 +530,18 @@ class Orchestrator:
         return state
 
 
+def save_state(state: AgentState) -> AgentState:
+    return get_blackboard().put(state)
+
+
+def get_state(state_id: str) -> Optional[AgentState]:
+    return get_blackboard().get(state_id)
+
+
+def latest_for_user(user_id: int) -> Optional[AgentState]:
+    return get_blackboard().latest_for_user(int(user_id or 0))
+
+
 def orchestrate_generate(
     request: str,
     work_dir: str | Path,
@@ -697,27 +552,59 @@ def orchestrate_generate(
     registry: AgentRegistry | None = None,
     board: BlackboardStore | None = None,
 ) -> Any:
+    """Temporal (optional) → official LangGraph + Cline agent_loop. No dual path."""
+    import os
+    from lumen.engine.core.result import GenerationResult
+
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+
     try:
         from lumen.platform.queue_backpressure import check_enqueue_allowed
         ok_bp, reason_bp = check_enqueue_allowed(f"tg:{int(user_id or 0)}", kind="generate")
         if not ok_bp:
-            from lumen.engine.core.result import GenerationResult
-            return GenerationResult(
-                success=False,
-                errors=[f"backpressure:{reason_bp}"],
-                metadata={"backpressure": True},
-            )
+            return GenerationResult(success=False, errors=[f"backpressure:{reason_bp}"], metadata={"backpressure": True})
     except Exception as _bp:
-        import os as _os
-        if (_os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
-            from lumen.engine.core.result import GenerationResult
-            return GenerationResult(
-                success=False,
-                errors=[f"backpressure_error:{type(_bp).__name__}"],
-                metadata={"backpressure": True},
+        if (os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
+            return GenerationResult(success=False, errors=[f"backpressure_error:{type(_bp).__name__}"], metadata={"backpressure": True})
+
+    inside = (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip().lower() in {"1", "true", "yes"}
+    try:
+        from .temporal_client_run import run_generate_via_temporal, temporal_configured
+        if temporal_configured() and not inside and (os.environ.get("LUMEN_GENERATE_VIA_TEMPORAL") or "1").strip().lower() not in {"0", "false", "no"}:
+            tr = run_generate_via_temporal(
+                request=request or "",
+                work_dir=str(work),
+                user_id=int(user_id or 0),
+                preferred_keys=list(preferred_keys or []),
             )
+            result = tr.get("result") or tr
+            if tr.get("error") and not result.get("ok"):
+                return GenerationResult(success=False, errors=[str(tr.get("error"))], metadata={"engine": "temporal", "temporal": tr})
+            path = str((result or {}).get("generated_path") or "") or None
+            success = bool((result or {}).get("ok") or (result or {}).get("qa_passed"))
+            return GenerationResult(
+                success=success,
+                project_path=path,
+                errors=[] if success else [str((result or {}).get("status") or "failed")],
+                metadata={"engine": "temporal+langgraph+cline", "workflow_id": tr.get("workflow_id"), "task_tree": (result or {}).get("task_tree")},
+            )
+    except Exception:
+        logger.exception("temporal path failed — LangGraph in-process")
+
+    from .langgraph_pipeline import langgraph_available, run_langgraph_pipeline
+    from .registry import get_registry
+    from .blackboard import get_blackboard
+
+    if not langgraph_available():
+        return GenerationResult(
+            success=False,
+            errors=["langgraph_required: pip install langgraph langchain-core"],
+            metadata={"engine": "multi_agent"},
+        )
+
+    board = board or get_blackboard()
+    registry = registry or get_registry()
     state = AgentState(
         user_id=int(user_id or 0),
         user_text=_safe_user_text(request),
@@ -725,105 +612,42 @@ def orchestrate_generate(
         preferred_keys=list(preferred_keys or []),
     )
     state.extensions["work_dir"] = str(work)
-    # Production durability: prefer Temporal workflow when policy says so
-    try:
-        from .production_policy import is_production, required_workflow_engine
-        from .temporal_client_run import run_generate_via_temporal, temporal_configured
-        use_t = is_production() or (os.environ.get("TBE_WORKFLOW_ENGINE") or "").strip().lower() in {"temporal", "temporalio"}
-        use_t = use_t and temporal_configured() and (os.environ.get("LUMEN_GENERATE_VIA_TEMPORAL") or "1").strip().lower() not in {"0", "false", "no"}
-        if use_t and required_workflow_engine() in {"temporal", "temporalio"}:
-            # Avoid recursion: activity calls orchestrate_generate with LUMEN_GENERATE_VIA_TEMPORAL=0
-            if (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip() not in {"1", "true"}:
-                tr = run_generate_via_temporal(
-                    request=request or "",
-                    work_dir=str(work),
-                    user_id=int(user_id or 0),
-                    preferred_keys=list(preferred_keys or []) if preferred_keys else None,
-                    wait=True,
-                )
-                from lumen.engine.core.result import GenerationResult
-                if tr.get("ok"):
-                    res = (tr.get("result") or {}).get("result") or tr.get("result") or {}
-                    return GenerationResult(
-                        success=True,
-                        project_path=str(res.get("project_path") or "") or None,
-                        errors=[],
-                        metadata={"temporal": tr, "orchestration": "temporal+langgraph"},
-                    )
-                # If Temporal server down in production — hard fail (no silent local)
-                if is_production():
-                    return GenerationResult(
-                        success=False,
-                        errors=[f"temporal_required:{tr.get('error') or 'failed'}"],
-                        metadata={"temporal": tr},
-                    )
-                logger.warning("temporal generate failed; continuing local LangGraph (non-prod)")
-    except Exception:
-        logger.exception("temporal path error")
-        try:
-            from .production_policy import is_production
-            if is_production():
-                from lumen.engine.core.result import GenerationResult
-                return GenerationResult(success=False, errors=["temporal_path_exception"])
-        except Exception:
-            pass
-    try:
-        from lumen.engine.services.events import emit
-        emit(
-            "generation.started",
-            {"user_id": int(user_id or 0), "request": (request or "")[:200]},
-            source="multi_agent",
-        )
-    except Exception:
-        logger.exception("generation.started emit failed")
-    orch = Orchestrator(registry=registry, board=board)
-    state = orch.run(state, context={"work_dir": work})
+    state.capability_id = "generate_bot"
+    board.put(state)
 
-    result = (state.extensions or {}).pop("_generation_result", None)
-    state.extensions.pop("_generation_result", None)
+    out = run_langgraph_pipeline(
+        state,
+        context={"work_dir": str(work), "user_id": int(user_id or 0)},
+        registry=registry,
+        board=board,
+        thread_id=state.state_id,
+    )
+    board.put(out)
     try:
-        orch.board.put(state)
+        _phase_d_e_finalize(out)
     except Exception:
-        pass
+        logger.exception("finalize failed")
 
-    if result is not None:
-        try:
-            meta = dict(getattr(result, "metadata", None) or {})
-            meta["multi_agent"] = state.to_dict()
-            result.metadata = meta
-            # If final QA failed after retries, surface honesty
-            if not state.qa_passed and getattr(result, "success", False):
-                meta["qa_failed_after_retries"] = True
-                result.metadata = meta
-                try:
-                    result.success = False
-                    errs = list(getattr(result, "errors", None) or [])
-                    errs.append("qa_failed_after_retries")
-                    result.errors = errs
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return result
-
-    from lumen.engine.core.result import GenerationResult
+    success = bool(out.qa_passed) or str(out.status).upper() in {"PASSED", "DELIVERED"}
+    errors = list(out.build_errors or [])
+    if not success and out.final_message:
+        errors.append(out.final_message[:500])
     return GenerationResult(
-        success=False,
-        errors=list(state.build_errors or ["orchestrator_no_result"]),
-        metadata={"multi_agent": state.to_dict()},
+        success=success,
+        project_path=out.generated_path or None,
+        validation_reports=[out.qa_report] if out.qa_report else [],
+        errors=errors[:30],
+        metadata={
+            "engine": "langgraph+cline",
+            "orchestration": "langgraph+cline",
+            "state_id": out.state_id,
+            "status": out.status,
+            "attempts": out.attempts,
+            "task_tree": (out.extensions or {}).get("task_tree_summary"),
+            "qa_passed": out.qa_passed,
+        },
     )
 
-
-def save_state(state: AgentState) -> AgentState:
-    return get_blackboard().put(state)
-
-
-def get_state(state_id: str) -> Optional[AgentState]:
-    return get_blackboard().get(state_id)
-
-
-def latest_for_user(user_id: int) -> Optional[AgentState]:
-    return get_blackboard().latest_for_user(user_id)
 
 
 def resume_after_confirm(
