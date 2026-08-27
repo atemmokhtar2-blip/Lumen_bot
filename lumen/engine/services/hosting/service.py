@@ -595,12 +595,32 @@ class HostingService:
             return None
         run_log = ""
         install_log = ""
+        # Firecracker / sandbox backend logs first
+        dep = (inst.deployment_id or "").strip()
+        backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
+        try:
+            from lumen.bot.sanitize import sanitize_log_text
+            if backend == "firecracker" or dep.startswith("fc-"):
+                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                    FirecrackerSandboxBackend,
+                )
+                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
+                run_log = sanitize_log_text("\n".join(lines)[-8000:])
+            elif dep:
+                from lumen.engine.services.sandbox_runtime import select_sandbox_backend
+                b, _ = select_sandbox_backend(require_available=False)
+                lines = b.logs(dep, limit=200)
+                if lines:
+                    run_log = sanitize_log_text("\n".join(lines)[-8000:])
+        except Exception:
+            pass
         # Prefer deployment log files beside project
         root = Path(inst.project_path)
         try:
-            for p in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
-                from lumen.bot.sanitize import sanitize_log_text
-                run_log = sanitize_log_text(p.read_text(encoding="utf-8", errors="ignore")[-8000:])
+            if not run_log:
+                for p in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
+                    from lumen.bot.sanitize import sanitize_log_text
+                    run_log = sanitize_log_text(p.read_text(encoding="utf-8", errors="ignore")[-8000:])
             for p in sorted(root.glob(".deploy_*.install.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
                 from lumen.bot.sanitize import sanitize_log_text as _slog
                 install_log = _slog(p.read_text(encoding="utf-8", errors="ignore")[-5000:])

@@ -114,7 +114,8 @@ def _local_process_allowed() -> bool:
         return bool(decide_isolation().allow_local)
     except Exception:
         import os
-        return (os.environ.get("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER") or "1").strip().lower() in {
+        # Fail closed: never default-allow host process on policy failure
+        return (os.environ.get("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER") or "0").strip().lower() in {
             "1", "true", "yes", "on",
         }
 

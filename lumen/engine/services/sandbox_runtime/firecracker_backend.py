@@ -427,7 +427,15 @@ class FirecrackerSandboxBackend(SandboxBackend):
             # Dev-only; never in production (blocked above)
             boot_args += f" BOT_TOKEN={spec.bot_token}"
 
-        mem_mib = int((os.environ.get("TBE_FC_MEM_MIB") or "256").strip() or "256")
+        # Align with hard sandbox policy when env unset
+        try:
+            from .policy import load_policy
+            pol = load_policy()
+            pol_mem = str(pol.max_memory or "256m").lower().replace("m", "").replace("mi", "")
+            pol_mem_mib = int(float(pol_mem)) if pol_mem.replace(".", "", 1).isdigit() else 256
+        except Exception:
+            pol_mem_mib = 256
+        mem_mib = int((os.environ.get("TBE_FC_MEM_MIB") or str(pol_mem_mib)).strip() or "256")
         vcpus = int((os.environ.get("TBE_FC_VCPUS") or "1").strip() or "1")
 
         # Rate limiters (bytes/s style — Firecracker refill_time in ms)
@@ -608,6 +616,20 @@ class FirecrackerSandboxBackend(SandboxBackend):
         for d in drives:
             _api_put(sock, f"/drives/{d['drive_id']}", d)
         _api_put(sock, "/machine-config", machine_cfg)
+        if _flag("TBE_FC_BALLOON", "1"):
+            try:
+                amount = max(0, int(machine_cfg.get("mem_size_mib") or 256) // 4)
+                _api_put(
+                    sock,
+                    "/balloon",
+                    {
+                        "amount_mib": amount,
+                        "deflate_on_oom": True,
+                        "stats_polling_interval_s": 0,
+                    },
+                )
+            except Exception as balloon_exc:
+                logger.warning("fc balloon optional failed: %s", type(balloon_exc).__name__)
         for iface in network_ifaces:
             _api_put(sock, f"/network-interfaces/{iface['iface_id']}", iface)
         _api_put(sock, "/actions", {"action_type": "InstanceStart"})

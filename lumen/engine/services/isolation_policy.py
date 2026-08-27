@@ -100,27 +100,28 @@ def assert_local_process_allowed() -> None:
 
 
 def select_process_driver():
-    """Legacy helper: prefer Docker driver, else local if allowed.
+    """Prefer SandboxProcessDriver (FC/gVisor/DinD/Docker). Local only if explicitly allowed.
 
-    New hosting paths must use sandbox_runtime.start_sandboxed_bot instead.
+    Production multi-tenant must never receive LocalProcessDriver.
     """
     decision = decide_isolation()
-    try:
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
-            DockerProcessDriver,
-            docker_available,
-        )
-
-        if decision.require_docker and docker_available():
-            return DockerProcessDriver(), decision
-    except Exception:
-        pass
+    if decision.require_strong_isolation:
+        try:
+            from lumen.engine.engines.generators.live_deployment.sandbox_process_driver import (
+                SandboxProcessDriver,
+            )
+            require_strong_isolation()
+            return SandboxProcessDriver(), decision
+        except Exception as exc:
+            raise RuntimeError(
+                "sandbox_required_but_unavailable: isolated runtime required; "
+                f"({decision.reason}; {type(exc).__name__}:{exc})"
+            ) from exc
 
     if decision.allow_local:
         from lumen.engine.engines.generators.live_deployment.local_process_driver import (
             LocalProcessDriver,
         )
-
         return LocalProcessDriver(), decision
 
     raise RuntimeError(
