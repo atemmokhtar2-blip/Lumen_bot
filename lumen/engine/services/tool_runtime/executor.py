@@ -79,6 +79,32 @@ def execute_tool(
         logger.warning("policy evaluation error (fail closed): %s", pol_exc)
         return ToolResult(ok=False, tool=name, message=f"policy_error: {type(pol_exc).__name__}")
 
+    # Heavy-tool rate limit (clone / git / host) — per user, fail closed on abuse
+    _HEAVY = {
+        "clone_repo", "create_repo", "git_push", "git_pull",
+        "repo_modify", "host_start", "generate_bot", "refine_bot",
+    }
+    if name in _HEAVY and int(user_id or 0) > 0:
+        try:
+            from lumen.platform.rate_limit import get_rate_limiter
+            limit = int(os.getenv("TOOL_HEAVY_RPM") or "8")
+            rl = get_rate_limiter()
+            ok_rl = bool(rl.allow(f"tool:{int(user_id)}", limit=limit, window_sec=60.0))
+            if not ok_rl:
+                wait_s = 0
+                try:
+                    wait_s = int(rl.seconds_until_allow(f"tool:{int(user_id)}", limit=limit, window_sec=60.0))
+                except Exception:
+                    wait_s = 60
+                return ToolResult(
+                    ok=False,
+                    tool=name,
+                    message=f"rate_limited: حد الأدوات الثقيلة ({limit}/دقيقة). انتظر ~{wait_s}ث.",
+                    data={"rate_limited": True, "wait_seconds": wait_s},
+                )
+        except Exception:
+            logger.debug("tool rate limit probe failed — allowing (non-fatal)", exc_info=True)
+
     try:
         if name == "clone_repo":
             return _tool_clone_repo(params, user_id=user_id)
@@ -115,6 +141,15 @@ def _load_smart_clone():
 
 
 def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
+    import shutil
+
+    if not shutil.which("git"):
+        return ToolResult(
+            ok=False,
+            tool="clone_repo",
+            message="git غير مثبت على السيرفر (binary not found in PATH)",
+            data={"missing_binary": "git"},
+        )
     _sc = _load_smart_clone()
     extract_repo_url = _sc.extract_repo_url
     smart_clone = _sc.smart_clone

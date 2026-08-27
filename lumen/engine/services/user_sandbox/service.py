@@ -86,26 +86,84 @@ class UserSandbox:
             raise
         except Exception:
             pass
+        try:
+            self.purge_old(keep_projects=int(os.getenv("TBE_KEEP_PROJECTS") or "8"))
+        except Exception:
+            pass
         self.ensure()
         stamp = time.strftime("%Y%m%d_%H%M%S")
         name = f"{_safe_segment(label, 'bot')}_{stamp}"
         path = self.projects_dir / name
         path.mkdir(parents=True, exist_ok=False)
         try:
-            import os
             os.chmod(path, 0o700)
         except Exception:
             pass
         return path
 
+    def purge_old(
+        self,
+        *,
+        keep_projects: int = 8,
+        keep_clones: int = 4,
+        max_age_days: float | None = None,
+    ) -> dict[str, int]:
+        """Remove oldest projects/clones beyond retention (disk growth control)."""
+        import shutil
+
+        self.ensure()
+        if max_age_days is None:
+            try:
+                max_age_days = float(os.getenv("TBE_SANDBOX_MAX_AGE_DAYS") or "14")
+            except ValueError:
+                max_age_days = 14.0
+        cutoff = time.time() - max(1.0, float(max_age_days)) * 86400.0
+
+        def _purge_dir(parent: Path, keep: int) -> int:
+            if not parent.is_dir():
+                return 0
+            kids = [p for p in parent.iterdir() if p.is_dir() and not p.is_symlink()]
+            kids.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0.0)
+            deleted = 0
+            for p in list(kids):
+                try:
+                    if p.stat().st_mtime < cutoff:
+                        shutil.rmtree(p, ignore_errors=True)
+                        if not p.exists():
+                            deleted += 1
+                            kids.remove(p)
+                except Exception:
+                    continue
+            keep_n = max(1, int(keep))
+            while len(kids) > keep_n:
+                victim = kids.pop(0)
+                try:
+                    shutil.rmtree(victim, ignore_errors=True)
+                    if not victim.exists():
+                        deleted += 1
+                except Exception:
+                    break
+            return deleted
+
+        return {
+            "removed_projects": _purge_dir(self.projects_dir, keep_projects),
+            "removed_clones": _purge_dir(self.clones_dir, keep_clones),
+        }
+
     def new_clone_dir(self, label: str = "clone") -> Path:
         self.ensure()
+        try:
+            self.purge_old(
+                keep_projects=int(os.getenv("TBE_KEEP_PROJECTS") or "8"),
+                keep_clones=int(os.getenv("TBE_KEEP_CLONES") or "4"),
+            )
+        except Exception:
+            pass
         stamp = time.strftime("%Y%m%d_%H%M%S")
         name = f"{_safe_segment(label, 'clone')}_{stamp}"
         path = self.clones_dir / name
         path.mkdir(parents=True, exist_ok=False)
         try:
-            import os
             os.chmod(path, 0o700)
         except Exception:
             pass

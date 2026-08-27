@@ -388,6 +388,14 @@ def run_agent(
         if isinstance(result, dict):
             result = dict(result)
             result["elapsed_ms"] = _elapsed_ms
+            try:
+                from lumen.bot.sanitize import sanitize_log_text
+
+                for _k in ("stdout", "stderr", "content", "message", "error"):
+                    if isinstance(result.get(_k), str):
+                        result[_k] = sanitize_log_text(result[_k], max_len=8000)
+            except Exception:
+                pass
         step.tool_result = result
         try:
             timings = list(state.metadata.get("tool_timings") or [])
