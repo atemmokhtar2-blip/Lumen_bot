@@ -206,3 +206,49 @@ def test_merge_strict_missing_owned():
         release_task_workspace(s)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_safe_task_id_no_path_escape():
+    wd = Path(tempfile.mkdtemp(prefix="wt_esc_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        ensure_git_repo(wd)
+        for tid in ["../../../escape", "feat/auth", ".."]:
+            s = acquire_task_workspace(wd, tid, use_isolation=True)
+            assert s.kind == "worktree", (tid, s)
+            s.path.resolve().relative_to((wd / ".worktrees").resolve())
+            release_task_workspace(s)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_concurrent_same_task_id_unique_slots():
+    from concurrent.futures import ThreadPoolExecutor
+    wd = Path(tempfile.mkdtemp(prefix="wt_slot_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        ensure_git_repo(wd)
+        def once(i):
+            s = acquire_task_workspace(wd, "same", use_isolation=True)
+            assert s.kind == "worktree"
+            p = s.path
+            release_task_workspace(s)
+            return str(p)
+        with ThreadPoolExecutor(4) as ex:
+            paths = list(ex.map(once, range(4)))
+        assert len(set(paths)) == 4
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_empty_files_forced_serial():
+    from lumen.engine.services.multi_agent.task_tree import TaskNode, TaskStatus
+    from lumen.engine.services.multi_agent.worktree_isolation import partition_wave_by_ownership
+    wave = [
+        TaskNode(id="e1", title="e1", files=[], parallel_group="g", status=TaskStatus.READY.value),
+        TaskNode(id="e2", title="e2", files=[], parallel_group="g", status=TaskStatus.READY.value),
+        TaskNode(id="ok", title="ok", files=["a.py"], parallel_group="g", status=TaskStatus.READY.value),
+    ]
+    safe, serial = partition_wave_by_ownership(wave)
+    assert [x.id for x in safe] == ["ok"]
+    assert set(x.id for x in serial) == {"e1", "e2"}

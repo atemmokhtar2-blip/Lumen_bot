@@ -32,8 +32,20 @@ def _repo_lock(root: Path) -> threading.RLock:
 
 
 def _safe_task_id(task_id: str) -> str:
-    s = _SAFE_ID.sub("-", str(task_id or "task").strip())[:64]
-    return s or "task"
+    """Branch/path-safe id: no dots-as-path, no slashes, git-ref safe."""
+    raw = str(task_id or "task").strip().lower()
+    # collapse path tricks
+    raw = raw.replace("..", "").replace("/", "-").replace("\\", "-")
+    s = _SAFE_ID.sub("-", raw)
+    s = re.sub(r"-{2,}", "-", s).strip("-._")
+    # git rejects refs starting with . or ending with .lock
+    s = s.strip(".")
+    if not s or s in {".", ".."} or not re.match(r"^[a-z0-9]", s):
+        s = "task-" + (s or "x")
+    s = re.sub(r"[^a-z0-9._-]", "", s)[:48]
+    if not s or not re.match(r"^[a-z0-9]", s):
+        s = "task"
+    return s
 
 
 def _run_git(cwd: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -138,8 +150,12 @@ def acquire_task_workspace(
                   in {"1", "true", "yes", "on"})
 
     if ensure_git_repo(root):
-        branch = f"agent/{tid}"
-        wt_path = root / ".worktrees" / tid
+        import uuid
+        unique = uuid.uuid4().hex[:8]
+        # Unique path+branch so concurrent same logical task_id cannot share a worktree
+        slot = f"{tid}-{unique}"
+        branch = f"agent/{slot}"
+        wt_path = root / ".worktrees" / slot
         with _repo_lock(root):
             if wt_path.exists():
                 _run_git(root, "worktree", "remove", "--force", str(wt_path))
@@ -148,7 +164,10 @@ def acquire_task_workspace(
             wt_path.parent.mkdir(parents=True, exist_ok=True)
             r = _run_git(root, "worktree", "add", "-b", branch, str(wt_path))
             if r.returncode == 0 and wt_path.is_dir():
-                logger.info("worktree acquired task=%s path=%s branch=%s", tid, wt_path, branch)
+                logger.info(
+                    "worktree acquired task=%s slot=%s path=%s branch=%s",
+                    tid, slot, wt_path, branch,
+                )
                 return TaskWorkspace(
                     task_id=tid, root=root, path=wt_path, kind="worktree", branch=branch
                 )
@@ -466,15 +485,30 @@ def owned_files_overlap(tasks: list) -> list:
 
 
 def partition_wave_by_ownership(tasks: list) -> tuple:
-    """Split wave into (parallel_safe, must_run_serial) by file ownership overlap."""
-    overlaps = owned_files_overlap(tasks)
-    if not overlaps:
-        return list(tasks), []
+    """Split wave into (parallel_safe, must_run_serial) by file ownership overlap.
+
+    Tasks with empty owned_files have no exclusivity boundary — force serial
+    when the wave has more than one task (prevents silent full-tree races).
+    """
+    tasks = list(tasks)
+    if len(tasks) <= 1:
+        return tasks, []
+
+    unbounded = [
+        t for t in tasks
+        if not list(getattr(t, "files", None) or [])
+    ]
+    bounded = [t for t in tasks if list(getattr(t, "files", None) or [])]
+
+    overlaps = owned_files_overlap(bounded) if bounded else []
     contested = set()
     for _rel, a, b in overlaps:
         contested.add(a)
         contested.add(b)
-    parallel_safe = [t for t in tasks if str(getattr(t, "id", "")) not in contested]
+    for t in unbounded:
+        contested.add(str(getattr(t, "id", "")))
+
+    parallel_safe = [t for t in bounded if str(getattr(t, "id", "")) not in contested]
     serial = [t for t in tasks if str(getattr(t, "id", "")) in contested]
     return parallel_safe, serial
 
