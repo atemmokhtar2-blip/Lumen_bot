@@ -2,9 +2,10 @@
 
 Post multi-agent architecture (deterministic catalog engine retired):
 
-  • Chat     → Grok (xAI) first for speed, then Groq
-  • Translate → residual only (Groq then Gemini); bot generation goes multi-agent
-  • TBE_STRICT_LLM_ROLES is OFF by default (old Gemini=translate / Groq=chat killed)
+  • Chat     → Groq first (fast inference; NOT xAI Grok)
+  • Engine LLM (Cline) → Gemini first for speed (see model_router)
+  • Translate → residual only; bot generation goes multi-agent
+  • TBE_STRICT_LLM_ROLES is OFF by default (old dual-role split retired)
 
 Callers use translate_request / chat_request from this module or translator_client.
 """
@@ -57,9 +58,7 @@ def get_translate_provider_name() -> str:
 def get_chat_provider_name() -> str:
     if _strict_llm_roles():
         return "groq"
-    # Grok first when key present
-    if (os.getenv("XAI_API_KEY") or "").strip():
-        return _env_name(os.getenv("CHAT_PROVIDER"), "xai")
+    # Groq (api.groq.com) — primary chat. xAI Grok is optional via CHAT_PROVIDER=xai only.
     return _env_name(os.getenv("CHAT_PROVIDER"), "groq")
 
 
@@ -73,10 +72,10 @@ def get_translate_provider() -> TranslateProvider:
 
 def get_chat_provider() -> ChatProvider:
     name = get_chat_provider_name()
-    cls = _CHAT_REGISTRY.get(name) or GrokChatAdapter
+    cls = _CHAT_REGISTRY.get(name) or GroqChatAdapter
     if name not in _CHAT_REGISTRY:
-        logger.warning("Unknown CHAT_PROVIDER=%s; using xai/grok", name)
-        cls = GrokChatAdapter
+        logger.warning("Unknown CHAT_PROVIDER=%s; using groq", name)
+        cls = GroqChatAdapter
     return cls()  # type: ignore[return-value]
 
 
@@ -103,17 +102,17 @@ def _translate_chain() -> list:
 
 
 def _chat_chain() -> list:
-    """Chat: Grok (xAI) primary for speed → Groq → optional Gemini last."""
+    """Chat: Groq primary (fast) → optional xAI if keyed → Gemini only if allowed."""
     if _strict_llm_roles():
         return [GroqChatAdapter()]
     chain: list = []
-    # Grok first when keyed
-    if (os.getenv("XAI_API_KEY") or "").strip():
-        chain.append(GrokChatAdapter())
     primary = get_chat_provider()
     chain.append(primary)
+    # Always ensure Groq is in the chain (speed + reliability)
     chain.append(GroqChatAdapter())
-    # Gemini chat only if explicitly allowed (not default product path)
+    # xAI Grok only as optional fallback when key present (not primary)
+    if (os.getenv("XAI_API_KEY") or "").strip():
+        chain.append(GrokChatAdapter())
     if (os.getenv("CHAT_ALLOW_GEMINI") or "").strip().lower() in {"1", "true", "yes"}:
         chain.append(GeminiChatAdapter())
     seen: set[str] = set()

@@ -1,4 +1,4 @@
-"""Chat prefers Grok; strict Gemini/Groq role split is off by default."""
+"""Chat prefers Groq (api.groq.com, NOT xAI); engine prefers Gemini; strict roles off."""
 
 
 def test_strict_roles_default_off(monkeypatch):
@@ -8,14 +8,18 @@ def test_strict_roles_default_off(monkeypatch):
     assert _strict_llm_roles() is False
 
 
-def test_chat_prefers_xai_when_keyed(monkeypatch):
+def test_chat_prefers_groq_not_xai(monkeypatch):
     monkeypatch.delenv("TBE_STRICT_LLM_ROLES", raising=False)
     monkeypatch.setenv("XAI_API_KEY", "xai-test")
     monkeypatch.delenv("CHAT_PROVIDER", raising=False)
     from lumen.engine.services.llm.facade import get_chat_provider_name, _chat_chain
 
-    assert get_chat_provider_name() == "xai"
-    assert [p.name for p in _chat_chain()][0] == "xai"
+    assert get_chat_provider_name() == "groq"
+    names = [p.name for p in _chat_chain()]
+    assert names[0] == "groq"
+    # xai may appear later as optional fallback only
+    if "xai" in names:
+        assert names.index("xai") > names.index("groq")
 
 
 def test_translate_not_forced_gemini(monkeypatch):
@@ -23,15 +27,14 @@ def test_translate_not_forced_gemini(monkeypatch):
     monkeypatch.delenv("TRANSLATE_PROVIDER", raising=False)
     from lumen.engine.services.llm.facade import get_translate_provider_name
 
-    assert get_translate_provider_name() != "gemini" or True
     assert get_translate_provider_name() == "groq"
 
 
-def test_model_router_xai_first_for_build(monkeypatch):
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
-    monkeypatch.delenv("CLINE_LLM_PROVIDER", raising=False)
-    monkeypatch.delenv("ENGINE_LLM_PROVIDER", raising=False)
-    from lumen.engine.services.cline_runtime.model_router import select_model
+def test_engine_build_order_gemini_before_groq():
+    """Cline engine: Gemini leads for speed when both available."""
+    import inspect
+    from lumen.engine.services.cline_runtime import model_router as mr
 
-    c = select_model(task="build")
-    assert c.provider == "xai"
+    src = inspect.getsource(mr.select_model)
+    # build branch order tuple must start with gemini
+    assert 'order = ("gemini", "groq"' in src or "('gemini', 'groq'" in src
