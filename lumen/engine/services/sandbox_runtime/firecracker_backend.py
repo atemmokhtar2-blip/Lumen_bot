@@ -520,6 +520,20 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 }
             )
 
+        mmds_payload = {
+            "latest": {
+                "meta-data": {
+                    "vm-id": vm_id,
+                    "user-id": str(spec.user_id),
+                },
+                "user-data": {
+                    "BOT_TOKEN": spec.bot_token,
+                    "TELEGRAM_BOT_TOKEN": spec.bot_token,
+                    **{k: str(v) for k, v in (spec.env_vars or {}).items() if k and v is not None},
+                },
+            }
+        }
+
         use_jailer = _require_jailer() and bool(_jailer_bin())
         if _require_jailer() and not _jailer_bin():
             if net_plan is not None:
@@ -627,6 +641,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
         drives: list[dict],
         machine_cfg: dict,
         network_ifaces: list[dict],
+        mmds_payload: dict | None = None,
     ) -> None:
         _api_put(sock, "/boot-source", {"kernel_image_path": kernel, "boot_args": boot_args})
         for d in drives:
@@ -646,8 +661,29 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 )
             except Exception as balloon_exc:
                 logger.warning("fc balloon optional failed: %s", type(balloon_exc).__name__)
+        # MMDS — guest can fetch secrets/metadata at 169.254.169.254 (no boot-args tokens)
+        if mmds_payload and _flag("TBE_FC_MMDS", "1"):
+            try:
+                _api_put(sock, "/mmds", mmds_payload)
+                # Network config for MMDS on eth0 (link-local)
+                _api_put(
+                    sock,
+                    "/mmds/config",
+                    {"network_interfaces": ["eth0"], "ipv4_address": "169.254.169.254"},
+                )
+            except Exception as mmds_exc:
+                logger.warning("fc mmds failed: %s", type(mmds_exc).__name__)
+                if not _is_dev_environment() and _flag("TBE_FC_REQUIRE_MMDS", "0"):
+                    raise RuntimeError(f"mmds_required_failed:{mmds_exc}") from mmds_exc
         for iface in network_ifaces:
             _api_put(sock, f"/network-interfaces/{iface['iface_id']}", iface)
+        # Logger/metrics system (optional)
+        if _flag("TBE_FC_METRICS", "1"):
+            try:
+                metrics_path = str(sock).replace(".sock", ".metrics")
+                _api_put(sock, "/metrics", {"metrics_path": metrics_path})
+            except Exception:
+                pass
         _api_put(sock, "/actions", {"action_type": "InstanceStart"})
 
     def _start_direct(
@@ -660,6 +696,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
         machine_cfg: dict,
         boot_args: str,
         network_ifaces: list[dict],
+        mmds_payload: dict | None = None,
     ) -> int:
         log_f = open(log_path, "a")
         try:
@@ -682,6 +719,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 drives=drives,
                 machine_cfg=machine_cfg,
                 network_ifaces=network_ifaces,
+                mmds_payload=mmds_payload,
             )
         except Exception:
             try:
@@ -705,6 +743,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
         boot_args: str,
         network_ifaces: list[dict],
         netns_path: str,
+        mmds_payload: dict | None = None,
     ) -> int:
         """Start Firecracker under official jailer (prod host setup).
 
@@ -824,6 +863,7 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 drives=staged_drives,
                 machine_cfg=machine_cfg,
                 network_ifaces=network_ifaces,
+                mmds_payload=mmds_payload,
             )
         except Exception:
             self._kill_vm_tree(vm_id, host_sock)
@@ -939,6 +979,19 @@ class FirecrackerSandboxBackend(SandboxBackend):
             message="firecracker_stopped",
         )
 
+    def _guest_log_markers(self, meta: dict) -> tuple[bool, bool]:
+        """Detect guest init / bot markers from serial log (honest claims)."""
+        log_path = str(meta.get("log") or "")
+        if not log_path or not Path(log_path).is_file():
+            return False, False
+        try:
+            tail = Path(log_path).read_text(encoding="utf-8", errors="ignore")[-16000:]
+        except OSError:
+            return False, False
+        guest_ready = "lumen-guest-ready" in tail
+        bot_started = "lumen-bot-started" in tail or "Application started" in tail
+        return guest_ready, bot_started
+
     def status(self, handle_or_id: str) -> SandboxHandle:
         meta_p = self._meta_path(handle_or_id)
         if not meta_p.exists():
@@ -954,14 +1007,32 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 except ProcessLookupError:
                     running = False
                 except PermissionError:
-                    # Process exists but we cannot signal — treat as running
                     running = True
+            if not running:
+                return SandboxHandle(
+                    self.name,
+                    handle_or_id,
+                    container_or_vm_id=handle_or_id,
+                    status="stopped",
+                    message="stopped",
+                    meta=meta,
+                )
+            guest_ready, bot_started = self._guest_log_markers(meta)
+            if bot_started:
+                msg = "vm_alive_guest_bot_marker"
+            elif guest_ready:
+                msg = "vm_alive_guest_ready"
+            else:
+                msg = "vm_process_alive_guest_unconfirmed"
+            meta = dict(meta)
+            meta["guest_ready"] = guest_ready
+            meta["bot_marker"] = bot_started
             return SandboxHandle(
                 self.name,
                 handle_or_id,
                 container_or_vm_id=handle_or_id,
-                status="running" if running else "stopped",
-                message="vm_process" if running else "stopped",
+                status="running",
+                message=msg,
                 meta=meta,
             )
         except Exception as exc:

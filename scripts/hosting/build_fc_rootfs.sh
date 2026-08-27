@@ -44,7 +44,8 @@ cat > "${MNT}/sbin/lumen-bot-init" << 'EOF'
 #!/bin/sh
 set -e
 mkdir -p /project /run/token /app
-# Firecracker extra drives appear as /dev/vdb, /dev/vdc (order: root, project, token)
+echo "lumen-guest-ready" >&2
+# Firecracker extra drives: /dev/vdb=project, /dev/vdc=token
 if [ -b /dev/vdb ]; then
   mount -o ro /dev/vdb /project || true
 fi
@@ -56,14 +57,21 @@ if [ -f /run/token/BOT_TOKEN ]; then
   export TELEGRAM_BOT_TOKEN="$BOT_TOKEN"
 fi
 if [ -f /run/token/env.json ]; then
-  # shell-free: Python one-liner if available
   if command -v python3 >/dev/null 2>&1; then
-    eval "$(python3 -c "import json,os,shlex; d=json.load(open('/run/token/env.json'));
+    eval "$(python3 -c "import json,shlex; d=json.load(open('/run/token/env.json'));
 print(' '.join(f'export {k}={shlex.quote(str(v))}' for k,v in d.items()))" 2>/dev/null || true)"
   fi
 fi
+# MMDS fallback (Firecracker metadata service)
+if [ -z "${BOT_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then
+  UD="$(curl -fsS --max-time 2 http://169.254.169.254/latest/user-data/ 2>/dev/null || true)"
+  if [ -n "$UD" ] && command -v python3 >/dev/null 2>&1; then
+    export BOT_TOKEN="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]) if sys.argv[1].startswith('{') else {}; print(d.get('BOT_TOKEN',''))" "$UD" 2>/dev/null || true)"
+    export TELEGRAM_BOT_TOKEN="${BOT_TOKEN}"
+  fi
+fi
 cd /project 2>/dev/null || cd /
-# Prefer common entry points
+echo "lumen-bot-started" >&2
 if [ -f /project/main.py ]; then
   exec python3 /project/main.py
 elif [ -f /project/bot.py ]; then
