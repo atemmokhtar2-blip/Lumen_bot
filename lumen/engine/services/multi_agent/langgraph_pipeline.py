@@ -162,35 +162,34 @@ def _make_builder(registry: Any, board: Any):
         tree = _load_tree(state)
         if not tree.nodes or len(tree.nodes) <= 1:
             try:
-                from .plan_contract import ExecutionPlan, build_plan_from_spec
-                plan_raw = (state.extensions or {}).get("execution_plan") or state.strict_spec or {}
+                from .dynamic_planner import assemble_plan
+                from .plan_contract import ExecutionPlan
+                work = str(ctx.get("work_dir") or (state.extensions or {}).get("work_dir") or "")
                 feats = list(state.preferred_keys or []) or list((state.strict_spec or {}).get("features") or [])
-                if isinstance(plan_raw, dict) and plan_raw.get("tasks"):
-                    plan = ExecutionPlan(
-                        goal=str(plan_raw.get("goal") or state.user_text or "")[:2000],
-                        language=str(plan_raw.get("language") or "ar"),
-                        tasks=list(plan_raw.get("tasks") or []),
-                        constraints=list(plan_raw.get("constraints") or []),
-                        features=list(plan_raw.get("features") or feats),
-                    )
-                    tree = TaskTree.from_execution_plan(plan, goal=plan.goal)
+                plan_raw = (state.extensions or {}).get("execution_plan")
+                # Prefer architect-produced plan only if it has real multi-task structure
+                if isinstance(plan_raw, dict) and len(list(plan_raw.get("tasks") or [])) >= 2:
+                    plan = ExecutionPlan.from_dict(plan_raw)
+                    if not plan.goal:
+                        plan.goal = (state.user_text or state.spec_request or "")[:2000]
                 else:
-                    tree = TaskTree.default_bot_tree(
-                        goal=state.user_text or state.spec_request or "telegram bot",
-                        features=feats,
-                    )
-                    ep = build_plan_from_spec(
+                    plan = assemble_plan(
                         goal=state.user_text or state.spec_request or "",
-                        features=feats,
-                        language=str((state.strict_spec or {}).get("language") or "ar"),
+                        preferred_keys=feats,
+                        constraints=list((state.strict_spec or {}).get("constraints") or []) if isinstance(state.strict_spec, dict) else [],
+                        language=str((state.strict_spec or {}).get("language") or "ar") if isinstance(state.strict_spec, dict) else "ar",
+                        work_dir=work or None,
                     )
-                    state.extensions = dict(state.extensions or {})
-                    if hasattr(ep, "to_dict"):
-                        state.extensions["execution_plan"] = ep.to_dict()
+                state.extensions = dict(state.extensions or {})
+                state.extensions["execution_plan"] = plan.to_dict()
+                state.extensions["plan_intent"] = [
+                    c for c in (plan.constraints or []) if str(c).startswith("intent:") or str(c).startswith("platform:")
+                ]
+                tree = TaskTree.from_execution_plan(plan, goal=plan.goal)
             except Exception as exc:
                 logger.exception("plan tree failed")
                 state.record(AgentRole.ORCHESTRATOR, "task_tree_error", str(exc)[:200])
-                tree = TaskTree.default_bot_tree(goal=state.user_text or "bot")
+                tree = TaskTree.default_bot_tree(goal=state.user_text or "bot", work_dir=str(ctx.get("work_dir") or ""))
         _save_tree(state, tree)
         state.record(AgentRole.ORCHESTRATOR, "plan_tree", f"nodes={len(tree.nodes)-1}")
         try:

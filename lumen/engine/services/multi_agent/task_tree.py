@@ -255,8 +255,9 @@ class TaskTree:
                 continue
             tid = str(raw.get("id") or f"t{i+1}")
             depends = list(raw.get("depends_on") or [])
-            if prev_id and prev_id not in depends:
-                depends.append(prev_id)
+            # Only linear-chain when planner omitted dependencies
+            if not depends and prev_id:
+                depends = [prev_id]
             tree.add(
                 TaskNode(
                     id=tid,
@@ -276,64 +277,12 @@ class TaskTree:
         return tree
 
     @classmethod
-    def default_bot_tree(cls, *, goal: str, features: Iterable[str] | None = None) -> "TaskTree":
-        feats = [str(f).strip() for f in (features or []) if str(f).strip()]
-        tree = cls(goal=goal[:2000])
-        tree.add(TaskNode(
-            id="scaffold",
-            title="Create complete project scaffold",
-            description=(
-                "Write a full Telegram bot project: main.py with Application, "
-                "requirements.txt (python-telegram-bot), README.md, .env.example. "
-                "Read BOT_TOKEN or TELEGRAM_BOT_TOKEN from environment. "
-                "Include /start and /help handlers. Valid Python only."
-            ),
-            files=["main.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=[
-                "main.py exists and parses as Python",
-                "requirements.txt includes telegram dependency",
-                "token from environment",
-                "/start handler registered",
-            ],
-            priority=1,
-            max_attempts=4,
-        ))
-        if feats:
-            tree.add(TaskNode(
-                id="features",
-                title="Implement all requested features as real handlers",
-                description="Implement fully working handlers/modules for: " + ", ".join(feats[:20]),
-                depends_on=["scaffold"],
-                files=["main.py"],
-                acceptance=[f"working feature: {f}" for f in feats[:12]],
-                priority=1,
-                max_attempts=4,
-            ))
-            harden_dep = ["features"]
-        else:
-            harden_dep = ["scaffold"]
-        tree.add(TaskNode(
-            id="harden",
-            title="Harden: errors, logging, fallbacks, structure",
-            description="Add error handling, logging, unknown-message fallback, clean structure.",
-            depends_on=harden_dep,
-            files=["main.py"],
-            acceptance=["safe fallback for unknown text", "no stub handlers"],
-            priority=2,
-            max_attempts=3,
-        ))
-        tree.add(TaskNode(
-            id="verify",
-            title="Self-verify project compiles and imports",
-            description="Ensure project is importable; fix any syntax/import errors before finish.",
-            depends_on=["harden"],
-            files=["main.py"],
-            acceptance=["compileall passes", "main.py importable"],
-            priority=2,
-            max_attempts=3,
-        ))
-        tree.refresh_readiness()
-        return tree
+    def default_bot_tree(cls, *, goal: str, features: Iterable[str] | None = None, work_dir: str | None = None) -> "TaskTree":
+        """Build tree via dynamic planner (intent-aware, not Telegram-only template)."""
+        from .dynamic_planner import assemble_plan
+        plan = assemble_plan(goal=goal or "", preferred_keys=list(features or []), work_dir=work_dir)
+        return cls.from_execution_plan(plan, goal=plan.goal)
+
 
 
 __all__ = ["TaskStatus", "TaskRole", "TaskNode", "TaskTree"]

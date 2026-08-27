@@ -57,6 +57,7 @@ class ExecutionPlan:
                     files=list(t.get("files") or []),
                     acceptance=list(t.get("acceptance") or []),
                     priority=int(t.get("priority") or 1),
+                    depends_on=list(t.get("depends_on") or []),
                 ))
         return cls(
             goal=str(d.get("goal") or ""),
@@ -98,43 +99,16 @@ def build_plan_from_spec(
     features: list[str] | None = None,
     constraints: list[str] | None = None,
     language: str = "ar",
+    work_dir: str | None = None,
 ) -> ExecutionPlan:
-    """Deterministic plan skeleton from StrictSpec-like inputs (Planner baseline)."""
-    feats = [str(f).strip() for f in (features or []) if str(f).strip()]
-    tasks: list[PlanTask] = [
-        PlanTask(
-            id="scaffold",
-            title="Create project scaffold and entrypoint",
-            files=["main.py", "app/handlers.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=[
-                "main.py exists and is valid Python",
-                "requirements.txt lists telegram dependency",
-                "BOT_TOKEN read from environment",
-            ],
-            priority=1,
-        ),
-    ]
-    if feats:
-        tasks.append(PlanTask(
-            id="features",
-            title="Implement requested features as handlers/modules",
-            files=["main.py"] + [f"modules/{f}.py" for f in feats[:12]],
-            acceptance=[f"feature wired: {f}" for f in feats[:12]],
-            priority=1,
-        ))
-    tasks.append(PlanTask(
-        id="harden",
-        title="Basic error handling and /start help text",
-        files=["main.py"],
-        acceptance=["/start responds", "unknown text has safe fallback"],
-        priority=2,
-    ))
-    return ExecutionPlan(
-        goal=(goal or "")[:2000],
+    """Dynamic plan via multi-layer planner (intent → features → workspace → tasks)."""
+    from .dynamic_planner import assemble_plan
+    return assemble_plan(
+        goal=goal or "",
+        preferred_keys=features or [],
+        constraints=constraints or [],
         language=language or "ar",
-        tasks=tasks,
-        constraints=list(constraints or [])[:20],
-        features=feats[:40],
+        work_dir=work_dir,
     )
 
 
