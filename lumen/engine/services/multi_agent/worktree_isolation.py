@@ -198,33 +198,34 @@ def _git_checkout_owned(root: Path, branch: str, rel: str) -> bool:
 def merge_task_workspace(
     session: TaskWorkspace,
     owned_files: list[str] | None = None,
+    *,
+    strict: bool = True,
 ) -> dict[str, Any]:
-    """Merge owned files from isolation back into root.
+    """Merge owned paths from isolation into root (Cursor-style apply).
 
-    Worktree path: commit on agent branch, then `git checkout <branch> -- <files>`
-    into the main worktree (Cursor-style apply of owned paths).
+    Rules (world-class):
+    - Prefer explicit owned_files from the planner (exclusive ownership).
+    - If owned_files empty on a worktree: only paths changed on the agent branch
+      vs main HEAD (git diff --name-only) — NEVER dump the whole tree.
+    - Apply via `git checkout <branch> -- <path>` under repo lock.
+    - strict=True: ok=False if any owned path missing after apply.
     """
     if not session.isolated:
-        return {"ok": True, "kind": "main", "merged": [], "conflicts": [], "method": "none"}
+        return {"ok": True, "kind": "main", "merged": [], "conflicts": [], "method": "none", "missing": []}
 
     root = session.root
     src_root = session.path
     merged: list[str] = []
     conflicts: list[str] = []
+    missing: list[str] = []
     method = "copy"
-    files = [str(f).replace("\\", "/").lstrip("./") for f in (owned_files or []) if str(f).strip()]
-
-    if not files:
-        for src in src_root.rglob("*"):
-            if not src.is_file():
-                continue
-            if any(x in src.parts for x in (".git", "__pycache__", ".venv")):
-                continue
-            files.append(str(src.relative_to(src_root)).replace("\\", "/"))
+    explicit = [str(f).replace("\\", "/").lstrip("./") for f in (owned_files or []) if str(f).strip()]
+    # normalize backslashes properly
+    explicit = [str(f).replace(chr(92), "/").lstrip("./") for f in (owned_files or []) if str(f).strip()]
 
     with _repo_lock(root):
         if session.kind == "worktree" and session.branch:
-            # Commit agent work on its branch
+            # Commit agent work on its branch first
             _run_git(src_root, "add", "-A")
             _run_git(
                 src_root,
@@ -233,10 +234,28 @@ def merge_task_workspace(
                 "commit", "-m", f"agent({session.task_id}): parallel task",
                 "--allow-empty",
             )
+
+            files = list(explicit)
+            if not files:
+                # Diff-only discovery — never full-tree rglob (ownership blast radius)
+                diff = _run_git(root, "diff", "--name-only", "HEAD", session.branch)
+                if diff.returncode == 0 and (diff.stdout or "").strip():
+                    files = [ln.strip().replace(chr(92), "/") for ln in diff.stdout.splitlines() if ln.strip()]
+                else:
+                    # fallback: new untracked in worktree relative to list-files
+                    ls = _run_git(src_root, "ls-files", "--others", "--exclude-standard")
+                    tracked = _run_git(src_root, "diff", "--name-only", "HEAD")
+                    for blob in (ls.stdout or "", tracked.stdout or ""):
+                        for ln in blob.splitlines():
+                            rel = ln.strip().replace(chr(92), "/")
+                            if rel and rel not in files:
+                                files.append(rel)
+
             method = "git_checkout_branch"
             for rel in files:
                 src = src_root / rel
                 if not src.is_file():
+                    missing.append(rel)
                     continue
                 dest = root / rel
                 if dest.is_file():
@@ -248,7 +267,6 @@ def merge_task_workspace(
                 if _git_checkout_owned(root, session.branch, rel):
                     merged.append(rel)
                 else:
-                    # Fallback file copy for this path
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         shutil.copy2(src, dest)
@@ -256,7 +274,8 @@ def merge_task_workspace(
                         method = "git_checkout+copy_fallback"
                     except Exception as exc:
                         conflicts.append(f"{rel}:{type(exc).__name__}")
-            # Record merge commit on main for audit
+                        missing.append(rel)
+
             _run_git(root, "add", "-A")
             _run_git(
                 root,
@@ -267,9 +286,20 @@ def merge_task_workspace(
             )
         else:
             method = "copy"
+            files = list(explicit)
+            if not files:
+                # copy isolation without owned_files: only files present in session not in skip dirs
+                for src in src_root.rglob("*"):
+                    if not src.is_file():
+                        continue
+                    if any(x in src.parts for x in (".git", "__pycache__", ".venv")):
+                        continue
+                    rel = str(src.relative_to(src_root)).replace(chr(92), "/")
+                    files.append(rel)
             for rel in files:
                 src = src_root / rel
                 if not src.is_file():
+                    missing.append(rel)
                     continue
                 dest = root / rel
                 try:
@@ -280,15 +310,28 @@ def merge_task_workspace(
                     merged.append(rel)
                 except Exception as exc:
                     conflicts.append(f"{rel}:{type(exc).__name__}")
+                    missing.append(rel)
+
+    ok = True
+    if strict and explicit:
+        for rel in explicit:
+            if not (root / rel).is_file():
+                if rel not in missing:
+                    missing.append(rel)
+                ok = False
+    if strict and missing and explicit:
+        ok = False
 
     return {
-        "ok": True,
+        "ok": ok,
         "kind": session.kind,
         "merged": merged,
         "conflicts": conflicts,
+        "missing": missing,
         "branch": session.branch,
         "method": method,
     }
+
 
 
 def release_task_workspace(session: TaskWorkspace) -> None:

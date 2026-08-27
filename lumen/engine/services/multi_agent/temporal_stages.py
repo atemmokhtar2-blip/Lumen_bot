@@ -207,7 +207,7 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
                 )[:12],
             )
             if session.isolated:
-                merge_task_workspace(session, owned_files=files)
+                merge_task_workspace(session, owned_files=files, strict=True)
             acc_rep = evaluate_task(work, files=files, acceptance=acc, strict=True)
             return {
                 "ok": bool(acc_rep.get("ok")),

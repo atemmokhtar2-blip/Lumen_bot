@@ -390,13 +390,9 @@ def _make_builder(registry: Any, board: Any):
             if use_iso:
                 from .worktree_isolation import (
                     acquire_task_workspace,
-                    snapshot_base_commit,
                     prune_worktrees,
                 )
-                try:
-                    snapshot_base_commit(work)
-                except Exception:
-                    pass
+                # Base snapshot is done once in node_schedule — not per Send worker
                 _wt_session = acquire_task_workspace(work, tid, use_isolation=True)
                 if _wt_session.errors or _wt_session.kind not in {"worktree", "copy"}:
                     # Isolation required but unavailable — fail task (no silent main writes)
@@ -425,9 +421,17 @@ def _make_builder(registry: Any, board: Any):
             # Merge isolation → work for declared task files (worktree or copy)
             if use_iso and _wt_session is not None:
                 from .worktree_isolation import merge_task_workspace, release_task_workspace
-                merge_rep = merge_task_workspace(_wt_session, owned_files=list(_files or []))
+                merge_rep = merge_task_workspace(
+                    _wt_session, owned_files=list(_files or []), strict=True
+                )
                 result["merge_conflicts"] = list(merge_rep.get("conflicts") or [])
+                result["merge_missing"] = list(merge_rep.get("missing") or [])
                 result["isolation_kind"] = merge_rep.get("kind")
+                if not merge_rep.get("ok"):
+                    result["ok"] = False
+                    result.setdefault("errors", []).append(
+                        "merge_incomplete:" + ",".join(merge_rep.get("missing") or [])[:200]
+                    )
                 try:
                     release_task_workspace(_wt_session)
                 except Exception:

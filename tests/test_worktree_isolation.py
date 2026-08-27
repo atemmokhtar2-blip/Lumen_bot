@@ -13,6 +13,7 @@ from lumen.engine.services.multi_agent.worktree_isolation import (
     read_task_tree_disk,
     release_task_workspace,
     run_tasks_in_parallel,
+    snapshot_base_commit,
     write_task_tree_disk,
 )
 
@@ -173,3 +174,35 @@ def test_schedule_marks_only_batch_running():
         n.status = TaskStatus.RUNNING.value
     assert safe[0].status == TaskStatus.RUNNING.value
     assert all(n.status == TaskStatus.READY.value for n in serial)
+
+
+def test_merge_empty_owned_uses_diff_not_full_tree():
+    wd = Path(tempfile.mkdtemp(prefix="wt_diff_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        (wd / "untouched.py").write_text("U\n", encoding="utf-8")
+        ensure_git_repo(wd)
+        snapshot_base_commit(wd)
+        s = acquire_task_workspace(wd, "diff1", use_isolation=True)
+        (s.path / "new_only.py").write_text("N\n", encoding="utf-8")
+        m = merge_task_workspace(s, owned_files=None, strict=False)
+        assert "new_only.py" in (m.get("merged") or []) or (wd / "new_only.py").is_file()
+        # untouched must still exist
+        assert (wd / "untouched.py").read_text(encoding="utf-8") == "U\n"
+        release_task_workspace(s)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_merge_strict_missing_owned():
+    wd = Path(tempfile.mkdtemp(prefix="wt_strict_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        ensure_git_repo(wd)
+        s = acquire_task_workspace(wd, "st1", use_isolation=True)
+        m = merge_task_workspace(s, owned_files=["nope.py"], strict=True)
+        assert m.get("ok") is False
+        assert "nope.py" in (m.get("missing") or [])
+        release_task_workspace(s)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
