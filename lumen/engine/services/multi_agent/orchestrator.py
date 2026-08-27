@@ -650,6 +650,20 @@ def orchestrate_generate(
 
 
 
+
+def _resume_or_rerun(state, ctx, board, orch):
+    """Prefer official LangGraph Command(resume) when an interrupt is pending."""
+    ext = state.extensions or {}
+    if ext.get("langgraph_interrupt") or ext.get("hitl_status") == "awaiting_approval":
+        try:
+            from .langgraph_pipeline import resume_langgraph_hitl
+            return resume_langgraph_hitl(state, "approved", context=ctx, board=board)
+        except Exception as exc:
+            state.extensions = dict(ext)
+            state.extensions["hitl_resume_error"] = f"{type(exc).__name__}:{exc}"
+    return orch.run(state, context=ctx)
+
+
 def resume_after_confirm(
     state_id: str,
     action_id: str,
@@ -676,7 +690,7 @@ def resume_after_confirm(
     orch = Orchestrator(board=board)
     # For generate tools after confirm, run full build loop
     if tool in {"generate_bot", "refine_bot"}:
-        return orch.run(state, context=ctx)
+        return _resume_or_rerun(state, ctx, board, orch)
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
     board.put(state)
@@ -704,7 +718,7 @@ def continue_after_confirm(
     ctx = {"work_dir": Path(work_dir) if work_dir else Path(state.extensions.get("work_dir") or ".")}
     orch = Orchestrator(board=board)
     if tool in {"generate_bot", "refine_bot"}:
-        return orch.run(state, context=ctx)
+        return _resume_or_rerun(state, ctx, board, orch)
     from .tools import execute_tool_gated
     state = execute_tool_gated(state, tool, dict(pending.get("params") or {}), skip_hitl=True)
     board.put(state)

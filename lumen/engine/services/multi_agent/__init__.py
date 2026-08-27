@@ -45,6 +45,7 @@ from .trajectory import append_trajectory, load_trajectory, trajectory_summary
 from .plan_contract import ExecutionPlan, PlanTask, build_plan_from_spec
 from .findings import CritiqueFinding
 from .event_wake import temporal_enabled, signal_wake, schedule_wake_cron
+from .langgraph_pipeline import resume_langgraph_hitl, hitl_interrupt_enabled
 from .production_policy import policy_snapshot, allow_swarm, allow_template_fallback
 from .repair_worker import should_incremental_repair, run_incremental_repair
 from .redis_board import (
@@ -56,6 +57,7 @@ from .redis_board import (
 __all__ = [
     "policy_snapshot", "allow_swarm", "allow_template_fallback",
     "temporal_enabled", "signal_wake", "schedule_wake_cron",
+    "resume_langgraph_hitl", "hitl_interrupt_enabled",
 
     "SCHEMA_VERSION",
     "AgentState",

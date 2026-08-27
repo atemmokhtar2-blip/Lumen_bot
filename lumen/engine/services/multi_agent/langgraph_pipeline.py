@@ -18,6 +18,33 @@ from .task_tree import TaskStatus, TaskTree
 
 logger = logging.getLogger(__name__)
 
+# Process-wide checkpointer so interrupt → resume works across calls (official MemorySaver).
+_SHARED_CHECKPOINTER = None
+
+
+def _shared_checkpointer():
+    """Official LangGraph MemorySaver singleton (required for HITL resume)."""
+    global _SHARED_CHECKPOINTER
+    if _SHARED_CHECKPOINTER is not None:
+        return _SHARED_CHECKPOINTER
+    if (os.getenv("MULTI_AGENT_CHECKPOINT") or "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    try:
+        from langgraph.checkpoint.memory import MemorySaver
+        _SHARED_CHECKPOINTER = MemorySaver()
+        return _SHARED_CHECKPOINTER
+    except Exception as exc:
+        logger.warning("MemorySaver unavailable: %s", exc)
+        return None
+
+
+def hitl_interrupt_enabled() -> bool:
+    """Official LangGraph interrupt after plan. Default ON when langgraph available."""
+    flag = (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return langgraph_available()
+
 
 def langgraph_available() -> bool:
     try:
@@ -92,6 +119,7 @@ class GraphState(TypedDict, total=False):
     wave: int
     done: bool
     notes: Annotated[list[str], operator.add]
+    hitl_decision: str  # approved | rejected | ""
 
 
 def _make_builder(registry: Any, board: Any):
@@ -402,8 +430,79 @@ def _make_builder(registry: Any, board: Any):
             return "repair"
         return "fail"
 
+    def node_human_gate(gs: GraphState) -> dict[str, Any]:
+        """Official LangGraph interrupt — pause for human plan approval."""
+        from langgraph.types import interrupt
+
+        state: AgentState = gs["agent"]
+        tree = _load_tree(state)
+        payload = {
+            "type": "approve_plan",
+            "state_id": state.state_id,
+            "goal": (state.user_text or state.spec_request or "")[:500],
+            "task_tree": tree.summary() if hasattr(tree, "summary") else {},
+            "attempts": int(state.attempts or 0),
+            "message": "Approve the execution plan to continue building?",
+        }
+        state.extensions = dict(state.extensions or {})
+        state.extensions["hitl_pending"] = payload
+        state.extensions["hitl_status"] = "awaiting_approval"
+        try:
+            state.transition(AgentStatus.AWAITING_CONFIRMATION, role=AgentRole.ORCHESTRATOR, force=True)
+        except Exception:
+            try:
+                state.status = AgentStatus.AWAITING_CONFIRMATION.value
+            except Exception:
+                state.status = AgentStatus.AWAITING_CONFIRMATION.value
+        # interrupt pauses here; resume value becomes decision
+        decision = interrupt(payload)
+        decision_s = str(decision or "").strip().lower()
+        if isinstance(decision, dict):
+            decision_s = str(decision.get("decision") or decision.get("value") or decision).strip().lower()
+        approved = decision_s in {"1", "true", "yes", "y", "approve", "approved", "ok", "confirm"}
+        state.extensions["hitl_status"] = "approved" if approved else "rejected"
+        state.extensions["hitl_decision"] = decision_s
+        state.record(
+            AgentRole.ORCHESTRATOR,
+            "hitl_decision",
+            "approved" if approved else f"rejected:{decision_s[:40]}",
+        )
+        if not approved:
+            state.final_message = state.final_message or "تم رفض الخطة من المستخدم (HITL)"
+            try:
+                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                state.status = AgentStatus.FAILED.value
+        else:
+            try:
+                state.transition(AgentStatus.BUILDING, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                pass
+        return {
+            "agent": state,
+            "last_node": "human_gate",
+            "hitl_decision": "approved" if approved else "rejected",
+            "notes": [f"hitl:{'approved' if approved else 'rejected'}"],
+        }
+
+    def after_plan(gs: GraphState) -> Literal["human_gate", "schedule"]:
+        if hitl_interrupt_enabled():
+            return "human_gate"
+        return "schedule"
+
+    def after_human_gate(gs: GraphState) -> Literal["schedule", "fail"]:
+        d = str(gs.get("hitl_decision") or "").lower()
+        if d == "approved":
+            return "schedule"
+        # also check state
+        st: AgentState = gs["agent"]
+        if (st.extensions or {}).get("hitl_status") == "approved":
+            return "schedule"
+        return "fail"
+
     g = StateGraph(GraphState)
     g.add_node("plan", node_plan)
+    g.add_node("human_gate", node_human_gate)
     g.add_node("schedule", node_schedule)
     g.add_node("work", node_work)
     g.add_node("critique", node_critique)
@@ -411,7 +510,8 @@ def _make_builder(registry: Any, board: Any):
     g.add_node("deliver", node_deliver)
     g.add_node("fail", node_fail)
     g.add_edge(START, "plan")
-    g.add_edge("plan", "schedule")
+    g.add_conditional_edges("plan", after_plan, {"human_gate": "human_gate", "schedule": "schedule"})
+    g.add_conditional_edges("human_gate", after_human_gate, {"schedule": "schedule", "fail": "fail"})
     g.add_conditional_edges("schedule", after_schedule, {"work": "work", "critique": "critique"})
     g.add_conditional_edges("work", after_work, {"schedule": "schedule", "critique": "critique"})
     g.add_conditional_edges(
@@ -426,6 +526,14 @@ def _make_builder(registry: Any, board: Any):
 
 def build_lumen_graph(registry: Any, board: Any):
     return _make_builder(registry, board).compile()
+
+
+def _compile_graph(registry: Any, board: Any):
+    builder = _make_builder(registry, board)
+    cp = _shared_checkpointer()
+    if cp is not None:
+        return builder.compile(checkpointer=cp), cp
+    return builder.compile(), None
 
 
 def run_langgraph_pipeline(
@@ -443,25 +551,28 @@ def run_langgraph_pipeline(
 
     reg = registry or get_registry()
     bd = board or get_blackboard()
-    checkpointer = None
-    if (os.getenv("MULTI_AGENT_CHECKPOINT") or "1").strip().lower() not in {"0", "false", "no", "off"}:
-        try:
-            from langgraph.checkpoint.memory import MemorySaver
-            checkpointer = MemorySaver()
-        except Exception:
-            checkpointer = None
-    builder = _make_builder(reg, bd)
-    graph = builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()
+    graph, checkpointer = _compile_graph(reg, bd)
     max_att = _max_attempts(state)
     state.max_attempts = max_att
     state.extensions = dict(state.extensions or {})
+    tid = thread_id or state.state_id or "lumen-default"
+    state.extensions["langgraph_thread_id"] = tid
     state.extensions["orchestration"] = "langgraph+cline"
-    state.record(AgentRole.ORCHESTRATOR, "langgraph_start", f"max_attempts={max_att}")
+    state.record(AgentRole.ORCHESTRATOR, "langgraph_start", f"max_attempts={max_att};hitl={hitl_interrupt_enabled()}")
     cfg: dict[str, Any] = {"recursion_limit": max(40, max_att * 12)}
-    if checkpointer:
-        cfg["configurable"] = {"thread_id": thread_id or state.state_id or "lumen-default"}
+    if checkpointer is not None:
+        cfg["configurable"] = {"thread_id": tid}
     result = graph.invoke(
-        {"agent": state, "context": dict(context or {}), "last_node": "", "active_task_ids": [], "wave": 0, "done": False, "notes": []},
+        {
+            "agent": state,
+            "context": dict(context or {}),
+            "last_node": "",
+            "active_task_ids": [],
+            "wave": 0,
+            "done": False,
+            "notes": [],
+            "hitl_decision": "",
+        },
         config=cfg,
     )
     out = result.get("agent") if isinstance(result, dict) else state
@@ -469,7 +580,86 @@ def run_langgraph_pipeline(
         out = state
     out.extensions = dict(out.extensions or {})
     out.extensions["orchestration"] = "langgraph+cline"
+    out.extensions["langgraph_thread_id"] = tid
     out.extensions["langgraph_last_node"] = result.get("last_node") if isinstance(result, dict) else ""
+    # Official interrupt payload
+    inter = None
+    if isinstance(result, dict):
+        inter = result.get("__interrupt__")
+    if inter:
+        out.extensions["hitl_status"] = "awaiting_approval"
+        out.extensions["langgraph_interrupt"] = True
+        # normalize interrupt value
+        try:
+            first = inter[0] if isinstance(inter, (list, tuple)) else inter
+            val = getattr(first, "value", first)
+            out.extensions["hitl_pending"] = val if isinstance(val, dict) else {"raw": str(val)[:500]}
+        except Exception:
+            out.extensions["hitl_pending"] = {"raw": str(inter)[:500]}
+        try:
+            out.transition(AgentStatus.AWAITING_CONFIRMATION, role=AgentRole.ORCHESTRATOR, force=True)
+        except Exception:
+            try:
+                out.status = AgentStatus.AWAITING_CONFIRMATION.value
+            except Exception:
+                out.status = "waiting_confirm"
+        out.final_message = out.final_message or "بانتظار موافقة الخطة (LangGraph HITL)"
+    try:
+        bd.put(out)
+    except Exception:
+        pass
+    return out
+
+
+def resume_langgraph_hitl(
+    state: AgentState,
+    decision: str | dict[str, Any] = "approved",
+    *,
+    context: Optional[dict[str, Any]] = None,
+    registry: Any = None,
+    board: Any = None,
+    thread_id: str | None = None,
+) -> AgentState:
+    """Resume after official interrupt via Command(resume=...).
+
+    Requires the same process MemorySaver + thread_id from the paused run.
+    """
+    if not langgraph_available():
+        raise RuntimeError("langgraph_not_installed")
+    from langgraph.types import Command
+    from .blackboard import get_blackboard
+    from .registry import get_registry
+
+    reg = registry or get_registry()
+    bd = board or get_blackboard()
+    graph, checkpointer = _compile_graph(reg, bd)
+    if checkpointer is None:
+        raise RuntimeError("checkpointer_required_for_hitl_resume")
+    tid = (
+        thread_id
+        or (state.extensions or {}).get("langgraph_thread_id")
+        or state.state_id
+        or "lumen-default"
+    )
+    cfg: dict[str, Any] = {
+        "recursion_limit": max(40, _max_attempts(state) * 12),
+        "configurable": {"thread_id": tid},
+    }
+    resume_val = decision
+    if isinstance(decision, str):
+        resume_val = decision.strip().lower() or "approved"
+    result = graph.invoke(Command(resume=resume_val), config=cfg)
+    out = result.get("agent") if isinstance(result, dict) else state
+    if out is None:
+        out = state
+    out.extensions = dict(out.extensions or {})
+    out.extensions["langgraph_thread_id"] = tid
+    out.extensions["langgraph_interrupt"] = bool(result.get("__interrupt__")) if isinstance(result, dict) else False
+    if isinstance(result, dict) and result.get("__interrupt__"):
+        out.extensions["hitl_status"] = "awaiting_approval"
+    else:
+        out.extensions["hitl_status"] = out.extensions.get("hitl_status") or "resumed"
+        out.extensions["langgraph_interrupt"] = False
     try:
         bd.put(out)
     except Exception:
@@ -481,6 +671,8 @@ __all__ = [
     "build_lumen_graph",
     "langgraph_available",
     "run_langgraph_pipeline",
+    "resume_langgraph_hitl",
+    "hitl_interrupt_enabled",
     "use_langgraph_pipeline",
     "GraphState",
 ]
