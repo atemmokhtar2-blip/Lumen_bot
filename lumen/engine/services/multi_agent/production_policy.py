@@ -49,22 +49,10 @@ def allow_cline_builtin() -> bool:
     }
 
 
-def allow_swarm() -> bool:
-    """Parallel swarm is experimental (weak merge). Off by default."""
-    return (os.getenv("MULTI_AGENT_SWARM") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-
 
 def required_workflow_engine() -> str:
-    """Prefer temporal when host is set; otherwise memory (dev only)."""
-    if is_production():
-        override = (os.getenv("TBE_WORKFLOW_ENGINE") or "").strip().lower()
-        if override and not override.startswith("temporal"):
-            # refuse non-temporal in production naming
-            return "temporal"
-        return "temporal"
-    return (os.getenv("TBE_WORKFLOW_ENGINE") or "memory").strip().lower() or "memory"
+    """Durability: LangGraph SqliteSaver (HITL) + optional Temporal host."""
+    return "langgraph_sqlite+temporal_optional"
 
 
 def force_cline_agent_mode() -> bool:
@@ -80,8 +68,7 @@ def policy_snapshot() -> dict[str, Any]:
         "allow_imperative_fallback": allow_imperative_fallback(),
         "allow_template_fallback": allow_template_fallback(),
         "allow_cline_builtin": allow_cline_builtin(),
-        "allow_swarm": allow_swarm(),
-        "workflow_engine": required_workflow_engine(),
+                "workflow_engine": required_workflow_engine(),
         "force_cline_agent_mode": force_cline_agent_mode(),
     }
 
@@ -93,7 +80,6 @@ __all__ = [
     "allow_imperative_fallback",
     "allow_template_fallback",
     "allow_cline_builtin",
-    "allow_swarm",
     "required_workflow_engine",
     "force_cline_agent_mode",
     "policy_snapshot",

@@ -31,7 +31,8 @@ if activity is not None:
 
     @activity.defn(name="lumen_register_generate_job")
     async def register_generate_job(data: dict[str, Any]) -> dict[str, Any]:
-        from .durable_workflow import JournalEntry, get_journal
+        JournalEntry = None  # durable_workflow removed; Temporal workflow is source of truth
+        get_journal = None
         import uuid
         state_id = str(data.get("state_id") or "")
         wid = str(data.get("workflow_id") or f"twf-{uuid.uuid4().hex[:16]}")

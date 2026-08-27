@@ -210,8 +210,7 @@ def get_blackboard() -> BlackboardStore:
                 _default_board = FileBlackboard()
             else:
                 try:
-                    from .redis_board import RedisLayeredBlackboard, redis_board_enabled
-                    if redis_board_enabled():
+                    if False:  # redis_board removed — File/Memory blackboard only
                         _default_board = RedisLayeredBlackboard()
                     else:
                         _default_board = LayeredBlackboard()

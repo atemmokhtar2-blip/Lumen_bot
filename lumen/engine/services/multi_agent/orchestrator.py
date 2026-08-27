@@ -86,19 +86,8 @@ class Orchestrator:
         return None
 
     def _run_agent(self, name: str, state: AgentState, ctx: dict[str, Any]) -> AgentState:
-        from .circuit import get_circuit_board
         from .metrics import get_metrics
         metrics = get_metrics()
-        breaker = get_circuit_board().get(f"agent:{name}")
-        if not breaker.allow():
-            state.record(AgentRole.ORCHESTRATOR, "circuit_open", name)
-            metrics.incr("agent_circuit_open", agent=name)
-            try:
-                state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail=f"circuit:{name}", force=True)
-            except Exception:
-                state.status = AgentStatus.FAILED.value
-            self.board.put(state)
-            return state
         agent = self._agent(name)
         if agent is None:
             state.record(AgentRole.ORCHESTRATOR, "missing_agent", name)
@@ -114,18 +103,14 @@ class Orchestrator:
             start_span(state, name)
             with metrics.timer("agent_latency_s", agent=name):
                 state = agent.run(state, context=ctx)
-            # Success heuristic: not FAILED after agent
             if state.status != AgentStatus.FAILED.value:
-                breaker.record_success()
                 metrics.incr("agent_success", agent=name)
                 end_span(state, name, ok=True)
             else:
-                breaker.record_failure()
                 metrics.incr("agent_failure", agent=name)
                 end_span(state, name, ok=False, detail=state.status)
         except Exception as exc:
             logger.exception("agent %s crashed", name)
-            breaker.record_failure()
             metrics.incr("agent_crash", agent=name)
             try:
                 from .tracing import end_span
@@ -162,22 +147,11 @@ class Orchestrator:
         *,
         context: Optional[dict[str, Any]] = None,
     ) -> AgentState:
-        from .concurrency import orchestration_slot
         from .metrics import get_metrics
         metrics = get_metrics()
-        with orchestration_slot(user_id=int(state.user_id or 0)) as got:
-            if not got:
-                metrics.incr("orchestrator_slot_timeout")
-                state.final_message = "النظام مشغول (حد التوازي) — أعد المحاولة بعد لحظات."
-                try:
-                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, detail="busy", force=True)
-                except Exception:
-                    state.status = AgentStatus.FAILED.value
-                self.board.put(state)
-                return state
-            metrics.incr("orchestrator_start")
-            with metrics.timer("orchestrator_total_s"):
-                return self._run_inner(state, context=context)
+        metrics.incr("orchestrator_start")
+        with metrics.timer("orchestrator_total_s"):
+            return self._run_inner(state, context=context)
 
     def _run_inner(
         self,
@@ -367,142 +341,6 @@ class Orchestrator:
         self._wf_checkpoint(state, "paused_429")
         self.board.put(state)
         # Schedule resume via worker pool and/or Redis queue
-        try:
-            from .worker_pool import submit_resume_job
-            submit_resume_job(state.state_id)
-        except Exception:
-            pass
-        try:
-            from .redis_board import enqueue_resume_job, redis_board_enabled
-            if redis_board_enabled():
-                enqueue_resume_job(state.state_id)
-        except Exception:
-            pass
-        msg = (state.final_message or "").strip()
-        extra = "[Phase B] paused for provider rate limit (429) — resume scheduled"
-        state.final_message = (msg + "\n" + extra).strip() if msg else extra
-        return state
-
-    def _wf_checkpoint(self, state: AgentState, step: str) -> None:
-        """Durable journal + workflow engine start/checkpoint after each agent step (Phase B)."""
-        try:
-            from .durable_workflow import JournalEntry, get_journal
-            from .workflow_engine import get_workflow_engine
-            ext = dict(state.extensions or {})
-            wid = str(ext.get("workflow_id") or "")
-            eng = get_workflow_engine()
-            payload = {
-                "qa_passed": bool(state.qa_passed),
-                "generated_path": str(state.generated_path or "")[:500],
-                "capability_id": str(state.capability_id or ""),
-                "user_id": int(state.user_id or 0),
-                "attempts": int(state.attempts or 0),
-            }
-            if not wid:
-                wid = eng.start(
-                    state.state_id,
-                    step=step,
-                    payload={
-                        **payload,
-                        "description": str(getattr(state, "user_text", "") or "")[:500],
-                    },
-                )
-                ext["workflow_id"] = wid
-                ext["workflow_engine"] = type(eng).__name__
-            else:
-                eng.checkpoint(
-                    wid,
-                    state_id=state.state_id,
-                    step=step,
-                    status=str(state.status or "running"),
-                    payload=payload,
-                )
-            entry = JournalEntry(
-                workflow_id=wid,
-                state_id=state.state_id,
-                step=step,
-                status=str(state.status or "running"),
-                user_id=int(state.user_id or 0),
-                description=str(getattr(state, "user_text", "") or getattr(state, "description", "") or ""),
-                attempts=int(state.attempts or 0),
-                payload=payload,
-            )
-            get_journal().write(entry)
-            state.extensions = ext
-            self.board.put(state)
-        except Exception:
-            logger.exception("workflow checkpoint skipped")
-
-    def _deliver(self, state: AgentState) -> AgentState:
-        from .context_views import deliver_view
-        dview = deliver_view(state)
-        # Final automated unit gate before any "success" delivery
-        if (state.status == AgentStatus.PASSED.value or state.qa_passed) and (state.generated_path or "").strip():
-            try:
-                from .generated_tests import run_generated_unit_gate
-                gate = run_generated_unit_gate(state.generated_path)
-                ext = dict(state.extensions or {})
-                ext["unit_gate_deliver"] = gate
-                state.extensions = ext
-                if not gate.get("ok"):
-                    state.qa_passed = False
-                    state.status = AgentStatus.FAILED.value
-                    state.final_message = (
-                        "فشل بوابة الاختبار الآلي على الكود المولَّد:\n"
-                        + "\n".join(str(e) for e in (gate.get("errors") or [])[:6])
-                    )
-                    self.board.put(state)
-                    return state
-            except Exception as _ug:
-                logger.exception("unit gate at deliver failed")
-                state.qa_passed = False
-                state.status = AgentStatus.FAILED.value
-                state.final_message = f"unit_gate_error:{type(_ug).__name__}"
-                self.board.put(state)
-                return state
-        if state.status == AgentStatus.PASSED.value or state.qa_passed:
-            state.final_message = (
-                f"تم البناء بنجاح.\nالمسار: {state.generated_path}\n"
-                f"QA: PASSED\nمحاولات: {state.attempts}/{state.max_attempts}\n"
-                f"state_id: {state.state_id}"
-            )
-            try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.DELIVERED.value
-        elif dview.get("clarification_needed") and dview.get("clarification_questions"):
-            qs = dview["clarification_questions"]
-            state.final_message = (
-                "المعماري يحتاج توضيح قبل البناء:\n"
-                + "\n".join(f"• {q}" for q in qs[:5])
-                + f"\nstate_id: {state.state_id}"
-            )
-            try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.DELIVERED.value
-        else:
-            qa_errs = (state.qa_report or {}).get("errors") or state.build_errors or []
-            state.final_message = (
-                f"انتهى المسار بحالة {state.status} بعد {state.attempts} محاولة/محاولات.\n"
-                f"المسار: {state.generated_path or '—'}\n"
-                f"QA: {'PASSED' if state.qa_passed else 'FAILED'}\n"
-                f"تفاصيل: {'; '.join(str(e) for e in qa_errs[:5])}\n"
-                f"state_id: {state.state_id}"
-            )
-            try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.DELIVERED.value
-            state.record(AgentRole.ORCHESTRATOR, "deliver_terminal", state.status)
-
-        # Formal deliver agent (if registered) may refine final_message
-        deliver = self._agent("deliver")
-        if deliver is not None and state.status != AgentStatus.AWAITING_CONFIRMATION.value:
-            try:
-                state = deliver.run(state, context={})
-            except Exception:
-                logger.exception("deliver agent failed")
         self.board.put(state)
         try:
             from .metrics import get_metrics

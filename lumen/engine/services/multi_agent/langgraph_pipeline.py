@@ -63,7 +63,14 @@ def _shared_checkpointer():
         return None
 
 
+def hitl_deliver_enabled() -> bool:
+    """Second HITL gate before deliver when QA passed (default off)."""
+    import os
+    return (os.getenv("MULTI_AGENT_HITL_DELIVER") or "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def hitl_interrupt_enabled() -> bool:
+
     """Official LangGraph interrupt after plan. Default ON when langgraph available."""
     flag = (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
@@ -475,6 +482,36 @@ def _make_builder(registry: Any, board: Any):
             pass
         return {"agent": state, "last_node": "repair", "active_task_ids": []}
 
+    
+    def node_human_deliver_gate(gs: GraphState) -> dict[str, Any]:
+        """Optional HITL before deliver — approve generated project."""
+        from langgraph.types import interrupt
+        state: AgentState = gs["agent"]
+        payload = {
+            "type": "approve_deliver",
+            "state_id": state.state_id,
+            "goal": (state.user_text or "")[:500],
+            "path": state.generated_path or "",
+            "qa_passed": bool(state.qa_passed),
+            "message": "Approve delivery of the generated project?",
+        }
+        state.extensions = dict(state.extensions or {})
+        state.extensions["hitl_pending"] = payload
+        state.extensions["hitl_status"] = "awaiting_deliver_approval"
+        decision = interrupt(payload)
+        decision_s = str(decision or "").strip().lower()
+        if isinstance(decision, dict):
+            decision_s = str(decision.get("decision") or decision.get("value") or decision).strip().lower()
+        approved = decision_s in {"1", "true", "yes", "y", "approve", "approved", "ok"}
+        state.extensions["hitl_status"] = "deliver_approved" if approved else "deliver_rejected"
+        state.extensions["hitl_decision"] = "approved" if approved else "rejected"
+        return {
+            "agent": state,
+            "last_node": "human_deliver_gate",
+            "hitl_decision": "approved" if approved else "rejected",
+            "notes": [f"hitl_deliver:{'approved' if approved else 'rejected'}"],
+        }
+
     def node_deliver(gs: GraphState) -> dict[str, Any]:
         state: AgentState = gs["agent"]
         ctx = dict(gs.get("context") or {})
@@ -649,6 +686,7 @@ def _make_builder(registry: Any, board: Any):
     g.add_node("work", node_work)
     g.add_node("critique", node_critique)
     g.add_node("repair", node_repair)
+    g.add_node("human_deliver_gate", node_human_deliver_gate)
     g.add_node("deliver", node_deliver)
     g.add_node("fail", node_fail)
     g.add_edge(START, "plan")
@@ -658,9 +696,14 @@ def _make_builder(registry: Any, board: Any):
     g.add_conditional_edges("work", after_work, {"schedule": "schedule", "critique": "critique"})
     g.add_conditional_edges(
         "critique", after_critique,
-        {"deliver": "deliver", "repair": "repair", "schedule": "schedule", "fail": "fail"},
+        {"deliver": "deliver", "human_deliver_gate": "human_deliver_gate", "repair": "repair", "schedule": "schedule", "fail": "fail"},
     )
     g.add_edge("repair", "schedule")
+    g.add_conditional_edges(
+        "human_deliver_gate",
+        lambda gs: "deliver" if str(gs.get("hitl_decision") or "").lower() in {"approved", "approve", "yes", "1"} else "fail",
+        {"deliver": "deliver", "fail": "fail"},
+    )
     g.add_edge("deliver", END)
     g.add_edge("fail", END)
     return g

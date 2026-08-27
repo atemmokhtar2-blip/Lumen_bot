@@ -21,8 +21,8 @@ def main() -> int:
     queues = [Queue(name, connection=conn)]
     # Resume interrupted multi-agent generations left mid-flight after a crash.
     try:
-        from lumen.engine.services.multi_agent.redis_board import enqueue_pending_resumes
-        resumed = enqueue_pending_resumes(limit=int(os.getenv("MULTI_AGENT_RESUME_BOOT_LIMIT") or "20"))
+        # redis_board removed — LangGraph SqliteSaver is HITL durability
+        resumed = 0
         if resumed:
             logger.info("multi_agent resume boot enqueued=%s", len(resumed))
     except Exception:

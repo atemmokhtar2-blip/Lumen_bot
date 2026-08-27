@@ -216,6 +216,13 @@ SCENARIOS = [
 
 
 
+# registered agent-layer scenarios
+AGENT_LAYER_SCENARIOS = [
+    ("agent_layer_contracts", _scenario_agent_layer_contracts),
+    ("planner_to_acceptance_tree", _scenario_planner_to_acceptance_tree),
+]
+
+
 def run_bot_bench_suite(*, work_root: Path | None = None, persist: bool = True) -> dict[str, Any]:
     import tempfile
 
@@ -254,3 +261,46 @@ def run_bot_bench_suite(*, work_root: Path | None = None, persist: bool = True) 
 
 
 __all__ = ["run_bot_bench_suite", "SCENARIOS"]
+
+
+def _scenario_agent_layer_contracts() -> dict[str, Any]:
+    """E2E offline: all four agent layers + market scenarios (no LLM)."""
+    import time
+    from lumen.engine.services.multi_agent.layer_scenarios import run_all_layer_scenarios
+    t0 = time.time()
+    out = run_all_layer_scenarios()
+    return {
+        "success": bool(out.get("ok")),
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": 0.0,
+        "errors": [] if out.get("ok") else [r["name"] for r in out.get("results") or [] if not r.get("ok")],
+        "metrics": {"passed": out.get("passed"), "total": out.get("total")},
+    }
+
+
+def _scenario_planner_to_acceptance_tree() -> dict[str, Any]:
+    """Plan → TaskTree → parallel wave → acceptance on empty fails."""
+    import time
+    from pathlib import Path as P
+    import tempfile
+    from lumen.engine.services.multi_agent.dynamic_planner import assemble_plan
+    from lumen.engine.services.multi_agent.task_tree import TaskTree, TaskStatus
+    from lumen.engine.services.multi_agent.acceptance_check import evaluate_task
+    t0 = time.time()
+    plan = assemble_plan(goal="telegram bot", preferred_keys=["admin", "payments"])
+    tree = TaskTree.from_execution_plan(plan, goal=plan.goal)
+    tree.mark("scaffold", TaskStatus.DONE)
+    tree.refresh_readiness()
+    wave = tree.parallel_wave()
+    tmp = P(tempfile.mkdtemp())
+    acc = evaluate_task(tmp, files=["main.py"], acceptance=["main.py exists"], strict=True)
+    ok = len(wave) >= 2 and acc.get("ok") is False
+    return {
+        "success": ok,
+        "attempts": 1,
+        "latency_s": time.time() - t0,
+        "cost_usd": 0.0,
+        "errors": [] if ok else ["wave_or_acceptance"],
+        "metrics": {"wave": [n.id for n in wave]},
+    }

@@ -43,42 +43,6 @@ def _code_intel_preflight(work_dir: str, state) -> None:
 
 
 
-def _try_swarm_independent_tasks(state, plan: dict, work_dir) -> dict | None:
-    """If execution_plan has multiple independent tasks, run parallel Cline workers."""
-    import os
-    if (os.getenv("MULTI_AGENT_SWARM") or "1").strip().lower() in {"0", "false", "off", "no"}:
-        return None
-    # Real parallel codegen is expensive; enable when MULTI_AGENT_SWARM_CODEGEN=1 (default on for >=3 tasks)
-    tasks = list((plan or {}).get("tasks") or [])
-    if len(tasks) < 2:
-        return None
-    independent = []
-    for t in tasks:
-        if not isinstance(t, dict):
-            continue
-        deps = t.get("deps") or t.get("depends_on") or []
-        if not deps:
-            independent.append(t)
-    if len(independent) < 2:
-        return None
-    codegen = (os.getenv("MULTI_AGENT_SWARM_CODEGEN") or "1").strip().lower() not in {"0", "false", "no"}
-    if not codegen:
-        return None
-    try:
-        from ..production_policy import allow_swarm
-        if not allow_swarm():
-            return None
-        from ..swarm import run_swarm
-        goal = (state.user_text or state.spec_request or plan.get("goal") or "")[:2000]
-        result = run_swarm(
-            work_dir=work_dir or "",
-            tasks=independent,
-            base_goal=goal,
-            ir_dict={"execution_plan": plan, "preferred_keys": list(state.preferred_keys or [])},
-        )
-        return result
-    except Exception:
-        return None
 
 
 
@@ -140,41 +104,6 @@ class BuilderAgent(Agent):
 
             # Execution plan + repair directive → Cline goal enrichment
             plan = (state.extensions or {}).get("execution_plan") or {}
-
-            try:
-                _wd = str((state.extensions or {}).get("work_dir") or work_dir or "")
-                _swarm = _try_swarm_independent_tasks(state, plan if isinstance(plan, dict) else {}, _wd)
-                if _swarm:
-                    state.extensions["swarm"] = _swarm
-                    state.record("BUILDER", "swarm_partition", str((_swarm or {}).get("workers")))
-                    # If parallel workers merged real files, treat as successful build unit
-                    from pathlib import Path as _P
-                    root = _P(_wd)
-                    main_py = root / "main.py"
-                    if (_swarm.get("ok") and main_py.is_file()) or (
-                        any((_P(r.get("subdir") or root) / "main.py").is_file()
-                            for r in (_swarm.get("results") or []) if isinstance(r, dict)) is False
-                        and main_py.is_file()
-                    ):
-                        if main_py.is_file():
-                            state.build_success = True
-                            state.generated_path = str(root)
-                            try:
-                                from lumen.engine.core.result import GenerationResult
-                                state.extensions["_generation_result"] = GenerationResult(
-                                    success=True,
-                                    project_path=str(root),
-                                    metadata={"engine": "swarm_run_agent", "swarm": _swarm},
-                                )
-                            except Exception:
-                                state.extensions["_generation_result"] = None
-                            # Skip single-threaded full regenerate when swarm already wrote project
-                            if (os.getenv("MULTI_AGENT_SWARM_SKIP_FULL") or "1").strip().lower() not in {"0", "false", "no"}:
-                                if sum(int(r.get("merged_files") or 0) for r in (_swarm.get("results") or []) if isinstance(r, dict)) > 0 or main_py.is_file():
-                                    state.record(AgentRole.BUILDER, "swarm_build_accepted", str(root))
-                                    return state
-            except Exception:
-                pass
             repair = (state.extensions or {}).get("last_repair") or {}
             brief_parts = [req]
             try:
