@@ -142,20 +142,21 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
         all_ok = agent.build_success
         notes.append("full_goal:" + ("ok" if all_ok else "fail"))
     else:
+        from .worktree_isolation import (
+            acquire_task_workspace,
+            merge_task_workspace,
+            release_task_workspace,
+            write_task_tree_disk,
+        )
         for task in ready[:cap]:
-            heartbeat(
-                {
-                    "phase": "work_task",
-                    "task_id": str(task.id),
-                    "attempts": int(agent.attempts or 0),
-                }
-            )
             tree.mark(task.id, TaskStatus.RUNNING)
             brief = tree.worker_brief(task.id)
             acc = list(getattr(task, "acceptance", None) or [])
             files = list(getattr(task, "files", None) or [])
+            use_iso = bool(getattr(task, "parallel_group", "") or "")
+            session = acquire_task_workspace(work, str(task.id), use_isolation=use_iso)
             result = run_coding_session(
-                work_dir=work,
+                work_dir=session.path,
                 goal=agent.spec_request or agent.user_text or "",
                 task_brief=brief,
                 acceptance=acc,
@@ -169,14 +170,24 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
                     or []
                 )[:12],
             )
+            if session.isolated:
+                merge_task_workspace(session, owned_files=files)
+                try:
+                    release_task_workspace(session)
+                except Exception:
+                    pass
             acc_rep = evaluate_task(work, files=files, acceptance=acc, strict=True)
             if acc_rep.get("ok"):
                 tree.mark(
                     task.id,
                     TaskStatus.DONE,
-                    result={"acceptance": acc_rep, "steps": result.get("steps")},
+                    result={
+                        "acceptance": acc_rep,
+                        "steps": result.get("steps"),
+                        "isolation": session.kind,
+                    },
                 )
-                notes.append(f"{task.id}:done")
+                notes.append(f"{task.id}:done:{session.kind}")
             else:
                 all_ok = False
                 fails = [
@@ -189,13 +200,10 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
                 notes.append(f"{task.id}:failed")
             agent.extensions["task_tree"] = tree.to_dict()
             agent.extensions["task_tree_summary"] = tree.summary()
-            heartbeat(
-                {
-                    "phase": "work_task_done",
-                    "task_id": str(task.id),
-                    "ok": bool(acc_rep.get("ok")),
-                }
-            )
+            try:
+                write_task_tree_disk(work, tree.to_dict())
+            except Exception:
+                pass
 
     agent.generated_path = str(work)
     agent.build_success = all_ok or any(n.endswith(":done") for n in notes)

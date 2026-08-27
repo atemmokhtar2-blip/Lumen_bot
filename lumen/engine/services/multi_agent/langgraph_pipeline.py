@@ -329,27 +329,14 @@ def _make_builder(registry: Any, board: Any):
                 _files = list(getattr(task, "files", None) or [])
             state.extensions = dict(state.extensions or {})
             state.extensions["active_task_id"] = tid
-            # Isolated workspace for parallel_group tasks (avoid concurrent writes on main.py)
-            use_iso = bool(getattr(task, "parallel_group", "") or "")  # always isolate parallel_group (Send-safe)
+            # Isolated workspace for parallel_group tasks — real git worktree (Cursor pattern)
+            use_iso = bool(getattr(task, "parallel_group", "") or "")
             session_dir = work
+            _wt_session = None
             if use_iso:
-                session_dir = work / ".parallel" / tid
-                if session_dir.exists():
-                    shutil.rmtree(session_dir, ignore_errors=True)
-                session_dir.mkdir(parents=True, exist_ok=True)
-                # snapshot current tree into isolation (copy2)
-                for src in work.rglob("*"):
-                    if not src.is_file():
-                        continue
-                    if ".parallel" in src.parts or ".git" in src.parts or "__pycache__" in src.parts:
-                        continue
-                    rel = src.relative_to(work)
-                    dest = session_dir / rel
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        shutil.copy2(src, dest)
-                    except Exception:
-                        pass
+                from .worktree_isolation import acquire_task_workspace
+                _wt_session = acquire_task_workspace(work, tid, use_isolation=True)
+                session_dir = _wt_session.path
             _constraints = list(((state.extensions or {}).get("execution_plan") or {}).get("constraints") or [])[:12]
             result = run_coding_session(
                 acceptance=_acc,
@@ -361,30 +348,21 @@ def _make_builder(registry: Any, board: Any):
                 repair=bool((state.extensions or {}).get("repair_mode")),
                 constraints=_constraints,
             )
-            # Merge isolation → work for declared task files only (hash-safe)
-            if use_iso:
-                conflicts = []
-                for rel in _files or []:
-                    src = session_dir / rel
-                    if not src.is_file():
-                        continue
-                    dest = work / rel
-                    if dest.is_file():
-                        try:
-                            if dest.read_bytes() != src.read_bytes() and rel not in _files:
-                                conflicts.append(rel)
-                        except Exception:
-                            pass
-                    # Task owns declared files — always take session version
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, dest)
-                result["merge_conflicts"] = conflicts
+            # Merge isolation → work for declared task files (worktree or copy)
+            if use_iso and _wt_session is not None:
+                from .worktree_isolation import merge_task_workspace, release_task_workspace
+                merge_rep = merge_task_workspace(_wt_session, owned_files=list(_files or []))
+                result["merge_conflicts"] = list(merge_rep.get("conflicts") or [])
+                result["isolation_kind"] = merge_rep.get("kind")
+                try:
+                    release_task_workspace(_wt_session)
+                except Exception:
+                    pass
                 from .acceptance_check import evaluate_task
                 acc_merged = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
                 result["acceptance_report"] = acc_merged
                 if not acc_merged.get("ok"):
                     result["ok"] = False
-                # Also fail if session itself failed
                 if not result.get("ok"):
                     result["ok"] = False
             # Professional gate: NEVER trust worker self-reported acceptance alone

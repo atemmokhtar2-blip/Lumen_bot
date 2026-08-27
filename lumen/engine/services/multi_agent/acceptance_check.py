@@ -154,7 +154,7 @@ def feature_mentioned_in_sources(root: Path, feature: str) -> bool:
     for p in list(root.rglob("*"))[:120]:
         if not p.is_file():
             continue
-        if any(x in p.parts for x in (".git", "__pycache__", ".parallel", ".venv")):
+        if any(x in p.parts for x in (".git", "__pycache__", ".parallel", ".worktrees", ".venv", ".lumen")):
             continue
         path_l = p.as_posix().lower()
         if any(v in path_l for v in variants):
