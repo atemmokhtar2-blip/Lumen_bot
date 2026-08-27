@@ -294,6 +294,21 @@ def _make_builder(registry: Any, board: Any):
 
         # Role critic (AST/static)
         state = _run_named(registry, "critic", state, ctx)
+        # Ensure acceptance layer ran (even if critic role is thin)
+        if not (state.extensions or {}).get("acceptance_report"):
+            try:
+                from .acceptance_check import evaluate_tree
+                from .task_tree import TaskTree
+                work = _work_dir(state, ctx)
+                tree = _load_tree(state)
+                acc = evaluate_tree(work, tree)
+                state.extensions = dict(state.extensions or {})
+                state.extensions["acceptance_report"] = acc
+                if not acc.get("ok"):
+                    state.qa_passed = False
+            except Exception:
+                logger.exception("acceptance in critique node failed")
+
 
         # Official execution feedback (compile + import + pytest)
         try:
@@ -428,15 +443,54 @@ def _make_builder(registry: Any, board: Any):
             pass
         return {"agent": state, "last_node": "fail", "done": True}
 
-    def after_schedule(gs: GraphState) -> Literal["work", "critique"]:
-        if list(gs.get("active_task_ids") or []):
-            return "work"
+    def after_schedule(gs: GraphState):
+        """Fan-out ready tasks via official LangGraph Send when parallel-safe."""
+        ids = list(gs.get("active_task_ids") or [])
         tree = _load_tree(gs["agent"])
-        if tree.is_complete():
-            return "critique"
-        if tree.ready_tasks():
-            return "work"
-        return "critique"
+        if not ids:
+            if tree.is_complete():
+                return "critique"
+            ready = tree.ready_tasks()
+            if not ready:
+                return "critique"
+            ids = [n.id for n in ready]
+
+        # Parallel only when enabled and 2+ tasks with disjoint file sets
+        parallel = (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower() not in {"0", "false", "no", "off"}
+        if parallel and len(ids) > 1:
+            try:
+                from langgraph.types import Send
+                nodes = [tree.get(i) for i in ids]
+                file_sets = [set(getattr(n, "files", None) or []) for n in nodes if n]
+                # disjoint if no pairwise overlap (empty files = conflict with all)
+                disjoint = True
+                for i, a in enumerate(file_sets):
+                    if not a:
+                        disjoint = False
+                        break
+                    for b in file_sets[i + 1:]:
+                        if not b or (a & b):
+                            disjoint = False
+                            break
+                    if not disjoint:
+                        break
+                if disjoint:
+                    return [
+                        Send("work", {
+                            "agent": gs["agent"],
+                            "context": dict(gs.get("context") or {}),
+                            "last_node": "schedule",
+                            "active_task_ids": [tid],
+                            "wave": int(gs.get("wave") or 0),
+                            "done": False,
+                            "notes": [],
+                            "hitl_decision": str(gs.get("hitl_decision") or ""),
+                        })
+                        for tid in ids
+                    ]
+            except Exception as exc:
+                logger.warning("Send fan-out failed (%s) — sequential work", exc)
+        return "work"
 
     def after_work(gs: GraphState) -> Literal["schedule", "critique"]:
         tree = _load_tree(gs["agent"])

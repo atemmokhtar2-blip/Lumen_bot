@@ -326,6 +326,38 @@ class CriticAgent(Agent):
             state.transition(AgentStatus.PASSED, role=AgentRole.CRITIC)
         else:
             state.transition(AgentStatus.FAILED, role=AgentRole.CRITIC, detail="qa_failed")
+        # Layered behavioral acceptance against task criteria
+        try:
+            from ..acceptance_check import evaluate_tree, evaluate_task
+            work = Path(ctx.get("work_dir") or state.generated_path or state.extensions.get("work_dir") or ".")
+            tree_raw = (state.extensions or {}).get("task_tree")
+            if tree_raw:
+                from ..task_tree import TaskTree
+                tree = TaskTree.from_dict(tree_raw) if isinstance(tree_raw, dict) else None
+                if tree is not None:
+                    acc = evaluate_tree(work, tree)
+                    state.extensions = dict(state.extensions or {})
+                    state.extensions["acceptance_report"] = acc
+                    if not acc.get("ok"):
+                        state.qa_passed = False
+                        fails = []
+                        for tid, tr in (acc.get("tasks") or {}).items():
+                            for f in tr.get("failed") or []:
+                                fails.append(f"{tid}:{f.get('check')}:{f.get('criterion') or f.get('path')}")
+                        state.build_errors = list(state.build_errors or []) + fails[:20]
+                        state.record(AgentRole.CRITIC, "acceptance_failed", f"fails={len(fails)}")
+                    else:
+                        state.record(AgentRole.CRITIC, "acceptance_passed", "tree_ok")
+            else:
+                # no tree — still structural check
+                acc = evaluate_task(work, files=["main.py"], acceptance=["main.py exists", "compileall passes"])
+                state.extensions = dict(state.extensions or {})
+                state.extensions["acceptance_report"] = acc
+                if not acc.get("ok"):
+                    state.qa_passed = False
+        except Exception as _acc_exc:
+            logger.exception("acceptance_check failed")
+
         return state
 
 
