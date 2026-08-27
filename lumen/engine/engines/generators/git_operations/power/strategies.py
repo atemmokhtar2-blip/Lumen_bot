@@ -205,9 +205,12 @@ def strategy_zip_archive(url: str, dest: Path, *, token: Optional[str], branch: 
         req = Request(arch, headers=headers)
         with urlopen(req, timeout=120) as resp, open(tmp_zip, "wb") as f:
             shutil.copyfileobj(resp, f)
-        with zipfile.ZipFile(tmp_zip) as zf:
-            zf.extractall(dest.parent / f"{dest.name}_extract")
         extracted = dest.parent / f"{dest.name}_extract"
+        if extracted.exists():
+            shutil.rmtree(extracted, ignore_errors=True)
+        extracted.mkdir(parents=True, exist_ok=True)
+        from lumen.engine.services.safe_zip import safe_extract_zip
+        safe_extract_zip(tmp_zip, extracted)
         subs = [p for p in extracted.iterdir() if p.is_dir()]
         src = subs[0] if len(subs) == 1 else extracted
         if dest.exists():

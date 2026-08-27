@@ -222,6 +222,20 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN validation failed: %s", _tok_exc)
         raise SystemExit(1)
 
+    # Public mode without shared Redis rate limits = multi-worker cost DoS
+    try:
+        from lumen.platform.runtime_config import is_dev, redis_url
+
+        if ALLOW_ALL_USERS and not redis_url() and not is_dev():
+            logger.error(
+                "ALLOW_ALL_USERS=1 requires REDIS_URL for shared rate limiting outside dev"
+            )
+            raise SystemExit(1)
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("public-bot rate-limit precondition check failed")
+
     # ── Single poller only (prevents 409 Conflict on getUpdates) ──
     from lumen.bot.singleton import acquire_bot_singleton, clear_telegram_webhook
 

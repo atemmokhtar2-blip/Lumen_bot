@@ -111,3 +111,65 @@ def write_project_zip(
             pass
         logger.exception("safe_zip failed for %s", root)
         return None
+
+
+class UnsafeZipError(ValueError):
+    """Zip content rejected for security policy."""
+
+
+def safe_extract_zip(
+    zip_path: str | Path,
+    dest_dir: str | Path,
+    *,
+    max_files: int = 50_000,
+    max_total_bytes: int = 512 * 1024 * 1024,
+) -> Path:
+    """Extract zip under dest_dir with Zip-Slip protection.
+
+    Rejects absolute paths, '..' components, and symlink members.
+    """
+    zpath = Path(zip_path)
+    dest = Path(dest_dir).resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+    total = 0
+    n = 0
+    with zipfile.ZipFile(zpath, "r") as zf:
+        for info in zf.infolist():
+            name = info.filename or ""
+            if not name:
+                continue
+            if name.endswith("/"):
+                rel = name.rstrip("/")
+                if not rel:
+                    continue
+                if name.startswith("/") or ".." in Path(rel).parts:
+                    raise UnsafeZipError(f"zip_slip_dir:{name}")
+                (dest / rel).mkdir(parents=True, exist_ok=True)
+                continue
+            if name.startswith("/") or name.startswith("\\"):
+                raise UnsafeZipError(f"zip_slip_abs:{name}")
+            parts = Path(name).parts
+            if ".." in parts:
+                raise UnsafeZipError(f"zip_slip:{name}")
+            mode = info.external_attr >> 16
+            if mode and stat.S_ISLNK(mode):
+                raise UnsafeZipError(f"zip_symlink_forbidden:{name}")
+            n += 1
+            if n > max_files:
+                raise UnsafeZipError("zip_too_many_files")
+            target = (dest / name).resolve()
+            try:
+                target.relative_to(dest)
+            except ValueError as exc:
+                raise UnsafeZipError(f"zip_slip_escape:{name}") from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info, "r") as src, open(target, "wb") as out:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_total_bytes:
+                        raise UnsafeZipError("zip_too_large")
+                    out.write(chunk)
+    return dest

@@ -60,19 +60,32 @@ async def job_diff_files(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "job_id": job_id, "files": [], "generated_path": gen or None})
     root = Path(gen).resolve()
     files = []
-    for p in sorted(root.rglob("*")):
-        if not p.is_file():
-            continue
-        if any(x in p.parts for x in {".git", "__pycache__", "node_modules", ".venv"}):
-            continue
-        rel = p.relative_to(root).as_posix()
+    import os
+    import stat as _stat
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in {".git", "__pycache__", "node_modules", ".venv"}
+            and not (Path(dirpath) / d).is_symlink()
+        ]
+        for name in filenames:
+            if len(files) >= 80:
+                break
+            full = Path(dirpath) / name
+            try:
+                st = full.lstat()
+            except OSError:
+                continue
+            if not _stat.S_ISREG(st.st_mode):
+                continue
+            try:
+                rel = full.resolve().relative_to(root).as_posix()
+            except ValueError:
+                continue
+            files.append({"path": rel, "size": int(st.st_size)})
         if len(files) >= 80:
             break
-        try:
-            size = p.stat().st_size
-        except OSError:
-            size = 0
-        files.append({"path": rel, "size": size})
     return web.json_response({"ok": True, "job_id": job_id, "generated_path": str(root), "files": files})
 
 
@@ -93,13 +106,16 @@ async def job_file_content(request: web.Request) -> web.Response:
     if not gen:
         raise web.HTTPNotFound(text='{"error":"no_generated_path"}', content_type="application/json")
     root = Path(gen).resolve()
-    target = (root / rel).resolve()
     try:
-        target.relative_to(root)
-    except ValueError:
+        from lumen.engine.services.safe_fs import UnsafePathError, safe_open_under
+
+        with safe_open_under(root, rel, "rb") as fh:
+            data = fh.read(120_000)
+    except UnsafePathError:
         raise web.HTTPForbidden(text='{"error":"path_escape"}', content_type="application/json")
-    if not target.is_file():
+    except FileNotFoundError:
         raise web.HTTPNotFound(text='{"error":"not_found"}', content_type="application/json")
-    data = target.read_bytes()[:120_000]
+    except OSError:
+        raise web.HTTPNotFound(text='{"error":"not_found"}', content_type="application/json")
     text = data.decode("utf-8", errors="replace")
     return web.json_response({"ok": True, "path": rel, "content": text, "truncated": len(data) >= 120_000})
