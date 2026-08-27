@@ -61,7 +61,7 @@ async def signal_wake(
 
 def schedule_wake_cron(
     *,
-    workflow_type: str = "LumenMultiAgentGenerateWorkflow",
+    workflow_type: str = "LumenSequentialGenerateWorkflow",
     cron: str = "0 * * * *",
     task_queue: str | None = None,
 ) -> dict[str, Any]:

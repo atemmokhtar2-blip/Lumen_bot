@@ -41,4 +41,5 @@ def test_production_policy_no_swarm():
     from lumen.engine.services.multi_agent.production_policy import policy_snapshot
     snap = policy_snapshot()
     assert "allow_swarm" not in snap
-    assert "langgraph" in str(snap.get("workflow_engine") or "")
+    engine = str(snap.get("workflow_engine") or "")
+    assert "temporal_sequential" in engine or "langgraph" in engine

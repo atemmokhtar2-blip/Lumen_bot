@@ -63,7 +63,7 @@ def temporal_preferred() -> bool:
 def required_workflow_engine() -> str:
     """Durability stack label for ops / health."""
     if temporal_preferred():
-        return "temporal+langgraph_sqlite+cline"
+        return "temporal_sequential_activities+cline"
     return "langgraph_sqlite+cline"
 
 
