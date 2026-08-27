@@ -21,6 +21,23 @@ from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
+def _hb(payload: dict[str, Any] | None = None) -> None:
+    """Heartbeat when running inside a Temporal Activity (no-op outside).
+
+    Uses the sync heartbeat API so it is safe from threads (asyncio.to_thread).
+    """
+    try:
+        from temporalio import activity
+        if not activity.in_activity():
+            return
+        # Prefer sync path; ignore if runtime returns a coroutine unexpectedly
+        result = activity.heartbeat(payload or {})
+        if hasattr(result, "send") or hasattr(result, "__await__"):
+            pass  # never await from sync worker thread
+    except Exception:
+        pass
+
+
 
 class LumenTGState(TypedDict, total=False):
     request: str
@@ -93,6 +110,7 @@ def _load_agent(state: LumenTGState):
 
 
 def _plan_sync(state: LumenTGState) -> dict[str, Any]:
+    _hb({"phase": "plan_start", "state_id": str(state.get("state_id") or "")})
     from .state import AgentRole, AgentStatus
     from .registry import get_registry
     from .dynamic_planner import assemble_plan
@@ -145,6 +163,7 @@ def _plan_sync(state: LumenTGState) -> dict[str, Any]:
 
 
 def _work_sync(state: LumenTGState) -> dict[str, Any]:
+    _hb({"phase": "work_start", "state_id": str(state.get("state_id") or "")})
     from .state import AgentRole, AgentStatus
     from .coding_agent import run_coding_session
     from .task_tree import TaskTree, TaskStatus
@@ -184,6 +203,7 @@ def _work_sync(state: LumenTGState) -> dict[str, Any]:
     else:
         cap = max(1, min(8, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
         for task in ready[:cap]:
+            _hb({"phase": "work_task", "task_id": str(task.id), "attempts": int(agent.attempts or 0)})
             tree.mark(task.id, TaskStatus.RUNNING)
             brief = tree.worker_brief(task.id)
             acc = list(getattr(task, "acceptance", None) or [])
@@ -223,6 +243,7 @@ def _work_sync(state: LumenTGState) -> dict[str, Any]:
                 notes.append(f"{task.id}:failed")
             agent.extensions["task_tree"] = tree.to_dict()
             agent.extensions["task_tree_summary"] = tree.summary()
+            _hb({"phase": "work_task_done", "task_id": str(task.id), "ok": bool(acc_rep.get("ok"))})
 
     agent.generated_path = str(work)
     agent.build_success = all_ok or any(n.endswith(":done") for n in notes)
@@ -238,6 +259,7 @@ def _work_sync(state: LumenTGState) -> dict[str, Any]:
 
 
 def _critique_sync(state: LumenTGState) -> dict[str, Any]:
+    _hb({"phase": "critique_start", "state_id": str(state.get("state_id") or "")})
     from .state import AgentRole, AgentStatus
     from .registry import get_registry
 
@@ -271,6 +293,7 @@ def _critique_sync(state: LumenTGState) -> dict[str, Any]:
 
 
 def _repair_sync(state: LumenTGState) -> dict[str, Any]:
+    _hb({"phase": "repair_start", "state_id": str(state.get("state_id") or "")})
     from .state import AgentRole, AgentStatus
     from .repair import build_repair_directive
     from .repair_worker import should_incremental_repair, run_incremental_repair
@@ -418,8 +441,9 @@ def _route_after_plan_gate(state: LumenTGState) -> str:
 
 
 def _hitl_enabled() -> bool:
-    return (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "1").strip().lower() not in {
-        "0", "false", "no", "off",
+    """HITL is opt-in only. Default OFF so generate does not hang waiting for a signal."""
+    return (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
     }
 
 
@@ -433,7 +457,6 @@ def make_lumen_generate_graph():
     crit_h = float(os.getenv("TEMPORAL_CRITIQUE_HOURS") or "1")
 
     g.add_node("plan", node_plan, metadata=_node_meta(hours=plan_h, attempts=2))
-    g.add_node("plan_gate", node_plan_gate, metadata=_node_meta(hours=0.25, attempts=1))
     g.add_node("work", node_work, metadata=_node_meta(hours=work_h, attempts=3))
     g.add_node("critique", node_critique, metadata=_node_meta(hours=crit_h, attempts=2))
     g.add_node("repair", node_repair, metadata=_node_meta(hours=plan_h, attempts=2))
@@ -441,6 +464,8 @@ def make_lumen_generate_graph():
 
     g.add_edge(START, "plan")
     if _hitl_enabled():
+        # plan_gate only when HITL opt-in (never register unreachable nodes)
+        g.add_node("plan_gate", node_plan_gate, metadata=_node_meta(hours=0.25, attempts=1))
         g.add_edge("plan", "plan_gate")
         g.add_conditional_edges(
             "plan_gate", _route_after_plan_gate, {"work": "work", "deliver": "deliver"}

@@ -157,7 +157,6 @@ if workflow is not None:
 
         @workflow.run
         async def run(self, data: dict[str, Any]) -> dict[str, Any]:
-            import os
             from datetime import timedelta
 
             payload = dict(data or {})
@@ -178,8 +177,8 @@ if workflow is not None:
             result = await workflow.execute_activity(
                 run_langgraph_generate_activity,
                 payload,
-                start_to_close_timeout=timedelta(hours=float(os.getenv("TEMPORAL_ACTIVITY_HOURS") or "24")),
-                heartbeat_timeout=timedelta(minutes=int(os.getenv("TEMPORAL_HEARTBEAT_MINUTES") or "10")),
+                start_to_close_timeout=timedelta(hours=24),
+                heartbeat_timeout=timedelta(minutes=10),
                 retry_policy=retry,
             )
             return dict(result or {})
@@ -237,8 +236,6 @@ if workflow is not None:
 
         @workflow.run
         async def run(self, data: dict[str, Any]) -> dict[str, Any]:
-            import os
-            import uuid
             from datetime import timedelta
 
             payload = dict(data or {})
@@ -246,12 +243,19 @@ if workflow is not None:
                 return {"ok": False, "status": "CANCELLED", "engine": "temporal_langgraph_plugin"}
 
             try:
+                # Official pattern: only temporal_graph + InMemorySaver inside workflow.
+                # Graph implementation is registered on the Worker via LangGraphPlugin —
+                # do NOT import temporal_plugin_graph here (sandbox + non-determinism).
                 from temporalio.contrib.langgraph import graph as temporal_graph
                 from langgraph.checkpoint.memory import InMemorySaver
                 from langgraph.types import Command
-                from .temporal_plugin_graph import GRAPH_NAME
 
-                state_id = str(payload.get("state_id") or uuid.uuid4().hex[:16])
+                state_id = str(payload.get("state_id") or payload.get("workflow_id") or "lumen-state")
+                max_attempts = int(payload.get("max_attempts") or 4)
+                if max_attempts < 1:
+                    max_attempts = 1
+                if max_attempts > 8:
+                    max_attempts = 8
                 initial: dict[str, Any] = {
                     "request": str(payload.get("request") or payload.get("description") or ""),
                     "work_dir": str(payload.get("work_dir") or ""),
@@ -263,10 +267,10 @@ if workflow is not None:
                     "ok": False,
                     "error": "",
                     "attempts": 0,
-                    "max_attempts": max(1, min(8, int(os.getenv("MULTI_AGENT_MAX_ATTEMPTS") or "4"))),
+                    "max_attempts": max_attempts,
                     "plan_summary": "",
                 }
-                app = temporal_graph(GRAPH_NAME).compile(checkpointer=InMemorySaver())
+                app = temporal_graph("lumen-generate").compile(checkpointer=InMemorySaver())
                 config = {"configurable": {"thread_id": state_id}}
 
                 # First invoke — may pause at plan_gate interrupt()
@@ -322,7 +326,7 @@ if workflow is not None:
                 }
             except Exception as exc:
                 workflow.logger.warning(
-                    "plugin graph failed (%s) — legacy single activity", type(exc).__name__
+                    "plugin graph failed (%s): %s — legacy single activity", type(exc).__name__, repr(exc)[:500]
                 )
                 retry = RetryPolicy(
                     initial_interval=timedelta(seconds=2),
@@ -330,15 +334,12 @@ if workflow is not None:
                     maximum_interval=timedelta(seconds=60),
                     maximum_attempts=2,
                 )
+                # Sandbox: no os.getenv — fixed production timeouts (override via activity defaults on worker)
                 result = await workflow.execute_activity(
                     run_langgraph_generate_activity,
                     payload,
-                    start_to_close_timeout=timedelta(
-                        hours=float(os.getenv("TEMPORAL_ACTIVITY_HOURS") or "24")
-                    ),
-                    heartbeat_timeout=timedelta(
-                        minutes=int(os.getenv("TEMPORAL_HEARTBEAT_MINUTES") or "10")
-                    ),
+                    start_to_close_timeout=timedelta(hours=24),
+                    heartbeat_timeout=timedelta(minutes=10),
                     retry_policy=retry,
                 )
                 out = dict(result or {})
@@ -348,16 +349,207 @@ if workflow is not None:
 
 
 
+if activity is not None:
+
+    @activity.defn(name="lumen_stage_plan")
+    async def lumen_stage_plan(data: dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from .temporal_plugin_graph import _plan_sync, _hb
+        _hb({"phase": "plan_activity"})
+        out = await asyncio.to_thread(_plan_sync, data)
+        _hb({"phase": "plan_done", "ok": bool((out or {}).get("ok"))})
+        # merge into state
+        merged = dict(data or {})
+        merged.update(out or {})
+        return merged
+
+    @activity.defn(name="lumen_stage_work")
+    async def lumen_stage_work(data: dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from .temporal_plugin_graph import _work_sync, _hb
+        _hb({"phase": "work_activity"})
+        out = await asyncio.to_thread(_work_sync, data)
+        _hb({"phase": "work_done", "ok": bool((out or {}).get("ok"))})
+        merged = dict(data or {})
+        merged.update(out or {})
+        return merged
+
+    @activity.defn(name="lumen_stage_critique")
+    async def lumen_stage_critique(data: dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from .temporal_plugin_graph import _critique_sync, _hb
+        _hb({"phase": "critique_activity"})
+        out = await asyncio.to_thread(_critique_sync, data)
+        _hb({"phase": "critique_done", "ok": bool((out or {}).get("ok"))})
+        merged = dict(data or {})
+        merged.update(out or {})
+        return merged
+
+    @activity.defn(name="lumen_stage_repair")
+    async def lumen_stage_repair(data: dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from .temporal_plugin_graph import _repair_sync, _hb
+        _hb({"phase": "repair_activity"})
+        out = await asyncio.to_thread(_repair_sync, data)
+        merged = dict(data or {})
+        merged.update(out or {})
+        return merged
+
+    @activity.defn(name="lumen_stage_deliver")
+    async def lumen_stage_deliver(data: dict[str, Any]) -> dict[str, Any]:
+        import asyncio
+        from .temporal_plugin_graph import _deliver_sync, _hb
+        _hb({"phase": "deliver_activity"})
+        out = await asyncio.to_thread(_deliver_sync, data)
+        merged = dict(data or {})
+        merged.update(out or {})
+        return merged
+
+
+if workflow is not None:
+
+    @workflow.defn(name="LumenSequentialGenerateWorkflow")
+    class LumenSequentialGenerateWorkflow:
+        """Production durable path: explicit Temporal Activities per stage (Temporal AI cookbook).
+
+        plan → work → critique ⇄ repair → deliver
+        No LangGraphPlugin ainvoke in the workflow sandbox — pure Temporal orchestration.
+        Plugin graph remains registered for advanced/HITL path.
+        """
+
+        def __init__(self) -> None:
+            self._cancelled = False
+            self._steer: dict[str, Any] = {}
+
+        @workflow.signal
+        def cancel(self) -> None:
+            self._cancelled = True
+
+        @workflow.signal
+        def steer(self, payload: dict[str, Any]) -> None:
+            self._steer = dict(payload or {})
+
+        @workflow.query
+        def status_view(self) -> dict[str, Any]:
+            return {"cancelled": self._cancelled, "steer": dict(self._steer), "engine": "temporal_sequential_activities"}
+
+        @workflow.run
+        async def run(self, data: dict[str, Any]) -> dict[str, Any]:
+            from datetime import timedelta
+
+            payload = dict(data or {})
+            state_id = str(payload.get("state_id") or payload.get("workflow_id") or "lumen-state")
+            max_attempts = int(payload.get("max_attempts") or 4)
+            if max_attempts < 1:
+                max_attempts = 1
+            if max_attempts > 8:
+                max_attempts = 8
+
+            state: dict[str, Any] = {
+                "request": str(payload.get("request") or payload.get("description") or ""),
+                "work_dir": str(payload.get("work_dir") or ""),
+                "user_id": int(payload.get("user_id") or 0),
+                "preferred_keys": list(payload.get("preferred_keys") or []),
+                "state_id": state_id,
+                "agent": {},
+                "status": "PENDING",
+                "ok": False,
+                "error": "",
+                "attempts": 0,
+                "max_attempts": max_attempts,
+                "plan_summary": "",
+            }
+
+            retry = RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=60),
+                maximum_attempts=3,
+            )
+            plan_to = timedelta(hours=1)
+            work_to = timedelta(hours=6)
+            crit_to = timedelta(hours=1)
+            hb = timedelta(minutes=10)
+
+            if self._cancelled:
+                return {"ok": False, "status": "CANCELLED", "engine": "temporal_sequential_activities"}
+
+            state = await workflow.execute_activity(
+                lumen_stage_plan, state,
+                start_to_close_timeout=plan_to, heartbeat_timeout=hb, retry_policy=retry,
+            )
+            if self._cancelled:
+                return {"ok": False, "status": "CANCELLED", "state_id": state_id, "engine": "temporal_sequential_activities"}
+
+            for _ in range(max_attempts):
+                if self._cancelled:
+                    break
+                state = await workflow.execute_activity(
+                    lumen_stage_work, state,
+                    start_to_close_timeout=work_to, heartbeat_timeout=hb, retry_policy=retry,
+                )
+                state = await workflow.execute_activity(
+                    lumen_stage_critique, state,
+                    start_to_close_timeout=crit_to, heartbeat_timeout=hb, retry_policy=retry,
+                )
+                agent = state.get("agent") or {}
+                qa = bool(agent.get("qa_passed")) if isinstance(agent, dict) else bool(state.get("ok"))
+                if qa:
+                    break
+                attempts = int(state.get("attempts") or 0)
+                if attempts >= max_attempts:
+                    break
+                state = await workflow.execute_activity(
+                    lumen_stage_repair, state,
+                    start_to_close_timeout=plan_to, heartbeat_timeout=hb, retry_policy=retry,
+                )
+
+            state = await workflow.execute_activity(
+                lumen_stage_deliver, state,
+                start_to_close_timeout=timedelta(minutes=30), heartbeat_timeout=hb, retry_policy=retry,
+            )
+            agent = state.get("agent") or {}
+            ok = bool(state.get("ok")) or bool(agent.get("qa_passed") if isinstance(agent, dict) else False)
+            return {
+                "ok": ok,
+                "status": str(state.get("status") or (agent.get("status") if isinstance(agent, dict) else "") or ""),
+                "state_id": state_id,
+                "generated_path": agent.get("generated_path") if isinstance(agent, dict) else None,
+                "qa_passed": bool(agent.get("qa_passed")) if isinstance(agent, dict) else ok,
+                "attempts": int(state.get("attempts") or 0),
+                "task_tree": (
+                    (agent.get("extensions") or {}).get("task_tree_summary")
+                    if isinstance(agent, dict) else None
+                ),
+                "state": agent if isinstance(agent, dict) else {},
+                "engine": "temporal_sequential_activities",
+            }
+
+
+
 def activity_fns() -> list[Callable[..., Any]]:
     if activity is None:
         return []
-    return [register_generate_job, run_langgraph_generate_activity, run_generate_activity]
+    return [
+        register_generate_job,
+        run_langgraph_generate_activity,
+        run_generate_activity,
+        lumen_stage_plan,
+        lumen_stage_work,
+        lumen_stage_critique,
+        lumen_stage_repair,
+        lumen_stage_deliver,
+    ]
 
 
 def workflow_classes() -> list[type]:
     if workflow is None:
         return []
-    return [LumenMultiAgentGenerateWorkflow, LumenPluginGenerateWorkflow]
+    return [
+        LumenSequentialGenerateWorkflow,
+        LumenPluginGenerateWorkflow,
+        LumenMultiAgentGenerateWorkflow,
+    ]
 
 
 __all__ = [

@@ -39,20 +39,29 @@ def _prefer_plugin() -> bool:
 
 async def _start_and_wait(payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:
     from temporalio.client import Client
-    from .temporal_defs import LumenMultiAgentGenerateWorkflow, LumenPluginGenerateWorkflow
-
     host = (os.getenv("TEMPORAL_HOST") or "localhost:7233").strip()
     namespace = (os.getenv("TEMPORAL_NAMESPACE") or "default").strip()
     task_queue = (os.getenv("TEMPORAL_TASK_QUEUE") or "tbe-generate").strip()
     client = await Client.connect(host, namespace=namespace)
     wid = str(payload.get("workflow_id") or f"lumen-gen-{uuid.uuid4().hex[:16]}")
 
-    if _prefer_plugin():
+    # Prefer sequential Activities (durable, sandbox-safe). Plugin HITL path via LUMEN_TEMPORAL_PLUGIN=1.
+    from .temporal_defs import (
+        LumenMultiAgentGenerateWorkflow,
+        LumenPluginGenerateWorkflow,
+        LumenSequentialGenerateWorkflow,
+    )
+    use_plugin = (os.getenv("LUMEN_TEMPORAL_PLUGIN") or "").strip().lower() in {"1", "true", "yes", "on"}
+    use_legacy = (os.getenv("LUMEN_TEMPORAL_LEGACY") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_legacy:
+        wf = LumenMultiAgentGenerateWorkflow.run
+        engine = "temporal_legacy"
+    elif use_plugin and _prefer_plugin():
         wf = LumenPluginGenerateWorkflow.run
         engine = "temporal_langgraph_plugin"
     else:
-        wf = LumenMultiAgentGenerateWorkflow.run
-        engine = "temporal_legacy"
+        wf = LumenSequentialGenerateWorkflow.run
+        engine = "temporal_sequential_activities"
 
     handle = await client.start_workflow(
         wf,
