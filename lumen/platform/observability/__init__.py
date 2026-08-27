@@ -30,7 +30,32 @@ def setup_observability(*, service_name: str | None = None) -> None:
         return
     configure_logging()
     setup_otel(service_name=service_name)
+    _setup_langsmith(service_name=service_name)
     _CONFIGURED = True
+
+
+def _setup_langsmith(*, service_name: str | None = None) -> None:
+    """Enable LangSmith / LangChain tracing when API key present (LangGraph-compatible)."""
+    import os
+    import logging
+    log = logging.getLogger(__name__)
+    key = (os.getenv("LANGCHAIN_API_KEY") or os.getenv("LANGSMITH_API_KEY") or "").strip()
+    if not key:
+        return
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_API_KEY", key)
+    if service_name:
+        os.environ.setdefault("LANGCHAIN_PROJECT", service_name)
+    # Optional Phoenix OTEL exporter when PHOENIX_COLLECTOR_ENDPOINT is set
+    phoenix = (os.getenv("PHOENIX_COLLECTOR_ENDPOINT") or "").strip()
+    if phoenix:
+        try:
+            from openinference.instrumentation.langchain import LangChainInstrumentor  # type: ignore
+            LangChainInstrumentor().instrument()
+            log.info("phoenix langchain instrumentation enabled")
+        except Exception:
+            log.debug("phoenix instrumentation unavailable", exc_info=True)
+    log.info("langsmith tracing enabled project=%s", os.getenv("LANGCHAIN_PROJECT"))
 
 
 def shutdown_observability() -> None:

@@ -18,6 +18,7 @@ from .accounts import (
     validate_idempotency_key,
 )
 from .types import CreditResult, LedgerEntry, LedgerLeg, PricingRule, ReconcileReport, Wallet
+from lumen.platform.pg_tenant_context import set_tenant_context
 
 logger = logging.getLogger(__name__)
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -46,6 +47,18 @@ class PostgresCreditsStore:
 
     def _conn(self):
         return self._psycopg.connect(self.dsn, row_factory=self._dict_row)
+
+    def _tenant_conn(self, tenant_id: str):
+        """Connection with app.tenant_id set for PostgreSQL RLS."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            with self._conn() as conn:
+                set_tenant_context(conn, str(tenant_id or ""))
+                yield conn
+
+        return _cm()
 
     def _ensure_schema(self) -> None:
         sql = _SCHEMA_PATH.read_text(encoding="utf-8")
@@ -114,7 +127,7 @@ class PostgresCreditsStore:
         tid = str(tenant_id)
         aid = user_wallet_account(tid)
         now = time.time()
-        with self._conn() as conn:
+        with self._tenant_conn(tid) as conn:
             self._ensure_promo_columns(conn)
             conn.execute(
                 """
@@ -265,7 +278,7 @@ class PostgresCreditsStore:
         self.ensure_wallet(tid)
         now = time.time()
         try:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -324,7 +337,7 @@ class PostgresCreditsStore:
         self.ensure_wallet(tid)
         now = time.time()
         try:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -393,7 +406,7 @@ class PostgresCreditsStore:
         self.ensure_wallet(tid)
         now = time.time()
         try:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit

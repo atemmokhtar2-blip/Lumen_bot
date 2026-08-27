@@ -48,13 +48,17 @@ def decide_isolation() -> IsolationDecision:
       TBE_ALLOW_LOCAL_PROCESS=1 AND TBE_FORCE_LOCAL_PROCESS=1
 
     Automatic fallback when Docker is down (default ON for single-host ops):
-      TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1  (default "1")
+      TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER — default "0" in multi-tenant/production, "1" in local dev
     """
     multi = is_multi_tenant()
     dev = is_dev_environment()
     dual = _flag("TBE_ALLOW_LOCAL_PROCESS", "0") and _flag("TBE_FORCE_LOCAL_PROCESS", "0")
-    # Default ON so hosts without Docker can still live-run generated bots.
-    fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "1")
+    # Production / multi-tenant: Docker (or gVisor via TBE_DOCKER_RUNTIME=runsc) required.
+    # Local fallback only when explicitly enabled OR pure single-tenant dev.
+    if multi or not dev:
+        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "0")
+    else:
+        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "1")
 
     if dual:
         return IsolationDecision(

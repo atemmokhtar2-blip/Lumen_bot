@@ -24,6 +24,14 @@ import multiprocessing
 import os
 import threading
 
+# Dynamic secrets (Doppler / Vault) BEFORE reading bot config / tokens
+try:
+    from lumen.platform.secrets_provider import load_secrets_into_environ
+
+    load_secrets_into_environ(only_missing=True)
+except Exception:
+    pass
+
 from telegram import Update
 from telegram.ext import (
     Application,
