@@ -76,10 +76,11 @@ def _firecracker_track_ready() -> tuple[bool, list[str]]:
         missing.append("TBE_FC_KERNEL (vmlinux موجود)")
     if not rootfs or not Path(rootfs).is_file():
         missing.append("TBE_FC_ROOTFS (rootfs.ext4 موجود)")
+    auto_net = _on("TBE_FC_AUTO_NET", "1")
     tap = (os.environ.get("TBE_FC_TAP") or "").strip()
     netns = (os.environ.get("TBE_FC_NETNS") or "").strip()
-    if not tap and not netns and not _on("TBE_FC_ALLOW_NO_NET", "0"):
-        missing.append("TBE_FC_TAP أو TBE_FC_NETNS")
+    if not auto_net and not tap and not netns and not _on("TBE_FC_ALLOW_NO_NET", "0"):
+        missing.append("TBE_FC_AUTO_NET=1 أو TBE_FC_TAP/NETNS")
     if _on("TBE_FC_TOKEN_IN_BOOTARGS", "0") and _env() not in {"dev", "development", "local", "test"}:
         missing.append("TBE_FC_TOKEN_IN_BOOTARGS ممنوع في الإنتاج")
     return (len(missing) == 0), missing

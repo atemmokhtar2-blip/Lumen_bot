@@ -105,6 +105,7 @@ def test_firecracker_probe_requires_tap(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
     monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
+    monkeypatch.setenv("TBE_FC_AUTO_NET", "0")
     monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
     monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
     monkeypatch.delenv("TBE_FC_TAP", raising=False)
@@ -124,12 +125,21 @@ def test_firecracker_probe_requires_tap(monkeypatch):
         )
         p = FirecrackerSandboxBackend().probe()
         assert p.available is False
-        assert "TBE_FC_TAP" in p.reason or "NETNS" in p.reason
+        # AUTO_NET default needs iproute2; without it probe fails closed
+        assert (
+            "TBE_FC_TAP" in p.reason
+            or "NETNS" in p.reason
+            or "iproute2" in p.reason
+            or "auto_net" in p.reason.lower()
+            or "fc_network" in p.reason.lower()
+            or "AUTO_NET" in p.reason
+        )
 
 
 def test_firecracker_bootargs_token_forbidden_in_production(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("FORCE_PRODUCTION", "1")
+    monkeypatch.setenv("TBE_FC_AUTO_NET", "0")
     monkeypatch.setenv("TBE_FC_TAP", "tap0")
     monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
     monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")

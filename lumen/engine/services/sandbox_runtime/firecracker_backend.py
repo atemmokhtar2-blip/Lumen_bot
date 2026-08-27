@@ -341,15 +341,23 @@ class FirecrackerSandboxBackend(SandboxBackend):
             return SandboxProbe(self.name, False, "TBE_FC_KERNEL missing", self.strength)
         if not _rootfs() or not os.path.isfile(_rootfs()):
             return SandboxProbe(self.name, False, "TBE_FC_ROOTFS missing", self.strength)
+        auto_net = _flag("TBE_FC_AUTO_NET", "1")
         tap = (os.environ.get("TBE_FC_TAP") or "").strip()
         netns = (os.environ.get("TBE_FC_NETNS") or "").strip()
-        if not tap and not netns and not _flag("TBE_FC_ALLOW_NO_NET", "0"):
+        if not auto_net and not tap and not netns and not _flag("TBE_FC_ALLOW_NO_NET", "0"):
             return SandboxProbe(
                 self.name,
                 False,
-                "TBE_FC_TAP or TBE_FC_NETNS required (or TBE_FC_ALLOW_NO_NET=1 for offline dev)",
+                "TBE_FC_AUTO_NET=1 (per-VM TAP) or TBE_FC_TAP/NETNS required",
                 self.strength,
             )
+        if auto_net:
+            try:
+                from .fc_network import ip_available
+                if not ip_available():
+                    return SandboxProbe(self.name, False, "iproute2_missing_for_auto_net", self.strength)
+            except Exception as exc:
+                return SandboxProbe(self.name, False, f"fc_network:{type(exc).__name__}", self.strength)
         if not _which_mkfs() and not _flag("TBE_FC_SKIP_DRIVE_BUILD", "0"):
             # Still allow probe if operator pre-builds drives
             pass
@@ -482,13 +490,27 @@ class FirecrackerSandboxBackend(SandboxBackend):
         }
 
         network_ifaces: list[dict] = []
-        tap = (os.environ.get("TBE_FC_TAP") or "").strip()
+        net_plan = None
+        netns_path = ""
+        tap = ""
+        guest_mac = self._guest_mac(vm_id)
+        try:
+            from .fc_network import resolve_start_network, destroy_vm_network
+            tap, netns_path, net_plan = resolve_start_network(vm_id, guest_mac)
+        except Exception as net_exc:
+            self._cleanup_files(vm_id)
+            return SandboxHandle(
+                self.name,
+                "",
+                status="failed",
+                message=f"fc_network_failed:{type(net_exc).__name__}:{net_exc}",
+            )
         if tap:
             network_ifaces.append(
                 {
                     "iface_id": "eth0",
                     "host_dev_name": tap,
-                    "guest_mac": self._guest_mac(vm_id),
+                    "guest_mac": guest_mac,
                     "rx_rate_limiter": {
                         "bandwidth": {"size": net_bw, "refill_time": 1000},
                     },
@@ -500,6 +522,12 @@ class FirecrackerSandboxBackend(SandboxBackend):
 
         use_jailer = _require_jailer() and bool(_jailer_bin())
         if _require_jailer() and not _jailer_bin():
+            if net_plan is not None:
+                try:
+                    from .fc_network import destroy_vm_network
+                    destroy_vm_network(net_plan)
+                except Exception:
+                    pass
             self._cleanup_files(vm_id)
             return SandboxHandle(
                 self.name,
@@ -507,24 +535,6 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 status="failed",
                 message="jailer_required_but_missing",
             )
-
-        netns_path = ""
-        if use_jailer:
-            netns_env = (os.environ.get("TBE_FC_NETNS") or "").strip()
-            if netns_env:
-                netns_path = netns_env if netns_env.startswith("/") else f"/var/run/netns/{netns_env}"
-            elif _flag("TBE_FC_CREATE_NETNS", "1") and not _flag("TBE_FC_ALLOW_NO_NET", "0"):
-                try:
-                    netns_path = _ensure_netns(f"fc-{spec.user_id}-{vm_id[-8:]}")
-                except Exception as exc:
-                    if not tap:
-                        self._cleanup_files(vm_id)
-                        return SandboxHandle(
-                            self.name,
-                            "",
-                            status="failed",
-                            message=f"netns_failed:{type(exc).__name__}:{exc}",
-                        )
 
         try:
             if use_jailer:
@@ -574,7 +584,13 @@ class FirecrackerSandboxBackend(SandboxBackend):
             "project_path": spec.project_path,
             "token_fp": hashlib.sha256(spec.bot_token.encode()).hexdigest()[:16],
             "network_tap": bool(tap),
+            "tap_name": tap,
             "netns": netns_path,
+            "net_plan": {
+                "tap": getattr(net_plan, "tap_name", ""),
+                "netns": getattr(net_plan, "netns", ""),
+                "bridge": getattr(net_plan, "bridge", ""),
+            } if net_plan is not None else {},
             "claim": "vm_process_started_not_bot_health",
         }
         self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
@@ -892,6 +908,16 @@ class FirecrackerSandboxBackend(SandboxBackend):
                             break
                         except OSError:
                             break
+                # Destroy exclusive TAP/netns before dropping meta
+                try:
+                    from .fc_network import destroy_vm_network
+                    plan = meta.get("net_plan") if isinstance(meta.get("net_plan"), dict) else {}
+                    destroy_vm_network(
+                        tap_name=str(plan.get("tap") or meta.get("tap_name") or ""),
+                        netns=str(plan.get("netns") or ""),
+                    )
+                except Exception as net_exc:
+                    logger.warning("fc net destroy: %s", type(net_exc).__name__)
             except Exception as exc:
                 logger.warning("fc stop: %s", type(exc).__name__)
             try:
