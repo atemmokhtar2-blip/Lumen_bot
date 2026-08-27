@@ -185,22 +185,51 @@ def looks_like_clone_request(text: str) -> bool:
     return bool(has_trigger and has_url)
 
 
-def _inject_token(url: str, token: Optional[str]) -> str:
-    if not token or not url.startswith("http"):
-        return url
-    p = urlparse(url)
-    host = p.hostname or ""
-    if "github.com" in host:
-        netloc = f"x-access-token:{token}@{host}"
-    elif "gitlab" in host:
-        netloc = f"oauth2:{token}@{host}"
-    elif "bitbucket" in host:
-        netloc = f"x-token-auth:{token}@{host}"
-    else:
-        netloc = f"oauth2:{token}@{host}"
-    if p.port:
-        netloc += f":{p.port}"
-    return urlunparse((p.scheme, netloc, p.path, "", "", ""))
+def _inject_token(url: str, token: Optional[str] = None) -> str:
+    """Never embed credentials in the remote URL (SSRF / log leakage).
+
+    Kept as a compatibility name for callers; always returns the clean HTTPS URL.
+    Authentication must use apply_git_auth_env → GIT_ASKPASS.
+    """
+    if not url:
+        return url or ""
+    # Strip any accidental userinfo
+    try:
+        p = urlparse(url)
+        if p.username or p.password or "@" in (p.netloc or ""):
+            host = p.hostname or ""
+            netloc = host if not p.port else f"{host}:{p.port}"
+            return urlunparse((p.scheme or "https", netloc, p.path, "", "", ""))
+    except Exception:
+        pass
+    return url
+
+
+def apply_git_auth_env(env: dict, token: Optional[str]) -> Optional[str]:
+    """Install GIT_ASKPASS for private repos. Returns askpass path to unlink later."""
+    tok = (token or "").strip()
+    if not tok:
+        return None
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="lumen_git_askpass_", suffix=".sh")
+    os.close(fd)
+    Path(path).write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  *Username*|username*) printf '%s\\n' 'x-access-token' ;;\n"
+        '  *Password*|password*) printf \'%s\\n\' "$LUMEN_GIT_TOKEN" ;;\n'
+        "  *) printf '\\n' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    os.chmod(path, 0o700)
+    env["GIT_ASKPASS"] = path
+    env["SSH_ASKPASS"] = path
+    env["GIT_ASKPASS_REQUIRE"] = "force"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LUMEN_GIT_TOKEN"] = tok
+    env["GCM_INTERACTIVE"] = "never"
+    return path
 
 
 def _redact(text: str, token: Optional[str]) -> str:
@@ -370,10 +399,11 @@ def _run_clone_argv(
         return 1, "host_git_clone_forbidden"
 
     env = clean_child_environ()
-    # Inject safe git -c flags after 'git'
+    askpass = apply_git_auth_env(env, token)
+    # Inject safe git -c flags after 'git'; disable credential helpers that might log
     final = list(argv)
     if final and final[0] == "git":
-        final = ["git", *_git_safe_config_args(), *final[1:]]
+        final = ["git", "-c", "credential.helper=", *_git_safe_config_args(), *final[1:]]
     try:
         proc = subprocess.run(
             final,
@@ -388,7 +418,14 @@ def _run_clone_argv(
     except subprocess.TimeoutExpired:
         return 124, "timeout"
     except Exception as exc:
-        return 1, str(exc)
+        return 1, _redact(str(exc), token)
+    finally:
+        if askpass:
+            try:
+                os.unlink(askpass)
+            except OSError:
+                pass
+        env.pop("LUMEN_GIT_TOKEN", None)
 
 
 def _clone_strategies(

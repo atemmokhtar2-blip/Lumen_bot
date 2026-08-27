@@ -61,3 +61,37 @@ def test_rate_limiter_no_memory_path_in_select_source():
     assert "MemoryRateLimiter()" not in select
     assert "SqliteRateLimiter()" not in select
     assert "RedisRateLimiter" in select
+
+
+def test_smart_clone_inject_token_never_embeds():
+    from lumen.engine.engines.generators.git_operations.smart_clone import _inject_token
+    u = "https://github.com/org/repo.git"
+    out = _inject_token(u, "ghp_secret_with:colon@and")
+    assert out == u or "@" not in urlparse_netloc(out)
+    assert "ghp_secret" not in out
+    assert "x-access-token:" not in out
+
+
+def urlparse_netloc(url: str) -> str:
+    from urllib.parse import urlparse
+    return urlparse(url).netloc
+
+
+def test_smart_clone_strips_existing_userinfo():
+    from lumen.engine.engines.generators.git_operations.smart_clone import _inject_token
+    dirty = "https://x-access-token:oldtok@github.com/org/repo.git"
+    out = _inject_token(dirty, "newtok")
+    assert "oldtok" not in out
+    assert "newtok" not in out
+    assert "x-access-token" not in out
+
+
+def test_no_token_interpolation_left_in_git_ops():
+    from pathlib import Path
+    root = Path("lumen/engine/engines/generators/git_operations")
+    bad = []
+    for p in root.rglob("*.py"):
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        if "x-access-token:{token}" in text or "oauth2:{token}" in text:
+            bad.append(str(p))
+    assert bad == [], bad

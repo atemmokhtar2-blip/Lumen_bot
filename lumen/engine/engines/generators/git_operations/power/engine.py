@@ -41,18 +41,46 @@ def _run(argv: list[str], cwd: Optional[Path] = None, timeout: int = 180, token:
     except Exception:
         env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    askpass = None
+    try:
+        from ..smart_clone import apply_git_auth_env
+        askpass = apply_git_auth_env(env, token)
+    except Exception:
+        askpass = None
     try:
         from lumen.engine.services.secure_exec import run_git
         if not argv or argv[0] != "git":
             argv = ["git"] + list(argv or [])
-        proc = run_git(list(argv), cwd=cwd, timeout=timeout)
-        out, err = proc.stdout or "", proc.stderr or ""
+        # Prefer askpass over credential-in-URL; run_git may ignore env — use subprocess if token
+        if token and askpass:
+            proc = subprocess.run(
+                list(argv),
+                cwd=str(cwd) if cwd else None,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+            out, err = proc.stdout or "", proc.stderr or ""
+            code = int(proc.returncode)
+        else:
+            proc = run_git(list(argv), cwd=cwd, timeout=timeout)
+            out, err = proc.stdout or "", proc.stderr or ""
+            code = int(proc.returncode)
         if token:
             out = redact_text(out, [token])
             err = redact_text(err, [token])
-        return int(proc.returncode), out, err
+        return code, out, err
     except Exception as exc:
         return 1, "", type(exc).__name__
+    finally:
+        if askpass:
+            try:
+                os.unlink(askpass)
+            except OSError:
+                pass
+        env.pop("LUMEN_GIT_TOKEN", None)
 
 
 def _inject_token(url: str, token: Optional[str]) -> str:
@@ -120,9 +148,7 @@ class PowerGitEngine:
             return GitEngineResult.fail("pull", message="not_a_git_repo", path=str(root))
         code, remote, _ = _run(["git", "remote", "get-url", "origin"], cwd=root)
         remote = (remote or "").strip()
-        if token and remote:
-            auth = _inject_token(remote, token)
-            _run(["git", "remote", "set-url", "origin", auth], cwd=root)
+        # Auth via GIT_ASKPASS only — never rewrite origin with embedded token
         args = ["git", "pull", "--ff-only"]
         if branch:
             args = ["git", "pull", "--ff-only", "origin", branch]
@@ -185,9 +211,6 @@ class PowerGitEngine:
         remote_url = (remote_url or "").strip()
         if code != 0 or not remote_url:
             return GitEngineResult.fail("push", message=f"no_remote:{remote}", path=str(root))
-        if token:
-            auth = _inject_token(remote_url, token)
-            _run(["git", "remote", "set-url", remote, auth], cwd=root)
         code, out, err = _run(["git", "push", "-u", remote, br], cwd=root, timeout=180, token=token)
         if token and remote_url:
             try:
