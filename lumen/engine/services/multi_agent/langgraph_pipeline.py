@@ -388,12 +388,28 @@ def _make_builder(registry: Any, board: Any):
             session_dir = work
             _wt_session = None
             if use_iso:
-                from .worktree_isolation import acquire_task_workspace, snapshot_base_commit
+                from .worktree_isolation import (
+                    acquire_task_workspace,
+                    snapshot_base_commit,
+                    prune_worktrees,
+                )
                 try:
                     snapshot_base_commit(work)
                 except Exception:
                     pass
                 _wt_session = acquire_task_workspace(work, tid, use_isolation=True)
+                if _wt_session.errors or _wt_session.kind not in {"worktree", "copy"}:
+                    # Isolation required but unavailable — fail task (no silent main writes)
+                    with _TREE_LOCK:
+                        tree = _load_tree(state)
+                        tree.mark(
+                            tid,
+                            TaskStatus.FAILED,
+                            error=";".join(_wt_session.errors or ["isolation_unavailable"]),
+                        )
+                        _save_tree(state, tree)
+                    notes.append(f"{tid}:failed:isolation")
+                    continue
                 session_dir = _wt_session.path
             _constraints = list(((state.extensions or {}).get("execution_plan") or {}).get("constraints") or [])[:12]
             result = run_coding_session(
@@ -414,6 +430,10 @@ def _make_builder(registry: Any, board: Any):
                 result["isolation_kind"] = merge_rep.get("kind")
                 try:
                     release_task_workspace(_wt_session)
+                except Exception:
+                    pass
+                try:
+                    prune_worktrees(work)
                 except Exception:
                     pass
                 from .acceptance_check import evaluate_task

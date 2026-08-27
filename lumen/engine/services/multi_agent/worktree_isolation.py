@@ -133,6 +133,10 @@ def acquire_task_workspace(
     if not use_isolation:
         return TaskWorkspace(task_id=tid, root=root, path=root, kind="main")
 
+    # World-class path: real git worktree only (Cursor/Claude). No shutil copy theatre.
+    allow_copy = (str(__import__("os").environ.get("LUMEN_ALLOW_COPY_ISOLATION") or "0").strip().lower()
+                  in {"1", "true", "yes", "on"})
+
     if ensure_git_repo(root):
         branch = f"agent/{tid}"
         wt_path = root / ".worktrees" / tid
@@ -149,9 +153,21 @@ def acquire_task_workspace(
                     task_id=tid, root=root, path=wt_path, kind="worktree", branch=branch
                 )
             err = (r.stderr or r.stdout or "worktree_add_failed")[:300]
-            logger.warning("git worktree failed (%s) — copy fallback", err)
+            logger.error("git worktree failed: %s", err)
+            if not allow_copy:
+                return TaskWorkspace(
+                    task_id=tid, root=root, path=root, kind="main",
+                    errors=[f"worktree_failed:{err}"],
+                )
 
-    # Copy fallback
+    if not allow_copy:
+        logger.error("git unavailable — isolation required but cannot create worktree")
+        return TaskWorkspace(
+            task_id=tid, root=root, path=root, kind="main",
+            errors=["git_required_for_isolation"],
+        )
+
+    # Explicit opt-in only (LUMEN_ALLOW_COPY_ISOLATION=1) — not production default
     session = root / ".parallel" / tid
     if session.exists():
         shutil.rmtree(session, ignore_errors=True)
@@ -168,7 +184,7 @@ def acquire_task_workspace(
             shutil.copy2(src, dest)
         except Exception:
             pass
-    logger.info("copy workspace acquired task=%s path=%s", tid, session)
+    logger.warning("copy isolation used (opt-in) task=%s", tid)
     return TaskWorkspace(task_id=tid, root=root, path=session, kind="copy")
 
 

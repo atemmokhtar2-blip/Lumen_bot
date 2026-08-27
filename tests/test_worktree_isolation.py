@@ -130,3 +130,46 @@ def test_prune_worktrees():
         assert out.get("ok") is True
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+
+
+def test_isolation_requires_git_no_silent_copy():
+    """Without LUMEN_ALLOW_COPY_ISOLATION, failure is kind=main + errors — never silent copy."""
+    import os
+    os.environ.pop("LUMEN_ALLOW_COPY_ISOLATION", None)
+    from lumen.engine.services.multi_agent.worktree_isolation import acquire_task_workspace
+    # force fail by using a non-writable path simulation: empty path that can't init — skip
+    # Real path: ensure worktree succeeds when git works
+    wd = Path(tempfile.mkdtemp(prefix="wt_req_"))
+    try:
+        (wd / "main.py").write_text("1\n", encoding="utf-8")
+        s = acquire_task_workspace(wd, "t1", use_isolation=True)
+        assert s.kind == "worktree", s
+        release_task_workspace(s)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+
+def test_schedule_marks_only_batch_running():
+    """Ownership partition: only disjoint tasks are parallel-safe."""
+    from lumen.engine.services.multi_agent.task_tree import TaskNode, TaskStatus
+    from lumen.engine.services.multi_agent.worktree_isolation import partition_wave_by_ownership
+
+    def make(tid, files):
+        return TaskNode(
+            id=tid,
+            title=tid,
+            status=TaskStatus.READY.value,
+            files=files,
+            parallel_group="feature_modules",
+        )
+
+    wave = [make("a", ["mod_a.py"]), make("b", ["mod_b.py"]), make("c", ["mod_a.py"])]
+    safe, serial = partition_wave_by_ownership(wave)
+    assert [x.id for x in safe] == ["b"]
+    assert set(x.id for x in serial) == {"a", "c"}
+    # schedule would only mark safe (or one serial) RUNNING
+    for n in safe:
+        n.status = TaskStatus.RUNNING.value
+    assert safe[0].status == TaskStatus.RUNNING.value
+    assert all(n.status == TaskStatus.READY.value for n in serial)

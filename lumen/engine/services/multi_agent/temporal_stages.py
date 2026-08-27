@@ -183,6 +183,14 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
                 )[:12],
             )
             brief = (wview.get("task_brief") or brief)
+            if session.errors and multi:
+                return {
+                    "ok": False,
+                    "task_id": str(task.id),
+                    "errors": list(session.errors),
+                    "acceptance": {"ok": False, "failed": [{"id": "isolation"}]},
+                    "isolation": session.kind,
+                }
             result = run_coding_session(
                 work_dir=session.path,
                 goal=agent.spec_request or agent.user_text or "",
