@@ -565,6 +565,14 @@ class FirecrackerSandboxBackend(SandboxBackend):
                     if wp is not None:
                         pid = wp
                         warm_used = True
+                        # Inject tenant secrets into resumed VM via MMDS
+                        try:
+                            if _flag("TBE_FC_MMDS", "1"):
+                                _api_put(sock, "/mmds", mmds_payload)
+                        except Exception as mmds_exc:
+                            logger.warning(
+                                "warm_mmds_inject_failed: %s", type(mmds_exc).__name__
+                            )
             if not warm_used:
                 if use_jailer:
                     pid = self._start_with_jailer(
