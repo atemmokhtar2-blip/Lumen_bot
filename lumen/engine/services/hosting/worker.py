@@ -102,13 +102,6 @@ def process_one(queue=None, fleet=None) -> bool:
         os.environ.setdefault("TBE_WORKER_BUILD", "1")
         try:
             from lumen.engine.services.sandbox_runtime import start_sandboxed_bot
-            from lumen.engine.services.sandbox_runtime.egress import harden_network
-            try:
-                harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
-            except Exception as eg:
-                # strict mode raises — fail the job honestly
-                q.mark_failed(job.job_id, f"egress:{type(eg).__name__}:{eg}"[:500])
-                return True
             backend, handle = start_sandboxed_bot(
                 project_path=build_path,
                 bot_token=token,

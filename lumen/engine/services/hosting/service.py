@@ -42,6 +42,7 @@ class HostInstance:
     bot_username: str = ""
     status: str = "stopped"  # starting | running | stopped | failed
     deployment_id: str = ""
+    sandbox_backend: str = ""  # firecracker | gvisor | dind | docker
     pid: int | None = None
     started_at: float = 0.0
     last_error: str = ""
@@ -331,12 +332,11 @@ class HostingService:
                 ),
             )
 
-        # Isolation: central fail-closed policy (Docker required in multi-tenant)
+        # Isolation: sandbox_runtime ONLY — no LocalProcess fallback
         try:
             from lumen.engine.engines.generators.live_deployment.token_validator import (
                 TokenValidator,
             )
-            from lumen.engine.services.isolation_policy import select_process_driver
         except Exception as e:
             return HostResult(ok=False, message=f"تعذر تحميل محرك الاستضافة: {e}")
 
@@ -346,7 +346,6 @@ class HostingService:
             return HostResult(ok=False, message=f"التوكن غير صالح: {msg}")
 
         username = bot_username or getattr(tv, "bot_username", "") or ""
-        # Strong sandbox layer (firecracker > dind > hardened docker)
         env = {
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
@@ -360,39 +359,32 @@ class HostingService:
                 service_name=f"host-u{user_id}",
                 env_vars=env,
             )
-            dep_id = handle.deployment_id or ""
-            st = handle.status or ""
-            message = handle.message or ""
-            if not handle.ok:
-                return HostResult(
-                    ok=False,
-                    message=f"فشل تشغيل الصندوق المعزول ({_backend.name}): {message[:300]}",
-                    details={"backend": _backend.name, "meta": dict(handle.meta or {})},
-                )
         except Exception as sbx_exc:
-            # Fallback to legacy select_process_driver only if sandbox package import fails
-            try:
-                driver, _decision = select_process_driver()
-            except RuntimeError as exc:
-                return HostResult(
-                    ok=False,
-                    message=f"عزل الاستضافة مرفوض: {sbx_exc}; legacy: {exc}",
-                )
-            status = driver.deploy(
-                str(path),
-                env_vars=env,
-                service_name=f"host-u{user_id}",
+            return HostResult(
+                ok=False,
+                message=f"عزل الاستضافة مرفوض (sandbox_runtime): {type(sbx_exc).__name__}: {sbx_exc}"[:500],
             )
-            dep_id = getattr(status, "deployment_id", "") or ""
-            st = getattr(status, "status", "") or ""
-            message = getattr(status, "message", "") or ""
-        # pid may only appear inside the message from LocalProcessDriver
+        dep_id = handle.deployment_id or ""
+        st = handle.status or ""
+        message = handle.message or ""
+        backend_name = getattr(_backend, "name", "") or str((handle.meta or {}).get("backend") or "")
+        if not handle.ok:
+            return HostResult(
+                ok=False,
+                message=f"فشل تشغيل الصندوق المعزول ({backend_name}): {message[:300]}",
+                details={"backend": backend_name, "meta": dict(handle.meta or {})},
+            )
         import re as _re
         import uuid
         pid = None
         m_pid = _re.search(r"pid=(\d+)", message)
         if m_pid:
             pid = int(m_pid.group(1))
+        elif isinstance(handle.meta, dict) and handle.meta.get("pid"):
+            try:
+                pid = int(handle.meta.get("pid"))
+            except (TypeError, ValueError):
+                pid = None
 
         instance_id = f"host-{uuid.uuid4().hex[:10]}"
         running_like = st in ("running", "deploy_running") or "running" in st.lower()
@@ -405,6 +397,7 @@ class HostingService:
             bot_username=username,
             status="running" if running_like else ("failed" if failed_like else (st or "unknown")),
             deployment_id=str(dep_id),
+            sandbox_backend=str(backend_name or ""),
             pid=pid,
             started_at=time.time(),
             last_error="" if not failed_like else message,
@@ -472,7 +465,8 @@ class HostingService:
         try:
             stopped = False
             dep = (inst.deployment_id or "").strip()
-            if dep.startswith("fc-"):
+            backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
+            if backend == "firecracker" or dep.startswith("fc-"):
                 try:
                     from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                         FirecrackerSandboxBackend,
@@ -552,8 +546,9 @@ class HostingService:
         dep = (inst.deployment_id or "").strip()
         if not dep:
             return False
+        backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
         # Firecracker microVMs
-        if dep.startswith("fc-"):
+        if backend == "firecracker" or dep.startswith("fc-"):
             try:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
