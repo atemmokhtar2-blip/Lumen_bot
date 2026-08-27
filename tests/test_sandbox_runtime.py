@@ -1,7 +1,8 @@
-"""Sandbox runtime foundation tests — fail-closed gaps."""
+"""Sandbox runtime foundation tests — fail-closed gaps + Firecracker production path."""
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -60,14 +61,57 @@ def test_dind_refuses_host_socket(monkeypatch):
     assert p.available is False
 
 
+def test_firecracker_probe_requires_kvm(monkeypatch):
+    with mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=False,
+    ):
+        from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        p = FirecrackerSandboxBackend().probe()
+        assert p.available is False
+        assert "kvm" in p.reason.lower()
+
+
+def test_firecracker_probe_requires_jailer_in_prod(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "1")
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
+    monkeypatch.setenv("TBE_FC_TAP", "tap0")
+    monkeypatch.delenv("TBE_FC_ALLOW_NO_JAILER", raising=False)
+    Path("/tmp/k").write_text("k")
+    Path("/tmp/r").write_text("r")
+    with mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=True,
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        return_value="/usr/bin/firecracker",
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        return_value="",
+    ), mock.patch("os.path.isfile", return_value=True):
+        from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        p = FirecrackerSandboxBackend().probe()
+        assert p.available is False
+        assert "jailer" in p.reason.lower()
+
+
 def test_firecracker_probe_requires_tap(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
+    monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
     monkeypatch.delenv("TBE_FC_TAP", raising=False)
+    monkeypatch.delenv("TBE_FC_NETNS", raising=False)
     monkeypatch.delenv("TBE_FC_ALLOW_NO_NET", raising=False)
-    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/fake_kernel")
-    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/fake_rootfs")
-    from pathlib import Path
-    Path("/tmp/fake_kernel").write_text("x")
-    Path("/tmp/fake_rootfs").write_text("x")
+    Path("/tmp/k").write_text("k")
+    Path("/tmp/r").write_text("r")
     with mock.patch(
         "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
         return_value=True,
@@ -80,16 +124,18 @@ def test_firecracker_probe_requires_tap(monkeypatch):
         )
         p = FirecrackerSandboxBackend().probe()
         assert p.available is False
-        assert "TBE_FC_TAP" in p.reason
+        assert "TBE_FC_TAP" in p.reason or "NETNS" in p.reason
 
 
-def test_firecracker_start_requires_token_path(monkeypatch):
+def test_firecracker_bootargs_token_forbidden_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("FORCE_PRODUCTION", "1")
     monkeypatch.setenv("TBE_FC_TAP", "tap0")
     monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
     monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
-    monkeypatch.delenv("TBE_FC_TOKEN_DRIVE", raising=False)
-    monkeypatch.delenv("TBE_FC_TOKEN_IN_BOOTARGS", raising=False)
-    from pathlib import Path
+    monkeypatch.setenv("TBE_FC_TOKEN_IN_BOOTARGS", "1")
+    monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
+    monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
     Path("/tmp/k").write_text("k")
     Path("/tmp/r").write_text("r")
     with mock.patch(
@@ -98,9 +144,10 @@ def test_firecracker_start_requires_token_path(monkeypatch):
     ), mock.patch(
         "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
         return_value="/usr/bin/firecracker",
-    ), mock.patch("os.path.isfile", return_value=True), mock.patch(
-        "shutil.which", return_value="/usr/bin/curl"
-    ):
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        return_value="/usr/bin/jailer",
+    ), mock.patch("os.path.isfile", return_value=True):
         from lumen.engine.services.sandbox_runtime.firecracker_backend import (
             FirecrackerSandboxBackend,
         )
@@ -109,7 +156,26 @@ def test_firecracker_start_requires_token_path(monkeypatch):
             SandboxSpec(project_path="/tmp/p", bot_token="1:tok", user_id=1)
         )
         assert h.status == "failed"
-        assert "token" in h.message.lower()
+        assert "bootargs" in h.message.lower() or "production" in h.message.lower()
+
+
+def test_firecracker_stable_uid_range():
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import _stable_vm_ids, _FC_UID_BASE
+    u1, g1 = _stable_vm_ids(42, "fc-42-abc")
+    u2, g2 = _stable_vm_ids(42, "fc-42-abc")
+    assert u1 == u2 == g1 == g2
+    assert u1 >= _FC_UID_BASE
+    u3, _ = _stable_vm_ids(99, "fc-99-xyz")
+    assert u3 != u1
+
+
+def test_guest_mac_format():
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    mac = FirecrackerSandboxBackend._guest_mac("fc-1-deadbeef")
+    parts = mac.split(":")
+    assert len(parts) == 6
+    assert parts[0] == "AA"
+    assert parts[1] == "FC"
 
 
 def test_egress_strict_raises_when_iptables_fails(monkeypatch):
@@ -117,17 +183,15 @@ def test_egress_strict_raises_when_iptables_fails(monkeypatch):
     monkeypatch.setenv("TBE_EGRESS_IPTABLES", "1")
     from lumen.engine.services.sandbox_runtime import egress as eg
     with mock.patch.object(eg, "apply_egress_iptables", return_value={"ok": False, "errors": ["x"]}):
-        with mock.patch.object(eg, "ensure_egress_network", create=True):
-            # patch network module used inside harden
-            with mock.patch(
-                "lumen.engine.services.sandbox_runtime.network.ensure_egress_network",
-                return_value="tbe-egress",
-            ), mock.patch(
-                "lumen.engine.services.sandbox_runtime.network.network_exists",
-                return_value=True,
-            ):
-                with pytest.raises(RuntimeError, match="egress_strict_failed"):
-                    eg.harden_network("tbe-egress")
+        with mock.patch(
+            "lumen.engine.services.sandbox_runtime.network.ensure_egress_network",
+            return_value="tbe-egress",
+        ), mock.patch(
+            "lumen.engine.services.sandbox_runtime.network.network_exists",
+            return_value=True,
+        ):
+            with pytest.raises(RuntimeError, match="egress_strict_failed"):
+                eg.harden_network("tbe-egress")
 
 
 def test_load_policy_egress_hosts():
