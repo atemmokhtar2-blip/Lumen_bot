@@ -244,9 +244,14 @@ def _make_builder(registry: Any, board: Any):
             if tree.get(tid) is None:
                 continue
             brief = tree.worker_brief(tid)
+            task = tree.get(tid)
             state.extensions = dict(state.extensions or {})
             state.extensions["active_task_id"] = tid
+            _acc = list(getattr(task, "acceptance", None) or []) if task is not None else []
+            _files = list(getattr(task, "files", None) or []) if task is not None else []
             result = run_coding_session(
+                acceptance=_acc,
+                target_files=_files,
                 work_dir=work,
                 goal=base_goal,
                 task_brief=brief,
