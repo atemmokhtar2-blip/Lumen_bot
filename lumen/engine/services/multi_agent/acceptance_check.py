@@ -262,6 +262,12 @@ def check_criterion(root: Path, criterion: str, *, strict: bool = True) -> dict[
         ok = (root / "README.md").is_file()
         return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "readme"}
 
+    # Entrypoint present (scaffold gate)
+    if "entrypoint" in c:
+        candidates = ["main.py", "bot.py", "app.py", "src/main.py", "src/bot.py"]
+        ok = any((root / rel).is_file() for rel in candidates)
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "entrypoint_exists" if ok else "entrypoint_missing"}
+
     # Strict: unknown criterion fails (professional, not soft-pass)
     if strict:
         # If main exists and parses, still fail unknown to force explicit criteria design

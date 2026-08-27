@@ -213,7 +213,14 @@ class AgentState:
 
     def transition(self, new_status: AgentStatus | str, *, role: AgentRole | str = AgentRole.ORCHESTRATOR, detail: str = "", force: bool = False) -> None:
         target = new_status.value if isinstance(new_status, AgentStatus) else str(new_status)
-        current = self.status
+        # Normalize case: external callers may pass "pending" instead of "PENDING"
+        _vals = {s.value for s in AgentStatus}
+        if target.upper() in _vals:
+            target = target.upper()
+        current = str(self.status or AgentStatus.PENDING.value)
+        if current.upper() in _vals:
+            current = current.upper()
+            self.status = current
         if current == target:
             return
         allowed = _TRANSITIONS.get(current, frozenset())
