@@ -282,19 +282,31 @@ def _make_builder(registry: Any, board: Any):
                 repair=bool((state.extensions or {}).get("repair_mode")),
                 constraints=_constraints,
             )
-            # Merge isolation → work for declared task files only
-            if use_iso and result.get("ok"):
+            # Merge isolation → work for declared task files only (hash-safe)
+            if use_iso:
+                conflicts = []
                 for rel in _files or []:
                     src = session_dir / rel
-                    if src.is_file():
-                        dest = work / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(src, dest)
-                # re-evaluate acceptance on merged work
+                    if not src.is_file():
+                        continue
+                    dest = work / rel
+                    if dest.is_file():
+                        try:
+                            if dest.read_bytes() != src.read_bytes() and rel not in _files:
+                                conflicts.append(rel)
+                        except Exception:
+                            pass
+                    # Task owns declared files — always take session version
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
+                result["merge_conflicts"] = conflicts
                 from .acceptance_check import evaluate_task
                 acc_merged = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
                 result["acceptance_report"] = acc_merged
                 if not acc_merged.get("ok"):
+                    result["ok"] = False
+                # Also fail if session itself failed
+                if not result.get("ok"):
                     result["ok"] = False
             # Professional gate: files_written alone is NOT success — acceptance must pass
             from .acceptance_check import evaluate_task

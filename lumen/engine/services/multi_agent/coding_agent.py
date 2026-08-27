@@ -61,6 +61,7 @@ def build_task_packet(
             "Fix ERROR findings only.",
         )
     parts.append(
+        "HARD GATE: do not call finish until EVERY acceptance checkbox is satisfied.\n"
         "PROTOCOL:\n"
         "- Use find_symbol / grep_codebase before large edits\n"
         "- Prefer apply_edits for multi-file changes\n"

@@ -71,12 +71,18 @@ class ArchitectAgent(Agent):
         try:
             from ..plan_contract import build_plan_from_spec
             lang = str((spec.raw or {}).get("language") or state.extensions.get("language") or "ar")
+            work = str(
+                (state.extensions or {}).get("work_dir")
+                or state.generated_path
+                or ""
+            ) or None
             plan = build_plan_from_spec(
                 goal=spec.spec_request or state.user_request or state.raw_request or "",
                 features=list(spec.features or state.preferred_keys or []),
                 constraints=list(getattr(spec, "constraints", None) or [])
                 or list((spec.raw or {}).get("constraints") or []),
                 language=lang,
+                work_dir=work,
             )
             if directive is not None and directive.actions:
                 plan.constraints = list(plan.constraints) + [
