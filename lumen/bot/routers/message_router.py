@@ -218,24 +218,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _clear_thinking()
         return
 
-    # LLM Guardrails (ProtectAI llm-guard when installed + builtin prompt_guard)
-    try:
-        from lumen.engine.security.llm_guardrails import scan_user_input
-        _gr = scan_user_input(request)
-        if not _gr.ok:
-            await message.reply_text(
-                "طلبك اترفض لأسباب أمنية (حماية من حقن الأوامر / تسريب بيانات)."
-            )
-            logger.warning("llm_guardrails blocked user=%s reasons=%s backend=%s", getattr(user, "id", None), _gr.reasons, _gr.backend)
-            return
-        if _gr.sanitized:
-            request = _gr.sanitized
-    except Exception:
-        logger.exception("llm_guardrails scan failed — fail closed")
-        await message.reply_text(
-            "تعذر التحقق الأمني من الطلب. أعد المحاولة لاحقًا."
-        )
-        return
 
     # Cooperative cancel of in-flight generation (agent_loop checks each step)
     _low_req = request.lower().strip()

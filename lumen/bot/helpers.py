@@ -148,7 +148,7 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
     request = clamp_spec_request(request or "")
     # Fail-closed security scan before any engine work
     try:
-        from lumen.engine.security.llm_guardrails import scan_user_input
+        from lumen.engine.pipeline.prompt_guard import scan_user_input
         _gr = scan_user_input(request)
         if not _gr.ok:
             from lumen.engine.core.result import GenerationResult

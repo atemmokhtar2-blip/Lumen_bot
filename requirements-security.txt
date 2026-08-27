@@ -2,4 +2,3 @@
 bandit>=1.7.9
 pip-audit>=2.7.3
 semgrep>=1.80.0
-# Optional: pip install llm-guard  # ProtectAI prompt injection scanners

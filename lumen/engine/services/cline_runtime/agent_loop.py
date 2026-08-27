@@ -129,7 +129,7 @@ def run_agent(
         pass
     # Guard goal text (fail-closed on injection)
     try:
-        from lumen.engine.security.llm_guardrails import scan_user_input
+        from lumen.engine.pipeline.prompt_guard import scan_user_input
         _gr = scan_user_input(goal or "")
         if not _gr.ok:
             state = AgentState(work_dir=str(work.resolve()), goal=goal or "")

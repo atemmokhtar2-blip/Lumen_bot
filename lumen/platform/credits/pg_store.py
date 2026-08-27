@@ -18,9 +18,23 @@ from .accounts import (
     validate_idempotency_key,
 )
 from .types import CreditResult, LedgerEntry, LedgerLeg, PricingRule, ReconcileReport, Wallet
-from lumen.platform.pg_tenant_context import set_tenant_context
 
 logger = logging.getLogger(__name__)
+
+
+def set_tenant_context(conn, tenant_id: str) -> None:
+    """SET LOCAL app.tenant_id for PostgreSQL RLS."""
+    tid = str(tenant_id or "").strip()
+    if not tid:
+        return
+    try:
+        conn.execute("SELECT set_config('app.tenant_id', %s, true)", (tid,))
+    except Exception:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT set_config(%s, %s, true)", ("app.tenant_id", tid))
+        except Exception:
+            logger.debug("set_tenant_context failed", exc_info=True)
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
