@@ -22,9 +22,13 @@ def _graph(work_dir: str | Path, *, rebuild: bool = False) -> dict[str, Any]:
     try:
         from lumen.engine.services.code_intelligence.persistent_index import get_or_build_graph
         return get_or_build_graph(work_dir, rebuild=rebuild)
-    except Exception:
-        from lumen.engine.services.code_intelligence.symbol_graph import build_symbol_graph
-        return build_symbol_graph(work_dir)
+    except Exception as exc1:
+        try:
+            from lumen.engine.services.code_intelligence.symbol_graph import build_symbol_graph
+            return build_symbol_graph(work_dir)
+        except Exception as exc2:
+            logger.warning("symbol graph unavailable: %s / %s", type(exc1).__name__, type(exc2).__name__)
+            return {"ok": False, "nodes": [], "edges": [], "error": f"{type(exc2).__name__}:{exc2}"}
 
 
 def find_symbol(

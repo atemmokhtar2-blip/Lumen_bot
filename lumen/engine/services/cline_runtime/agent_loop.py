@@ -19,6 +19,27 @@ from .model_router import describe_runtime, select_model, select_model_for_goal
 
 logger = logging.getLogger(__name__)
 
+# Official tool surface — must match agent_fs.run_tool (no ghost names)
+AGENT_TOOL_NAMES: tuple[str, ...] = (
+    "list_dir", "tree", "read_file", "read_files", "write_file", "edit_file",
+    "search_replace", "apply_edits", "apply_patch", "grep_codebase", "glob_files",
+    "run_shell", "find_symbol", "get_symbol_source", "find_references", "blast_radius",
+    "code_search", "browser_navigate", "browser_content", "browser_click",
+    "browser_fill", "browser_screenshot", "run_skill", "finish",
+)
+
+
+def _tools_help() -> str:
+    return (
+        "Tools (exactly one JSON object per turn): "
+        + ", ".join(AGENT_TOOL_NAMES)
+        + ". Multi-file: apply_edits/apply_patch/read_files/grep_codebase/glob_files. "
+        "Code intel: find_symbol/get_symbol_source/find_references/blast_radius/code_search. "
+        "Browser needs Playwright+BROWSER_USE_ENABLED. Shell needs CLINE_ALLOW_SHELL=1."
+    )
+
+
+
 
 def _max_steps() -> int:
     try:
@@ -70,12 +91,11 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
         else "You are Cline, an autonomous coding agent operating as the Worker role."
     )
     return f"""{role_line}
-Build a complete runnable Telegram bot. No stub-only placeholders for required features.
+Build a complete runnable project matching the GOAL (any platform). No stub-only placeholders for required features.
 
 Workspace: {work_dir}
 
-Tools (exactly one JSON object per turn):
-list_dir, tree, read_file, write_file, edit_file (or apply_patch), run_shell (if allowed), browser_navigate, browser_content, browser_click, browser_fill, browser_screenshot, run_skill, finish.
+{_tools_help()}
 
 Rules:
 1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example
@@ -245,7 +265,7 @@ def run_agent(
                 "INVALID. Reply with ONLY this JSON shape:\n"
                 '{"thought":"...","tool":"write_file","args":{"path":"main.py","content":"..."},'
                 '"finish":false,"summary":""}\n'
-                "Valid tools: list_dir, tree, read_file, write_file, edit_file, apply_patch, browser_navigate, browser_content, browser_click, browser_fill, browser_screenshot, run_skill, finish."
+                "Valid tools: " + ", ".join(AGENT_TOOL_NAMES) + "."
             )
             state.steps.append(step)
             state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")

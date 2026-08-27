@@ -6,16 +6,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from tree_sitter import Language, Node, Parser
-
 try:
+    from tree_sitter import Language, Node, Parser
     import tree_sitter_python as tspython
-except ImportError as exc:  # pragma: no cover
-    raise RuntimeError("pip install tree-sitter tree-sitter-python") from exc
-
-
-_PY_LANGUAGE = Language(tspython.language())
-_PARSER = Parser(_PY_LANGUAGE)
+    TREE_SITTER_AVAILABLE = True
+    _PY_LANGUAGE = Language(tspython.language())
+    _PARSER = Parser(_PY_LANGUAGE)
+except Exception:  # pragma: no cover
+    TREE_SITTER_AVAILABLE = False
+    Language = Node = Parser = None  # type: ignore
+    tspython = None  # type: ignore
+    _PY_LANGUAGE = None
+    _PARSER = None
 
 _SKIP_DIRS = {
     ".git",
