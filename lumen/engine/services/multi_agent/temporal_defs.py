@@ -186,12 +186,17 @@ if workflow is not None:
 
     @workflow.defn(name="LumenPluginGenerateWorkflow")
     class LumenPluginGenerateWorkflow:
-        """World-class path: Temporal LangGraph Plugin — plan/work/critique/repair as Activities."""
+        """Official Temporal + LangGraph Plugin path (samples-python aligned).
+
+        plan → (HITL interrupt + wait_condition) → work → critique ⇄ repair → deliver
+        Each heavy node is a Temporal Activity via LangGraphPlugin metadata.
+        """
 
         def __init__(self) -> None:
             self._steer: dict[str, Any] = {}
             self._cancelled = False
-            self._hitl: dict[str, Any] = {}
+            self._human_input: str | None = None
+            self._pending_interrupt: Any = None
 
         @workflow.signal
         def steer(self, payload: dict[str, Any]) -> None:
@@ -202,17 +207,33 @@ if workflow is not None:
             self._cancelled = True
 
         @workflow.signal
-        def hitl_decision(self, payload: dict[str, Any]) -> None:
-            self._hitl = dict(payload or {})
+        def hitl_decision(self, payload: dict[str, Any] | str) -> None:
+            """Signal: approve/reject plan (string or {decision: ...})."""
+            if isinstance(payload, dict):
+                self._human_input = str(
+                    payload.get("decision") or payload.get("value") or payload.get("feedback") or ""
+                )
+            else:
+                self._human_input = str(payload or "")
+
+        # Alias used by some Temporal HITL clients
+        @workflow.signal
+        def provide_feedback(self, feedback: str) -> None:
+            self._human_input = str(feedback or "")
 
         @workflow.query
         def status_view(self) -> dict[str, Any]:
             return {
                 "steer": dict(self._steer),
                 "cancelled": self._cancelled,
-                "hitl": dict(self._hitl),
+                "awaiting_hitl": self._human_input is None and self._pending_interrupt is not None,
+                "pending_interrupt": self._pending_interrupt,
                 "engine": "temporal_langgraph_plugin",
             }
+
+        @workflow.query
+        def get_pending_plan(self) -> Any:
+            return self._pending_interrupt
 
         @workflow.run
         async def run(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -225,12 +246,13 @@ if workflow is not None:
                 return {"ok": False, "status": "CANCELLED", "engine": "temporal_langgraph_plugin"}
 
             try:
-                from temporalio.contrib.langgraph import graph
+                from temporalio.contrib.langgraph import graph as temporal_graph
                 from langgraph.checkpoint.memory import InMemorySaver
+                from langgraph.types import Command
                 from .temporal_plugin_graph import GRAPH_NAME
 
                 state_id = str(payload.get("state_id") or uuid.uuid4().hex[:16])
-                initial = {
+                initial: dict[str, Any] = {
                     "request": str(payload.get("request") or payload.get("description") or ""),
                     "work_dir": str(payload.get("work_dir") or ""),
                     "user_id": int(payload.get("user_id") or 0),
@@ -242,26 +264,66 @@ if workflow is not None:
                     "error": "",
                     "attempts": 0,
                     "max_attempts": max(1, min(8, int(os.getenv("MULTI_AGENT_MAX_ATTEMPTS") or "4"))),
-                    "hitl_decision": "",
+                    "plan_summary": "",
                 }
-                app = graph(GRAPH_NAME).compile(checkpointer=InMemorySaver())
+                app = temporal_graph(GRAPH_NAME).compile(checkpointer=InMemorySaver())
                 config = {"configurable": {"thread_id": state_id}}
-                result = await app.ainvoke(initial, config=config)
-                agent = (result or {}).get("agent") or {}
-                ok = bool((result or {}).get("ok")) or bool(agent.get("qa_passed"))
+
+                # First invoke — may pause at plan_gate interrupt()
+                result = await app.ainvoke(initial, config, version="v2")
+
+                # Official HITL: if graph paused on interrupt, wait for Temporal signal
+                interrupts = getattr(result, "interrupts", None) or []
+                if interrupts:
+                    self._pending_interrupt = getattr(interrupts[0], "value", interrupts[0])
+                    await workflow.wait_condition(
+                        lambda: self._human_input is not None or self._cancelled
+                    )
+                    if self._cancelled:
+                        return {
+                            "ok": False,
+                            "status": "CANCELLED",
+                            "state_id": state_id,
+                            "engine": "temporal_langgraph_plugin",
+                        }
+                    result = await app.ainvoke(
+                        Command(resume=self._human_input),
+                        config,
+                        version="v2",
+                    )
+                    self._pending_interrupt = None
+
+                # result may be state dict or object with values
+                if hasattr(result, "values") and isinstance(result.values, dict):
+                    out_state = result.values
+                elif isinstance(result, dict):
+                    out_state = result
+                else:
+                    out_state = {}
+
+                agent = out_state.get("agent") or {}
+                ok = bool(out_state.get("ok")) or bool(
+                    agent.get("qa_passed") if isinstance(agent, dict) else False
+                )
                 return {
                     "ok": ok,
-                    "status": str((result or {}).get("status") or agent.get("status") or ""),
+                    "status": str(out_state.get("status") or (agent.get("status") if isinstance(agent, dict) else "") or ""),
                     "state_id": state_id,
                     "generated_path": agent.get("generated_path") if isinstance(agent, dict) else None,
                     "qa_passed": bool(agent.get("qa_passed")) if isinstance(agent, dict) else ok,
-                    "attempts": int((result or {}).get("attempts") or agent.get("attempts") or 0),
-                    "task_tree": (agent.get("extensions") or {}).get("task_tree_summary") if isinstance(agent, dict) else None,
+                    "attempts": int(out_state.get("attempts") or (agent.get("attempts") if isinstance(agent, dict) else 0) or 0),
+                    "task_tree": (
+                        (agent.get("extensions") or {}).get("task_tree_summary")
+                        if isinstance(agent, dict)
+                        else None
+                    ),
                     "state": agent if isinstance(agent, dict) else {},
                     "engine": "temporal_langgraph_plugin",
                 }
             except Exception as exc:
-                workflow.logger.warning("plugin graph invoke failed: %s — legacy activity", type(exc).__name__)
+                workflow.logger.warning(
+                    "plugin graph failed (%s) — legacy single activity", type(exc).__name__
+                )
                 retry = RetryPolicy(
                     initial_interval=timedelta(seconds=2),
                     backoff_coefficient=2.0,
@@ -271,14 +333,19 @@ if workflow is not None:
                 result = await workflow.execute_activity(
                     run_langgraph_generate_activity,
                     payload,
-                    start_to_close_timeout=timedelta(hours=float(os.getenv("TEMPORAL_ACTIVITY_HOURS") or "24")),
-                    heartbeat_timeout=timedelta(minutes=int(os.getenv("TEMPORAL_HEARTBEAT_MINUTES") or "10")),
+                    start_to_close_timeout=timedelta(
+                        hours=float(os.getenv("TEMPORAL_ACTIVITY_HOURS") or "24")
+                    ),
+                    heartbeat_timeout=timedelta(
+                        minutes=int(os.getenv("TEMPORAL_HEARTBEAT_MINUTES") or "10")
+                    ),
                     retry_policy=retry,
                 )
                 out = dict(result or {})
                 out["engine"] = out.get("engine") or "temporal_legacy_after_plugin_error"
                 out["plugin_error"] = f"{type(exc).__name__}:{exc}"
                 return out
+
 
 
 def activity_fns() -> list[Callable[..., Any]]:
