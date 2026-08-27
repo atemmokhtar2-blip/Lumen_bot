@@ -35,41 +35,47 @@ ALLOWED_USER_IDS = {
     if x.strip().isdigit()
 }
 
-# Telegram product bot: public by default (growth). Cost controls = credits + rate limits.
-# To lock:
-#   LOCK_BOT_TO_ALLOWLIST=1 + ALLOWED_USER_IDS=1,2,3
-#   or ALLOW_ALL_USERS=0
+# Telegram access control — secure-by-default.
+# Open public mode ONLY with explicit ALLOW_ALL_USERS=1.
+# To lock: LOCK_BOT_TO_ALLOWLIST=1 + ALLOWED_USER_IDS=1,2,3
+# Closed default: refuse strangers (prevents API-credit drain bots).
 _LOCK_RAW = (os.getenv("LOCK_BOT_TO_ALLOWLIST") or "").strip().lower()
 LOCK_BOT_TO_ALLOWLIST = _LOCK_RAW in {"1", "true", "yes", "on"}
 
 _ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
 
-if _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
-    ALLOW_ALL_USERS = False
-elif _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
+if _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
     ALLOW_ALL_USERS = True
+elif _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
+    ALLOW_ALL_USERS = False
 elif LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:
     ALLOW_ALL_USERS = False
-elif ALLOWED_USER_IDS and LOCK_BOT_TO_ALLOWLIST:
+elif ALLOWED_USER_IDS:
+    # Explicit allowlist without LOCK still means restricted mode
     ALLOW_ALL_USERS = False
 else:
-    # Default OPEN for the public Lumen Telegram bot
-    ALLOW_ALL_USERS = True
+    # Secure default: CLOSED unless operator explicitly opens the bot
+    ALLOW_ALL_USERS = False
 
 if LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:
     logger.info(
         "Bot locked to ALLOWED_USER_IDS (%s users).",
         len(ALLOWED_USER_IDS),
     )
-elif not ALLOW_ALL_USERS:
+elif not ALLOW_ALL_USERS and not ALLOWED_USER_IDS:
     logger.warning(
-        "Bot access CLOSED (ALLOW_ALL_USERS=0). "
-        "Set ALLOW_ALL_USERS=1 or ALLOWED_USER_IDS=… to accept users."
+        "Bot access CLOSED by default. "
+        "Set ALLOW_ALL_USERS=1 (public) or ALLOWED_USER_IDS=… to accept users."
+    )
+elif not ALLOW_ALL_USERS and ALLOWED_USER_IDS:
+    logger.info(
+        "Bot restricted to ALLOWED_USER_IDS (%s users).",
+        len(ALLOWED_USER_IDS),
     )
 else:
-    logger.info(
-        "Public Telegram bot mode: all users allowed "
-        "(credits + rate limits still apply)."
+    logger.warning(
+        "Public Telegram bot mode ENABLED (ALLOW_ALL_USERS=1) — "
+        "credits + rate limits are the only cost controls."
     )
 
 def _resolve_output_dir() -> Path:

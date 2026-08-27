@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import zipfile
 from pathlib import Path
 
@@ -12,17 +13,20 @@ from .resource_limits import run_with_engine_timeout, EngineTimeoutError, clamp_
 
 
 def is_allowed(user_id: int | None) -> bool:
-    """Telegram bot access: public by default.
+    """Telegram bot access — secure by default (closed).
 
-    - Default OPEN (ALLOW_ALL_USERS effective True).
-    - LOCK_BOT_TO_ALLOWLIST=1 + ALLOWED_USER_IDS → allowlist only.
-    - ALLOW_ALL_USERS=0 → closed.
+    - ALLOW_ALL_USERS=1 → public (explicit opt-in only).
+    - ALLOWED_USER_IDS set → only those IDs.
+    - LOCK_BOT_TO_ALLOWLIST=1 + allowlist → allowlist only.
+    - Otherwise → deny (prevents anonymous API-cost drain).
     """
     if user_id is None:
         return False
     from .config import LOCK_BOT_TO_ALLOWLIST
 
     if LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:
+        return user_id in ALLOWED_USER_IDS
+    if ALLOWED_USER_IDS and not ALLOW_ALL_USERS:
         return user_id in ALLOWED_USER_IDS
     if ALLOW_ALL_USERS:
         return True
@@ -96,7 +100,12 @@ async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> No
 
 
 def make_zip_from_path(project_path: str | Path) -> Path | None:
-    """Create a clean, safe ZIP containing only deliverable project files."""
+    """Create a clean, safe ZIP containing only deliverable project files.
+
+    TOCTOU-hardened: refuse symlinks (lstat), re-check containment after
+    open with O_NOFOLLOW, write file bytes (not path) into the archive so a
+    race cannot swap a regular file for a symlink to /etc/passwd.
+    """
     project_path = Path(project_path).resolve()
     if not project_path.is_dir():
         return None
@@ -108,24 +117,54 @@ def make_zip_from_path(project_path: str | Path) -> Path | None:
         logger.exception("zip parent mkdir failed")
         return None
     excluded_dirs = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
-    excluded_names = {".env", ".env.local", ".env.production", "secrets.json"}
+    excluded_names = {".env", ".env.local", ".env.production", "secrets.json", ".tbe_bot_token"}
     tmp_zip = zip_path.with_suffix(".zip.tmp")
     try:
         with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-            for root, dirs, files in os.walk(project_path):
-                dirs[:] = [d for d in dirs if d not in excluded_dirs and not d.startswith(".")]
+            for root, dirs, files in os.walk(project_path, followlinks=False):
+                # Never follow directory symlinks
+                dirs[:] = [
+                    d for d in dirs
+                    if d not in excluded_dirs
+                    and not d.startswith(".")
+                    and not (Path(root) / d).is_symlink()
+                ]
                 for name in files:
-                    full = (Path(root) / name).resolve()
                     if name in excluded_names or name.endswith((".pyc", ".pyo", ".log")):
                         continue
-                    if full == zip_path or not full.is_file():
+                    full = Path(root) / name
+                    try:
+                        st = full.lstat()
+                    except OSError:
+                        continue
+                    # Skip symlinks and non-regular files (TOCTOU + escape)
+                    if not stat.S_ISREG(st.st_mode):
+                        logger.warning("Skipping non-regular/symlink in zip: %s", full)
                         continue
                     try:
-                        arc = full.relative_to(project_path)
+                        resolved = full.resolve()
+                        arc = resolved.relative_to(project_path)
                     except ValueError:
                         logger.warning("Skipping path outside project: %s", full)
                         continue
-                    zf.write(full, arc.as_posix())
+                    # Open with O_NOFOLLOW so a symlink swap between lstat and read fails
+                    try:
+                        flags = os.O_RDONLY
+                        if hasattr(os, "O_NOFOLLOW"):
+                            flags |= os.O_NOFOLLOW
+                        fd = os.open(str(full), flags)
+                        try:
+                            data = os.read(fd, st.st_size + 1)
+                        finally:
+                            os.close(fd)
+                    except OSError as exc:
+                        logger.warning("zip skip open failed %s: %s", full, exc)
+                        continue
+                    # Cap individual file size in zip (DoS)
+                    if len(data) > 8 * 1024 * 1024:
+                        logger.warning("zip skip oversized file %s (%s bytes)", full, len(data))
+                        continue
+                    zf.writestr(arc.as_posix(), data)
         os.replace(tmp_zip, zip_path)
         return zip_path
     except Exception as e:

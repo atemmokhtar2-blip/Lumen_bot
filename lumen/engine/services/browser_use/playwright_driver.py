@@ -131,6 +131,61 @@ def close_session(session_id: str) -> dict[str, Any]:
     return {"ok": True, "session_id": session_id}
 
 
+def _url_allowed_for_browser(url: str) -> tuple[bool, str]:
+    """Block SSRF / metadata / private targets for agent browser tools."""
+    from urllib.parse import urlparse
+    import ipaddress
+    import socket
+
+    u = (url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return False, "url_must_be_http_https"
+    if len(u) > 2048:
+        return False, "url_too_long"
+    try:
+        parsed = urlparse(u)
+    except Exception:
+        return False, "url_parse_failed"
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False, "url_host_required"
+    # Block obvious local / cloud metadata targets
+    blocked_hosts = {
+        "localhost", "metadata.google.internal", "metadata",
+        "169.254.169.254", "0.0.0.0",
+    }
+    if host in blocked_hosts or host.endswith(".local") or host.endswith(".internal"):
+        return False, f"url_host_blocked:{host}"
+    # Optional allowlist: BROWSER_ALLOW_HOSTS=example.com,docs.python.org
+    allow_raw = (os.getenv("BROWSER_ALLOW_HOSTS") or "").strip()
+    if allow_raw:
+        allowed = {h.strip().lower() for h in allow_raw.split(",") if h.strip()}
+        if host not in allowed and not any(host.endswith("." + a) for a in allowed):
+            return False, f"url_host_not_allowlisted:{host}"
+    # Resolve and reject private/link-local/loopback (SSRF)
+    try:
+        infos = socket.getaddrinfo(host, None)
+        for info in infos:
+            ip_s = info[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_s)
+            except ValueError:
+                continue
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+            ):
+                return False, f"url_resolves_to_private:{ip_s}"
+    except socket.gaierror:
+        return False, "url_dns_failed"
+    except Exception as exc:
+        return False, f"url_resolve_error:{type(exc).__name__}"
+    return True, ""
+
+
 def browse_url(
     url: str,
     *,
@@ -138,10 +193,11 @@ def browse_url(
     work_dir: str = "",
     wait_until: str = "domcontentloaded",
 ) -> dict[str, Any]:
-    """Navigate to URL with real Chromium via Playwright."""
+    """Navigate to URL with real Chromium via Playwright (SSRF-hardened)."""
     u = (url or "").strip()
-    if not u.startswith(("http://", "https://")):
-        return {"ok": False, "error": "url_must_be_http_https"}
+    ok, reason = _url_allowed_for_browser(u)
+    if not ok:
+        return {"ok": False, "error": reason}
     try:
         sess = _get_or_create(session_id, work_dir=work_dir)
         page = sess._page

@@ -303,29 +303,41 @@ class RateLimiter:
     def _select_backend() -> RateLimiterBackend:
         from .runtime_config import redis_url, is_dev
         url = redis_url()
+        # Explicit opt-in required for process-local limiters (multi-worker hole otherwise).
+        # ENVIRONMENT=dev alone is NOT enough — mis-set ENVIRONMENT on a VPS must not open DoS.
+        insecure_local = (os.getenv("ALLOW_INSECURE_LOCAL_RATE_LIMIT") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
         if url:
             try:
                 backend = RedisRateLimiter(url)
                 logger.info("rate_limit backend=redis")
                 return backend
             except Exception as exc:
-                # Production: NEVER fall back to memory/sqlite (multi-worker DDoS hole)
-                if not is_dev():
+                # NEVER fall back to memory/sqlite without explicit insecure opt-in
+                if not (is_dev() and insecure_local):
                     raise RuntimeError(
-                        f"Redis rate limiter unavailable in production: {type(exc).__name__}: {exc}. "
-                        "Refusing to start with local fallback."
+                        f"Redis rate limiter unavailable: {type(exc).__name__}: {exc}. "
+                        "Refusing local fallback (set ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 only for single-process dev)."
                     ) from exc
-                logger.warning("Redis rate limiter failed in dev (%s); using memory", exc)
+                logger.warning(
+                    "Redis rate limiter failed; using memory ONLY because "
+                    "ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 (%s)",
+                    exc,
+                )
                 return MemoryRateLimiter()
-        if is_dev():
+        if is_dev() and insecure_local:
             try:
-                logger.info("rate_limit backend=sqlite (dev only — never production)")
+                logger.warning(
+                    "rate_limit backend=sqlite (ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 — single process only)"
+                )
                 return SqliteRateLimiter()
             except Exception:
                 return MemoryRateLimiter()
         raise RuntimeError(
-            "REDIS_URL is required for rate limiting outside ENVIRONMENT=dev. "
-            "No MemoryRateLimiter / SQLite fallback in production (B2B multi-tenant DoS risk)."
+            "REDIS_URL is required for shared rate limiting. "
+            "Local Memory/SQLite backends need BOTH ENVIRONMENT=dev|local|test "
+            "AND ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 (single-process only)."
         )
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
