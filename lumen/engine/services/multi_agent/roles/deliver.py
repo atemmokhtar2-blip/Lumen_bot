@@ -1,4 +1,4 @@
-"""Deliver agent — final user-facing message composition (no build/QA)."""
+"""Deliver agent — final user-facing message (does not rewrite FAILED → DELIVERED)."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -23,11 +23,14 @@ class DeliverAgent(Agent):
         }
 
     def run(self, state: AgentState, *, context: Optional[dict[str, Any]] = None) -> AgentState:
-        # AWAITING_CONFIRMATION keeps existing final_message from HITL
         if state.status == AgentStatus.AWAITING_CONFIRMATION.value:
             return state
         view = deliver_view(state)
-        if state.qa_passed or state.status == AgentStatus.PASSED.value:
+        terminal_failed = str(state.status).lower() in {
+            AgentStatus.FAILED.value.lower(),
+            AgentStatus.CANCELLED.value.lower(),
+        }
+        if (state.qa_passed or state.status == AgentStatus.PASSED.value) and not terminal_failed:
             state.final_message = (
                 f"✅ تم البناء بنجاح\n"
                 f"المسار: {state.generated_path or '—'}\n"
@@ -46,10 +49,12 @@ class DeliverAgent(Agent):
                 + "\n".join(f"• {q}" for q in qs[:5])
                 + f"\nstate_id: {state.state_id}"
             )
-            try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.DELIVERED.value
+            # Clarification is not a successful delivery
+            if not terminal_failed:
+                try:
+                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+                except Exception:
+                    state.status = AgentStatus.FAILED.value
         else:
             errs = (state.qa_report or {}).get("errors") or state.build_errors or []
             state.final_message = (
@@ -60,9 +65,15 @@ class DeliverAgent(Agent):
                 f"تفاصيل: {'; '.join(str(e) for e in errs[:5])}\n"
                 f"state_id: {state.state_id}"
             )
-            try:
-                state.transition(AgentStatus.DELIVERED, role=AgentRole.ORCHESTRATOR, force=True)
-            except Exception:
-                state.status = AgentStatus.DELIVERED.value
-        state.record("DELIVER", "delivered", state.status)
+            # CRITICAL: keep FAILED — never promote to DELIVERED on failure
+            if not terminal_failed and not (state.qa_passed or state.status == AgentStatus.PASSED.value):
+                try:
+                    state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+                except Exception:
+                    state.status = AgentStatus.FAILED.value
+        state.record("DELIVER", "message_composed", state.status)
         return state
+
+
+def run_deliver(state: AgentState) -> AgentState:
+    return DeliverAgent().run(state)

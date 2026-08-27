@@ -387,13 +387,12 @@ def _make_builder(registry: Any, board: Any):
                 # Also fail if session itself failed
                 if not result.get("ok"):
                     result["ok"] = False
-            # Professional gate + thread-safe tree update (Send parallel-safe)
+            # Professional gate: NEVER trust worker self-reported acceptance alone
             from .acceptance_check import evaluate_task
-            acc_rep = result.get("acceptance_report")
-            if not isinstance(acc_rep, dict) or "ok" not in acc_rep:
-                acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
+            acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
             result["acceptance_report"] = acc_rep
-            session_ok = bool(result.get("ok")) and bool(acc_rep.get("ok"))
+            # session ok requires real acceptance on work_dir (ignore worker lie)
+            session_ok = bool(acc_rep.get("ok"))
             with _TREE_LOCK:
                 tree = _load_tree(state)
                 if session_ok:
@@ -533,9 +532,20 @@ def _make_builder(registry: Any, board: Any):
                 "steps": result.get("steps"),
                 "errors": result.get("errors"),
             }
-            if result.get("ok") or result.get("files_written"):
-                state.generated_path = str(work)
-                state.build_success = True
+            # Require real acceptance — files_written alone is not success
+            try:
+                from .acceptance_check import evaluate_task
+                _rep = evaluate_task(work, files=["main.py"], acceptance=["main.py exists", "compileall passes"], strict=True)
+                result["acceptance_report"] = _rep
+                if _rep.get("ok"):
+                    state.generated_path = str(work)
+                    state.build_success = True
+                else:
+                    state.build_success = False
+            except Exception:
+                if result.get("ok"):
+                    state.generated_path = str(work)
+                    state.build_success = True
         except Exception:
             logger.exception("repair coding session failed")
 
