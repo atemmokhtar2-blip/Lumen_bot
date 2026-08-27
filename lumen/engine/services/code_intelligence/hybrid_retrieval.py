@@ -20,7 +20,7 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
-from .embeddings import cosine, embed_text_local, embed_texts, tokenize_code
+from .embeddings import cosine, embed_text_local, embed_query, embed_documents, tokenize_code
 from .symbol_graph import build_symbol_graph
 
 logger = logging.getLogger(__name__)
@@ -87,17 +87,19 @@ def _bm25_ranking(docs: list[dict[str, Any]], query: str) -> tuple[list[float], 
 def _dense_ranking(
     docs: list[dict[str, Any]], query: str
 ) -> tuple[list[float], list[int], str]:
-    """Dense channel via embed_texts; returns (scores, order, provider)."""
+    """Dense channel: query with input_type=query, docs with document (Voyage-correct)."""
     try:
-        emb = embed_texts([query] + [d["text"] for d in docs])
-        vectors = list(emb.get("vectors") or [])
-        if len(vectors) != 1 + len(docs) or not all(
-            isinstance(v, (list, tuple)) and v for v in vectors
-        ):
-            raise RuntimeError("embed_texts_incomplete")
-        q_vec = list(map(float, vectors[0]))
-        doc_vecs = [list(map(float, v)) for v in vectors[1:]]
-        provider = str(emb.get("provider") or emb.get("fallback") or "embed_texts")
+        q_out = embed_query(query)
+        d_out = embed_documents([d["text"] for d in docs])
+        if not q_out.get("ok") or not d_out.get("ok"):
+            raise RuntimeError(
+                f"embed_failed:q={q_out.get('error')};d={d_out.get('error')}"
+            )
+        q_vec = list(map(float, q_out.get("vector") or (q_out.get("vectors") or [[]])[0]))
+        doc_vecs = [list(map(float, v)) for v in (d_out.get("vectors") or [])]
+        if not q_vec or len(doc_vecs) != len(docs):
+            raise RuntimeError("embed_vectors_incomplete")
+        provider = str(q_out.get("provider") or d_out.get("provider") or "neural")
     except Exception as exc:
         required = (os.getenv("CODE_EMBEDDING_REQUIRED") or "").strip().lower() in {
             "1",
