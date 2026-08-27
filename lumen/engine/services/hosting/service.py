@@ -187,18 +187,17 @@ class HostingService:
             from lumen.engine.services.isolation_policy import (
                 decide_isolation,
                 is_dev_environment,
+                strong_sandbox_available,
             )
             decision = decide_isolation()
-            if decision.require_docker:
-                from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
-                    docker_available,
-                )
-                if not docker_available():
+            if decision.require_strong_isolation:
+                ok_sbx, sbx_reason = strong_sandbox_available()
+                if not ok_sbx:
                     return HostResult(
                         ok=False,
                         message=(
-                            "الاستضافة تتطلب Docker على هذه العقدة. "
-                            "LocalProcess غير مسموح في وضع الإنتاج/متعدد المستأجرين."
+                            "الاستضافة تتطلب عزل قوي (Firecracker / gVisor / DinD / Docker). "
+                            f"غير متاح: {sbx_reason[:240]}"
                         ),
                     )
             if not is_dev_environment():
@@ -215,11 +214,17 @@ class HostingService:
                             "أو اضبط TBE_REQUIRE_DATABASE_URL=0 للتطوير فقط."
                         ),
                     )
-                if decision.require_docker and not (os.environ.get("TBE_DOCKER_NETWORK") or "").strip():
-                    return HostResult(
-                        ok=False,
-                        message="TBE_DOCKER_NETWORK مطلوب في الإنتاج (شبكة محدودة الخروج).",
-                    )
+                # Egress network required for container backends; Firecracker uses TAP/netns instead
+                backend_pref = (os.environ.get("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
+                if backend_pref not in {"firecracker"} and not (
+                    os.environ.get("TBE_DOCKER_NETWORK") or ""
+                ).strip():
+                    # auto may still pick firecracker — only hard-require docker net if FC not preferred
+                    if backend_pref in {"docker", "dind", "gvisor"}:
+                        return HostResult(
+                            ok=False,
+                            message="TBE_DOCKER_NETWORK مطلوب في الإنتاج (شبكة محدودة الخروج).",
+                        )
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة الاستضافة: {gate_exc}")
 
@@ -466,21 +471,33 @@ class HostingService:
 
         try:
             stopped = False
-            if inst.deployment_id:
+            dep = (inst.deployment_id or "").strip()
+            if dep.startswith("fc-"):
+                try:
+                    from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                        FirecrackerSandboxBackend,
+                    )
+                    FirecrackerSandboxBackend().stop(dep)
+                    stopped = True
+                except Exception as fc_exc:
+                    inst.last_error = f"fc_stop:{type(fc_exc).__name__}"
+            elif dep:
                 try:
                     from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
                         DockerProcessDriver,
                         docker_available,
                     )
                     if docker_available():
-                        DockerProcessDriver().stop(inst.deployment_id)
+                        DockerProcessDriver().stop(dep)
                         stopped = True
                 except Exception:
                     pass
-                if not stopped and inst.deployment_id:
-                    # Last resort: docker rm by deployment id / container name only — never host PID
+                if not stopped:
                     try:
-                        DockerProcessDriver().stop(inst.deployment_id)
+                        from lumen.engine.services.sandbox_runtime import select_sandbox_backend
+
+                        backend, _ = select_sandbox_backend(require_available=False)
+                        backend.stop(dep)
                         stopped = True
                     except Exception:
                         pass
@@ -531,37 +548,48 @@ class HostingService:
         )
 
     def _is_alive(self, inst: HostInstance) -> bool:
-        """Liveness: Docker inspect for container deploys; PID only for legacy local."""
+        """Liveness via sandbox backend matching deployment_id prefix."""
         dep = (inst.deployment_id or "").strip()
-        # Docker deployments (preferred path)
-        if dep.startswith("docker-") or (inst.pid is None and dep):
+        if not dep:
+            return False
+        # Firecracker microVMs
+        if dep.startswith("fc-"):
             try:
-                from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
-                    DockerProcessDriver,
-                    docker_available,
+                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                    FirecrackerSandboxBackend,
                 )
-                if docker_available():
-                    st = DockerProcessDriver().status(dep)
-                    return str(getattr(st, "status", "")).lower() == "running"
-            except Exception:
-                pass
-            # Fallback: docker inspect by deployment id / container name label
-            try:
-                import subprocess
-                # registry may map dep_id → container name
-                from lumen.engine.engines.generators.live_deployment import docker_process_driver as dpd
-                info = getattr(dpd, "_RUNNING", {}).get(dep) or {}
-                cname = info.get("container") or info.get("name") or ""
-                if cname:
-                    r = subprocess.run(
-                        ["docker", "inspect", "-f", "{{.State.Running}}", cname],
-                        capture_output=True, text=True, timeout=5, check=False,
-                    )
-                    return (r.stdout or "").strip().lower() == "true"
+                st = FirecrackerSandboxBackend().status(dep)
+                return str(st.status).lower() == "running"
             except Exception:
                 return False
+        # Docker / gVisor / DinD deployments
+        try:
+            from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+                DockerProcessDriver,
+                docker_available,
+            )
+            if docker_available():
+                st = DockerProcessDriver().status(dep)
+                return str(getattr(st, "status", "")).lower() == "running"
+        except Exception:
+            pass
+        try:
+            import subprocess
+            from lumen.engine.engines.generators.live_deployment import docker_process_driver as dpd
+
+            info = getattr(dpd, "_RUNNING", {}).get(dep) or {}
+            cname = info.get("container") or info.get("name") or ""
+            if cname:
+                r = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.State.Running}}", cname],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                return (r.stdout or "").strip().lower() == "true"
+        except Exception:
             return False
-        # No host-PID liveness — sandboxed bots only
         return False
 
 

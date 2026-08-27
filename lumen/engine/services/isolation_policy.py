@@ -2,11 +2,10 @@
 
 All entry points that execute user/tenant code MUST consult this module.
 
-Policy (practical SaaS host):
-  1) Prefer Docker isolation when the daemon is available.
-  2) If Docker is missing/fails, allow LocalProcessDriver only when explicitly
-     opted in (dual gate) OR when TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 (default).
-  3) Local process always applies OS resource limits (RLIMIT_*).
+Policy (production multi-tenant):
+  1) Strong sandbox required: Firecracker (best) > gVisor > DinD > hardened Docker.
+  2) LocalProcess is forbidden unless explicit dual gate or allowed dev fallback.
+  3) Docker is one backend among sandbox_runtime — not the only isolation form.
 """
 from __future__ import annotations
 
@@ -32,29 +31,38 @@ def is_multi_tenant() -> bool:
 
 @dataclass(frozen=True)
 class IsolationDecision:
+    """require_docker kept for backward callers; prefer require_strong_isolation."""
+
     require_docker: bool
     allow_local: bool
     reason: str
+    require_strong_isolation: bool = True
 
     @property
     def may_use_local(self) -> bool:
         return self.allow_local
 
 
+def strong_sandbox_available() -> tuple[bool, str]:
+    """True if any sandbox_runtime backend can run right now."""
+    try:
+        from lumen.engine.services.sandbox_runtime import probe_all
+
+        probes = probe_all()
+        for p in probes:
+            if p.available:
+                return True, f"{p.name}:{p.reason}"
+        reasons = "; ".join(f"{p.name}:{p.reason}" for p in probes) or "no_probes"
+        return False, reasons
+    except Exception as exc:
+        return False, f"probe_error:{type(exc).__name__}"
+
+
 def decide_isolation() -> IsolationDecision:
-    """Docker preferred; local fallback allowed when configured.
-
-    Dual explicit gate (always allows local, skips docker preference):
-      TBE_ALLOW_LOCAL_PROCESS=1 AND TBE_FORCE_LOCAL_PROCESS=1
-
-    Automatic fallback when Docker is down (default ON for single-host ops):
-      TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER — default "0" in multi-tenant/production, "1" in local dev
-    """
+    """Strong sandbox required in multi-tenant/production; local only with explicit gates."""
     multi = is_multi_tenant()
     dev = is_dev_environment()
     dual = _flag("TBE_ALLOW_LOCAL_PROCESS", "0") and _flag("TBE_FORCE_LOCAL_PROCESS", "0")
-    # Production / multi-tenant: Docker (or gVisor via TBE_DOCKER_RUNTIME=runsc) required.
-    # Local fallback only when explicitly enabled OR pure single-tenant dev.
     if multi or not dev:
         fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "0")
     else:
@@ -64,14 +72,17 @@ def decide_isolation() -> IsolationDecision:
         return IsolationDecision(
             require_docker=False,
             allow_local=True,
+            require_strong_isolation=False,
             reason=f"explicit_local multi_tenant={multi} dev={dev}",
         )
 
+    # Strong isolation is mandatory whenever we are not on the dual local gate.
     return IsolationDecision(
-        require_docker=True,  # try Docker first
-        allow_local=fallback,  # fall back if Docker missing/fails
+        require_docker=True,  # legacy: try container backends in the stack
+        allow_local=fallback,
+        require_strong_isolation=True,
         reason=(
-            f"docker_preferred local_fallback={fallback} "
+            f"strong_sandbox_required local_fallback={fallback} "
             f"multi_tenant={multi} dev={dev}"
         ),
     )
@@ -89,13 +100,17 @@ def assert_local_process_allowed() -> None:
 
 
 def select_process_driver():
-    """Return DeploymentProvider: Docker when available, else local if allowed."""
+    """Legacy helper: prefer Docker driver, else local if allowed.
+
+    New hosting paths must use sandbox_runtime.start_sandboxed_bot instead.
+    """
     decision = decide_isolation()
     try:
         from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
             DockerProcessDriver,
             docker_available,
         )
+
         if decision.require_docker and docker_available():
             return DockerProcessDriver(), decision
     except Exception:
@@ -105,6 +120,7 @@ def select_process_driver():
         from lumen.engine.engines.generators.live_deployment.local_process_driver import (
             LocalProcessDriver,
         )
+
         return LocalProcessDriver(), decision
 
     raise RuntimeError(
@@ -114,19 +130,40 @@ def select_process_driver():
 
 
 def require_docker_runtime() -> None:
+    """Legacy name: require *some* strong sandbox, not Docker exclusively."""
     d = decide_isolation()
-    if d.require_docker and not d.allow_local:
-        try:
-            from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
-                docker_available,
-            )
-            if not docker_available():
-                raise RuntimeError(
-                    "docker_required_but_unavailable: "
-                    f"({d.reason})"
-                )
-        except ImportError as exc:
-            raise RuntimeError(f"docker_required_but_unavailable: {exc}") from exc
+    if not d.require_strong_isolation and d.allow_local:
+        return
+    ok, reason = strong_sandbox_available()
+    if ok:
+        return
+    # Fall back to docker-only check for older callers
+    try:
+        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+            docker_available,
+        )
+
+        if docker_available():
+            return
+    except Exception:
+        pass
+    raise RuntimeError(
+        "strong_sandbox_required_but_unavailable: "
+        f"({d.reason}; probes={reason})"
+    )
+
+
+def require_strong_isolation() -> None:
+    """Fail closed if no Firecracker/gVisor/DinD/Docker backend is available."""
+    d = decide_isolation()
+    if d.allow_local and not d.require_strong_isolation:
+        return
+    ok, reason = strong_sandbox_available()
+    if not ok:
+        raise RuntimeError(
+            "strong_sandbox_required_but_unavailable: "
+            f"({d.reason}; probes={reason})"
+        )
 
 
 __all__ = [
@@ -135,6 +172,8 @@ __all__ = [
     "assert_local_process_allowed",
     "select_process_driver",
     "require_docker_runtime",
+    "require_strong_isolation",
+    "strong_sandbox_available",
     "is_dev_environment",
     "is_multi_tenant",
     "environment_name",

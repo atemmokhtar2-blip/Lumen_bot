@@ -148,12 +148,35 @@ def _create_ext4_image(path: Path, size_mb: int) -> None:
 
 
 def _populate_ext4_with_files(image: Path, files: dict[str, bytes], mount_point: Path) -> None:
-    """Mount ext4 image and write files (requires root or FUSE; fail closed if impossible)."""
+    """Write files into an ext4 image via loop-mount, or debugfs without mount."""
+    # Preferred: debugfs (no root mount required on many hosts)
+    debugfs = shutil.which("debugfs")
+    if debugfs:
+        tmp = image.parent / f".dbg-{image.stem}"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            for rel, data in files.items():
+                local = tmp / rel.replace("/", "_")
+                local.write_bytes(data)
+                remote = rel.lstrip("/")
+                # Ensure parent dirs inside image
+                parts = remote.split("/")
+                if len(parts) > 1:
+                    acc = ""
+                    for part in parts[:-1]:
+                        acc = f"{acc}/{part}" if acc else part
+                        _run([debugfs, "-w", "-R", f"mkdir {acc}", str(image)], timeout=15)
+                cmd = f"write {local} {remote}"
+                code, _, err = _run([debugfs, "-w", "-R", cmd, str(image)], timeout=30)
+                if code != 0:
+                    raise RuntimeError(f"debugfs_write_failed:{remote}:{err[:200]}")
+            return
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     mount_point.mkdir(parents=True, exist_ok=True)
     code, _, err = _run(["mount", "-o", "loop", str(image), str(mount_point)], timeout=30)
     if code != 0:
-        # Fallback: write a simple tarball sidecar the guest init can consume if loop mount denied.
-        # Still fail if we cannot mount — production must be able to inject secrets.
         raise RuntimeError(f"loop_mount_failed:{err[:200]}")
     try:
         for rel, data in files.items():
