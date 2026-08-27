@@ -1,4 +1,4 @@
-"""Security fixes: no token-in-URL, Gemini system/user split, rate-limit deploy gate."""
+"""Root-cause security fixes: credential URL, Gemini split, Redis-only rate limit."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,9 +10,10 @@ import pytest
 def test_pr_agent_never_embeds_token_in_clone_url():
     src = Path("lumen/engine/services/integrations/github/pr_agent.py").read_text()
     assert "x-access-token:{token}" not in src
+    assert "https://x-access-token:" not in src
     assert "GIT_ASKPASS" in src
     assert "LUMEN_GIT_TOKEN" in src
-    assert "_safe_https_github_clone_url" in src
+    assert "_git_clone_authenticated" in src
 
 
 def test_safe_clone_url_rejects_credentials_and_non_github():
@@ -26,42 +27,37 @@ def test_safe_clone_url_rejects_credentials_and_non_github():
     with pytest.raises(ValueError, match="https"):
         _safe_https_github_clone_url("http://github.com/a/b.git")
     u = _safe_https_github_clone_url("https://github.com/org/repo")
-    assert u.startswith("https://github.com/")
+    assert u == "https://github.com/org/repo.git"
     assert "@" not in u
 
 
-def test_gemini_uses_system_instruction_split():
+def test_gemini_system_prompt_has_no_user_message_slot():
     src = Path("lumen/engine/services/gemini_client.py").read_text()
+    assert "def _system_prompt(" in src
     assert "system_instruction" in src
     assert "fence_user_input" in src
     assert "responseSchema" in src
-    assert "responseMimeType" in src
+    # User text must not be interpolated into system prompt builder
+    assert "{_wrap_user_payload(text)}" not in src
+    assert "text[:20000]" not in src
 
 
-def test_rate_limiter_rejects_local_on_railway_marker(monkeypatch):
+def test_rate_limiter_requires_redis_even_in_dev(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "dev")
     monkeypatch.setenv("ALLOW_INSECURE_LOCAL_RATE_LIMIT", "1")
-    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
     monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("JOB_REDIS_URL", raising=False)
     monkeypatch.delenv("TBE_REDIS_URL", raising=False)
-    from lumen.platform.rate_limit import RateLimiter
-    # reset singleton if any
     import lumen.platform.rate_limit as rl
     rl._LIMITER = None
     with pytest.raises(RuntimeError, match="REDIS_URL"):
-        RateLimiter._select_backend()
+        rl.RateLimiter._select_backend()
 
 
-def test_rate_limiter_allows_lab_only(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "dev")
-    monkeypatch.setenv("ALLOW_INSECURE_LOCAL_RATE_LIMIT", "1")
-    for m in (
-        "RAILWAY_ENVIRONMENT", "KUBERNETES_SERVICE_HOST", "FORCE_PRODUCTION",
-        "RENDER_SERVICE_ID", "FLY_APP_NAME", "DYNO",
-    ):
-        monkeypatch.delenv(m, raising=False)
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    import lumen.platform.rate_limit as rl
-    rl._LIMITER = None
-    backend = rl.RateLimiter._select_backend()
-    assert type(backend).__name__ in {"SqliteRateLimiter", "MemoryRateLimiter"}
+def test_rate_limiter_no_memory_path_in_select_source():
+    src = Path("lumen/platform/rate_limit.py").read_text()
+    # Selection path must not return Memory/SQLite
+    select = src.split("def _select_backend")[1].split("def allow")[0]
+    assert "MemoryRateLimiter()" not in select
+    assert "SqliteRateLimiter()" not in select
+    assert "RedisRateLimiter" in select

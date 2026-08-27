@@ -1,4 +1,4 @@
-"""Rate limiter — Redis mandatory in production; local only in explicit dev.
+"""Rate limiter — Redis mandatory always (no Memory/SQLite selection path).
 
 Foundation:
   - Production / staging: REDIS_URL required. No SQLite / memory fallback
@@ -300,60 +300,28 @@ class RateLimiter:
         self._backend: RateLimiterBackend = self._select_backend()
 
     @staticmethod
-    def _deployed_surface() -> bool:
-        """True when process is clearly on a hosted/production surface."""
-        markers = (
-            "KUBERNETES_SERVICE_HOST", "K_SERVICE", "AWS_EXECUTION_ENV",
-            "AWS_REGION", "RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID",
-            "FLY_APP_NAME", "DYNO", "WEBSITE_INSTANCE_ID", "FORCE_PRODUCTION",
-        )
-        for m in markers:
-            if (os.getenv(m) or "").strip():
-                return True
-        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-        return env in {"production", "prod", "staging"}
-
-    @staticmethod
     def _select_backend() -> RateLimiterBackend:
-        from .runtime_config import redis_url, is_dev
-        url = redis_url()
-        # Dual gate: ENVIRONMENT=dev AND ALLOW_INSECURE_LOCAL_RATE_LIMIT=1.
-        # Deployed surfaces NEVER get local backends — mis-set ENVIRONMENT must not open multi-worker DoS.
-        insecure_local = (os.getenv("ALLOW_INSECURE_LOCAL_RATE_LIMIT") or "").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        deployed = RateLimiter._deployed_surface()
-        allow_local = bool(is_dev() and insecure_local and not deployed)
-        if url:
-            try:
-                backend = RedisRateLimiter(url)
-                logger.info("rate_limit backend=redis")
-                return backend
-            except Exception as exc:
-                if not allow_local:
-                    raise RuntimeError(
-                        f"Redis rate limiter unavailable: {type(exc).__name__}: {exc}. "
-                        "Refusing local fallback (set ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 "
-                        "only for single-process lab with ENVIRONMENT=dev and no deploy markers)."
-                    ) from exc
-                logger.warning(
-                    "Redis rate limiter failed; using memory ONLY because lab opt-in (%s)",
-                    exc,
-                )
-                return MemoryRateLimiter()
-        if allow_local:
-            try:
-                logger.warning(
-                    "rate_limit backend=sqlite (lab only — single process)"
-                )
-                return SqliteRateLimiter()
-            except Exception:
-                return MemoryRateLimiter()
-        raise RuntimeError(
-            "REDIS_URL is required for shared rate limiting. "
-            "Local Memory/SQLite backends need ENVIRONMENT=dev|local|test "
-            "AND ALLOW_INSECURE_LOCAL_RATE_LIMIT=1 AND no production/deploy markers."
-        )
+        """Redis is mandatory in every environment — no Memory/SQLite fallback.
+
+        Lab/tests must provide REDIS_URL (e.g. docker run redis). Mis-set
+        ENVIRONMENT=dev must never open a multi-worker DoS hole.
+        """
+        from .runtime_config import redis_url
+        url = (redis_url() or "").strip()
+        if not url:
+            raise RuntimeError(
+                "REDIS_URL is required for rate limiting (no local fallback). "
+                "Start Redis for lab: docker run -p 6379:6379 redis:7-alpine"
+            )
+        try:
+            backend = RedisRateLimiter(url)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Redis rate limiter unavailable: {type(exc).__name__}: {exc}. "
+                "No Memory/SQLite fallback is permitted."
+            ) from exc
+        logger.info("rate_limit backend=redis")
+        return backend
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
         # First layer: process-local token bucket
