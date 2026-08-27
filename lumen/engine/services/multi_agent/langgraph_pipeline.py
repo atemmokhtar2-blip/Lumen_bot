@@ -221,6 +221,7 @@ class GraphState(TypedDict, total=False):
     done: bool
     notes: Annotated[list[str], operator.add]
     hitl_decision: str  # approved | rejected | ""
+    isolate: bool  # parallel worktree isolation for this wave
 
 
 def _make_builder(registry: Any, board: Any):
@@ -275,20 +276,68 @@ def _make_builder(registry: Any, board: Any):
         return {"agent": state, "last_node": "plan", "active_task_ids": [], "notes": []}
 
     def node_schedule(gs: GraphState) -> dict[str, Any]:
+        """Select next wave with ownership exclusivity (Cursor worktree rule).
+
+        Only tasks scheduled THIS turn are marked RUNNING. Contested-file tasks
+        stay ready for a later serial turn — never stuck RUNNING without a worker.
+        """
         state: AgentState = gs["agent"]
+        ctx = dict(gs.get("context") or {})
         tree = _load_tree(state)
         tree.refresh_readiness()
         wave = tree.parallel_wave()
-        ids = [n.id for n in wave]
-        for n in wave:
-            tree.mark(n.id, TaskStatus.RUNNING)
+        try:
+            from .production_policy import max_parallel_workers
+            max_par = max_parallel_workers()
+        except Exception:
+            try:
+                max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
+            except ValueError:
+                max_par = 8
+
+        isolate = False
+        ids: list[str] = []
+        if not wave:
+            ids = []
+        elif len(wave) == 1:
+            ids = [wave[0].id]
+            tree.mark(wave[0].id, TaskStatus.RUNNING)
+            isolate = bool(getattr(wave[0], "parallel_group", "") or "")
+        else:
+            from .worktree_isolation import partition_wave_by_ownership, snapshot_base_commit
+            safe, serial = partition_wave_by_ownership(wave)
+            batch = list(safe)[:max_par] if safe else list(serial)[:1]
+            for n in batch:
+                tree.mark(n.id, TaskStatus.RUNNING)
+            ids = [n.id for n in batch]
+            isolate = len(batch) > 1 or bool(safe)
+            try:
+                work = _work_dir(state, ctx)
+                snapshot_base_commit(work)
+            except Exception:
+                pass
+
         _save_tree(state, tree)
-        state.record(AgentRole.ORCHESTRATOR, "schedule", f"wave={ids}")
+        state.record(
+            AgentRole.ORCHESTRATOR,
+            "schedule",
+            f"wave={ids} isolate={isolate} ready_left={len(tree.ready_tasks())}",
+        )
         try:
             board.put(state)
         except Exception:
             pass
-        return {"agent": state, "last_node": "schedule", "active_task_ids": ids, "wave": int(gs.get("wave") or 0) + 1}
+        if isolate:
+            ctx["isolate"] = True
+            ctx["parallel_wave"] = True
+        return {
+            "agent": state,
+            "context": ctx,
+            "last_node": "schedule",
+            "active_task_ids": ids,
+            "wave": int(gs.get("wave") or 0) + 1,
+            "isolate": isolate,
+        }
 
     def node_work(gs: GraphState) -> dict[str, Any]:
         """Real Cline agent_loop per active task — Cursor-class coding session."""
@@ -329,12 +378,12 @@ def _make_builder(registry: Any, board: Any):
                 _files = list(getattr(task, "files", None) or [])
             state.extensions = dict(state.extensions or {})
             state.extensions["active_task_id"] = tid
-            # Isolate on parallel wave (Send) OR parallel_group — always real worktree
+            # Isolate when schedule/Send marked isolate OR task in parallel_group
             use_iso = bool(
-                getattr(task, "parallel_group", "")
+                gs.get("isolate")
                 or ctx.get("isolate")
                 or ctx.get("parallel_wave")
-                or gs.get("isolate")
+                or getattr(task, "parallel_group", "")
             )
             session_dir = work
             _wt_session = None
@@ -649,80 +698,30 @@ def _make_builder(registry: Any, board: Any):
                 max_par = 8
         if parallel and len(ids) > 1:
             ids = ids[:max_par]
-            # Ownership exclusivity: only disjoint-file tasks fan-out in parallel
             try:
-                from .worktree_isolation import (
-                    partition_wave_by_ownership,
-                    snapshot_base_commit,
-                )
-                tree = _load_tree(gs["agent"])
-                nodes = [tree.get(i) for i in ids]
-                nodes = [n for n in nodes if n is not None]
-                safe, serial = partition_wave_by_ownership(nodes)
-                ids = [n.id for n in safe] + [n.id for n in serial]
-                # First max_par of safe in parallel; serial remain for next schedule loops
-                parallel_ids = [n.id for n in safe][:max_par]
-                if not parallel_ids and serial:
-                    # all contested → one at a time
-                    parallel_ids = [serial[0].id]
-                    serial_rest = True
-                else:
-                    serial_rest = False
-                try:
-                    work = _work_dir(gs["agent"], dict(gs.get("context") or {}))
-                    snapshot_base_commit(work)
-                except Exception:
-                    pass
-                if len(parallel_ids) > 1:
-                    from langgraph.types import Send
-                    base_ctx = dict(gs.get("context") or {})
-                    base_ctx["isolate"] = True
-                    base_ctx["parallel_wave"] = True
-                    return [
-                        Send(
-                            "work",
-                            {
-                                "agent": gs["agent"],
-                                "context": dict(base_ctx),
-                                "last_node": "schedule",
-                                "active_task_ids": [tid],
-                                "wave": int(gs.get("wave") or 0),
-                                "done": False,
-                                "notes": [],
-                                "hitl_decision": str(gs.get("hitl_decision") or ""),
-                                "isolate": True,
-                            },
-                        )
-                        for tid in parallel_ids
-                    ]
-                # single remaining
-                ids = parallel_ids or ids[:1]
+                from langgraph.types import Send
+                base_ctx = dict(gs.get("context") or {})
+                base_ctx["isolate"] = True
+                base_ctx["parallel_wave"] = True
+                return [
+                    Send(
+                        "work",
+                        {
+                            "agent": gs["agent"],
+                            "context": dict(base_ctx),
+                            "last_node": "schedule",
+                            "active_task_ids": [tid],
+                            "wave": int(gs.get("wave") or 0),
+                            "done": False,
+                            "notes": [],
+                            "hitl_decision": str(gs.get("hitl_decision") or ""),
+                            "isolate": True,
+                        },
+                    )
+                    for tid in ids
+                ]
             except Exception as exc:
-                logger.warning("parallel ownership partition failed (%s)", exc)
-                try:
-                    from langgraph.types import Send
-                    base_ctx = dict(gs.get("context") or {})
-                    base_ctx["isolate"] = True
-                    base_ctx["parallel_wave"] = True
-                    return [
-                        Send(
-                            "work",
-                            {
-                                "agent": gs["agent"],
-                                "context": dict(base_ctx),
-                                "last_node": "schedule",
-                                "active_task_ids": [tid],
-                                "wave": int(gs.get("wave") or 0),
-                                "done": False,
-                                "notes": [],
-                                "hitl_decision": str(gs.get("hitl_decision") or ""),
-                                "isolate": True,
-                            },
-                        )
-                        for tid in ids[:max_par]
-                    ]
-                except Exception as exc2:
-                    logger.warning("Send fan-out failed (%s) — sequential work", exc2)
+                logger.warning("Send fan-out failed (%s) — sequential work", exc)
         return "work"
 
     def after_work(gs: GraphState) -> Literal["schedule", "critique"]:
