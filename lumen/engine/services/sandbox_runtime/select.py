@@ -66,13 +66,17 @@ def start_sandboxed_bot(
     service_name: str = "",
     env_vars: Optional[dict] = None,
 ):
-    from .egress import harden_network
     from .types import SandboxSpec
 
-    # Always harden network before start — strict mode raises
-    harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
-
     backend, probe = select_sandbox_backend(require_available=True)
+
+    # Container backends need Docker egress network hardening.
+    # Firecracker uses TAP/netns — do not require Docker network there.
+    if backend.name != "firecracker":
+        from .egress import harden_network
+
+        harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
+
     spec = SandboxSpec(
         project_path=str(project_path),
         bot_token=bot_token,
