@@ -115,9 +115,18 @@ def edit_file(
         text = target.read_text(encoding="utf-8", errors="replace")
         if old_string not in text:
             return {"ok": False, "error": "old_string_not_found", "path": path}
+        occurrences = text.count(old_string)
+        if not replace_all and occurrences > 1:
+            return {
+                "ok": False,
+                "error": "old_string_not_unique",
+                "path": path,
+                "occurrences": occurrences,
+                "hint": "Provide more surrounding context so old_string matches exactly once, or set replace_all=true",
+            }
         if replace_all:
             updated = text.replace(old_string, new_string)
-            count = text.count(old_string)
+            count = occurrences
         else:
             updated = text.replace(old_string, new_string, 1)
             count = 1
@@ -280,8 +289,384 @@ def _coerce_rel_path(work_dir: str, path: str) -> str:
     return raw.lstrip("/") or "."
 
 
+
+def grep_codebase(
+    work_dir: str,
+    pattern: str,
+    *,
+    glob: str = "**/*",
+    max_matches: int = 50,
+    case_insensitive: bool = False,
+) -> dict[str, Any]:
+    """Ripgrep-style content search across the workspace (official agent search tool)."""
+    import re as _re
+    try:
+        root = _root(work_dir)
+        if not pattern:
+            return {"ok": False, "error": "pattern_required"}
+        flags = _re.MULTILINE
+        if case_insensitive:
+            flags |= _re.IGNORECASE
+        try:
+            rx = _re.compile(pattern, flags)
+        except _re.error as exc:
+            return {"ok": False, "error": f"invalid_regex:{exc}"}
+        matches: list[dict[str, Any]] = []
+        # Prefer system rg when available (same as Cline/OpenCode)
+        try:
+            cmd = ["rg", "-n", "--no-heading", "-m", str(max(1, min(max_matches, 200)))]
+            if case_insensitive:
+                cmd.append("-i")
+            if glob and glob not in {"**/*", "*"}:
+                cmd.extend(["-g", glob])
+            cmd.extend(["--", pattern, str(root)])
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            if proc.returncode in {0, 1}:
+                for line in (proc.stdout or "").splitlines()[: max_matches]:
+                    # path:line:content
+                    parts = line.split(":", 2)
+                    if len(parts) >= 3:
+                        try:
+                            rel = Path(parts[0]).resolve().relative_to(root).as_posix()
+                        except Exception:
+                            rel = parts[0]
+                        matches.append({
+                            "path": rel,
+                            "line": int(parts[1]) if parts[1].isdigit() else 0,
+                            "text": parts[2][:300],
+                        })
+                return {"ok": True, "pattern": pattern, "matches": matches, "engine": "rg", "count": len(matches)}
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.debug("rg failed: %s", exc)
+
+        # Pure-Python fallback
+        g = glob if glob else "**/*"
+        for fp in sorted(root.glob(g))[:2000]:
+            if not fp.is_file():
+                continue
+            if fp.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".pyc", ".so"}:
+                continue
+            try:
+                if fp.stat().st_size > 400_000:
+                    continue
+                content = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for i, line in enumerate(content.splitlines(), 1):
+                if rx.search(line):
+                    try:
+                        rel = fp.relative_to(root).as_posix()
+                    except Exception:
+                        rel = str(fp)
+                    matches.append({"path": rel, "line": i, "text": line[:300]})
+                    if len(matches) >= max_matches:
+                        return {"ok": True, "pattern": pattern, "matches": matches, "engine": "python", "count": len(matches)}
+        return {"ok": True, "pattern": pattern, "matches": matches, "engine": "python", "count": len(matches)}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+
+
+def glob_files(work_dir: str, pattern: str = "**/*", *, max_results: int = 200) -> dict[str, Any]:
+    """Find files by glob pattern relative to work_dir."""
+    try:
+        root = _root(work_dir)
+        pat = (pattern or "**/*").strip() or "**/*"
+        out: list[str] = []
+        for fp in sorted(root.glob(pat))[: max(1, min(max_results, 500))]:
+            if not fp.is_file():
+                continue
+            try:
+                out.append(fp.relative_to(root).as_posix())
+            except Exception:
+                continue
+        return {"ok": True, "pattern": pat, "files": out, "count": len(out)}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+
+
+def read_files(work_dir: str, paths: list[str] | None = None, *, max_files: int = 12) -> dict[str, Any]:
+    """Batch-read multiple files (Cline-style read_files)."""
+    paths = list(paths or [])[: max(1, min(max_files, 20))]
+    if not paths:
+        return {"ok": False, "error": "paths_required"}
+    files: dict[str, Any] = {}
+    errors: list[str] = []
+    for p in paths:
+        r = read_file(work_dir, p)
+        if r.get("ok"):
+            files[str(p)] = {
+                "content": r.get("content"),
+                "truncated": r.get("truncated"),
+                "size": r.get("size"),
+            }
+        else:
+            errors.append(f"{p}:{r.get('error')}")
+    return {"ok": bool(files), "files": files, "errors": errors, "count": len(files)}
+
+
+def apply_edits(
+    work_dir: str,
+    edits: list[dict[str, Any]] | None = None,
+    *,
+    atomic: bool = True,
+) -> dict[str, Any]:
+    """Multi-file transactional edits.
+
+    Each edit: {path, old_string, new_string, replace_all?}
+    On failure with atomic=True, restores original file contents.
+    """
+    edits = list(edits or [])
+    if not edits:
+        return {"ok": False, "error": "edits_required"}
+    if len(edits) > 40:
+        return {"ok": False, "error": "too_many_edits", "max": 40}
+
+    root = _root(work_dir)
+    backups: dict[str, str] = {}
+    applied: list[dict[str, Any]] = []
+    try:
+        for i, ed in enumerate(edits):
+            path = str(ed.get("path") or "").strip()
+            old_s = str(ed.get("old_string") if "old_string" in ed else ed.get("old") or "")
+            new_s = str(ed.get("new_string") if "new_string" in ed else ed.get("new") or "")
+            replace_all = bool(ed.get("replace_all"))
+            if not path:
+                raise RuntimeError(f"edit[{i}]:path_required")
+            target = safe_resolve_under(root, path)
+            if not target.exists():
+                raise RuntimeError(f"edit[{i}]:not_found:{path}")
+            if path not in backups:
+                backups[path] = target.read_text(encoding="utf-8", errors="replace")
+            r = edit_file(work_dir, path, old_s, new_s, replace_all=replace_all)
+            if not r.get("ok"):
+                raise RuntimeError(f"edit[{i}]:{path}:{r.get('error')}")
+            applied.append({"path": path, "replacements": r.get("replacements") or r.get("count") or 1})
+        return {"ok": True, "applied": applied, "count": len(applied), "atomic": atomic}
+    except Exception as exc:
+        if atomic and backups:
+            for path, content in backups.items():
+                try:
+                    safe_write_text(root, path, content)
+                except Exception:
+                    logger.exception("rollback failed for %s", path)
+        return {
+            "ok": False,
+            "error": str(exc)[:500],
+            "applied_before_fail": applied,
+            "rolled_back": bool(atomic and backups),
+        }
+
+
+def apply_patch(work_dir: str, patch: str) -> dict[str, Any]:
+    """Apply a multi-file unified diff or simple *** Update File blocks.
+
+    Supports:
+      - Standard unified diffs (--- a/path +++ b/path @@ ...)
+      - OpenCode-style lines: *** Update File: path / *** Add File: path
+    Atomic: restores all touched files on failure.
+    """
+    import re as _re
+    patch = (patch or "").strip()
+    if not patch:
+        return {"ok": False, "error": "patch_required"}
+
+    root = _root(work_dir)
+    backups: dict[str, str | None] = {}  # None = did not exist
+    results: list[dict[str, Any]] = []
+
+    def _backup(rel: str) -> None:
+        if rel in backups:
+            return
+        try:
+            target = safe_resolve_under(root, rel)
+            if target.exists() and target.is_file():
+                backups[rel] = target.read_text(encoding="utf-8", errors="replace")
+            else:
+                backups[rel] = None
+        except Exception:
+            backups[rel] = None
+
+    def _rollback() -> None:
+        for rel, content in backups.items():
+            try:
+                if content is None:
+                    target = safe_resolve_under(root, rel)
+                    if target.exists() and target.is_file():
+                        target.unlink()
+                else:
+                    safe_write_text(root, rel, content)
+            except Exception:
+                logger.exception("patch rollback failed %s", rel)
+
+    try:
+        # *** Add/Update File format (simplified multi-file)
+        if "***" in patch and ("Update File" in patch or "Add File" in patch):
+            blocks = _re.split(r"(?=^\*\*\* (?:Add|Update|Delete) File:)", patch, flags=_re.M)
+            for block in blocks:
+                block = block.strip()
+                if not block:
+                    continue
+                m = _re.match(r"\*\*\* (Add|Update|Delete) File:\s*(.+)$", block, flags=_re.M)
+                if not m:
+                    continue
+                kind, rel = m.group(1), m.group(2).strip()
+                body = block[m.end():].lstrip("\n")
+                _backup(rel)
+                if kind == "Delete":
+                    target = safe_resolve_under(root, rel)
+                    if target.exists():
+                        target.unlink()
+                    results.append({"path": rel, "op": "delete"})
+                elif kind == "Add":
+                    # body may be full content or +prefixed lines
+                    lines = []
+                    for ln in body.splitlines():
+                        if ln.startswith("+") and not ln.startswith("+++"):
+                            lines.append(ln[1:])
+                        elif not ln.startswith("-") and not ln.startswith("@@") and not ln.startswith("***"):
+                            lines.append(ln)
+                    safe_write_text(root, rel, "\n".join(lines) + ("\n" if lines else ""))
+                    results.append({"path": rel, "op": "add"})
+                else:  # Update — try as unified hunks or full replace with + lines
+                    target = safe_resolve_under(root, rel)
+                    if not target.exists():
+                        raise RuntimeError(f"update_missing:{rel}")
+                    original = target.read_text(encoding="utf-8", errors="replace")
+                    if "@@" in body:
+                        updated = _apply_unified_to_text(original, body)
+                    else:
+                        # collect + lines as new content if no hunks
+                        plus = [ln[1:] if ln.startswith("+") else ln for ln in body.splitlines() if not ln.startswith("-") and not ln.startswith("***")]
+                        updated = "\n".join(plus) if plus else original
+                    safe_write_text(root, rel, updated)
+                    results.append({"path": rel, "op": "update"})
+            if not results:
+                raise RuntimeError("no_patch_blocks_parsed")
+            return {"ok": True, "files": results, "count": len(results), "format": "begin_patch"}
+
+        # Standard multi-file unified diff
+        file_chunks = _re.split(r"(?=^--- )", patch, flags=_re.M)
+        for chunk in file_chunks:
+            chunk = chunk.strip()
+            if not chunk.startswith("---"):
+                continue
+            lines = chunk.splitlines()
+            if len(lines) < 2:
+                continue
+            old_line, new_line = lines[0], lines[1]
+            # --- a/path or --- path
+            def _parse_path(header: str) -> str:
+                h = header[4:].strip() if header.startswith("--- ") or header.startswith("+++ ") else header
+                if h.startswith("a/") or h.startswith("b/"):
+                    h = h[2:]
+                # strip timestamps
+                h = h.split("\t")[0].strip()
+                return h
+
+            if not new_line.startswith("+++"):
+                continue
+            rel = _parse_path(new_line if not new_line.endswith("/dev/null") else old_line)
+            if rel in {"/dev/null", "dev/null"}:
+                rel = _parse_path(old_line)
+            _backup(rel)
+            if new_line.strip().endswith("/dev/null"):
+                target = safe_resolve_under(root, rel)
+                if target.exists():
+                    target.unlink()
+                results.append({"path": rel, "op": "delete"})
+                continue
+            if old_line.strip().endswith("/dev/null"):
+                # new file from + lines
+                content_lines = []
+                for ln in lines[2:]:
+                    if ln.startswith("+") and not ln.startswith("+++"):
+                        content_lines.append(ln[1:])
+                    elif ln.startswith("@@"):
+                        continue
+                safe_write_text(root, rel, "\n".join(content_lines) + "\n")
+                results.append({"path": rel, "op": "add"})
+                continue
+            target = safe_resolve_under(root, rel)
+            original = target.read_text(encoding="utf-8", errors="replace") if target.exists() else ""
+            updated = _apply_unified_to_text(original, "\n".join(lines[2:]))
+            safe_write_text(root, rel, updated)
+            results.append({"path": rel, "op": "update"})
+        if not results:
+            raise RuntimeError("no_unified_hunks_parsed")
+        return {"ok": True, "files": results, "count": len(results), "format": "unified"}
+    except Exception as exc:
+        _rollback()
+        return {"ok": False, "error": str(exc)[:500], "rolled_back": True, "partial": results}
+
+
+def _apply_unified_to_text(original: str, hunk_text: str) -> str:
+    """Apply unified diff hunks to original text. Raises on failure."""
+    import re as _re
+    src_lines = original.splitlines(keepends=True)
+    # normalize to list without keepends for indexing
+    src = original.splitlines()
+    out: list[str] = []
+    pos = 0
+    hunks = list(_re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", hunk_text, flags=_re.M))
+    if not hunks:
+        # no hunks: treat + lines as full file
+        plus = [ln[1:] for ln in hunk_text.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+        if plus:
+            return "\n".join(plus) + "\n"
+        return original
+
+    lines = hunk_text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", lines[i])
+        if not m:
+            i += 1
+            continue
+        old_start = int(m.group(1))
+        # copy unchanged prefix (1-indexed)
+        while pos < old_start - 1 and pos < len(src):
+            out.append(src[pos])
+            pos += 1
+        i += 1
+        while i < len(lines) and not lines[i].startswith("@@"):
+            ln = lines[i]
+            if ln.startswith("\\"):  # "\ No newline at end of file"
+                i += 1
+                continue
+            if ln.startswith(" "):
+                # context — must match
+                expected = ln[1:]
+                if pos >= len(src) or src[pos] != expected:
+                    # soft: still consume
+                    if pos < len(src):
+                        out.append(src[pos])
+                        pos += 1
+                    else:
+                        out.append(expected)
+                else:
+                    out.append(src[pos])
+                    pos += 1
+            elif ln.startswith("-"):
+                # delete
+                if pos < len(src):
+                    pos += 1
+            elif ln.startswith("+"):
+                out.append(ln[1:])
+            else:
+                # unknown line — ignore
+                pass
+            i += 1
+    while pos < len(src):
+        out.append(src[pos])
+        pos += 1
+    return "\n".join(out) + ("\n" if original.endswith("\n") else "")
+
+
+
 def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Dispatch FS tool by name."""
+    """Dispatch FS / multi-file tool by name."""
     args = dict(args or {})
     if name in {
         "browser_navigate", "browser_content", "browser_click",
@@ -295,19 +680,46 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
         return list_dir(work_dir, str(args.get("path") or "."))
     if name == "read_file":
         return read_file(work_dir, str(args.get("path") or ""))
+    if name == "read_files":
+        paths = args.get("paths") or args.get("files") or []
+        if isinstance(paths, str):
+            paths = [paths]
+        return read_files(work_dir, list(paths))
     if name == "write_file":
         return write_file(
             work_dir,
             str(args.get("path") or ""),
             str(args.get("content") if args.get("content") is not None else ""),
         )
-    if name in {"edit_file", "apply_patch", "search_replace"}:
+    if name in {"edit_file", "search_replace"}:
         return edit_file(
             work_dir,
             str(args.get("path") or ""),
-            str(args.get("old_string") or ""),
-            str(args.get("new_string") if args.get("new_string") is not None else ""),
+            str(args.get("old_string") or args.get("old") or ""),
+            str(args.get("new_string") if args.get("new_string") is not None else args.get("new") or ""),
             replace_all=bool(args.get("replace_all")),
+        )
+    if name == "apply_edits":
+        return apply_edits(
+            work_dir,
+            list(args.get("edits") or []),
+            atomic=bool(args.get("atomic", True)),
+        )
+    if name == "apply_patch":
+        return apply_patch(work_dir, str(args.get("patch") or args.get("patch_text") or args.get("diff") or ""))
+    if name in {"grep_codebase", "grep", "search"}:
+        return grep_codebase(
+            work_dir,
+            str(args.get("pattern") or args.get("query") or ""),
+            glob=str(args.get("glob") or "**/*"),
+            max_matches=int(args.get("max_matches") or 50),
+            case_insensitive=bool(args.get("case_insensitive") or args.get("i")),
+        )
+    if name in {"glob_files", "glob"}:
+        return glob_files(
+            work_dir,
+            str(args.get("pattern") or args.get("glob") or "**/*"),
+            max_results=int(args.get("max_results") or 200),
         )
     if name == "tree":
         try:
@@ -330,10 +742,16 @@ def run_tool(work_dir: str, name: str, args: dict[str, Any] | None = None) -> di
     return {"ok": False, "error": f"unknown_tool:{name}"}
 
 
+
 __all__ = [
+    "apply_edits",
+    "apply_patch",
     "edit_file",
+    "glob_files",
+    "grep_codebase",
     "list_dir",
     "read_file",
+    "read_files",
     "run_tool",
     "tree",
     "write_file",

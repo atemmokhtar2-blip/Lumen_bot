@@ -64,7 +64,7 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
         )
     )
     role_line = (
-        "You are Cline in INCREMENTAL REPAIR mode. Edit the existing project. "
+        "You are Cline (multi-file coding agent) in INCREMENTAL REPAIR mode. Edit the existing project. "
         "Prefer edit_file. Never wipe the project. Fix ERROR findings only."
         if repair_mode
         else "You are Cline, an autonomous coding agent operating as the Worker role."
@@ -153,6 +153,14 @@ def run_agent(
         state.metadata["repo_context_error"] = type(_rc_exc).__name__
         repo_ctx = None
     sys_prompt = _system_prompt(state.work_dir, goal, ir_dict)
+    sys_prompt = sys_prompt + (
+        "\n\nMULTI-FILE TOOLS:\n"
+        "- grep_codebase(pattern), glob_files(pattern), read_files(paths=[...])\n"
+        "- apply_edits(edits=[{path,old_string,new_string}, ...]) atomic multi-file\n"
+        "- apply_patch(patch=unified diff or *** Update File blocks)\n"
+        "- edit_file requires unique old_string unless replace_all=true\n"
+        "Prefer apply_edits/apply_patch for changes spanning multiple files.\n"
+    )
     if repo_ctx and repo_ctx.get("files"):
         try:
             from lumen.engine.services.code_intelligence.repo_context import context_to_agent_block
@@ -181,7 +189,7 @@ def run_agent(
         )
     else:
         state.add_user(
-            "Start building now. Inspect the workspace (list_dir/tree), then write the project files."
+            "Start building now. Use grep_codebase/glob_files/list_dir to map the project, read_files for context, then apply_edits or write_file/edit_file across all needed files."
         )
 
     for i in range(limit):

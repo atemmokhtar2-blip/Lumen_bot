@@ -56,8 +56,17 @@ def _record_usage(provider: str, model_id: str, body: dict | None = None, *, pro
 ALLOWED_TOOLS = {
     "list_dir",
     "read_file",
+    "read_files",
     "write_file",
     "edit_file",
+    "apply_edits",
+    "apply_patch",
+    "grep_codebase",
+    "grep",
+    "search",
+    "glob_files",
+    "glob",
+    "search_replace",
     "tree",
     "run_shell",
     "finish",
@@ -71,9 +80,12 @@ ALLOWED_TOOLS = {
 
 _JSON_SCHEMA_HINT = (
     "Respond with ONE JSON object only (no markdown fences). Schema:\n"
-    '{"thought": "short plan", "tool": "list_dir|read_file|write_file|edit_file|tree|run_shell|finish", '
+    '{"thought": "short plan", '
+    '"tool": "list_dir|read_file|read_files|write_file|edit_file|apply_edits|apply_patch|'
+    'grep_codebase|glob_files|tree|run_shell|finish", '
     '"args": {}, "finish": false, "summary": ""}'
 )
+
 
 
 def _timeout() -> float:
