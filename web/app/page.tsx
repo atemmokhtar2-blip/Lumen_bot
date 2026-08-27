@@ -16,7 +16,7 @@ export default function HomePage() {
     queryKey: ["agents-home"],
     queryFn: async () => {
       const d = await listAgentReports(20);
-      return d?.ok ? d.reports || [];
+      return d?.ok ? d.reports || [] : [];
     },
     refetchInterval: 6000,
   });
