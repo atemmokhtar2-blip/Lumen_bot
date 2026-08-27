@@ -652,7 +652,12 @@ def _make_builder(registry: Any, board: Any):
                 _save_tree(gs["agent"], tree)
 
         parallel = (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower() not in {"0", "false", "no", "off"}
+        try:
+            max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
+        except ValueError:
+            max_par = 8
         if parallel and len(ids) > 1:
+            ids = ids[:max_par]  # swarm-style concurrency cap (LangGraph Send)
             try:
                 from langgraph.types import Send
                 return [

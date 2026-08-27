@@ -123,6 +123,7 @@ if workflow is not None:
 
         @workflow.run
         async def run(self, data: dict[str, Any]) -> dict[str, Any]:
+            import os
             from datetime import timedelta
             payload = dict(data or {})
             retry = RetryPolicy(
@@ -142,8 +143,8 @@ if workflow is not None:
             result = await workflow.execute_activity(
                 run_langgraph_generate_activity,
                 payload,
-                start_to_close_timeout=timedelta(hours=2),
-                heartbeat_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(hours=float(os.getenv('TEMPORAL_ACTIVITY_HOURS') or '24')),
+                heartbeat_timeout=timedelta(minutes=int(os.getenv('TEMPORAL_HEARTBEAT_MINUTES') or '10')),
                 retry_policy=retry,
             )
             return dict(result or {})
