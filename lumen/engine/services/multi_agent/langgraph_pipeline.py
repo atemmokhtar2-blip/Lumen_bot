@@ -8,6 +8,7 @@ not a shallow template path.
 from __future__ import annotations
 
 import logging
+import threading
 import operator
 import os
 from pathlib import Path
@@ -17,6 +18,7 @@ from .state import AgentRole, AgentState, AgentStatus
 from .task_tree import TaskStatus, TaskTree
 
 logger = logging.getLogger(__name__)
+_TREE_LOCK = threading.Lock()
 
 # Process-wide checkpointer so interrupt → resume works across calls (official MemorySaver).
 _SHARED_CHECKPOINTER = None
@@ -48,7 +50,10 @@ def _shared_checkpointer():
         db = _checkpoint_db_path()
         db.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db), check_same_thread=False)
-        _SHARED_CHECKPOINTER = SqliteSaver(conn)
+        if hasattr(SqliteSaver, "from_conn"):
+            _SHARED_CHECKPOINTER = SqliteSaver.from_conn(conn)
+        else:
+            _SHARED_CHECKPOINTER = SqliteSaver(conn)
         logger.info("LangGraph SqliteSaver at %s", db)
         return _SHARED_CHECKPOINTER
     except Exception as exc:
@@ -249,14 +254,17 @@ def _make_builder(registry: Any, board: Any):
 
         import shutil
         for tid in active:
-            if tree.get(tid) is None:
-                continue
-            brief = tree.worker_brief(tid)
-            task = tree.get(tid)
+            # Reload tree under lock so parallel Send workers see latest marks
+            with _TREE_LOCK:
+                tree = _load_tree(state)
+                task = tree.get(tid)
+                if task is None:
+                    continue
+                brief = tree.worker_brief(tid)
+                _acc = list(getattr(task, "acceptance", None) or [])
+                _files = list(getattr(task, "files", None) or [])
             state.extensions = dict(state.extensions or {})
             state.extensions["active_task_id"] = tid
-            _acc = list(getattr(task, "acceptance", None) or []) if task is not None else []
-            _files = list(getattr(task, "files", None) or []) if task is not None else []
             # Isolated workspace for parallel_group tasks (avoid concurrent writes on main.py)
             use_iso = bool(getattr(task, "parallel_group", "") or "")  # always isolate parallel_group (Send-safe)
             session_dir = work
@@ -315,34 +323,39 @@ def _make_builder(registry: Any, board: Any):
                 # Also fail if session itself failed
                 if not result.get("ok"):
                     result["ok"] = False
-            # Professional gate: files_written alone is NOT success — acceptance must pass
+            # Professional gate + thread-safe tree update (Send parallel-safe)
             from .acceptance_check import evaluate_task
-            acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
+            acc_rep = result.get("acceptance_report")
+            if not isinstance(acc_rep, dict) or "ok" not in acc_rep:
+                acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
             result["acceptance_report"] = acc_rep
             session_ok = bool(result.get("ok")) and bool(acc_rep.get("ok"))
-            if session_ok:
-                tree.mark(tid, TaskStatus.DONE, result={
-                    "files": result.get("files_written"),
-                    "steps": result.get("steps"),
-                    "stop": result.get("stop_reason"),
-                    "acceptance": acc_rep,
-                })
-                state.generated_path = str(work)
-                state.build_success = True
-                notes.append(f"{tid}:done:steps={result.get('steps')}")
+            with _TREE_LOCK:
+                tree = _load_tree(state)
+                if session_ok:
+                    tree.mark(tid, TaskStatus.DONE, result={
+                        "files": result.get("files_written"),
+                        "steps": result.get("steps"),
+                        "stop": result.get("stop_reason"),
+                        "acceptance": acc_rep,
+                    })
+                    state.generated_path = str(work)
+                    state.build_success = True
+                    notes.append(f"{tid}:done:steps={result.get('steps')}")
+                else:
+                    fails = [f.get("id") or f.get("detail") for f in (acc_rep.get("failed") or [])][:8]
+                    err = "; ".join(
+                        list(result.get("errors") or []) + [f"acceptance:{x}" for x in fails] or ["build_or_acceptance_failed"]
+                    )[:500]
+                    tree.mark(tid, TaskStatus.FAILED, error=err, result={"acceptance": acc_rep})
+                    state.build_errors = list(state.build_errors or []) + list(result.get("errors") or []) + fails
+                    state.build_success = False
+                    notes.append(f"{tid}:failed:{err[:80]}")
+                _save_tree(state, tree)
                 try:
                     board.put(state)
                 except Exception:
                     pass
-            else:
-                fails = [f.get("id") or f.get("detail") for f in (acc_rep.get("failed") or [])][:8]
-                err = "; ".join(
-                    list(result.get("errors") or []) + [f"acceptance:{x}" for x in fails] or ["build_or_acceptance_failed"]
-                )[:500]
-                tree.mark(tid, TaskStatus.FAILED, error=err, result={"acceptance": acc_rep})
-                state.build_errors = list(state.build_errors or []) + list(result.get("errors") or []) + fails
-                state.build_success = False
-                notes.append(f"{tid}:failed:{err[:80]}")
 
         _save_tree(state, tree)
         ctx["work_dir"] = str(work)
@@ -678,7 +691,8 @@ def _make_builder(registry: Any, board: Any):
             return "schedule"
         # also check state
         st: AgentState = gs["agent"]
-        if (st.extensions or {}).get("hitl_status") == "approved":
+        status = str((st.extensions or {}).get("hitl_status") or "")
+        if status in {"approved", "deliver_approved"}:
             return "schedule"
         return "fail"
 

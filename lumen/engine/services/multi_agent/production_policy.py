@@ -6,7 +6,6 @@ World-class gate (no silent degradation):
   - Verified template fallback is FORBIDDEN always
   - Imperative while-True generate path is FORBIDDEN always
   - CLINE_MODE=builtin catalog path is FORBIDDEN in production
-  - Swarm is OFF unless MULTI_AGENT_SWARM=1 (experimental)
 """
 from __future__ import annotations
 

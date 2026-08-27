@@ -507,7 +507,10 @@ def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
     tool = str(pending.get("tool") or state.capability_id or "")
     is_lg = (
         ext.get("langgraph_interrupt")
-        or ext.get("hitl_status") == "awaiting_approval"
+        or ext.get("hitl_status") in {
+            "awaiting_approval",
+            "awaiting_deliver_approval",
+        }
         or tool in {"langgraph_plan_approve", "langgraph_deliver_approve"}
     )
     if is_lg:
