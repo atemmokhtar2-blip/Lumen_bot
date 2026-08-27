@@ -124,11 +124,17 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
     ready = tree.ready_tasks()
     notes: list[str] = []
     all_ok = True
-    cap = max(1, min(8, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
+    try:
+        from .production_policy import max_parallel_workers
+        cap = max_parallel_workers()
+    except Exception:
+        cap = max(1, min(8, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
 
     if not ready:
+        from .worktree_isolation import acquire_task_workspace, merge_task_workspace, release_task_workspace
+        session = acquire_task_workspace(work, "full_goal", use_isolation=False)
         result = run_coding_session(
-            work_dir=work,
+            work_dir=session.path,
             goal=agent.spec_request or agent.user_text or state.get("request") or "",
             ir_hint={
                 "spec_request": agent.spec_request,
@@ -147,14 +153,16 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
             merge_task_workspace,
             release_task_workspace,
             write_task_tree_disk,
+            run_tasks_in_parallel,
         )
-        for task in ready[:cap]:
-            tree.mark(task.id, TaskStatus.RUNNING)
+        wave = ready[:cap]
+        # Isolate when parallel wave OR any parallel_group task
+        multi = len(wave) > 1 or any(getattr(t, "parallel_group", "") for t in wave)
+
+        def _runner(task, session):
             brief = tree.worker_brief(task.id)
             acc = list(getattr(task, "acceptance", None) or [])
             files = list(getattr(task, "files", None) or [])
-            use_iso = bool(getattr(task, "parallel_group", "") or "")
-            session = acquire_task_workspace(work, str(task.id), use_isolation=use_iso)
             result = run_coding_session(
                 work_dir=session.path,
                 goal=agent.spec_request or agent.user_text or "",
@@ -172,38 +180,85 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
             )
             if session.isolated:
                 merge_task_workspace(session, owned_files=files)
-                try:
-                    release_task_workspace(session)
-                except Exception:
-                    pass
             acc_rep = evaluate_task(work, files=files, acceptance=acc, strict=True)
-            if acc_rep.get("ok"):
+            return {
+                "ok": bool(acc_rep.get("ok")),
+                "task_id": str(task.id),
+                "acceptance": acc_rep,
+                "steps": result.get("steps"),
+                "errors": list(result.get("errors") or []),
+                "files": files,
+                "isolation": session.kind,
+            }
+
+        if multi:
+            # Concurrent worktrees (world-class parallel agents)
+            for t in wave:
+                tree.mark(t.id, TaskStatus.RUNNING)
+            batch = run_tasks_in_parallel(work, wave, _runner, max_workers=cap)
+            for item in batch:
+                tid = str(item.get("task_id") or "")
+                if item.get("ok"):
+                    tree.mark(
+                        tid,
+                        TaskStatus.DONE,
+                        result={
+                            "acceptance": item.get("acceptance"),
+                            "steps": item.get("steps"),
+                            "isolation": item.get("isolation"),
+                        },
+                    )
+                    notes.append(f"{tid}:done:{item.get('isolation')}")
+                else:
+                    all_ok = False
+                    fails = [
+                        str(f.get("id") or f.get("detail") or "")
+                        for f in ((item.get("acceptance") or {}).get("failed") or [])
+                    ][:8]
+                    err = "; ".join(list(item.get("errors") or []) + fails)[:400]
+                    tree.mark(tid, TaskStatus.FAILED, error=err, result={"acceptance": item.get("acceptance")})
+                    agent.build_errors = list(agent.build_errors or []) + fails
+                    notes.append(f"{tid}:failed")
+        else:
+            task = wave[0]
+            tree.mark(task.id, TaskStatus.RUNNING)
+            session = acquire_task_workspace(
+                work, str(task.id),
+                use_isolation=bool(getattr(task, "parallel_group", "")),
+            )
+            out = _runner(task, session)
+            try:
+                release_task_workspace(session)
+            except Exception:
+                pass
+            if out.get("ok"):
                 tree.mark(
                     task.id,
                     TaskStatus.DONE,
                     result={
-                        "acceptance": acc_rep,
-                        "steps": result.get("steps"),
-                        "isolation": session.kind,
+                        "acceptance": out.get("acceptance"),
+                        "steps": out.get("steps"),
+                        "isolation": out.get("isolation"),
                     },
                 )
-                notes.append(f"{task.id}:done:{session.kind}")
+                notes.append(f"{task.id}:done:{out.get('isolation')}")
             else:
                 all_ok = False
                 fails = [
                     str(f.get("id") or f.get("detail") or "")
-                    for f in (acc_rep.get("failed") or [])
+                    for f in ((out.get("acceptance") or {}).get("failed") or [])
                 ][:8]
-                err = "; ".join(list(result.get("errors") or []) + fails)[:400]
-                tree.mark(task.id, TaskStatus.FAILED, error=err, result={"acceptance": acc_rep})
+                err = "; ".join(list(out.get("errors") or []) + fails)[:400]
+                tree.mark(task.id, TaskStatus.FAILED, error=err, result={"acceptance": out.get("acceptance")})
                 agent.build_errors = list(agent.build_errors or []) + fails
                 notes.append(f"{task.id}:failed")
-            agent.extensions["task_tree"] = tree.to_dict()
-            agent.extensions["task_tree_summary"] = tree.summary()
-            try:
-                write_task_tree_disk(work, tree.to_dict())
-            except Exception:
-                pass
+
+        agent.extensions["task_tree"] = tree.to_dict()
+        agent.extensions["task_tree_summary"] = tree.summary()
+        try:
+            write_task_tree_disk(work, tree.to_dict())
+        except Exception:
+            pass
 
     agent.generated_path = str(work)
     agent.build_success = all_ok or any(n.endswith(":done") for n in notes)

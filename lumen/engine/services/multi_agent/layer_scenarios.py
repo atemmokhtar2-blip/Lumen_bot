@@ -164,26 +164,17 @@ def sc_parallel_isolation_merge(tmp: Path) -> ScenarioResult:
     use_iso = bool(getattr(task, "parallel_group", "") or "")
     r.add("iso_on_single_active", use_iso is True)
 
-    session = tmp / ".parallel" / "feat_admin"
-    if session.exists():
-        shutil.rmtree(session)
-    session.mkdir(parents=True)
-    for src in tmp.rglob("*"):
-        if src.is_file() and ".parallel" not in src.parts:
-            dest = session / src.relative_to(tmp)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-    # worker writes only its module
-    mod = session / "modules" / "admin.py"
+    from .worktree_isolation import (
+        acquire_task_workspace, merge_task_workspace, release_task_workspace, ensure_git_repo,
+    )
+    ensure_git_repo(tmp)
+    wt = acquire_task_workspace(tmp, "feat_admin", use_isolation=True)
+    r.add("isolation_kind_worktree", wt.kind == "worktree")
+    mod = wt.path / "modules" / "admin.py"
     mod.parent.mkdir(parents=True, exist_ok=True)
     mod.write_text("def admin():\n    return True\n", encoding="utf-8")
-    # merge declared files only
-    for rel in task.files:
-        src = session / rel
-        if src.is_file():
-            dest = tmp / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+    merge_task_workspace(wt, owned_files=list(task.files or ["modules/admin.py"]))
+    release_task_workspace(wt)
     r.add("merged_file", (tmp / "modules" / "admin.py").is_file())
     r.add("main_untouched", (tmp / "main.py").read_text() == "# root\n")
     acc = evaluate_task(tmp, files=task.files, acceptance=task.acceptance, strict=True)
