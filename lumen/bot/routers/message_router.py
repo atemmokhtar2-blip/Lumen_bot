@@ -231,7 +231,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if _gr.sanitized:
             request = _gr.sanitized
     except Exception:
-        logger.exception("llm_guardrails scan failed")
+        logger.exception("llm_guardrails scan failed — fail closed")
+        await message.reply_text(
+            "تعذر التحقق الأمني من الطلب. أعد المحاولة لاحقًا."
+        )
+        return
 
     # Cooperative cancel of in-flight generation (agent_loop checks each step)
     _low_req = request.lower().strip()

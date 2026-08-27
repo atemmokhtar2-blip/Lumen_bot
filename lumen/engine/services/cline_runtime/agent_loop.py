@@ -121,6 +121,31 @@ def run_agent(
 ) -> AgentState:
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    # LLM observability (LangSmith when keyed) — real process setup
+    try:
+        from lumen.platform.observability import setup_observability
+        setup_observability(service_name="lumen-agent")
+    except Exception:
+        pass
+    # Guard goal text (fail-closed on injection)
+    try:
+        from lumen.engine.security.llm_guardrails import scan_user_input
+        _gr = scan_user_input(goal or "")
+        if not _gr.ok:
+            state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
+            state.ok = False
+            state.stop_reason = "blocked_by_guardrails"
+            state.errors.append("guardrails:" + ",".join(_gr.reasons)[:300])
+            state.metadata["guardrails"] = {"ok": False, "reasons": list(_gr.reasons), "backend": _gr.backend}
+            return state
+        if _gr.sanitized:
+            goal = _gr.sanitized
+    except Exception as _gexc:
+        state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
+        state.ok = False
+        state.stop_reason = "guardrails_error"
+        state.errors.append(f"guardrails_error:{type(_gexc).__name__}")
+        return state
     state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
     state.metadata["model"] = describe_runtime()
     task = "repair" if (

@@ -146,6 +146,26 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
       2) Cline via run_generation_with_bridge / execute_ir
     """
     request = clamp_spec_request(request or "")
+    # Fail-closed security scan before any engine work
+    try:
+        from lumen.engine.security.llm_guardrails import scan_user_input
+        _gr = scan_user_input(request)
+        if not _gr.ok:
+            from lumen.engine.core.result import GenerationResult
+            return GenerationResult(
+                success=False,
+                errors=["guardrails:" + ",".join(_gr.reasons)[:300]],
+                metadata={"guardrails": {"ok": False, "reasons": list(_gr.reasons), "backend": _gr.backend}},
+            )
+        if _gr.sanitized:
+            request = clamp_spec_request(_gr.sanitized)
+    except Exception as _gexc:
+        from lumen.engine.core.result import GenerationResult
+        return GenerationResult(
+            success=False,
+            errors=[f"guardrails_error:{type(_gexc).__name__}"],
+            metadata={"guardrails": {"ok": False, "error": type(_gexc).__name__}},
+        )
     _bp_tenant = f"tg:{int(user_id or 0)}"
     _bp_acquired = False
     try:

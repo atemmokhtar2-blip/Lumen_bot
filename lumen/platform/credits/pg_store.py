@@ -45,8 +45,12 @@ class PostgresCreditsStore:
         self._pg_errors = pg_errors
         self._ensure_schema()
 
-    def _conn(self):
-        return self._psycopg.connect(self.dsn, row_factory=self._dict_row)
+    def _conn(self, tenant_id: str | None = None):
+        """Open connection; when tenant_id given, set RLS GUC app.tenant_id."""
+        conn = self._psycopg.connect(self.dsn, row_factory=self._dict_row)
+        if tenant_id is not None and str(tenant_id).strip():
+            set_tenant_context(conn, str(tenant_id))
+        return conn
 
     def _tenant_conn(self, tenant_id: str):
         """Connection with app.tenant_id set for PostgreSQL RLS."""
@@ -54,8 +58,7 @@ class PostgresCreditsStore:
 
         @contextmanager
         def _cm():
-            with self._conn() as conn:
-                set_tenant_context(conn, str(tenant_id or ""))
+            with self._conn(tenant_id) as conn:
                 yield conn
 
         return _cm()
@@ -310,7 +313,7 @@ class PostgresCreditsStore:
                 )
                 conn.commit()
         except self._pg_errors.UniqueViolation:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -380,7 +383,7 @@ class PostgresCreditsStore:
                 )
                 conn.commit()
         except self._pg_errors.UniqueViolation:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -458,7 +461,7 @@ class PostgresCreditsStore:
                 )
                 conn.commit()
         except self._pg_errors.UniqueViolation:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -484,7 +487,7 @@ class PostgresCreditsStore:
             return CreditResult(ok=False, reason=err)
         now = time.time()
         try:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -516,7 +519,7 @@ class PostgresCreditsStore:
                 )
                 conn.commit()
         except self._pg_errors.UniqueViolation:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -542,7 +545,7 @@ class PostgresCreditsStore:
             return CreditResult(ok=False, reason=err)
         now = time.time()
         try:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
@@ -591,7 +594,7 @@ class PostgresCreditsStore:
                 )
                 conn.commit()
         except self._pg_errors.UniqueViolation:
-            with self._conn() as conn:
+            with self._tenant_conn(tid) as conn:
                 hit = self._fetch_idem(conn, key, tid)
                 if hit:
                     return hit
