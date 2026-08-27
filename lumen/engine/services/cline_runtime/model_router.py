@@ -8,7 +8,7 @@ Keys never collide:
   OLLAMA_HOST    → local
 
 CLINE_LLM_PROVIDER / ENGINE_LLM_PROVIDER: groq | gemini | xai | ollama | llamacpp | openai_compat | auto
-Default auto order: llamacpp → qwen → groq → gemini → xai → ollama
+Default auto order: xai (Grok) → groq → qwen → llamacpp → gemini → ollama
 
 Tablet / llama.cpp server:
   LLAMACPP_BASE_URL=https://xxx.trycloudflare.com/v1
@@ -253,12 +253,12 @@ def select_model(*, task: str = "build") -> ModelChoice:
     # plan/critique → stronger models first; build → cheaper/faster first
     task_l = (task or "build").strip().lower()
     if task_l in {"plan", "planner", "architect"}:
-        order = ("gemini", "xai", "qwen", "groq", "llamacpp", "ollama")
+        order = ("xai", "gemini", "qwen", "groq", "llamacpp", "ollama")
     elif task_l in {"critique", "critic", "review", "qa"}:
-        order = ("gemini", "xai", "qwen", "groq", "llamacpp", "ollama")
+        order = ("xai", "gemini", "qwen", "groq", "llamacpp", "ollama")
     else:
-        # build / worker — prefer fast local or high-RPM pools
-        order = ("llamacpp", "qwen", "groq", "gemini", "xai", "ollama")
+        # build / worker — Grok (xAI) first for speed, then Groq high-RPM
+        order = ("xai", "groq", "qwen", "llamacpp", "gemini", "ollama")
 
     for name in order:
         choice = table.get(name)

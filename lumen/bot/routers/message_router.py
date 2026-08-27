@@ -55,7 +55,7 @@ def _looks_like_generation_request(text: str) -> bool:
     """Explicit generate intent (verbs). Does NOT include bare bot-spec descriptions.
 
     Bare specs like «بوت متجر إلكتروني…» are handled by _looks_like_bot_spec and
-    must flow through Gemini chat → translator → engine — not force_generate.
+    flows through free multi-agent engine (force_generate) — Gemini translate pipeline retired.
     """
     value = (text or "").strip().lower()
     # Strip decorative quotes/punctuation that users often paste from chat UIs.
@@ -716,7 +716,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
     # NEVER intercept bot generation/specs here — those must reach:
-    #   Gemini (understand) → translator (generation contract) → engine
+    #   multi-agent / Cline engine (Gemini translate dual-path retired)
     try:
         _ar0 = (context.user_data or {}).get("active_repo") if context.user_data else None
         _path0 = ""

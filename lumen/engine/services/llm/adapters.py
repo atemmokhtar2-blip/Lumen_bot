@@ -1,10 +1,8 @@
 """Concrete adapters: vendor SDKs → TranslateProvider / ChatProvider ports.
 
-Step 1 keeps current production behavior:
-  translate → Groq body in translator_client.translate_via_groq
-  chat      → Gemini body in translator_client.chat_via_gemini
-
-Step 2: Groq chat is production-ready; Gemini translate adapter is live.
+Post multi-agent era (no deterministic catalog engine):
+  chat      → Grok (xAI) primary, Groq fallback — fast responses
+  translate → optional residual path (Groq/Gemini); generation goes multi-agent
 """
 from __future__ import annotations
 
@@ -201,9 +199,25 @@ class GroqChatAdapter:
         return chat_via_groq(message, context)
 
 
+class GrokChatAdapter:
+    """xAI Grok chat — preferred primary for speed."""
+
+    name = "xai"
+
+    def chat(
+        self,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        from lumen.engine.services.llm.grok_chat import chat_via_grok
+
+        return chat_via_grok(message, context)
+
+
 __all__ = [
     "GroqTranslateAdapter",
     "GeminiChatAdapter",
     "GeminiTranslateAdapter",
     "GroqChatAdapter",
+    "GrokChatAdapter",
 ]
