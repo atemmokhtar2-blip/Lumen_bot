@@ -113,11 +113,8 @@ def _local_process_allowed() -> bool:
         from lumen.engine.services.isolation_policy import decide_isolation
         return bool(decide_isolation().allow_local)
     except Exception:
-        import os
-        # Fail closed: never default-allow host process on policy failure
-        return (os.environ.get("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER") or "0").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
+        # Fail closed: never allow host process when policy cannot be evaluated.
+        return False
 
 
 class LocalProcessDriver(DeploymentProvider):

@@ -100,3 +100,34 @@ def test_gemini_rejects_unknown_action_name():
     }
     out = gc._normalize(result)  # type: ignore[attr-defined]
     assert out["action"]["name"] == ""
+
+
+def test_api_security_require_openat2_defined_and_true(monkeypatch):
+    monkeypatch.delenv("TBE_ALLOW_WEAK_PATH_OPEN", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    import importlib.util
+    from pathlib import Path as P
+    path = P("lumen/api/security.py").resolve()
+    spec = importlib.util.spec_from_file_location("lumen_api_security_under_test", path)
+    sec = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(sec)
+    assert callable(sec._require_openat2)
+    assert sec._require_openat2() is True
+
+
+def test_open_beneath_defaults_require_openat2():
+    import inspect
+    from lumen.engine.services.linux_path_open import open_beneath, verify_dir_beneath
+    assert inspect.signature(open_beneath).parameters["require_openat2"].default is True
+    assert inspect.signature(verify_dir_beneath).parameters["require_openat2"].default is True
+
+
+def test_live_runner_allow_local_requires_not_strong(monkeypatch):
+    """Even if allow_local leaked True with strong isolation, runner must not host-run."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    from lumen.engine.services.isolation_policy import decide_isolation
+    d = decide_isolation()
+    # Policy: multi-tenant never allow_local without dual gate
+    assert d.allow_local is False or d.require_strong_isolation is False

@@ -658,11 +658,13 @@ def run_bot_project(
 
     import os as _os
     # Single source of truth: isolation_policy (fail-closed multi-tenant/prod).
+    # Host LocalProcess is NEVER a silent fallback when Docker fails — only the
+    # explicit dual gate (ALLOW+FORCE) sets allow_local without strong isolation.
     try:
         from lumen.engine.services.isolation_policy import decide_isolation
         _d = decide_isolation()
-        require_docker = bool(_d.require_docker)
-        allow_local = bool(_d.allow_local)
+        require_docker = bool(_d.require_docker) or bool(_d.require_strong_isolation)
+        allow_local = bool(_d.allow_local) and not bool(_d.require_strong_isolation)
     except Exception:
         require_docker, allow_local = True, False
     prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
@@ -670,7 +672,6 @@ def run_bot_project(
     }
     if require_docker:
         prefer = True
-        # keep allow_local from isolation policy (fallback when Docker fails)
 
     docker_err = ""
     if prefer or require_docker:
@@ -734,10 +735,11 @@ def run_bot_project(
             ok=False,
             phase="security",
             message=(
-                "Docker مطلوب لتشغيل آمن وغير متاح أو فشل. "
-                "لا يُسمح بالتشغيل المحلي "
-                f"({docker_err or 'docker_required'}). "
-                "فعّل TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 أو ثبّت Docker."
+                "عزل قوي (Docker/Firecracker/gVisor) مطلوب وغير متاح أو فشل. "
+                "التشغيل على المضيف مرفوض (fail-closed). "
+                f"({docker_err or 'sandbox_required'}). "
+                "ثبّت sandbox backend أو استخدم البوابة المزدوجة "
+                "TBE_ALLOW_LOCAL_PROCESS=1 + TBE_FORCE_LOCAL_PROCESS=1 للتطوير فقط."
             ),
             install_log="",
             run_log="",

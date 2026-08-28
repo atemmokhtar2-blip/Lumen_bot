@@ -181,7 +181,7 @@ def open_beneath(
     directory: bool = True,
     flags: int | None = None,
     resolve: int = _DEFAULT_RESOLVE,
-    require_openat2: bool = False,
+    require_openat2: bool = True,
 ) -> OpenedPath:
     """Open path so it must remain under *root* with no symlink traversal.
 
@@ -261,7 +261,7 @@ def open_beneath(
             pass
 
 
-def verify_dir_beneath(root: str | Path, path: str | Path, *, require_openat2: bool = False) -> Path:
+def verify_dir_beneath(root: str | Path, path: str | Path, *, require_openat2: bool = True) -> Path:
     """Open-and-verify directory under root; close fd; return real Path.
 
     Security-sensitive API for validate_*_project_path.
