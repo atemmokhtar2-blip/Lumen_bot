@@ -56,9 +56,7 @@ async def handle_ui_callback(update, context) -> None:
 
     text = render_message(result.state, facts)
     if not result.ok:
-        text = f"⚠️ {result.message_ar}
-
-{text}"
+        text = f"⚠️ {result.message_ar}\n\n{text}"
 
     try:
         markup = build_inline_keyboard(result.buttons)
