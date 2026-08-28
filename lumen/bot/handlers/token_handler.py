@@ -28,8 +28,26 @@ async def try_handle_token(
     # Spec 065 — if user is sending a bot token after successful generation
     pending_host = (context.user_data or {}).get("pending_host")
     if pending_host and looks_like_bot_token(request):
+        # Resolve path if UI left a relative/stale ref
+        try:
+            from lumen.bot.ui.project_resolve import resolve_project_path, resolve_entry_point
+            _root = resolve_project_path(str(pending_host.get("project_path") or ""), context.user_data)
+            if _root is not None:
+                pending_host = dict(pending_host)
+                pending_host["project_path"] = str(_root)
+                pending_host.setdefault("entry_point", resolve_entry_point(_root))
+                context.user_data["pending_host"] = pending_host
+        except Exception:
+            pass
         context.user_data.pop("pending_host", None)
-        status = await message.reply_text("🚀 جاري بدء الاستضافة (عملية طويلة الأمد)...")
+        # Ensure trial pending cannot steal this token mid-flight
+        if context.user_data is not None:
+            context.user_data.pop("pending_run", None)
+            context.user_data.pop("pending_live_run", None)
+            context.user_data.pop("pending_deploy", None)
+        status = await message.reply_text(
+            "🚀 جاري بدء الاستضافة الدائمة (HostService / Firecracker)..."
+        )
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         def _do_host():

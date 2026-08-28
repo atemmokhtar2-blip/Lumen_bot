@@ -113,9 +113,17 @@ async def handle_ui_callback(update, context) -> None:
     if result.ok and getattr(result, "post_side_effect", ""):
         try:
             from .post_actions import execute_post_side_effect
+            from .project_resolve import resolve_project_path
+            pref = result.state.project_ref
+            if not pref:
+                rp = resolve_project_path("", user_data)
+                pref = str(rp) if rp else ""
+                if pref:
+                    result.state.project_ref = pref
+                    save_ui_state(user_data, result.state)
             note = await execute_post_side_effect(
                 effect=result.post_side_effect,
-                project_ref=result.state.project_ref,
+                project_ref=pref,
                 message=msg,
                 context=context,
                 user=update.effective_user,

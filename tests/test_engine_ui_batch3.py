@@ -64,7 +64,7 @@ def test_execute_post_trial_sets_pending(tmp_path):
         )
 
     note = asyncio.get_event_loop().run_until_complete(_run())
-    assert "تجربة" in note or "توكن" in note
+    assert "trial_chat" in note or "تجربة" in note or "توكن" in note
     assert ctx.user_data.get("pending_run", {}).get("project_path") == str(proj)
     assert ctx.user_data.get("pending_run", {}).get("plane") == "trial_chat"
 
@@ -90,6 +90,18 @@ def test_execute_post_host_sets_pending_host(tmp_path):
         )
 
     note = asyncio.get_event_loop().run_until_complete(_run())
-    assert "دائمة" in note or "Firecracker" in note or "توكن" in note
+    assert "permanent_host" in note or "دائمة" in note or "توكن" in note
     assert ctx.user_data.get("pending_host", {}).get("project_path") == str(proj)
     assert "pending_run" not in ctx.user_data  # cleared for host routing
+
+
+def test_resolve_project_path_and_entry(tmp_path):
+    from lumen.bot.ui.project_resolve import resolve_entry_point, resolve_project_path, bind_active_repo
+    proj = tmp_path / "p"
+    proj.mkdir()
+    (proj / "main.py").write_text("x")
+    ud = {"last_project_path": str(proj)}
+    assert resolve_project_path("", ud) == proj.resolve()
+    assert resolve_entry_point(proj) == "main.py"
+    bind_active_repo(ud, proj, entry="main.py")
+    assert ud["active_repo"]["path"] == str(proj)

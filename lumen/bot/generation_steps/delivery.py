@@ -345,13 +345,24 @@ async def deliver_generation_result(
         logger.exception("anti_hallucination report failed")
 
     if ready and context.user_data is not None:
+        try:
+            from lumen.bot.ui.project_resolve import resolve_entry_point, bind_active_repo
+            _entry = resolve_entry_point(Path(str(project_path)))
+        except Exception:
+            _entry = "main.py"
         pending_payload = {
             "project_path": str(project_path),
             "owner_user_id": user.id if user else None,
-            "entry_point": "main.py",
-            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 1800)),  # overridden by plan gate in messages
+            "entry_point": _entry,
+            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 1800)),
             "sandbox": True,
+            "plane": "trial_chat",
         }
+        try:
+            if context.user_data is not None:
+                bind_active_repo(context.user_data, Path(str(project_path)), entry=_entry)
+        except Exception:
+            pass
         # All three keys so any token-handler path finds the project
         context.user_data["pending_deploy"] = dict(pending_payload)
         context.user_data["pending_live_run"] = dict(pending_payload)
