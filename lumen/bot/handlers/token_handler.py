@@ -9,7 +9,6 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import sanitize_error
 from ..helpers import looks_like_bot_token, normalize_bot_token
 from ..live import handle_live_run_token, handle_live_deploy_token
 from ..middlewares.mongo_sync import (
@@ -205,7 +204,7 @@ async def try_handle_token(
                 context.user_data.pop("pending_git_push", None)
                 await status.edit_text(f"✅ {result.message}")
             else:
-                await status.edit_text(f"❌ {sanitize_error(result.message)}")
+                await status.edit_text("❌ فشلت العملية. راجع التفاصيل في السجلات.")
             return True
 
     # Private repo: user sends GitHub PAT after auth failure
@@ -240,9 +239,8 @@ async def try_handle_token(
             try:
                 result = await asyncio.to_thread(_reclone)
             except Exception as e:
-                err_msg = sanitize_error(f"{type(e).__name__}: {e}")
-                logger.error("private reclone failed: %s", err_msg)
-                await status.edit_text(f"❌ فشل السحب بالتوكن: {err_msg}")
+                logger.exception("private reclone failed")
+                await status.edit_text(f"❌ فشل السحب بالتوكن (`{type(e).__name__}`).")
                 return True
 
             finally:

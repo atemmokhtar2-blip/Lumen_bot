@@ -9,7 +9,6 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import sanitize_error
 from ..helpers import make_zip_from_path
 from ..middlewares.mongo_sync import (
     persist_session as _persist_session,
@@ -172,7 +171,7 @@ async def try_handle_git(
             context.user_data["pending_git_push"] = {"path": path}
             await status.edit_text("🔒 التوكن مرفوض. أرسل PAT بصلاحية `repo`.")
         else:
-            await status.edit_text(f"❌ {sanitize_error(result.message)}")
+            await status.edit_text("❌ فشلت العملية. راجع السجلات على الخادم.")
         return True
 
     # ── PULL (update existing active repo) ────────────────────────
@@ -187,7 +186,7 @@ async def try_handle_git(
         status = await message.reply_text("📥 جاري سحب آخر نسخة...")
         result = await asyncio.to_thread(lambda: git_pull(path, token=token))
         if result.ok:
-            await status.edit_text(f"✅ {result.message}\n`{result.path}`")
+            await status.edit_text(f"✅ {result.message}")
         elif result.needs_auth:
             context.user_data["pending_clone_auth"] = {
                 "url": result.url or "",
@@ -198,7 +197,7 @@ async def try_handle_git(
                 "🔒 المستودع خاص.\nأرسل توكن GitHub (PAT) بصلاحية `repo`."
             )
         else:
-            await status.edit_text(f"❌ {sanitize_error(result.message)}")
+            await status.edit_text("❌ فشلت العملية. راجع السجلات على الخادم.")
         return True
 
     # ── CLONE (default) ───────────────────────────────────────────

@@ -9,7 +9,6 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import sanitize_error
 from ..helpers import chat_route, make_zip_from_path
 
 

@@ -67,7 +67,6 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             await hb_task
         except Exception:
             pass
-        from .sanitize import sanitize_error
         await status.edit_text(f"❌ فشل التشغيل الحي (`{type(e).__name__}`).")
         context.user_data.pop("pending_run", None)
         return
@@ -122,7 +121,7 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
         logger.exception("Live deployment engine failed")
         await status.edit_text(
             "❌ فشل Live Deployment — العزل بحاوية Docker إلزامي.\n"
-            f"{type(e1).__name__}: {sanitize_error(str(e1), max_len=220)}\n"
+            f"رمز: `{type(e1).__name__}`\n"
             "لا يوجد تشغيل محلي بديل."
         )
         context.user_data.pop("pending_deploy", None)
