@@ -15,7 +15,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import sanitize_error
+from ..sanitize import sanitize_error, user_facing_generation_error
 from ..resource_limits import (
     clamp_user_text,
     clamp_spec_request,
@@ -180,7 +180,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Ensure user identity + plan exist in MongoDB (users collection)
-    _ensure_mongo_user(user)
+    # pymongo is sync — never block the PTB asyncio loop
+    await asyncio.to_thread(_ensure_mongo_user, user)
 
     uid_check = int(user.id) if user else 0
     if not _rate_limit_ok(uid_check):
@@ -275,7 +276,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # User plan status from MongoDB
     if request.lower().split("@")[0] in {"/plan", "/myplan", "/خطة"}:
         uid = int(user.id) if user else 0
-        plan = _mongo_plan_for_user(uid) or "free"
+        plan = (await asyncio.to_thread(_mongo_plan_for_user, uid)) or "free"
         labels = {
             "free": "Free — مجاني",
             "explorer": "Free — مجاني",
@@ -513,13 +514,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             work_dir = get_user_sandbox(uid, out_root).new_project_dir(label="gen")
         except Exception as sandbox_exc:
             logger.exception("sandbox workdir failed: %s", sandbox_exc)
-            fallback = Path(OUTPUT_DIR) / "fallback_gen" / f"u{int(user.id) if user else 0}"
+            # Hard-restricted fallback under /tmp only (never OUTPUT_DIR root / host paths)
             try:
-                fallback.mkdir(parents=True, exist_ok=True)
-                work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(fallback)))
-            except Exception:
-                work_dir = Path(tempfile.mkdtemp(prefix="botgen_lumen_"))
-                work_dir.mkdir(parents=True, exist_ok=True)
+                from lumen.bot.safe_workdir import allocate_fallback_workdir
+                work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
+            except Exception as fb_exc:
+                logger.exception("fallback workdir failed: %s", fb_exc)
+                await safe_edit_text(
+                    status_msg,
+                    user_facing_generation_error(code="sandbox_unavailable"),
+                )
+                return
 
         try:
             # Engine-direct: Multi-Agent Orchestrator + Cline owns understanding,
@@ -541,10 +546,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             errors = list(getattr(result, "errors", None) or [])
 
             if not success or not project_path:
-                err_bits = ", ".join(str(e)[:80] for e in errors[:4]) or "unknown"
+                logger.warning("generation failed errors=%s", [str(e)[:200] for e in errors[:8]])
                 await safe_edit_text(
                     status_msg,
-                    f"❌ فشل التوليد: {escape_md(err_bits)[:300]}",
+                    user_facing_generation_error(code="generation_failed"),
                 )
                 return
 
@@ -603,11 +608,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         except Exception:
                             logger.exception("zip upload failed")
                             await message.reply_text(
-                                f"✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل.\nالمسار: `{escape_md(str(proj))}`"
+                                "✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل. تم حفظه في مساحة المستخدم المعزولة."
                             )
                     else:
                         await message.reply_text(
-                            f"✅ المشروع اتولد.\nالمسار: `{escape_md(str(proj))}`\n"
+                            "✅ المشروع اتولد وتم حفظه في مساحة المستخدم المعزولة.\n"
                             "تعذر إنشاء ZIP — راجع السجلات."
                         )
 
@@ -624,19 +629,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pass
         except FileNotFoundError as e:
             logger.exception("generate-now FileNotFoundError")
-            missing = getattr(e, "filename", None) or (e.args[0] if e.args else "")
             await safe_edit_text(
                 status_msg,
-                f"❌ ملف/مجلد مفقود أثناء التوليد.\n`{escape_md(str(missing)[:200])}`\n"
-                "تأكد أن OUTPUT_DIR قابل للكتابة على السيرفر.",
+                user_facing_generation_error(e),
             )
         except Exception as e:
             logger.exception("generate-now path failed")
-            err_text = escape_md(sanitize_error(str(e), max_len=400))
             await safe_edit_text(
                 status_msg,
-                f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`",
-                use_markdown=True,
+                user_facing_generation_error(e),
             )
         return
 
@@ -1887,11 +1888,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as _wd_exc:
         logger.exception("workdir sandbox failed: %s", _wd_exc)
         try:
-            out_root = Path(OUTPUT_DIR)
-            out_root.mkdir(parents=True, exist_ok=True)
-            work_dir = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(out_root)))
-        except Exception:
-            work_dir = Path(tempfile.mkdtemp(prefix="botgen_lumen_"))
+            from lumen.bot.safe_workdir import allocate_fallback_workdir
+            work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
+        except Exception as fb_exc:
+            logger.exception("fallback workdir failed: %s", fb_exc)
+            await safe_edit_text(
+                status_msg,
+                user_facing_generation_error(code="sandbox_unavailable"),
+            )
+            return
 
     try:
         _pref_keys = None
@@ -2000,9 +2005,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                             )
                     except Exception:
                         logger.exception("zip upload failed")
-                        await message.reply_text(f"✅ المشروع جاهز: `{escape_md(str(proj))}`")
+                        await message.reply_text("✅ المشروع جاهز في مساحة المستخدم المعزولة.")
                 else:
-                    await message.reply_text(f"✅ المشروع جاهز: `{escape_md(str(proj))}`")
+                    await message.reply_text("✅ المشروع جاهز في مساحة المستخدم المعزولة.")
         try:
             if result and getattr(result, "success", False) and getattr(result, "project_path", None):
                 from ..generation_cache import get_generation_cache
@@ -2033,25 +2038,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except FileNotFoundError as e:
         logger.exception("Generation FileNotFoundError")
-        missing = getattr(e, "filename", None) or (e.args[0] if e.args else str(e))
-        # Last-chance: create OUTPUT_DIR and tell user to retry once
-        try:
-            Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
         await safe_edit_text(
             status_msg,
-            f"❌ مجلد/ملف مفقود أثناء التوليد.\n`{escape_md(str(missing)[:180])}`\n"
-            "أعد المحاولة مرة واحدة بعد ثوانٍ.",
+            user_facing_generation_error(e),
         )
     except Exception as e:
         logger.exception("Generation failed")
-        err_text = escape_md(sanitize_error(str(e), max_len=400))
         await safe_edit_text(
             status_msg,
-            f"❌ حدث خطأ أثناء التوليد:\n`{err_text}`\n\n"
-            "راجع السجلات أو أعد المحاولة. المحرك الرسمي نشط.",
-            use_markdown=True,
+            user_facing_generation_error(e),
         )
     finally:
         # Optional cleanup of very old temp dirs can be added later.

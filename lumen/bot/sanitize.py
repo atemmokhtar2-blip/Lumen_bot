@@ -155,8 +155,41 @@ def install_secret_log_filter() -> None:
             log.addFilter(filt)
 
 
+
+
+def user_facing_generation_error(exc: BaseException | None = None, *, code: str | None = None) -> str:
+    """User-visible generation failure — generic codes only; full detail stays in logs.
+
+    Never echo exception messages, paths, or stack fragments to Telegram clients.
+    """
+    if code:
+        c = str(code).strip()[:64] or "generation_failed"
+    elif exc is not None:
+        name = type(exc).__name__
+        if name in {"FileNotFoundError", "NotADirectoryError"}:
+            c = "missing_resource"
+        elif name in {"PermissionError"}:
+            c = "permission_denied"
+        elif name in {"TimeoutError", "EngineTimeoutError"}:
+            c = "timeout"
+        elif name == "RuntimeError" and "sandbox" in str(exc).lower():
+            c = "sandbox_unavailable"
+        else:
+            c = "generation_failed"
+    else:
+        c = "generation_failed"
+    return (
+        "❌ تعذر إكمال التوليد."
+        + chr(10)
+        + f"رمز الخطأ: `{c}`"
+        + chr(10)
+        + "أعد المحاولة لاحقًا. إذا تكرر الخطأ تواصل مع الدعم مع ذكر الرمز فقط."
+    )
+
+
 __all__ = [
     "sanitize_error",
+    "user_facing_generation_error",
     "sanitize_for_storage",
     "assert_safe_fs_path",
     "sanitize_log_text",

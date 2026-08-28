@@ -8,6 +8,12 @@ Foundation:
     absorb bursts before hitting Redis/SQLite.
 
 Callers use RateLimiter only — never branch on backend type.
+
+Multi-worker note:
+  LocalTokenBucket is process-local only. Global authority is Redis (Lua/sorted-set).
+  Under concurrent workers the local layer may admit a small burst of
+  (workers × local_capacity) before Redis rejects — accepted latency/availability
+  tradeoff. For strict global caps, set RATE_LIMIT_DISABLE_LOCAL_BUCKET=1 (optional).
 """
 from __future__ import annotations
 
