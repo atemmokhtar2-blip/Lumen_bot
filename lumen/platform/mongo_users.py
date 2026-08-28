@@ -57,7 +57,7 @@ class MongoUserStore:
         if not self.uri:
             raise ValueError("MONGODB_URI is required for MongoUserStore")
         self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
-        timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "8000")
+        timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
         self._client = MongoClient(
             self.uri,
             serverSelectionTimeoutMS=timeout,

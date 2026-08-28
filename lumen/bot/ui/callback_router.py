@@ -142,10 +142,32 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         if result.state.phase != EngineUiPhase.GEN_TYPE:
             user_data.pop("engine_ui_await_generate", None)
 
+    # Persist off the event loop (SQLite can block under load)
     if uid:
-        persist_ui_session(uid, dict(user_data))
+        try:
+            import asyncio
+            asyncio.get_running_loop().create_task(
+                asyncio.to_thread(persist_ui_session, uid, dict(user_data))
+            )
+        except Exception:
+            try:
+                persist_ui_session(uid, dict(user_data))
+            except Exception:
+                pass
 
-    facts = gather_ui_facts(uid, user_data)
+    # Facts I/O (Neon/Mongo) off event loop — include hosts only for dashboard
+    include_hosts = result.state.phase.value == "dashboard"
+    try:
+        import asyncio
+        from functools import partial
+        facts = await asyncio.to_thread(
+            partial(gather_ui_facts, uid, user_data, include_hosts=include_hosts)
+        )
+    except Exception:
+        try:
+            facts = gather_ui_facts(uid, user_data, include_hosts=include_hosts)
+        except TypeError:
+            facts = gather_ui_facts(uid, user_data)
     if result.state.phase == EngineUiPhase.HELP:
         facts.generate_hint = _help_body()
 

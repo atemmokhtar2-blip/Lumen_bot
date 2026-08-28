@@ -36,7 +36,14 @@ class RedisRateLimiter:
     def __init__(self, redis_url: str) -> None:
         import redis  # optional dependency; imported only when configured
 
-        self._r = redis.Redis.from_url(redis_url, decode_responses=True)
+        connect_to = float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2")
+        socket_to = float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2")
+        self._r = redis.Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=connect_to,
+            socket_timeout=socket_to,
+        )
         # Fail fast if Redis is unreachable at construction time
         self._r.ping()
         self._prefix = (os.getenv("REDIS_RATE_PREFIX") or "rl:").strip() or "rl:"

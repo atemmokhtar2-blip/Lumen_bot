@@ -1,6 +1,7 @@
 """Telegram command handlers (/start, /help, /status, /lang)."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from telegram import Update
@@ -28,11 +29,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data is not None and "lang" not in context.user_data:
         set_lang(context, lang)
 
-    # Persist user on every /start (create or refresh last_seen — even after bot delete)
+    # Persist user on every /start — off event loop (pymongo is sync)
     try:
         if user:
             from lumen.bot.middlewares.mongo_sync import ensure_mongo_user
-            ensure_mongo_user(user)
+            await asyncio.to_thread(ensure_mongo_user, user)
     except Exception:
         pass
 
@@ -59,9 +60,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     save_ui_state(ud, ui)
     uid = int(user.id) if user else 0
     if uid:
-        persist_ui_session(uid, dict(ud))
+        try:
+            await asyncio.to_thread(persist_ui_session, uid, dict(ud))
+        except Exception:
+            persist_ui_session(uid, dict(ud))
 
-    facts = gather_ui_facts(uid, ud)
+    try:
+        facts = await asyncio.to_thread(gather_ui_facts, uid, ud)
+    except Exception:
+        facts = gather_ui_facts(uid, ud)
     caption = render_message(ui, facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME))
 
