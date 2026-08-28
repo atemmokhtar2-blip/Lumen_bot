@@ -243,7 +243,9 @@ def open_beneath(
         if require_openat2:
             raise PathOpenError(errno.ENOSYS, "openat2_required_but_unavailable")
 
-        # Fallback: O_NOFOLLOW|O_DIRECTORY on final path only (weaker — last component)
+        # Fallback (DEV/TEST ONLY when callers pass require_openat2=False):
+        # O_NOFOLLOW protects the *final* component only — intermediate symlinks can
+        # still escape. Production callers must set require_openat2=True.
         final = root_p / rel_s if rel_s else root_p
         fb_flags = base_flags | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(str(final), fb_flags)

@@ -30,6 +30,15 @@ _ALLOWED_ACTIONS = {
     "refine_bot",
 }
 
+# Server-side gate: model cannot disable confirmation for these (prompt-injection resistant).
+_ACTIONS_FORCE_CONFIRMATION = frozenset({
+    "clone_repo",
+    "host_start",
+    "host_stop",
+    "generate_bot",
+    "refine_bot",
+})
+
 def _gemini_tools() -> list[dict[str, Any]]:
     """Native functionDeclarations for actions — validated server-side against allowlist."""
     names = sorted(a for a in _ALLOWED_ACTIONS if a)
@@ -407,9 +416,12 @@ def _apply_function_calls(result: dict[str, Any], body: dict[str, Any]) -> dict[
                 continue
             an = str(args.get("name") or "")
             if an in _ALLOWED_ACTIONS:
+                confirm = bool(args.get("requires_confirmation"))
+                if an in _ACTIONS_FORCE_CONFIRMATION:
+                    confirm = True
                 result["action"] = {
                     "name": an,
-                    "requires_confirmation": bool(args.get("requires_confirmation")),
+                    "requires_confirmation": confirm,
                 }
     except Exception:
         pass
@@ -451,10 +463,14 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
     if action_name not in _ALLOWED_ACTIONS:
         action = {"name": "", "requires_confirmation": False}
     else:
-        # Drop any extra keys the model may invent (prompt-injection of action payloads)
+        # Drop any extra keys the model may invent (prompt-injection of action payloads).
+        # Force confirmation for high-risk actions regardless of model output.
+        confirm = bool(action.get("requires_confirmation"))
+        if action_name in _ACTIONS_FORCE_CONFIRMATION:
+            confirm = True
         action = {
             "name": action_name,
-            "requires_confirmation": bool(action.get("requires_confirmation")),
+            "requires_confirmation": confirm,
         }
 
     translation = result.get("translation")

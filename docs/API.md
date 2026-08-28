@@ -6,7 +6,7 @@ Defaults pushed in factory when unset:
 
 - `TBE_MULTI_TENANT=1`
 - `TBE_REQUIRE_DOCKER=1`
-- `TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1`
+- `TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=0` (fail-closed; host LocalProcess never defaulted for B2B)
 - `TBE_PIP_WHEELS_ONLY=1`
 
 CORS: allowlist via `API_CORS_ORIGIN` (no `*` in production unless explicit unsafe flags in dev).

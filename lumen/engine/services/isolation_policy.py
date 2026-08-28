@@ -59,14 +59,16 @@ def strong_sandbox_available() -> tuple[bool, str]:
 
 
 def decide_isolation() -> IsolationDecision:
-    """Strong sandbox required in multi-tenant/production; local only with explicit gates."""
+    """Strong sandbox required in multi-tenant/production; local only with explicit gates.
+
+    Production / multi-tenant: TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER is **ignored**.
+    Host LocalProcess is allowed only via dual gate:
+      TBE_ALLOW_LOCAL_PROCESS=1 AND TBE_FORCE_LOCAL_PROCESS=1
+    (intentional single-tenant debug — never the API default).
+    """
     multi = is_multi_tenant()
     dev = is_dev_environment()
     dual = _flag("TBE_ALLOW_LOCAL_PROCESS", "0") and _flag("TBE_FORCE_LOCAL_PROCESS", "0")
-    if multi or not dev:
-        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "0")
-    else:
-        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "1")
 
     if dual:
         return IsolationDecision(
@@ -76,7 +78,13 @@ def decide_isolation() -> IsolationDecision:
             reason=f"explicit_local multi_tenant={multi} dev={dev}",
         )
 
-    # Strong isolation is mandatory whenever we are not on the dual local gate.
+    # Multi-tenant or non-dev: never allow host-local fallback (fail-closed).
+    if multi or not dev:
+        fallback = False
+    else:
+        # Dev-only convenience when Docker is missing on a developer laptop.
+        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "1")
+
     return IsolationDecision(
         require_docker=True,  # legacy: try container backends in the stack
         allow_local=fallback,
@@ -93,8 +101,9 @@ def assert_local_process_allowed() -> None:
     d = decide_isolation()
     if not d.allow_local:
         raise RuntimeError(
-            "local_process_denied: set TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 "
-            "or TBE_ALLOW_LOCAL_PROCESS=1 + TBE_FORCE_LOCAL_PROCESS=1. "
+            "local_process_denied: production/multi-tenant forbids host LocalProcess; "
+            "dev may use TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1; explicit dual gate "
+            "TBE_ALLOW_LOCAL_PROCESS=1 + TBE_FORCE_LOCAL_PROCESS=1 only when intentional. "
             f"({d.reason})"
         )
 

@@ -11,16 +11,17 @@ from lumen.api.routes import audit, billing, dashboard, generate, github_webhook
 
 logger = logging.getLogger("lumen_api")
 
-# B2B API is multi-tenant by nature: require Docker isolation unless operator overrides.
+# B2B API is multi-tenant by nature: strong isolation required (fail-closed).
 # Set TBE_MULTI_TENANT=0 explicitly only for single-tenant local debugging.
+# NEVER default TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 — that was an RCE path when
+# Docker/Firecracker/gVisor were unavailable (LocalProcessDriver on the host).
 if "TBE_MULTI_TENANT" not in os.environ:
     os.environ["TBE_MULTI_TENANT"] = "1"
 if "TBE_REQUIRE_DOCKER" not in os.environ:
     os.environ["TBE_REQUIRE_DOCKER"] = "1"
-# Local process controlled by isolation_policy (TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER).
-# Do not force TBE_ALLOW_LOCAL_PROCESS=0 here — that blocked all live runs without Docker.
+# Explicit deny of host-local untrusted execution unless operator dual-gates in isolation_policy.
 if "TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER" not in os.environ:
-    os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "1"
+    os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"
 if "TBE_PIP_WHEELS_ONLY" not in os.environ:
     os.environ["TBE_PIP_WHEELS_ONLY"] = "1"
 

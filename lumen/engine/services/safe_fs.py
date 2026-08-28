@@ -191,18 +191,42 @@ def open_directory_nofollow(path: Path | str) -> int:
     return fd
 
 
+def _require_openat2_for_paths() -> bool:
+    """Production / multi-tenant must use openat2 (RESOLVE_BENEATH); O_NOFOLLOW-only is unsafe."""
+    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        return True
+    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return False
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
+        return False
+    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    return multi or env not in {"dev", "development", "local", "test"}
+
+
 def verify_directory_nofollow(path: Path | str, *, root: Path | str | None = None) -> Path:
     """Validate path is a real directory under root — prefers openat2.
 
     Authority order:
       1) linux_path_open.verify_dir_beneath (openat2 RESOLVE_BENEATH|NO_SYMLINKS)
-      2) O_DIRECTORY|O_NOFOLLOW fallback
+      2) O_DIRECTORY|O_NOFOLLOW fallback — **dev/test only** (symlink TOCTOU on intermediates)
+    Production / multi-tenant: require_openat2=True (fail-closed if kernel lacks openat2).
     """
     p = Path(path)
     if root is not None:
         try:
             from lumen.engine.services.linux_path_open import verify_dir_beneath, PathOpenError
-            return Path(verify_dir_beneath(root, p, require_openat2=False))
+            return Path(
+                verify_dir_beneath(
+                    root, p, require_openat2=_require_openat2_for_paths()
+                )
+            )
         except Exception as exc:
             # Map to UnsafePathError for callers
             raise UnsafePathError(str(exc) or "path_open_refused") from exc
