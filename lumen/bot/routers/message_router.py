@@ -184,8 +184,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await asyncio.to_thread(_ensure_mongo_user, user)
 
     uid_check = int(user.id) if user else 0
-    if not _rate_limit_ok(uid_check):
-        wait_s = _rate_limit_wait_seconds(uid_check)
+    # Redis rate-limit is sync — keep it off the event loop
+    try:
+        allowed = await asyncio.to_thread(_rate_limit_ok, uid_check)
+    except Exception:
+        allowed = _rate_limit_ok(uid_check)
+    if not allowed:
+        try:
+            wait_s = await asyncio.to_thread(_rate_limit_wait_seconds, uid_check)
+        except Exception:
+            wait_s = _rate_limit_wait_seconds(uid_check)
         await message.reply_text(
             f"⏳ تجاوزت الحد المسموح من الطلبات. انتظر حوالي {wait_s} ثانية ثم حاول مرة أخرى."
         )
