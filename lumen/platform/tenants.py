@@ -108,6 +108,49 @@ def require_api_key_pepper() -> None:
     )
 
 
+def _dev_pepper_path() -> Path:
+    """Local file that stores an auto-generated strong pepper for pure-dev runs."""
+    base = Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
+    return base / ".lumen_dev_pepper"
+
+
+def _load_or_create_dev_pepper() -> bytes:
+    """Generate a strong random pepper once and persist it (mode 0600).
+
+    Used only when ENVIRONMENT is explicitly dev/local/test AND no env pepper
+    is provided. Never used when production signals are present.
+    """
+    path = _dev_pepper_path()
+    try:
+        if path.is_file():
+            data = path.read_bytes().strip()
+            if _pepper_is_strong(data):
+                return data
+    except OSError:
+        pass
+    # Generate new strong pepper
+    pepper = secrets.token_urlsafe(48).encode("utf-8")  # ~64 bytes
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(pepper)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        raise RuntimeError(
+            "Cannot create local dev pepper file. "
+            "Set API_KEY_PEPPER explicitly or ensure OUTPUT_DIR is writable."
+        ) from exc
+    import logging
+    logging.getLogger("lumen.platform.tenants").warning(
+        "Generated and persisted a local dev API_KEY_PEPPER at %s (mode 0600). "
+        "Set API_KEY_PEPPER in the environment for reproducible hashes across machines.",
+        path,
+    )
+    return pepper
+
+
 def _key_pepper() -> bytes:
     """Server-side pepper for API key hashes.
 
@@ -115,7 +158,8 @@ def _key_pepper() -> bytes:
     TBE_TOKEN_SECRET so existing single-node deploys keep a non-empty pepper
     without a new secret.
 
-    Hardcoded / weak peppers are allowed ONLY in explicit dev environments.
+    No hardcoded constant peppers remain. In pure dev (no production signals)
+    a strong random pepper is generated once and stored locally with 0600 perms.
     Production / unset ENVIRONMENT must set a strong API_KEY_PEPPER (or equivalent).
     """
     for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
@@ -126,14 +170,14 @@ def _key_pepper() -> bytes:
         if _pepper_is_strong(raw):
             return raw
         if _is_dev_environment():
-            # Weak but explicit env in dev — still prefer non-hardcoded
+            # Explicit (even if weak) env var in pure dev — still prefer non-hardcoded
             return raw
         raise RuntimeError(
             f"{name} is too weak for production (need >= 32 random chars). "
             "Refusing to use known-dev or short peppers."
         )
     if _is_dev_environment():
-        return b"lumen_dev_only_pepper_change_me"
+        return _load_or_create_dev_pepper()
     raise RuntimeError(
         "API_KEY_PEPPER is required outside dev. "
         "Set API_KEY_PEPPER (preferred) or PLATFORM_ADMIN_TOKEN / TBE_TOKEN_SECRET. "
