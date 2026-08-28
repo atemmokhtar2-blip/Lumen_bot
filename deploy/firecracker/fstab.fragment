@@ -1,0 +1,4 @@
+# Append to guest /etc/fstab — adjust device nodes to match rootfs virtio order.
+# Typical Firecracker order after root: project (vdb), token (vdc).
+/dev/vdb  /project  ext4  defaults,noatime  0  2
+/dev/vdc  /token    ext4  defaults,noatime,ro  0  2

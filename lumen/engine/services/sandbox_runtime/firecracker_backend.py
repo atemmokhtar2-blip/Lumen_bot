@@ -1266,20 +1266,50 @@ class FirecrackerSandboxBackend(SandboxBackend):
                     meta=meta,
                 )
             guest_ready, bot_started = self._guest_log_markers(meta)
-            if bot_started:
-                msg = "vm_alive_guest_bot_marker"
-            elif guest_ready:
-                msg = "vm_alive_guest_ready"
-            else:
-                msg = "vm_process_alive_guest_unconfirmed"
             meta = dict(meta)
             meta["guest_ready"] = guest_ready
             meta["bot_marker"] = bot_started
+            log_path = str(meta.get("log") or "")
+            fatal = False
+            if log_path and Path(log_path).is_file():
+                try:
+                    tail = Path(log_path).read_text(encoding="utf-8", errors="ignore")[-16000:]
+                except OSError:
+                    tail = ""
+                fatal = "lumen-bot-fatal" in tail
+            meta["bot_fatal"] = fatal
+            if fatal:
+                meta["claim"] = "vm_alive_guest_fatal"
+                meta["bot_healthy"] = False
+                return SandboxHandle(
+                    self.name,
+                    handle_or_id,
+                    container_or_vm_id=handle_or_id,
+                    status="failed",
+                    message="vm_alive_but_guest_fatal",
+                    meta=meta,
+                )
+            if bot_started:
+                meta["claim"] = "vm_alive_guest_bot_marker"
+                meta["bot_healthy"] = True
+                msg = "vm_alive_guest_bot_marker"
+                st = "running"
+            elif guest_ready:
+                meta["claim"] = "vm_alive_guest_ready_only"
+                meta["bot_healthy"] = False
+                msg = "vm_alive_guest_ready"
+                # still starting or degraded — not permanent success
+                st = "starting"
+            else:
+                meta["claim"] = "vm_process_alive_guest_unconfirmed"
+                meta["bot_healthy"] = False
+                msg = "vm_process_alive_guest_unconfirmed"
+                st = "starting"
             return SandboxHandle(
                 self.name,
                 handle_or_id,
                 container_or_vm_id=handle_or_id,
-                status="running",
+                status=st,
                 message=msg,
                 meta=meta,
             )

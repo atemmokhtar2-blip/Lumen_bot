@@ -415,3 +415,18 @@ def test_wait_for_bot_health_fatal(tmp_path):
     ok, reason = b._wait_for_bot_health("fc-test", {"log": str(log), "pid": 0}, timeout_sec=2)
     assert ok is False
     assert "fatal" in reason
+
+def test_fc_status_fatal_not_running(tmp_path, monkeypatch):
+    import json, os
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    b = FirecrackerSandboxBackend()
+    vm_id = "fc-0-testhealth"
+    log = tmp_path / "vm.log"
+    log.write_text("lumen-guest-ready\nlumen-bot-fatal token_missing\n")
+    meta = {"pid": os.getpid(), "log": str(log), "vm_id": vm_id}
+    # write meta where backend expects
+    b._state_dir.mkdir(parents=True, exist_ok=True)
+    (b._state_dir / f"{vm_id}.json").write_text(json.dumps(meta), encoding="utf-8")
+    st = b.status(vm_id)
+    assert st.status == "failed"
+    assert st.meta.get("bot_fatal") is True

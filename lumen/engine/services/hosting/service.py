@@ -527,10 +527,11 @@ class HostingService:
             alive = self._is_alive(inst)
             if inst.status == "running" and not alive:
                 inst.status = "failed"
-                inst.last_error = "العملية توقفت"
+                inst.last_error = "الاستضافة توقفت أو البوت داخل الضيف غير مؤكد"
                 self._save()
-            msg = f"الحالة الحالية: {inst.status}"
-            return HostResult(ok=inst.status == "running", message=msg, instance=inst, error_contract=contract)
+            health = "bot_ok" if alive else "bot_down_or_unconfirmed"
+            msg = f"الحالة الحالية: {inst.status} | صحة: {health}"
+            return HostResult(ok=inst.status == "running" and alive, message=msg, instance=inst, error_contract=contract)
 
         if not items:
             return HostResult(ok=True, message="لا توجد مثيلات استضافة حالياً")
@@ -564,7 +565,11 @@ class HostingService:
                     FirecrackerSandboxBackend,
                 )
                 st = FirecrackerSandboxBackend().status(dep)
-                return str(st.status).lower() == "running"
+                if str(st.status).lower() != "running":
+                    return False
+                # Permanent host: VMM alone is not enough — need bot marker
+                meta = dict(getattr(st, "meta", None) or {})
+                return bool(meta.get("bot_marker") or meta.get("bot_healthy"))
             except Exception:
                 return False
         # Docker / gVisor / DinD deployments

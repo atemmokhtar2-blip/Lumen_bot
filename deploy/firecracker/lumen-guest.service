@@ -1,0 +1,23 @@
+[Unit]
+Description=Lumen permanent-host guest supervisor
+After=network-online.target local-fs.target
+Wants=network-online.target
+# Project and token virtio drives must be mounted first
+RequiresMountsFor=/project /token
+
+[Service]
+Type=simple
+Environment=LUMEN_PROJECT_ROOT=/project
+Environment=LUMEN_TOKEN_DIR=/token
+Environment=PYTHONUNBUFFERED=1
+# Prefer injected agent on project drive; fallback to image copy
+ExecStart=/bin/sh -c 'if [ -x /project/.lumen_guest/lumen-guest-boot.sh ]; then exec /project/.lumen_guest/lumen-guest-boot.sh; elif [ -f /project/.lumen_guest/supervisor.py ]; then exec /usr/bin/python3 /project/.lumen_guest/supervisor.py; else exec /usr/bin/python3 /opt/lumen/supervisor.py; fi'
+Restart=on-failure
+RestartSec=3
+# Hardening inside guest
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
