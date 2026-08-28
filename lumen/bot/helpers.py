@@ -235,6 +235,7 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             logger.exception("Groq codegen forced path failed; continuing with engine")
 
         # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
+        # If orchestrator cannot run (missing langgraph, etc.) → fall through to Cline.
         try:
             from lumen.engine.services.multi_agent import (
                 orchestrate_generate,
@@ -242,20 +243,35 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             )
             if orchestrator_enabled():
                 logger.info("multi_agent orchestrator A–E — generate path")
-                return orchestrate_generate(
+                _orch_res = orchestrate_generate(
                     request,
                     work_dir,
                     user_id=int(user_id or 0),
                     preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
                 )
+                if getattr(_orch_res, "success", False):
+                    return _orch_res
+                _orch_errs = list(getattr(_orch_res, "errors", None) or [])
+                _orch_join = " ".join(str(x) for x in _orch_errs).lower()
+                _fallbackable = any(
+                    k in _orch_join
+                    for k in (
+                        "langgraph_required",
+                        "langchain",
+                        "module",
+                        "import",
+                        "not installed",
+                        "no_llm_provider",
+                    )
+                )
+                if not _fallbackable:
+                    return _orch_res
+                logger.warning(
+                    "multi_agent failed (%s) — falling through to Cline",
+                    _orch_errs[:3],
+                )
         except Exception as _orch_exc:
-            logger.exception("multi_agent orchestrator failed — no template fallback")
-            from lumen.engine.core.result import GenerationResult
-            return GenerationResult(
-                success=False,
-                errors=[f"orchestrator_failed:{type(_orch_exc).__name__}:{_orch_exc}"],
-                metadata={"engine": "multi_agent", "template_fallback": False},
-            )
+            logger.exception("multi_agent orchestrator exception — falling through to Cline")
 
         # Cline engine-direct fallback (no translator/bridge layer).
         try:

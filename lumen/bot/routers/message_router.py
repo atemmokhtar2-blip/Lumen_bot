@@ -623,16 +623,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             if not success or not project_path:
                 logger.warning("generation failed errors=%s", [str(e)[:200] for e in errors[:8]])
+                _fail_code = "generation_failed"
+                try:
+                    _fe = list(getattr(result, "errors", None) or [])
+                    if _fe:
+                        _fail_code = str(_fe[0])[:80]
+                except Exception:
+                    pass
                 await safe_edit_text(
                     status_msg,
-                    user_facing_generation_error(code="generation_failed"),
+                    user_facing_generation_error(code=_fail_code),
                 )
                 try:
                     from lumen.bot.ui.emit_context import emit_context_event
                     await emit_context_event(
                         message=message, context=context, user=user,
                         kind="generation_failed",
-                        detail=user_facing_generation_error(code="generation_failed"),
+                        detail=user_facing_generation_error(code=_fail_code),
                     )
                 except Exception:
                     logger.exception("emit gen fail context failed")

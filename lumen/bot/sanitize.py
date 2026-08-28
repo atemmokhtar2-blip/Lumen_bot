@@ -158,24 +158,39 @@ def install_secret_log_filter() -> None:
 
 
 def user_facing_generation_error(exc: BaseException | None = None, *, code: str | None = None) -> str:
-    """User-visible generation failure — generic codes only; full detail stays in logs.
-
-    Never echo exception messages, paths, or stack fragments to Telegram clients.
-    """
-    if code:
-        c = str(code).strip()[:64] or "generation_failed"
-    elif exc is not None:
+    """User-visible generation failure — stable machine codes only (no stacks/secrets)."""
+    raw = (str(code).strip() if code else "") or ""
+    if not raw and exc is not None:
         name = type(exc).__name__
         if name in {"FileNotFoundError", "NotADirectoryError"}:
-            c = "missing_resource"
+            raw = "missing_resource"
         elif name in {"PermissionError"}:
-            c = "permission_denied"
+            raw = "permission_denied"
         elif name in {"TimeoutError", "EngineTimeoutError"}:
-            c = "timeout"
+            raw = "timeout"
         elif name == "RuntimeError" and "sandbox" in str(exc).lower():
-            c = "sandbox_unavailable"
+            raw = "sandbox_unavailable"
         else:
-            c = "generation_failed"
+            raw = "generation_failed"
+    low = raw.lower()
+    # Map internal prefixes → short stable codes shown to the user
+    if "langgraph" in low or "langchain" in low:
+        c = "engine_dependency_missing"
+    elif "llm_budget" in low or "token_cap" in low or "usd_cap" in low:
+        c = "llm_budget_exceeded"
+    elif "no_llm_provider" in low or "no_llm" in low:
+        c = "no_llm_keys"
+    elif "backpressure" in low:
+        c = "system_busy"
+    elif "guardrails" in low:
+        c = "input_blocked"
+    elif "quota" in low or "insufficient" in low:
+        c = "quota_exceeded"
+    elif "timeout" in low:
+        c = "timeout"
+    elif raw:
+        # keep first segment only (e.g. llm_budget_blocked:...)
+        c = raw.split(":")[0].strip()[:48] or "generation_failed"
     else:
         c = "generation_failed"
     return (

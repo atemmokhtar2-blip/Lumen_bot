@@ -18,7 +18,7 @@ async def run_guided_generation(
 ) -> Any:
     """Invoke run_generation + deliver_generation_result — no parallel engine."""
     from lumen.bot.config import OUTPUT_DIR
-    from lumen.bot.errors import user_facing_generation_error
+    from lumen.bot.sanitize import user_facing_generation_error
     from lumen.bot.helpers import run_generation, safe_edit_text
     from lumen.bot.progress_tracker import run_with_heartbeat
 
@@ -93,6 +93,12 @@ async def run_guided_generation(
     if not success or not project_path:
         # Surface real engine reason (single edited message — no extra spam)
         code = "generation_failed"
+        try:
+            _errs = list(getattr(result, "errors", None) or [])
+            if _errs:
+                code = str(_errs[0])[:80]
+        except Exception:
+            pass
         try:
             errs = list(getattr(result, "errors", None) or [])
             if errs:
