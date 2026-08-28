@@ -40,14 +40,8 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     phase = state.phase
 
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
-        bal = int(facts.credits_available or facts.credits_balance or 0)
-        lines = [
-            "أهلاً بك في Lumen",
-            f"رصيدك: {bal} كريدت",
-        ]
-        if facts.active_project:
-            lines.append(f"مشروع نشط: {facts.active_project}")
-        return "\n".join(lines)
+        # Homepage only — balance lives exclusively under open_billing (product rule)
+        return "أهلاً بك في Lumen"
 
     if phase == EngineUiPhase.GEN_TYPE:
         return "اكتب وصف البوت."

@@ -63,10 +63,31 @@ async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=
 
 
 async def handle_ui_callback(update, context) -> None:
-    """Top-level UI callback — never let uncaught exceptions become opaque internal_error."""
+    """Top-level UI callback — auth, rate-limit, whitelist, no error leakage."""
     q = update.callback_query
     if q is None:
         return
+
+    # 1) Identity — refuse anonymous / blocked users (no action, no leak)
+    user = update.effective_user
+    uid = int(user.id) if user else 0
+    try:
+        from lumen.bot.helpers import is_allowed
+        if not uid or not is_allowed(uid):
+            try:
+                await q.answer("غير مصرح", show_alert=True)
+            except Exception:
+                pass
+            return
+    except Exception:
+        logger.exception("auth check failed on callback")
+        try:
+            await q.answer()
+        except Exception:
+            pass
+        return
+
+    # 2) Parse + closed catalog (fail closed on forged callback_data)
     parsed = decode_callback(q.data or "")
     if parsed is None:
         try:
@@ -75,6 +96,34 @@ async def handle_ui_callback(update, context) -> None:
             pass
         return
     action_id, arg = parsed
+    try:
+        from lumen.engine.services.ui_state.catalog import is_known_action
+        if not is_known_action(action_id):
+            try:
+                await q.answer()
+            except Exception:
+                pass
+            logger.warning("unknown ui action rejected uid=%s action=%s", uid, action_id)
+            return
+    except Exception:
+        logger.exception("catalog check failed")
+        return
+
+    # 3) Per-user rate limit on button spam (same Redis limiter as messages)
+    try:
+        from lumen.bot.middlewares.auth import rate_limit_ok
+        import asyncio
+        ok = await asyncio.to_thread(rate_limit_ok, uid)
+        if not ok:
+            try:
+                await q.answer("انتظر قليلاً", show_alert=False)
+            except Exception:
+                pass
+            return
+    except Exception:
+        logger.debug("callback rate limit check failed", exc_info=True)
+
+    # 4) Acknowledge immediately (Telegram best practice; does not count as flood)
     try:
         await q.answer()
     except Exception:
@@ -90,14 +139,9 @@ async def handle_ui_callback(update, context) -> None:
             type(exc).__name__,
             str(exc)[:200],
         )
+        # Never surface stack/type to the user (anti-recon)
         try:
-            msg = update.effective_message or (q.message if q else None)
-            if msg is not None:
-                await msg.reply_text(
-                    "تعذر تنفيذ هذا الزر الآن.\n"
-                    f"رمز: `{type(exc).__name__}`\n"
-                    "جرّب /start ثم الزر مرة أخرى. إذا تكرر الخطأ راجع Deploy Logs."
-                )
+            await q.answer("تعذر التنفيذ. أعد المحاولة.", show_alert=False)
         except Exception:
             pass
 
