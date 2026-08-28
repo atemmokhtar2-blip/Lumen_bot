@@ -1199,11 +1199,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             from lumen.engine.services.gemini_client import status_snapshot
             snap = status_snapshot()
         except Exception:
+            # Prefer key_pool so GEMINI_API_KEYS bulk / numbered keys count
+            _kp = False
+            try:
+                from lumen.engine.services.llm.key_pool import gemini_keys as _gk
+
+                _kp = bool(_gk())
+            except Exception:
+                _kp = bool(
+                    (
+                        os.getenv("GEMINI_API_KEY")
+                        or os.getenv("GEMINI_API_KEYS")
+                        or os.getenv("GOOGLE_API_KEY")
+                        or ""
+                    ).strip()
+                )
             snap = {
                 "enabled": False,
-                "key_present": bool(
-                    (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-                ),
+                "key_present": _kp,
                 "key_len": 0,
                 "model": os.getenv("GEMINI_MODEL") or "gemini-2.0-flash",
                 "gemini_enabled_env": os.getenv("GEMINI_ENABLED"),
@@ -1250,7 +1263,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             logger.exception("gemini re-resolve failed")
         if not _generation_like and not snap.get("key_present"):
-            await message.reply_text('طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\nأضف GEMINI_API_KEY (أو GOOGLE_API_KEY) في Variables في Railway ثم أعد التشغيل.')
+            await message.reply_text(
+                "طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\n"
+                "أضف أحد المتغيرات في Railway ثم أعد النشر:\n"
+                "• GEMINI_API_KEYS (مفتاح أو أكثر مفصولة بفاصلة أو سطر)\n"
+                "• أو GEMINI_API_KEY / GOOGLE_API_KEY"
+            )
             return
         if not _generation_like and snap.get("enabled") is False:
             await message.reply_text(

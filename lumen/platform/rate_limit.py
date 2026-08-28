@@ -192,11 +192,21 @@ def check_tenant_llm_budget(
     usd_key = f"llm_usd:{tid}:{day}"
 
     # Try Redis atomic INCR
-    url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+    try:
+        from .runtime_config import redis_url as _redis_url_fn
+
+        url = (_redis_url_fn() or "").strip()
+    except Exception:
+        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
     if url:
         try:
             import redis
-            r = redis.Redis.from_url(url, decode_responses=True)
+            r = redis.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "5"),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "5"),
+            )
             pipe = r.pipeline()
             pipe.get(tok_key)
             pipe.get(usd_key)

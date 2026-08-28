@@ -35,7 +35,32 @@ def database_url() -> str:
 
 
 def redis_url() -> str:
-    return (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+    """Normalize REDIS_URL — strip quotes and accidental ``redis-cli -u`` pastes.
+
+    Correct value example:
+      redis://default:PASSWORD@host:13903
+    Not:
+      redis-cli -u redis://default:PASSWORD@host:13903
+    """
+    raw = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+    if not raw:
+        return ""
+    # strip wrapping quotes from secret UIs
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        raw = raw[1:-1].strip()
+    # user pasted full redis-cli invocation
+    lower = raw.lower()
+    if "redis-cli" in lower and "redis://" in lower:
+        idx = lower.find("redis://")
+        raw = raw[idx:].strip()
+    elif "redis-cli" in lower and "rediss://" in lower:
+        idx = lower.find("rediss://")
+        raw = raw[idx:].strip()
+    # drop trailing flags after the URL
+    for sep in (" -", " --", "\n", "\t"):
+        if sep in raw and raw.startswith(("redis://", "rediss://")):
+            raw = raw.split(sep, 1)[0].strip()
+    return raw
 
 
 def require_production_data_plane() -> None:
