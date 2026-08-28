@@ -159,6 +159,12 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
 
     # Facts I/O (Neon/Mongo) off event loop — include hosts only for dashboard
     include_hosts = result.state.phase.value == "dashboard"
+    if action_id in {"open_billing", "open_dashboard", "home", "open_generate"}:
+        try:
+            from .facts import invalidate_facts_cache
+            invalidate_facts_cache(uid)
+        except Exception:
+            pass
     try:
         import asyncio
         from functools import partial

@@ -12,7 +12,7 @@ from typing import Any
 logger = logging.getLogger("lumen_bot.ui.hygiene")
 
 _KEY = "lumen_ui_msg_ids"
-_MAX_BOT_UI_MSGS = 2  # hard product rule
+_MAX_BOT_UI_MSGS = 1  # hard product rule
 
 
 def _ids(user_data: dict[str, Any] | None) -> list[int]:

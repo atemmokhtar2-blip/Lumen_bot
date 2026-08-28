@@ -119,3 +119,14 @@ def gather_ui_facts(
             logger.debug("hosting list unavailable", exc_info=True)
 
     return facts
+
+
+def invalidate_facts_cache(user_id: int | None = None) -> None:
+    """Force next gather_ui_facts to hit live wallet/plan stores."""
+    if user_id is None:
+        _WALLET_CACHE.clear()
+        _PLAN_CACHE.clear()
+        return
+    tid = f"tg:{int(user_id)}"
+    _WALLET_CACHE.pop(tid, None)
+    _PLAN_CACHE.pop(int(user_id), None)
