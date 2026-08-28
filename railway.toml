@@ -1,6 +1,6 @@
 [build]
 builder = "DOCKERFILE"
-# Dockerfile pins Python 3.10 and installs the bot runtime dependencies.
+# Dockerfile (python:3.12-slim-bookworm) installs requirements.txt and runs main.py.
 
 [deploy]
 startCommand = "python main.py"
