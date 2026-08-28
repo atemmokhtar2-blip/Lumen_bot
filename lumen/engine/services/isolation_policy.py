@@ -59,13 +59,7 @@ def strong_sandbox_available() -> tuple[bool, str]:
 
 
 def decide_isolation() -> IsolationDecision:
-    """Fail-closed isolation policy.
-
-    Rules (absolute):
-    - Multi-tenant: NEVER allow host LocalProcess (ignores LOCAL_FALLBACK and dual gates).
-    - Production (non-dev): NEVER allow host LocalProcess.
-    - Dev + single-tenant only: dual gate OR LOCAL_FALLBACK may allow local.
-    """
+    """Fail-closed: multi-tenant/production never host-local; dev single-tenant may dual-gate."""
     multi = is_multi_tenant()
     dev = is_dev_environment()
     dual = _flag("TBE_ALLOW_LOCAL_PROCESS", "0") and _flag("TBE_FORCE_LOCAL_PROCESS", "0")
@@ -102,10 +96,7 @@ def assert_local_process_allowed() -> None:
     d = decide_isolation()
     if not d.allow_local:
         raise RuntimeError(
-            "local_process_denied: production/multi-tenant forbids host LocalProcess; "
-            "dev may use TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1; explicit dual gate "
-            "TBE_ALLOW_LOCAL_PROCESS=1 + TBE_FORCE_LOCAL_PROCESS=1 only when intentional. "
-            f"({d.reason})"
+            f"local_process_denied: host LocalProcess forbidden ({d.reason})"
         )
 
 

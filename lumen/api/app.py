@@ -11,10 +11,7 @@ from lumen.api.routes import audit, billing, dashboard, generate, github_webhook
 
 logger = logging.getLogger("lumen_api")
 
-# Isolation defaults live in isolation_policy / settings readers (fail-closed).
-# Do NOT mutate os.environ here — global env writes are an anti-pattern (import-order
-# side effects, untestable defaults, hidden policy). Policy is decide_isolation().
-
+# Isolation: decide_isolation() only — do not mutate os.environ here.
 
 
 def _cors_origin_for(request: web.Request) -> str | None:
