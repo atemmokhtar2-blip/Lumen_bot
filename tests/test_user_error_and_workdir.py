@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lumen.bot.sanitize import user_facing_generation_error
-from lumen.bot.safe_workdir import allocate_fallback_workdir
+from lumen.engine.services.user_sandbox import allocate_fallback_workdir
 
 
 def test_user_facing_error_hides_paths():

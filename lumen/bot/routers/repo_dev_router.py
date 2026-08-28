@@ -79,7 +79,7 @@ async def try_handle_repo_dev(
                 dev = await asyncio.to_thread(_run_dev)
             except Exception as e:
                 logger.exception("RepoDev failed")
-                await status.edit_text(f"❌ فشل التنفيذ على المستودع: {type(e).__name__}: {sanitize_error(str(e))}")
+                await status.edit_text(f"❌ فشل التنفيذ على المستودع (`{type(e).__name__}`).")
                 return True
 
 

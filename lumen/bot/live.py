@@ -68,7 +68,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
         except Exception:
             pass
         from .sanitize import sanitize_error
-        await status.edit_text(f"❌ فشل التشغيل الحي: {type(e).__name__}: {sanitize_error(str(e), max_len=200)}")
+        await status.edit_text(f"❌ فشل التشغيل الحي (`{type(e).__name__}`).")
         context.user_data.pop("pending_run", None)
         return
     finally:

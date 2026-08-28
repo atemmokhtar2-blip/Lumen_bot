@@ -46,7 +46,7 @@ async def try_handle_token(
             result = await asyncio.to_thread(_do_host)
         except Exception as e:
             logger.exception("hosting start failed")
-            await status.edit_text(f"❌ فشل الاستضافة: {type(e).__name__}: {sanitize_error(str(e))}")
+            await status.edit_text(f"❌ فشل الاستضافة (`{type(e).__name__}`).")
             return True
 
         await status.edit_text(result.to_user_text())
@@ -175,7 +175,7 @@ async def try_handle_token(
             try:
                 result = await asyncio.to_thread(_create)
             except Exception as e:
-                await status.edit_text(f"❌ فشل الإنشاء: {sanitize_error(str(e))}")
+                await status.edit_text(f"❌ فشل الإنشاء.")
                 return True
             if result.ok:
                 context.user_data.pop("pending_create_repo", None)

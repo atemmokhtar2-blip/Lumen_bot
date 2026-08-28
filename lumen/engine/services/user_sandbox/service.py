@@ -412,6 +412,33 @@ def clean_child_env(
     return env
 
 
+
+
+def allocate_fallback_workdir(user_id: int = 0) -> Path:
+    """Restricted fallback under /tmp/lumen_fallback (0o700) when primary sandbox fails."""
+    import tempfile
+
+    base = Path(os.getenv("LUMEN_FALLBACK_WORKDIR") or "/tmp/lumen_fallback").resolve()
+    if base in {Path("/"), Path("/tmp"), Path("/var"), Path("/home"), Path("/root")} or len(base.parts) < 2:
+        base = Path("/tmp/lumen_fallback")
+    base.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    user_root = base / f"u{int(user_id)}"
+    user_root.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(user_root, 0o700)
+    except OSError:
+        pass
+    path = Path(tempfile.mkdtemp(prefix="botgen_", dir=str(user_root)))
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
+
 __all__ = [
     "UserSandbox",
     "get_user_sandbox",
@@ -419,4 +446,5 @@ __all__ = [
     "write_token_file",
     "shard_for_user",
     "max_projects_per_user",
+    "allocate_fallback_workdir",
 ]

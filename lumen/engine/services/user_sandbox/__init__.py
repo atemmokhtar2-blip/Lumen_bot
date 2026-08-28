@@ -6,6 +6,7 @@ from .service import (
     write_token_file,
     shard_for_user,
     max_projects_per_user,
+    allocate_fallback_workdir,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "write_token_file",
     "shard_for_user",
     "max_projects_per_user",
+    "allocate_fallback_workdir",
 ]

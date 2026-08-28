@@ -118,7 +118,7 @@ async def try_handle_git(
             result = await asyncio.to_thread(_create)
         except Exception as e:
             logger.exception("create_repo failed")
-            await status.edit_text(f"❌ فشل الإنشاء: {sanitize_error(str(e))}")
+            await status.edit_text(f"❌ فشل الإنشاء.")
             return True
 
         if result.ok:
@@ -216,7 +216,7 @@ async def try_handle_git(
         result = await asyncio.to_thread(_do_clone)
     except Exception as e:
         logger.exception("Clone failed")
-        await status.edit_text(f"❌ فشل سحب المستودع: {type(e).__name__}: {sanitize_error(str(e))}")
+        await status.edit_text(f"❌ فشل سحب المستودع (`{type(e).__name__}`).")
         return True
 
     if result is None:

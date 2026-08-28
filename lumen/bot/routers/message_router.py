@@ -15,7 +15,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import sanitize_error, user_facing_generation_error
+from ..sanitize import user_facing_generation_error
 from ..resource_limits import (
     clamp_user_text,
     clamp_spec_request,
@@ -516,7 +516,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("sandbox workdir failed: %s", sandbox_exc)
             # Hard-restricted fallback under /tmp only (never OUTPUT_DIR root / host paths)
             try:
-                from lumen.bot.safe_workdir import allocate_fallback_workdir
+                from lumen.engine.services.user_sandbox import allocate_fallback_workdir
                 work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
             except Exception as fb_exc:
                 logger.exception("fallback workdir failed: %s", fb_exc)
@@ -1888,7 +1888,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as _wd_exc:
         logger.exception("workdir sandbox failed: %s", _wd_exc)
         try:
-            from lumen.bot.safe_workdir import allocate_fallback_workdir
+            from lumen.engine.services.user_sandbox import allocate_fallback_workdir
             work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
         except Exception as fb_exc:
             logger.exception("fallback workdir failed: %s", fb_exc)
