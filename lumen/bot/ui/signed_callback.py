@@ -1,22 +1,11 @@
-"""HMAC-signed Telegram callback_data (production standard 2025–2026).
+"""HMAC-signed Telegram callback_data — always ≤ 64 bytes.
 
-Threat model Telegram does NOT solve for you:
-  - Users can copy any callback_data from a button and resend it.
-  - Plain strings like ``lumen:ui:dash_stop:0`` can be forged offline.
-  - Stale buttons from old messages remain clickable forever.
+Wire format (v2, binary → base64url):
+  packed = action\\x1f arg\\x1f uid_str\\x1f exp_str
+  mac    = HMAC-SHA256(secret, packed)[:6]   # 48-bit
+  wire   = "L2." + b64url(packed + mac)      # single blob, ≤ 64
 
-World-class pattern (HMAC-SHA256 + uid bind + expiry + short MAC):
-  payload = action|arg|uid|exp_unix
-  mac     = HMAC-SHA256(secret, payload)[:10]  # 80-bit truncated
-  wire    = base64url(payload) + "." + base64url(mac)   # ≤ 64 bytes
-
-Reject when:
-  - MAC fails (timing-safe)
-  - exp < now
-  - uid in token != effective_user.id
-  - action not in closed catalog (checked by caller)
-
-Secret: CALLBACK_HMAC_SECRET env, else derived from TELEGRAM_BOT_TOKEN.
+Bound to user_id; expires; timing-safe verify.
 """
 from __future__ import annotations
 
@@ -30,9 +19,10 @@ from typing import Optional
 
 logger = logging.getLogger("lumen_bot.ui.signed_callback")
 
-_PREFIX = "L1."  # versioned scheme; reject unknown versions
-_MAC_LEN = 10  # bytes kept from HMAC (80-bit)
-_DEFAULT_TTL_SEC = 6 * 3600  # 6h — buttons expire; user hits /start for fresh UI
+_PREFIX = "L2."
+_MAC_LEN = 6
+_DEFAULT_TTL_SEC = 6 * 3600
+_SEP = "\x1f"
 
 
 def _b64u(data: bytes) -> str:
@@ -50,10 +40,45 @@ def _secret() -> bytes:
         return raw.encode("utf-8")
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        # Fail closed in production-like envs would break local tests — use fixed weak only in tests
         return b"lumen-dev-callback-secret-not-for-prod"
-    # Derive a dedicated key so the bot token is never used raw as HMAC key material pattern
-    return hmac.new(b"lumen-callback-v1", token.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(b"lumen-callback-v2", token.encode("utf-8"), hashlib.sha256).digest()
+
+
+# Short aliases keep the packed blob small under the 64-byte Telegram limit
+_ACTION_SHORT: dict[str, str] = {
+    "home": "h",
+    "open_generate": "og",
+    "open_dashboard": "od",
+    "open_billing": "ob",
+    "open_help": "oh",
+    "confirm_generate": "cg",
+    "cancel_generate": "xg",
+    "await_generate_text": "ag",
+    "pick_type": "pt",
+    "fill_slot": "fs",
+    "skip_need": "sn",
+    "to_confirm": "tc",
+    "resume_slots": "rs",
+    "post_trial": "ptr",
+    "post_host": "ph",
+    "post_zip": "pz",
+    "post_preview": "pp",
+    "dash_status": "ds",
+    "dash_stop": "dx",
+    "dash_diagnose": "dd",
+    "dash_trial": "dt",
+}
+_SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
+
+
+def _shorten_action(action: str) -> str:
+    a = (action or "").strip().lower()
+    return _ACTION_SHORT.get(a, a[:10])
+
+
+def _expand_action(short: str) -> str:
+    s = (short or "").strip().lower()
+    return _SHORT_ACTION.get(s, s)
 
 
 def encode_signed(
@@ -63,63 +88,66 @@ def encode_signed(
     user_id: int,
     ttl_sec: int = _DEFAULT_TTL_SEC,
 ) -> str:
-    """Build ≤64-byte signed callback_data bound to ``user_id``."""
-    action = (action or "").strip().lower()[:24]
-    arg = (arg or "").strip()[:16]
+    """Build signed callback_data guaranteed ≤ 64 UTF-8 bytes."""
+    act = _shorten_action(action)
+    arg = (arg or "").strip()[:12]
     exp = int(time.time()) + max(60, int(ttl_sec))
-    # Compact plaintext — no JSON (saves bytes under 64 limit)
-    plain = f"{action}|{arg}|{int(user_id)}|{exp}".encode("utf-8")
-    mac = hmac.new(_secret(), plain, hashlib.sha256).digest()[:_MAC_LEN]
-    wire = _PREFIX + _b64u(plain) + "." + _b64u(mac)
+    # Compact text fields — no base64 of each field
+    packed = f"{act}{_SEP}{arg}{_SEP}{int(user_id)}{_SEP}{exp}".encode("utf-8")
+    mac = hmac.new(_secret(), packed, hashlib.sha256).digest()[:_MAC_LEN]
+    blob = packed + mac
+    wire = _PREFIX + _b64u(blob)
+    # Hard clamp: if still over 64, drop arg then shorten action
     if len(wire.encode("utf-8")) > 64:
-        # Extreme truncation fallback — still signed
-        action = action[:12]
-        arg = arg[:8]
-        plain = f"{action}|{arg}|{int(user_id)}|{exp}".encode("utf-8")
-        mac = hmac.new(_secret(), plain, hashlib.sha256).digest()[:_MAC_LEN]
-        wire = _PREFIX + _b64u(plain) + "." + _b64u(mac)
+        packed = f"{act}{_SEP}{_SEP}{int(user_id)}{_SEP}{exp}".encode("utf-8")
+        mac = hmac.new(_secret(), packed, hashlib.sha256).digest()[:_MAC_LEN]
+        wire = _PREFIX + _b64u(packed + mac)
+    if len(wire.encode("utf-8")) > 64:
+        # Extreme: action 4 chars only
+        act = act[:4]
+        packed = f"{act}{_SEP}{_SEP}{int(user_id)}{_SEP}{exp}".encode("utf-8")
+        mac = hmac.new(_secret(), packed, hashlib.sha256).digest()[:_MAC_LEN]
+        wire = _PREFIX + _b64u(packed + mac)
     if len(wire.encode("utf-8")) > 64:
         raise ValueError(f"signed_callback_too_long:{len(wire)}")
     return wire
 
 
 def decode_signed(data: str, *, user_id: int) -> Optional[tuple[str, str]]:
-    """Verify MAC + expiry + uid binding. Returns (action, arg) or None."""
+    """Verify MAC + expiry + uid. Returns (action, arg) or None."""
     raw = (data or "").strip()
     if not raw.startswith(_PREFIX):
+        # Legacy unsigned / v1 — reject (force fresh /start)
         return None
-    body = raw[len(_PREFIX) :]
-    if "." not in body:
-        return None
-    p_b64, m_b64 = body.rsplit(".", 1)
     try:
-        plain = _b64u_decode(p_b64)
-        mac_got = _b64u_decode(m_b64)
+        blob = _b64u_decode(raw[len(_PREFIX) :])
     except Exception:
         return None
-    mac_exp = hmac.new(_secret(), plain, hashlib.sha256).digest()[:_MAC_LEN]
+    if len(blob) <= _MAC_LEN:
+        return None
+    packed, mac_got = blob[:-_MAC_LEN], blob[-_MAC_LEN:]
+    mac_exp = hmac.new(_secret(), packed, hashlib.sha256).digest()[:_MAC_LEN]
     if not hmac.compare_digest(mac_got, mac_exp):
         logger.warning("callback MAC fail uid=%s", user_id)
         return None
     try:
-        text = plain.decode("utf-8")
-        parts = text.split("|")
+        text = packed.decode("utf-8")
+        parts = text.split(_SEP)
         if len(parts) != 4:
             return None
-        action, arg, uid_s, exp_s = parts
+        act_s, arg, uid_s, exp_s = parts
         token_uid = int(uid_s)
         exp = int(exp_s)
     except Exception:
         return None
     if token_uid != int(user_id):
         logger.warning(
-            "callback uid mismatch token_uid=%s clicker=%s action=%s",
+            "callback uid mismatch token_uid=%s clicker=%s",
             token_uid,
             user_id,
-            action,
         )
         return None
     if exp < int(time.time()):
-        logger.info("callback expired uid=%s action=%s", user_id, action)
+        logger.info("callback expired uid=%s", user_id)
         return None
-    return action.strip().lower(), (arg or "").strip()
+    return _expand_action(act_s), (arg or "").strip()
