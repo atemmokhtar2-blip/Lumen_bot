@@ -382,8 +382,9 @@ def main() -> None:
         application.add_handler(CommandHandler("language", lang_cmd))
         # Engine UI callbacks (Batch 0 foundation — lumen:ui:*)
         from lumen.bot.ui.callback_router import handle_ui_callback
+        # L2. = HMAC-signed callbacks; lumen:ui: = legacy (ignored by decoder)
         application.add_handler(
-            CallbackQueryHandler(handle_ui_callback, pattern=r"^lumen:ui:")
+            CallbackQueryHandler(handle_ui_callback, pattern=r"^(L2\.|lumen:ui:)")
         )
         # Never leave an unknown slash command without a Telegram response.
         application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
