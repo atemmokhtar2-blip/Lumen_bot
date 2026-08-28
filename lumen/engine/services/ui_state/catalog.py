@@ -114,8 +114,29 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "Safe preview",
         frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD}),
     ),
+    "dash_status": UiActionSpec(
+        "dash_status",
+        "HostService.status for instance",
+        frozenset({EngineUiPhase.DASHBOARD}),
+    ),
+    "dash_stop": UiActionSpec(
+        "dash_stop",
+        "HostService.stop for instance",
+        frozenset({EngineUiPhase.DASHBOARD}),
+    ),
+    "dash_diagnose": UiActionSpec(
+        "dash_diagnose",
+        "HostService.diagnose for instance",
+        frozenset({EngineUiPhase.DASHBOARD}),
+    ),
+    "dash_trial": UiActionSpec(
+        "dash_trial",
+        "Start trial on active project",
+        frozenset({EngineUiPhase.DASHBOARD}),
+    ),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }
+
 
 
 

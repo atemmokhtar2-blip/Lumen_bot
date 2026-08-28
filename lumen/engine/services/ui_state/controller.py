@@ -24,6 +24,8 @@ class ApplyResult:
     run_generation: bool = False
     generation_request: str = ""
     post_side_effect: str = ""
+    dash_effect: str = ""
+    dash_target: str = ""
 
 
 def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
@@ -162,13 +164,35 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         )
         return tuple(rows)
     if phase == EngineUiPhase.DASHBOARD:
-        return (
+        rows: list[tuple[UiButton, ...]] = []
+        # Host rows encoded in state.slots by bot layer: dash_h0..dash_h4 = instance_id
+        for i in range(5):
+            iid = (state.slots.get(f"dash_h{i}") or "").strip()
+            if not iid:
+                continue
+            short = iid[-8:] if len(iid) > 8 else iid
+            st = (state.slots.get(f"dash_s{i}") or "?")[:12]
+            rows.append((UiButton(f"{short} [{st}]", "noop", short),))
+            rows.append(
+                (
+                    UiButton("حالة", "dash_status", short),
+                    UiButton("إيقاف", "dash_stop", short),
+                    UiButton("تشخيص", "dash_diagnose", short),
+                )
+            )
+        rows.append(
             (
                 UiButton("تحديث", "open_dashboard"),
-                UiButton("إنشاء بوت", "open_generate"),
-            ),
-            (UiButton("القائمة", "home"),),
+                UiButton("تجربة المشروع", "dash_trial"),
+            )
         )
+        rows.append(
+            (
+                UiButton("إنشاء بوت", "open_generate"),
+                UiButton("القائمة", "home"),
+            )
+        )
+        return tuple(rows)
     if phase == EngineUiPhase.BILLING:
         return (
             (UiButton("تحديث الخطة", "open_billing"),),
@@ -233,6 +257,8 @@ def apply_action(
     gen_req = ""
     msg = ""
     post_fx = ""
+    dash_fx = ""
+    dash_tgt = ""
 
     if action_id == "home":
         new.phase = EngineUiPhase.HOME
@@ -356,7 +382,30 @@ def apply_action(
         new.phase = EngineUiPhase.HELP
         new.missing = []
         msg = "المساعدة."
+    elif action_id == "dash_status":
+        new.phase = EngineUiPhase.DASHBOARD
+        dash_fx = "dash_status"
+        dash_tgt = arg
+        msg = "جلب الحالة من HostService..."
+    elif action_id == "dash_stop":
+        new.phase = EngineUiPhase.DASHBOARD
+        dash_fx = "dash_stop"
+        dash_tgt = arg
+        msg = "إيقاف المثيل..."
+    elif action_id == "dash_diagnose":
+        new.phase = EngineUiPhase.DASHBOARD
+        dash_fx = "dash_diagnose"
+        dash_tgt = arg
+        msg = "تشخيص المثيل..."
+    elif action_id == "dash_trial":
+        new.phase = EngineUiPhase.DASHBOARD
+        # Reuse trial plane on active project
+        from .models import RuntimePlaneHint
+        new.plane = RuntimePlaneHint.TRIAL_CHAT
+        post_fx = "post_trial"
+        msg = "تجربة المشروع النشط..."
     elif action_id == "post_trial":
+
         if not (new.project_ref or "").strip():
             msg = "لا يوجد مشروع — ولّد بوت أولاً."
         else:
@@ -400,4 +449,6 @@ def apply_action(
         run_generation=run_gen,
         generation_request=gen_req,
         post_side_effect=post_fx,
+        dash_effect=dash_fx,
+        dash_target=dash_tgt,
     )

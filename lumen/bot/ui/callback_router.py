@@ -40,6 +40,27 @@ async def handle_ui_callback(update, context) -> None:
     state = load_ui_state(user_data)
     uid = int(update.effective_user.id) if update.effective_user else 0
     result = apply_action(state, action_id, arg, user_id=uid or None)
+    # Batch 4: bind live host instances into state slots for dynamic buttons
+    if result.state.phase.value == "dashboard":
+        try:
+            from .dash_actions import sync_dashboard_slots
+            from lumen.engine.services.ui_state.controller import buttons_for_state
+            result.state.slots = sync_dashboard_slots(uid, result.state.slots)
+            # refresh buttons after sync
+            from lumen.engine.services.ui_state.controller import ApplyResult
+            result = ApplyResult(
+                state=result.state,
+                ok=result.ok,
+                message_ar=result.message_ar,
+                buttons=buttons_for_state(result.state),
+                run_generation=result.run_generation,
+                generation_request=result.generation_request,
+                post_side_effect=result.post_side_effect,
+                dash_effect=result.dash_effect,
+                dash_target=result.dash_target,
+            )
+        except Exception:
+            logger.exception("dashboard slot sync failed")
     save_ui_state(user_data, result.state)
 
     if result.state.phase == EngineUiPhase.GEN_TYPE and result.state.slots.get("awaiting_text") == "1":
@@ -132,3 +153,30 @@ async def handle_ui_callback(update, context) -> None:
                 await msg.reply_text(note[:2000])
         except Exception:
             logger.exception("post_side_effect failed effect=%s", result.post_side_effect)
+
+    if result.ok and getattr(result, "dash_effect", ""):
+        try:
+            from .dash_actions import execute_dash_effect
+            note = await execute_dash_effect(
+                effect=result.dash_effect,
+                target=result.dash_target,
+                user_id=uid,
+                user_data=user_data,
+                message=msg,
+            )
+            if note and msg:
+                await msg.reply_text(note[:3500])
+            # re-sync hosts after stop
+            if result.dash_effect == "dash_stop":
+                from .dash_actions import sync_dashboard_slots
+                from lumen.engine.services.ui_state.controller import buttons_for_state
+                st = load_ui_state(user_data)
+                st.slots = sync_dashboard_slots(uid, st.slots)
+                save_ui_state(user_data, st)
+                if msg:
+                    await msg.reply_text(
+                        "تم تحديث القائمة.",
+                        reply_markup=build_inline_keyboard(buttons_for_state(st)),
+                    )
+        except Exception:
+            logger.exception("dash_effect failed effect=%s", result.dash_effect)
