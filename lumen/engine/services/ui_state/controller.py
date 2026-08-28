@@ -30,16 +30,15 @@ class ApplyResult:
 
 
 def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
-    # Emoji labels — Telegram inline buttons have no real green/red colors;
-    # production bots use emoji + short Arabic labels (same pattern as Ads Apex).
+    # Bot API 9.4 native colors: success=green, primary=blue, danger=red
     return (
         (
-            UiButton("🟢 إنشاء بوت", "open_generate"),
-            UiButton("🖥 لوحة التحكم", "open_dashboard"),
+            UiButton("إنشاء بوت", "open_generate", style="success"),
+            UiButton("لوحة التحكم", "open_dashboard", style="primary"),
         ),
         (
-            UiButton("💰 الرصيد", "open_billing"),
-            UiButton("❓ المساعدة", "open_help"),
+            UiButton("الرصيد", "open_billing", style="primary"),
+            UiButton("المساعدة", "open_help"),
         ),
     )
 
@@ -87,7 +86,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     if phase == EngineUiPhase.GEN_TYPE:
         # Description-only path — no type chips (user writes free text below)
         return (
-            (UiButton("◀️ رجوع", "home"),),
+            (UiButton("رجوع", "home", style="danger"),),
         )
 
     if phase == EngineUiPhase.GEN_SLOTS:
@@ -114,7 +113,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("توليد بما هو متاح", "to_confirm"),
             )
         )
-        rows.append((UiButton("إلغاء", "cancel_generate"),))
+        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
         return tuple(rows)
 
     if phase == EngineUiPhase.GEN_CONFIRM:
@@ -125,11 +124,11 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             rows.append((UiButton("أكمل الناقص", "resume_slots"),))
         rows.append(
             (
-                UiButton("نعم، ابدأ التوليد", "confirm_generate"),
+                UiButton("نعم، ابدأ التوليد", "confirm_generate", style="success"),
                 UiButton("تعديل", "open_generate"),
             )
         )
-        rows.append((UiButton("إلغاء", "cancel_generate"),))
+        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
         return tuple(rows)
 
     if phase == EngineUiPhase.GENERATING:
@@ -198,11 +197,11 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return tuple(rows)
     if phase == EngineUiPhase.BILLING:
         return (
-            (UiButton("🔄 تحديث الرصيد", "open_billing"),),
-            (UiButton("◀️ رجوع", "home"),),
+            (UiButton("تحديث الرصيد", "open_billing", style="primary"),),
+            (UiButton("رجوع", "home", style="danger"),),
         )
     if phase == EngineUiPhase.HELP:
-        return ((UiButton("◀️ رجوع", "home"),),)
+        return ((UiButton("رجوع", "home", style="danger"),),)
     if phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
         return buttons_for_event(kind)

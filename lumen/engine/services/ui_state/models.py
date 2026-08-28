@@ -42,6 +42,8 @@ class UiButton:
     text: str
     action: str
     arg: str = ""
+    # Bot API 9.4 / PTB 22.7+: primary=blue, success=green, danger=red
+    style: str = ""
 
 
 @dataclass

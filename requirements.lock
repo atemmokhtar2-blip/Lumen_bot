@@ -132,7 +132,7 @@ python-dotenv==1.2.2
     # via
     #   -r requirements.txt
     #   pydantic-settings
-python-telegram-bot==21.10
+python-telegram-bot==22.7
     # via -r requirements.txt
 rapidfuzz==3.12.1
     # via -r requirements.txt

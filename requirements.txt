@@ -1,6 +1,7 @@
 # Runtime — Lumen (exact pins; lockfile is requirements.lock)
 # Bump only after: pip-audit + pip-compile
-python-telegram-bot==21.10
+# 22.7+ required for InlineKeyboardButton.style (Bot API 9.4 colored buttons)
+python-telegram-bot==22.7
 python-dotenv==1.2.2
 pydantic==2.10.6
 pydantic-settings==2.7.1
