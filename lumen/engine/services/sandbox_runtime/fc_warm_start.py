@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .fc_snapshot import SnapshotArtifacts, get_warm_pool, load_and_resume
+from .fc_snapshot import SnapshotArtifacts, fast_link_or_copy, get_warm_pool, load_and_resume
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +74,17 @@ def try_warm_start(
             pass
         raise RuntimeError("warm_start_sock_timeout")
     try:
-        load_and_resume(sock, arts)
+        metrics = load_and_resume(sock, arts) or {}
     except Exception:
         try:
             proc.kill()
         except OSError:
             pass
         raise
-    logger.info("warm_start resumed label=%s pid=%s", arts.label, proc.pid)
+    logger.info(
+        "warm_start resumed label=%s pid=%s load_ms=%s",
+        arts.label, proc.pid, metrics.get("load_ms"),
+    )
     return int(proc.pid)
 
 
@@ -122,17 +125,22 @@ def try_warm_start_jailed(
     run_dir.mkdir(parents=True, exist_ok=True)
     snap_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage snapshot into jail
+    # Stage snapshot into jail — hardlink/reflink first (avoid multi-GB copy)
     snap_dst = snap_dir / "snapshot"
     mem_dst = snap_dir / "mem"
+    t_stage = time.perf_counter()
     try:
-        shutil.copy2(arts.snapshot_path, snap_dst)
-        shutil.copy2(arts.mem_path, mem_dst)
+        m1 = fast_link_or_copy(arts.snapshot_path, snap_dst)
+        m2 = fast_link_or_copy(arts.mem_path, mem_dst)
         for pth in (snap_dst, mem_dst, run_dir, snap_dir, jail_root):
             try:
                 os.chown(pth, uid, gid)
             except OSError:
                 pass
+        logger.info(
+            "warm_jailed stage methods snap=%s mem=%s elapsed_ms=%.0f",
+            m1, m2, (time.perf_counter() - t_stage) * 1000,
+        )
     except OSError as exc:
         logger.error("warm_jailed stage failed: %s", type(exc).__name__)
         return None
@@ -179,9 +187,13 @@ def try_warm_start_jailed(
             mem_path=Path("/snapshot/mem"),
             label=arts.label,
         )
-        # load_and_resume talks via host-visible unix socket but paths in JSON
-        # must be jail-relative for the VMM process.
-        load_and_resume(host_sock, jail_arts)
+        # Host-visible files for readahead (same inode if hardlinked)
+        if snap_dst.is_file():
+            from .fc_snapshot import readahead_file
+            readahead_file(snap_dst)
+            readahead_file(mem_dst)
+        metrics = load_and_resume(host_sock, jail_arts) or {}
+        logger.info("warm_jailed load_ms=%s", metrics.get("load_ms"))
     except Exception:
         try:
             proc.kill()

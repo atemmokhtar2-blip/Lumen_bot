@@ -1,10 +1,12 @@
 """Firecracker snapshot create/load — real VMM API (PUT /snapshot/*).
 
-Competitive path (E2B-class cold-start reduction):
+Performance-oriented path (E2B / Lambda-class resume):
   1) Boot base microVM to guest-ready
   2) PATCH /vm state=Paused
-  3) PUT /snapshot/create {snapshot_path, mem_file_path, snapshot_type=Full}
-  4) Later: fresh firecracker process → PUT /snapshot/load + resume_vm
+  3) PUT /snapshot/create (Full base, optional Diff thereafter)
+  4) Fresh VMM → PUT /snapshot/load with File backend + resume_vm
+  5) Staging uses hardlink → reflink → copy (never full copy when avoidable)
+  6) Optional posix_fadvise readahead on mem file before load
 
 This module does not fake snapshots; without a live API socket it fails closed.
 """
@@ -13,7 +15,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socket
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,7 +54,6 @@ def _api_put(sock_path: Path, path: str, body: dict, *, timeout: float = 60.0) -
                 break
             chunks.append(data)
             if b"\r\n\r\n" in b"".join(chunks):
-                # read a bit more for body
                 try:
                     s.settimeout(0.2)
                     while True:
@@ -133,59 +136,168 @@ def resume_vm(sock: Path) -> None:
     _api_patch(sock, "/vm", {"state": "Resumed"})
 
 
+def readahead_file(path: Path, *, max_mib: int = 512) -> None:
+    """Advise kernel to page in snapshot mem file before Firecracker load."""
+    if not _flag("TBE_FC_SNAPSHOT_READAHEAD", "1"):
+        return
+    if not path.is_file():
+        return
+    try:
+        size = path.stat().st_size
+        try:
+            max_mib = int(os.environ.get("TBE_FC_SNAPSHOT_READAHEAD_MIB") or str(max_mib))
+        except ValueError:
+            pass
+        cap = max_mib * 1024 * 1024
+        length = min(size, cap) if cap > 0 else size
+        if length <= 0:
+            return
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_WILLNEED"):
+                os.posix_fadvise(fd, 0, length, os.POSIX_FADV_WILLNEED)
+            else:
+                chunk = 1024 * 1024
+                left = length
+                while left > 0:
+                    n = os.read(fd, min(chunk, left))
+                    if not n:
+                        break
+                    left -= len(n)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        logger.debug("readahead skipped: %s", type(exc).__name__)
+
+
+def fast_link_or_copy(src: Path, dst: Path) -> str:
+    """Stage snapshot file: hardlink → reflink → full copy."""
+    src = Path(src)
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        try:
+            ss, ds = src.stat(), dst.stat()
+            if ss.st_ino == ds.st_ino and ss.st_dev == ds.st_dev:
+                return "hardlink-exists"
+        except OSError:
+            pass
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+    try:
+        os.link(str(src), str(dst))
+        return "hardlink"
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(
+            ["cp", "--reflink=auto", str(src), str(dst)],
+            capture_output=True,
+            timeout=300,
+            check=False,
+        )
+        if r.returncode == 0 and dst.is_file():
+            return "reflink"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    shutil.copy2(src, dst)
+    return "copy"
+
+
 def create_full_snapshot(sock: Path, arts: SnapshotArtifacts) -> SnapshotArtifacts:
-    """Pause microVM and create Full snapshot (requires live API socket)."""
+    """Pause microVM and create Full snapshot (base template for warm pool)."""
+    return _create_snapshot(sock, arts, snapshot_type="Full")
+
+
+def create_diff_snapshot(sock: Path, arts: SnapshotArtifacts) -> SnapshotArtifacts:
+    """Diff snapshot (dirty pages). Machine must have track_dirty_pages enabled."""
+    return _create_snapshot(sock, arts, snapshot_type="Diff")
+
+
+def _create_snapshot(
+    sock: Path, arts: SnapshotArtifacts, *, snapshot_type: str
+) -> SnapshotArtifacts:
     if not sock.exists() and not sock.is_symlink():
         raise RuntimeError(f"api_sock_missing:{sock}")
+    arts.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    t0 = time.perf_counter()
     pause_vm(sock)
-    _api_put(
-        sock,
-        "/snapshot/create",
-        {
-            "snapshot_type": "Full",
-            "snapshot_path": str(arts.snapshot_path.resolve()),
-            "mem_file_path": str(arts.mem_path.resolve()),
-            "sync_snapshot_files": True,
-        },
-        timeout=120.0,
-    )
+    body: dict[str, Any] = {
+        "snapshot_type": snapshot_type,
+        "snapshot_path": str(arts.snapshot_path.resolve()),
+        "mem_file_path": str(arts.mem_path.resolve()),
+        "sync_snapshot_files": _flag("TBE_FC_SNAPSHOT_SYNC", "1"),
+    }
+    _api_put(sock, "/snapshot/create", body, timeout=180.0)
     if not arts.exists():
         raise RuntimeError("snapshot_files_not_created")
+    ms = (time.perf_counter() - t0) * 1000
     logger.info(
-        "fc snapshot created label=%s size_mib=%.1f",
+        "fc snapshot created type=%s label=%s size_mib=%.1f elapsed_ms=%.0f",
+        snapshot_type,
         arts.label,
         arts.size_bytes() / (1024 * 1024),
+        ms,
     )
     return arts
 
 
 def load_snapshot_payload(arts: SnapshotArtifacts, *, resume: bool = True) -> dict[str, Any]:
-    """Body for PUT /snapshot/load on a fresh Firecracker process."""
-    if not arts.exists():
-        raise RuntimeError(f"snapshot_missing:{arts.label}")
-    return {
-        "snapshot_path": str(arts.snapshot_path.resolve()),
+    if not arts.exists() and arts.snapshot_path.is_absolute():
+        # jail-relative paths may not exist on host path namespace
+        if not str(arts.snapshot_path).startswith("/"):
+            raise RuntimeError(f"snapshot_missing:{arts.label}")
+    if arts.snapshot_path.is_absolute() and arts.mem_path.is_absolute():
+        if arts.snapshot_path.is_file() and arts.mem_path.is_file():
+            pass
+        elif not arts.exists():
+            raise RuntimeError(f"snapshot_missing:{arts.label}")
+    snap = str(arts.snapshot_path)
+    mem = str(arts.mem_path)
+    if arts.snapshot_path.is_absolute() and arts.snapshot_path.exists():
+        snap = str(arts.snapshot_path.resolve())
+    if arts.mem_path.is_absolute() and arts.mem_path.exists():
+        mem = str(arts.mem_path.resolve())
+    body: dict[str, Any] = {
+        "snapshot_path": snap,
         "mem_backend": {
             "backend_type": "File",
-            "backend_path": str(arts.mem_path.resolve()),
+            "backend_path": mem,
         },
         "resume_vm": bool(resume),
     }
+    if _flag("TBE_FC_SNAPSHOT_ENABLE_DIFF_LOAD", "0"):
+        body["enable_diff_snapshots"] = True
+    return body
 
 
-def load_and_resume(sock: Path, arts: SnapshotArtifacts) -> None:
-    """Load snapshot into a fresh VMM (no prior boot-source config)."""
+def load_and_resume(sock: Path, arts: SnapshotArtifacts) -> dict[str, float]:
+    """Load snapshot into a fresh VMM. Returns timing metrics (ms)."""
+    t0 = time.perf_counter()
+    if arts.mem_path.is_file():
+        readahead_file(arts.mem_path)
+    t_read = time.perf_counter()
     body = load_snapshot_payload(arts, resume=True)
     _api_put(sock, "/snapshot/load", body, timeout=120.0)
+    t_end = time.perf_counter()
+    metrics = {
+        "readahead_ms": (t_read - t0) * 1000,
+        "load_ms": (t_end - t_read) * 1000,
+        "total_ms": (t_end - t0) * 1000,
+    }
+    logger.info(
+        "fc snapshot load label=%s readahead_ms=%.0f load_ms=%.0f",
+        arts.label,
+        metrics["readahead_ms"],
+        metrics["load_ms"],
+    )
+    return metrics
 
 
 class WarmPool:
-    """In-process registry of base snapshot labels available for fast resume.
-
-    Operator pre-builds base snapshot once (kernel+rootfs+guest-ready).
-    Runtime resumes and attaches per-tenant project/token drives separately
-    when TBE_FC_WARM_POOL=1 and artifacts exist.
-    """
+    """In-process registry of base snapshot labels available for fast resume."""
 
     def __init__(self) -> None:
         self._labels: dict[str, SnapshotArtifacts] = {}

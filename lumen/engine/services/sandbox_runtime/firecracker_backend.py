@@ -578,6 +578,9 @@ class FirecrackerSandboxBackend(SandboxBackend):
             "mem_size_mib": mem_mib,
             "smt": False,
         }
+        # Required for Diff snapshots (incremental); small overhead on page tracking
+        if _flag("TBE_FC_TRACK_DIRTY_PAGES", "1"):
+            machine_cfg["track_dirty_pages"] = True
 
         network_ifaces: list[dict] = []
         net_plan = None

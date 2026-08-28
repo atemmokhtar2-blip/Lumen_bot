@@ -445,3 +445,32 @@ def test_warm_jailed_none_without_pool(tmp_path, monkeypatch):
         log_path=tmp_path / "w.log",
     )
     assert r is None
+
+def test_fast_link_or_copy_hardlink(tmp_path):
+    from lumen.engine.services.sandbox_runtime.fc_snapshot import fast_link_or_copy
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"x" * 4096)
+    dst = tmp_path / "dst.bin"
+    method = fast_link_or_copy(src, dst)
+    assert method in {"hardlink", "reflink", "copy", "hardlink-exists"}
+    assert dst.is_file()
+    assert dst.read_bytes() == src.read_bytes()
+
+
+def test_load_snapshot_payload_structure(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_FC_SNAPSHOT_DIR", str(tmp_path))
+    from lumen.engine.services.sandbox_runtime.fc_snapshot import (
+        SnapshotArtifacts,
+        load_snapshot_payload,
+    )
+    arts = SnapshotArtifacts(
+        snapshot_path=tmp_path / "vm.snap",
+        mem_path=tmp_path / "vm.mem",
+        label="t",
+    )
+    arts.snapshot_path.write_bytes(b"s")
+    arts.mem_path.write_bytes(b"m")
+    body = load_snapshot_payload(arts, resume=True)
+    assert body["resume_vm"] is True
+    assert body["mem_backend"]["backend_type"] == "File"
+    assert "snapshot_path" in body
