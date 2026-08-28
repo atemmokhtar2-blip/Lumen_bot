@@ -6,11 +6,15 @@ from pathlib import Path
 import pytest
 
 
-def test_api_app_does_not_force_local_fallback_on():
-    """Regression: app.py must never default LOCAL_FALLBACK=1 (RCE when no sandbox)."""
+def test_api_app_does_not_mutate_isolation_environ():
+    """app.py must not write isolation keys into os.environ (anti-pattern)."""
     src = Path("lumen/api/app.py").read_text(encoding="utf-8")
-    assert 'TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "1"' not in src
-    assert 'TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"' in src
+    assert 'os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"]' not in src
+    assert 'os.environ["TBE_MULTI_TENANT"]' not in src
+    assert 'os.environ["TBE_REQUIRE_DOCKER"]' not in src
+    assert 'os.environ["TBE_PIP_WHEELS_ONLY"]' not in src
+    # No legacy "soften security" comments
+    assert "blocked all live runs without Docker" not in src
 
 
 def test_decide_isolation_ignores_local_fallback_in_multi_tenant(monkeypatch):
@@ -153,9 +157,10 @@ def test_linux_path_open_has_no_weak_os_open_fallback():
 
 
 def test_app_always_forces_local_fallback_off():
+    """Kept name: ensures app neither enables nor mutates LOCAL_FALLBACK."""
     src = Path("lumen/api/app.py").read_text(encoding="utf-8")
     assert 'TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "1"' not in src
-    assert 'os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"' in src
+    assert 'os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"]' not in src
 
 
 def test_generate_source_has_sandbox_503_gate():

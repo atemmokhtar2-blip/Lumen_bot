@@ -2,12 +2,14 @@
 
 App factory: `lumen/api/app.py` (aiohttp).
 
-Defaults pushed in factory when unset:
+Isolation / package defaults are **not** written into `os.environ` by the API factory.
 
-- `TBE_MULTI_TENANT=1`
-- `TBE_REQUIRE_DOCKER=1`
-- `TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=0` (fail-closed; host LocalProcess never defaulted for B2B)
-- `TBE_PIP_WHEELS_ONLY=1`
+Readers apply fail-closed defaults when env is unset:
+
+- `isolation_policy.is_multi_tenant()` → default multi-tenant on
+- `isolation_policy.decide_isolation()` → multi-tenant/production never allow host LocalProcess
+- `TBE_PIP_WHEELS_ONLY` defaulted at use sites in live_runner (wheels-only)
+- `APISettings` (`lumen/api/settings.py`) documents B2B knobs without mutating the process env
 
 CORS: allowlist via `API_CORS_ORIGIN` (no `*` in production unless explicit unsafe flags in dev).
 

@@ -11,21 +11,9 @@ from lumen.api.routes import audit, billing, dashboard, generate, github_webhook
 
 logger = logging.getLogger("lumen_api")
 
-# B2B API is multi-tenant by nature: strong isolation required (fail-closed).
-# Set TBE_MULTI_TENANT=0 explicitly only for single-tenant local debugging.
-# NEVER default TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1 — that was an RCE path when
-# Docker/Firecracker/gVisor were unavailable (LocalProcessDriver on the host).
-if "TBE_MULTI_TENANT" not in os.environ:
-    os.environ["TBE_MULTI_TENANT"] = "1"
-if "TBE_REQUIRE_DOCKER" not in os.environ:
-    os.environ["TBE_REQUIRE_DOCKER"] = "1"
-# ROOT FIX: never enable host-local fallback from API process defaults.
-# Even if the operator exported TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1, B2B multi-tenant
-# isolation_policy ignores it; we still force the env to 0 so no child code path
-# can treat "missing sandbox → local process" as acceptable.
-os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"
-if "TBE_PIP_WHEELS_ONLY" not in os.environ:
-    os.environ["TBE_PIP_WHEELS_ONLY"] = "1"
+# Isolation defaults live in isolation_policy / settings readers (fail-closed).
+# Do NOT mutate os.environ here — global env writes are an anti-pattern (import-order
+# side effects, untestable defaults, hidden policy). Policy is decide_isolation().
 
 
 
@@ -306,6 +294,22 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
 
 
 def create_app() -> web.Application:
+    # Log isolation posture (read-only) — never write os.environ.
+    try:
+        from lumen.engine.services.isolation_policy import decide_isolation
+        d = decide_isolation()
+        logger.info(
+            "isolation_policy require_strong=%s allow_local=%s reason=%s",
+            d.require_strong_isolation,
+            d.allow_local,
+            d.reason,
+        )
+        if d.allow_local and d.require_strong_isolation is False:
+            logger.warning(
+                "isolation_policy allows host LocalProcess (dev/single-tenant only)"
+            )
+    except Exception:
+        logger.exception("isolation_policy snapshot failed")
     try:
         from lumen.platform.observability import setup_observability
         setup_observability(service_name=os.getenv("OTEL_SERVICE_NAME") or "lumen-api")
