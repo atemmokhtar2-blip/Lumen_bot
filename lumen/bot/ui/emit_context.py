@@ -52,7 +52,20 @@ async def emit_context_event(
                 if message is not None:
                     await message.reply_text(text, reply_markup=markup)
         elif message is not None:
-            await message.reply_text(text, reply_markup=markup)
+            from lumen.bot.ui.chat_hygiene import send_or_edit_ui
+            chat_id = getattr(getattr(message, "chat", None), "id", None)
+            bot = getattr(context, "bot", None) or getattr(message, "get_bot", lambda: None)()
+            if chat_id and bot:
+                await send_or_edit_ui(
+                    bot=bot,
+                    chat_id=int(chat_id),
+                    user_data=ud,
+                    text=text,
+                    markup=markup,
+                    preferred_message=message,
+                )
+            else:
+                await message.reply_text(text, reply_markup=markup)
     except Exception:
         logger.exception("emit_context_event failed kind=%s", kind)
 

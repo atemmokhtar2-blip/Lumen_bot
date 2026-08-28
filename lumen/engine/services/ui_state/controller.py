@@ -138,21 +138,21 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         if (state.project_ref or "").strip():
             rows.append(
                 (
-                    UiButton("تجربة في الشات", "post_trial"),
-                    UiButton("استضافة دائمة", "post_host"),
+                    UiButton("تجربة في الشات", "post_trial", style="success"),
+                    UiButton("استضافة دائمة", "post_host", style="success"),
                 )
             )
             rows.append(
                 (
-                    UiButton("تحميل ZIP", "post_zip"),
-                    UiButton("معاينة الملفات", "post_preview"),
+                    UiButton("تحميل ZIP", "post_zip", style="primary"),
+                    UiButton("معاينة الملفات", "post_preview", style="primary"),
                 )
             )
-        rows.append((UiButton("إنشاء بوت آخر", "open_generate"),))
+        rows.append((UiButton("إنشاء بوت آخر", "open_generate", style="success"),))
         rows.append(
             (
-                UiButton("لوحة التحكم", "open_dashboard"),
-                UiButton("القائمة", "home"),
+                UiButton("لوحة التحكم", "open_dashboard", style="primary"),
+                UiButton("القائمة", "home", style="danger"),
             )
         )
         return tuple(rows)
@@ -171,27 +171,27 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             rows.append((UiButton(label[:40], "dash_status", str(i)),))
             rows.append(
                 (
-                    UiButton("حالة", "dash_status", str(i)),
-                    UiButton("إيقاف", "dash_stop", str(i)),
-                    UiButton("تشخيص", "dash_diagnose", str(i)),
+                    UiButton("حالة", "dash_status", str(i), style="primary"),
+                    UiButton("إيقاف", "dash_stop", str(i), style="danger"),
+                    UiButton("تشخيص", "dash_diagnose", str(i), style="primary"),
                 )
             )
         rows.append(
             (
-                UiButton("تحديث القائمة", "open_dashboard"),
-                UiButton("حالة الكل", "dash_status", "all"),
+                UiButton("تحديث القائمة", "open_dashboard", style="primary"),
+                UiButton("حالة الكل", "dash_status", "all", style="primary"),
             )
         )
         rows.append(
             (
-                UiButton("تجربة المشروع", "dash_trial"),
-                UiButton("استضافة المشروع", "post_host"),
+                UiButton("تجربة المشروع", "dash_trial", style="success"),
+                UiButton("استضافة المشروع", "post_host", style="success"),
             )
         )
         rows.append(
             (
-                UiButton("إنشاء بوت", "open_generate"),
-                UiButton("القائمة", "home"),
+                UiButton("إنشاء بوت", "open_generate", style="success"),
+                UiButton("القائمة", "home", style="danger"),
             )
         )
         return tuple(rows)

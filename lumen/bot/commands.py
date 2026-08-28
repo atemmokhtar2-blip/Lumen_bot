@@ -73,24 +73,36 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME))
 
     welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
-    sent = False
+    from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
+    sent_msg = None
     if welcome_img.is_file():
         try:
             from telegram import InputFile
             with welcome_img.open("rb") as fh:
-                await message.reply_photo(
+                sent_msg = await message.reply_photo(
                     photo=InputFile(fh, filename="welcome.jpg"),
                     caption=caption[:1024],
                     reply_markup=markup,
                 )
-            sent = True
         except Exception:
-            sent = False
-    if not sent:
+            sent_msg = None
+    if sent_msg is None:
         try:
-            await message.reply_text(caption[:4000], reply_markup=markup)
+            sent_msg = await message.reply_text(caption[:4000], reply_markup=markup)
         except Exception:
             await safe_reply_text(message, caption[:4000])
+            sent_msg = None
+    if sent_msg is not None and context.user_data is not None:
+        remember_message(context.user_data, getattr(sent_msg, "message_id", None))
+        try:
+            await prune_bot_messages(
+                context.bot,
+                int(message.chat_id),
+                context.user_data,
+                protect=getattr(sent_msg, "message_id", None),
+            )
+        except Exception:
+            pass
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -26,38 +26,40 @@ def _help_body() -> str:
         return "استخدم /help"
 
 
-async def _safe_render_ui(q, msg, text: str, markup) -> None:
-    """Edit the originating message; fall back to a new reply on any failure.
+async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=None) -> None:
+    """Single-surface UI: edit in place, then hard-prune chat to max 2 bot messages."""
+    from .chat_hygiene import send_or_edit_ui
 
-    /start often sends a photo+caption — edit_message_text would fail there.
-    Always prefer a visible update over a silent failure.
-    """
-    body = (text or "")[:4000]
-    cap = (text or "")[:1024]
-    # Prefer caption edit when the source is a photo (no .text)
-    has_text = q is not None and q.message is not None and getattr(q.message, "text", None)
-    has_caption = (
-        q is not None
-        and q.message is not None
-        and getattr(q.message, "caption", None) is not None
-    )
-    try:
-        if has_text:
-            await q.edit_message_text(text=body, reply_markup=markup)
-            return
-        if has_caption:
-            await q.edit_message_caption(caption=cap, reply_markup=markup)
-            return
-    except Exception:
-        logger.exception("ui edit failed — falling back to reply")
-    target = msg
-    if target is None and q is not None:
-        target = q.message
-    if target is not None:
+    bot = getattr(context, "bot", None) if context is not None else None
+    chat_id = None
+    preferred = None
+    if q is not None and getattr(q, "message", None) is not None:
+        preferred = q.message
+        chat_id = getattr(q.message.chat, "id", None)
+    elif msg is not None:
+        preferred = msg
+        chat_id = getattr(getattr(msg, "chat", None), "id", None)
+    if bot is None and preferred is not None:
+        bot = getattr(preferred, "get_bot", lambda: None)()
+    if chat_id is None:
+        # last resort legacy path
         try:
-            await target.reply_text(body, reply_markup=markup)
+            if preferred is not None and getattr(preferred, "text", None):
+                await preferred.edit_text(text=(text or "")[:4000], reply_markup=markup)
+                return
+            if preferred is not None:
+                await preferred.reply_text((text or "")[:4000], reply_markup=markup)
         except Exception:
-            logger.exception("ui reply_text fallback failed")
+            logger.exception("legacy render failed")
+        return
+    await send_or_edit_ui(
+        bot=bot,
+        chat_id=int(chat_id),
+        user_data=user_data,
+        text=text,
+        markup=markup,
+        preferred_message=preferred,
+    )
 
 
 async def handle_ui_callback(update, context) -> None:
@@ -182,7 +184,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         markup = None
 
     msg = update.effective_message
-    await _safe_render_ui(q, msg, text, markup)
+    await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
 
     # Real generation — same engine as chat path
     if result.ok and result.run_generation and result.generation_request:
@@ -216,25 +218,21 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             save_ui_state(user_data, st2)
             if uid:
                 persist_ui_session(uid, dict(user_data))
-            if st2.phase == EngineUiPhase.CONTEXT and msg:
+            if st2.phase in {EngineUiPhase.CONTEXT, EngineUiPhase.GEN_DONE} and msg:
                 from lumen.engine.services.ui_state.controller import buttons_for_state
-
-                await msg.reply_text(
-                    render_ui_message(st2)[:2000],
-                    reply_markup=build_inline_keyboard(buttons_for_state(st2)),
-                )
-            if st2.phase == EngineUiPhase.GEN_DONE and msg:
-                from lumen.engine.services.ui_state.controller import buttons_for_state
-
-                body = (
-                    "ما التالي؟\n"
-                    "• تجربة في الشات — تشغيل مؤقت\n"
-                    "• استضافة دائمة — Firecracker\n"
-                    "• ZIP أو معاينة"
-                )
-                await msg.reply_text(
-                    body,
-                    reply_markup=build_inline_keyboard(buttons_for_state(st2)),
+                if st2.phase == EngineUiPhase.GEN_DONE:
+                    body = (
+                        "ما التالي؟\n"
+                        "• تجربة في الشات — تشغيل مؤقت\n"
+                        "• استضافة دائمة — Firecracker\n"
+                        "• ZIP أو معاينة"
+                    )
+                else:
+                    body = render_ui_message(st2)[:2000]
+                await _safe_render_ui(
+                    q, msg, body,
+                    build_inline_keyboard(buttons_for_state(st2)),
+                    user_data=user_data, context=context,
                 )
         except Exception:
             logger.exception("guided generation bridge failed")
@@ -266,40 +264,22 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 user=update.effective_user,
             )
             if note and msg:
-                await msg.reply_text(note[:2000])
-                low = note
-                if "لا يوجد مشروع" in low or "غير موجود" in low:
-                    from lumen.bot.ui.emit_context import emit_context_event
-
-                    await emit_context_event(
-                        message=msg,
-                        context=context,
-                        user=update.effective_user,
-                        kind="no_project",
-                        detail=note[:400],
-                    )
+                # Merge into the same UI surface — never flood chat
+                merged = (text + "\n\n" + note)[:4000] if text else note[:4000]
+                await _safe_render_ui(
+                    q, msg, merged, markup, user_data=user_data, context=context
+                )
         except Exception:
             logger.exception("post_side_effect failed effect=%s", result.post_side_effect)
 
     if result.ok and action_id == "open_dashboard" and msg:
-        try:
-            from .dash_actions import execute_dash_effect
-
-            overview = await execute_dash_effect(
-                effect="dash_status",
-                target="all",
-                user_id=uid,
-                user_data=user_data,
-                message=msg,
-            )
-            if overview:
-                await msg.reply_text(("ملخص الاستضافة:\n" + overview)[:3500])
-        except Exception:
-            logger.exception("dashboard overview failed")
+        # Status already reflected in dashboard render + hosts facts — no extra spam message
+        pass
 
     if result.ok and getattr(result, "dash_effect", ""):
         try:
             from .dash_actions import execute_dash_effect
+            from lumen.engine.services.ui_state.controller import buttons_for_state
 
             note = await execute_dash_effect(
                 effect=result.dash_effect,
@@ -308,29 +288,23 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 user_data=user_data,
                 message=msg,
             )
-            if note and msg:
-                await msg.reply_text(note[:3500])
-                if note.startswith("FAIL") or "غير موجود" in note or "لا مثيل" in note:
-                    from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
-
-                    await emit_context_event(
-                        message=msg,
-                        context=context,
-                        user=update.effective_user,
-                        kind=classify_host_failure(note),
-                        detail=note[:400],
-                    )
             if result.dash_effect == "dash_stop":
                 from .dash_actions import sync_dashboard_slots
-                from lumen.engine.services.ui_state.controller import buttons_for_state
-
                 st = load_ui_state(user_data)
                 st.slots = sync_dashboard_slots(uid, st.slots)
                 save_ui_state(user_data, st)
-                if msg:
-                    await msg.reply_text(
-                        "تم تحديث القائمة.",
-                        reply_markup=build_inline_keyboard(buttons_for_state(st)),
-                    )
+                body = render_ui_message(
+                    st, gather_ui_facts(uid, user_data, include_hosts=True)
+                )
+                await _safe_render_ui(
+                    q, msg, body,
+                    build_inline_keyboard(buttons_for_state(st)),
+                    user_data=user_data, context=context,
+                )
+            elif note and msg:
+                merged = ((text or "") + "\n\n" + note)[:4000]
+                await _safe_render_ui(
+                    q, msg, merged, markup, user_data=user_data, context=context
+                )
         except Exception:
             logger.exception("dash_effect failed effect=%s", result.dash_effect)
