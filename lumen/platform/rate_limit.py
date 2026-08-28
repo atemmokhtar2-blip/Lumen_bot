@@ -1,37 +1,21 @@
-"""Rate limiter — Redis mandatory always (no Memory/SQLite selection path).
+"""Rate limiter — Redis only (no Memory/SQLite backends).
 
-Foundation:
-  - Production / staging: REDIS_URL required. No SQLite / memory fallback
-    (multi-worker DoS hole if local backends are used under B2B load).
-  - Dev / local / test: SQLite or in-process memory allowed when Redis is absent.
-  - No process-local bucket: limits are enforced only on the shared Redis backend.
+REDIS_URL is required in every environment. Missing or unreachable Redis
+raises at construction time (fail-fast). No local fallback exists — that
+would open a multi-worker DoS hole under B2B load.
 
 Callers use RateLimiter only — never branch on backend type.
-
-Authority is Redis only (no process-local token bucket). Global limits are exact
-across workers at the cost of one Redis round-trip per check.
 """
 from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Protocol
 
 logger = logging.getLogger("lumen.rate_limit")
-
-def _durable_data_dir() -> Path:
-    try:
-        from .paths import durable_data_dir
-        return durable_data_dir()
-    except Exception:
-        p = Path.home() / ".lumen"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
-
 
 
 class RateLimiterBackend(Protocol):
@@ -118,149 +102,7 @@ class RedisRateLimiter:
         return max(1, int(oldest + window_sec - now) + 1)
 
 
-# ── SQLite backend (fallback) ────────────────────────────────────────────────
-
-class SqliteRateLimiter:
-    """Process-safe rate limiter backed by SQLite — **dev only**.
-
-    Construction outside ENVIRONMENT=dev|local|test raises. Production must use Redis.
-    """
-
-    def __init__(self, db_path: str | Path | None = None) -> None:
-        from .runtime_config import is_dev
-        if not is_dev():
-            raise RuntimeError(
-                "SqliteRateLimiter is forbidden outside ENVIRONMENT=dev|local|test. "
-                "Set REDIS_URL for production rate limiting."
-            )
-        base = _durable_data_dir()
-        self.path = Path(db_path or (base / "platform" / "rate_limit.sqlite3"))
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
-        self._init_db()
-
-    def _conn(self) -> sqlite3.Connection:
-        conn = getattr(self._local, "conn", None)
-        if conn is None:
-            conn = sqlite3.connect(str(self.path), timeout=30, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            self._local.conn = conn
-        return conn
-
-    def _init_db(self) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS hits (
-                    bucket TEXT NOT NULL,
-                    ts REAL NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_hits_bucket_ts ON hits(bucket, ts)"
-            )
-            conn.commit()
-
-    def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
-        if limit <= 0:
-            return True
-        now = time.time()
-        cutoff = now - window_sec
-        bucket = str(key)
-        conn = self._conn()
-        with conn:
-            conn.execute("DELETE FROM hits WHERE bucket=? AND ts < ?", (bucket, cutoff))
-            row = conn.execute(
-                "SELECT COUNT(*) FROM hits WHERE bucket=?", (bucket,)
-            ).fetchone()
-            count = int(row[0]) if row else 0
-            if count >= limit:
-                return False
-            conn.execute("INSERT INTO hits(bucket, ts) VALUES (?, ?)", (bucket, now))
-        return True
-
-    def remaining(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
-        if limit <= 0:
-            return 10**9
-        now = time.time()
-        cutoff = now - window_sec
-        conn = self._conn()
-        row = conn.execute(
-            "SELECT COUNT(*) FROM hits WHERE bucket=? AND ts >= ?",
-            (str(key), cutoff),
-        ).fetchone()
-        used = int(row[0]) if row else 0
-        return max(0, limit - used)
-
-    def seconds_until_allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
-        if limit <= 0:
-            return 0
-        now = time.time()
-        cutoff = now - window_sec
-        conn = self._conn()
-        rows = conn.execute(
-            "SELECT ts FROM hits WHERE bucket=? AND ts >= ? ORDER BY ts ASC",
-            (str(key), cutoff),
-        ).fetchall()
-        if len(rows) < limit:
-            return 0
-        oldest = float(rows[0][0])
-        return max(1, int(oldest + window_sec - now) + 1)
-
-
-# ── Public facade ────────────────────────────────────────────────────────────
-
-
-class MemoryRateLimiter:
-    """Process-local sliding window — always available emergency backend."""
-
-    def __init__(self) -> None:
-        self._hits: dict[str, list[float]] = {}
-        self._lock = threading.Lock()
-
-    def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
-        if limit <= 0:
-            return True
-        now = time.time()
-        cutoff = now - window_sec
-        with self._lock:
-            bucket = [ts for ts in self._hits.get(key, []) if ts >= cutoff]
-            if len(bucket) >= limit:
-                self._hits[key] = bucket
-                return False
-            bucket.append(now)
-            self._hits[key] = bucket
-            # opportunistic prune
-            if len(self._hits) > 20000:
-                stale = [k for k, v in self._hits.items() if not v or v[-1] < cutoff]
-                for k in stale[:5000]:
-                    self._hits.pop(k, None)
-            return True
-
-    def remaining(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
-        if limit <= 0:
-            return 10**9
-        now = time.time()
-        cutoff = now - window_sec
-        with self._lock:
-            bucket = [ts for ts in self._hits.get(key, []) if ts >= cutoff]
-            self._hits[key] = bucket
-            return max(0, limit - len(bucket))
-
-    def seconds_until_allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
-        if limit <= 0:
-            return 0
-        now = time.time()
-        cutoff = now - window_sec
-        with self._lock:
-            bucket = sorted(ts for ts in self._hits.get(key, []) if ts >= cutoff)
-            if len(bucket) < limit:
-                return 0
-            oldest = bucket[0]
-            return max(1, int(oldest + window_sec - now) + 1)
-
+# ── Public facade (Redis only) ──────────────────────────────────────────────
 
 
 class RateLimiter:
@@ -376,21 +218,8 @@ def check_tenant_llm_budget(
                 pipe.execute()
             return True, "ok"
         except Exception:
-            logger.warning("llm budget redis failed; refusing in non-dev", exc_info=True)
-            env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-            if env not in {"dev", "development", "local", "test"}:
-                return False, "llm_budget_backend_unavailable"
-            # fall through to memory in dev
+            logger.warning("llm budget redis failed; refusing", exc_info=True)
+            return False, "llm_budget_backend_unavailable"
 
-    # Dev memory fallback
-    store = getattr(check_tenant_llm_budget, "_mem", None)
-    if store is None:
-        store = {}
-        check_tenant_llm_budget._mem = store  # type: ignore[attr-defined]
-    cur_tok, cur_usd = store.get(tok_key, (0, 0.0))
-    if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
-        return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
-    if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
-        return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
-    store[tok_key] = (cur_tok + max(0, int(add_tokens)), cur_usd + max(0.0, float(add_usd)))
-    return True, "ok"
+    # Redis is mandatory — no in-process budget store
+    return False, "llm_budget_backend_unavailable"
