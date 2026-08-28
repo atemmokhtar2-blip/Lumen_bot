@@ -108,12 +108,13 @@ def _find_entry_point(project_path: Path) -> Optional[Path]:
 
 
 def _local_process_allowed() -> bool:
-    """Local subprocess allowed when isolation policy says so."""
+    """Local subprocess only when isolation policy allow_local (dev/single-tenant only)."""
     try:
-        from lumen.engine.services.isolation_policy import decide_isolation
+        from lumen.engine.services.isolation_policy import decide_isolation, is_multi_tenant
+        if is_multi_tenant():
+            return False
         return bool(decide_isolation().allow_local)
     except Exception:
-        # Fail closed: never allow host process when policy cannot be evaluated.
         return False
 
 

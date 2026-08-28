@@ -59,40 +59,41 @@ def strong_sandbox_available() -> tuple[bool, str]:
 
 
 def decide_isolation() -> IsolationDecision:
-    """Strong sandbox required in multi-tenant/production; local only with explicit gates.
+    """Fail-closed isolation policy.
 
-    Production / multi-tenant: TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER is **ignored**.
-    Host LocalProcess is allowed only via dual gate:
-      TBE_ALLOW_LOCAL_PROCESS=1 AND TBE_FORCE_LOCAL_PROCESS=1
-    (intentional single-tenant debug — never the API default).
+    Rules (absolute):
+    - Multi-tenant: NEVER allow host LocalProcess (ignores LOCAL_FALLBACK and dual gates).
+    - Production (non-dev): NEVER allow host LocalProcess.
+    - Dev + single-tenant only: dual gate OR LOCAL_FALLBACK may allow local.
     """
     multi = is_multi_tenant()
     dev = is_dev_environment()
     dual = _flag("TBE_ALLOW_LOCAL_PROCESS", "0") and _flag("TBE_FORCE_LOCAL_PROCESS", "0")
 
+    # Absolute: multi-tenant or production → strong isolation only.
+    if multi or not dev:
+        return IsolationDecision(
+            require_docker=True,
+            allow_local=False,
+            require_strong_isolation=True,
+            reason=f"fail_closed multi_tenant={multi} dev={dev}",
+        )
+
+    # Dev + single-tenant only below this line.
     if dual:
         return IsolationDecision(
             require_docker=False,
             allow_local=True,
             require_strong_isolation=False,
-            reason=f"explicit_local multi_tenant={multi} dev={dev}",
+            reason="dev_single_tenant_explicit_local",
         )
 
-    # Multi-tenant or non-dev: never allow host-local fallback (fail-closed).
-    if multi or not dev:
-        fallback = False
-    else:
-        # Dev-only convenience when Docker is missing on a developer laptop.
-        fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "1")
-
+    fallback = _flag("TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER", "0")
     return IsolationDecision(
-        require_docker=True,  # legacy: try container backends in the stack
+        require_docker=True,
         allow_local=fallback,
-        require_strong_isolation=True,
-        reason=(
-            f"strong_sandbox_required local_fallback={fallback} "
-            f"multi_tenant={multi} dev={dev}"
-        ),
+        require_strong_isolation=not fallback,
+        reason=f"dev_single_tenant local_fallback={fallback}",
     )
 
 

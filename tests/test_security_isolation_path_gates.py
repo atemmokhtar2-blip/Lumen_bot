@@ -27,9 +27,22 @@ def test_decide_isolation_ignores_local_fallback_in_multi_tenant(monkeypatch):
     assert d.allow_local is False
 
 
-def test_decide_isolation_dual_gate_still_allows_local(monkeypatch):
+def test_decide_isolation_dual_gate_denied_in_multi_tenant(monkeypatch):
+    """Multi-tenant production: dual gate must NOT unlock host LocalProcess."""
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
+    monkeypatch.setenv("TBE_FORCE_LOCAL_PROCESS", "1")
+    from lumen.engine.services.isolation_policy import decide_isolation
+
+    d = decide_isolation()
+    assert d.allow_local is False
+    assert d.require_strong_isolation is True
+
+
+def test_decide_isolation_dual_gate_ok_in_dev_single_tenant(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
     monkeypatch.setenv("TBE_FORCE_LOCAL_PROCESS", "1")
     from lumen.engine.services.isolation_policy import decide_isolation
