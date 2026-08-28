@@ -86,13 +86,34 @@ def _chroot_base() -> Path:
     return Path(raw)
 
 
+def _production_isolation() -> bool:
+    """Match select.is_production_sandbox_path — multi-tenant or non-dev."""
+    try:
+        from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
+        return is_production_sandbox_path()
+    except Exception:
+        # Fail closed: treat as production if we cannot import
+        if not _is_dev_environment():
+            return True
+        multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        return multi
+
+
 def _require_jailer() -> bool:
-    """Jailer is mandatory outside explicit unsafe dev mode."""
-    if _flag("TBE_FC_REQUIRE_JAILER", "1"):
-        if _is_dev_environment() and _flag("TBE_FC_ALLOW_NO_JAILER", "0"):
-            return False
+    """Jailer is mandatory on the production isolation path.
+
+    Dev may opt out only with BOTH:
+      ENVIRONMENT=dev|local|test AND TBE_FC_ALLOW_NO_JAILER=1
+    TBE_FC_REQUIRE_JAILER=0 is ignored when production isolation applies.
+    """
+    if _production_isolation():
         return True
-    return False
+    # Dev path only
+    if _flag("TBE_FC_ALLOW_NO_JAILER", "0"):
+        return False
+    return _flag("TBE_FC_REQUIRE_JAILER", "1")
 
 
 def _stable_vm_ids(user_id: int, vm_id: str) -> Tuple[int, int]:
@@ -341,10 +362,36 @@ class FirecrackerSandboxBackend(SandboxBackend):
             return SandboxProbe(self.name, False, "TBE_FC_KERNEL missing", self.strength)
         if not _rootfs() or not os.path.isfile(_rootfs()):
             return SandboxProbe(self.name, False, "TBE_FC_ROOTFS missing", self.strength)
+        if _production_isolation():
+            if _flag("TBE_FC_ALLOW_NO_JAILER", "0"):
+                return SandboxProbe(
+                    self.name, False,
+                    "TBE_FC_ALLOW_NO_JAILER forbidden in production",
+                    self.strength,
+                )
+            if _flag("TBE_FC_ALLOW_NO_NET", "0"):
+                return SandboxProbe(
+                    self.name, False,
+                    "TBE_FC_ALLOW_NO_NET forbidden in production",
+                    self.strength,
+                )
+            if _flag("TBE_FC_TOKEN_IN_BOOTARGS", "0"):
+                return SandboxProbe(
+                    self.name, False,
+                    "TBE_FC_TOKEN_IN_BOOTARGS forbidden in production",
+                    self.strength,
+                )
+            if _flag("TBE_FC_SKIP_PROJECT_DRIVE", "0"):
+                return SandboxProbe(
+                    self.name, False,
+                    "TBE_FC_SKIP_PROJECT_DRIVE forbidden in production",
+                    self.strength,
+                )
         auto_net = _flag("TBE_FC_AUTO_NET", "1")
         tap = (os.environ.get("TBE_FC_TAP") or "").strip()
         netns = (os.environ.get("TBE_FC_NETNS") or "").strip()
-        if not auto_net and not tap and not netns and not _flag("TBE_FC_ALLOW_NO_NET", "0"):
+        allow_no_net = _flag("TBE_FC_ALLOW_NO_NET", "0") and not _production_isolation()
+        if not auto_net and not tap and not netns and not allow_no_net:
             return SandboxProbe(
                 self.name,
                 False,
@@ -373,10 +420,28 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 message=f"firecracker_unavailable:{probe.reason}",
             )
 
+        # Production isolation hard gates (no unsafe opt-outs)
+        if _production_isolation():
+            if _flag("TBE_FC_ALLOW_NO_JAILER", "0"):
+                return SandboxHandle(
+                    backend=self.name, deployment_id="", status="failed",
+                    message="firecracker_allow_no_jailer_forbidden_in_production",
+                )
+            if _flag("TBE_FC_ALLOW_NO_NET", "0"):
+                return SandboxHandle(
+                    backend=self.name, deployment_id="", status="failed",
+                    message="firecracker_allow_no_net_forbidden_in_production",
+                )
+            if _flag("TBE_FC_SKIP_PROJECT_DRIVE", "0"):
+                return SandboxHandle(
+                    backend=self.name, deployment_id="", status="failed",
+                    message="firecracker_skip_project_drive_forbidden_in_production",
+                )
+
         # Token path: production forbids boot-args injection
         token_drive_env = (os.environ.get("TBE_FC_TOKEN_DRIVE") or "").strip()
         inject_boot = _flag("TBE_FC_TOKEN_IN_BOOTARGS", "0")
-        if inject_boot and not _is_dev_environment():
+        if inject_boot and _production_isolation():
             return SandboxHandle(
                 backend=self.name,
                 deployment_id="",
@@ -534,7 +599,22 @@ class FirecrackerSandboxBackend(SandboxBackend):
             }
         }
 
-        use_jailer = _require_jailer() and bool(_jailer_bin())
+        # Production: jailer is non-negotiable (binary absence already failed above)
+        use_jailer = bool(_require_jailer() and _jailer_bin())
+        if _production_isolation() and not use_jailer:
+            if net_plan is not None:
+                try:
+                    from .fc_network import destroy_vm_network
+                    destroy_vm_network(net_plan)
+                except Exception:
+                    pass
+            self._cleanup_files(vm_id)
+            return SandboxHandle(
+                self.name,
+                "",
+                status="failed",
+                message="firecracker_jailer_mandatory_in_production",
+            )
         if _require_jailer() and not _jailer_bin():
             if net_plan is not None:
                 try:

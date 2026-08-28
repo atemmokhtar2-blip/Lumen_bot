@@ -3,9 +3,9 @@
 All entry points that execute user/tenant code MUST consult this module.
 
 Policy (production multi-tenant):
-  1) Strong sandbox required: Firecracker (best) > gVisor > DinD > hardened Docker.
-  2) LocalProcess is forbidden unless explicit dual gate or allowed dev fallback.
-  3) Docker is one backend among sandbox_runtime — not the only isolation form.
+  1) Firecracker microVM is the sole production sandbox (no gVisor/Docker fallback).
+  2) LocalProcess is forbidden unless explicit dual gate in dev single-tenant.
+  3) gVisor / DinD / Docker exist only as explicit dev backends.
 """
 from __future__ import annotations
 
@@ -44,11 +44,25 @@ class IsolationDecision:
 
 
 def strong_sandbox_available() -> tuple[bool, str]:
-    """True if any sandbox_runtime backend can run right now."""
+    """True if the required sandbox can run right now.
+
+    Production/multi-tenant: Firecracker only.
+    Dev: any available backend (for local testing).
+    """
     try:
-        from lumen.engine.services.sandbox_runtime import probe_all
+        from lumen.engine.services.sandbox_runtime.select import (
+            is_production_sandbox_path,
+            probe_all,
+        )
 
         probes = probe_all()
+        if is_production_sandbox_path():
+            for p in probes:
+                if p.name == "firecracker" and p.available:
+                    return True, f"{p.name}:{p.reason}"
+            fc = next((p for p in probes if p.name == "firecracker"), None)
+            reason = fc.reason if fc else "firecracker_not_probed"
+            return False, f"firecracker_required:{reason}"
         for p in probes:
             if p.available:
                 return True, f"{p.name}:{p.reason}"
@@ -101,7 +115,7 @@ def assert_local_process_allowed() -> None:
 
 
 def select_process_driver():
-    """Prefer SandboxProcessDriver (FC/gVisor/DinD/Docker). Local only if explicitly allowed.
+    """Prefer SandboxProcessDriver (Firecracker in production). Local only if explicitly allowed.
 
     Production multi-tenant must never receive LocalProcessDriver.
     """
@@ -156,7 +170,7 @@ def require_docker_runtime() -> None:
 
 
 def require_strong_isolation() -> None:
-    """Fail closed if no Firecracker/gVisor/DinD/Docker backend is available."""
+    """Fail closed if required sandbox is unavailable (Firecracker in production)."""
     d = decide_isolation()
     if d.allow_local and not d.require_strong_isolation:
         return

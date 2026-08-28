@@ -38,6 +38,9 @@ def test_policy_forbids_docker_sock_mount():
 
 
 def test_select_fails_closed_when_none(monkeypatch):
+    """Dev auto: no backend available → no_sandbox_backend_available."""
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_SANDBOX_BACKEND", "auto")
     from lumen.engine.services.sandbox_runtime import select as sel
     with mock.patch.object(sel.FirecrackerSandboxBackend, "probe") as a, \
@@ -103,6 +106,7 @@ def test_firecracker_probe_requires_jailer_in_prod(monkeypatch):
 
 def test_firecracker_probe_requires_tap(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
     monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
     monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
     monkeypatch.setenv("TBE_FC_AUTO_NET", "0")
@@ -209,3 +213,158 @@ def test_load_policy_egress_hosts():
     pol = load_policy()
     assert "api.telegram.org" in pol.egress_hosts
     assert pol.allow_docker_sock_in_bot is False
+
+
+def test_production_forces_firecracker_rejects_docker(monkeypatch):
+    """Production/multi-tenant must not select docker even if requested."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "docker")
+    from lumen.engine.services.sandbox_runtime import select as sel
+    with pytest.raises(RuntimeError, match="production_requires_firecracker"):
+        sel.select_sandbox_backend(require_available=False)
+
+
+def test_production_auto_uses_firecracker_only(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "auto")
+    from lumen.engine.services.sandbox_runtime import select as sel
+    from lumen.engine.services.sandbox_runtime.types import SandboxProbe
+    with mock.patch.object(sel.FirecrackerSandboxBackend, "probe") as fc, \
+         mock.patch.object(sel.DockerSandboxBackend, "probe") as dk:
+        fc.return_value = SandboxProbe("firecracker", True, "ok", 100)
+        dk.return_value = SandboxProbe("docker", True, "ok", 50)
+        b, p = sel.select_sandbox_backend(require_available=True)
+        assert b.name == "firecracker"
+        assert p.available is True
+        dk.assert_not_called()
+
+
+def test_production_fails_when_firecracker_down_no_docker_fallback(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "auto")
+    from lumen.engine.services.sandbox_runtime import select as sel
+    from lumen.engine.services.sandbox_runtime.types import SandboxProbe
+    with mock.patch.object(sel.FirecrackerSandboxBackend, "probe") as fc, \
+         mock.patch.object(sel.DockerSandboxBackend, "probe") as dk, \
+         mock.patch.object(sel.GVisorSandboxBackend, "probe") as gv:
+        fc.return_value = SandboxProbe("firecracker", False, "kvm_unavailable", 100)
+        dk.return_value = SandboxProbe("docker", True, "ok", 50)
+        gv.return_value = SandboxProbe("gvisor", True, "ok", 85)
+        with pytest.raises(RuntimeError, match="sandbox_backend_unavailable:firecracker"):
+            sel.select_sandbox_backend(require_available=True)
+        dk.assert_not_called()
+        gv.assert_not_called()
+
+
+def test_dev_allows_explicit_docker(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "docker")
+    from lumen.engine.services.sandbox_runtime import select as sel
+    from lumen.engine.services.sandbox_runtime.types import SandboxProbe
+    with mock.patch.object(sel.DockerSandboxBackend, "probe") as dk:
+        dk.return_value = SandboxProbe("docker", True, "ok", 50)
+        b, p = sel.select_sandbox_backend(require_available=True)
+        assert b.name == "docker"
+
+
+def test_is_production_sandbox_path(monkeypatch):
+    from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    assert is_production_sandbox_path() is True
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
+    assert is_production_sandbox_path() is False
+
+
+def test_market_gate_rejects_docker_commercial(monkeypatch):
+    monkeypatch.setenv("TBE_MARKET_GATE", "1")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "docker")
+    monkeypatch.setenv("TBE_TOKEN_SECRET", "x" * 40)
+    monkeypatch.setenv("TBE_SCALE_MODE", "1")
+    monkeypatch.setenv("TBE_DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "0")
+    from lumen.engine.services.hosting.market_gate import evaluate_market_gate
+    g = evaluate_market_gate()
+    assert g.ok is False
+    assert g.track == "rejected"
+    assert any("Firecracker" in m or "firecracker" in m.lower() or "غير مقبول" in m for m in g.missing)
+
+
+def test_fc_require_jailer_forced_in_production(monkeypatch):
+    """TBE_FC_REQUIRE_JAILER=0 must not disable jailer on production path."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_FC_REQUIRE_JAILER", "0")
+    monkeypatch.delenv("TBE_FC_ALLOW_NO_JAILER", raising=False)
+    from lumen.engine.services.sandbox_runtime import firecracker_backend as fc
+    assert fc._require_jailer() is True
+
+
+def test_fc_allow_no_jailer_only_in_dev(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "0")
+    monkeypatch.setenv("TBE_FC_ALLOW_NO_JAILER", "1")
+    from lumen.engine.services.sandbox_runtime import firecracker_backend as fc
+    assert fc._require_jailer() is False
+
+
+def test_fc_probe_rejects_allow_no_net_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_FC_ALLOW_NO_NET", "1")
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
+    Path("/tmp/k").write_text("k")
+    Path("/tmp/r").write_text("r")
+    with mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=True,
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        return_value="/usr/bin/firecracker",
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        return_value="/usr/bin/jailer",
+    ), mock.patch("os.path.isfile", return_value=True):
+        from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        p = FirecrackerSandboxBackend().probe()
+        assert p.available is False
+        assert "ALLOW_NO_NET" in p.reason or "no_net" in p.reason.lower()
+
+
+def test_fc_probe_rejects_token_in_bootargs_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    monkeypatch.setenv("TBE_FC_TOKEN_IN_BOOTARGS", "1")
+    monkeypatch.setenv("TBE_FC_AUTO_NET", "1")
+    monkeypatch.setenv("TBE_FC_KERNEL", "/tmp/k")
+    monkeypatch.setenv("TBE_FC_ROOTFS", "/tmp/r")
+    Path("/tmp/k").write_text("k")
+    Path("/tmp/r").write_text("r")
+    with mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._kvm_ok",
+        return_value=True,
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._bin",
+        return_value="/usr/bin/firecracker",
+    ), mock.patch(
+        "lumen.engine.services.sandbox_runtime.firecracker_backend._jailer_bin",
+        return_value="/usr/bin/jailer",
+    ), mock.patch("os.path.isfile", return_value=True), mock.patch(
+        "lumen.engine.services.sandbox_runtime.fc_network.ip_available",
+        return_value=True,
+    ):
+        from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
+        p = FirecrackerSandboxBackend().probe()
+        assert p.available is False
+        assert "TOKEN_IN_BOOTARGS" in p.reason or "bootargs" in p.reason.lower()

@@ -1,6 +1,8 @@
-"""DeploymentProvider backed by sandbox_runtime (Firecracker > gVisor > DinD > Docker).
+"""DeploymentProvider backed by sandbox_runtime.
 
-This is the production isolation path for live deployment. LocalProcess is not used.
+Production path: Firecracker only (via select_sandbox_backend).
+Dev may use weaker backends when TBE_SANDBOX_BACKEND is set explicitly.
+LocalProcess is not used here.
 """
 from __future__ import annotations
 

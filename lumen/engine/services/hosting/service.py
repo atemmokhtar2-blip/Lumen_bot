@@ -4,7 +4,7 @@ HostingService — foundation for paid hosting (no billing yet).
 Manages long-running bot processes for the owner:
   start / stop / status / diagnose (via Error Intelligence)
 
-Uses sandbox_runtime (Docker/DinD/Firecracker) for isolated process lifecycle and Error Intelligence
+Uses sandbox_runtime (Firecracker in production; weak backends are dev-only) for isolated process lifecycle and Error Intelligence
 for log diagnosis. State persisted under OUTPUT_DIR/hosting_state.json.
 """
 
@@ -197,7 +197,7 @@ class HostingService:
                     return HostResult(
                         ok=False,
                         message=(
-                            "الاستضافة تتطلب عزل قوي (Firecracker / gVisor / DinD / Docker). "
+                            "الاستضافة تتطلب عزل Firecracker (microVM). "
                             f"غير متاح: {sbx_reason[:240]}"
                         ),
                     )

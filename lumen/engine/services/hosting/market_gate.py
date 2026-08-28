@@ -3,15 +3,15 @@
 Hosting is refused unless the deployment surface meets a minimum bar that
 is safe to sell. Dev/local can set TBE_MARKET_GATE=0 to skip.
 
-Two commercial isolation tracks (either is valid):
+Commercial isolation track (sole path):
+  Firecracker microVM — firecracker+jailer, TBE_FC_KERNEL, TBE_FC_ROOTFS,
+  TAP or netns (TBE_FC_AUTO_NET / TBE_FC_TAP / TBE_FC_NETNS)
 
-  A) Container track (Docker / gVisor / DinD):
-       TBE_DOCKER_NETWORK, Docker CLI, registry + push, artifacts
+gVisor / DinD / Docker are NOT commercial tracks. They exist only for
+explicit dev/local testing (TBE_SANDBOX_BACKEND=gvisor|dind|docker +
+ENVIRONMENT=dev|local|test).
 
-  B) MicroVM track (Firecracker):
-       firecracker+jailer, TBE_FC_KERNEL, TBE_FC_ROOTFS, TAP or netns
-
-Shared (both tracks):
+Shared requirements:
   TBE_TOKEN_SECRET (>=32), TBE_SCALE_MODE=1, Postgres control plane,
   no LocalProcess.
 """
@@ -79,28 +79,11 @@ def _firecracker_track_ready() -> tuple[bool, list[str]]:
     auto_net = _on("TBE_FC_AUTO_NET", "1")
     tap = (os.environ.get("TBE_FC_TAP") or "").strip()
     netns = (os.environ.get("TBE_FC_NETNS") or "").strip()
-    if not auto_net and not tap and not netns and not _on("TBE_FC_ALLOW_NO_NET", "0"):
-        missing.append("TBE_FC_AUTO_NET=1 أو TBE_FC_TAP/NETNS")
-    if _on("TBE_FC_TOKEN_IN_BOOTARGS", "0") and _env() not in {"dev", "development", "local", "test"}:
-        missing.append("TBE_FC_TOKEN_IN_BOOTARGS ممنوع في الإنتاج")
-    return (len(missing) == 0), missing
-
-
-def _container_track_ready() -> tuple[bool, list[str]]:
-    missing: list[str] = []
-    if not (os.environ.get("TBE_DOCKER_NETWORK") or "").strip():
-        missing.append("TBE_DOCKER_NETWORK (شبكة egress معزولة)")
-    if not shutil.which("docker"):
-        missing.append("Docker CLI غير مثبت على هذه العقدة")
-    registry = (os.environ.get("TBE_DOCKER_REGISTRY") or "").strip()
-    if not registry:
-        missing.append("TBE_DOCKER_REGISTRY (سجل صور مشترك بين العقد)")
-    if not _on("TBE_DOCKER_PUSH", "0"):
-        missing.append("TBE_DOCKER_PUSH=1")
-    has_s3 = bool((os.environ.get("TBE_S3_BUCKET") or "").strip())
-    has_art = bool((os.environ.get("TBE_ARTIFACT_ROOT") or "").strip())
-    if not has_s3 and not has_art:
-        missing.append("TBE_ARTIFACT_ROOT أو TBE_S3_BUCKET")
+    allow_no_net = _on("TBE_FC_ALLOW_NO_NET", "0")
+    if not auto_net and not tap and not netns and not allow_no_net:
+        missing.append("TBE_FC_AUTO_NET=1 أو TBE_FC_TAP أو TBE_FC_NETNS")
+    if _on("TBE_FC_TOKEN_IN_BOOTARGS", "0"):
+        missing.append("TBE_FC_TOKEN_IN_BOOTARGS يجب أن يكون 0 في الإنتاج")
     return (len(missing) == 0), missing
 
 
@@ -126,27 +109,21 @@ def evaluate_market_gate() -> GateResult:
         missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
 
     pref = _backend_pref()
+    if pref in {"gvisor", "dind", "docker"}:
+        missing.append(
+            f"TBE_SANDBOX_BACKEND={pref} غير مقبول تجارياً — "
+            "المسار التجاري الوحيد هو Firecracker "
+            "(اضبط TBE_SANDBOX_BACKEND=firecracker أو auto)"
+        )
+        return GateResult(ok=False, missing=missing, warnings=warnings, track="rejected")
+
     fc_ok, fc_miss = _firecracker_track_ready()
-    ct_ok, ct_miss = _container_track_ready()
+    if not fc_ok:
+        missing.extend(fc_miss)
 
-    track = ""
-    if pref == "firecracker":
-        if not fc_ok:
-            missing.extend(fc_miss)
-        track = "firecracker"
-    elif pref in {"docker", "dind", "gvisor"}:
-        if not ct_ok:
-            missing.extend(ct_miss)
-        track = pref
-    else:
-        if fc_ok:
-            track = "firecracker"
-        elif ct_ok:
-            track = "container"
-        else:
-            missing.append(
-                "مسار عزل تجاري: اضبط Firecracker (TBE_FC_*) أو Docker "
-                f"(FC: {', '.join(fc_miss[:3]) or 'n/a'} | CT: {', '.join(ct_miss[:3]) or 'n/a'})"
-            )
-
-    return GateResult(ok=not missing, missing=missing, warnings=warnings, track=track)
+    return GateResult(
+        ok=not missing,
+        missing=missing,
+        warnings=warnings,
+        track="firecracker",
+    )

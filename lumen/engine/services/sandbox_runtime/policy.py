@@ -55,7 +55,7 @@ def load_policy() -> HardSandboxPolicy:
         allow_docker_sock_in_bot=False,
         allow_default_bridge=False,
         require_egress_allowlist=_flag("TBE_EGRESS_ALLOWLIST", "1"),
-        prefer_gvisor=_flag("TBE_PREFER_GVISOR", "1"),
+        prefer_gvisor=_flag("TBE_PREFER_GVISOR", "0"),
         prefer_firecracker=_flag("TBE_PREFER_FIRECRACKER", "1"),
         max_memory=(os.environ.get("TBE_DOCKER_MEMORY") or "192m").strip() or "192m",
         max_cpus=(os.environ.get("TBE_DOCKER_CPUS") or "0.4").strip() or "0.4",

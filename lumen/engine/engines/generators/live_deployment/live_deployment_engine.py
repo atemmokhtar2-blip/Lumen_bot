@@ -42,7 +42,7 @@ _log = logging.getLogger("engine.live_deployment")
 
 
 def _select_primary_provider():
-    """Production path: sandbox_runtime only (Firecracker > gVisor > DinD > Docker)."""
+    """Production path: sandbox_runtime only (Firecracker; weak backends are dev-only)."""
     from lumen.engine.engines.generators.live_deployment.sandbox_process_driver import (
         SandboxProcessDriver,
     )
@@ -65,7 +65,7 @@ class LiveDeploymentEngine(BaseEngine):
             version="1.1.0",
             description=(
                 "Installs dependencies, runs the generated bot in an isolated "
-                "Docker container (preferred) or local process, validates the "
+                "sandbox (Firecracker in production), validates the "
                 "Telegram token, health-checks, runs functional tests. "
                 "Railway remains an optional provider."
             ),
