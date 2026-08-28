@@ -155,6 +155,10 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         lines.append("لا يوجد دفع داخل هذه الشاشة حتى تُفعَّل بوابة دفع حقيقية.")
         return "\n".join(lines)
 
+    if phase == EngineUiPhase.CONTEXT:
+        from .ui_events import render_event_message
+        return render_event_message(state)
+
     if phase == EngineUiPhase.HELP:
         return facts.generate_hint or "استخدم /help لعرض القدرات."
 

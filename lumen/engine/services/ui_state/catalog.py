@@ -24,6 +24,7 @@ _NAV = frozenset(
         EngineUiPhase.GEN_SLOTS,
         EngineUiPhase.GEN_CONFIRM,
         EngineUiPhase.GEN_DONE,
+        EngineUiPhase.CONTEXT,
     }
 )
 
@@ -41,6 +42,7 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.GEN_TYPE,
                 EngineUiPhase.GEN_CONFIRM,
                 EngineUiPhase.GEN_SLOTS,
+                EngineUiPhase.CONTEXT,
             }
         ),
     ),
@@ -67,12 +69,12 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "to_confirm": UiActionSpec(
         "to_confirm",
         "Go confirm with current slots",
-        frozenset({EngineUiPhase.GEN_SLOTS, EngineUiPhase.GEN_TYPE}),
+        frozenset({EngineUiPhase.GEN_SLOTS, EngineUiPhase.GEN_TYPE, EngineUiPhase.CONTEXT}),
     ),
     "resume_slots": UiActionSpec(
         "resume_slots",
         "Back to engine needs",
-        frozenset({EngineUiPhase.GEN_CONFIRM}),
+        frozenset({EngineUiPhase.GEN_CONFIRM, EngineUiPhase.CONTEXT}),
     ),
     "confirm_generate": UiActionSpec(
         "confirm_generate",
@@ -91,9 +93,18 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
             }
         ),
     ),
-    "open_dashboard": UiActionSpec("open_dashboard", "Dashboard", _NAV),
-    "open_billing": UiActionSpec("open_billing", "Billing", _NAV),
-    "open_help": UiActionSpec("open_help", "Help", _NAV),
+    "open_dashboard": UiActionSpec(
+        "open_dashboard", "Dashboard",
+        _NAV | frozenset({EngineUiPhase.CONTEXT}),
+    ),
+    "open_billing": UiActionSpec(
+        "open_billing", "Billing",
+        _NAV | frozenset({EngineUiPhase.CONTEXT}),
+    ),
+    "open_help": UiActionSpec(
+        "open_help", "Help",
+        _NAV | frozenset({EngineUiPhase.CONTEXT}),
+    ),
     "post_trial": UiActionSpec(
         "post_trial",
         "Trial chat plane",
@@ -134,8 +145,19 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "Start trial on active project",
         frozenset({EngineUiPhase.DASHBOARD}),
     ),
+    "retry_generate": UiActionSpec(
+        "retry_generate",
+        "Retry generation from last description",
+        frozenset({EngineUiPhase.CONTEXT, EngineUiPhase.GEN_DONE, EngineUiPhase.GEN_CONFIRM}),
+    ),
+    "dismiss_event": UiActionSpec(
+        "dismiss_event",
+        "Clear contextual event → home",
+        frozenset({EngineUiPhase.CONTEXT}),
+    ),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }
+
 
 
 

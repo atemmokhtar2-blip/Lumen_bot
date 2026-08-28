@@ -112,10 +112,24 @@ async def handle_ui_callback(update, context) -> None:
                 st2.phase = EngineUiPhase.GEN_DONE
                 st2.project_ref = str(getattr(gen_result, "project_path", "") or "")[:500]
             else:
-                st2.phase = EngineUiPhase.GEN_CONFIRM
+                from lumen.engine.services.ui_state.ui_events import UiEventKind, apply_event
+                err = ""
+                try:
+                    errs = list(getattr(gen_result, "errors", None) or [])
+                    err = str(errs[0])[:300] if errs else "generation_failed"
+                except Exception:
+                    err = "generation_failed"
+                st2 = apply_event(st2, UiEventKind.GENERATION_FAILED, detail=err)
             save_ui_state(user_data, st2)
             if uid:
                 persist_ui_session(uid, dict(user_data))
+            if st2.phase == EngineUiPhase.CONTEXT and msg:
+                from lumen.engine.services.ui_state.controller import buttons_for_state
+                from lumen.engine.services.ui_state.render import render_message
+                await msg.reply_text(
+                    render_message(st2)[:2000],
+                    reply_markup=build_inline_keyboard(buttons_for_state(st2)),
+                )
             if st2.phase == EngineUiPhase.GEN_DONE and msg:
                 from lumen.engine.services.ui_state.controller import buttons_for_state
                 body = (

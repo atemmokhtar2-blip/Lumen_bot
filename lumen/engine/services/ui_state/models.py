@@ -26,6 +26,7 @@ class EngineUiPhase(str, Enum):
     DASHBOARD = "dashboard"
     BILLING = "billing"
     HELP = "help"
+    CONTEXT = "context"  # Batch 6 contextual event surface
 
 
 class RuntimePlaneHint(str, Enum):

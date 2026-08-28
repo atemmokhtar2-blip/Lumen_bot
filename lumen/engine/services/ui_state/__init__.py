@@ -12,6 +12,7 @@ from .engine_needs import EngineNeed, NeedPlan, analyze_needs, remaining_needs
 from .models import EngineUiPhase, EngineUiState, RuntimePlaneHint, UiButton, state_summary_ar
 from .presets import BOT_TYPE_PRESETS, preset_description, preset_label
 from .render import HostRow, UiFacts, render_message
+from .ui_events import UiEventKind, apply_event, buttons_for_event, event_label_ar
 
 __all__ = [
     "BOT_TYPE_PRESETS",
@@ -25,6 +26,10 @@ __all__ = [
     "RuntimePlaneHint",
     "UiButton",
     "UiFacts",
+    "UiEventKind",
+    "apply_event",
+    "buttons_for_event",
+    "event_label_ar",
     "analyze_needs",
     "apply_action",
     "buttons_for_phase",

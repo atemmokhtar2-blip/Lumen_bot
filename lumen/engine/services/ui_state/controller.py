@@ -13,6 +13,7 @@ from .engine_needs import (
 )
 from .models import EngineUiPhase, EngineUiState, UiButton
 from .presets import BOT_TYPE_PRESETS, preset_description, preset_label
+from .ui_events import UiEventKind, apply_event, buttons_for_event
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,9 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         )
     if phase == EngineUiPhase.HELP:
         return ((UiButton("القائمة", "home"),),)
+    if phase == EngineUiPhase.CONTEXT:
+        kind = (state.slots or {}).get("ui_event") or ""
+        return buttons_for_event(kind)
     return ((UiButton("القائمة", "home"),),)
 
 
@@ -367,11 +371,27 @@ def apply_action(
             new.slots["awaiting_text"] = "1"
             msg = "لا يوجد وصف — اكتب وصف البوت."
         else:
-            new.slots["confirmed"] = "1"
-            new.phase = EngineUiPhase.GENERATING
-            run_gen = True
-            gen_req = req
-            msg = "بدء التوليد."
+            # Platform quota (real plan_gate) before starting engine
+            quota_block = False
+            quota_detail = ""
+            if user_id:
+                try:
+                    from lumen.platform.plan_gate import check_generation_quota
+                    ok_q, reason_q, _info = check_generation_quota(int(user_id))
+                    if not ok_q:
+                        quota_block = True
+                        quota_detail = reason_q or "generation_quota_exceeded"
+                except Exception:
+                    pass
+            if quota_block:
+                new = apply_event(new, UiEventKind.INSUFFICIENT_QUOTA, detail=quota_detail)
+                msg = "حد الخطة يمنع التوليد الآن."
+            else:
+                new.slots["confirmed"] = "1"
+                new.phase = EngineUiPhase.GENERATING
+                run_gen = True
+                gen_req = req
+                msg = "بدء التوليد."
     elif action_id == "cancel_generate":
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
@@ -391,6 +411,24 @@ def apply_action(
         new.phase = EngineUiPhase.HELP
         new.missing = []
         msg = "المساعدة."
+    elif action_id == "retry_generate":
+        req = composed_request(new)
+        if not req:
+            new.phase = EngineUiPhase.GEN_TYPE
+            new.slots["awaiting_text"] = "1"
+            msg = "لا وصف لإعادة المحاولة — اكتب وصفاً."
+        else:
+            new.slots.pop("ui_event", None)
+            new.slots.pop("ui_event_detail", None)
+            new.phase = EngineUiPhase.GENERATING
+            run_gen = True
+            gen_req = req
+            msg = "إعادة التوليد..."
+    elif action_id == "dismiss_event":
+        new.slots.pop("ui_event", None)
+        new.slots.pop("ui_event_detail", None)
+        new.phase = EngineUiPhase.HOME
+        msg = "القائمة الرئيسية."
     elif action_id == "dash_status":
         new.phase = EngineUiPhase.DASHBOARD
         dash_fx = "dash_status"
