@@ -1,11 +1,10 @@
 """Build Telegram InlineKeyboardMarkup from engine UiButton rows.
 
-Bot API 9.4 native button colors via ``style``:
-  primary = blue, success = green, danger = red
+Security (world-class 2025–2026):
+  callback_data is HMAC-signed and bound to the viewing user_id.
+  Forged / replayed / cross-user button presses fail closed.
 
-Always inject ``style`` into the outbound API payload (not only constructor
-kwargs) so colors work even when the PTB version or intermediate layer
-drops unknown fields.
+Colors (Bot API 9.4): style primary|success|danger forced on the wire payload.
 """
 from __future__ import annotations
 
@@ -13,33 +12,26 @@ from typing import Sequence
 
 from lumen.engine.services.ui_state.models import UiButton
 
-_PREFIX = "lumen:ui:"
+from .signed_callback import encode_signed
+
 _VALID_STYLES = frozenset({"primary", "success", "danger"})
 
 
-def encode_callback(action: str, arg: str = "") -> str:
-    action = (action or "").strip().lower()[:32]
-    arg = (arg or "").strip()[:20]
-    if arg:
-        data = f"{_PREFIX}{action}:{arg}"
-    else:
-        data = f"{_PREFIX}{action}"
-    if len(data.encode("utf-8")) > 64:
-        raise ValueError(f"callback_data_too_long:{len(data)}")
-    return data
+def encode_callback(action: str, arg: str = "", *, user_id: int = 0) -> str:
+    """Public encoder — always signed when user_id > 0."""
+    if int(user_id or 0) <= 0:
+        # Dev/test path only — production builders must pass user_id
+        from .signed_callback import encode_signed as _es
+        return _es(action, arg, user_id=0)
+    return encode_signed(action, arg, user_id=int(user_id))
 
 
-def decode_callback(data: str) -> tuple[str, str] | None:
-    raw = (data or "").strip()
-    if not raw.startswith(_PREFIX):
+def decode_callback(data: str, *, user_id: int = 0):
+    """Verify signed callback; returns (action, arg) or None."""
+    from .signed_callback import decode_signed
+    if int(user_id or 0) <= 0:
         return None
-    rest = raw[len(_PREFIX) :]
-    if not rest:
-        return None
-    if ":" in rest:
-        action, arg = rest.split(":", 1)
-        return action.strip().lower(), arg.strip()
-    return rest.strip().lower(), ""
+    return decode_signed(data, user_id=int(user_id))
 
 
 def _normalize_style(raw: str) -> str | None:
@@ -50,7 +42,6 @@ def _normalize_style(raw: str) -> str | None:
 
 
 def _style_for_action(action: str, explicit: str = "") -> str | None:
-    """Fallback style map so every meaningful button is colored."""
     s = _normalize_style(explicit)
     if s:
         return s
@@ -71,17 +62,15 @@ def _style_for_action(action: str, explicit: str = "") -> str | None:
     return None
 
 
-def _make_inline_button(btn: UiButton):
+def _make_inline_button(btn: UiButton, *, user_id: int):
     from telegram import InlineKeyboardButton
 
     text = (btn.text or "")[:64]
-    callback_data = encode_callback(btn.action, btn.arg)
+    callback_data = encode_signed(btn.action, btn.arg, user_id=int(user_id or 0))
     style = _style_for_action(btn.action, getattr(btn, "style", "") or "")
-
     kwargs = {"text": text, "callback_data": callback_data}
     if style:
         kwargs["style"] = style
-        # Force field into wire payload regardless of PTB version quirks
         kwargs["api_kwargs"] = {"style": style}
     try:
         return InlineKeyboardButton(**kwargs)
@@ -94,47 +83,14 @@ def _make_inline_button(btn: UiButton):
             return InlineKeyboardButton(text=text, callback_data=callback_data)
 
 
-def build_inline_keyboard(rows: Sequence[Sequence[UiButton]]):
+def build_inline_keyboard(rows: Sequence[Sequence[UiButton]], *, user_id: int = 0):
+    """Build markup. ``user_id`` is required in production so buttons are non-transferable."""
     from telegram import InlineKeyboardMarkup
 
+    uid = int(user_id or 0)
     kb: list[list] = []
     for row in rows:
-        line = [_make_inline_button(btn) for btn in row]
+        line = [_make_inline_button(btn, user_id=uid) for btn in row]
         if line:
             kb.append(line)
-    markup = InlineKeyboardMarkup(kb)
-    # Ensure style survives serialization to Telegram
-    try:
-        data = markup.to_dict()
-        for i, row in enumerate(rows):
-            for j, btn in enumerate(row):
-                style = _style_for_action(btn.action, getattr(btn, "style", "") or "")
-                if style and i < len(data.get("inline_keyboard", [])) and j < len(
-                    data["inline_keyboard"][i]
-                ):
-                    data["inline_keyboard"][i][j]["style"] = style
-        # Rebuild from dict so outbound JSON carries style
-        from telegram import InlineKeyboardButton as IKB
-
-        rebuilt = []
-        for row in data.get("inline_keyboard", []):
-            rebuilt.append(
-                [
-                    IKB(
-                        text=b.get("text", ""),
-                        callback_data=b.get("callback_data"),
-                        **({"style": b["style"]} if b.get("style") else {}),
-                        **(
-                            {"api_kwargs": {"style": b["style"]}}
-                            if b.get("style")
-                            else {}
-                        ),
-                    )
-                    if True
-                    else None
-                    for b in row
-                ]
-            )
-        return InlineKeyboardMarkup(rebuilt)
-    except Exception:
-        return markup
+    return InlineKeyboardMarkup(kb)

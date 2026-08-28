@@ -88,7 +88,7 @@ async def handle_ui_callback(update, context) -> None:
         return
 
     # 2) Parse + closed catalog (fail closed on forged callback_data)
-    parsed = decode_callback(q.data or "")
+    parsed = decode_callback(q.data or "", user_id=uid)
     if parsed is None:
         try:
             await q.answer()
@@ -228,7 +228,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         text = "⚠️ " + result.message_ar + "\n\n" + text
 
     try:
-        markup = build_inline_keyboard(result.buttons)
+        markup = build_inline_keyboard(result.buttons, user_id=uid)
     except Exception:
         logger.exception("build_inline_keyboard failed action=%s", action_id)
         markup = None
@@ -281,7 +281,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     body = render_ui_message(st2)[:2000]
                 await _safe_render_ui(
                     q, msg, body,
-                    build_inline_keyboard(buttons_for_state(st2)),
+                    build_inline_keyboard(buttons_for_state(st2), user_id=uid),
                     user_data=user_data, context=context,
                 )
         except Exception:
@@ -348,7 +348,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 )
                 await _safe_render_ui(
                     q, msg, body,
-                    build_inline_keyboard(buttons_for_state(st)),
+                    build_inline_keyboard(buttons_for_state(st), user_id=uid),
                     user_data=user_data, context=context,
                 )
             elif note and msg:

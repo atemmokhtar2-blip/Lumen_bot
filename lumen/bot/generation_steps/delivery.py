@@ -410,7 +410,7 @@ async def deliver_generation_result(
             )
             await message.reply_text(
                 body,
-                reply_markup=build_inline_keyboard(buttons_for_state(ui)),
+                reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=int(getattr(user, "id", 0) or 0)),
             )
         except Exception:
             logger.exception("post-generation UI menu failed")

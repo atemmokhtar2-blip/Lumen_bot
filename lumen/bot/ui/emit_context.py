@@ -38,7 +38,7 @@ async def emit_context_event(
             persist_ui_session(uid, dict(ud))
 
         body = render_message(st)
-        markup = build_inline_keyboard(buttons_for_state(st))
+        markup = build_inline_keyboard(buttons_for_state(st), user_id=uid)
         text = body[:3500]
         if also_edit is not None:
             try:

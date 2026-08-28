@@ -70,7 +70,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         facts = gather_ui_facts(uid, ud)
     caption = render_message(ui, facts)
-    markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME))
+    markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
 
     welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages

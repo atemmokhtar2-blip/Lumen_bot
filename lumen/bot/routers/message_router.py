@@ -248,7 +248,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     body = render_message(ui, facts)
                     await message.reply_text(
                         body[:4000],
-                        reply_markup=build_inline_keyboard(buttons_for_state(ui)),
+                        reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=uid_ui),
                     )
                     return
         except Exception:
