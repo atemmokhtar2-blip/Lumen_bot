@@ -498,9 +498,28 @@ def _normalize(result: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         confidence = 0.0
 
+    # Defense-in-depth: filter features_requested against the capability
+    # catalog. The LLM may emit invented/unknown keys under prompt injection;
+    # only known CAPABILITIES keys survive. Downstream gates.py re-checks,
+    # but we strip here too so the translation handoff is clean by default.
+    raw_features = strings("features_requested")
+    known_caps: set[str] = set()
+    try:
+        from lumen.engine.services.capability_detection.catalog import CAPABILITIES
+        known_caps = set(CAPABILITIES.keys())
+    except Exception:
+        known_caps = set()
+    if known_caps:
+        filtered_features = [f for f in raw_features if f in known_caps]
+        rejected = [f for f in raw_features if f not in known_caps]
+        if rejected:
+            logger.warning("gemini features filtered (not in catalog): %s", rejected[:20])
+    else:
+        filtered_features = raw_features
+
     normalized_translation = {
         "purpose": str(translation.get("purpose") or "").strip(),
-        "features_requested": strings("features_requested"),
+        "features_requested": filtered_features,
         "flows": strings("flows"),
         "strict_spec": bool(translation.get("strict_spec")),
         "model": model_name(),

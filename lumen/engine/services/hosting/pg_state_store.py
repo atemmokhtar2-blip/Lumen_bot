@@ -162,3 +162,70 @@ class PgHostStateStore:
                 )
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
+
+    # Deterministic 64-bit advisory-lock key derived from user_id.
+    # PostgreSQL advisory locks are cluster-wide (survive across nodes),
+    # closing the TOCTOU race that a local file lock (fcntl.flock) leaves
+    # open in multi-node TBE_SCALE_MODE deployments.
+    _ADVISE_LOCK_NAMESPACE: int = 0x4C4D4E  # 'LMN' — namespace to avoid collisions
+
+    def atomic_stop_conflicting(
+        self,
+        *,
+        user_id: int,
+        project_path: str,
+        token_fp: str,
+        mark_status: str = "stopped",
+    ) -> list[dict[str, Any]]:
+        """Atomically find and stop conflicting running instances under a
+        cluster-wide advisory lock.
+
+        This closes the cross-node TOCTOU race in HostService.start(): two
+        nodes could both read "no running instance" under their own local
+        file lock, then both start a duplicate bot (409 Conflict / double
+        Telegram polling). ``pg_advisory_xact_lock`` serializes the
+        check-and-stop across the entire PostgreSQL cluster, and
+        ``FOR UPDATE`` row-locks the candidates within the same transaction.
+
+        Returns the list of instances that were stopped (for caller cleanup).
+        """
+        import hashlib
+
+        # Derive a stable 64-bit key per (namespace, user_id)
+        key_seed = f"{self._ADVISE_LOCK_NAMESPACE}:{int(user_id)}".encode()
+        key64 = int.from_bytes(hashlib.sha256(key_seed).digest()[:8], "big", signed=False)
+        # pg_advisory_xact_lock takes bigint (signed 64-bit); mask to signed range
+        signed_key = key64 if key64 < (1 << 63) else key64 - (1 << 64)
+
+        stopped: list[dict[str, Any]] = []
+        now = time.time()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                # Cluster-wide transaction-scoped advisory lock — auto-released on commit/rollback.
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (signed_key,))
+                # Lock and fetch conflicting running instances for this user/path/token.
+                cur.execute(
+                    """
+                    SELECT instance_id, user_id, project_path, entry_point, bot_username,
+                           status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
+                           token_fp, updated_at
+                    FROM tbe_host_instances
+                    WHERE status = 'running'
+                      AND user_id = %s
+                      AND (project_path = %s OR (token_fp != '' AND token_fp = %s))
+                    FOR UPDATE
+                    """,
+                    (int(user_id), project_path, token_fp or ""),
+                )
+                rows = cur.fetchall()
+                ids = [self._row_to_dict(r)["instance_id"] for r in rows]
+                if ids:
+                    # Mark them stopped within the same locked transaction.
+                    cur.execute(
+                        "UPDATE tbe_host_instances SET status = %s, updated_at = %s "
+                        "WHERE instance_id = ANY(%s) AND status = 'running'",
+                        (mark_status, now, list(ids)),
+                    )
+            conn.commit()
+        stopped = [self._row_to_dict(r) for r in rows]
+        return stopped

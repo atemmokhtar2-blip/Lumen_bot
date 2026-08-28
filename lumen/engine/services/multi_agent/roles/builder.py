@@ -84,6 +84,17 @@ class BuilderAgent(Agent):
             state.transition(AgentStatus.FAILED, role=AgentRole.BUILDER, detail="empty_spec")
             return state
 
+        # Security gate: refuse to build if Architect's catalog gate failed
+        # (prompt-injection / spec-manipulation smuggled unknown capability keys).
+        gate = (state.extensions or {}).get("architect_gate") or {}
+        if gate and not gate.get("ok") and not spec.clarification_needed:
+            errs = gate.get("errors") or []
+            state.build_success = False
+            state.build_errors = [f"architect_gate_failed:{e}" for e in errs]
+            state.record(AgentRole.BUILDER, "build_abort", f"gate={errs}")
+            state.transition(AgentStatus.FAILED, role=AgentRole.BUILDER, detail="architect_gate")
+            return state
+
         # Cursor-class path: patch existing project instead of full regenerate
         try:
             from ..repair_worker import should_incremental_repair, run_incremental_repair

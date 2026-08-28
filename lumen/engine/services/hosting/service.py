@@ -296,22 +296,40 @@ class HostingService:
             except Exception as qexc:
                 return HostResult(ok=False, message=f"فشل إدخال الطابور: {type(qexc).__name__}: {qexc}")
 
-        # Stop existing instance for same path+user OR same token under exclusive lock
-        # (closes TOCTOU race between concurrent start requests).
+        # Stop existing instance for same path+user OR same token.
+        # Production (multi-node / TBE_SCALE_MODE): use PostgreSQL advisory lock
+        # + FOR UPDATE via PgHostStateStore.atomic_stop_conflicting — this closes
+        # the cross-node TOCTOU race that a local file lock (fcntl.flock) leaves
+        # open (two nodes could both read "no running instance" and start a
+        # duplicate bot → 409 Conflict / double Telegram polling).
+        # Dev (single-node, SQLite): fall back to the local file lock.
+        from lumen.engine.services.hosting.pg_state_store import PgHostStateStore
         to_stop: list[str] = []
-        with exclusive_state_lock(self._lock_path()):
-            self._load_unlocked()
-            for inst in list(self._instances.values()):
-                if inst.user_id != user_id:
-                    continue
-                same_path = Path(inst.project_path).resolve() == path and inst.status == "running"
-                same_token = (
-                    inst.status == "running"
-                    and token_fp
-                    and (getattr(inst, "token_fp", "") or "") == token_fp
+        if isinstance(self._store, PgHostStateStore):
+            try:
+                stopped = self._store.atomic_stop_conflicting(
+                    user_id=int(user_id),
+                    project_path=str(path),
+                    token_fp=token_fp or "",
                 )
-                if same_path or same_token:
-                    to_stop.append(inst.instance_id)
+                to_stop = [s["instance_id"] for s in stopped]
+            except Exception:
+                logger.exception("atomic_stop_conflicting failed — aborting start (fail-closed)")
+                return HostResult(ok=False, message="تعذّر تأمين قفل الاستضافة الموزع. حاول مجدداً.")
+        else:
+            with exclusive_state_lock(self._lock_path()):
+                self._load_unlocked()
+                for inst in list(self._instances.values()):
+                    if inst.user_id != user_id:
+                        continue
+                    same_path = Path(inst.project_path).resolve() == path and inst.status == "running"
+                    same_token = (
+                        inst.status == "running"
+                        and token_fp
+                        and (getattr(inst, "token_fp", "") or "") == token_fp
+                    )
+                    if same_path or same_token:
+                        to_stop.append(inst.instance_id)
         for iid in to_stop:
             self.stop(instance_id=iid, user_id=user_id)
 

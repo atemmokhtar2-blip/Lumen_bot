@@ -193,12 +193,13 @@ async def try_handle_token(
             status = await message.reply_text(f"🔑 جاري إنشاء المستودع `{name}`...")
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
             uid = int(user.id) if user else 0
+            from lumen.engine.services.user_sandbox import get_user_sandbox
             try:
-                from lumen.engine.services.user_sandbox import get_user_sandbox
                 dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="newrepo")
             except Exception:
-                dest = Path(OUTPUT_DIR) / "clones"
-                dest.mkdir(parents=True, exist_ok=True)
+                logger.exception("user_sandbox init failed for create_repo uid=%s — refusing shared-dir fallback", uid)
+                await status.edit_text("❌ تعذّر تهيئة مسار العزل الآمن. لم يتم إنشاء المستودع.")
+                return True
 
             def _create():
                 return run_git_intent(
@@ -256,12 +257,13 @@ async def try_handle_token(
             status = await message.reply_text("🔑 جاري إعادة سحب المستودع بالتوكن...")
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
             uid = int(user.id) if user else 0
+            from lumen.engine.services.user_sandbox import get_user_sandbox
             try:
-                from lumen.engine.services.user_sandbox import get_user_sandbox
                 dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="reclone")
             except Exception:
-                dest = Path(OUTPUT_DIR) / "clones"
-                dest.mkdir(parents=True, exist_ok=True)
+                logger.exception("user_sandbox init failed for reclone uid=%s — refusing shared-dir fallback", uid)
+                await status.edit_text("❌ تعذّر تهيئة مسار العزل الآمن. لم يتم إعادة السحب.")
+                return True
             url = pending_clone.get("url") or ""
 
             def _reclone():

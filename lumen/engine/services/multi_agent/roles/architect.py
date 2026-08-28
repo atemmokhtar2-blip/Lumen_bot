@@ -3,6 +3,7 @@
 Architect agent — writes StrictSpec only. Never chats with the user. Never builds."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from ..architect_backends import SpecBackend, default_backends, produce_strict_spec
@@ -12,6 +13,8 @@ from ..state import AgentRole, AgentState, AgentStatus
 from ..strict_spec import merge_spec_request, validate_strict_spec
 from ..gates import apply_catalog_filter_to_state
 from ..repair import build_repair_directive, apply_deterministic_repair, spec_hash, record_repair_history
+
+logger = logging.getLogger(__name__)
 
 
 class ArchitectAgent(Agent):
@@ -59,6 +62,20 @@ class ArchitectAgent(Agent):
         # preferred_keys for Builder = features from contract
         if spec.features:
             state.preferred_keys = list(spec.features)
+        # Hard gate: enforce catalog membership of features (fail-closed on
+        # prompt-injection / spec-manipulation that smuggles unknown keys).
+        from ..gates import architect_gate
+        gate_ok, gate_errors = architect_gate(state)
+        state.extensions["architect_gate"] = {"ok": gate_ok, "errors": gate_errors}
+        if not gate_ok and not spec.clarification_needed:
+            unknown = (spec.raw or {}).get("unknown_features") or []
+            logger.warning(
+                "architect_gate FAIL-CLOSED: errors=%s unknown_features=%s",
+                gate_errors, unknown[:20],
+            )
+            state.extensions.setdefault("architect", {})["validation_errors"] = list(
+                set((state.extensions.get("architect") or {}).get("validation_errors") or []) | set(gate_errors)
+            )
         state.extensions["architect"] = {
             "source": spec.source,
             "model": spec.model,

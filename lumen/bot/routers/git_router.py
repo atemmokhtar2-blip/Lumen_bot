@@ -337,10 +337,15 @@ async def try_handle_git(
 
 
 def _dest_for(uid: int) -> Path:
+    """Per-user sandbox clone dir. Fail-closed — NEVER fall back to a shared dir.
+
+    A shared ``OUTPUT_DIR/clones`` fallback would break tenant isolation
+    (IDOR / path collision across users). We raise so callers abort cleanly
+    instead of writing into a shared, world-readable tree.
+    """
+    from lumen.engine.services.user_sandbox import get_user_sandbox
     try:
-        from lumen.engine.services.user_sandbox import get_user_sandbox
         return get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="clone")
-    except Exception:
-        dest = Path(OUTPUT_DIR) / "clones"
-        dest.mkdir(parents=True, exist_ok=True)
-        return dest
+    except Exception as exc:
+        logger.exception("user_sandbox init failed for uid=%s — refusing shared-dir fallback", uid)
+        raise RuntimeError("sandbox_unavailable_refusing_shared_dir") from exc

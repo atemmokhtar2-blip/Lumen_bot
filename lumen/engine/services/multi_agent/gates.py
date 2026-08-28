@@ -28,7 +28,14 @@ def filter_features_to_catalog(features: list[str]) -> tuple[list[str], list[str
 
 
 def architect_gate(state: AgentState) -> tuple[bool, list[str]]:
-    """Builder may run only when StrictSpec is buildable."""
+    """Builder may run only when StrictSpec is buildable.
+
+    Fail-closed on unknown features: if the catalog is available and the spec
+    contains any feature key NOT in CAPABILITIES, generation is refused. This
+    blocks prompt-injection / spec-manipulation attacks where a crafted user
+    input coaxes the LLM into emitting unauthorized capability keys that would
+    produce a bot with functions outside the allowed set.
+    """
     spec = StrictSpec.from_dict(state.strict_spec or {})
     ok, errors = validate_strict_spec(spec)
     # Extra: must have non-empty spec_request after merge
@@ -38,23 +45,29 @@ def architect_gate(state: AgentState) -> tuple[bool, list[str]]:
     if spec.clarification_needed:
         errors.append("clarification_needed")
         ok = False
-    # Soft: if features all unknown and catalog present, still allow if spec_request strong
+    # Hard gate: every feature must be a known catalog key (fail-closed).
     feats, unknown = filter_features_to_catalog(list(spec.features or []))
-    if unknown and not feats and len((spec.spec_request or "")) < 20:
+    if unknown:
         errors.append("features_not_in_catalog")
         ok = False
     return ok, errors
 
 
 def apply_catalog_filter_to_state(state: AgentState) -> AgentState:
-    """Normalize preferred_keys/features to catalog keys when possible."""
+    """Normalize preferred_keys/features to catalog keys — fail-closed.
+
+    Unknown feature keys are DROPPED (not retained). If after filtering no
+    known features remain, the spec_request is preserved but features is set
+    to the known subset only; architect_gate will then fail-closed if the
+    catalog was available and every key was unknown.
+    """
     spec = StrictSpec.from_dict(state.strict_spec or {})
     feats, unknown = filter_features_to_catalog(list(spec.features or state.preferred_keys or []))
-    if feats:
-        spec.features = feats
-        state.preferred_keys = feats
-        state.strict_spec = spec.to_dict()
-        state.strict_spec.setdefault("raw", {})
-        if isinstance(state.strict_spec.get("raw"), dict):
-            state.strict_spec["raw"]["unknown_features"] = unknown
+    # Always replace with the known subset — never keep unknown keys.
+    spec.features = feats
+    state.preferred_keys = feats
+    state.strict_spec = spec.to_dict()
+    state.strict_spec.setdefault("raw", {})
+    if isinstance(state.strict_spec.get("raw"), dict):
+        state.strict_spec["raw"]["unknown_features"] = unknown
     return state
