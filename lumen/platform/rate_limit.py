@@ -4,16 +4,12 @@ Foundation:
   - Production / staging: REDIS_URL required. No SQLite / memory fallback
     (multi-worker DoS hole if local backends are used under B2B load).
   - Dev / local / test: SQLite or in-process memory allowed when Redis is absent.
-  - Every backend is fronted by a process-local token-bucket (first layer) to
-    absorb bursts before hitting Redis/SQLite.
+  - No process-local bucket: limits are enforced only on the shared Redis backend.
 
 Callers use RateLimiter only — never branch on backend type.
 
-Multi-worker note:
-  LocalTokenBucket is process-local only. Global authority is Redis (Lua/sorted-set).
-  Under concurrent workers the local layer may admit a small burst of
-  (workers × local_capacity) before Redis rejects — accepted latency/availability
-  tradeoff. For strict global caps, set RATE_LIMIT_DISABLE_LOCAL_BUCKET=1 (optional).
+Authority is Redis only (no process-local token bucket). Global limits are exact
+across workers at the cost of one Redis round-trip per check.
 """
 from __future__ import annotations
 
@@ -266,43 +262,11 @@ class MemoryRateLimiter:
             return max(1, int(oldest + window_sec - now) + 1)
 
 
-class LocalTokenBucket:
-    """Process-local token bucket — first defense layer before Redis/SQLite.
-
-    Not a multi-worker authority (that is Redis). Absorbs intra-process bursts
-    and fails closed under extreme local load without opening DB locks.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        # key -> (tokens, last_refill_monotonic)
-        self._buckets: dict[str, tuple[float, float]] = {}
-
-    def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
-        if limit <= 0:
-            return True
-        rate = max(0.01, float(limit) / max(0.1, float(window_sec)))
-        capacity = float(max(1, limit))
-        now = time.monotonic()
-        with self._lock:
-            tokens, last = self._buckets.get(key, (capacity, now))
-            elapsed = max(0.0, now - last)
-            tokens = min(capacity, tokens + elapsed * rate)
-            if tokens < 1.0:
-                self._buckets[key] = (tokens, now)
-                return False
-            self._buckets[key] = (tokens - 1.0, now)
-            return True
-
 
 class RateLimiter:
-    """Facade: Redis mandatory outside dev; local backends only when ENVIRONMENT=dev.
-
-    Layering: LocalTokenBucket (process) → Redis/SQLite backend (shared).
-    """
+    """Facade: Redis-only rate limiting (exact multi-worker limits)."""
 
     def __init__(self) -> None:
-        self._local = LocalTokenBucket()
         self._backend: RateLimiterBackend = self._select_backend()
 
     @staticmethod
@@ -330,9 +294,6 @@ class RateLimiter:
         return backend
 
     def allow(self, key: str, *, limit: int, window_sec: float = 60.0) -> bool:
-        # First layer: process-local token bucket
-        if not self._local.allow(key, limit=limit, window_sec=window_sec):
-            return False
         return self._backend.allow(key, limit=limit, window_sec=window_sec)
 
     def remaining(self, key: str, *, limit: int, window_sec: float = 60.0) -> int:
