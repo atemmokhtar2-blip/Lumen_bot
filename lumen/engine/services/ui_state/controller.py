@@ -1,11 +1,7 @@
-"""Pure engine UI controller — apply actions, compute missing, propose buttons.
-
-No Telegram imports. No generation. No hosting side effects.
-"""
+"""Pure engine UI controller — apply actions, compute missing, propose buttons."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
 
 from .catalog import get_action, is_known_action
 from .models import EngineUiPhase, EngineUiState, UiButton
@@ -16,7 +12,6 @@ class ApplyResult:
     state: EngineUiState
     ok: bool
     message_ar: str
-    # buttons are derived from new state; also returned for convenience
     buttons: tuple[tuple[UiButton, ...], ...]
 
 
@@ -34,38 +29,42 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
 
 
 def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
-    """Keyboard layout owned by the engine for each phase (Batch 0 shells)."""
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         return _home_buttons()
     if phase == EngineUiPhase.GEN_TYPE:
-        # Shell only — real type catalog in Batch 2
         return (
-            (UiButton("✨ مخصص (اكتب وصفاً)", "noop", "custom"),),
+            (UiButton("✍️ اكتب الوصف في الشات", "await_generate_text"),),
             (UiButton("🔙 القائمة", "home"),),
         )
     if phase == EngineUiPhase.DASHBOARD:
         return (
-            (UiButton("🤖 إنشاء بوت", "open_generate"),),
+            (
+                UiButton("🔄 تحديث", "open_dashboard"),
+                UiButton("🤖 إنشاء بوت", "open_generate"),
+            ),
             (UiButton("🔙 القائمة", "home"),),
         )
     if phase == EngineUiPhase.BILLING:
-        return ((UiButton("🔙 القائمة", "home"),),)
+        return (
+            (UiButton("🔄 تحديث الخطة", "open_billing"),),
+            (UiButton("🔙 القائمة", "home"),),
+        )
     if phase == EngineUiPhase.HELP:
         return ((UiButton("🔙 القائمة", "home"),),)
-    # Safe default
     return ((UiButton("🔙 القائمة", "home"),),)
 
 
 def missing_for_state(state: EngineUiState) -> list[str]:
-    """What the engine still needs before a later batch can proceed."""
     if state.phase == EngineUiPhase.GEN_TYPE:
-        if not (state.slots.get("bot_type") or "").strip():
-            return ["bot_type"]
+        if not (state.slots.get("bot_description") or state.slots.get("bot_type") or "").strip():
+            if state.slots.get("awaiting_text") == "1":
+                return ["bot_description"]
+            return ["bot_description"]
         return []
     if state.phase == EngineUiPhase.GEN_CONFIRM:
         miss: list[str] = []
-        if not (state.slots.get("bot_type") or "").strip():
-            miss.append("bot_type")
+        if not (state.slots.get("bot_description") or "").strip():
+            miss.append("bot_description")
         if not (state.slots.get("confirmed") or "").strip():
             miss.append("confirmed")
         return miss
@@ -73,7 +72,6 @@ def missing_for_state(state: EngineUiState) -> list[str]:
 
 
 def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyResult:
-    """Apply a catalog action. Unknown actions fail closed (state unchanged)."""
     action_id = (action_id or "").strip().lower()
     arg = (arg or "").strip()[:40]
     if not is_known_action(action_id):
@@ -105,31 +103,38 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
 
     if action_id == "home":
         new.phase = EngineUiPhase.HOME
+        new.slots.pop("awaiting_text", None)
         new.missing = []
         msg = "القائمة الرئيسية."
     elif action_id == "open_generate":
         new.phase = EngineUiPhase.GEN_TYPE
+        new.slots["awaiting_text"] = "1"
         new.missing = missing_for_state(new)
-        msg = "مرحلة اختيار نوع البوت (هيكل — التوليد في دفعة لاحقة)."
+        msg = "اكتب وصف البوت في الشات."
+    elif action_id == "await_generate_text":
+        new.phase = EngineUiPhase.GEN_TYPE
+        new.slots["awaiting_text"] = "1"
+        new.missing = missing_for_state(new)
+        msg = "في انتظار وصف البوت نصاً."
     elif action_id == "open_dashboard":
         new.phase = EngineUiPhase.DASHBOARD
         new.missing = []
-        msg = "لوحة التحكم (هيكل)."
+        msg = "لوحة التحكم."
     elif action_id == "open_billing":
         new.phase = EngineUiPhase.BILLING
         new.missing = []
-        msg = "الرصيد والخطة (هيكل — بدون دفع وهمي)."
+        msg = "الخطة والرصيد."
     elif action_id == "open_help":
         new.phase = EngineUiPhase.HELP
         new.missing = []
-        msg = "المساعدة (هيكل)."
+        msg = "المساعدة."
     elif action_id == "noop":
         msg = "تم."
     else:
         return ApplyResult(
             state=state,
             ok=False,
-            message_ar="إجراء غير منفَّذ في هذه الدفعة.",
+            message_ar="إجراء غير منفَّذ.",
             buttons=buttons_for_phase(state.phase),
         )
 
@@ -139,12 +144,4 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
         ok=True,
         message_ar=msg,
         buttons=buttons_for_phase(new.phase),
-    )
-
-
-def render_home_message_ar() -> str:
-    return (
-        "👋 أهلاً بك في Lumen\n\n"
-        "أنا مساعدك لبناء ونشر بوتات تيليجرام.\n"
-        "اختر من القائمة — المحرك يتحكم في الخطوات التالية."
     )

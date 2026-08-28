@@ -44,11 +44,27 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    # Brand welcome (image + caption) — same for every new user
-    caption = (
-        "مرحباً بك في Lumen 👋\n"
-        "أنا هنا لمساعدتك في بناء وإدارة مشاريع البوتات بكل سهولة وذكاء."
-    )
+    # Engine UI state → HOME + live facts + real keyboard
+    from lumen.engine.services.ui_state.controller import buttons_for_phase
+    from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
+    from lumen.engine.services.ui_state.render import render_message
+    from lumen.bot.ui.facts import gather_ui_facts
+    from lumen.bot.ui.keyboards import build_inline_keyboard
+    from lumen.bot.ui.state_store import load_ui_state, persist_ui_session, save_ui_state
+
+    ud = context.user_data if context.user_data is not None else {}
+    ui = load_ui_state(ud)
+    ui.phase = EngineUiPhase.HOME
+    ui.last_action = "start"
+    save_ui_state(ud, ui)
+    uid = int(user.id) if user else 0
+    if uid:
+        persist_ui_session(uid, dict(ud))
+
+    facts = gather_ui_facts(uid, ud)
+    caption = render_message(ui, facts)
+    markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME))
+
     welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
     sent = False
     if welcome_img.is_file():
@@ -57,16 +73,17 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             with welcome_img.open("rb") as fh:
                 await message.reply_photo(
                     photo=InputFile(fh, filename="welcome.jpg"),
-                    caption=caption,
+                    caption=caption[:1024],
+                    reply_markup=markup,
                 )
             sent = True
         except Exception:
             sent = False
     if not sent:
         try:
-            await message.reply_text(caption)
+            await message.reply_text(caption[:4000], reply_markup=markup)
         except Exception:
-            await safe_reply_text(message, caption)
+            await safe_reply_text(message, caption[:4000])
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -97,10 +114,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         for k in ("pending_run", "pending_deploy", "pending_live_run", "active_repo"):
             if context.user_data.get(k):
                 pending[k] = "yes"
+    ui_phase = "—"
+    try:
+        from lumen.bot.ui.state_store import load_ui_state
+        ui_phase = load_ui_state(context.user_data).phase.value
+    except Exception:
+        pass
     lines = [
         "📊 حالة الجلسة",
         f"• user_id: {user.id if user else '?'}",
         f"• OUTPUT_DIR: {OUTPUT_DIR}",
+        f"• engine_ui.phase: {ui_phase}",
         f"• pending: {', '.join(pending) if pending else 'لا يوجد'}",
     ]
     await message.reply_text("\n".join(lines))

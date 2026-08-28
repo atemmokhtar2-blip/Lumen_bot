@@ -27,14 +27,14 @@ def test_home_to_generate_shell():
     r = apply_action(st, "open_generate")
     assert r.ok is True
     assert r.state.phase == EngineUiPhase.GEN_TYPE
-    assert "bot_type" in missing_for_state(r.state)
+    assert "bot_description" in missing_for_state(r.state)
 
 
 def test_action_not_allowed_in_phase():
-    st = EngineUiState(phase=EngineUiPhase.GEN_TYPE)
+    st = EngineUiState(phase=EngineUiPhase.GEN_CONFIRM)
     r = apply_action(st, "open_billing")
     assert r.ok is False
-    assert r.state.phase == EngineUiPhase.GEN_TYPE
+    assert r.state.phase == EngineUiPhase.GEN_CONFIRM
 
 
 def test_buttons_encode_under_64_bytes():
@@ -70,3 +70,40 @@ def test_catalog_closed():
 def test_from_dict_invalid_phase_defaults_home():
     st = EngineUiState.from_dict({"phase": "not_a_real_phase"})
     assert st.phase == EngineUiPhase.HOME
+
+def test_render_dashboard_lists_hosts():
+    from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, HostRow, UiFacts, render_message
+    st = EngineUiState(phase=EngineUiPhase.DASHBOARD)
+    facts = UiFacts(
+        hosts=[HostRow("host-1", "running", "mybot", "firecracker")],
+        active_project="/data/u1/bot",
+    )
+    text = render_message(st, facts)
+    assert "host-1" in text
+    assert "running" in text
+    assert "firecracker" in text
+    assert "/data/u1/bot" in text
+
+
+def test_render_billing_no_fake_payment():
+    from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, UiFacts, render_message
+    st = EngineUiState(phase=EngineUiPhase.BILLING)
+    facts = UiFacts(plan_label="Free — مجاني", generations_per_month="10", hosted_bots_limit="1")
+    text = render_message(st, facts)
+    assert "Free" in text
+    assert "10" in text
+    assert "دفع" in text  # honest note that payment UI is not live
+
+
+def test_open_generate_sets_awaiting_text():
+    from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, apply_action
+    r = apply_action(EngineUiState(phase=EngineUiPhase.HOME), "open_generate")
+    assert r.ok
+    assert r.state.slots.get("awaiting_text") == "1"
+    assert "bot_description" in r.state.missing
+
+
+def test_encode_await_generate():
+    from lumen.bot.ui.keyboards import encode_callback, decode_callback
+    d = encode_callback("await_generate_text")
+    assert decode_callback(d) == ("await_generate_text", "")

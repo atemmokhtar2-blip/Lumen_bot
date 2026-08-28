@@ -10,42 +10,69 @@ from .models import EngineUiPhase
 class UiActionSpec:
     action_id: str
     description: str
-    # Phases where this action is legal (empty = any known phase in Batch 0 home set)
     allowed_phases: frozenset[EngineUiPhase]
 
 
-# Batch 0 actions — navigation only, no generation / host / payment side effects.
 UI_ACTIONS: dict[str, UiActionSpec] = {
-    "home": UiActionSpec(
-        "home",
-        "Return to home menu",
-        frozenset(EngineUiPhase),
-    ),
+    "home": UiActionSpec("home", "Home menu", frozenset(EngineUiPhase)),
     "open_generate": UiActionSpec(
         "open_generate",
-        "Enter generation type phase (Batch 2 will deepen)",
-        frozenset({EngineUiPhase.HOME, EngineUiPhase.IDLE, EngineUiPhase.DASHBOARD, EngineUiPhase.GEN_DONE}),
+        "Start generate flow — user must type description",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.GEN_DONE,
+                EngineUiPhase.GEN_TYPE,
+            }
+        ),
+    ),
+    "await_generate_text": UiActionSpec(
+        "await_generate_text",
+        "Mark awaiting free-text bot description",
+        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.HOME}),
     ),
     "open_dashboard": UiActionSpec(
         "open_dashboard",
-        "Open dashboard phase shell",
-        frozenset({EngineUiPhase.HOME, EngineUiPhase.IDLE, EngineUiPhase.BILLING, EngineUiPhase.HELP}),
+        "Dashboard with live host list",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.GEN_TYPE,
+            }
+        ),
     ),
     "open_billing": UiActionSpec(
         "open_billing",
-        "Open billing/plan phase shell",
-        frozenset({EngineUiPhase.HOME, EngineUiPhase.IDLE, EngineUiPhase.DASHBOARD}),
+        "Live plan facts",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.BILLING,
+            }
+        ),
     ),
     "open_help": UiActionSpec(
         "open_help",
-        "Open help phase shell",
-        frozenset({EngineUiPhase.HOME, EngineUiPhase.IDLE, EngineUiPhase.DASHBOARD, EngineUiPhase.BILLING}),
+        "Real capability help text",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+            }
+        ),
     ),
-    "noop": UiActionSpec(
-        "noop",
-        "No-op (ack only)",
-        frozenset(EngineUiPhase),
-    ),
+    "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }
 
 
