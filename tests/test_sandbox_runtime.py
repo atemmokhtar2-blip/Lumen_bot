@@ -368,3 +368,9 @@ def test_fc_probe_rejects_token_in_bootargs_in_production(monkeypatch):
         p = FirecrackerSandboxBackend().probe()
         assert p.available is False
         assert "TOKEN_IN_BOOTARGS" in p.reason or "bootargs" in p.reason.lower()
+
+def test_fc_tap_egress_rejects_invalid_tap():
+    from lumen.engine.services.sandbox_runtime.fc_network import apply_fc_tap_egress
+    r = apply_fc_tap_egress("")
+    assert r["ok"] is False
+    assert "invalid_tap" in r["errors"] or "iptables_not_found" in r["errors"]

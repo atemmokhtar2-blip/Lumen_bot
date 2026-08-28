@@ -85,6 +85,109 @@ def ensure_bridge(name: str) -> None:
     _run(["ip", "link", "set", name, "up"])
 
 
+
+def _resolve_allow_ips(hosts: list[str]) -> list[str]:
+    import socket
+    ips: list[str] = []
+    for h in hosts:
+        h = (h or "").strip()
+        if not h:
+            continue
+        try:
+            for info in socket.getaddrinfo(h, 443, type=socket.SOCK_STREAM):
+                ip = info[4][0]
+                if ip and ip not in ips:
+                    ips.append(ip)
+        except Exception as exc:
+            logger.warning("fc egress resolve %s failed: %s", h, type(exc).__name__)
+    return ips
+
+
+def apply_fc_tap_egress(tap_name: str) -> dict:
+    """Deny-by-default FORWARD for traffic from this TAP (production posture).
+
+    Allow: ESTABLISHED/RELATED, DNS (53), policy egress hosts on tcp/443.
+    Drop: other NEW from this interface.
+    Requires iptables. Best-effort insert; production can require success via TBE_FC_EGRESS_STRICT.
+    """
+    report: dict = {"ok": False, "rules": [], "errors": [], "allow_ips": []}
+    if not tap_name or not _SAFE.match(tap_name):
+        report["errors"].append("invalid_tap")
+        return report
+    if not shutil.which("iptables"):
+        report["errors"].append("iptables_not_found")
+        return report
+
+    try:
+        from .policy import load_policy
+        hosts = sorted(load_policy().egress_hosts)
+    except Exception:
+        hosts = ["api.telegram.org", "core.telegram.org"]
+
+    telegram_only = (os.environ.get("TBE_EGRESS_TELEGRAM_ONLY") or "1").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    allow_ips = _resolve_allow_ips(hosts) if telegram_only else []
+    report["allow_ips"] = allow_ips
+
+    def _ensure(check: list[str]) -> tuple[bool, str]:
+        code, _, err = _run(check)
+        if code == 0:
+            return True, "exists"
+        ins = list(check)
+        if len(ins) > 1 and ins[1] == "-C":
+            ins[1] = "-I"
+        code2, _, err2 = _run(ins)
+        return code2 == 0, err2[:200]
+
+    # Established
+    ok, err = _ensure(
+        ["iptables", "-C", "FORWARD", "-i", tap_name, "-m", "conntrack",
+         "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]
+    )
+    report["rules"].append({"rule": "est", "ok": ok, "err": err})
+    if not ok:
+        report["errors"].append(f"est:{err}")
+
+    # DNS
+    for proto in ("udp", "tcp"):
+        ok, err = _ensure(
+            ["iptables", "-C", "FORWARD", "-i", tap_name, "-p", proto, "--dport", "53", "-j", "ACCEPT"]
+        )
+        report["rules"].append({"rule": f"dns_{proto}", "ok": ok, "err": err})
+        if not ok:
+            report["errors"].append(f"dns_{proto}:{err}")
+
+    # Telegram / allowlist HTTPS
+    if telegram_only:
+        if not allow_ips:
+            report["errors"].append("telegram_ips_unresolved")
+        for ip in allow_ips:
+            ok, err = _ensure(
+                ["iptables", "-C", "FORWARD", "-i", tap_name, "-p", "tcp",
+                 "-d", ip, "--dport", "443", "-j", "ACCEPT"]
+            )
+            report["rules"].append({"rule": f"allow:{ip}", "ok": ok, "err": err})
+            if not ok:
+                report["errors"].append(f"allow:{ip}:{err}")
+
+        # Drop other NEW from this TAP
+        ok, err = _ensure(
+            ["iptables", "-C", "FORWARD", "-i", tap_name, "-m", "conntrack",
+             "--ctstate", "NEW", "-j", "DROP"]
+        )
+        report["rules"].append({"rule": "drop_new", "ok": ok, "err": err})
+        if not ok:
+            report["errors"].append(f"drop_new:{err}")
+
+    report["ok"] = len(report["errors"]) == 0
+    if report["ok"]:
+        logger.info("fc egress applied tap=%s allow_ips=%s", tap_name, allow_ips[:6])
+    else:
+        logger.error("fc egress incomplete tap=%s errors=%s", tap_name, report["errors"][:6])
+    return report
+
+
 def create_vm_network(plan: FcNetPlan) -> FcNetPlan:
     """Create dedicated TAP in its own netns, attach TAP to host bridge for egress."""
     if not ip_available():
@@ -146,12 +249,28 @@ def create_vm_network(plan: FcNetPlan) -> FcNetPlan:
         _run(["sysctl", "-w", "net.ipv4.ip_forward=1"])
 
     plan.created = True
+
+    # Production-grade egress: deny-by-default from this TAP (Telegram allowlist)
+    egress_report = apply_fc_tap_egress(plan.tap_name)
+    strict = _flag("TBE_FC_EGRESS_STRICT", "1")
+    if strict and not egress_report.get("ok"):
+        # Tear down partial net on strict failure
+        try:
+            destroy_vm_network(plan)
+        except Exception:
+            pass
+        raise RuntimeError(
+            "fc_egress_strict_failed: "
+            + ",".join(str(x) for x in (egress_report.get("errors") or [])[:4])
+        )
+
     logger.info(
-        "fc net ready vm=%s tap=%s bridge=%s netns=%s",
+        "fc net ready vm=%s tap=%s bridge=%s netns=%s egress_ok=%s",
         plan.vm_id[:20],
         plan.tap_name,
         plan.bridge,
         plan.netns,
+        egress_report.get("ok"),
     )
     return plan
 
