@@ -248,45 +248,14 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
                         headers={"Retry-After": str(retry)},
                     )
     except Exception:
-        logger.exception("ip_rate_limit_middleware failure")
-        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
-        is_dev = env in {"dev", "development", "local", "test"}
-        # Degraded mode: process-local limiter (stricter RPM). Never unthrottled.
-        # Multi-worker under-count is accepted vs total outage; fix Redis for correct global limits.
-        try:
-            from lumen.platform.rate_limit import MemoryRateLimiter
-            emergency = getattr(ip_rate_limit_middleware, "_emergency_limiter", None)
-            if emergency is None:
-                emergency = MemoryRateLimiter()
-                ip_rate_limit_middleware._emergency_limiter = emergency  # type: ignore[attr-defined]
-            ip = _client_ip(request)
-            base = int(os.getenv("API_IP_RPM") or "60")
-            # Production degraded: cap harder (default 15 rpm) so multi-worker hole is bounded
-            if not is_dev:
-                base = min(base, int(os.getenv("API_IP_RPM_DEGRADED") or "15"))
-            limit = max(1, base)
-            if not emergency.allow(f"ip:{ip}", limit=limit, window_sec=60.0):
-                return web.json_response(
-                    {
-                        "ok": False,
-                        "error": "ip_rate_limited",
-                        "degraded": True,
-                        "retry_after": 30,
-                    },
-                    status=429,
-                    headers={"Retry-After": "30"},
-                )
-            if not is_dev:
-                logger.error("rate_limit backend unavailable — using degraded in-process limiter")
-        except Exception:
-            logger.exception("degraded rate limiter failed")
-            if not is_dev:
-                return web.json_response(
-                    {"ok": False, "error": "rate_limit_unavailable"},
-                    status=503,
-                    headers={"Retry-After": "5"},
-                )
-            # Dev only: allow the request through if even the emergency limiter dies
+        # Fail closed: Redis is the sole rate-limit backend. No in-process Memory
+        # fallback (multi-worker DoS hole). Return 503 so callers retry / ops alert.
+        logger.exception("ip_rate_limit_middleware failure — refusing request")
+        return web.json_response(
+            {"ok": False, "error": "rate_limit_unavailable"},
+            status=503,
+            headers={"Retry-After": "5"},
+        )
     return await handler(request)
 
 
