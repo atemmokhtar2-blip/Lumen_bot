@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from lumen.engine.services.ui_state.render import HostRow, UiFacts
@@ -20,31 +19,48 @@ def gather_ui_facts(user_id: int, user_data: dict[str, Any] | None) -> UiFacts:
     if path:
         facts.active_project = path
 
-    # Plan from Mongo (same path as /plan)
+    # Credits-first (primary economy surface)
+    try:
+        from lumen.platform.credits import get_credit_service
+        from lumen.platform.credits.onboarding import (
+            UNIT_GENERATION_COST,
+            UNIT_HOURLY_HOSTING,
+            grant_welcome_credits,
+        )
+
+        tid = f"tg:{int(user_id)}"
+        # Ensure welcome pack exists (idempotent)
+        try:
+            grant_welcome_credits(tid)
+        except Exception:
+            logger.debug("welcome grant skipped", exc_info=True)
+        wallet = get_credit_service().get_wallet(tid)
+        facts.credits_balance = int(getattr(wallet, "current_balance", 0) or 0)
+        facts.credits_reserved = int(getattr(wallet, "reserved_balance", 0) or 0)
+        avail = getattr(wallet, "available", None)
+        if avail is None:
+            avail = facts.credits_balance - facts.credits_reserved
+        facts.credits_available = max(0, int(avail or 0))
+        facts.gen_cost_credits = int(UNIT_GENERATION_COST)
+        facts.host_hourly_credits = int(UNIT_HOURLY_HOSTING)
+    except Exception:
+        logger.debug("credits facts unavailable", exc_info=True)
+
+    # Plan label kept as secondary metadata only
     try:
         from lumen.bot.middlewares.mongo_sync import mongo_plan_for_user
 
         plan = mongo_plan_for_user(int(user_id)) or "free"
         facts.plan_id = str(plan)
         labels = {
-            "free": "Free — مجاني",
-            "explorer": "Free — مجاني",
-            "starter": "المبادر (Starter)",
-            "growth": "النمو (Growth)",
-            "pro": "النمو (Growth)",
-            "unlimited": "النمو (Growth)",
+            "free": "Free",
+            "explorer": "Free",
+            "starter": "Starter",
+            "growth": "Growth",
+            "pro": "Growth",
+            "unlimited": "Growth",
         }
         facts.plan_label = labels.get(str(plan), str(plan))
-        try:
-            from lumen.platform.plans import get_plan, public_plan_dict
-
-            pd = public_plan_dict(get_plan(plan))
-            facts.generations_per_month = str(pd.get("generations_per_month", ""))
-            facts.hosted_bots_limit = str(pd.get("hosted_bots", ""))
-            facts.live_preview_minutes = str(pd.get("live_preview_minutes", ""))
-            facts.engine_tier = str(pd.get("engine_tier", ""))
-        except Exception:
-            logger.debug("plan public dict unavailable", exc_info=True)
     except Exception:
         logger.debug("mongo plan unavailable", exc_info=True)
 

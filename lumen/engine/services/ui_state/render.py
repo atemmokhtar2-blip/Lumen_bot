@@ -27,6 +27,12 @@ class UiFacts:
     hosts: list[HostRow] = field(default_factory=list)
     active_project: str = ""
     generate_hint: str = ""
+    # Credits-first economy (primary UX surface)
+    credits_balance: int = 0
+    credits_reserved: int = 0
+    credits_available: int = 0
+    gen_cost_credits: int = 50
+    host_hourly_credits: int = 10
 
 
 def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
@@ -35,30 +41,29 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         lines = [
-            "أهلاً بك في Lumen",
+            "👋 أهلاً بك في Lumen",
             "",
-            "اختر من الأزرار أو اكتب وصف بوت مباشرة.",
+            "أنشئ بوت تيليجرام من وصف واحد — أو أدِر مشاريعك من لوحة التحكم.",
         ]
-        if facts.plan_label:
-            lines.append(f"خطتك: {facts.plan_label}")
+        bal = int(facts.credits_available or facts.credits_balance or 0)
+        lines.append(f"💰 رصيدك: {bal} كريدت")
         if facts.active_project:
-            lines.append(f"مشروع نشط: `{facts.active_project}`")
+            lines.append(f"📁 مشروع نشط: `{facts.active_project}`")
         if facts.hosts:
             n_run = sum(1 for h in facts.hosts if h.status == "running")
-            lines.append(f"مثيلات استضافة: {len(facts.hosts)} (يعمل: {n_run})")
+            lines.append(f"🖥 استضافة: {len(facts.hosts)} مثيل (يعمل: {n_run})")
         return "\n".join(lines)
 
     if phase == EngineUiPhase.GEN_TYPE:
+        # Direct description path — no type chips
         lines = [
-            "إنشاء بوت — اختر النوع",
+            "✍️ إنشاء بوت جديد",
             "",
-            "بعد الاختيار ستظهر شاشة تأكيد قبل التوليد الحقيقي.",
+            "اكتب وصف البوت في رسالة واحدة تحت هذا الصندوق.",
+            "مثال: بوت متجر إلكتروني مع سلة ودفع فودافون كاش",
+            "",
+            f"💰 التكلفة تقريباً: {int(facts.gen_cost_credits or 50)} كريدت للتوليد",
         ]
-        if state.slots.get("awaiting_text") == "1":
-            lines.append("")
-            lines.append("اكتب وصف البوت الآن في رسالة نصية.")
-        if state.missing:
-            lines.append("ناقص: " + ", ".join(state.missing))
         return "\n".join(lines)
 
     if phase == EngineUiPhase.GEN_SLOTS:
@@ -138,21 +143,28 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
 
     if phase == EngineUiPhase.BILLING:
-        lines = ["الرصيد والخطة", ""]
-        if facts.plan_label or facts.plan_id:
-            lines.append(f"الخطة: {facts.plan_label or facts.plan_id}")
-        else:
-            lines.append("تعذر قراءة الخطة — جرّب /plan")
-        if facts.generations_per_month:
-            lines.append(f"• التوليد: {facts.generations_per_month}/شهر")
-        if facts.hosted_bots_limit:
-            lines.append(f"• استضافة 24/7: {facts.hosted_bots_limit} بوت")
-        if facts.live_preview_minutes:
-            lines.append(f"• معاينة حية: {facts.live_preview_minutes} دقيقة")
-        if facts.engine_tier:
-            lines.append(f"• المحرك: {facts.engine_tier}")
-        lines.append("")
-        lines.append("لا يوجد دفع داخل هذه الشاشة حتى تُفعَّل بوابة دفع حقيقية.")
+        bal = int(facts.credits_available or facts.credits_balance or 0)
+        reserved = int(facts.credits_reserved or 0)
+        gen_c = int(facts.gen_cost_credits or 50)
+        host_c = int(facts.host_hourly_credits or 10)
+        lines = [
+            "💰 الرصيد (كريدت)",
+            "",
+            f"المتاح: {bal} كريدت",
+        ]
+        if reserved:
+            lines.append(f"محجوز: {reserved} كريدت")
+        lines.extend(
+            [
+                "",
+                "أسعار تقريبية:",
+                f"• توليد بوت: {gen_c} كريدت",
+                f"• استضافة: {host_c} كريدت / ساعة",
+                "",
+                "رصيد الترحيب الافتراضي: 400 كريدت",
+                "(3 توليدات + 24 ساعة استضافة + هامش رسائل)",
+            ]
+        )
         return "\n".join(lines)
 
     if phase == EngineUiPhase.CONTEXT:

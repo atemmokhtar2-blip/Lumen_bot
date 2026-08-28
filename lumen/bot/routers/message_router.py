@@ -246,7 +246,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             logger.exception("engine_ui GEN_SLOTS answer failed")
 
-    # Engine UI Batch 2: free-text description after guided "custom" / await flag
+    # Engine UI: description after "إنشاء بوت" → force generate (no type/slots spam)
     if (
         context.user_data
         and context.user_data.get("engine_ui_await_generate")
@@ -256,40 +256,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             from lumen.bot.ui.state_store import load_ui_state, save_ui_state, persist_ui_session
             from lumen.engine.services.ui_state.models import EngineUiPhase
-            from lumen.engine.services.ui_state.controller import missing_for_state
 
             ui = load_ui_state(context.user_data)
-            ui.slots["bot_type"] = ui.slots.get("bot_type") or "custom"
+            ui.slots["bot_type"] = "custom"
             ui.slots["bot_description"] = request[:2000]
             ui.slots.pop("awaiting_text", None)
-            from lumen.engine.services.ui_state.controller import apply_action as _ui_apply
-            # Re-run via pick path logic: refresh needs from description
-            from lumen.engine.services.ui_state.engine_needs import analyze_needs, remaining_needs
-            plan = analyze_needs(request[:2000], user_id=int(user.id) if user else None)
-            ui.needs = plan.to_list()
-            rem = remaining_needs(ui.needs, ui.slots)
-            ui.missing = [n.slot for n in rem]
-            ui.phase = EngineUiPhase.GEN_SLOTS if rem else EngineUiPhase.GEN_CONFIRM
+            ui.needs = []
+            ui.missing = []
+            ui.phase = EngineUiPhase.GENERATING
             save_ui_state(context.user_data, ui)
             context.user_data.pop("engine_ui_await_generate", None)
+            context.user_data["force_generate_once"] = True
+            context.user_data["skip_clarify_once"] = True
+            context.user_data["last_bot_request"] = request[:2000]
             uid_ui = int(user.id) if user else 0
             if uid_ui:
                 persist_ui_session(uid_ui, dict(context.user_data))
-            from lumen.bot.ui.keyboards import build_inline_keyboard
-            from lumen.engine.services.ui_state.controller import buttons_for_phase
-            from lumen.engine.services.ui_state.render import render_message
-            from lumen.bot.ui.facts import gather_ui_facts
-
-            facts = gather_ui_facts(uid_ui, context.user_data)
-            body = render_message(ui, facts)
-            await message.reply_text(
-                body[:4000],
-                reply_markup=build_inline_keyboard(buttons_for_phase(ui.phase)),
-            )
-            return
+            logger.info("engine_ui description received → force generate")
+            # fall through into generation pipeline (single status path)
         except Exception:
             logger.exception("engine_ui await_generate handler failed")
-            # fall through to normal generation if UI path fails
             context.user_data["force_generate_once"] = True
             context.user_data["skip_clarify_once"] = True
     if len((message.text or "").strip()) > MAX_USER_MESSAGE_CHARS:

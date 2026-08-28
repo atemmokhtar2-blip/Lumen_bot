@@ -30,14 +30,16 @@ class ApplyResult:
 
 
 def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
+    # Emoji labels — Telegram inline buttons have no real green/red colors;
+    # production bots use emoji + short Arabic labels (same pattern as Ads Apex).
     return (
         (
-            UiButton("إنشاء بوت جديد", "open_generate"),
-            UiButton("لوحة التحكم", "open_dashboard"),
+            UiButton("🟢 إنشاء بوت", "open_generate"),
+            UiButton("🖥 لوحة التحكم", "open_dashboard"),
         ),
         (
-            UiButton("الرصيد والخطة", "open_billing"),
-            UiButton("المساعدة", "open_help"),
+            UiButton("💰 الرصيد", "open_billing"),
+            UiButton("❓ المساعدة", "open_help"),
         ),
     )
 
@@ -83,18 +85,9 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _home_buttons()
 
     if phase == EngineUiPhase.GEN_TYPE:
-        # Soft type chips + free text — still entry points to engine path
+        # Description-only path — no type chips (user writes free text below)
         return (
-            (
-                UiButton("متجر", "pick_type", "shop"),
-                UiButton("إشعارات", "pick_type", "notify"),
-            ),
-            (
-                UiButton("مهام", "pick_type", "tasks"),
-                UiButton("محادثة", "pick_type", "chat"),
-            ),
-            (UiButton("مخصص — اكتب وصفاً", "pick_type", "custom"),),
-            (UiButton("القائمة", "home"),),
+            (UiButton("◀️ رجوع", "home"),),
         )
 
     if phase == EngineUiPhase.GEN_SLOTS:
@@ -205,11 +198,11 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return tuple(rows)
     if phase == EngineUiPhase.BILLING:
         return (
-            (UiButton("تحديث الخطة", "open_billing"),),
-            (UiButton("القائمة", "home"),),
+            (UiButton("🔄 تحديث الرصيد", "open_billing"),),
+            (UiButton("◀️ رجوع", "home"),),
         )
     if phase == EngineUiPhase.HELP:
-        return ((UiButton("القائمة", "home"),),)
+        return ((UiButton("◀️ رجوع", "home"),),)
     if phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
         return buttons_for_event(kind)
@@ -279,15 +272,20 @@ def apply_action(
         new.missing = []
         msg = "القائمة الرئيسية."
     elif action_id == "open_generate":
+        # Jump straight to free-text description — no shop/notify/chat chips
         new.phase = EngineUiPhase.GEN_TYPE
+        new.slots["bot_type"] = "custom"
+        new.slots["awaiting_text"] = "1"
         new.slots.pop("confirmed", None)
-        new.missing = missing_for_state(new)
-        msg = "اختر نوعاً أو اكتب وصفاً — المحرك سيحدد الناقص."
+        new.slots.pop("bot_description", None)
+        new.needs = []
+        new.missing = ["bot_description"]
+        msg = "اكتب وصف البوت تحت."
     elif action_id == "await_generate_text":
         new.phase = EngineUiPhase.GEN_TYPE
         new.slots["bot_type"] = "custom"
         new.slots["awaiting_text"] = "1"
-        msg = "اكتب وصف البوت."
+        msg = "اكتب وصف البوت تحت."
     elif action_id == "pick_type":
         if arg not in BOT_TYPE_PRESETS:
             return ApplyResult(

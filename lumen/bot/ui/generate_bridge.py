@@ -91,16 +91,17 @@ async def run_guided_generation(
     success = bool(getattr(result, "success", False))
     project_path = getattr(result, "project_path", None)
     if not success or not project_path:
-        await safe_edit_text(status_msg, user_facing_generation_error(code="generation_failed"))
+        # Surface real engine reason (single edited message — no extra spam)
+        code = "generation_failed"
         try:
-            from lumen.bot.ui.emit_context import emit_context_event
-            await emit_context_event(
-                message=message, context=context, user=user,
-                kind="generation_failed",
-                detail=user_facing_generation_error(code="generation_failed"),
-            )
+            errs = list(getattr(result, "errors", None) or [])
+            if errs:
+                raw = str(errs[0])[:120]
+                code = raw.split(":")[0].strip() or code
+                logger.warning("generation failed errors=%s meta=%s", errs[:5], getattr(result, "metadata", None))
         except Exception:
             pass
+        await safe_edit_text(status_msg, user_facing_generation_error(code=code))
         return result
 
     try:
