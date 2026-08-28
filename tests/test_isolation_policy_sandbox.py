@@ -9,7 +9,7 @@ import pytest
 def test_strong_sandbox_available_true_when_fc_probes():
     from lumen.engine.services.sandbox_runtime.types import SandboxProbe
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.probe_all",
+        "lumen.engine.services.sandbox_runtime.select.probe_all",
         return_value=[SandboxProbe("firecracker", True, "ok", 100)],
     ):
         from lumen.engine.services.isolation_policy import strong_sandbox_available
@@ -25,7 +25,7 @@ def test_require_strong_isolation_fails_closed(monkeypatch):
     monkeypatch.delenv("TBE_FORCE_LOCAL_PROCESS", raising=False)
     from lumen.engine.services.sandbox_runtime.types import SandboxProbe
     with mock.patch(
-        "lumen.engine.services.sandbox_runtime.probe_all",
+        "lumen.engine.services.sandbox_runtime.select.probe_all",
         return_value=[
             SandboxProbe("firecracker", False, "no", 100),
             SandboxProbe("gvisor", False, "no", 85),
