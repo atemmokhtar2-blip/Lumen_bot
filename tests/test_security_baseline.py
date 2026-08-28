@@ -56,7 +56,7 @@ def test_security_headers_middleware_in_app_source():
 
 
 def test_credit_service_privilege_strings():
-    text = (ROOT / "lumen.platform/credits/service.py").read_text(encoding="utf-8")
+    text = (ROOT / "lumen/platform/credits/service.py").read_text(encoding="utf-8")
     for s in (
         "promotional_requires_expiry",
         "promotional_requires_promo_reason",

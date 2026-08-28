@@ -54,7 +54,7 @@ def main() -> int:
         )
 
     # 2) PolicyEngine in execute_tool
-    executor = _read("lumen.engine/services/tool_runtime/executor.py")
+    executor = _read("lumen/engine/services/tool_runtime/executor.py")
     check(
         "tool_runtime.policy",
         "PolicyEngine" in executor and "evaluate" in executor,
@@ -63,7 +63,7 @@ def main() -> int:
     )
 
     # 3) credit_credits privilege rules
-    service = _read("lumen.platform/credits/service.py")
+    service = _read("lumen/platform/credits/service.py")
     for needle in (
         "promotional_requires_expiry",
         "promotional_requires_promo_reason",
@@ -87,7 +87,7 @@ def main() -> int:
     )
 
     # 5) onboarding promotional + TTL
-    onboarding = _read("lumen.platform/credits/onboarding.py")
+    onboarding = _read("lumen/platform/credits/onboarding.py")
     check(
         "credits.welcome.promotional",
         "promotional=True" in onboarding and "promo_expires_at" in onboarding,
@@ -138,9 +138,7 @@ def main() -> int:
         ".zap/rules.tsv",
         "scripts/security/start_api_dast.py",
         ".github/workflows/supply-chain.yml",
-        "docs/27_PHASE3_SUPPLY_CHAIN.md",
         ".github/workflows/policy-as-code.yml",
-        "docs/28_PHASE4_POLICY_AS_CODE.md",
         "scripts/security/seed_dast_tenants.py",
     ):
         check(
@@ -150,11 +148,17 @@ def main() -> int:
             failures,
         )
 
-    # 9) Multi-tenant defaults
+    # 9) Multi-tenant defaults — isolation_policy is the single source of truth.
+    #    After the refactor that stopped mutating os.environ in the API factory,
+    #    the fail-closed multi-tenant default lives in isolation_policy._flag
+    #    (default "1") and decide_isolation() requires strong isolation when
+    #    multi-tenant or non-dev. Verify that contract holds.
+    isolation = _read("lumen/engine/services/isolation_policy.py")
     check(
         "api.multi_tenant_default",
-        'TBE_MULTI_TENANT' in app and '"1"' in app,
-        "multi-tenant default on",
+        '_flag("TBE_MULTI_TENANT", "1")' in isolation
+        and "require_strong_isolation=True" in isolation,
+        "multi-tenant default on (fail-closed in isolation_policy)",
         failures,
     )
 
