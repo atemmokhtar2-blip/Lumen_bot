@@ -24,7 +24,8 @@ RUN apt-get update \
     && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
     && mkdir -p /tmp/lumen_output \
     && chown -R appuser:appuser /app /tmp/lumen_output
 
