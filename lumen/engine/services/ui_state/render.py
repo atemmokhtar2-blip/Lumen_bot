@@ -72,10 +72,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.GEN_CONFIRM:
         desc = (state.slots.get("bot_description") or "")[:400]
-        return "تأكيد التوليد
-
-" + (desc or "—")
-
+        return "تأكيد التوليد\n\n" + (desc or "—")
 
     if phase == EngineUiPhase.GENERATING:
         return "جاري توليد البوت عبر المحرك…\nلا تغلق الشات."
