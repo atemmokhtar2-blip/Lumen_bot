@@ -53,6 +53,37 @@ async def generate(request: web.Request) -> web.Response:
     """
     tenant = require_tenant(request)
 
+    # ROOT FIX: refuse generation when no strong sandbox (never host-execute untrusted code).
+    try:
+        from lumen.engine.services.isolation_policy import (
+            decide_isolation,
+            strong_sandbox_available,
+        )
+        decision = decide_isolation()
+        if decision.require_strong_isolation:
+            ok_sb, sb_reason = strong_sandbox_available()
+            if not ok_sb:
+                return web.json_response(
+                    {
+                        "ok": False,
+                        "error": "sandbox_unavailable",
+                        "detail": "strong isolation required; host LocalProcess is disabled",
+                        "probes": sb_reason,
+                    },
+                    status=503,
+                    headers={"Retry-After": "30"},
+                )
+    except Exception as exc:
+        return web.json_response(
+            {
+                "ok": False,
+                "error": "sandbox_check_failed",
+                "detail": type(exc).__name__,
+            },
+            status=503,
+            headers={"Retry-After": "30"},
+        )
+
     # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
     lim = get_rate_limiter()
     if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):

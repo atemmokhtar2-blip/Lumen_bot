@@ -131,3 +131,22 @@ def test_live_runner_allow_local_requires_not_strong(monkeypatch):
     d = decide_isolation()
     # Policy: multi-tenant never allow_local without dual gate
     assert d.allow_local is False or d.require_strong_isolation is False
+
+
+def test_linux_path_open_has_no_weak_os_open_fallback():
+    src = Path("lumen/engine/services/linux_path_open.py").read_text(encoding="utf-8")
+    assert "os.open(str(final)" not in src
+    assert "openat2_required_but_unavailable" in src
+
+
+def test_app_always_forces_local_fallback_off():
+    src = Path("lumen/api/app.py").read_text(encoding="utf-8")
+    assert 'TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "1"' not in src
+    assert 'os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"' in src
+
+
+def test_generate_source_has_sandbox_503_gate():
+    src = Path("lumen/api/routes/generate.py").read_text(encoding="utf-8")
+    assert "sandbox_unavailable" in src
+    assert "strong_sandbox_available" in src
+    assert "503" in src

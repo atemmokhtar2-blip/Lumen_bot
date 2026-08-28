@@ -216,6 +216,15 @@ def open_beneath(
         raise PathOpenError(exc.errno, f"root_open_failed:{exc.strerror}") from exc
 
     try:
+        # require_openat2=False is rejected unless explicit weak-path emergency (dev only).
+        allow_weak = (
+            not require_openat2
+            and (os.environ.get("TBE_ALLOW_WEAK_PATH_OPEN") or "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if not _has_openat2() and not allow_weak:
+            raise PathOpenError(errno.ENOSYS, "openat2_required_but_unavailable")
+
         if _has_openat2():
             # Empty relative means open the root itself via dup
             if not rel_s or rel_s == ".":
@@ -240,20 +249,9 @@ def open_beneath(
                 real = str((root_p / rel_s).resolve(strict=False))
             return OpenedPath(fd=fd, realpath=real)
 
-        if require_openat2:
-            raise PathOpenError(errno.ENOSYS, "openat2_required_but_unavailable")
-
-        # Fallback (DEV/TEST ONLY when callers pass require_openat2=False):
-        # O_NOFOLLOW protects the *final* component only — intermediate symlinks can
-        # still escape. Production callers must set require_openat2=True.
-        final = root_p / rel_s if rel_s else root_p
-        fb_flags = base_flags | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(str(final), fb_flags)
-        try:
-            real = os.readlink(f"/proc/self/fd/{fd}")
-        except OSError:
-            real = str(final.resolve(strict=False))
-        return OpenedPath(fd=fd, realpath=real)
+        # ROOT FIX: never use O_NOFOLLOW-only open on a full path — intermediate
+        # symlinks can escape the sandbox. openat2(RESOLVE_BENEATH|NO_SYMLINKS) only.
+        raise PathOpenError(errno.ENOSYS, "openat2_required_but_unavailable")
     finally:
         try:
             os.close(root_fd)

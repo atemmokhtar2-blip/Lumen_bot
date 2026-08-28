@@ -19,9 +19,11 @@ if "TBE_MULTI_TENANT" not in os.environ:
     os.environ["TBE_MULTI_TENANT"] = "1"
 if "TBE_REQUIRE_DOCKER" not in os.environ:
     os.environ["TBE_REQUIRE_DOCKER"] = "1"
-# Explicit deny of host-local untrusted execution unless operator dual-gates in isolation_policy.
-if "TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER" not in os.environ:
-    os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"
+# ROOT FIX: never enable host-local fallback from API process defaults.
+# Even if the operator exported TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER=1, B2B multi-tenant
+# isolation_policy ignores it; we still force the env to 0 so no child code path
+# can treat "missing sandbox → local process" as acceptable.
+os.environ["TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER"] = "0"
 if "TBE_PIP_WHEELS_ONLY" not in os.environ:
     os.environ["TBE_PIP_WHEELS_ONLY"] = "1"
 
@@ -264,15 +266,8 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
         logger.exception("ip_rate_limit_middleware failure")
         env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
         is_dev = env in {"dev", "development", "local", "test"}
-        if not is_dev:
-            # Production fail-closed for THIS request — never MemoryRateLimiter (multi-worker hole)
-            # and never allow the request through unthrottled.
-            return web.json_response(
-                {"ok": False, "error": "rate_limit_unavailable"},
-                status=503,
-                headers={"Retry-After": "5"},
-            )
-        # Dev only: process-local limiter
+        # Degraded mode: process-local limiter (stricter RPM). Never unthrottled.
+        # Multi-worker under-count is accepted vs total outage; fix Redis for correct global limits.
         try:
             from lumen.platform.rate_limit import MemoryRateLimiter
             emergency = getattr(ip_rate_limit_middleware, "_emergency_limiter", None)
@@ -280,15 +275,33 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
                 emergency = MemoryRateLimiter()
                 ip_rate_limit_middleware._emergency_limiter = emergency  # type: ignore[attr-defined]
             ip = _client_ip(request)
-            limit = int(os.getenv("API_IP_RPM") or "60")
-            if limit > 0 and not emergency.allow(f"ip:{ip}", limit=limit, window_sec=60.0):
+            base = int(os.getenv("API_IP_RPM") or "60")
+            # Production degraded: cap harder (default 15 rpm) so multi-worker hole is bounded
+            if not is_dev:
+                base = min(base, int(os.getenv("API_IP_RPM_DEGRADED") or "15"))
+            limit = max(1, base)
+            if not emergency.allow(f"ip:{ip}", limit=limit, window_sec=60.0):
                 return web.json_response(
-                    {"ok": False, "error": "ip_rate_limited", "retry_after": 30},
+                    {
+                        "ok": False,
+                        "error": "ip_rate_limited",
+                        "degraded": True,
+                        "retry_after": 30,
+                    },
                     status=429,
                     headers={"Retry-After": "30"},
                 )
+            if not is_dev:
+                logger.error("rate_limit backend unavailable — using degraded in-process limiter")
         except Exception:
-            logger.exception("dev emergency rate limiter failed; allowing once")
+            logger.exception("degraded rate limiter failed")
+            if not is_dev:
+                return web.json_response(
+                    {"ok": False, "error": "rate_limit_unavailable"},
+                    status=503,
+                    headers={"Retry-After": "5"},
+                )
+            # Dev only: allow the request through if even the emergency limiter dies
     return await handler(request)
 
 
