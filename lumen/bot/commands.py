@@ -66,9 +66,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             persist_ui_session(uid, dict(ud))
 
     try:
-        facts = await asyncio.to_thread(gather_ui_facts, uid, ud)
+        facts = await asyncio.wait_for(asyncio.to_thread(gather_ui_facts, uid, ud), timeout=6.0)
     except Exception:
-        facts = gather_ui_facts(uid, ud)
+        from lumen.engine.services.ui_state.render import UiFacts
+        facts = UiFacts()
     caption = render_message(ui, facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
 

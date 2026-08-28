@@ -121,6 +121,12 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return render_event_message(state)
 
     if phase == EngineUiPhase.HELP:
-        return facts.generate_hint or "استخدم /help لعرض القدرات."
+        return (
+            "المساعدة\n\n"
+            "• إنشاء بوت — اكتب وصفاً واحداً\n"
+            "• الرصيد — رصيدك الحالي\n"
+            "• لوحة التحكم — مشاريعك والاستضافة\n"
+            "• /start — القائمة الرئيسية"
+        )
 
     return f"مرحلة `{phase.value}`"

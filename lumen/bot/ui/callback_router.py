@@ -63,57 +63,50 @@ async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=
 
 
 async def handle_ui_callback(update, context) -> None:
-    """Top-level UI callback — auth, rate-limit, whitelist, no error leakage."""
+    """Top-level UI callback — answer first, never hang on Redis/DB."""
     q = update.callback_query
     if q is None:
         return
 
-    # 1) Identity — refuse anonymous / blocked users (no action, no leak)
+    import asyncio
+
     user = update.effective_user
     uid = int(user.id) if user else 0
+
+    # 0) Acknowledge IMMEDIATELY — stops Telegram loading spinner (best practice)
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
+    # 1) Identity
     try:
         from lumen.bot.helpers import is_allowed
         if not uid or not is_allowed(uid):
-            try:
-                await q.answer("غير مصرح", show_alert=True)
-            except Exception:
-                pass
             return
     except Exception:
         logger.exception("auth check failed on callback")
-        try:
-            await q.answer()
-        except Exception:
-            pass
         return
 
-    # 2) Parse + closed catalog (fail closed on forged callback_data)
+    # 2) Signed parse + closed catalog
     parsed = decode_callback(q.data or "", user_id=uid)
     if parsed is None:
-        try:
-            await q.answer()
-        except Exception:
-            pass
+        # Stale / unsigned / foreign button — silent fail-closed
         return
     action_id, arg = parsed
     try:
         from lumen.engine.services.ui_state.catalog import is_known_action
         if not is_known_action(action_id):
-            try:
-                await q.answer()
-            except Exception:
-                pass
             logger.warning("unknown ui action rejected uid=%s action=%s", uid, action_id)
             return
     except Exception:
         logger.exception("catalog check failed")
         return
 
-    # 3) Per-user rate limit on button spam (same Redis limiter as messages)
+    # 3) Rate limit with hard timeout (never block UI on Redis stall)
     try:
         from lumen.bot.middlewares.auth import rate_limit_ok
-        import asyncio
-        ok = await asyncio.to_thread(rate_limit_ok, uid)
+        ok = await asyncio.wait_for(asyncio.to_thread(rate_limit_ok, uid), timeout=1.5)
         if not ok:
             try:
                 await q.answer("انتظر قليلاً", show_alert=False)
@@ -121,16 +114,21 @@ async def handle_ui_callback(update, context) -> None:
                 pass
             return
     except Exception:
-        logger.debug("callback rate limit check failed", exc_info=True)
-
-    # 4) Acknowledge immediately (Telegram best practice; does not count as flood)
-    try:
-        await q.answer()
-    except Exception:
-        pass
+        logger.debug("callback rate limit skipped", exc_info=True)
 
     try:
-        await _handle_ui_callback_body(update, context, q, action_id, arg)
+        await asyncio.wait_for(
+            _handle_ui_callback_body(update, context, q, action_id, arg),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("ui callback timeout action=%s uid=%s", action_id, uid)
+        try:
+            msg = update.effective_message or (q.message if q else None)
+            if msg is not None:
+                await msg.reply_text("استغرق الرد وقتاً أطول من المعتاد. جرّب مرة أخرى.")
+        except Exception:
+            pass
     except Exception as exc:
         logger.exception(
             "ui callback fatal action=%s arg=%s err=%s:%s",
@@ -139,11 +137,7 @@ async def handle_ui_callback(update, context) -> None:
             type(exc).__name__,
             str(exc)[:200],
         )
-        # Never surface stack/type to the user (anti-recon)
-        try:
-            await q.answer("تعذر التنفيذ. أعد المحاولة.", show_alert=False)
-        except Exception:
-            pass
+
 
 
 async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str) -> None:
@@ -212,8 +206,11 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     try:
         import asyncio
         from functools import partial
-        facts = await asyncio.to_thread(
-            partial(gather_ui_facts, uid, user_data, include_hosts=include_hosts)
+        facts = await asyncio.wait_for(
+            asyncio.to_thread(
+                partial(gather_ui_facts, uid, user_data, include_hosts=include_hosts)
+            ),
+            timeout=8.0,
         )
     except Exception:
         try:
