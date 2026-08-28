@@ -446,6 +446,7 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/jobs/{job_id}/pause", jobs.pause_job)
     app.router.add_post("/v1/jobs/{job_id}/resume", jobs.resume_job)
     app.router.add_post("/v1/jobs/{job_id}/steer", jobs.steer_job)
+    app.router.add_post("/v1/jobs/{job_id}/events-ticket", jobs.create_events_ticket)
     app.router.add_get("/v1/jobs/{job_id}/events", jobs.stream_job)
     app.router.add_get("/v1/jobs/{job_id}/files", runs_ux.job_diff_files)
     app.router.add_get("/v1/jobs/{job_id}/file", runs_ux.job_file_content)
