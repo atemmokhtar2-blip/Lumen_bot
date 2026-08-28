@@ -64,9 +64,28 @@ async def try_handle_token(
         except Exception as e:
             logger.exception("hosting start failed")
             await status.edit_text(f"❌ فشل الاستضافة (`{type(e).__name__}`).")
+            try:
+                from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
+                await emit_context_event(
+                    message=message, context=context, user=message.from_user,
+                    kind=classify_host_failure(str(e)),
+                    detail=f"hosting start exception: {type(e).__name__}",
+                )
+            except Exception:
+                pass
             return True
 
         await status.edit_text(result.to_user_text())
+        if not getattr(result, "ok", True):
+            try:
+                from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
+                await emit_context_event(
+                    message=message, context=context, user=message.from_user,
+                    kind=classify_host_failure(getattr(result, "message", "") or ""),
+                    detail=str(getattr(result, "message", "") or "")[:400],
+                )
+            except Exception:
+                pass
         return True
 
 

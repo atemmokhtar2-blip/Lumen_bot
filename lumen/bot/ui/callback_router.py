@@ -165,6 +165,14 @@ async def handle_ui_callback(update, context) -> None:
             )
             if note and msg:
                 await msg.reply_text(note[:2000])
+                # Contextual buttons when post action cannot proceed
+                low = note
+                if "لا يوجد مشروع" in low or "غير موجود" in low:
+                    from lumen.bot.ui.emit_context import emit_context_event
+                    await emit_context_event(
+                        message=msg, context=context, user=update.effective_user,
+                        kind="no_project", detail=note[:400],
+                    )
         except Exception:
             logger.exception("post_side_effect failed effect=%s", result.post_side_effect)
 
@@ -195,6 +203,13 @@ async def handle_ui_callback(update, context) -> None:
             )
             if note and msg:
                 await msg.reply_text(note[:3500])
+                if note.startswith("FAIL") or "غير موجود" in note or "لا مثيل" in note:
+                    from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
+                    await emit_context_event(
+                        message=msg, context=context, user=update.effective_user,
+                        kind=classify_host_failure(note),
+                        detail=note[:400],
+                    )
             # re-sync hosts after stop
             if result.dash_effect == "dash_stop":
                 from .dash_actions import sync_dashboard_slots

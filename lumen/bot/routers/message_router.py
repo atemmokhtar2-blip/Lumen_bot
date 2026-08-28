@@ -633,6 +633,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     status_msg,
                     user_facing_generation_error(code="generation_failed"),
                 )
+                try:
+                    from lumen.bot.ui.emit_context import emit_context_event
+                    await emit_context_event(
+                        message=message, context=context, user=user,
+                        kind="generation_failed",
+                        detail=user_facing_generation_error(code="generation_failed"),
+                    )
+                except Exception:
+                    logger.exception("emit gen fail context failed")
                 return
 
             proj = Path(str(project_path))
@@ -1951,11 +1960,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not _q_ok:
             limit = _q_info.get("limit") or "?"
             plan_id = _q_info.get("plan_id") or "free"
-            await status_msg.edit_text(
-                f"⛔ وصلت للحد الشهري للتوليد على خطة `{plan_id}` "
-                f"({limit} توليد/شهر).\n"
-                "رقِّ خطتك: /plan — المبادر $8 أو النمو $30."
+            detail = (
+                f"وصلت للحد الشهري للتوليد على خطة {plan_id} "
+                f"({limit} توليد/شهر). السبب: {_q_reason}"
             )
+            await status_msg.edit_text("⛔ " + detail)
+            try:
+                from lumen.bot.ui.emit_context import emit_context_event
+                await emit_context_event(
+                    message=message, context=context, user=user,
+                    kind="insufficient_quota", detail=detail,
+                )
+            except Exception:
+                logger.exception("emit quota context failed")
             return
     except Exception:
         logger.exception("plan quota check failed")
@@ -1978,6 +1995,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 status_msg,
                 user_facing_generation_error(code="sandbox_unavailable"),
             )
+            try:
+                from lumen.bot.ui.emit_context import emit_context_event
+                await emit_context_event(
+                    message=message, context=context, user=user,
+                    kind="sandbox_unavailable",
+                    detail=user_facing_generation_error(code="sandbox_unavailable"),
+                )
+            except Exception:
+                logger.exception("emit sandbox context failed")
             return
 
     try:

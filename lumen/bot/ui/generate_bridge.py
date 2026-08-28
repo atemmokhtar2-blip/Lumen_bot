@@ -49,6 +49,15 @@ async def run_guided_generation(
         except Exception:
             logger.exception("fallback workdir failed")
             await safe_edit_text(status_msg, user_facing_generation_error(code="sandbox_unavailable"))
+            try:
+                from lumen.bot.ui.emit_context import emit_context_event
+                await emit_context_event(
+                    message=message, context=context, user=user,
+                    kind="sandbox_unavailable",
+                    detail=user_facing_generation_error(code="sandbox_unavailable"),
+                )
+            except Exception:
+                pass
             return None
 
     preferred_keys = None
@@ -64,6 +73,15 @@ async def run_guided_generation(
     except Exception as exc:
         logger.exception("guided generation failed")
         await safe_edit_text(status_msg, user_facing_generation_error(exc))
+        try:
+            from lumen.bot.ui.emit_context import emit_context_event
+            await emit_context_event(
+                message=message, context=context, user=user,
+                kind="generation_failed",
+                detail=user_facing_generation_error(exc)[:400],
+            )
+        except Exception:
+            pass
         return None
 
     if result is None:
@@ -74,6 +92,15 @@ async def run_guided_generation(
     project_path = getattr(result, "project_path", None)
     if not success or not project_path:
         await safe_edit_text(status_msg, user_facing_generation_error(code="generation_failed"))
+        try:
+            from lumen.bot.ui.emit_context import emit_context_event
+            await emit_context_event(
+                message=message, context=context, user=user,
+                kind="generation_failed",
+                detail=user_facing_generation_error(code="generation_failed"),
+            )
+        except Exception:
+            pass
         return result
 
     try:
