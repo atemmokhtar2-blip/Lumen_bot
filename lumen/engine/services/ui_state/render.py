@@ -109,20 +109,33 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return "\n".join(lines)
 
     if phase == EngineUiPhase.DASHBOARD:
-        lines = ["لوحة التحكم", ""]
+        lines = ["لوحة التحكم — استضافة حقيقية", ""]
         if facts.active_project:
-            lines.append(f"مشروع نشط: `{facts.active_project}`")
-        else:
-            lines.append("لا يوجد مشروع نشط في الجلسة.")
-        if not facts.hosts:
-            lines.append("لا مثيلات استضافة مسجّلة لهذا الحساب.")
-        else:
-            lines.append("الاستضافة:")
-            for h in facts.hosts[:10]:
+            lines.append(f"مشروع الجلسة: `{facts.active_project}`")
+        count = int((state.slots or {}).get("dash_count") or 0) if (state.slots or {}).get("dash_count", "").isdigit() else 0
+        # prefer slot-synced hosts
+        shown = 0
+        for i in range(5):
+            iid = (state.slots or {}).get(f"dash_h{i}") or ""
+            if not iid:
+                continue
+            st = (state.slots or {}).get(f"dash_s{i}") or "?"
+            un = (state.slots or {}).get(f"dash_u{i}") or "—"
+            be = (state.slots or {}).get(f"dash_b{i}") or "—"
+            lines.append(f"#{i+1} `{iid[-12:]}` | {st} | @{un} | {be}")
+            shown += 1
+        if shown == 0 and facts.hosts:
+            for h in facts.hosts[:5]:
                 un = f"@{h.bot_username}" if h.bot_username else "—"
-                be = h.backend or "—"
-                lines.append(f"• `{h.instance_id}` | {h.status} | {un} | {be}")
+                lines.append(f"• `{h.instance_id}` | {h.status} | {un} | {h.backend or '—'}")
+            shown = len(facts.hosts[:5])
+        if shown == 0:
+            lines.append("لا مثيلات HostService لهذا الحساب.")
+            lines.append("بعد التوليد: استضافة دائمة + توكن لظهور المثيل هنا.")
+        lines.append("")
+        lines.append("الأزرار تستدعي status/stop/diagnose من HostService مباشرة.")
         return "\n".join(lines)
+
 
     if phase == EngineUiPhase.BILLING:
         lines = ["الرصيد والخطة", ""]

@@ -165,25 +165,34 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return tuple(rows)
     if phase == EngineUiPhase.DASHBOARD:
         rows: list[tuple[UiButton, ...]] = []
-        # Host rows encoded in state.slots by bot layer: dash_h0..dash_h4 = instance_id
+        # Host rows: dash_h{i}=instance_id; callback arg is index i (stable)
         for i in range(5):
             iid = (state.slots.get(f"dash_h{i}") or "").strip()
             if not iid:
                 continue
-            short = iid[-8:] if len(iid) > 8 else iid
-            st = (state.slots.get(f"dash_s{i}") or "?")[:12]
-            rows.append((UiButton(f"{short} [{st}]", "noop", short),))
+            st = (state.slots.get(f"dash_s{i}") or "?")[:10]
+            un = (state.slots.get(f"dash_u{i}") or "")[:16]
+            label = f"#{i+1} {st}"
+            if un:
+                label = f"#{i+1} @{un} {st}"
+            rows.append((UiButton(label[:40], "dash_status", str(i)),))
             rows.append(
                 (
-                    UiButton("حالة", "dash_status", short),
-                    UiButton("إيقاف", "dash_stop", short),
-                    UiButton("تشخيص", "dash_diagnose", short),
+                    UiButton("حالة", "dash_status", str(i)),
+                    UiButton("إيقاف", "dash_stop", str(i)),
+                    UiButton("تشخيص", "dash_diagnose", str(i)),
                 )
             )
         rows.append(
             (
-                UiButton("تحديث", "open_dashboard"),
+                UiButton("تحديث القائمة", "open_dashboard"),
+                UiButton("حالة الكل", "dash_status", "all"),
+            )
+        )
+        rows.append(
+            (
                 UiButton("تجربة المشروع", "dash_trial"),
+                UiButton("استضافة المشروع", "post_host"),
             )
         )
         rows.append(

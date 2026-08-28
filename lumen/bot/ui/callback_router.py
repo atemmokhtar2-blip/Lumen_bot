@@ -154,6 +154,21 @@ async def handle_ui_callback(update, context) -> None:
         except Exception:
             logger.exception("post_side_effect failed effect=%s", result.post_side_effect)
 
+    if result.ok and action_id == "open_dashboard" and msg:
+        try:
+            from .dash_actions import execute_dash_effect
+            overview = await execute_dash_effect(
+                effect="dash_status",
+                target="all",
+                user_id=uid,
+                user_data=user_data,
+                message=msg,
+            )
+            if overview:
+                await msg.reply_text(("ملخص الاستضافة:\n" + overview)[:3500])
+        except Exception:
+            logger.exception("dashboard overview failed")
+
     if result.ok and getattr(result, "dash_effect", ""):
         try:
             from .dash_actions import execute_dash_effect
