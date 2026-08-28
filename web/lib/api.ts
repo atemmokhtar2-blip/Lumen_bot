@@ -134,15 +134,31 @@ export async function getJobFile(jobId: string, path: string) {
   );
 }
 
-/** Browser EventSource — api_key in query (headers not supported by EventSource). */
-export function subscribeJobEvents(
+/** Obtain a short-lived SSE ticket (headers OK here; EventSource cannot set them). */
+export async function createEventsTicket(jobId: string, ttlSec = 300): Promise<{ ticket: string; expires_in: number }> {
+  const res = await fetch(
+    `${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/events-ticket?ttl=${ttlSec}`,
+    { method: "POST", headers: authHeaders(), cache: "no-store" }
+  );
+  const data = await res.json();
+  if (!res.ok || !data?.ticket) {
+    throw new Error(data?.error || "failed_to_mint_sse_ticket");
+  }
+  return { ticket: data.ticket, expires_in: data.expires_in ?? ttlSec };
+}
+
+/**
+ * Browser EventSource using a short-lived ticket.
+ * The long-lived API key is NEVER placed in the URL (prevents log leakage).
+ */
+export async function subscribeJobEvents(
   jobId: string,
   onEvent: (ev: MessageEvent) => void,
   onError?: (err: Event) => void,
   timeoutSec = 600
-): EventSource {
-  const key = encodeURIComponent(apiKey());
-  const url = `${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/events?api_key=${key}&timeout=${timeoutSec}`;
+): Promise<EventSource> {
+  const { ticket } = await createEventsTicket(jobId, Math.min(timeoutSec, 900));
+  const url = `${apiBase()}/v1/jobs/${encodeURIComponent(jobId)}/events?ticket=${encodeURIComponent(ticket)}&timeout=${timeoutSec}`;
   const es = new EventSource(url);
   es.addEventListener("job", onEvent as EventListener);
   es.addEventListener("done", onEvent as EventListener);
