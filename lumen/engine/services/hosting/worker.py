@@ -14,28 +14,53 @@ logger = logging.getLogger("tbe.hosting.worker")
 
 
 def bootstrap() -> None:
+    """Worker node bootstrap — permanent host plane (Firecracker-first)."""
     from lumen.engine.services.hosting.pg_control_plane import migrate, is_postgres
     if not is_postgres():
         raise RuntimeError("Worker requires TBE_DATABASE_URL=postgresql://...")
     migrate()
 
+    # Production isolation: Firecracker + jailer must be available on worker nodes
+    os.environ.setdefault("TBE_MULTI_TENANT", "1")
+    if (os.environ.get("ENVIRONMENT") or "").strip().lower() in {"", "development", "dev", "test"}:
+        # worker nodes are production by default
+        os.environ.setdefault("ENVIRONMENT", "production")
+
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    probe = FirecrackerSandboxBackend().probe()
+    if not probe.available:
+        raise RuntimeError(
+            f"worker_requires_firecracker:{probe.reason}. "
+            "Install firecracker+jailer+kernel+rootfs (see deploy/firecracker/)."
+        )
+    logger.info("firecracker probe ok strength=%s", probe.strength)
+
     from lumen.engine.services.hosting.network import ensure_network, telegram_egress_hint
     ok, msg = ensure_network()
     if not ok:
-        raise RuntimeError(f"network_setup_failed:{msg}")
-    logger.info("network %s", msg)
+        logger.warning("docker-network setup skipped/failed (FC uses TAP): %s", msg)
+    else:
+        logger.info("network %s", msg)
     logger.info(telegram_egress_hint())
 
-    from lumen.engine.services.hosting.registry import docker_login, registry_host
-    if registry_host():
-        ok, msg = docker_login()
-        if not ok:
-            raise RuntimeError(f"registry_login_failed:{msg}")
-        logger.info("registry %s", msg)
+    # Docker registry only needed for legacy docker backend workers
+    if (os.environ.get("TBE_WORKER_ALLOW_DOCKER_REGISTRY") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        from lumen.engine.services.hosting.registry import docker_login, registry_host
+        if registry_host():
+            ok, msg = docker_login()
+            if not ok:
+                raise RuntimeError(f"registry_login_failed:{msg}")
+            logger.info("registry %s", msg)
 
     from lumen.engine.services.hosting.fleet import FleetRegistry
     rec = FleetRegistry().register(version=os.environ.get("TBE_WORKER_VERSION") or "1")
-    logger.info("registered worker %s max_bots=%s", rec.node_id, rec.max_bots)
+    logger.info(
+        "registered FC worker %s max_bots=%s backend=firecracker",
+        rec.node_id,
+        rec.max_bots,
+    )
 
 
 def _meta(job) -> dict:

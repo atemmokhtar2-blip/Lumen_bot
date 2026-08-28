@@ -657,22 +657,49 @@ class FirecrackerSandboxBackend(SandboxBackend):
 
         warm_used = False
         try:
-            # Warm pool (optional): resume base snapshot instead of cold boot
-            if not use_jailer:
-                from .fc_warm_start import try_warm_start, warm_pool_enabled
-                if warm_pool_enabled():
+            # Warm pool: preferred path when snapshots exist (direct or jailed)
+            from .fc_warm_start import (
+                try_warm_start,
+                try_warm_start_jailed,
+                warm_pool_enabled,
+            )
+            if warm_pool_enabled():
+                label = (os.environ.get("TBE_FC_SNAPSHOT_LABEL") or "base")
+                if use_jailer:
+                    wj = try_warm_start_jailed(
+                        firecracker_bin=_bin(),
+                        jailer_bin=_jailer_bin(),
+                        vm_id=vm_id,
+                        uid=uid,
+                        gid=gid,
+                        chroot_base=_chroot_base(),
+                        log_path=log_path,
+                        netns_path=netns_path or "",
+                        label=label,
+                    )
+                    if wj is not None:
+                        pid, host_sock = wj
+                        sock = host_sock
+                        warm_used = True
+                        try:
+                            if mmds_payload and _flag("TBE_FC_MMDS", "1"):
+                                _api_put(sock, "/mmds", mmds_payload)
+                        except Exception as mmds_exc:
+                            logger.warning(
+                                "warm_jailed_mmds_failed: %s", type(mmds_exc).__name__
+                            )
+                else:
                     wp = try_warm_start(
                         firecracker_bin=_bin(),
                         sock=sock,
                         log_path=log_path,
-                        label=(os.environ.get("TBE_FC_SNAPSHOT_LABEL") or "base"),
+                        label=label,
                     )
                     if wp is not None:
                         pid = wp
                         warm_used = True
-                        # Inject tenant secrets into resumed VM via MMDS
                         try:
-                            if _flag("TBE_FC_MMDS", "1"):
+                            if mmds_payload and _flag("TBE_FC_MMDS", "1"):
                                 _api_put(sock, "/mmds", mmds_payload)
                         except Exception as mmds_exc:
                             logger.warning(

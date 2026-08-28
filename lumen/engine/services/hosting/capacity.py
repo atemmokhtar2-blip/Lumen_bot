@@ -50,7 +50,12 @@ def node_id() -> str:
 
 
 def local_node_capacity(running: int = 0) -> NodeCapacity:
-    mem_str = (os.environ.get("TBE_DOCKER_MEMORY") or "192m").strip().lower()
+    # Prefer Firecracker mem accounting on permanent-host workers
+    fc_mem = (os.environ.get("TBE_FC_MEM_MIB") or "").strip()
+    if fc_mem.isdigit():
+        mem_str = f"{fc_mem}m"
+    else:
+        mem_str = (os.environ.get("TBE_DOCKER_MEMORY") or "192m").strip().lower()
     bot_mb = 192
     if mem_str.endswith("m"):
         try:

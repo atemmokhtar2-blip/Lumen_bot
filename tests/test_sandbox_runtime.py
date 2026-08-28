@@ -430,3 +430,18 @@ def test_fc_status_fatal_not_running(tmp_path, monkeypatch):
     st = b.status(vm_id)
     assert st.status == "failed"
     assert st.meta.get("bot_fatal") is True
+
+def test_warm_jailed_none_without_pool(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_FC_WARM_POOL", "1")
+    monkeypatch.setenv("TBE_FC_SNAPSHOT_DIR", str(tmp_path / "empty_pool"))
+    from lumen.engine.services.sandbox_runtime.fc_warm_start import try_warm_start_jailed
+    r = try_warm_start_jailed(
+        firecracker_bin="/bin/false",
+        jailer_bin="/bin/false",
+        vm_id="fc-warm-test",
+        uid=10000,
+        gid=10000,
+        chroot_base=tmp_path / "jail",
+        log_path=tmp_path / "w.log",
+    )
+    assert r is None
