@@ -27,21 +27,29 @@ def _sse_ticket_secret() -> bytes:
     """Key material for HMAC-signed SSE tickets.
 
     Prefers TBE_TOKEN_SECRET / API_KEY_PEPPER. Never falls back to the
-    long-lived tenant API key itself.
+    long-lived tenant API key itself. No hardcoded secrets remain.
+    In pure dev, reuses the same auto-generated local pepper as API key hashing.
     """
     raw = (
         (os.getenv("TBE_TOKEN_SECRET") or "").strip()
         or (os.getenv("API_KEY_PEPPER") or "").strip()
         or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     )
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    if not raw:
-        if env in {"production", "prod", "staging"}:
+    if raw:
+        return hashlib.sha256(raw.encode("utf-8")).digest()
+    # Pure dev fallback: reuse the tenants pepper mechanism (strong, persisted)
+    try:
+        from lumen.platform.tenants import _key_pepper
+        return hashlib.sha256(_key_pepper()).digest()
+    except Exception:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"production", "prod", "staging"} or not env:
             raise RuntimeError(
                 "TBE_TOKEN_SECRET or API_KEY_PEPPER required to mint/verify SSE tickets"
             )
-        raw = "lumen-dev-sse-ticket-insecure"
-    return hashlib.sha256(raw.encode("utf-8")).digest()
+        # Last resort for unit tests with no filesystem
+        import secrets as _secrets
+        return hashlib.sha256(_secrets.token_bytes(32)).digest()
 
 
 def mint_sse_ticket(tenant_id: str, job_id: str, ttl_sec: int = _SSE_TICKET_DEFAULT_TTL) -> str:
