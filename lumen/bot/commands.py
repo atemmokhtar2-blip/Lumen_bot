@@ -73,20 +73,36 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caption = render_message(ui, facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
 
-    welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
+
+    # First-time hero image only. After that: text menu forever.
+    # Flag lives in user_data + session store so it survives process restarts.
+    already_welcomed = bool(ud.get("lumen_welcome_shown"))
     sent_msg = None
-    if welcome_img.is_file():
-        try:
-            from telegram import InputFile
-            with welcome_img.open("rb") as fh:
-                sent_msg = await message.reply_photo(
-                    photo=InputFile(fh, filename="welcome.jpg"),
-                    caption=caption[:1024],
-                    reply_markup=markup,
-                )
-        except Exception:
-            sent_msg = None
+    if not already_welcomed:
+        welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
+        if welcome_img.is_file():
+            try:
+                from telegram import InputFile
+                with welcome_img.open("rb") as fh:
+                    sent_msg = await message.reply_photo(
+                        photo=InputFile(fh, filename="welcome.jpg"),
+                        caption=caption[:1024],
+                        reply_markup=markup,
+                    )
+                # Mark as shown immediately so a second /start never re-sends the photo
+                ud["lumen_welcome_shown"] = True
+                ud["lumen_welcome_msg_id"] = getattr(sent_msg, "message_id", None)
+                if context.user_data is not None:
+                    context.user_data["lumen_welcome_shown"] = True
+                    context.user_data["lumen_welcome_msg_id"] = ud["lumen_welcome_msg_id"]
+                try:
+                    if uid:
+                        get_session_store().save(uid, dict(ud if isinstance(ud, dict) else {}))
+                except Exception:
+                    pass
+            except Exception:
+                sent_msg = None
     if sent_msg is None:
         try:
             sent_msg = await message.reply_text(caption[:4000], reply_markup=markup)

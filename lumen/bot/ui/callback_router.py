@@ -141,6 +141,29 @@ async def handle_ui_callback(update, context) -> None:
 
 
 async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str) -> None:
+    # One-shot welcome photo: delete permanently on first button press
+    try:
+        ud0 = context.user_data if context.user_data is not None else {}
+        wmid = ud0.get("lumen_welcome_msg_id")
+        if wmid and update.effective_chat:
+            try:
+                await context.bot.delete_message(
+                    chat_id=int(update.effective_chat.id),
+                    message_id=int(wmid),
+                )
+            except Exception:
+                pass
+            ud0.pop("lumen_welcome_msg_id", None)
+            ud0["lumen_welcome_shown"] = True
+            # Drop from hygiene tracker so it is never edited again
+            try:
+                ids = list(ud0.get("lumen_bot_ui_msg_ids") or [])
+                ud0["lumen_bot_ui_msg_ids"] = [i for i in ids if int(i) != int(wmid)]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     user_data = context.user_data if context.user_data is not None else {}
     # Ensure PTB keeps the same dict when user_data was None
     if context.user_data is None:
