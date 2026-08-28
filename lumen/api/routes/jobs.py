@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from lumen.api.auth import require_tenant
+from lumen.api.auth import require_tenant, require_tenant_for_sse, mint_sse_ticket
 from lumen.api.ownership import assert_job_owned
 from lumen.platform.jobs import get_job_runner
 
@@ -127,16 +127,46 @@ async def steer_job(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **data})
 
 
-async def stream_job(request: web.Request) -> web.StreamResponse:
-    """GET /v1/jobs/{job_id}/events — Server-Sent Events progress stream (Phase E)."""
-    import asyncio
-    import json as _json
-    import time as _time
+async def create_events_ticket(request: web.Request) -> web.Response:
+    """POST /v1/jobs/{job_id}/events-ticket — mint short-lived SSE ticket.
 
+    Authenticated with the normal long-lived API key (headers only).
+    The returned ticket is the only credential that may appear in the
+    EventSource URL, preventing API-key leakage into access logs.
+    """
     tenant = require_tenant(request)
     job_id = (request.match_info.get("job_id") or "").strip()
     if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    job = get_job_runner().store.get(job_id)
+    assert_job_owned(job, tenant.tenant_id)
+    try:
+        ttl = int(request.rel_url.query.get("ttl") or "300")
+    except ValueError:
+        ttl = 300
+    ticket = mint_sse_ticket(tenant.tenant_id, job_id, ttl_sec=ttl)
+    return web.json_response({
+        "ok": True,
+        "ticket": ticket,
+        "expires_in": max(60, min(ttl, 900)),
+        "job_id": job_id,
+    })
+
+
+async def stream_job(request: web.Request) -> web.StreamResponse:
+    """GET /v1/jobs/{job_id}/events — Server-Sent Events progress stream (Phase E).
+
+    Auth: short-lived ticket only (query param ticket).
+    Long-lived API keys are rejected here by design.
+    """
+    import asyncio
+    import json as _json
+    import time as _time
+
+    job_id = (request.match_info.get("job_id") or "").strip()
+    if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
+        raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    tenant = require_tenant_for_sse(request, job_id)
     runner = get_job_runner()
     job = runner.store.get(job_id)
     assert_job_owned(job, tenant.tenant_id)
