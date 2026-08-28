@@ -35,6 +35,7 @@ except Exception:
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -379,6 +380,11 @@ def main() -> None:
         application.add_handler(CommandHandler("status", status_cmd))
         application.add_handler(CommandHandler("lang", lang_cmd))
         application.add_handler(CommandHandler("language", lang_cmd))
+        # Engine UI callbacks (Batch 0 foundation — lumen:ui:*)
+        from lumen.bot.ui.callback_router import handle_ui_callback
+        application.add_handler(
+            CallbackQueryHandler(handle_ui_callback, pattern=r"^lumen:ui:")
+        )
         # Never leave an unknown slash command without a Telegram response.
         application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))
         application.add_handler(
