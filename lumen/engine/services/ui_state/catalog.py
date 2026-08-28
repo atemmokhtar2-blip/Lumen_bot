@@ -1,4 +1,4 @@
-"""Closed catalog of UI actions the engine accepts (fail closed on unknown)."""
+"""Closed catalog of UI actions (fail closed on unknown)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,11 +13,24 @@ class UiActionSpec:
     allowed_phases: frozenset[EngineUiPhase]
 
 
+_NAV = frozenset(
+    {
+        EngineUiPhase.HOME,
+        EngineUiPhase.IDLE,
+        EngineUiPhase.DASHBOARD,
+        EngineUiPhase.BILLING,
+        EngineUiPhase.HELP,
+        EngineUiPhase.GEN_TYPE,
+        EngineUiPhase.GEN_CONFIRM,
+        EngineUiPhase.GEN_DONE,
+    }
+)
+
 UI_ACTIONS: dict[str, UiActionSpec] = {
-    "home": UiActionSpec("home", "Home menu", frozenset(EngineUiPhase)),
+    "home": UiActionSpec("home", "Home", frozenset(EngineUiPhase)),
     "open_generate": UiActionSpec(
         "open_generate",
-        "Start generate flow — user must type description",
+        "Open generate type picker",
         frozenset(
             {
                 EngineUiPhase.HOME,
@@ -25,53 +38,33 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.DASHBOARD,
                 EngineUiPhase.GEN_DONE,
                 EngineUiPhase.GEN_TYPE,
+                EngineUiPhase.GEN_CONFIRM,
             }
         ),
     ),
     "await_generate_text": UiActionSpec(
         "await_generate_text",
-        "Mark awaiting free-text bot description",
-        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.HOME}),
+        "Await free-text description",
+        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.HOME, EngineUiPhase.GEN_CONFIRM}),
     ),
-    "open_dashboard": UiActionSpec(
-        "open_dashboard",
-        "Dashboard with live host list",
-        frozenset(
-            {
-                EngineUiPhase.HOME,
-                EngineUiPhase.IDLE,
-                EngineUiPhase.BILLING,
-                EngineUiPhase.HELP,
-                EngineUiPhase.DASHBOARD,
-                EngineUiPhase.GEN_TYPE,
-            }
-        ),
+    "pick_type": UiActionSpec(
+        "pick_type",
+        "Pick bot type preset (arg=shop|notify|tasks|chat|custom)",
+        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.GEN_CONFIRM}),
     ),
-    "open_billing": UiActionSpec(
-        "open_billing",
-        "Live plan facts",
-        frozenset(
-            {
-                EngineUiPhase.HOME,
-                EngineUiPhase.IDLE,
-                EngineUiPhase.DASHBOARD,
-                EngineUiPhase.BILLING,
-            }
-        ),
+    "confirm_generate": UiActionSpec(
+        "confirm_generate",
+        "Confirm and run generation",
+        frozenset({EngineUiPhase.GEN_CONFIRM}),
     ),
-    "open_help": UiActionSpec(
-        "open_help",
-        "Real capability help text",
-        frozenset(
-            {
-                EngineUiPhase.HOME,
-                EngineUiPhase.IDLE,
-                EngineUiPhase.DASHBOARD,
-                EngineUiPhase.BILLING,
-                EngineUiPhase.HELP,
-            }
-        ),
+    "cancel_generate": UiActionSpec(
+        "cancel_generate",
+        "Cancel guided generate",
+        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.GEN_CONFIRM, EngineUiPhase.GENERATING}),
     ),
+    "open_dashboard": UiActionSpec("open_dashboard", "Dashboard", _NAV),
+    "open_billing": UiActionSpec("open_billing", "Billing/plan", _NAV),
+    "open_help": UiActionSpec("open_help", "Help", _NAV),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }
 

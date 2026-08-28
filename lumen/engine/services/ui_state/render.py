@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .models import EngineUiPhase, EngineUiState
+from .presets import preset_label
 
 
 @dataclass
@@ -36,7 +37,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         lines = [
             "أهلاً بك في Lumen",
             "",
-            "المحرك جاهز — اختر إجراءً من الأزرار أو اكتب وصف بوت مباشرة.",
+            "اختر من الأزرار أو اكتب وصف بوت مباشرة.",
         ]
         if facts.plan_label:
             lines.append(f"خطتك: {facts.plan_label}")
@@ -49,15 +50,41 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.GEN_TYPE:
         lines = [
-            "إنشاء بوت",
+            "إنشاء بوت — اختر النوع",
             "",
-            "اكتب الآن وصف البوت في رسالة نصية (مسار التوليد الحقيقي).",
-            "مثال: بوت متجر فيه سلة وأوامر /start /help",
+            "بعد الاختيار ستظهر شاشة تأكيد قبل التوليد الحقيقي.",
         ]
+        if state.slots.get("awaiting_text") == "1":
+            lines.append("")
+            lines.append("اكتب وصف البوت الآن في رسالة نصية.")
         if state.missing:
             lines.append("ناقص: " + ", ".join(state.missing))
-        if facts.generate_hint:
-            lines.append(facts.generate_hint)
+        return "\n".join(lines)
+
+    if phase == EngineUiPhase.GEN_CONFIRM:
+        tid = state.slots.get("bot_type") or ""
+        desc = (state.slots.get("bot_description") or "")[:400]
+        lines = [
+            "تأكيد التوليد",
+            "",
+            f"النوع: {preset_label(tid) if tid else '—'}",
+            f"الوصف: {desc or '—'}",
+        ]
+        if facts.plan_label:
+            lines.append(f"خطتك: {facts.plan_label}")
+        if facts.generations_per_month:
+            lines.append(f"حد التوليد: {facts.generations_per_month}/شهر")
+        lines.append("")
+        lines.append("التوليد يستخدم محرك Lumen الحالي (ليس مساراً وهمياً).")
+        return "\n".join(lines)
+
+    if phase == EngineUiPhase.GENERATING:
+        return "جاري توليد البوت عبر المحرك…\nلا تغلق الشات."
+
+    if phase == EngineUiPhase.GEN_DONE:
+        lines = ["اكتمل مسار التوليد الموجّه."]
+        if state.project_ref:
+            lines.append(f"المشروع: `{state.project_ref}`")
         return "\n".join(lines)
 
     if phase == EngineUiPhase.DASHBOARD:

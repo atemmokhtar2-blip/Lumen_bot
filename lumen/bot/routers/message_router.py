@@ -210,6 +210,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         pass
 
     request = clamp_user_text(message.text.strip())
+    # Engine UI Batch 2: free-text description after guided "custom" / await flag
+    if (
+        context.user_data
+        and context.user_data.get("engine_ui_await_generate")
+        and request
+        and not request.startswith("/")
+    ):
+        try:
+            from lumen.bot.ui.state_store import load_ui_state, save_ui_state, persist_ui_session
+            from lumen.engine.services.ui_state.models import EngineUiPhase
+            from lumen.engine.services.ui_state.controller import missing_for_state
+
+            ui = load_ui_state(context.user_data)
+            ui.slots["bot_type"] = ui.slots.get("bot_type") or "custom"
+            ui.slots["bot_description"] = request[:2000]
+            ui.slots.pop("awaiting_text", None)
+            ui.phase = EngineUiPhase.GEN_CONFIRM
+            ui.missing = missing_for_state(ui)
+            save_ui_state(context.user_data, ui)
+            context.user_data.pop("engine_ui_await_generate", None)
+            uid_ui = int(user.id) if user else 0
+            if uid_ui:
+                persist_ui_session(uid_ui, dict(context.user_data))
+            from lumen.bot.ui.keyboards import build_inline_keyboard
+            from lumen.engine.services.ui_state.controller import buttons_for_phase
+            from lumen.engine.services.ui_state.render import render_message
+            from lumen.bot.ui.facts import gather_ui_facts
+
+            facts = gather_ui_facts(uid_ui, context.user_data)
+            body = render_message(ui, facts)
+            await message.reply_text(
+                body[:4000],
+                reply_markup=build_inline_keyboard(buttons_for_phase(EngineUiPhase.GEN_CONFIRM)),
+            )
+            return
+        except Exception:
+            logger.exception("engine_ui await_generate handler failed")
+            # fall through to normal generation if UI path fails
+            context.user_data["force_generate_once"] = True
+            context.user_data["skip_clarify_once"] = True
     if len((message.text or "").strip()) > MAX_USER_MESSAGE_CHARS:
         await message.reply_text(
             f"⚠️ الرسالة طويلة جداً. الحد الأقصى {MAX_USER_MESSAGE_CHARS} حرفاً."

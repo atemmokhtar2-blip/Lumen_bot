@@ -27,14 +27,14 @@ def test_home_to_generate_shell():
     r = apply_action(st, "open_generate")
     assert r.ok is True
     assert r.state.phase == EngineUiPhase.GEN_TYPE
-    assert "bot_description" in missing_for_state(r.state)
+    assert "bot_type" in missing_for_state(r.state)
 
 
 def test_action_not_allowed_in_phase():
-    st = EngineUiState(phase=EngineUiPhase.GEN_CONFIRM)
-    r = apply_action(st, "open_billing")
+    st = EngineUiState(phase=EngineUiPhase.GENERATING)
+    r = apply_action(st, "confirm_generate")
     assert r.ok is False
-    assert r.state.phase == EngineUiPhase.GEN_CONFIRM
+    assert r.state.phase == EngineUiPhase.GENERATING
 
 
 def test_buttons_encode_under_64_bytes():
@@ -99,8 +99,10 @@ def test_open_generate_sets_awaiting_text():
     from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, apply_action
     r = apply_action(EngineUiState(phase=EngineUiPhase.HOME), "open_generate")
     assert r.ok
-    assert r.state.slots.get("awaiting_text") == "1"
-    assert "bot_description" in r.state.missing
+    assert r.state.phase == EngineUiPhase.GEN_TYPE
+    # awaiting_text is set when user picks custom, not on open_generate
+    r2 = apply_action(r.state, "pick_type", "custom")
+    assert r2.state.slots.get("awaiting_text") == "1"
 
 
 def test_encode_await_generate():
