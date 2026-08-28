@@ -210,6 +210,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         pass
 
     request = clamp_user_text(message.text.strip())
+    # Engine UI: answer current need slot with free text when in GEN_SLOTS
+    if context.user_data and not (request or "").startswith("/"):
+        try:
+            from lumen.bot.ui.state_store import load_ui_state, save_ui_state, persist_ui_session
+            from lumen.engine.services.ui_state.models import EngineUiPhase
+            from lumen.engine.services.ui_state.engine_needs import remaining_needs
+            from lumen.engine.services.ui_state.controller import buttons_for_state, missing_for_state
+            from lumen.engine.services.ui_state.render import render_message
+            from lumen.bot.ui.keyboards import build_inline_keyboard
+            from lumen.bot.ui.facts import gather_ui_facts
+
+            ui = load_ui_state(context.user_data)
+            if ui.phase == EngineUiPhase.GEN_SLOTS and request:
+                rem = remaining_needs(ui.needs or [], ui.slots)
+                slot = (ui.slots.get("awaiting_slot") or (rem[0].slot if rem else "")).strip()
+                if slot:
+                    ui.slots[slot] = request[:500]
+                    ui.slots.pop("awaiting_text", None)
+                    ui.slots.pop("awaiting_slot", None)
+                    rem2 = remaining_needs(ui.needs or [], ui.slots)
+                    ui.missing = [n.slot for n in rem2]
+                    ui.phase = EngineUiPhase.GEN_SLOTS if rem2 else EngineUiPhase.GEN_CONFIRM
+                    save_ui_state(context.user_data, ui)
+                    uid_ui = int(user.id) if user else 0
+                    if uid_ui:
+                        persist_ui_session(uid_ui, dict(context.user_data))
+                    facts = gather_ui_facts(uid_ui, context.user_data)
+                    body = render_message(ui, facts)
+                    await message.reply_text(
+                        body[:4000],
+                        reply_markup=build_inline_keyboard(buttons_for_state(ui)),
+                    )
+                    return
+        except Exception:
+            logger.exception("engine_ui GEN_SLOTS answer failed")
+
     # Engine UI Batch 2: free-text description after guided "custom" / await flag
     if (
         context.user_data
@@ -226,8 +262,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ui.slots["bot_type"] = ui.slots.get("bot_type") or "custom"
             ui.slots["bot_description"] = request[:2000]
             ui.slots.pop("awaiting_text", None)
-            ui.phase = EngineUiPhase.GEN_CONFIRM
-            ui.missing = missing_for_state(ui)
+            from lumen.engine.services.ui_state.controller import apply_action as _ui_apply
+            # Re-run via pick path logic: refresh needs from description
+            from lumen.engine.services.ui_state.engine_needs import analyze_needs, remaining_needs
+            plan = analyze_needs(request[:2000], user_id=int(user.id) if user else None)
+            ui.needs = plan.to_list()
+            rem = remaining_needs(ui.needs, ui.slots)
+            ui.missing = [n.slot for n in rem]
+            ui.phase = EngineUiPhase.GEN_SLOTS if rem else EngineUiPhase.GEN_CONFIRM
             save_ui_state(context.user_data, ui)
             context.user_data.pop("engine_ui_await_generate", None)
             uid_ui = int(user.id) if user else 0
@@ -242,7 +284,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             body = render_message(ui, facts)
             await message.reply_text(
                 body[:4000],
-                reply_markup=build_inline_keyboard(buttons_for_phase(EngineUiPhase.GEN_CONFIRM)),
+                reply_markup=build_inline_keyboard(buttons_for_phase(ui.phase)),
             )
             return
         except Exception:

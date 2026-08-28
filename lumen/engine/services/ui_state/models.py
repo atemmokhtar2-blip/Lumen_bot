@@ -6,7 +6,7 @@ are filled so the bot can render the next honest keyboard.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -51,6 +51,7 @@ class EngineUiState:
     project_ref: str = ""
     plane: RuntimePlaneHint = RuntimePlaneHint.NONE
     last_action: str = ""
+    needs: list = field(default_factory=list)  # list[dict] engine need payloads
     version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,6 +62,7 @@ class EngineUiState:
             "project_ref": self.project_ref,
             "plane": self.plane.value,
             "last_action": self.last_action,
+            "needs": list(self.needs or []),
             "version": int(self.version),
         }
 
@@ -87,6 +89,7 @@ class EngineUiState:
             project_ref=str(raw.get("project_ref") or "")[:500],
             plane=plane,
             last_action=str(raw.get("last_action") or "")[:80],
+            needs=list(raw.get("needs") or []) if isinstance(raw.get("needs"), list) else [],
             version=int(raw.get("version") or 1),
         )
 

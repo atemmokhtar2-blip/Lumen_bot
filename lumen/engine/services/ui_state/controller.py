@@ -1,9 +1,16 @@
-"""Pure engine UI controller — phases, buttons, apply_action."""
+"""Engine UI controller — buttons driven by engine needs, not fixed scripts."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from .catalog import get_action, is_known_action
+from .engine_needs import (
+    analyze_needs,
+    apply_choice_to_slots,
+    enrich_description,
+    remaining_needs,
+    EngineNeed,
+)
 from .models import EngineUiPhase, EngineUiState, UiButton
 from .presets import BOT_TYPE_PRESETS, preset_description, preset_label
 
@@ -14,7 +21,6 @@ class ApplyResult:
     ok: bool
     message_ar: str
     buttons: tuple[tuple[UiButton, ...], ...]
-    # Side-effect hint for bot layer (not executed here)
     run_generation: bool = False
     generation_request: str = ""
 
@@ -32,10 +38,48 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     )
 
 
-def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
+def _copy_state(state: EngineUiState) -> EngineUiState:
+    return EngineUiState(
+        phase=state.phase,
+        slots=dict(state.slots),
+        missing=list(state.missing),
+        project_ref=state.project_ref,
+        plane=state.plane,
+        last_action=state.last_action,
+        needs=list(state.needs or []),
+        version=state.version,
+    )
+
+
+def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> EngineUiState:
+    """Recompute needs from current description; drop filled slots from missing."""
+    desc = (state.slots.get("bot_description") or "").strip()
+    if not desc:
+        tid = (state.slots.get("bot_type") or "").strip()
+        desc = preset_description(tid)
+    if not desc:
+        state.needs = []
+        state.missing = ["bot_description"] if state.phase != EngineUiPhase.GEN_TYPE else (
+            ["bot_type"] if not state.slots.get("bot_type") else []
+        )
+        return state
+    plan = analyze_needs(desc, user_id=user_id)
+    state.needs = plan.to_list()
+    rem = remaining_needs(state.needs, state.slots)
+    state.missing = [n.slot for n in rem]
+    if plan.intent_kind:
+        state.slots["intent_kind"] = plan.intent_kind
+    return state
+
+
+def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
+    """Dynamic keyboard from phase + remaining engine needs."""
+    phase = state.phase
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         return _home_buttons()
+
     if phase == EngineUiPhase.GEN_TYPE:
+        # Soft type chips + free text — still entry points to engine path
         return (
             (
                 UiButton("متجر", "pick_type", "shop"),
@@ -48,14 +92,49 @@ def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
             (UiButton("مخصص — اكتب وصفاً", "pick_type", "custom"),),
             (UiButton("القائمة", "home"),),
         )
+
+    if phase == EngineUiPhase.GEN_SLOTS:
+        rem = remaining_needs(state.needs or [], state.slots)
+        if not rem:
+            return (
+                (UiButton("متابعة للتأكيد", "to_confirm"),),
+                (UiButton("القائمة", "home"),),
+            )
+        need = rem[0]
+        rows: list[tuple[UiButton, ...]] = []
+        # choice chips in rows of 2
+        row: list[UiButton] = []
+        for c in need.choices:
+            row.append(UiButton(c.label[:32], "fill_slot", c.choice_id))
+            if len(row) == 2:
+                rows.append(tuple(row))
+                row = []
+        if row:
+            rows.append(tuple(row))
+        rows.append(
+            (
+                UiButton("تخطي هذا", "skip_need"),
+                UiButton("توليد بما هو متاح", "to_confirm"),
+            )
+        )
+        rows.append((UiButton("إلغاء", "cancel_generate"),))
+        return tuple(rows)
+
     if phase == EngineUiPhase.GEN_CONFIRM:
-        return (
+        rem = remaining_needs(state.needs or [], state.slots)
+        rows = []
+        if rem:
+            # engine still wants something — offer continue slots or force generate
+            rows.append((UiButton("أكمل الناقص", "resume_slots"),))
+        rows.append(
             (
                 UiButton("نعم، ابدأ التوليد", "confirm_generate"),
-                UiButton("لا، تعديل", "open_generate"),
-            ),
-            (UiButton("إلغاء", "cancel_generate"),),
+                UiButton("تعديل", "open_generate"),
+            )
         )
+        rows.append((UiButton("إلغاء", "cancel_generate"),))
+        return tuple(rows)
+
     if phase == EngineUiPhase.GENERATING:
         return ((UiButton("القائمة", "home"),),)
     if phase == EngineUiPhase.GEN_DONE:
@@ -82,8 +161,12 @@ def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
     return ((UiButton("القائمة", "home"),),)
 
 
+def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
+    return buttons_for_state(EngineUiState(phase=phase))
+
+
 def missing_for_state(state: EngineUiState) -> list[str]:
-    if state.phase in {EngineUiPhase.GEN_TYPE}:
+    if state.phase == EngineUiPhase.GEN_TYPE:
         if not (state.slots.get("bot_type") or "").strip():
             return ["bot_type"]
         if state.slots.get("bot_type") == "custom" and not (
@@ -91,23 +174,22 @@ def missing_for_state(state: EngineUiState) -> list[str]:
         ).strip():
             return ["bot_description"]
         return []
-    if state.phase == EngineUiPhase.GEN_CONFIRM:
-        miss = []
-        if not (state.slots.get("bot_description") or "").strip():
-            miss.append("bot_description")
-        return miss
+    if state.phase in {EngineUiPhase.GEN_SLOTS, EngineUiPhase.GEN_CONFIRM}:
+        rem = remaining_needs(state.needs or [], state.slots)
+        return [n.slot for n in rem]
     return list(state.missing)
 
 
 def composed_request(state: EngineUiState) -> str:
     desc = (state.slots.get("bot_description") or "").strip()
-    if desc:
-        return desc
-    tid = (state.slots.get("bot_type") or "").strip()
-    return preset_description(tid).strip()
+    if not desc:
+        desc = preset_description((state.slots.get("bot_type") or "").strip())
+    return enrich_description(desc, state.slots)
 
 
-def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyResult:
+def apply_action(
+    state: EngineUiState, action_id: str, arg: str = "", *, user_id: int | None = None
+) -> ApplyResult:
     action_id = (action_id or "").strip().lower()
     arg = (arg or "").strip()[:40]
     if not is_known_action(action_id):
@@ -115,7 +197,7 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
             state=state,
             ok=False,
             message_ar="إجراء غير معروف.",
-            buttons=buttons_for_phase(state.phase),
+            buttons=buttons_for_state(state),
         )
     spec = get_action(action_id)
     assert spec is not None
@@ -124,20 +206,14 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
             state=state,
             ok=False,
             message_ar="هذا الإجراء غير متاح في المرحلة الحالية.",
-            buttons=buttons_for_phase(state.phase),
+            buttons=buttons_for_state(state),
         )
 
-    new = EngineUiState(
-        phase=state.phase,
-        slots=dict(state.slots),
-        missing=list(state.missing),
-        project_ref=state.project_ref,
-        plane=state.plane,
-        last_action=action_id,
-        version=state.version,
-    )
+    new = _copy_state(state)
+    new.last_action = action_id
     run_gen = False
     gen_req = ""
+    msg = ""
 
     if action_id == "home":
         new.phase = EngineUiPhase.HOME
@@ -148,44 +224,97 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
         new.phase = EngineUiPhase.GEN_TYPE
         new.slots.pop("confirmed", None)
         new.missing = missing_for_state(new)
-        msg = "اختر نوع البوت."
+        msg = "اختر نوعاً أو اكتب وصفاً — المحرك سيحدد الناقص."
     elif action_id == "await_generate_text":
         new.phase = EngineUiPhase.GEN_TYPE
         new.slots["bot_type"] = "custom"
         new.slots["awaiting_text"] = "1"
-        new.missing = missing_for_state(new)
         msg = "اكتب وصف البوت."
     elif action_id == "pick_type":
         if arg not in BOT_TYPE_PRESETS:
             return ApplyResult(
-                state=state,
-                ok=False,
-                message_ar="نوع غير معروف.",
-                buttons=buttons_for_phase(state.phase),
+                state=state, ok=False, message_ar="نوع غير معروف.", buttons=buttons_for_state(state)
             )
         new.slots["bot_type"] = arg
         if arg == "custom":
             new.phase = EngineUiPhase.GEN_TYPE
             new.slots["awaiting_text"] = "1"
             new.slots.pop("bot_description", None)
-            msg = "اكتب وصف البوت المخصص في الشات."
+            msg = "اكتب وصف البوت المخصص."
         else:
             new.slots["bot_description"] = preset_description(arg)
             new.slots.pop("awaiting_text", None)
+            new = _refresh_needs(new, user_id=user_id)
+            rem = remaining_needs(new.needs or [], new.slots)
+            if rem:
+                new.phase = EngineUiPhase.GEN_SLOTS
+                msg = f"المحرك يحتاج توضيحاً: {rem[0].text}"
+            else:
+                new.phase = EngineUiPhase.GEN_CONFIRM
+                msg = f"تم اختيار: {preset_label(arg)}"
+    elif action_id == "fill_slot":
+        rem = remaining_needs(new.needs or [], new.slots)
+        if not rem:
             new.phase = EngineUiPhase.GEN_CONFIRM
-            msg = f"تم اختيار: {preset_label(arg)}"
-        new.missing = missing_for_state(new)
+            msg = "لا يوجد نقص — راجع التأكيد."
+        else:
+            need = rem[0]
+            # match choice on current need
+            before = dict(new.slots)
+            new.slots = apply_choice_to_slots(new.slots, need, arg)
+            if new.slots == before and arg:
+                # try match any remaining need
+                for n in rem:
+                    new.slots = apply_choice_to_slots(new.slots, n, arg)
+                    if new.slots.get(n.slot):
+                        need = n
+                        break
+            if new.slots.get("awaiting_text") == "1":
+                new.phase = EngineUiPhase.GEN_SLOTS
+                msg = f"اكتب قيمة «{need.slot}» في الشات."
+            else:
+                rem2 = remaining_needs(new.needs or [], new.slots)
+                new.missing = [n.slot for n in rem2]
+                if rem2:
+                    new.phase = EngineUiPhase.GEN_SLOTS
+                    msg = rem2[0].text
+                else:
+                    new.phase = EngineUiPhase.GEN_CONFIRM
+                    msg = "اكتملت إجابات المحرك."
+    elif action_id == "skip_need":
+        rem = remaining_needs(new.needs or [], new.slots)
+        if rem:
+            # mark skipped so remaining_needs ignores it
+            new.slots[rem[0].slot] = new.slots.get(rem[0].slot) or "(تخطي)"
+        rem2 = remaining_needs(new.needs or [], new.slots)
+        new.missing = [n.slot for n in rem2]
+        if rem2:
+            new.phase = EngineUiPhase.GEN_SLOTS
+            msg = rem2[0].text
+        else:
+            new.phase = EngineUiPhase.GEN_CONFIRM
+            msg = "تم تخطي الناقص — راجع التأكيد."
+    elif action_id == "to_confirm":
+        new.phase = EngineUiPhase.GEN_CONFIRM
+        msg = "مراجعة قبل التوليد."
+    elif action_id == "resume_slots":
+        new = _refresh_needs(new, user_id=user_id)
+        rem = remaining_needs(new.needs or [], new.slots)
+        if rem:
+            new.phase = EngineUiPhase.GEN_SLOTS
+            msg = rem[0].text
+        else:
+            new.phase = EngineUiPhase.GEN_CONFIRM
+            msg = "لا يوجد نقص."
     elif action_id == "confirm_generate":
         req = composed_request(new)
         if not req:
             new.phase = EngineUiPhase.GEN_TYPE
             new.slots["awaiting_text"] = "1"
-            new.missing = ["bot_description"]
-            msg = "لا يوجد وصف — اكتب وصف البوت أولاً."
+            msg = "لا يوجد وصف — اكتب وصف البوت."
         else:
             new.slots["confirmed"] = "1"
             new.phase = EngineUiPhase.GENERATING
-            new.missing = []
             run_gen = True
             gen_req = req
             msg = "بدء التوليد."
@@ -193,8 +322,9 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
         new.slots.pop("confirmed", None)
+        new.needs = []
         new.missing = []
-        msg = "تم إلغاء التوليد الموجّه."
+        msg = "تم الإلغاء."
     elif action_id == "open_dashboard":
         new.phase = EngineUiPhase.DASHBOARD
         new.missing = []
@@ -211,10 +341,7 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
         msg = "تم."
     else:
         return ApplyResult(
-            state=state,
-            ok=False,
-            message_ar="إجراء غير منفَّذ.",
-            buttons=buttons_for_phase(state.phase),
+            state=state, ok=False, message_ar="إجراء غير منفَّذ.", buttons=buttons_for_state(state)
         )
 
     new.missing = missing_for_state(new)
@@ -222,7 +349,7 @@ def apply_action(state: EngineUiState, action_id: str, arg: str = "") -> ApplyRe
         state=new,
         ok=True,
         message_ar=msg,
-        buttons=buttons_for_phase(new.phase),
+        buttons=buttons_for_state(new),
         run_generation=run_gen,
         generation_request=gen_req,
     )

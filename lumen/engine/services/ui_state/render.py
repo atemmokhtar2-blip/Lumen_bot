@@ -61,6 +61,24 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             lines.append("ناقص: " + ", ".join(state.missing))
         return "\n".join(lines)
 
+    if phase == EngineUiPhase.GEN_SLOTS:
+        from .engine_needs import remaining_needs
+        rem = remaining_needs(state.needs or [], state.slots)
+        lines = ["المحرك يطلب توضيحاً قبل التوليد", ""]
+        if rem:
+            lines.append(f"السؤال ({len(state.missing)} متبقي):")
+            lines.append(rem[0].text)
+            if rem[0].choices:
+                lines.append("اختر من الأزرار أو اكتب في الشات.")
+            else:
+                lines.append("اكتب الإجابة في الشات.")
+        else:
+            lines.append("لا يوجد نقص — تابع للتأكيد.")
+        filled = [f"{k}={v}" for k, v in state.slots.items() if k not in {"bot_type", "bot_description", "awaiting_text", "awaiting_slot", "confirmed", "intent_kind"} and v]
+        if filled:
+            lines.append("تم: " + " | ".join(filled[:6]))
+        return "\n".join(lines)
+
     if phase == EngineUiPhase.GEN_CONFIRM:
         tid = state.slots.get("bot_type") or ""
         desc = (state.slots.get("bot_description") or "")[:400]

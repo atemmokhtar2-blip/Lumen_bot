@@ -21,6 +21,7 @@ _NAV = frozenset(
         EngineUiPhase.BILLING,
         EngineUiPhase.HELP,
         EngineUiPhase.GEN_TYPE,
+        EngineUiPhase.GEN_SLOTS,
         EngineUiPhase.GEN_CONFIRM,
         EngineUiPhase.GEN_DONE,
     }
@@ -30,7 +31,7 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "home": UiActionSpec("home", "Home", frozenset(EngineUiPhase)),
     "open_generate": UiActionSpec(
         "open_generate",
-        "Open generate type picker",
+        "Open generate",
         frozenset(
             {
                 EngineUiPhase.HOME,
@@ -39,31 +40,59 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.GEN_DONE,
                 EngineUiPhase.GEN_TYPE,
                 EngineUiPhase.GEN_CONFIRM,
+                EngineUiPhase.GEN_SLOTS,
             }
         ),
     ),
     "await_generate_text": UiActionSpec(
         "await_generate_text",
-        "Await free-text description",
-        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.HOME, EngineUiPhase.GEN_CONFIRM}),
+        "Await free text",
+        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.HOME, EngineUiPhase.GEN_CONFIRM, EngineUiPhase.GEN_SLOTS}),
     ),
     "pick_type": UiActionSpec(
         "pick_type",
-        "Pick bot type preset (arg=shop|notify|tasks|chat|custom)",
+        "Pick type seed then engine needs",
         frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.GEN_CONFIRM}),
+    ),
+    "fill_slot": UiActionSpec(
+        "fill_slot",
+        "Fill engine need choice",
+        frozenset({EngineUiPhase.GEN_SLOTS, EngineUiPhase.GEN_CONFIRM}),
+    ),
+    "skip_need": UiActionSpec(
+        "skip_need",
+        "Skip current engine need",
+        frozenset({EngineUiPhase.GEN_SLOTS}),
+    ),
+    "to_confirm": UiActionSpec(
+        "to_confirm",
+        "Go confirm with current slots",
+        frozenset({EngineUiPhase.GEN_SLOTS, EngineUiPhase.GEN_TYPE}),
+    ),
+    "resume_slots": UiActionSpec(
+        "resume_slots",
+        "Back to engine needs",
+        frozenset({EngineUiPhase.GEN_CONFIRM}),
     ),
     "confirm_generate": UiActionSpec(
         "confirm_generate",
-        "Confirm and run generation",
+        "Run generation",
         frozenset({EngineUiPhase.GEN_CONFIRM}),
     ),
     "cancel_generate": UiActionSpec(
         "cancel_generate",
-        "Cancel guided generate",
-        frozenset({EngineUiPhase.GEN_TYPE, EngineUiPhase.GEN_CONFIRM, EngineUiPhase.GENERATING}),
+        "Cancel",
+        frozenset(
+            {
+                EngineUiPhase.GEN_TYPE,
+                EngineUiPhase.GEN_SLOTS,
+                EngineUiPhase.GEN_CONFIRM,
+                EngineUiPhase.GENERATING,
+            }
+        ),
     ),
     "open_dashboard": UiActionSpec("open_dashboard", "Dashboard", _NAV),
-    "open_billing": UiActionSpec("open_billing", "Billing/plan", _NAV),
+    "open_billing": UiActionSpec("open_billing", "Billing", _NAV),
     "open_help": UiActionSpec("open_help", "Help", _NAV),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }

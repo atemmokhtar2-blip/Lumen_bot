@@ -38,7 +38,8 @@ async def handle_ui_callback(update, context) -> None:
 
     user_data = context.user_data if context.user_data is not None else {}
     state = load_ui_state(user_data)
-    result = apply_action(state, action_id, arg)
+    uid = int(update.effective_user.id) if update.effective_user else 0
+    result = apply_action(state, action_id, arg, user_id=uid or None)
     save_ui_state(user_data, result.state)
 
     if result.state.phase == EngineUiPhase.GEN_TYPE and result.state.slots.get("awaiting_text") == "1":
@@ -47,7 +48,6 @@ async def handle_ui_callback(update, context) -> None:
         if result.state.phase != EngineUiPhase.GEN_TYPE:
             user_data.pop("engine_ui_await_generate", None)
 
-    uid = int(update.effective_user.id) if update.effective_user else 0
     if uid:
         persist_ui_session(uid, dict(user_data))
 
