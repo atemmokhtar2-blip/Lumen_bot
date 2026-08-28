@@ -195,11 +195,6 @@ def _hash_key(raw: str) -> str:
     return hmac.new(_key_pepper(), raw.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _hash_key_legacy(raw: str) -> str:
-    """Pre-pepper SHA256 — kept only for one-release migration of existing keys."""
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
 @dataclass
 class Tenant:
     tenant_id: str
@@ -368,23 +363,9 @@ class TenantStore:
             return None
         key = api_key.strip()
         h = _hash_key(key)
-        h_legacy = _hash_key_legacy(key)
         with exclusive_lock(self.index_path):
             self._load_unlocked()
             tid = self._by_key_hash.get(h)
-            # Migration: accept legacy unsalted SHA256 once, then re-hash under pepper
-            if not tid:
-                tid = self._by_key_hash.get(h_legacy)
-                if tid:
-                    t = self._by_id.get(tid)
-                    if t and t.active:
-                        # Upgrade stored hash to peppered form
-                        self._by_key_hash.pop(h_legacy, None)
-                        t.api_key_hash = h
-                        self._by_key_hash[h] = tid
-                        self._save_unlocked()
-                        return t
-                    return None
             if not tid:
                 return None
             t = self._by_id.get(tid)
