@@ -1,4 +1,10 @@
-"""Live run and live deployment token handlers."""
+"""Chat runtime token handlers — two planes (do not mix).
+
+  TRIAL_CHAT      → handle_live_run_token  → LiveRunner (ephemeral, auto-stop)
+  PERMANENT_HOST  → pending_host / HostService (Firecracker, long-running)
+
+  handle_live_deploy_token routes to permanent HostService (not trial).
+"""
 
 from __future__ import annotations
 
@@ -11,9 +17,9 @@ from .helpers import escape_md, safe_edit_text
 
 
 async def handle_live_run_token(message, context, token: str, pending: dict) -> None:
-    """Validate + install + start bot; respond quickly (bot keeps running in background)."""
+    """TRIAL_CHAT plane: short try-in-chat. Not permanent hosting."""
     status = await message.reply_text(
-        "🔐 1/4 التحقق من التوكن..."
+        "🧪 تجربة مؤقتة (ليست استضافة دائمة)\n🔐 1/4 التحقق من التوكن..."
     )
     project_path = pending.get("project_path")
     entry = pending.get("entry_point") or ""
@@ -91,38 +97,36 @@ def _local_process_fallback_allowed() -> bool:
 
 
 async def handle_live_deploy_token(message, context, token: str, pending: dict) -> None:
-    """Deploy generated bot via LiveDeploymentEngine (Docker-first, fail-closed).
+    """PERMANENT_HOST plane: durable hosting via HostService (Firecracker in production)."""
+    from lumen.bot.config import OUTPUT_DIR
 
-    Host-process LiveRunner is never used when isolation requires Docker
-    (multi-tenant / production). Dev-only local fallback is gated by policy.
-    """
     status = await message.reply_text(
-        "🔐 جاري التحقق من التوكن وتشغيل Live Deployment..."
+        "🏠 استضافة دائمة (Firecracker في الإنتاج)\n🔐 جاري التحقق من التوكن وبدء الاستضافة..."
     )
-    project_path = pending.get("project_path")
-    owner_id = pending.get("owner_user_id")
-    entry = pending.get("entry_point") or ""
+    project_path = pending.get("project_path") or ""
+    owner_id = pending.get("owner_user_id") or (
+        message.from_user.id if message.from_user else 0
+    )
 
-    def _run_engine():
-        from lumen.engine.engines.generators.live_deployment import (
-            LiveDeploymentEngine,
-        )
-        engine = LiveDeploymentEngine()
-        return engine.run_live_deployment(
+    def _run_host():
+        from lumen.engine.services.hosting import get_hosting_service
+        from lumen.engine.services.runtime_planes import RuntimePlane
+
+        svc = get_hosting_service(OUTPUT_DIR)
+        return svc.start(
+            user_id=int(owner_id or 0),
             project_path=project_path,
             bot_token=token,
-            owner_user_id=owner_id,
         )
 
-    report = None
     try:
-        report = await asyncio.to_thread(_run_engine)
+        result = await asyncio.to_thread(_run_host)
     except Exception as e1:
-        logger.exception("Live deployment engine failed")
+        logger.exception("permanent host start failed")
         await status.edit_text(
-            "❌ فشل Live Deployment — العزل بحاوية Docker إلزامي.\n"
+            "❌ فشلت الاستضافة الدائمة.\n"
             f"رمز: `{type(e1).__name__}`\n"
-            "لا يوجد تشغيل محلي بديل."
+            "التجربة المؤقتة في الشات مسار منفصل (live_run)."
         )
         context.user_data.pop("pending_deploy", None)
         return
@@ -130,16 +134,7 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
         token = ""  # noqa: F841
 
     context.user_data.pop("pending_deploy", None)
-
-    try:
-        if hasattr(report, "to_user_text"):
-            text_out = report.to_user_text()
-        elif hasattr(report, "message"):
-            text_out = str(report.message)
-        else:
-            text_out = str(report)
-    except Exception:
-        text_out = str(report)[:3500]
+    text_out = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
     if len(text_out) > 3500:
         text_out = text_out[:3500] + "\n…"
     await status.edit_text(text_out)

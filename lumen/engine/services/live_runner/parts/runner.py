@@ -63,6 +63,130 @@ from .project_patch import (
 )
 
 class LiveRunnerService:
+
+    def _run_trial_chat(
+        self,
+        *,
+        project_path: str | Path,
+        bot_token: str,
+        entry_hint: str | None,
+        run_seconds: float,
+        t0: float,
+    ) -> LiveRunReport:
+        """Ephemeral try-in-chat — never registers permanent HostService state."""
+        from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
+
+        plane = RuntimePlane.TRIAL_CHAT
+        root = Path(project_path).resolve()
+        if not root.is_dir():
+            return LiveRunReport(
+                ok=False,
+                phase="input",
+                message="مسار المشروع غير موجود للتجربة المؤقتة",
+                errors=["project_missing"],
+                duration_ms=(time.perf_counter() - t0) * 1000,
+            )
+
+        # Cap trial length (chat experience, not hosting)
+        try:
+            max_trial = float(os.environ.get("TRIAL_CHAT_MAX_SECONDS") or "300")
+        except ValueError:
+            max_trial = 300.0
+        seconds = max(15.0, min(float(run_seconds or 60), max_trial))
+
+        # Token validation (shared helper) → (ok, data, error)
+        bot_username = ""
+        try:
+            tok_ok, tok_data, tok_err = validate_telegram_token(bot_token)
+            if not tok_ok:
+                return LiveRunReport(
+                    ok=False,
+                    phase="token",
+                    message=f"توكن غير صالح للتجربة: {tok_err or 'invalid_token'}",
+                    errors=["token_invalid"],
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                )
+            if isinstance(tok_data, dict):
+                bot_username = str(tok_data.get("username") or tok_data.get("bot_username") or "")
+        except Exception as exc:
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning("trial token validate soft-fail: %s", type(exc).__name__)
+
+        deployment_id = ""
+        backend_name = ""
+        try:
+            from lumen.engine.services.sandbox_runtime import start_sandboxed_bot, select_sandbox_backend
+
+            backend, handle = start_sandboxed_bot(
+                project_path=str(root),
+                bot_token=bot_token,
+                user_id=0,
+                service_name="trial-chat",
+                env_vars={
+                    "TELEGRAM_BOT_TOKEN": bot_token,
+                    "BOT_TOKEN": bot_token,
+                    "LUMEN_RUNTIME_PLANE": plane.value,
+                    "LUMEN_TRIAL": "1",
+                },
+            )
+            backend_name = getattr(backend, "name", "") or ""
+            deployment_id = handle.deployment_id or ""
+            if not handle.ok:
+                return LiveRunReport(
+                    ok=False,
+                    phase="trial_start",
+                    message=(
+                        f"تعذر بدء {plane_label_ar(plane)} "
+                        f"({backend_name}): {handle.message[:300]}"
+                    ),
+                    errors=["trial_start_failed", backend_name or "sandbox"],
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                )
+
+            # Hold for trial window then always stop (ephemeral)
+            time.sleep(seconds)
+            try:
+                backend.stop(deployment_id)
+            except Exception as stop_exc:
+                return LiveRunReport(
+                    ok=True,
+                    phase="trial_stop_warn",
+                    message=(
+                        f"✅ {plane_label_ar(plane)} اشتغلت ~{int(seconds)}ث "
+                        f"على {backend_name} ثم تعذر الإيقاف النظيف "
+                        f"({type(stop_exc).__name__}). "
+                        "هذه ليست استضافة دائمة."
+                    ),
+                    errors=[],
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                )
+
+            return LiveRunReport(
+                ok=True,
+                phase="trial_done",
+                bot_username=bot_username,
+                message=(
+                    f"✅ {plane_label_ar(plane)} اكتملت (~{int(seconds)}ث) "
+                    f"على عزل {backend_name}.\n"
+                    "هذه تجربة مؤقتة فقط — ليست استضافة دائمة.\n"
+                    "للاستضافة الدائمة: اطلب الاستضافة وأرسل التوكن بعد تفعيل المسار الدائم."
+                ),
+                errors=[],
+                duration_ms=(time.perf_counter() - t0) * 1000,
+            )
+        except Exception as exc:
+            return LiveRunReport(
+                ok=False,
+                phase="trial_error",
+                message=(
+                    f"فشل {plane_label_ar(plane)}: {type(exc).__name__}: {exc}\n"
+                    "الاستضافة الدائمة مسار منفصل (Firecracker)."
+                ),
+                errors=[f"trial:{type(exc).__name__}"],
+                duration_ms=(time.perf_counter() - t0) * 1000,
+            )
+
+
     def run(
         self,
         project_path: str | Path,
@@ -81,15 +205,17 @@ class LiveRunnerService:
           3) reinstall + rerun  (up to max_heal_rounds)
         """
         t0 = time.perf_counter()
-        # Host-process execution permanently disabled (Docker-only production rule).
-        return LiveRunReport(
-            ok=False,
-            phase="security",
-            message="LiveRunner host process removed — Docker isolation required",
-            errors=["host_process_removed", "docker_required"],
-            duration_ms=0.0,
+        # ── TRIAL_CHAT plane only (not permanent hosting) ───────────────
+        # Permanent hosting is HostService + Firecracker. This path is a
+        # short-lived try-in-chat experience with hard time bound + stop.
+        return self._run_trial_chat(
+            project_path=project_path,
+            bot_token=bot_token,
+            entry_hint=entry_hint,
+            run_seconds=run_seconds,
+            t0=t0,
         )
-        # unreachable legacy gate
+        # legacy body kept below for reference / dev tools — unreachable
         try:
             from lumen.engine.services.isolation_policy import assert_local_process_allowed
             assert_local_process_allowed()

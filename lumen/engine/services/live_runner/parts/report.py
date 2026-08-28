@@ -43,7 +43,8 @@ class LiveRunReport:
 
     def to_user_text(self) -> str:
         icon = "✅" if self.ok else "❌"
-        lines = [f"{icon} *تشغيل حي — {self.phase}*", f"• {self.message}", "• build: `live-fix-v4`"]
+        phase_title = "تجربة مؤقتة" if str(self.phase).startswith("trial") else "تشغيل حي"
+        lines = [f"{icon} *{phase_title} — {self.phase}*", f"• {self.message}", "• plane: `trial_chat`"]
         # Surface auto-heal hints clearly for the user
         hints = []
         for w in (self.warnings or []):

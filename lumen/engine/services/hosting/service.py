@@ -1,11 +1,13 @@
 """
-HostingService — foundation for paid hosting (no billing yet).
+HostingService — PERMANENT_HOST plane only (long-running / commercial).
+
+NOT the chat trial path. Trial is LiveRunner (TRIAL_CHAT).
 
 Manages long-running bot processes for the owner:
   start / stop / status / diagnose (via Error Intelligence)
 
-Uses sandbox_runtime (Firecracker in production; weak backends are dev-only) for isolated process lifecycle and Error Intelligence
-for log diagnosis. State persisted under OUTPUT_DIR/hosting_state.json.
+Isolation: Firecracker in production (see sandbox_runtime.select + market_gate).
+State persisted under OUTPUT_DIR/hosting_state.json.
 """
 
 from __future__ import annotations
