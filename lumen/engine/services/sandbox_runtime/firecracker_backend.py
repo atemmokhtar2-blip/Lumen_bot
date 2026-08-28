@@ -234,11 +234,36 @@ def _write_token_drive(path: Path, token: str, env_extra: dict[str, str]) -> Non
         raise
 
 
+def _inject_guest_agent(project_src: Path) -> None:
+    """Copy supervisor into project tree so rootfs can exec it from /project."""
+    try:
+        from lumen.engine.services.sandbox_runtime.guest_agent import (
+            BOOT_SH_PATH,
+            SUPERVISOR_PATH,
+        )
+    except Exception:
+        return
+    dest = project_src / ".lumen_guest"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        if SUPERVISOR_PATH.is_file():
+            shutil.copy2(SUPERVISOR_PATH, dest / "supervisor.py")
+        if BOOT_SH_PATH.is_file():
+            shutil.copy2(BOOT_SH_PATH, dest / "lumen-guest-boot.sh")
+            try:
+                os.chmod(dest / "lumen-guest-boot.sh", 0o755)
+            except OSError:
+                pass
+    except OSError as exc:
+        logger.warning("guest_agent_inject_failed: %s", type(exc).__name__)
+
+
 def _write_project_drive(path: Path, project_path: str) -> None:
     """Pack project directory into an ext4 image for guest mount at /project."""
     src = Path(project_path)
     if not src.is_dir():
         raise RuntimeError(f"project_path_not_dir:{project_path}")
+    _inject_guest_agent(src)
     size_mb = int((os.environ.get("TBE_FC_PROJECT_DRIVE_MB") or "512").strip() or "512")
     # Estimate size; grow if needed (capped)
     try:
@@ -716,16 +741,67 @@ class FirecrackerSandboxBackend(SandboxBackend):
                 "netns": getattr(net_plan, "netns", ""),
                 "bridge": getattr(net_plan, "bridge", ""),
             } if net_plan is not None else {},
-            "claim": "vm_process_started_not_bot_health",
+            "claim": "vm_started_awaiting_bot_health",
             "warm_start": warm_used,
+            "plane": "permanent_host",
+            "guest_agent_injected": True,
         }
+        self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
+
+        # Permanent-host: require guest bot markers (fail closed in production)
+        try:
+            health_timeout = float(os.environ.get("TBE_FC_BOT_HEALTH_TIMEOUT") or "90")
+        except ValueError:
+            health_timeout = 90.0
+        require_health = _flag("TBE_FC_REQUIRE_BOT_HEALTH", "1")
+        if _production_isolation() or require_health:
+            ok_h, reason_h = self._wait_for_bot_health(
+                vm_id, meta, timeout_sec=health_timeout
+            )
+            meta["health_reason"] = reason_h
+            meta["bot_healthy"] = bool(ok_h)
+            if not ok_h:
+                meta["claim"] = "vm_started_bot_health_failed"
+                self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
+                try:
+                    self.stop(vm_id)
+                except Exception:
+                    pass
+                return SandboxHandle(
+                    backend=self.name,
+                    deployment_id=vm_id,
+                    container_or_vm_id=vm_id,
+                    status="failed",
+                    message=(
+                        f"firecracker_bot_health_failed:{reason_h} "
+                        f"(rootfs must run /project/.lumen_guest/supervisor.py)"
+                    ),
+                    meta=meta,
+                )
+            meta["claim"] = "vm_alive_bot_marker_confirmed"
+            self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
+            return SandboxHandle(
+                backend=self.name,
+                deployment_id=vm_id,
+                container_or_vm_id=vm_id,
+                status="running",
+                message=f"firecracker_bot_healthy pid={pid} jailer={use_jailer} reason={reason_h}",
+                meta=meta,
+            )
+
+        # Dev opt-out of health gate only
+        meta["claim"] = "vm_process_started_health_not_required_dev"
+        meta["bot_healthy"] = False
         self._meta_path(vm_id).write_text(json.dumps(meta), encoding="utf-8")
         return SandboxHandle(
             backend=self.name,
             deployment_id=vm_id,
             container_or_vm_id=vm_id,
             status="running",
-            message=f"firecracker_vm_started pid={pid} jailer={use_jailer} (bot health not verified)",
+            message=(
+                f"firecracker_vm_started pid={pid} jailer={use_jailer} "
+                "(dev: bot health not required)"
+            ),
             meta=meta,
         )
 
@@ -1107,6 +1183,49 @@ class FirecrackerSandboxBackend(SandboxBackend):
             status="stopped",
             message="firecracker_stopped",
         )
+
+
+    def _wait_for_bot_health(
+        self,
+        vm_id: str,
+        meta: dict,
+        *,
+        timeout_sec: float,
+        proc: Optional[subprocess.Popen] = None,
+    ) -> tuple[bool, str]:
+        """Poll serial log until guest bot markers appear or timeout.
+
+        Production permanent-host requires lumen-bot-started (or Application started).
+        """
+        deadline = time.time() + max(5.0, float(timeout_sec))
+        last = "waiting_guest_markers"
+        while time.time() < deadline:
+            if proc is not None and proc.poll() is not None:
+                return False, f"firecracker_exited_during_health code={proc.returncode}"
+            pid = int(meta.get("pid") or 0)
+            if pid:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return False, "firecracker_pid_dead_during_health"
+                except PermissionError:
+                    pass
+            guest_ready, bot_started = self._guest_log_markers(meta)
+            if bot_started:
+                return True, "bot_marker_confirmed"
+            if guest_ready:
+                last = "guest_ready_waiting_bot"
+            # fatal marker
+            log_path = str(meta.get("log") or "")
+            if log_path and Path(log_path).is_file():
+                try:
+                    tail = Path(log_path).read_text(encoding="utf-8", errors="ignore")[-16000:]
+                except OSError:
+                    tail = ""
+                if "lumen-bot-fatal" in tail:
+                    return False, "guest_reported_fatal"
+            time.sleep(1.0)
+        return False, f"bot_health_timeout:{last}"
 
     def _guest_log_markers(self, meta: dict) -> tuple[bool, bool]:
         """Detect guest init / bot markers from serial log (honest claims)."""

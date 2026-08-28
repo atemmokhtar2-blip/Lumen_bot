@@ -376,6 +376,14 @@ class HostingService:
                 message=f"فشل تشغيل الصندوق المعزول ({backend_name}): {message[:300]}",
                 details={"backend": backend_name, "meta": dict(handle.meta or {})},
             )
+        # Permanent host: refuse "running" without bot health when FC reports meta
+        meta = dict(handle.meta or {})
+        if backend_name == "firecracker" and meta.get("bot_healthy") is False and meta.get("claim", "").endswith("failed"):
+            return HostResult(
+                ok=False,
+                message=f"الاستضافة الدائمة رُفضت: صحة البوت داخل الضيف غير مؤكدة ({message[:200]})",
+                details={"backend": backend_name, "meta": meta},
+            )
         import re as _re
         import uuid
         pid = None

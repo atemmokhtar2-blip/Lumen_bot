@@ -374,3 +374,44 @@ def test_fc_tap_egress_rejects_invalid_tap():
     r = apply_fc_tap_egress("")
     assert r["ok"] is False
     assert "invalid_tap" in r["errors"] or "iptables_not_found" in r["errors"]
+
+
+def test_guest_agent_files_exist():
+    from lumen.engine.services.sandbox_runtime.guest_agent import SUPERVISOR_PATH, BOOT_SH_PATH
+    assert SUPERVISOR_PATH.is_file()
+    assert "lumen-guest-ready" in SUPERVISOR_PATH.read_text(encoding="utf-8")
+    assert "lumen-bot-started" in SUPERVISOR_PATH.read_text(encoding="utf-8")
+    assert BOOT_SH_PATH.is_file()
+
+
+def test_inject_guest_agent_into_project(tmp_path):
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import _inject_guest_agent
+    proj = tmp_path / "bot"
+    proj.mkdir()
+    (proj / "main.py").write_text("print(1)\n")
+    _inject_guest_agent(proj)
+    assert (proj / ".lumen_guest" / "supervisor.py").is_file()
+    assert (proj / ".lumen_guest" / "lumen-guest-boot.sh").is_file()
+
+
+def test_wait_for_bot_health_reads_markers(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    log = tmp_path / "vm.log"
+    log.write_text("boot\nlumen-guest-ready\nlumen-bot-started entry=main.py\n")
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    b = FirecrackerSandboxBackend()
+    meta = {"log": str(log), "pid": 0}
+    ok, reason = b._wait_for_bot_health("fc-test", meta, timeout_sec=2)
+    assert ok is True
+    assert "bot_marker" in reason
+
+
+def test_wait_for_bot_health_fatal(tmp_path):
+    log = tmp_path / "vm.log"
+    log.write_text("lumen-bot-fatal token_missing\n")
+    from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+    b = FirecrackerSandboxBackend()
+    ok, reason = b._wait_for_bot_health("fc-test", {"log": str(log), "pid": 0}, timeout_sec=2)
+    assert ok is False
+    assert "fatal" in reason
