@@ -95,5 +95,32 @@ async def handle_ui_callback(update, context) -> None:
             save_ui_state(user_data, st2)
             if uid:
                 persist_ui_session(uid, dict(user_data))
+            if st2.phase == EngineUiPhase.GEN_DONE and msg:
+                from lumen.engine.services.ui_state.controller import buttons_for_state
+                body = (
+                    "ما التالي؟\n"
+                    "• تجربة في الشات — تشغيل مؤقت\n"
+                    "• استضافة دائمة — Firecracker\n"
+                    "• ZIP أو معاينة"
+                )
+                await msg.reply_text(
+                    body,
+                    reply_markup=build_inline_keyboard(buttons_for_state(st2)),
+                )
         except Exception:
             logger.exception("guided generation bridge failed")
+
+    if result.ok and getattr(result, "post_side_effect", ""):
+        try:
+            from .post_actions import execute_post_side_effect
+            note = await execute_post_side_effect(
+                effect=result.post_side_effect,
+                project_ref=result.state.project_ref,
+                message=msg,
+                context=context,
+                user=update.effective_user,
+            )
+            if note and msg:
+                await msg.reply_text(note[:2000])
+        except Exception:
+            logger.exception("post_side_effect failed effect=%s", result.post_side_effect)

@@ -94,8 +94,29 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "open_dashboard": UiActionSpec("open_dashboard", "Dashboard", _NAV),
     "open_billing": UiActionSpec("open_billing", "Billing", _NAV),
     "open_help": UiActionSpec("open_help", "Help", _NAV),
+    "post_trial": UiActionSpec(
+        "post_trial",
+        "Trial chat plane",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME}),
+    ),
+    "post_host": UiActionSpec(
+        "post_host",
+        "Permanent host plane",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME}),
+    ),
+    "post_zip": UiActionSpec(
+        "post_zip",
+        "Send ZIP",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD}),
+    ),
+    "post_preview": UiActionSpec(
+        "post_preview",
+        "Safe preview",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD}),
+    ),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
 }
+
 
 
 def get_action(action_id: str) -> UiActionSpec | None:

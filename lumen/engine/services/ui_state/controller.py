@@ -23,6 +23,7 @@ class ApplyResult:
     buttons: tuple[tuple[UiButton, ...], ...]
     run_generation: bool = False
     generation_request: str = ""
+    post_side_effect: str = ""
 
 
 def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
@@ -138,11 +139,28 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     if phase == EngineUiPhase.GENERATING:
         return ((UiButton("القائمة", "home"),),)
     if phase == EngineUiPhase.GEN_DONE:
-        return (
-            (UiButton("إنشاء بوت آخر", "open_generate"),),
-            (UiButton("لوحة التحكم", "open_dashboard"),),
-            (UiButton("القائمة", "home"),),
+        rows = []
+        if (state.project_ref or "").strip():
+            rows.append(
+                (
+                    UiButton("تجربة في الشات", "post_trial"),
+                    UiButton("استضافة دائمة", "post_host"),
+                )
+            )
+            rows.append(
+                (
+                    UiButton("تحميل ZIP", "post_zip"),
+                    UiButton("معاينة الملفات", "post_preview"),
+                )
+            )
+        rows.append((UiButton("إنشاء بوت آخر", "open_generate"),))
+        rows.append(
+            (
+                UiButton("لوحة التحكم", "open_dashboard"),
+                UiButton("القائمة", "home"),
+            )
         )
+        return tuple(rows)
     if phase == EngineUiPhase.DASHBOARD:
         return (
             (
@@ -214,6 +232,7 @@ def apply_action(
     run_gen = False
     gen_req = ""
     msg = ""
+    post_fx = ""
 
     if action_id == "home":
         new.phase = EngineUiPhase.HOME
@@ -337,6 +356,34 @@ def apply_action(
         new.phase = EngineUiPhase.HELP
         new.missing = []
         msg = "المساعدة."
+    elif action_id == "post_trial":
+        if not (new.project_ref or "").strip():
+            msg = "لا يوجد مشروع — ولّد بوت أولاً."
+        else:
+            from .models import RuntimePlaneHint
+            new.plane = RuntimePlaneHint.TRIAL_CHAT
+            msg = "تجربة مؤقتة — أرسل توكن البوت من @BotFather."
+            post_fx = "post_trial"
+    elif action_id == "post_host":
+        if not (new.project_ref or "").strip():
+            msg = "لا يوجد مشروع — ولّد بوت أولاً."
+        else:
+            from .models import RuntimePlaneHint
+            new.plane = RuntimePlaneHint.PERMANENT_HOST
+            msg = "استضافة دائمة — أرسل توكن البوت من @BotFather."
+            post_fx = "post_host"
+    elif action_id == "post_zip":
+        if not (new.project_ref or "").strip():
+            msg = "لا يوجد مشروع لـ ZIP."
+        else:
+            msg = "تجهيز ZIP..."
+            post_fx = "post_zip"
+    elif action_id == "post_preview":
+        if not (new.project_ref or "").strip():
+            msg = "لا يوجد مشروع للمعاينة."
+        else:
+            msg = "معاينة الملفات..."
+            post_fx = "post_preview"
     elif action_id == "noop":
         msg = "تم."
     else:
@@ -352,4 +399,5 @@ def apply_action(
         buttons=buttons_for_state(new),
         run_generation=run_gen,
         generation_request=gen_req,
+        post_side_effect=post_fx,
     )

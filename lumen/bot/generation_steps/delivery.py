@@ -375,6 +375,35 @@ async def deliver_generation_result(
                 + cmd_line
                 + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
             )
+
+        # Batch 3: engine UI post-generation menu (trial vs permanent host)
+        try:
+            from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
+            from lumen.engine.services.ui_state.controller import buttons_for_state
+            from lumen.bot.ui.keyboards import build_inline_keyboard
+            from lumen.bot.ui.state_store import save_ui_state, persist_ui_session
+            ui = EngineUiState(
+                phase=EngineUiPhase.GEN_DONE,
+                project_ref=str(project_path),
+                last_action="generation_done",
+            )
+            if context.user_data is not None:
+                save_ui_state(context.user_data, ui)
+                if user:
+                    persist_ui_session(int(user.id), dict(context.user_data))
+            body = (
+                "ما التالي؟\n"
+                "• تجربة في الشات — تشغيل مؤقت\n"
+                "• استضافة دائمة — Firecracker\n"
+                "• ZIP أو معاينة الملفات"
+            )
+            await message.reply_text(
+                body,
+                reply_markup=build_inline_keyboard(buttons_for_state(ui)),
+            )
+        except Exception:
+            logger.exception("post-generation UI menu failed")
+
     else:
         await message.reply_text(
             "⚠️ المشروع اتولّد لكن التحقق ضد الهلوسة رفض تسليمه كجاهز.\n"

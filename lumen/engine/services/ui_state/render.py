@@ -100,9 +100,12 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return "جاري توليد البوت عبر المحرك…\nلا تغلق الشات."
 
     if phase == EngineUiPhase.GEN_DONE:
-        lines = ["اكتمل مسار التوليد الموجّه."]
+        lines = ["اكتمل التوليد."]
         if state.project_ref:
             lines.append(f"المشروع: `{state.project_ref}`")
+        if state.plane and state.plane.value != "none":
+            lines.append(f"المستوى: {state.plane.value}")
+        lines.append("اختر: تجربة شات | استضافة دائمة | ZIP | معاينة")
         return "\n".join(lines)
 
     if phase == EngineUiPhase.DASHBOARD:
