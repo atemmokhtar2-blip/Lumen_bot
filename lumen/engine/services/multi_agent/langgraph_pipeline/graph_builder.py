@@ -79,12 +79,60 @@ def _run_named(registry: Any, name: str, state: AgentState, ctx: dict) -> AgentS
 
 
 def _merge_agent_state(left: AgentState | None, right: AgentState | None) -> AgentState:
-    """Reducer for parallel LangGraph Send — merge task trees without dropping DONE marks."""
+    """Reducer for the ``agent`` channel.
+
+    LangGraph initializes every channel with its dataclass *default* value before
+    the first node runs. For ``AgentState`` that default is an **empty** instance
+    (``user_text=""``, ``user_id=0``, ``state_id=<random uuid>``). When
+    ``graph.invoke({"agent": real_state})`` is called, the real state arrives as
+    ``right`` while the empty default arrives as ``left``. If the reducer only
+    keeps ``left``'s identity fields, the user's request text, user id, and
+    thread id are silently discarded — the architect then receives an empty
+    ``user_text``, all spec backends return ``None``, and the pipeline falls back
+    to the generic echo-bot template.
+
+    Fix: preserve identity-critical fields (``user_text``, ``user_id``,
+    ``state_id``, ``spec_request``, ``preferred_keys``, ``strict_spec``,
+    ``capability_id``) from ``right`` whenever ``right`` carries a meaningful
+    (non-default) value, so the real user request is never lost to the empty
+    channel default. Mid-pipeline merges (where ``left`` already has the real
+    values and ``right`` is a node update) are unaffected because ``right``
+    carries the same identity fields forward.
+    """
     if left is None:
         return right  # type: ignore
     if right is None:
         return left
     try:
+        # --- Identity fields: right wins when it carries a real value ---
+        # This is the critical fix. Without it, the LangGraph channel default
+        # (empty AgentState) overwrites the user's request on the first merge.
+        # Detect whether `left` is the empty channel default (no real identity
+        # yet) so we can adopt right's state_id cleanly.
+        left_is_default = (
+            not left.user_text
+            and not left.spec_request
+            and not left.strict_spec
+            and left.user_id == 0
+        )
+        if left_is_default and right.state_id:
+            # Adopt the real state_id from the incoming state on the first merge.
+            left.state_id = right.state_id
+        if right.user_text:
+            left.user_text = right.user_text
+        if right.user_id:
+            left.user_id = right.user_id
+        if right.spec_request:
+            left.spec_request = right.spec_request
+        if right.preferred_keys:
+            left.preferred_keys = list(right.preferred_keys)
+        if right.strict_spec:
+            left.strict_spec = dict(right.strict_spec)
+        if right.capability_id:
+            left.capability_id = right.capability_id
+        if right.user_intent:
+            left.user_intent = right.user_intent
+
         lext = dict(left.extensions or {})
         rext = dict(right.extensions or {})
         lt = TaskTree.from_dict(lext.get("task_tree") or {})
@@ -141,16 +189,44 @@ def _merge_context(left: dict | None, right: dict | None) -> dict:
     return out
 
 
+def _last_write_wins(left: Any, right: Any) -> Any:
+    """Reducer for scalar channels that parallel Send workers write concurrently.
+
+    LangGraph's default ``last_value`` channel raises ``InvalidUpdateError`` when
+    two parallel ``Send`` workers return the same key in the same step. For
+    bookkeeping fields like ``last_node`` / ``wave`` / ``done`` / ``isolate``
+    that are only used for edge routing (not for correctness), any value from any
+    worker is acceptable — so we simply take the rightmost non-None value.
+    """
+    return right if right is not None else left
+
+
+def _merge_task_ids(left: list | None, right: list | None) -> list:
+    """Reducer for ``active_task_ids`` under parallel Send — union, right wins on conflict."""
+    if left is None:
+        return right or []
+    if right is None:
+        return left or []
+    # Preserve order, deduplicate
+    seen = set()
+    out = []
+    for x in list(left) + list(right):
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 class GraphState(TypedDict, total=False):
     agent: Annotated[AgentState, _merge_agent_state]
     context: Annotated[dict[str, Any], _merge_context]
-    last_node: str
-    active_task_ids: list[str]
-    wave: int
-    done: bool
+    last_node: Annotated[str, _last_write_wins]
+    active_task_ids: Annotated[list[str], _merge_task_ids]
+    wave: Annotated[int, _last_write_wins]
+    done: Annotated[bool, _last_write_wins]
     notes: Annotated[list[str], operator.add]
-    hitl_decision: str  # approved | rejected | ""
-    isolate: bool  # parallel worktree isolation for this wave
+    hitl_decision: Annotated[str, _last_write_wins]  # approved | rejected | ""
+    isolate: Annotated[bool, _last_write_wins]  # parallel worktree isolation for this wave
 
 
 def _any_llm_provider_available() -> bool:

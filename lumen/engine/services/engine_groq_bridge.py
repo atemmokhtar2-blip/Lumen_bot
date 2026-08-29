@@ -39,7 +39,7 @@ def _rule_features(text: str) -> list[str]:
 def _slash_features_from_text(text: str, catalog: set[str]) -> list[str]:
     """User-written /commands → features (canonical command_map only)."""
     from lumen.engine.services.capability_detection.catalog import features_from_text
-    feats = features_from_text(text or "", include_core=False)
+    feats = features_from_text(text or "")
     return [f for f in feats if f in catalog] if catalog else feats
 
 

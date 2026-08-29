@@ -1,32 +1,38 @@
-# Lumen Bot — Fix Trial Chat (Live Run) From The Root
+# Todo: Investigate why generated bots don't match user requests
 
-## Root Cause Analysis
-- [x] `try_bot_token()` in `early_gates.py` crashed with `AttributeError: 'str' object has no attribute 'get'` — called `handle_live_run_token(message, context, user, tok)` with WRONG args (user as token, tok as pending)
-- [x] `decide_isolation()` returned `require_docker=True, allow_local=False` because `TBE_MULTI_TENANT` defaulted to "1" — blocked local process fallback
-- [x] `safe_zip.py` skips ALL dotfiles (security) — `.env.example` excluded from delivered ZIP
-- [x] Screenshot confirms: ZIP delivered (2KB, 7 files) but trial chat failed when user sent token
+## Phase 1: Map the generation pipeline
+- [ ] Read agent_brain / agent_loop code — how LLM responses are parsed, where failures occur
+- [ ] Read prompt construction code — how user requests become prompts
+- [ ] Read LLM model configuration — which models, what parameters
+- [ ] Read graph_builder — LangGraph flow, where quality could degrade
+- [ ] Read deterministic_repair.py — does it overwrite or supplement agent output?
 
-## Fix 1: Rewrite `try_bot_token()` in `early_gates.py` (COMMITTED 77bf198)
-- [x] Retrieve `pending_run` / `pending_deploy` from `context.user_data`
-- [x] Pass `tok` (string) as token and `pending_run` (dict) as pending
-- [x] Added user-friendly message when no pending project exists
+## Phase 2: Examine real generated outputs
+- [ ] Inspect actual generated project code at /var/lib/lumen/users/98/10/7631249810/projects/
+- [ ] Compare generated code vs what was likely requested
+- [ ] Check agent_brain logs / parse failure logs from actual generation runs
+- [ ] Find any saved prompts or LLM responses from real runs
 
-## Fix 2: Enable local process fallback via `.env` (COMMITTED 77bf198)
-- [x] Added `TBE_MULTI_TENANT=0`, `TBE_ALLOW_LOCAL_PROCESS=1`, `TBE_FORCE_LOCAL_PROCESS=1`, `LIVE_RUN_SECONDS=1800`
-- [x] Verified: `decide_isolation()` returns `require_docker=False, allow_local=True`
+## Phase 3: Identify weak points (ROOT CAUSE FOUND + FIXED)
+- [x] Classify each weak point: model weakness vs prompt vs architecture vs parsing
+- [x] Document evidence (actual code, actual logs, actual outputs)
+  - ROOT CAUSE #1 (FIXED): _merge_agent_state reducer dropped user_text/user_id/state_id
+  - ROOT CAUSE #2 (FIXED): InvalidUpdateError on last_node in parallel Send (no reducer)
+  - ROOT CAUSE #3 (FIXED): BridgeSpecBackend TypeError (features_from_text include_core arg)
+  - WEAK POINT #4 (model): gemini-3.1-flash-lite returns empty text for architect spec
+  - WEAK POINT #5 (model): LLM generates syntax errors (duplicate lines in handlers.py)
+  - WEAK POINT #6 (planner): over-decomposes simple requests (modules/telegram_bot_api.py)
+  - WEAK POINT #7 (model): no maxOutputTokens set → default limit may truncate
+  - WEAK POINT #8 (model): all models are flash-lite (weakest tier), no pro models
+- [x] Fix the _merge_agent_state reducer to preserve identity fields from right
+- [x] Fix the InvalidUpdateError by adding reducers to GraphState scalar fields
+- [x] Fix the BridgeSpecBackend TypeError
+- [x] Test the fix (reducer unit test + real LangGraph + full pipeline generation)
+- [x] Verify generated bot matches user request (تم الاستلام handler = user's request!)
+- [ ] Write findings report with recommendations
 
-## Fix 3: Include `.env.example` in delivered ZIP (COMMITTED 77bf198)
-- [x] Added `_DOTFILE_ALLOWLIST` with `.env.example` in `safe_zip.py`
-- [x] Keep security: still skip `.env`, `.aws`, `.git`, etc. — only allow `.env.example`
-- [x] Verified: ZIP now contains 8 files including `.env.example` (was 7)
-
-## Fix 4: Test full trial chat flow end-to-end (VERIFIED)
-- [x] `run_bot_project()` uses `LocalProcessDriver` — provider=local_process confirmed
-- [x] Bot process starts and runs `main.py` — fails only with dummy token (expected)
-- [x] ZIP now includes `.env.example` (verified with zipfile.ZipFile)
-- [x] `try_bot_token` correctly dispatches to `handle_live_run_token(message, context, tok, pending_run)`
-
-## Fix 5: Commit, push, restart (DONE)
-- [x] Committed `early_gates.py` + `safe_zip.py` + `live_run_test.py` (77bf198)
-- [x] Pushed to GitHub (branch Lumen)
-- [x] Bot restarted (pid 24687, polling healthy, Gemini 30 keys loaded)
+## Phase 4: Deliver findings
+- [ ] Present findings to user with evidence
+- [ ] If model weakness → recommend stronger paid models
+- [ ] If pipeline issue → recommend fix (3 PIPELINE BUGS FIXED)
+- [ ] PUSH the fix to GitHub

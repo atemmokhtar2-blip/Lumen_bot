@@ -11,7 +11,7 @@ from .flags import (
     use_langgraph_pipeline,
     _shared_checkpointer,
 )
-from .graph_builder import build_lumen_graph
+from .graph_builder import build_lumen_graph, _compile_graph, GraphState, _merge_agent_state
 from .runner import run_langgraph_pipeline, resume_langgraph_hitl
 
 __all__ = [
@@ -20,6 +20,9 @@ __all__ = [
     "langgraph_available",
     "use_langgraph_pipeline",
     "build_lumen_graph",
+    "_compile_graph",
+    "GraphState",
+    "_merge_agent_state",
     "run_langgraph_pipeline",
     "resume_langgraph_hitl",
     "_shared_checkpointer",

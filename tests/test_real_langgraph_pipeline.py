@@ -125,3 +125,83 @@ def test_merge_agent_keeps_done_from_both_sides():
     nodes = TaskTree.from_dict(m.extensions["task_tree"]).nodes
     assert nodes["f1"].status == TaskStatus.DONE.value
     assert nodes["f2"].status == TaskStatus.DONE.value
+
+
+def test_merge_agent_preserves_user_text_from_right(fresh_checkpoint):
+    """Regression: LangGraph channel default (empty AgentState) as `left` must
+    NOT overwrite the user's request text arriving as `right`.
+
+    Before the fix, _merge_agent_state only kept left's user_text. Since
+    LangGraph initializes the `agent` channel with AgentState() (empty default),
+    the first merge discarded the real user_text → architect received '' →
+    fallback spec → generic echo bot instead of the requested bot.
+    """
+    from lumen.engine.services.multi_agent.langgraph_pipeline import _merge_agent_state
+
+    # left = empty default (what LangGraph creates for the channel)
+    left = AgentState(user_id=0, user_text="", state_id="default_random")
+    # right = the real state passed to graph.invoke()
+    real_text = "بوت تيليجرام بسيط: عند /start ترد أهلاً بك"
+    right = AgentState(user_id=7631249810, user_text=real_text, state_id="real_thread_id")
+
+    merged = _merge_agent_state(left, right)
+    assert merged.user_text == real_text, (
+        f"user_text was lost! got {merged.user_text!r}, expected {real_text!r}"
+    )
+    assert merged.user_id == 7631249810, f"user_id was lost! got {merged.user_id}"
+    assert merged.state_id == "real_thread_id", (
+        f"state_id was not adopted from right! got {merged.state_id!r}"
+    )
+
+
+def test_pipeline_architect_receives_user_text(fresh_checkpoint, fake_coder, tmp_path):
+    """End-to-end: the architect node must receive the full user_text, not ''.
+
+    This is the definitive regression test for the generic-echo-bot bug. Before
+    the fix, the architect received user_text='' (due to the reducer dropping
+    it), all spec backends returned None, and the pipeline fell back to the
+    generic echo-bot template regardless of what the user requested.
+    """
+    import lumen.engine.services.multi_agent.roles.architect as arch_mod
+
+    captured = []
+    orig_run = arch_mod.ArchitectAgent.run
+
+    def _capture(self, state, context=None):
+        captured.append({
+            "user_text": state.user_text,
+            "user_id": state.user_id,
+            "state_id": state.state_id,
+        })
+        return orig_run(self, state, context=context)
+
+    arch_mod.ArchitectAgent.run = _capture
+    try:
+        work = tmp_path / "arch_test"
+        work.mkdir()
+        real_request = "بوت تيليجرام بسيط: عند /start ترد أهلاً بك، وعند أي رسالة أخرى ترد تم الاستلام"
+        state = AgentState(user_id=7631249810, user_text=real_request, state_id="arch-test-001")
+        state.extensions = {"work_dir": str(work)}
+        out = lp.run_langgraph_pipeline(
+            state, context={"work_dir": str(work)}, thread_id="arch-test-001"
+        )
+    finally:
+        arch_mod.ArchitectAgent.run = orig_run
+
+    assert len(captured) >= 1, "architect was never called"
+    first = captured[0]
+    assert first["user_text"] == real_request, (
+        f"architect received user_text={first['user_text']!r} instead of the real request"
+    )
+    assert first["user_id"] == 7631249810, f"architect received user_id={first['user_id']}"
+    assert first["state_id"] == "arch-test-001", (
+        f"architect received state_id={first['state_id']!r} instead of arch-test-001"
+    )
+    # The spec must NOT be the absolute fallback (source=fallback, confidence=0.1)
+    spec = out.strict_spec or {}
+    assert spec.get("source") != "fallback", (
+        f"spec is still fallback! spec={spec}"
+    )
+    assert spec.get("confidence", 0) > 0.1, (
+        f"spec confidence is still 0.1 (fallback)! spec={spec}"
+    )
