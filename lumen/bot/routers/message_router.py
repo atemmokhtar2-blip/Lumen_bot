@@ -59,6 +59,12 @@ from .message_intent import (
     _qwen_rescue_translation,
 )
 from .message_generation import execute_bot_generation
+from .message_stages.early_gates import (
+    gate_auth_and_rate,
+    gate_groups,
+    try_cancel,
+    try_bot_token,
+)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -96,49 +102,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("thinking indicator send failed")
             _thinking_msg = None
 
-    if not is_allowed(user.id if user else None):
-        await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
+    request = clamp_user_text(message.text or "")
+
+    if not await gate_auth_and_rate(update=update, context=context, message=message, user=user):
         return
 
-    # Ensure user identity + plan exist in MongoDB (users collection)
-    # pymongo is sync — never block the PTB asyncio loop
-    await asyncio.to_thread(_ensure_mongo_user, user)
-
-    uid_check = int(user.id) if user else 0
-    # Redis rate-limit is sync — keep it off the event loop
-    try:
-        allowed = await asyncio.to_thread(_rate_limit_ok, uid_check)
-    except Exception:
-        allowed = _rate_limit_ok(uid_check)
-    if not allowed:
-        try:
-            wait_s = await asyncio.to_thread(_rate_limit_wait_seconds, uid_check)
-        except Exception:
-            wait_s = _rate_limit_wait_seconds(uid_check)
-        await message.reply_text(
-            f"⏳ تجاوزت الحد المسموح من الطلبات. انتظر حوالي {wait_s} ثانية ثم حاول مرة أخرى."
-        )
+    if not await gate_groups(update=update, context=context, message=message, user=user):
         return
 
-    # Groups: only respond when @mentioned or replied-to (avoid spam)
-    try:
-        chat = update.effective_chat
-        if chat and getattr(chat, "type", "") in {"group", "supergroup"}:
-            bot_user = getattr(context.bot, "username", None) or ""
-            text0 = (message.text or "")
-            mentioned = bool(bot_user and f"@{bot_user}".lower() in text0.lower())
-            is_reply_to_us = bool(
-                message.reply_to_message
-                and message.reply_to_message.from_user
-                and message.reply_to_message.from_user.id == context.bot.id
-            )
-            if not mentioned and not is_reply_to_us:
-                await _clear_thinking()
-                return
-    except Exception:
-        pass
-
-    request = clamp_user_text(message.text.strip())
     # Engine UI: answer current need slot with free text when in GEN_SLOTS
     if context.user_data and not (request or "").startswith("/"):
         try:
@@ -217,19 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
 
-    # Cooperative cancel of in-flight generation (agent_loop checks each step)
-    _low_req = request.lower().strip()
-    if _low_req in {"/cancel", "cancel", "إلغاء", "الغاء", "الغي", "stop", "/stop"}:
-        try:
-            from lumen.engine.services.generation_cancel import request_cancel
-
-            request_cancel(int(user.id) if user else 0)
-        except Exception:
-            logger.exception("request_cancel failed")
-        if context.user_data is not None:
-            context.user_data.pop("force_generate_once", None)
-            context.user_data.pop("pending_clarify", None)
-        await message.reply_text("تم إرسال طلب الإلغاء. إذا كان هناك توليد جارٍ فسيتوقف عند أقرب خطوة.")
+    if await try_cancel(message=message, context=context, request=request):
         return
 
     # Platform under development: deterministic reply on error/bug complaints
@@ -319,14 +278,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    # ── Bot token FIRST (no thinking bubble — deploy progress has its own status) ──
-    if looks_like_bot_token(request) or looks_like_bot_token(normalize_bot_token(request)):
-        try:
-            from ..handlers.token_handler import try_handle_token
-            if await try_handle_token(update, context, request, user, message):
-                return
-        except Exception:
-            logger.exception("early token handler failed")
+    # Bot token FIRST
+    if await try_bot_token(message=message, context=context, user=user, request=request):
+        return
 
     # Thinking indicator only for normal chat / generation (not tokens)
     await _show_thinking()
@@ -1709,65 +1663,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         pass
 
-    # Stage-4: personalized status line
-    _status_line = "⏳ جاري توليد المشروع (مسار حتمي) ثم التحقق ضد الهلوسة..."
-    try:
-        from lumen.engine.spec_core.language_understanding import (
-            understand,
-            analyze_intent,
-            personalize,
-            extract_entities,
-        )
-        from lumen.engine.spec_core.language_understanding.smart_generation import (
-            build_narrative,
-        )
-        _lu4 = understand(request)
-        _intent4 = analyze_intent(request, lu=_lu4)
-        _style4 = personalize(
-            request, intent=_intent4, lu=_lu4, user_id=int(user.id) if user else None
-        )
-        _ent4 = getattr(_lu4, "entities", None)
-        _nav4 = build_narrative(
-            request,
-            style=_style4,
-            entities=_ent4,
-            intent_name=_intent4.primary.intent if _intent4 and _intent4.primary else None,
-            features=list(getattr(_ent4, "features_requested", None) or []),
-            strict=bool(getattr(_ent4, "strict_spec", False)) if _ent4 else False,
-            bot_name=getattr(_ent4, "bot_name", None) if _ent4 else None,
-        )
-        if _nav4.pre_summary:
-            await message.reply_text(_nav4.pre_summary[:1500])
-        _status_line = (_nav4.status_start or _status_line) + (_soft_note or "")
-    except Exception:
-        logger.exception("stage4 pre-summary failed")
-        _status_line = _status_line + (_soft_note or "")
-    status_msg = await message.reply_text(_status_line)
-    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
+    # Stage-4 + quota (extracted module)
+    from .message_stages.pre_generate import prepare_status_and_quota
 
-    # Server-side plan quota (Explorer 25 / Starter 50 / Growth 300 per month)
-    try:
-        from lumen.platform.plan_gate import check_generation_quota
-        _q_ok, _q_reason, _q_info = check_generation_quota(user_id=int(user.id) if user else 0)
-        if not _q_ok:
-            limit = _q_info.get("limit") or "?"
-            plan_id = _q_info.get("plan_id") or "free"
-            detail = (
-                f"وصلت للحد الشهري للتوليد على خطة {plan_id} "
-                f"({limit} توليد/شهر). السبب: {_q_reason}"
-            )
-            await status_msg.edit_text("⛔ " + detail)
-            try:
-                from lumen.bot.ui.emit_context import emit_context_event
-                await emit_context_event(
-                    message=message, context=context, user=user,
-                    kind="insufficient_quota", detail=detail,
-                )
-            except Exception:
-                logger.exception("emit quota context failed")
-            return
-    except Exception:
-        logger.exception("plan quota check failed")
+    status_msg = await prepare_status_and_quota(
+        message=message,
+        context=context,
+        user=user,
+        request=request,
+        soft_note=locals().get("_soft_note") or "",
+    )
+    if status_msg is None:
+        return
 
     # Shared generation execution (sandbox → engine → deliver)
     await execute_bot_generation(
@@ -1783,5 +1690,3 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ),
         cache_key=request,
     )
-
-
