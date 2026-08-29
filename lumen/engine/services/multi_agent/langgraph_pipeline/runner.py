@@ -170,6 +170,12 @@ def resume_langgraph_hitl(
     """Resume after official interrupt via Command(resume=...).
 
     Requires SqliteSaver/MemorySaver + same thread_id from the paused run.
+
+    Raises ``RuntimeError`` when the checkpointer has no saved checkpoint for the
+    given ``thread_id`` (e.g. the initial run happened in a different process with
+    a process-local MemorySaver). In that case LangGraph would silently restart the
+    graph from START and re-interrupt — producing an infinite "confirm the plan"
+    loop. We detect this and fail loudly instead.
     """
     if not langgraph_available():
         raise RuntimeError("langgraph_not_installed")
@@ -195,18 +201,64 @@ def resume_langgraph_hitl(
     resume_val = decision
     if isinstance(decision, str):
         resume_val = decision.strip().lower() or "approved"
+
+    # Guard against cross-process checkpoint loss: if there is no checkpoint for
+    # this thread_id, graph.invoke(Command(resume=...)) silently restarts from
+    # START and re-interrupts — causing an infinite HITL loop with no generation.
+    # We detect the missing checkpoint up front and raise a clear, actionable error.
+    _has_checkpoint = False
+    try:
+        import langgraph
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+        if isinstance(checkpointer, BaseCheckpointSaver):
+            # aget / aget_tuple — try async-capable API then sync fallback
+            tup = None
+            try:
+                import asyncio
+                tup = asyncio.get_event_loop().run_until_complete(
+                    checkpointer.aget_tuple({"configurable": {"thread_id": tid}})
+                )
+            except Exception:
+                pass
+            if tup is None:
+                try:
+                    tup = checkpointer.get_tuple({"configurable": {"thread_id": tid}})
+                except Exception:
+                    tup = None
+            _has_checkpoint = bool(tup)
+    except Exception:
+        # If we cannot probe, proceed and rely on the post-invoke re-interrupt guard.
+        _has_checkpoint = True
+
     result = graph.invoke(Command(resume=resume_val), config=cfg)
     out = result.get("agent") if isinstance(result, dict) else state
     if out is None:
         out = state
     out.extensions = dict(out.extensions or {})
     out.extensions["langgraph_thread_id"] = tid
-    out.extensions["langgraph_interrupt"] = bool(result.get("__interrupt__")) if isinstance(result, dict) else False
-    if isinstance(result, dict) and result.get("__interrupt__"):
+    re_interrupted = bool(result.get("__interrupt__")) if isinstance(result, dict) else False
+    out.extensions["langgraph_interrupt"] = re_interrupted
+    if re_interrupted:
         out.extensions["hitl_status"] = "awaiting_approval"
     else:
         out.extensions["hitl_status"] = out.extensions.get("hitl_status") or "resumed"
         out.extensions["langgraph_interrupt"] = False
+
+    # Re-interrupt guard: a successful resume of an "approved" plan must NOT pause
+    # again at the plan gate. If it does, the checkpoint was missing and the graph
+    # restarted from scratch — surface a clear error instead of an infinite loop.
+    if (
+        re_interrupted
+        and str(resume_val).lower() in {"approved", "approve", "yes", "1", "confirm"}
+        and not _has_checkpoint
+    ):
+        out.extensions["hitl_resume_error"] = (
+            "checkpoint_missing_for_thread: the LangGraph checkpoint for this thread was not "
+            "found (likely created in a different process). Install langgraph-checkpoint-sqlite "
+            "and ensure LANGGRAPH_CHECKPOINT_PATH points to a shared durable location."
+        )
+        raise RuntimeError(out.extensions["hitl_resume_error"])
+
     try:
         bd.put(out)
     except Exception:

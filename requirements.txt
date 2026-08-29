@@ -60,6 +60,10 @@ tree-sitter-cpp>=0.23.0
 # Official agent orchestration (LangGraph)
 langgraph==1.2.11
 langchain-core==1.6.1
+# Durable cross-process checkpointer — REQUIRED for Human-in-the-Loop resume
+# (generation runs in an RQ worker; confirm runs in the Telegram process).
+# Without this, MemorySaver is process-local and resume silently restarts the graph.
+langgraph-checkpoint-sqlite==3.1.1
 
 # Official MCP Python SDK
 mcp>=1.0.0,<2
