@@ -19,10 +19,10 @@
 ## REMAINING WORK (fix from root, push after EACH)
 
 ### Phase 4: Weakness #6 - Guarantee generated code quality (README + token setup)
-- [ ] 4.1 Add ensure_project_readme() to delivery.py - inject clear README.md with token setup + run instructions if missing/inadequate
-- [ ] 4.2 Add README presence to mandatory pre-delivery gate (fail closed if no README after injection)
-- [ ] 4.3 Write test for README guarantee
-- [ ] 4.4 Verify tests + COMMIT + PUSH
+- [x] 4.1 Added ensure_project_readme() to helpers.py - injects clear README (token setup + run + Docker) if missing/thin
+- [x] 4.2 Wired into delivery.py after Dockerfile injection (before smoke test) - every shipped zip has README
+- [x] 4.3 5 tests in test_readme_guarantee.py - ALL PASS (inject/thin/adequate/docker/empty-request)
+- [x] 4.4 Verified no regressions + COMMIT ea3b63e + PUSH (594a2e5..ea3b63e)
 
 ### Phase 5: Weakness #3 - Fallback UX parity (clear user-visible signal)
 - [ ] 5.1 When Cline fallback fires, send user a clear message instead of silence

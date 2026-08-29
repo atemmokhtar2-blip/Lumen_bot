@@ -232,6 +232,8 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                     metadata={"budget_blocked": True},
                 )
             logger.exception("generation llm budget gate failed (dev)")
+        # Track whether the Cline fallback path was used (weakness #3: fallback UX parity).
+        _fallback_fired = False
         # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
         # If orchestrator cannot run (missing langgraph, etc.) → fall through to Cline.
         try:
@@ -288,8 +290,12 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                     "multi_agent failed (%s) — falling through to Cline",
                     _orch_errs[:3],
                 )
+                # Signal to the async caller that the fallback path was used
+                # so it can notify the user (weakness #3: fallback UX parity).
+                _fallback_fired = True
         except Exception as _orch_exc:
             logger.exception("multi_agent orchestrator exception — falling through to Cline")
+            _fallback_fired = True
 
         # Cline engine-direct fallback (no translator/bridge layer).
         try:
@@ -299,12 +305,22 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             pass
 
         logger.info("run_generation → Cline engine-direct path")
-        return run_generation_with_bridge(
+        _cline_result = run_generation_with_bridge(
             request,
             work_dir,
             user_id=int(user_id or 0),
             preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
         )
+        # Tag the result so the async caller can notify the user that the
+        # fallback (Cline) path was used instead of the preferred multi-agent path.
+        if _fallback_fired:
+            try:
+                _meta = dict(getattr(_cline_result, "metadata", None) or {})
+                _meta["fallback_used"] = "cline"
+                setattr(_cline_result, "metadata", _meta)
+            except Exception:
+                pass
+        return _cline_result
 
 
     finally:

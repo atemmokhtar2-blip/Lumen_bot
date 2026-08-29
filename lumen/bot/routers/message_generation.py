@@ -92,6 +92,18 @@ async def execute_bot_generation(
                 await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
             return None
 
+        # Weakness #3 fix: if the multi-agent path failed and the Cline fallback
+        # was used, notify the user so it doesn't look like the system is "stuck".
+        try:
+            _meta = getattr(result, "metadata", None) or {}
+            if _meta.get("fallback_used") == "cline":
+                await message.reply_text(
+                    "⚙️ المسار المتقدم (multi-agent) غير متاح حالياً — "
+                    "جاري التوليد بالمسار المباشر (Cline). النتيجة ستكون جاهزة قريباً."
+                )
+        except Exception:
+            pass
+
         # LangGraph HITL: park confirm token + surface plan approval
         try:
             meta = getattr(result, "metadata", None) or {}

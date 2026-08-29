@@ -103,6 +103,17 @@ async def run_guided_generation(
             await safe_edit_text(status_msg, "فشل التوليد (نتيجة فارغة).")
         return None
 
+    # Weakness #3 fix: notify user when the Cline fallback path was used.
+    try:
+        _meta = getattr(result, "metadata", None) or {}
+        if _meta.get("fallback_used") == "cline":
+            await message.reply_text(
+                "⚙️ المسار المتقدم (multi-agent) غير متاح حالياً — "
+                "جاري التوليد بالمسار المباشر (Cline). النتيجة ستكون جاهزة قريباً."
+            )
+    except Exception:
+        pass
+
     success = bool(getattr(result, "success", False))
     project_path = getattr(result, "project_path", None)
     if not success or not project_path:
