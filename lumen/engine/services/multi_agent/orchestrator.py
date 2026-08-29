@@ -440,7 +440,10 @@ def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
             state.extensions["hitl_status"] = "resume_failed"
             if str(decision).lower() in {"rejected", "reject", "no", "cancel"}:
                 state.status = "FAILED"
-                state.final_message = state.final_message or f"HITL reject failed: {exc}"
+                # OVERRIDE (not fallback) — state.final_message still holds the
+                # stale "إجراء حساس — بوابة تأكيد" prompt from request_confirmation,
+                # so `or` would never use the real failure reason.
+                state.final_message = f"HITL reject failed: {exc}"
                 return state
             # Approved resume failed — do NOT fall through to orch.run (full restart)
             # which would re-interrupt and loop forever. Surface a clear failure so
@@ -450,9 +453,14 @@ def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
                 state.transition(AgentStatus.FAILED, role=AgentRole.HITL, detail=f"hitl_resume_failed:{type(exc).__name__}", force=True)
             except Exception:
                 state.status = AgentStatus.FAILED.value
+            # OVERRIDE (not fallback) — state.final_message still holds the stale
+            # "⚠️ إجراء حساس — بوابة تأكيد" prompt from request_confirmation, so
+            # using `or` would keep showing the approval prompt instead of this
+            # real error.  The user would see "confirm the plan" forever and think
+            # their confirmation did nothing — exactly the reported bug
+            # ("ببعت تاكيد مش بيبدا التوليد ليه").
             state.final_message = (
-                state.final_message
-                or f"تعذّر استئناف التنفيذ بعد التأكيد: {type(exc).__name__}. "
+                f"تعذّر استئناف التنفيذ بعد التأكيد: {type(exc).__name__}. "
                 f"السبب الأرجح: فقدان نقطة حفظ LangGraph بين العمليات. "
                 f"أعد طلب التوليد من البداية."
             )

@@ -330,22 +330,31 @@ def parse_confirmation_message(text: str) -> tuple[str, str, str] | None:
     """
     Parse:
       تأكيد <action_id> <token>
+      تأكيد            (verb-only → action_id/token resolved from user_data pending)
       confirm <action_id> <token>
+      confirm
       رفض <action_id>
-    Returns (verb, action_id, token).
+      رفض
+    Returns (verb, action_id, token). action_id/token may be "" for verb-only
+    messages; the caller (bridge) resolves them from the stored pending action.
     """
     raw = (text or "").strip()
     if not raw:
         return None
-    parts = raw.replace("`", "").split()
-    if len(parts) < 2:
+    # Strip common emoji/punctuation that users append (e.g. "تأكيد ✓", "confirm ✅")
+    import re as _re
+    cleaned = _re.sub(r"[\U0001f000-\U0001ffff\u2600-\u27bf\u2b00-\u2bff\u2713\u2714\u2717\u2718\u2705\u274c\u274e\u2753\u2757\ufe0f\u200d\u2764\U0001f44d\U0001f44e\U0001f194\U0001f198]+", " ", raw).strip()
+    parts = cleaned.replace("`", "").split()
+    if not parts:
         return None
     verb = parts[0].lower()
-    action_id = parts[1]
+    action_id = parts[1] if len(parts) >= 2 else ""
     token = parts[2] if len(parts) >= 3 else ""
-    if verb in {"تأكيد", "تاكيد", "confirm", "yes", "موافق"}:
+    if verb in {"تأكيد", "تاكيد", "confirm", "yes", "موافق", "موافقة", "ok", "okay", "افق", "أوافق"}:
+        # Verb-only confirmation is valid — the bridge resolves action_id/token
+        # from the pending action stored in user_data.
         return ("confirm", action_id, token)
-    if verb in {"رفض", "reject", "no", "الغاء", "إلغاء"}:
+    if verb in {"رفض", "reject", "no", "الغاء", "إلغاء", "cancel", "لا"}:
         return ("reject", action_id, "")
     return None
 

@@ -35,7 +35,9 @@ def try_handle_hitl_message(
         return False, ""
 
     verb, action_id, token = parsed
-    # Resolve state_id: user_data pending → latest board for user
+    # Resolve state_id + action_id + token from user_data pending when the user
+    # sent a verb-only message (e.g. "تأكيد", "confirm", "رفض"). The pending ids
+    # were stored by remember_hitl_pending when the plan-approval prompt was shown.
     state_id = ""
     if isinstance(user_data, dict):
         state_id = str(user_data.get("multi_agent_state_id") or "")
@@ -44,6 +46,11 @@ def try_handle_hitl_message(
             state_id = str(pending.get("state_id") or "")
         if not action_id and isinstance(pending, dict):
             action_id = str(pending.get("action_id") or action_id)
+        # When the user sends a verb-only confirm, resolve the token from the
+        # stored pending action so confirm_action's HMAC check passes without
+        # requiring the user to type the long token.
+        if not token and isinstance(pending, dict):
+            token = str(pending.get("confirm_token") or token or "")
 
     if not state_id:
         try:
@@ -116,6 +123,9 @@ def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:
                 "state_id": getattr(state, "state_id", "") or pending.get("state_id"),
                 "tool": pending.get("tool") or ("langgraph_deliver_approve" if (ext.get("hitl_pending") or {}).get("type") == "approve_deliver" else "langgraph_plan_approve"),
                 "langgraph_thread_id": ext.get("langgraph_thread_id"),
+                # Store the HMAC token so a verb-only "تأكيد" confirm (without the
+                # user typing the long token) can be validated by confirm_action.
+                "confirm_token": pending.get("confirm_token") or "",
             }
             user_data["multi_agent_state_id"] = (
                 getattr(state, "state_id", "") or pending.get("state_id")
