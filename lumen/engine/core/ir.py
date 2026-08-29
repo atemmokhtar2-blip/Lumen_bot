@@ -4,6 +4,9 @@ IR is NOT a translator. It is the validated contract between:
   User intent  →  Core  →  Execution engines (catalog | cline | hybrid)
 
 Planning stays outside generation: IR is accepted/rejected before any write.
+
+Execution is Cline-only; catalog/hybrid/infinite modes are historical
+labels coerced to CLINE on load.
 """
 from __future__ import annotations
 
@@ -13,12 +16,16 @@ from typing import Any
 
 
 class EngineMode(str, Enum):
-    """Which execution path Core selects after IR validation."""
+    """Execution path after IR validation.
 
-    CATALOG = "catalog"   # deterministic spec_core only
-    HYBRID = "hybrid"     # catalog compose + constrained assist for gaps
-    CLINE = "cline"       # general agent execution under policies
-    INFINITE = "infinite" # atomic DAG / DynamicBotSpec rule engine
+    Only CLINE runs generation. CATALOG/HYBRID/INFINITE are historical labels
+    kept for IR deserialization and always coerced to CLINE on load.
+    """
+
+    CATALOG = "catalog"   # REMOVED — coerced to CLINE
+    HYBRID = "hybrid"     # REMOVED — coerced to CLINE
+    CLINE = "cline"       # sole generation engine (Cline agent)
+    INFINITE = "infinite" # REMOVED — coerced to CLINE
 
 
 class IRStatus(str, Enum):
@@ -54,7 +61,7 @@ class BuildIR:
     capabilities_gap: list[str] = field(default_factory=list)
     integrations: list[str] = field(default_factory=list)
     acceptance: list[AcceptanceCriterion] = field(default_factory=list)
-    engine_mode: EngineMode = EngineMode.CATALOG
+    engine_mode: EngineMode = EngineMode.CLINE
     confidence: float = 0.0
     model: str = "rules"
     status: IRStatus = IRStatus.DRAFT
@@ -71,15 +78,11 @@ class BuildIR:
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "BuildIR":
         data = dict(data or {})
-        mode_raw = str(data.get("engine_mode") or "catalog").lower().strip()
-        try:
-            mode = EngineMode(mode_raw)
-        except ValueError:
-            # legacy aliases
-            if mode_raw in {"ai_codegen", "spec_core"}:
-                mode = EngineMode.CLINE if mode_raw == "ai_codegen" else EngineMode.CATALOG
-            else:
-                mode = EngineMode.CATALOG
+        mode_raw = str(data.get("engine_mode") or "cline").lower().strip()
+        # Permanent product policy: only CLINE executes generation.
+        mode = EngineMode.CLINE
+        if mode_raw and mode_raw not in {"cline", "ai_codegen", ""}:
+            pass  # legacy catalog/hybrid/infinite ignored
         status_raw = str(data.get("status") or "draft").lower().strip()
         try:
             status = IRStatus(status_raw)

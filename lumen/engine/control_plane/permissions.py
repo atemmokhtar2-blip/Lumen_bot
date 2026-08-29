@@ -45,7 +45,7 @@ def check_generate_permission(
             # Still allowed — runtime falls back to catalog
             return PermissionDecision(
                 True,
-                "cline_disabled_will_fallback_catalog",
+                "cline_disabled_no_fallback",
                 {"engine_mode": engine_mode},
             )
 

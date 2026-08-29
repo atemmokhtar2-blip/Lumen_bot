@@ -177,29 +177,18 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
                 fallback_catalog=False,
             )
 
-    try:
-        from lumen.engine.services.cline_runtime.provider_builtin import (
-            build as builtin_build,
-        )
-
-        raw = builtin_build(ir_dict, str(work))
-        return ClineExecutionResult(
-            ok=bool(raw.get("ok")),
-            project_path=raw.get("project_path"),
-            engine=str(raw.get("engine") or "cline_builtin"),
-            errors=list(raw.get("errors") or []),
-            warnings=list(raw.get("warnings") or []),
-            metadata=dict(raw.get("metadata") or {}),
-            fallback_catalog=bool(raw.get("fallback_catalog")),
-        )
-    except Exception as exc:
-        logger.exception("builtin cline provider failed")
-        return ClineExecutionResult(
-            ok=False,
-            engine="cline_builtin_error",
-            errors=[f"{type(exc).__name__}:{exc}"],
-            fallback_catalog=False,
-        )
+    # Catalog/builtin path permanently deleted — refuse non-agent modes.
+    return ClineExecutionResult(
+        ok=False,
+        engine="cline_mode_unsupported",
+        errors=[
+            f"cline_mode={mode!r}_rejected: only agent path remains "
+            "(catalog/hybrid/builtin permanently removed)"
+        ],
+        warnings=["catalog_path_deleted"],
+        metadata={"requested_mode": mode},
+        fallback_catalog=False,
+    )
 
 
 __all__ = [

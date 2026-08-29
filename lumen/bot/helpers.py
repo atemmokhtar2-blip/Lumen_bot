@@ -218,22 +218,6 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                     metadata={"budget_blocked": True},
                 )
             logger.exception("generation llm budget gate failed (dev)")
-        # Forced full AI path (manual experiment only)
-        try:
-            from lumen.engine.services.groq_codegen import (
-                groq_codegen_enabled,
-                generate_bot_via_groq,
-            )
-            if groq_codegen_enabled():
-                logger.info("GROQ_CODEGEN_ENABLED=1 — full Groq codegen (manual)")
-                return generate_bot_via_groq(
-                    request,
-                    work_dir,
-                    user_id=int(user_id or 0),
-                )
-        except Exception:
-            logger.exception("Groq codegen forced path failed; continuing with engine")
-
         # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
         # If orchestrator cannot run (missing langgraph, etc.) → fall through to Cline.
         try:

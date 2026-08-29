@@ -199,7 +199,7 @@ def execute_ir(
 
 
 
-def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
+def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False):  # hybrid ignored — path deleted -> Any:
     meta = dict(getattr(result, "metadata", None) or {})
     meta["ir"] = ir.to_dict()
     meta["engine_router_mode"] = ir.engine_mode.value
@@ -228,15 +228,6 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
     except Exception as exc:
         meta["control_plane_error"] = f"{type(exc).__name__}:{exc}"
 
-    path = getattr(result, "project_path", None)
-    if path and hybrid and ir.capabilities_gap:
-        try:
-            from lumen.engine.services.hybrid_scaffolds import apply_hybrid_scaffolds
-
-            written = apply_hybrid_scaffolds(path, list(ir.capabilities_gap), meta)
-            meta["hybrid_scaffolds"] = written
-        except Exception as exc:
-            meta["hybrid_scaffold_error"] = f"{type(exc).__name__}:{exc}"
 
     if path and getattr(result, "success", False):
         try:
@@ -274,7 +265,7 @@ def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False) -> Any:
                 engine_mode=ir.engine_mode.value,
                 ir_snapshot=ir.to_dict(),
                 path=str(path),
-                metadata={"delivery_gate": gate, "hybrid": hybrid},
+                metadata={"delivery_gate": gate},
             )
             meta["project_id"] = proj.project_id
             if meta.get("plan_id"):
