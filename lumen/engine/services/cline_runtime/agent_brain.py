@@ -789,7 +789,27 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                     except Exception:
                         raise groq_exc
             elif provider == "gemini":
-                raw = _call_gemini(system, user, choice.model_id)
+                try:
+                    raw = _call_gemini(system, user, choice.model_id)
+                except Exception as gemini_exc:
+                    # gemini→groq cross-provider failover (prevents quota/parse death spiral)
+                    try:
+                        from lumen.engine.services.llm.key_pool import groq_keys
+                        if groq_keys():
+                            logger.warning(
+                                "gemini failed (%s) — trying groq cross-provider failover",
+                                gemini_exc,
+                            )
+                            raw = _call_groq(
+                                system,
+                                user,
+                                (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip(),
+                            )
+                            provider = "groq"
+                        else:
+                            raise gemini_exc
+                    except Exception:
+                        raise gemini_exc
             elif provider == "xai":
                 raw = _call_xai(system, user, choice.model_id)
             elif provider == "ollama":
@@ -857,8 +877,24 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                 except Exception:
                     pass
             return decision
-        # parse failed — nudge and retry with stronger instruction injected once
-        logger.info("agent_brain parse fail attempt %s — retry", attempt)
+        # parse failed — nudge and retry with stronger instruction injected once.
+        # Cross-provider failover: if gemini returned unparseable JSON, switch to
+        # groq for the next attempt (groq returns cleaner JSON and has higher limits).
+        logger.info("agent_brain parse fail attempt %s provider=%s — retry", attempt, provider)
+        if provider == "gemini" and attempt < max_attempts:
+            try:
+                from lumen.engine.services.llm.key_pool import groq_keys
+                if groq_keys():
+                    logger.info("parse fail on gemini — switching to groq for next attempt")
+                    provider = "groq"
+                    choice = ModelChoice(
+                        "groq",
+                        (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip(),
+                        "GROQ_API_KEY",
+                        base_url="https://api.groq.com/openai/v1",
+                    )
+            except Exception:
+                pass
         user = user + "\n\nIMPORTANT: Previous reply was invalid JSON. Output ONLY one JSON object."
         last_error = "parse_fail"
 

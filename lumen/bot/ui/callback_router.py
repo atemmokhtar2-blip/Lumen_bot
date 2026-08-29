@@ -100,7 +100,7 @@ async def _handle_hitl_callback(update, context, q, action_id: str) -> bool:
         return try_handle_hitl_message(verb, user_id=uid, user_data=ud)
 
     try:
-        handled, reply = await asyncio.wait_for(asyncio.to_thread(_run), timeout=180.0)
+        handled, reply = await asyncio.wait_for(asyncio.to_thread(_run), timeout=300.0)
         if not handled:
             reply = "لا يوجد إجراء معلّق. أعد الطلب من جديد."
         text = (reply or "تم.")[:4000]
