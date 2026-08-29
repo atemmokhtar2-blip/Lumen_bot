@@ -183,9 +183,20 @@ async def execute_bot_generation(
             fail_code = "generation_failed"
             if errors:
                 fail_code = str(errors[0])[:80]
+            # Prefer the engine's user-facing final_message when it's a clear,
+            # actionable Arabic message (starts with ❌) — gives the user real
+            # guidance (e.g. "set GEMINI_API_KEY") instead of a generic code.
+            _engine_msg = ""
+            try:
+                _fm = str((getattr(result, "metadata", None) or {}).get("final_message") or "").strip()
+                if _fm and _fm.startswith("❌") and len(_fm) < 800:
+                    _engine_msg = _fm
+            except Exception:
+                _engine_msg = ""
+            _user_msg = _engine_msg or user_facing_generation_error(code=fail_code)
             await safe_edit_text(
                 status_msg,
-                user_facing_generation_error(code=fail_code),
+                _user_msg,
             )
             try:
                 from lumen.bot.ui.emit_context import emit_context_event

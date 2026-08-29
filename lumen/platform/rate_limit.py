@@ -1,8 +1,8 @@
-"""Rate limiter — Redis only (no Memory/SQLite backends).
+"""Rate limiter — Redis preferred, process-local fallback for budget.
 
-REDIS_URL is required in every environment. Missing or unreachable Redis
-raises at construction time (fail-fast). No local fallback exists — that
-would open a multi-worker DoS hole under B2B load.
+REDIS_URL is preferred for multi-worker deployments. When Redis is not
+configured, the LLM hard-budget gate falls back to process-local daily
+counters (thread-safe), which is correct for single-process deployments.
 
 Callers use RateLimiter only — never branch on backend type.
 """
@@ -238,5 +238,45 @@ def check_tenant_llm_budget(
             logger.warning("llm budget redis failed; refusing", exc_info=True)
             return False, "llm_budget_backend_unavailable"
 
-    # Redis is mandatory — no in-process budget store
-    return False, "llm_budget_backend_unavailable"
+    # No Redis: fall back to process-local daily counters.
+    # Safe for single-process deployments (the common Telegram-bot case).
+    # Multi-worker deployments should set REDIS_URL for shared accounting.
+    return _in_process_budget_check(tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd)
+
+
+# ── Process-local LLM budget (fallback when Redis is unavailable) ──────────────
+_PROC_BUDGET_LOCK = threading.Lock()
+_PROC_BUDGET: dict[str, dict[str, float]] = {}  # tid -> {"tokens": float, "usd": float}
+
+
+def _in_process_budget_check(
+    tid: str,
+    day: str,
+    tok_key: str,
+    usd_key: str,
+    tok_cap: int,
+    usd_cap: float,
+    add_tokens: int,
+    add_usd: float,
+) -> tuple[bool, str]:
+    """Thread-safe in-process daily budget counters (no Redis needed)."""
+    # Daily reset: keys include the day so stale entries are naturally ignored,
+    # but we also prune entries from previous days to bound memory.
+    with _PROC_BUDGET_LOCK:
+        # Prune entries from previous days (keep only today's)
+        today_prefix = f"{tid}:{day}"
+        stale = [k for k in _PROC_BUDGET if not k.endswith(today_prefix) and tid in k]
+        for k in stale:
+            _PROC_BUDGET.pop(k, None)
+        entry = _PROC_BUDGET.setdefault(today_prefix, {"tokens": 0.0, "usd": 0.0})
+        cur_tok = int(entry["tokens"])
+        cur_usd = float(entry["usd"])
+        if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
+            return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
+        if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
+            return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
+        if add_tokens:
+            entry["tokens"] = cur_tok + int(add_tokens)
+        if add_usd:
+            entry["usd"] = cur_usd + float(add_usd)
+        return True, "ok_proc"

@@ -153,6 +153,16 @@ class GraphState(TypedDict, total=False):
     isolate: bool  # parallel worktree isolation for this wave
 
 
+def _any_llm_provider_available() -> bool:
+    """True if at least one LLM provider has a key configured."""
+    try:
+        from lumen.engine.services.cline_runtime.model_router import select_model
+        choice = select_model()
+        return choice.provider != "none"
+    except Exception:
+        return False
+
+
 def _make_builder(registry: Any, board: Any):
     from langgraph.graph import END, START, StateGraph
 
@@ -604,6 +614,9 @@ def _make_builder(registry: Any, board: Any):
     def node_fail(gs: GraphState) -> dict[str, Any]:
         state: AgentState = gs["agent"]
         ctx = dict(gs.get("context") or {})
+        # Preserve an already-set final_message (e.g. the no-LLM-provider error)
+        # so node_fail doesn't overwrite it with a generic "session ended" string.
+        _saved_msg = (state.final_message or "").strip()
         try:
             state.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
         except Exception:
@@ -612,6 +625,10 @@ def _make_builder(registry: Any, board: Any):
             state = _run_named(registry, "deliver", state, ctx)
         except Exception:
             pass
+        if _saved_msg and not (state.final_message or "").strip():
+            state.final_message = _saved_msg
+        elif _saved_msg and "no_llm_provider" in " ".join(getattr(state, "build_errors", None) or []).lower():
+            state.final_message = _saved_msg
         try:
             board.put(state)
         except Exception:
@@ -755,7 +772,24 @@ def _make_builder(registry: Any, board: Any):
             "notes": [f"hitl:{'approved' if approved else 'rejected'}"],
         }
 
-    def after_plan(gs: GraphState) -> Literal["human_gate", "schedule"]:
+    def after_plan(gs: GraphState) -> Literal["human_gate", "schedule", "fail"]:
+        # If no LLM provider is configured, there is nothing to build — skip the
+        # HITL gate (which would only trap the user in an approval loop that leads
+        # to an immediate no_llm_provider failure) and go straight to fail with a
+        # clear, actionable error.
+        st0: AgentState = gs["agent"]
+        if not _any_llm_provider_available():
+            st0.final_message = (
+                "❌ لا يوجد مفتاح نموذج ذكاء اصطناعي مُهيّأ.\n"
+                "اضبط GEMINI_API_KEY أو GROQ_API_KEY أو QWEN_API_KEY ثم أعد المحاولة."
+            )
+            st0.build_errors = list(getattr(st0, "build_errors", None) or [])
+            st0.build_errors.append("no_llm_provider_configured")
+            try:
+                st0.transition(AgentStatus.FAILED, role=AgentRole.ORCHESTRATOR, force=True)
+            except Exception:
+                st0.status = AgentStatus.FAILED.value
+            return "fail"
         if hitl_interrupt_enabled():
             return "human_gate"
         return "schedule"
@@ -782,7 +816,7 @@ def _make_builder(registry: Any, board: Any):
     g.add_node("deliver", node_deliver)
     g.add_node("fail", node_fail)
     g.add_edge(START, "plan")
-    g.add_conditional_edges("plan", after_plan, {"human_gate": "human_gate", "schedule": "schedule"})
+    g.add_conditional_edges("plan", after_plan, {"human_gate": "human_gate", "schedule": "schedule", "fail": "fail"})
     g.add_conditional_edges("human_gate", after_human_gate, {"schedule": "schedule", "fail": "fail"})
     g.add_conditional_edges("schedule", after_schedule, {"work": "work", "critique": "critique"})
     g.add_conditional_edges("work", after_work, {"schedule": "schedule", "critique": "critique"})

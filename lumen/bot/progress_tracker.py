@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Callable, Optional
 
@@ -22,7 +23,7 @@ class ProgressHeartbeat:
             "⏳ جاري التحليل وبناء المواصفات...",
             "⏳ جاري توليد الأوامر والمعالجات...",
             "⏳ جاري التحقق ضد الهلوسة...",
-            "⏳ ما زال التوليد يعمل — لحظات...",
+            "⏳ ما زال التوليد تعمل — للحظات...",
         ]
         while not self._stop.is_set():
             try:
@@ -50,6 +51,21 @@ class ProgressHeartbeat:
                 self._task.cancel()
 
 
+def _heartbeat_timeout() -> float:
+    """Outer wall-clock guarantee for run_with_heartbeat.
+
+    Slightly above GENERATION_TIMEOUT_SEC so the inner engine timeout fires
+    first (producing a precise error), but this outer bound catches any path
+    that bypasses the inner timeout (defense-in-depth).
+    """
+    try:
+        inner = float(os.getenv("GENERATION_TIMEOUT_SEC") or "180")
+    except ValueError:
+        inner = 180.0
+    # Cap at 600s (same as GENERATION_TIMEOUT_SEC max), add 30s grace
+    return max(30.0, min(600.0, inner) + 30.0)
+
+
 async def run_with_heartbeat(
     fn: Callable[..., Any],
     *args,
@@ -59,7 +75,15 @@ async def run_with_heartbeat(
     hb = ProgressHeartbeat(status_msg)
     hb.start()
     try:
-        return await asyncio.to_thread(fn, *args, **kwargs)
+        # Defense-in-depth: bound the entire generation with an outer asyncio
+        # timeout. The inner run_with_engine_timeout should fire first, but if
+        # any pre-timeout path hangs (network import, blocking I/O, etc.) this
+        # guarantees the user always gets a result within a bounded time.
+        timeout = _heartbeat_timeout()
+        return await asyncio.wait_for(
+            asyncio.to_thread(fn, *args, **kwargs),
+            timeout=timeout,
+        )
     finally:
         await hb.stop()
 

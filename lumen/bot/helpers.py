@@ -281,9 +281,11 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
                         "module",
                         "import",
                         "not installed",
-                        "no_llm_provider",
                     )
                 )
+                # no_llm_provider is NOT fallbackable: Cline uses the same LLM
+                # keys as the orchestrator, so falling through would only repeat
+                # the same failure and discard the orchestrator's helpful message.
                 if not _fallbackable:
                     return _orch_res
                 logger.warning(
