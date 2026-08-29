@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time as _time
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +44,28 @@ def _tools_help() -> str:
 
 def _max_steps() -> int:
     try:
-        return max(5, min(50, int(os.getenv("CLINE_AGENT_MAX_STEPS") or "24")))
+        # Default 12 steps (was 24) — weakness #2 fix: fewer steps means the
+        # loop cannot run for 108 minutes even without the time budget. The
+        # time budget (150s) is the primary guarantee; this is a secondary cap.
+        return max(5, min(50, int(os.getenv("CLINE_AGENT_MAX_STEPS") or "12")))
     except ValueError:
-        return 16
+        return 12
+
+
+def _time_budget() -> float:
+    """Hard wall-clock budget (seconds) for the entire agent loop.
+
+    This is the INNER guarantee (weakness #2): even if the outer
+    run_with_engine_timeout is not active, the loop itself stops once the
+    total elapsed time exceeds this budget. Default 150s — slightly under
+    GENERATION_TIMEOUT_SEC (180s) so the loop finishes gracefully before the
+    outer hard kill. Tunable via CLINE_AGENT_TIME_BUDGET_SEC. Capped [10, 600].
+    """
+    try:
+        v = float(os.getenv("CLINE_AGENT_TIME_BUDGET_SEC") or "150")
+    except ValueError:
+        v = 150.0
+    return max(10.0, min(v, 600.0))
 
 
 
@@ -250,7 +270,40 @@ def run_agent(
             "Start building now. Use grep_codebase/glob_files/list_dir to map the project, read_files for context, then apply_edits or write_file/edit_file across all needed files."
         )
 
+    # Wall-clock budget — the INNER time guarantee (weakness #2 root fix).
+    # The loop stops as soon as total elapsed exceeds _time_budget(), even if
+    # max_steps has not been reached. This prevents the "10-minute hang" when
+    # the LLM is slow or retries stack up.
+    _budget_sec = _time_budget()
+    _loop_start = _time.monotonic()
+    _deadline = _loop_start + _budget_sec
+    state.metadata["time_budget_sec"] = _budget_sec
+
     for i in range(limit):
+        # TIME-BUDGET CUTOFF: stop the loop if the wall-clock budget is exhausted.
+        _now = _time.monotonic()
+        if _now >= _deadline:
+            _elapsed = int(_now - _loop_start)
+            state.stop_reason = "time_budget_exhausted"
+            state.ok = False
+            state.warnings.append(f"time_budget_exhausted:{_elapsed}s>={int(_budget_sec)}s")
+            state.metadata["time_budget_exhausted"] = True
+            state.metadata["elapsed_sec"] = _elapsed
+            logger.warning(
+                "agent_loop time budget exhausted: %ds >= %ds budget (step %d/%d)",
+                _elapsed, int(_budget_sec), i, limit,
+            )
+            # Attempt a graceful finish: check if anything was built so far.
+            try:
+                acc = check_agent_project(state.work_dir, goal=goal)
+                state.metadata["acceptance"] = acc
+                if acc.get("ok"):
+                    state.stop_reason = "completed_within_budget"
+                    state.ok = True
+                    state.metadata["summary"] = "auto_finish_time_budget_ok"
+            except Exception:
+                pass
+            return state
         try:
             from lumen.engine.services.generation_cancel import is_cancelled
 
@@ -404,8 +457,6 @@ def run_agent(
             state.add_user("Call a tool or finish. JSON only.")
             state.steps.append(step)
             continue
-
-        import time as _time
 
         _t0 = _time.monotonic()
         result = run_tool(state.work_dir, str(tool), args)

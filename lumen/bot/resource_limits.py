@@ -15,8 +15,13 @@ T = TypeVar("T")
 MAX_USER_MESSAGE_CHARS = int(os.getenv("MAX_USER_MESSAGE_CHARS") or "4000")
 # Spec / generation request body
 MAX_SPEC_REQUEST_CHARS = int(os.getenv("MAX_SPEC_REQUEST_CHARS") or "12000")
-# Hard wall-clock for expensive engine work (translate + generate)
+# Hard wall-clock for cheap engine work (translate, IR build, single LLM call)
 ENGINE_TIMEOUT_SEC = float(os.getenv("ENGINE_TIMEOUT_SEC") or "30")
+# Hard wall-clock for a FULL generation run (LangGraph orchestration OR Cline
+# agent loop). This is the single guarantee that a user ALWAYS sees a result
+# (success or a clear timeout error) within a bounded wall-clock window.
+# Default 180s (3 minutes) — tunable via env. Capped at 600s for safety.
+GENERATION_TIMEOUT_SEC = float(os.getenv("GENERATION_TIMEOUT_SEC") or "180")
 
 
 def clamp_user_text(text: str, *, limit: int | None = None) -> str:
@@ -51,7 +56,8 @@ def run_with_engine_timeout(
     to continue the request path.
     """
     sec = float(timeout if timeout is not None else ENGINE_TIMEOUT_SEC)
-    sec = max(1.0, min(sec, 300.0))
+    # Cap at 600s to support GENERATION_TIMEOUT_SEC while preventing runaway waits.
+    sec = max(1.0, min(sec, 600.0))
     # Do NOT wait on shutdown — a hung worker must not pin the request thread
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:

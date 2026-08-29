@@ -9,7 +9,12 @@ import zipfile
 from pathlib import Path
 
 from .config import ALLOWED_USER_IDS, ALLOW_ALL_USERS, logger
-from .resource_limits import run_with_engine_timeout, EngineTimeoutError, clamp_spec_request
+from .resource_limits import (
+    run_with_engine_timeout,
+    EngineTimeoutError,
+    clamp_spec_request,
+    GENERATION_TIMEOUT_SEC,
+)
 
 
 def is_allowed(user_id: int | None) -> bool:
@@ -236,12 +241,32 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             )
             if orchestrator_enabled():
                 logger.info("multi_agent orchestrator A–E — generate path")
-                _orch_res = orchestrate_generate(
-                    request,
-                    work_dir,
-                    user_id=int(user_id or 0),
-                    preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
-                )
+                # HARD WALL-CLOCK GUARANTEE (weakness #2 root fix):
+                # orchestrate_generate → run_langgraph_pipeline → graph.invoke had
+                # NO time bound. Wrap the entire orchestration in run_with_engine_timeout
+                # so a user ALWAYS sees a result within GENERATION_TIMEOUT_SEC.
+                def _orch():
+                    return orchestrate_generate(
+                        request,
+                        work_dir,
+                        user_id=int(user_id or 0),
+                        preferred_keys=preferred_keys if isinstance(preferred_keys, list) else None,
+                    )
+                try:
+                    _orch_res = run_with_engine_timeout(
+                        _orch, timeout=GENERATION_TIMEOUT_SEC
+                    )
+                except EngineTimeoutError as _ot:
+                    from lumen.engine.core.result import GenerationResult
+                    logger.warning(
+                        "orchestration timeout user=%s after %.0fs — falling through",
+                        user_id, GENERATION_TIMEOUT_SEC,
+                    )
+                    _orch_res = GenerationResult(
+                        success=False,
+                        errors=[f"orchestration_timeout:{_ot}"],
+                        metadata={"timeout": True, "stage": "orchestrate_generate"},
+                    )
                 if getattr(_orch_res, "success", False):
                     return _orch_res
                 _orch_errs = list(getattr(_orch_res, "errors", None) or [])
@@ -346,7 +371,9 @@ def run_generation_with_bridge(
         return result
 
     try:
-        return run_with_engine_timeout(_engine_direct_exec)
+        # Use the full generation timeout (not the 30s engine default) since
+        # this is a complete Cline agent loop that needs to build a project.
+        return run_with_engine_timeout(_engine_direct_exec, timeout=GENERATION_TIMEOUT_SEC)
     except EngineTimeoutError as exc:
         from lumen.engine.core.result import GenerationResult
         logger.warning("engine timeout user=%s: %s", user_id, exc)

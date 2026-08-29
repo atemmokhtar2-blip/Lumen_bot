@@ -98,9 +98,12 @@ _JSON_SCHEMA_HINT = (
 
 def _timeout() -> float:
     try:
-        return max(20.0, min(180.0, float(os.getenv("CLINE_LLM_TIMEOUT_SEC") or "90")))
+        # Default 45s (was 90s) — weakness #2 fix: a single LLM call should not
+        # consume 90s. With 2 retries the worst-case per-decide is ~2×45s + backoff
+        # ≈ ~95s, and the agent_loop time budget (150s) caps the total anyway.
+        return max(20.0, min(120.0, float(os.getenv("CLINE_LLM_TIMEOUT_SEC") or "45")))
     except ValueError:
-        return 90.0
+        return 45.0
 
 
 def _gemini_key() -> str:
@@ -736,9 +739,12 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
             pass
 
     try:
-        max_attempts = max(1, min(4, int(os.getenv("CLINE_LLM_RETRIES") or "3")))
+        # Default 2 retries (was 3) — weakness #2 fix: fewer retries means a
+        # slow/hung provider fails faster. The agent_loop time budget is the
+        # hard backstop regardless.
+        max_attempts = max(1, min(4, int(os.getenv("CLINE_LLM_RETRIES") or "2")))
     except ValueError:
-        max_attempts = 3
+        max_attempts = 2
 
     provider = choice.provider
     last_error = ""
