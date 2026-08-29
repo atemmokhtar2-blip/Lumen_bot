@@ -261,9 +261,11 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     models = [
         (model_id or "").strip(),
         (os.getenv("GEMINI_MODEL") or "").strip(),
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3-flash-preview",
         "gemini-3.6-flash",
-        "gemini-flash-latest",
-        "gemini-1.5-flash",
     ]
     models = [m for m in models if m]
     # dedupe
@@ -297,7 +299,8 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
             except requests.RequestException as exc:
                 last_err = exc
                 continue
-            if resp.status_code in {401, 403, 429, 503}:
+            if resp.status_code in {401, 403}:
+                # Auth errors are per-KEY — cool down this key and try the next one.
                 try:
                     mark_gemini_cooldown(source, reason=f"http_{resp.status_code}")
                 except Exception:
@@ -306,6 +309,19 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
                     f"gemini_http_{resp.status_code}:{(resp.text or '')[:200]}"
                 )
                 break  # next key
+            if resp.status_code in {429, 503}:
+                # Rate-limit / overload are PER-MODEL (free-tier daily quota is
+                # GenerateRequestsPerDayPerProjectPerModel).  Cool down this key
+                # but try the NEXT MODEL with the same (or next) key first — a
+                # different model has its own quota bucket and may still work.
+                try:
+                    mark_gemini_cooldown(source, reason=f"http_{resp.status_code}")
+                except Exception:
+                    pass
+                last_err = RuntimeError(
+                    f"gemini_http_{resp.status_code}:{(resp.text or '')[:200]}"
+                )
+                continue  # next model (per-model quota bucket)
             if resp.status_code == 404:
                 last_err = RuntimeError(f"gemini_model_404:{model}")
                 continue  # next model

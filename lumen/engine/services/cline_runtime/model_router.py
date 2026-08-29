@@ -168,12 +168,12 @@ def select_model(*, task: str = "build") -> ModelChoice:
     table = {
         "gemini": ModelChoice(
             "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip(),
+            (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip(),
             "GOOGLE_API_KEY",
         ),
         "google": ModelChoice(
             "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip(),
+            (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip(),
             "GOOGLE_API_KEY",
         ),
         "xai": ModelChoice(

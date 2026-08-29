@@ -286,16 +286,12 @@ def main() -> None:
     except Exception:
         logger.exception("Gemini status probe failed at boot")
 
-    # Resume interrupted multi-agent generations after crash/restart (Redis/file board).
-    try:
-        from lumen.engine.services.multi_agent.redis_board import enqueue_pending_resumes
-        _resumed = enqueue_pending_resumes(
-            limit=int(os.getenv("MULTI_AGENT_RESUME_BOOT_LIMIT") or "20")
-        )
-        if _resumed:
-            logger.info("multi_agent resume boot enqueued=%s", len(_resumed))
-    except Exception:
-        logger.warning("multi_agent resume boot skipped", exc_info=True)
+    # NOTE: A boot-time "enqueue pending resumes" call previously lived here
+    # but referenced a module (lumen.engine.services.multi_agent.redis_board)
+    # and function (enqueue_pending_resumes) that never existed in the
+    # codebase — it always failed silently.  Cross-process HITL resume is now
+    # handled durably by the SqliteSaver checkpoint (langgraph_pipeline.runner)
+    # and resume_langgraph_hitl(), so the dead import has been removed.
 
     allowed_repr = (
         sorted(ALLOWED_USER_IDS)

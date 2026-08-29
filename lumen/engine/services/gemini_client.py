@@ -107,13 +107,17 @@ _KEY_ENV_NAMES = (
 _NUMBERED_KEY_ENV_NAMES = tuple(f"GEMINI_API_KEY_{idx}" for idx in range(1, 151))
 _KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 
+# Verified-working models (tested 2026-08-29 against the live Gemini v1beta API).
+# Quota is PER-MODEL PER-DAY (GenerateRequestsPerDayPerProjectPerModel-FreeTier,
+# limit 20/day on free tier), so listing several distinct models multiplies the
+# available daily request budget.  Deprecated/removed model names (which return
+# HTTP 404 and waste a request cycle) have been removed.
 _MODEL_FALLBACKS = (
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3-flash-preview",
     "gemini-3.6-flash",
-    "gemini-3.6-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-flash-latest",
-    "gemini-1.5-flash",
 )
 
 _RESPONSE_SCHEMA: dict[str, Any] = {
@@ -187,7 +191,11 @@ def _truthy(value: str | None) -> bool:
 
 
 def model_name() -> str:
-    return (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
+    # gemini-3.5-flash has a separate per-model daily quota from gemini-3.6-flash,
+    # so using it as the primary spreads free-tier load across models.  The full
+    # _MODEL_FALLBACKS list is tried on every call, so an exhausted model simply
+    # falls through to the next one.
+    return (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip()
 
 
 def _normalize_secret(raw: str) -> str:
@@ -647,7 +655,7 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                 if response.status_code in {429, 503}:
                     body_preview = (response.text or "")[:240]
                     logger.warning(
-                        "Gemini source=%s model=%s HTTP %s — key cooldown and failover; body=%s",
+                        "Gemini source=%s model=%s HTTP %s — per-model quota/overload; try next model; body=%s",
                         key_source,
                         model,
                         response.status_code,
@@ -656,9 +664,11 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                     last_error = RuntimeError(
                         f"Gemini source {key_source} HTTP {response.status_code}: {body_preview}"
                     )
+                    # 429/503 are PER-MODEL (free-tier daily quota is per model).
+                    # Cool down this key but continue to the NEXT MODEL — a
+                    # different model has its own quota bucket and may succeed.
                     _cooldown_key(key_source, reason="rate")
-                    rotate_key = True
-                    break
+                    continue  # next model (same key still valid for other models)
 
                 if response.status_code == 404:
                     logger.warning(
