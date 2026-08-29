@@ -18,6 +18,105 @@ def _sentry_capture(**tags):
         pass
 
 
+def ensure_project_readme(project_path: str | Path, *, request: str = "") -> Path:
+    """Guarantee every delivered project has a clear README with token setup + run instructions.
+
+    If README.md is missing or too thin (< 200 chars / lacks token instructions),
+    inject a production-grade README so the user always knows how to set the token
+    and run the bot.  This closes the 'generated but not production-ready' gap:
+    the market judges 'does the bot run first time? is there a clear README?
+    is the token easy to set?' — none of which is guaranteed by architecture alone.
+    """
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        return root / "README.md"
+
+    readme = root / "README.md"
+    existing = ""
+    if readme.is_file():
+        try:
+            existing = readme.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            existing = ""
+
+    # If an adequate README already exists (has token + run instructions), keep it.
+    _low = existing.lower()
+    _adequate = (
+        len(existing.strip()) >= 200
+        and ("token" in _low or "bot_token" in _low or "telegram_bot_token" in _low)
+        and ("python" in _low or "docker" in _low or "run" in _low)
+    )
+    if _adequate:
+        return readme
+
+    # Detect entry point and requirements for accurate instructions.
+    entry = "main.py"
+    for cand in ("main.py", "bot.py", "app.py"):
+        if (root / cand).is_file():
+            entry = cand
+            break
+
+    has_dockerfile = (root / "Dockerfile").is_file()
+    has_requirements = (root / "requirements.txt").is_file()
+    has_env_example = (root / ".env.example").is_file()
+
+    # Build a clear, self-contained README.
+    title = (request.strip()[:80] if request.strip() else "Telegram Bot")
+    lines = [
+        f"# {title}",
+        "",
+        "## نظرة عامة",
+        f"بوت تيليجرام تم توليده تلقائياً. نقطة التشغيل: `{entry}`.",
+        "",
+        "## المتطلبات",
+        "- Python 3.11 أو أحدث",
+        "- حساب Bot على تيليجرام (عبر [@BotFather](https://t.me/BotFather))",
+        "",
+        "## إعداد التوكن (مهم)",
+        "1. افتح [@BotFather](https://t.me/BotFather) على تيليجرام",
+        "2. أرسل `/newbot` واتبع الخطوات للحصول على التوكن",
+        "3. ضع التوكن في متغير بيئة `BOT_TOKEN`:",
+        "",
+        "   ```bash",
+        "   export BOT_TOKEN=\"123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"",
+        "   ```",
+        "",
+        "   أو أنشئ ملف `.env`:",
+        "   ```",
+        "   BOT_TOKEN=123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "   ```",
+        "",
+        "## التشغيل المحلي",
+        "```bash",
+        "pip install -r requirements.txt" if has_requirements else "pip install python-telegram-bot",
+        f"python {entry}",
+        "```",
+        "",
+    ]
+    if has_dockerfile:
+        lines.extend([
+            "## التشغيل عبر Docker",
+            "```bash",
+            "docker build -t my-bot .",
+            "docker run -d --env BOT_TOKEN=\"YOUR_TOKEN\" my-bot",
+            "```",
+            "",
+        ])
+    lines.extend([
+        "## استكشاف الأخطاء",
+        "- **خطأ 409 Conflict**: تأكد من عدم تشغيل نسخة أخرى من نفس البوت، أو أزل الـ webhook عبر BotFather.",
+        "- **التوكن غير صالح**: تأكد من نسخ التوكن كاملاً من BotFather بدون مسافات.",
+        "- **المكتبات ناقصة**: شغّل `pip install -r requirements.txt` مرة أخرى.",
+        "",
+    ])
+    text = "\n".join(lines)
+    try:
+        readme.write_text(text, encoding="utf-8")
+    except Exception:
+        logger.exception("ensure_project_readme write failed")
+    return readme
+
+
 def _smoke_test_project(project_path: str | Path, *, seconds: float = 10.0) -> tuple[bool, str]:
     """Strong pre-delivery verification (~10s wall time).
 

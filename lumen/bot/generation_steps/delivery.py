@@ -82,6 +82,15 @@ async def deliver_generation_result(
     except Exception:
         logger.exception("dockerfile emit failed")
 
+    # Ensure every delivered project has a clear README with token setup + run instructions.
+    # Closes weakness #6: the market judges "does the bot run first time? is there a clear
+    # README? is the token easy to set?" — none guaranteed by architecture alone.
+    try:
+        from lumen.bot.generation_steps.helpers import ensure_project_readme
+        ensure_project_readme(project_path, request=request or "")
+    except Exception:
+        logger.exception("readme ensure failed")
+
     # Pre-delivery 10s smoke test — code must load before we ship a zip.
     try:
         await message.reply_text("🧪 جاري اختبار المشروع ~10 ثوانٍ قبل التسليم...")
