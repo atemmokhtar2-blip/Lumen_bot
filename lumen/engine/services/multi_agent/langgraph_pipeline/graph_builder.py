@@ -168,8 +168,8 @@ def _make_builder(registry: Any, board: Any):
         tree = _load_tree(state)
         if not tree.nodes or len(tree.nodes) <= 1:
             try:
-                from .dynamic_planner import assemble_plan
-                from .plan_contract import ExecutionPlan
+                from ..dynamic_planner import assemble_plan
+                from ..plan_contract import ExecutionPlan
                 work = str(ctx.get("work_dir") or (state.extensions or {}).get("work_dir") or "")
                 feats = list(state.preferred_keys or []) or list((state.strict_spec or {}).get("features") or [])
                 plan_raw = (state.extensions or {}).get("execution_plan")
@@ -216,7 +216,7 @@ def _make_builder(registry: Any, board: Any):
         tree.refresh_readiness()
         wave = tree.parallel_wave()
         try:
-            from .production_policy import max_parallel_workers
+            from ..production_policy import max_parallel_workers
             max_par = max_parallel_workers()
         except Exception:
             try:
@@ -446,7 +446,7 @@ def _make_builder(registry: Any, board: Any):
 
         # Official execution feedback (compile + import + pytest)
         try:
-            from .execution_feedback import run_execution_feedback
+            from ..execution_feedback import run_execution_feedback
             root = Path(state.generated_path) if state.generated_path else _work_dir(state, ctx)
             fb = run_execution_feedback(root)
             state.extensions = dict(state.extensions or {})
@@ -641,7 +641,7 @@ def _make_builder(registry: Any, board: Any):
 
         parallel = (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower() not in {"0", "false", "no", "off"}
         try:
-            from .production_policy import max_parallel_workers
+            from ..production_policy import max_parallel_workers
             max_par = max_parallel_workers()
         except Exception:
             try:

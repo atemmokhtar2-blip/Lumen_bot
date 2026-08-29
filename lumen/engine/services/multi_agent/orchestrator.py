@@ -409,7 +409,12 @@ def orchestrate_generate(
 
 
 def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
-    """Prefer official LangGraph Command(resume) when an interrupt is pending."""
+    """Prefer official LangGraph Command(resume) when an interrupt is pending.
+
+    On resume failure for an *approved* decision we surface the error instead of
+    falling through to ``orch.run`` — a full restart would re-interrupt at the
+    plan gate and trap the user in an infinite "confirm the plan" loop.
+    """
     ext = state.extensions or {}
     pending = ext.get("pending_action") or {}
     tool = str(pending.get("tool") or state.capability_id or "")
@@ -428,10 +433,34 @@ def _resume_or_rerun(state, ctx, board, orch, decision: str = "approved"):
         except Exception as exc:
             state.extensions = dict(ext)
             state.extensions["hitl_resume_error"] = f"{type(exc).__name__}:{exc}"
+            # Clear the stale awaiting-approval flags so callers (Telegram bot)
+            # do not mistake this FAILED state for a fresh interrupt prompt
+            # (which would re-ask "confirm the plan" and loop forever).
+            state.extensions["langgraph_interrupt"] = False
+            state.extensions["hitl_status"] = "resume_failed"
             if str(decision).lower() in {"rejected", "reject", "no", "cancel"}:
                 state.status = "FAILED"
                 state.final_message = state.final_message or f"HITL reject failed: {exc}"
                 return state
+            # Approved resume failed — do NOT fall through to orch.run (full restart)
+            # which would re-interrupt and loop forever. Surface a clear failure so
+            # the user sees what went wrong and can retry the whole generation.
+            logger.exception("HITL approved resume failed — surfacing error (no full restart)")
+            try:
+                state.transition(AgentStatus.FAILED, role=AgentRole.HITL, detail=f"hitl_resume_failed:{type(exc).__name__}", force=True)
+            except Exception:
+                state.status = AgentStatus.FAILED.value
+            state.final_message = (
+                state.final_message
+                or f"تعذّر استئناف التنفيذ بعد التأكيد: {type(exc).__name__}. "
+                f"السبب الأرجح: فقدان نقطة حفظ LangGraph بين العمليات. "
+                f"أعد طلب التوليد من البداية."
+            )
+            try:
+                board.put(state)
+            except Exception:
+                pass
+            return state
     return orch.run(state, context=ctx)
 
 

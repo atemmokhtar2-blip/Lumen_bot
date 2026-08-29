@@ -22,13 +22,20 @@ def _shared_checkpointer():
 
     Sqlite is process+restart durable (same machine). Required for real HITL resume
     after worker restart — Memory alone is not world-class.
+
+    CRITICAL: HITL resume across processes (RQ worker -> Telegram handler) REQUIRES
+    a durable checkpointer. MemorySaver is process-local and will cause resume to
+    silently restart the graph (infinite "confirm the plan" loop). When HITL is
+    enabled and no durable checkpointer can be created we log a loud error so the
+    operator can install ``langgraph-checkpoint-sqlite``.
     """
     global _SHARED_CHECKPOINTER
     if _SHARED_CHECKPOINTER is not None:
         return _SHARED_CHECKPOINTER
     if (os.getenv("MULTI_AGENT_CHECKPOINT") or "1").strip().lower() in {"0", "false", "no", "off"}:
         return None
-    # Prefer official SqliteSaver
+    # Prefer official SqliteSaver (durable across processes — required for HITL)
+    sqlite_ok = False
     try:
         from langgraph.checkpoint.sqlite import SqliteSaver
         import sqlite3
@@ -39,17 +46,28 @@ def _shared_checkpointer():
             _SHARED_CHECKPOINTER = SqliteSaver.from_conn(conn)
         else:
             _SHARED_CHECKPOINTER = SqliteSaver(conn)
+        sqlite_ok = True
         logger.info("LangGraph SqliteSaver at %s", db)
         return _SHARED_CHECKPOINTER
     except Exception as exc:
-        logger.warning("SqliteSaver unavailable (%s) — trying MemorySaver", exc)
+        logger.warning(
+            "SqliteSaver unavailable (%s) — trying MemorySaver. "
+            "HITL resume across processes WILL FAIL: pip install langgraph-checkpoint-sqlite",
+            exc,
+        )
     try:
         from langgraph.checkpoint.memory import MemorySaver
         _SHARED_CHECKPOINTER = MemorySaver()
+        if not sqlite_ok and hitl_interrupt_enabled():
+            logger.error(
+                "HITL is enabled but only MemorySaver is available (process-local). "
+                "Cross-process resume will restart the graph instead of continuing. "
+                "Install langgraph-checkpoint-sqlite for durable HITL."
+            )
         logger.warning("LangGraph using MemorySaver (not durable across process restart)")
         return _SHARED_CHECKPOINTER
     except Exception as exc:
-        logger.warning("No checkpointer: %s", exc)
+        logger.error("No LangGraph checkpointer available: %s — HITL resume impossible", exc)
         return None
 
 
