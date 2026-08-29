@@ -11,10 +11,13 @@ def test_resume_or_rerun_detects_deliver_awaiting():
 
 
 def test_tree_lock_in_node_work():
-    src = Path("lumen/engine/services/multi_agent/langgraph_pipeline.py").read_text(encoding="utf-8")
-    assert "_TREE_LOCK" in src
-    assert "with _TREE_LOCK:" in src
-    assert "SqliteSaver.from_conn" in src or "from_conn" in src
+    # langgraph_pipeline is a package — tree lock is in graph_builder.py,
+    # SqliteSaver checkpoint setup is in flags.py
+    gb = Path("lumen/engine/services/multi_agent/langgraph_pipeline/graph_builder.py").read_text(encoding="utf-8")
+    flags = Path("lumen/engine/services/multi_agent/langgraph_pipeline/flags.py").read_text(encoding="utf-8")
+    assert "_TREE_LOCK" in gb
+    assert "with _TREE_LOCK:" in gb
+    assert "SqliteSaver.from_conn" in flags or "from_conn" in flags
 
 
 def test_market_scenarios_still_green():
