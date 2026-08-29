@@ -29,7 +29,7 @@
 - [x] Fix the BridgeSpecBackend TypeError
 - [x] Test the fix (reducer unit test + real LangGraph + full pipeline generation)
 - [x] Verify generated bot matches user request (تم الاستلام handler = user's request!)
-- [ ] Write findings report with recommendations
+- [x] Write findings report with recommendations (INVESTIGATION_FINDINGS.md)
 
 ## Phase 4: Deliver findings
 - [x] Present findings to user with evidence
