@@ -35,9 +35,16 @@
 - [x] 2.4 Verify: syntax check + imports + 21 tests PASS (4 generation-time + 17 hitl/confirm) — no regressions
       - Fixed test isolation bug in test_generation_time_guarantee.py (module-level constant caching)
       - Confirmed pre-existing failures (capability_detection, firecracker) are NOT caused by these changes
-- [ ] 2.5 COMMIT + PUSH + verify
+- [x] 2.5 COMMIT debebcc + PUSH + verified (3190cec..debebcc)
 
 ## Phase 3: Weakness #4 — Clean Sprawling Code (audit + delete dead tools)
-- [ ] 3.1 Audit unused tools/services (repo_intelligence, static_dev_gate, package_reality, browser_use)
-- [ ] 3.2 Delete confirmed dead code
+- [x] 3.1 Audit unused tools/services
+      AUDIT COMPLETE. Top-level service dirs (repo_intelligence, static_dev_gate,
+      package_reality, browser_use, etc.) all LIVE — imported via relative imports.
+      callback_router.py (607 lines) = LIVE (wired in main.py L384 as CallbackQueryHandler).
+      3 CONFIRMED DEAD modules (zero imports anywhere):
+        (a) lumen/engine/services/cline_runtime/provider_builtin.py (25 lines) — retired stub
+        (b) lumen/engine/services/cline_runtime/tool_runner.py (78 lines) — ToolRunner, never used
+        (c) lumen/bot/generation_steps/state_machine.py (26 lines) — GenerationPhase enum + re-export
+- [ ] 3.2 Delete confirmed dead code (provider_builtin.py, tool_runner.py, state_machine.py)
 - [ ] 3.3 COMMIT + PUSH + verify
