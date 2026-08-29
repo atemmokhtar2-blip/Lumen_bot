@@ -157,7 +157,6 @@ async def try_engine_ui_text(
                 st.slots["bot_description"] = desc[:4000]
                 save_ui_state(user_data, st)
                 user_data["force_generate_once"] = True
-                user_data["engine_direct_request"] = desc[:4000]
                 user_data["last_bot_request"] = desc[:4000]
                 # fall through to generation in handle_message
                 return False  # not fully handled — generation continues

@@ -28,7 +28,6 @@ async def run_guided_generation(
         return None
 
     if context.user_data is not None:
-        context.user_data["engine_direct_request"] = gen_request
         context.user_data["force_generate_once"] = True
 
     work_dir: Path | None = None

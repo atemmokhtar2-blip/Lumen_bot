@@ -309,7 +309,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if _is_bot_spec_early or _looks_like_generation_request(request):
             context.user_data["last_bot_request"] = request
             context.user_data["force_generate_once"] = True
-            context.user_data["free_agent_path"] = True
             logger.info("Free-agent mode → force generate (skip catalog chat)")
 
     # If the user embeds start intent in a longer message (… وابدا حالا), force generation.
@@ -431,7 +430,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         preferred_keys = None
         if context.user_data is not None:
             context.user_data.pop("force_generate_once", None)
-            context.user_data["engine_direct_request"] = gen_request
             context.user_data["translated_source"] = "engine_direct"
         logger.info("generate-now engine-direct path (no translate/bridge layer) request_len=%s", len(gen_request))
 
@@ -543,10 +541,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Engine-direct: raw user text goes to multi-agent/Cline. No translate/bridge.
         logger.info("Skipping chat layer; force_generate_once active")
         if context.user_data is not None:
-            context.user_data["engine_direct_request"] = request
             context.user_data["translated_preferred_keys"] = []
             context.user_data["translated_source"] = "engine_direct"
-            context.user_data["free_agent_path"] = True
         try:
             await message.reply_text("جاري تجهيز البوت الآن…")
         except Exception:
@@ -704,7 +700,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     # Signal force-generate with raw user text; engine handles the rest.
                     if context.user_data is not None:
                         context.user_data["force_generate_once"] = True
-                        context.user_data["engine_direct_request"] = request
                         context.user_data["translated_source"] = "engine_direct_from_chat_action"
                     _translated_generation_request = request
                     _translation_source = "engine_direct"
@@ -776,7 +771,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if gen_src:
                 request = gen_src
                 if context.user_data is not None:
-                    context.user_data["engine_direct_request"] = gen_src
                     context.user_data["translated_source"] = "engine_direct"
                 _translated_generation_request = gen_src
                 logger.info("Force-generate engine-direct (no translate/bridge) len=%s", len(gen_src))
@@ -1055,22 +1049,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     )
         except Exception:
             logger.exception("continuity plan failed")
-        # Phase 6: advanced partner brief
-        try:
-            from lumen.engine.services.advanced_partner import (
-                build_advanced_brief,
-            )
-            _act = (context.user_data or {}).get("active_repo") or {}
-            _brief = build_advanced_brief(
-                uid,
-                request,
-                base_dir=OUTPUT_DIR,
-                active_path=str(_act.get("path") or ""),
-            )
-            context.user_data["advanced_brief"] = _brief.to_dict()
-            context.user_data["advanced_brief_ai"] = _brief.to_ai_context()
-        except Exception:
-            logger.exception("advanced_partner brief failed")
     except Exception:
         logger.exception("context_engine failed")
 
@@ -1295,29 +1273,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Capability Detection + feasibility (Phase 2) — honest gate before generation
     _soft_note = ""
-    _detection_meta = {}
     try:
         from lumen.engine.services.capability_detection import telegram_preflight
 
         _pre = telegram_preflight(request)
-        _rep = _pre.get("report")
-        if _rep is not None:
-            try:
-                from lumen.engine.services.capability_detection import metadata_from_report
-                _detection_meta = metadata_from_report(_rep)
-            except Exception:
-                _detection_meta = {}
         if _pre.get("should_block"):
             await message.reply_text(_pre.get("user_message") or rejection_message("الطلب خارج النطاق", ""))
             return
         _soft_note = _pre.get("soft_note") or ""
-        if context.user_data is not None and _rep is not None:
-            try:
-                context.user_data["detection_preferred_keys"] = []
-                context.user_data["detection_meta"] = dict(_detection_meta or {})
-                context.user_data["detection_meta"]["free_agent"] = True
-            except Exception:
-                pass
         # Fallback: keep legacy blocked_features note if detection silent
         if not _soft_note:
             from lumen.engine.services.feasibility_gate import check_feasibility
