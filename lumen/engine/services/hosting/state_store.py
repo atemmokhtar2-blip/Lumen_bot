@@ -190,10 +190,52 @@ class HostingStateStore:
             raise
 
 
+def _is_scale_mode() -> bool:
+    """True when TBE_SCALE_MODE indicates multi-node worker deployment."""
+    return (os.getenv("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shared_fs_available() -> bool:
+    """Heuristic: is the SQLite path on a shared/network filesystem?
+
+    On multi-node, SQLite MUST be on a shared volume (NFS, EFS, etc.) for
+    WAL to work across nodes. We check common network-FS indicators.
+    """
+    # If DATABASE_URL points to postgres, we wouldn't be here — this is
+    # only called in the SQLite fallback path.
+    import stat
+    try:
+        out_dir = Path(os.getenv("OUTPUT_DIR") or ".")
+        if not out_dir.exists():
+            return False
+        st = out_dir.stat()
+        # NFS (0x6969), CIFS/SMB (0x0000517B), overlay/fuse, etc.
+        # Major device magic numbers for network filesystems.
+        network_fs_magic = {
+            0x6969,      # NFS
+            0x65735546,  # FUSE
+            0xFF534D42,  # CIFS/SMB1
+            0xFE534D42,  # CIFS/SMB2
+        }
+        if st.st_dev in network_fs_magic:
+            return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
 def get_host_state_store(sqlite_path: str | Path | None = None):
-    """Production: Postgres only (fail-closed). Dev: SQLite allowed."""
+    """Production: Postgres only (fail-closed). Dev: SQLite allowed.
+
+    Multi-node safety (TBE_SCALE_MODE=1):
+      - SQLite on local disk is NOT safe for concurrent multi-node writes.
+      - If scale mode is on and Postgres is not configured, we fail-closed
+        unless the SQLite path is on a shared/network filesystem.
+    """
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
     is_dev = env in {"dev", "development", "local", "test"}
+
+    # Try Postgres first (the only truly multi-node-safe backend).
     try:
         from lumen.engine.services.hosting.pg_state_store import (
             PgHostStateStore,
@@ -208,14 +250,31 @@ def get_host_state_store(sqlite_path: str | Path | None = None):
             ) from exc
         import logging
         logging.getLogger("tbe.hosting").warning("postgres state unavailable in dev: %s", exc)
+
     if not is_dev:
         raise RuntimeError(
             "DATABASE_URL (postgresql://...) is required for host state outside ENVIRONMENT=dev. "
             "SQLite instances.sqlite3 is not multi-node safe."
         )
+
+    # --- Dev-only SQLite path below ---
+
+    # Multi-node guard: fail-closed if scale mode is on without shared FS.
+    if _is_scale_mode() and not _shared_fs_available():
+        raise RuntimeError(
+            "TBE_SCALE_MODE=1 (multi-node) requires a shared filesystem for SQLite "
+            "or DATABASE_URL=postgresql://... — local-disk SQLite will corrupt under "
+            "concurrent multi-node writes. Either: (1) set DATABASE_URL to Postgres, "
+            "or (2) mount OUTPUT_DIR on NFS/EFS, or (3) disable TBE_SCALE_MODE for "
+            "single-node dev."
+        )
+
     path = Path(sqlite_path) if sqlite_path else None
     if path is None:
         raise TypeError("sqlite_path required when not using Postgres")
     import logging
-    logging.getLogger("tbe.hosting").warning("DEV ONLY: SQLite host state store")
+    logging.getLogger("tbe.hosting").warning(
+        "DEV ONLY: SQLite host state store (WAL mode enabled%s)",
+        " + multi-node shared-FS" if _is_scale_mode() else "",
+    )
     return HostingStateStore(path)

@@ -169,12 +169,14 @@ def _key_pepper() -> bytes:
         raw = v.encode("utf-8")
         if _pepper_is_strong(raw):
             return raw
-        if _is_dev_environment():
-            # Explicit (even if weak) env var in pure dev — still prefer non-hardcoded
-            return raw
+        # FAIL-CLOSED: known-weak / short peppers are NEVER accepted, even in dev.
+        # The only way a weak pepper can slip in is operator misconfiguration
+        # (e.g. leaving ENVIRONMENT=dev on a real deploy). Reject unconditionally.
         raise RuntimeError(
-            f"{name} is too weak for production (need >= 32 random chars). "
-            "Refusing to use known-dev or short peppers."
+            f"{name} is too weak or known-insecure (need >= 32 random chars, "
+            "no hardcoded/dev/change-me values). Refusing to start regardless of "
+            "ENVIRONMENT. Set API_KEY_PEPPER to `python -c \"import secrets;"
+            "print(secrets.token_urlsafe(48))\"` output."
         )
     if _is_dev_environment():
         return _load_or_create_dev_pepper()

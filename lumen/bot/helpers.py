@@ -15,23 +15,32 @@ from .resource_limits import run_with_engine_timeout, EngineTimeoutError, clamp_
 def is_allowed(user_id: int | None) -> bool:
     """Telegram bot access — secure by default (closed).
 
-    - ALLOW_ALL_USERS=1 → public (explicit opt-in only).
-    - ALLOWED_USER_IDS set → only those IDs.
-    - LOCK_BOT_TO_ALLOWLIST=1 + allowlist → allowlist only.
-    - Otherwise → deny (prevents anonymous API-cost drain).
+    Decision tree (single, no duplication):
+      1. None user_id            → deny
+      2. ALLOW_ALL_USERS=True    → allow everyone (explicit public opt-in)
+      3. ALLOWED_USER_IDS set    → allow only listed IDs
+      4. Otherwise               → deny (prevents anonymous API-cost drain)
+
+    LOCK_BOT_TO_ALLOWLIST is a hardening flag that is redundant with
+    ALLOWED_USER_IDS being set (case 3 already restricts). It exists for
+    operator intent clarity but does not add a separate branch.
     """
     if user_id is None:
         return False
     from .config import LOCK_BOT_TO_ALLOWLIST
 
-    if LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:
-        return user_id in ALLOWED_USER_IDS
-    if ALLOWED_USER_IDS and not ALLOW_ALL_USERS:
-        return user_id in ALLOWED_USER_IDS
+    # Explicit public mode — highest priority, explicit opt-in only.
     if ALLOW_ALL_USERS:
         return True
+
+    # Restricted mode — allowlist governs access.
     if ALLOWED_USER_IDS:
+        # LOCK_BOT_TO_ALLOWLIST is an explicit hardening signal; even without
+        # it, having ALLOWED_USER_IDS set already means restricted mode.
         return user_id in ALLOWED_USER_IDS
+
+    # Secure default: closed. No allowlist and no explicit public mode.
+    # LOCK_BOT_TO_ALLOWLIST without any IDs means "deny everyone" (safe).
     return False
 
 

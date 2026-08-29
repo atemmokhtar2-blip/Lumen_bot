@@ -16,6 +16,13 @@ from pathlib import Path
 
 logger = logging.getLogger("tbe.dependency_scanner")
 
+# Safe filename pattern for requirements files — no leading dashes, no shell metacharacters.
+_SAFE_REQ_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.(txt|in)$")
+# Allowed parent directory names for the sandbox (relative to OUTPUT_DIR or cwd).
+_ALLOWED_SANDBOX_DIRS = frozenset({
+    "requirements", "deps", "project", "sandbox", "workdir", "build",
+})
+
 # High-confidence typosquats / malware package names seen in the wild
 _TYPOSQUAT_BLOCK = {
     "python-telegram", "telegram-bot", "telegram-bot-api", "pytelegrambot",
@@ -23,7 +30,7 @@ _TYPOSQUAT_BLOCK = {
     "setup-tools", "colourama", "python3-dateutil", "jeIlyfish", "cryptography-fernet",
 }
 
-_PIN = re.compile(r"==\s*[\dw")
+_PIN = re.compile(r"==\s*[\w]")
 _NAME = re.compile(r"^([a-zA-Z0-9][a-zA-Z0-9._+-]*)")
 
 
@@ -99,11 +106,86 @@ def scan_requirements_file(path: Path | str) -> tuple[bool, list[str], list[str]
     return ok, errors, warnings
 
 
+def _validate_req_path(req_path: Path) -> Path | None:
+    """Strict validation of a requirements file path before passing to pip-audit.
+
+    Prevents argument injection (filename starting with '-', containing
+    shell metacharacters) and path traversal (escaping the sandbox).
+    Returns the resolved path if safe, None otherwise.
+    """
+    try:
+        p = Path(req_path).resolve()
+    except (ValueError, OSError):
+        logger.warning("pip-audit: invalid path encoding rejected: %r", req_path)
+        return None
+
+    # 1. Must be a real, existing file
+    if not p.is_file():
+        logger.warning("pip-audit: path is not a regular file: %s", p)
+        return None
+
+    # 2. Filename must match safe pattern (no leading dash, no shell metacharacters)
+    name = p.name
+    if not _SAFE_REQ_NAME.match(name):
+        logger.warning("pip-audit: unsafe filename rejected: %r", name)
+        return None
+
+    # 3. Must be inside an allowed sandbox root (OUTPUT_DIR or a known workdir)
+    allowed_roots: list[Path] = []
+    out_dir = (os.getenv("OUTPUT_DIR") or "").strip()
+    if out_dir:
+        try:
+            allowed_roots.append(Path(out_dir).resolve())
+        except (ValueError, OSError):
+            pass
+    # System temp is also acceptable for isolated scans
+    import tempfile
+    allowed_roots.append(Path(tempfile.gettempdir()).resolve())
+    # Current working directory (sandbox workdir)
+    try:
+        allowed_roots.append(Path.cwd().resolve())
+    except (ValueError, OSError):
+        pass
+
+    for root in allowed_roots:
+        try:
+            p.relative_to(root)
+            return p  # Inside an allowed root — safe
+        except ValueError:
+            continue
+
+    logger.warning("pip-audit: path outside allowed sandbox roots rejected: %s", p)
+    return None
+
+
 def _run_pip_audit(req_path: Path) -> list[str]:
-    """Best-effort CVE scan via pip-audit if installed."""
+    """Best-effort CVE scan via pip-audit if installed.
+
+    Security: req_path is validated before being passed to subprocess to
+    prevent argument injection (filename flags) and path traversal.
+    Uses an isolated temp copy so the original file location is never
+    directly passed to the subprocess.
+    """
+    validated = _validate_req_path(req_path)
+    if validated is None:
+        return ["pip_audit_blocked:unsafe_requirements_path"]
+
+    # Isolate: copy requirements into a temp file with a safe name so
+    # pip-audit never touches the original path (defense in depth).
+    import shutil
+    import tempfile
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", prefix="pip_audit_", delete=False
+        ) as tmp:
+            tmp.write(validated.read_text(encoding="utf-8", errors="ignore"))
+            tmp_path = tmp.name
+    except OSError as exc:
+        return [f"pip_audit_error:temp_copy_failed:{type(exc).__name__}"]
+
     try:
         r = subprocess.run(
-            ["pip-audit", "-r", str(req_path), "--progress-spinner", "off"],
+            ["pip-audit", "-r", tmp_path, "--progress-spinner", "off"],
             capture_output=True,
             text=True,
             timeout=120,
@@ -117,3 +199,8 @@ def _run_pip_audit(req_path: Path) -> list[str]:
         return []
     except Exception as exc:
         return [f"pip_audit_error:{type(exc).__name__}"]
+    finally:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
