@@ -37,7 +37,7 @@ _CHAT_MODELS = (
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
     "allam-2-7b",
-    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
 )
 
 

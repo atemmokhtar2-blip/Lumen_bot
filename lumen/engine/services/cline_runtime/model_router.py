@@ -168,12 +168,12 @@ def select_model(*, task: str = "build") -> ModelChoice:
     table = {
         "gemini": ModelChoice(
             "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip(),
+            (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
             "GOOGLE_API_KEY",
         ),
         "google": ModelChoice(
             "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip(),
+            (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
             "GOOGLE_API_KEY",
         ),
         "xai": ModelChoice(
@@ -188,7 +188,7 @@ def select_model(*, task: str = "build") -> ModelChoice:
         ),
         "groq": ModelChoice(
             "groq",
-            (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip(),
+            (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
             "GROQ_API_KEY",
             base_url="https://api.groq.com/openai/v1",
         ),

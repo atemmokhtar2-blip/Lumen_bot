@@ -261,11 +261,11 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     models = [
         (model_id or "").strip(),
         (os.getenv("GEMINI_MODEL") or "").strip(),
-        "gemini-3.5-flash",
         "gemini-3.1-flash-lite",
-        "gemini-flash-lite-latest",
         "gemini-3-flash-preview",
-        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-flash-latest",
     ]
     models = [m for m in models if m]
     # dedupe
@@ -393,7 +393,7 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
         pool_status,
     )
 
-    model = model_id or (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip()
+    model = model_id or (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip()
     url = "https://api.groq.com/openai/v1/chat/completions"
     anti = (
         "CRITICAL: Do NOT call provider built-in tools (container.exec, browser, etc.). "
@@ -407,6 +407,8 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
 
     last_error = ""
     tried_sources: set[str] = set()
+    tpm_retries = 0
+    max_tpm_retries = 3  # after 3 TPM sleeps, give up and let caller handle
     max_key_tries = 100
     # Prefer plain chat; optional json_object only if GROQ_JSON_MODE=1
     use_json_mode = (os.getenv("GROQ_JSON_MODE") or "0").strip().lower() in {
@@ -459,11 +461,32 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
                 body = (resp.text or "")[:240]
                 last_error = f"groq_http_{resp.status_code}:{body}"
                 if resp.status_code == 429:
+                    # TPM (tokens-per-minute) rate limit is ORG-level, not per-key.
+                    # All 6 keys share the same limit, so rotating keys doesn't help.
+                    # Parse Groq's "Please try again in X.Xs" to wait the right time.
+                    import re as _re
+                    wait_match = _re.search(r"try again in ([\d.]+)\s*s", body)
+                    tpm_wait = float(wait_match.group(1)) if wait_match else 0.0
+                    # Short cooldown: TPM resets every 60s, so 15s is enough.
+                    # If Groq tells us a specific wait, use max(that, 15) capped at 30.
+                    cooldown_sec = min(30.0, max(15.0, tpm_wait + 2.0))
                     mark_cooldown(
                         source,
-                        seconds=float(os.getenv("GROQ_KEY_COOLDOWN_SEC") or "90"),
+                        seconds=cooldown_sec,
                         env_name="GROQ_KEY_COOLDOWN_SEC",
                     )
+                    # If ALL keys are cooling (TPM org-level limit), sleep briefly
+                    # instead of immediately failing — the limit resets in ~15s.
+                    remaining = pool_status().get("groq_keys_ready", 0)
+                    if remaining == 0:
+                        logger.warning(
+                            "groq TPM exhausted (all keys cooling) — sleeping %.1fs for limit reset",
+                            cooldown_sec,
+                        )
+                        time.sleep(cooldown_sec)
+                        # Reset tried_sources so we can retry after the sleep
+                        tried_sources.clear()
+                        break  # restart key loop with fresh (cooled-down) keys
                 elif resp.status_code in {401, 403}:
                     mark_cooldown(
                         source,
@@ -774,18 +797,34 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                 try:
                     raw = _call_groq(system, user, choice.model_id)
                 except Exception as groq_exc:
-                    logger.warning("groq failed (%s) — trying qwen failover", groq_exc)
+                    # groq→gemini cross-provider failover (TPM exhaustion on
+                    # groq free tier is org-level; fall back to gemini which
+                    # has 30 keys × multiple models = much higher throughput).
                     try:
-                        from lumen.engine.services.llm.key_pool import qwen_keys
-                        if not qwen_keys():
-                            raise groq_exc
-                        raw = _call_qwen(
-                            system,
-                            user,
-                            (os.getenv("QWEN_MODEL") or "qwen-plus"),
-                            None,
-                        )
-                        provider = "qwen"
+                        from lumen.engine.services.llm.key_pool import gemini_available
+                        if gemini_available():
+                            logger.warning(
+                                "groq failed (%s) — trying gemini cross-provider failover",
+                                groq_exc,
+                            )
+                            raw = _call_gemini(
+                                system,
+                                user,
+                                (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
+                            )
+                            provider = "gemini"
+                        else:
+                            # last resort: qwen (if configured)
+                            from lumen.engine.services.llm.key_pool import qwen_keys
+                            if not qwen_keys():
+                                raise groq_exc
+                            raw = _call_qwen(
+                                system,
+                                user,
+                                (os.getenv("QWEN_MODEL") or "qwen-plus"),
+                                None,
+                            )
+                            provider = "qwen"
                     except Exception:
                         raise groq_exc
             elif provider == "gemini":
@@ -803,7 +842,7 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                             raw = _call_groq(
                                 system,
                                 user,
-                                (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip(),
+                                (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
                             )
                             provider = "groq"
                         else:
@@ -889,9 +928,22 @@ def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None)
                     provider = "groq"
                     choice = ModelChoice(
                         "groq",
-                        (os.getenv("GROQ_MODEL") or "qwen/qwen3.6-27b").strip(),
+                        (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
                         "GROQ_API_KEY",
                         base_url="https://api.groq.com/openai/v1",
+                    )
+            except Exception:
+                pass
+        elif provider == "groq" and attempt < max_attempts:
+            try:
+                from lumen.engine.services.llm.key_pool import gemini_available
+                if gemini_available():
+                    logger.info("parse fail on groq — switching to gemini for next attempt")
+                    provider = "gemini"
+                    choice = ModelChoice(
+                        "gemini",
+                        (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
+                        "GOOGLE_API_KEY",
                     )
             except Exception:
                 pass

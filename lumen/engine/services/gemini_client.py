@@ -110,14 +110,16 @@ _KEY_COOLDOWN_UNTIL: dict[str, float] = {}
 # Verified-working models (tested 2026-08-29 against the live Gemini v1beta API).
 # Quota is PER-MODEL PER-DAY (GenerateRequestsPerDayPerProjectPerModel-FreeTier,
 # limit 20/day on free tier), so listing several distinct models multiplies the
-# available daily request budget.  Deprecated/removed model names (which return
-# HTTP 404 and waste a request cycle) have been removed.
+# available daily request budget.  Models are ordered by live availability
+# (gemini-3.1-flash-lite had 19/30 keys working, gemini-3-flash-preview 15/30,
+# gemini-3.5-flash-lite 14/30).  Deprecated 404 models (gemini-2.5-flash etc.)
+# have been removed.
 _MODEL_FALLBACKS = (
-    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
-    "gemini-flash-lite-latest",
     "gemini-3-flash-preview",
-    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
 )
 
 _RESPONSE_SCHEMA: dict[str, Any] = {
@@ -195,7 +197,7 @@ def model_name() -> str:
     # so using it as the primary spreads free-tier load across models.  The full
     # _MODEL_FALLBACKS list is tried on every call, so an exhausted model simply
     # falls through to the next one.
-    return (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash").strip()
+    return (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip()
 
 
 def _normalize_secret(raw: str) -> str:

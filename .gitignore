@@ -68,3 +68,5 @@ audit_*/
 *.bak
 *.orig
 *.tmp
+test_mock_engine.py
+test_real_groq_e2e.py
