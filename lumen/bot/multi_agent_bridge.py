@@ -12,11 +12,12 @@ def try_handle_hitl_message(
     *,
     user_id: int,
     user_data: dict[str, Any] | None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, Any]:
     """If the user message is a multi-agent confirm/reject, process it.
 
-    Returns (handled, reply_text). Verb-only messages resolve action_id/token
-    from Telegram user_data or the durable blackboard.
+    Returns (handled, reply_text, state). The state object is the final
+    AgentState after resume (or None if not applicable). Callers can use
+    the state to trigger delivery (zip send) when generation succeeded.
     """
     try:
         from lumen.engine.services.multi_agent import (
@@ -29,11 +30,11 @@ def try_handle_hitl_message(
         )
     except Exception:
         logger.exception("multi_agent HITL import failed")
-        return False, ""
+        return False, "", None
 
     parsed = parse_confirmation_message(text or "")
     if parsed is None:
-        return False, ""
+        return False, "", None
 
     verb, action_id, token = parsed
     state_id = ""
@@ -81,7 +82,7 @@ def try_handle_hitl_message(
         logger.exception("HITL pending recovery failed")
 
     if not state_id:
-        return True, "لا يوجد إجراء معلّق. اطلب التوليد من جديد ثم أكّد أو ارفض."
+        return True, "لا يوجد إجراء معلّق. اطلب التوليد من جديد ثم أكّد أو ارفض.", None
 
     if verb == "reject":
         ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))
@@ -105,20 +106,20 @@ def try_handle_hitl_message(
             user_data.pop("multi_agent_pending", None)
             user_data.pop("multi_agent_state_id", None)
         if ok and state is not None:
-            return True, (state.final_message or "✅ تم رفض الخطة. يمكنك طلب توليد جديد.").strip()[:4000]
+            return True, (state.final_message or "✅ تم رفض الخطة. يمكنك طلب توليد جديد.").strip()[:4000], state
         reason_ar = {
             "state_not_found": "لم يُعثر على الجلسة",
             "user_mismatch": "هذا الطلب ليس لحسابك",
             "action_mismatch": "لا يوجد إجراء معلّق للرفض",
         }.get(str(reason), str(reason))
-        return True, f"تعذر الرفض: {reason_ar}"
+        return True, f"تعذر الرفض: {reason_ar}", None
 
     # confirm
     if not action_id or not token:
         return True, (
             "تعذر التأكيد: بيانات الموافقة ناقصة.\n"
             "أعد طلب التوليد ثم اضغط ✅ تأكيد مباشرة."
-        )
+        ), None
 
     ok, state, reason = confirm_action(
         state_id, action_id, user_id=int(user_id or 0), confirm_token=token or "",
@@ -134,7 +135,7 @@ def try_handle_hitl_message(
         }.get(str(reason), str(reason))
         if str(reason).startswith("already_"):
             reason_ar = "تم التعامل مع هذا الإجراء مسبقاً"
-        return True, f"تعذر التأكيد: {reason_ar}"[:4000]
+        return True, f"تعذر التأكيد: {reason_ar}"[:4000], None
 
     try:
         state = continue_after_confirm(state_id, user_id=int(user_id or 0))
@@ -150,11 +151,11 @@ def try_handle_hitl_message(
         user_data["multi_agent_state_id"] = state_id
 
     if state is None:
-        return True, "تم التأكيد لكن تعذر استكمال التنفيذ. أعد التوليد."
+        return True, "تم التأكيد لكن تعذر استكمال التنفيذ. أعد التوليد.", None
     msg = (state.final_message or "").strip()
     if not msg:
         msg = "✅ تم التأكيد — جاري متابعة البناء."
-    return True, msg[:4000]
+    return True, msg[:4000], state
 
 
 

@@ -28,8 +28,26 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         re.I,
     )),
     ("role_hijack", re.compile(r"(?i)you\s+are\s+now\s+(a|an|the)\s+")),
+    # Exfiltration: block when user explicitly asks to PRINT/LEAK/SEND
+    # secrets to an external destination. Legitimate code patterns like
+    # `print("Error: TELEGRAM_BOT_TOKEN not found")` or `os.getenv('TOKEN')`
+    # must NOT be blocked — those are standard bot setup patterns.
+    # Strategy: match exfiltration VERB + secret keyword, but EXCLUDE when
+    # the context is clearly a standard error-guard pattern (print + "not found" / "missing" / "required").
     ("exfil_env", re.compile(
-        r"(?i)(print|show|dump|leak|reveal).{0,40}(api[_-]?key|token|secret|TELEGRAM_BOT|GEMINI_API)",
+        r"(?i)\b(?:leak|exfiltrate|dump|reveal|expose|send|post|upload|transmit|print|show)\b"
+        r".{0,50}\b(?:api[_-]?key|api[_-]?secret|access[_-]?token|TELEGRAM_BOT_TOKEN|"
+        r"GEMINI_API_KEY|bot[_-]?token|secret[_-]?key|private[_-]?key|api\s+key|secrets?|passwords?|"
+        r"environment\s+variables?|env\s+vars?)\b"
+        r"(?!.{0,30}(?:not\s+found|missing|required|not\s+set|environment\s+variable\s+should|not\s+in|is\s+none|"
+        r"from\s+environment|os\.getenv|getenv|environ|\.env|set\s+the|configure|setup|"
+        r"not\s+configured|please\s+set|must\s+be\s+set))"
+    )),
+    # Second pattern: explicit "send/leak/upload secret to URL/endpoint/webhook"
+    ("exfil_send", re.compile(
+        r"(?i)\b(?:send|leak|upload|post|transmit|exfiltrate|dump)\b"
+        r".{0,60}\b(?:api[_-]?key|token|secret|TELEGRAM_BOT|GEMINI_API|bot[_-]?token|secrets?|passwords?)\b"
+        r".{0,40}\b(?:to|via|through)\b.{0,30}\b(?:url|webhook|endpoint|http|server|chat|channel|chat_id|user|evil|attacker)\b",
     )),
     ("tool_abuse", re.compile(r"(?i)(run_shell|browser_navigate)\s*\(.*rm\s+-rf")),
     ("write_malware", re.compile(
@@ -66,3 +84,26 @@ def sanitize_generation_prompt(text: str, *, max_len: int = 8000) -> PromptGuard
 def scan_user_input(text: str) -> PromptGuardResult:
     """Public entry used by run_generation / agent_loop (single path)."""
     return sanitize_generation_prompt(text)
+
+
+def scan_user_request_only(text: str) -> PromptGuardResult:
+    """Scan only the user's original request (first line/paragraph before ---).
+
+    Used by agent_loop to avoid false-positives from repo context / agent
+    generated code that gets appended to the goal text on retries.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return PromptGuardResult(ok=False, reasons=["empty_request"], sanitized="")
+    # Extract only the portion before the first "---" separator (task packet marker)
+    # or before "TARGET FILES:" / "ACCEPTANCE CRITERIA:" / "REPO CONTEXT:" etc.
+    markers = ["\n---\n", "\nTARGET FILES:", "\nACCEPTANCE CRITERIA:",
+               "\nREPO CONTEXT:", "\nSYMBOL OUTLINE", "\nBLAST RADIUS",
+               "\nCONSTRAINTS:", "\nHARD GATE:"]
+    cut = len(raw)
+    for m in markers:
+        idx = raw.find(m)
+        if idx != -1 and idx < cut:
+            cut = idx
+    user_part = raw[:cut].strip()
+    return sanitize_generation_prompt(user_part)

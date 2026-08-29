@@ -148,9 +148,25 @@ def run_agent(
     except Exception:
         pass
     # Guard goal text (fail-closed on injection)
+    # Use scan_user_request_only to scan ONLY the user's original request,
+    # not the full task packet that includes repo context / agent-generated code
+    # (which can legitimately contain os.getenv('TELEGRAM_BOT_TOKEN') + print patterns).
     try:
-        from lumen.engine.pipeline.prompt_guard import scan_user_input
-        _gr = scan_user_input(goal or "")
+        from lumen.engine.pipeline.prompt_guard import scan_user_request_only, scan_user_input
+        # Primary scan: only the user's original request portion
+        _gr = scan_user_request_only(goal or "")
+        # Secondary scan: full goal for DANGEROUS code-exec patterns only
+        # (os.system, eval, exec, subprocess shell=True, etc.) — these should
+        # never appear anywhere, even in repo context
+        if _gr.ok:
+            _full = scan_user_input(goal or "")
+            dangerous = {"os_system", "eval_call", "exec_call", "subprocess_shell",
+                         "compile_exec", "dunder_import", "pickle_loads", "pty_spawn",
+                         "write_malware", "tool_abuse"}
+            dangerous_hits = [r for r in (_full.reasons or []) if r in dangerous]
+            if dangerous_hits:
+                _gr = PromptGuardResult(ok=False, reasons=dangerous_hits,
+                                        sanitized=_full.sanitized, backend=_full.backend)
         if not _gr.ok:
             state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
             state.ok = False

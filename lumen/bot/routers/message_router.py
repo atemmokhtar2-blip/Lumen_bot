@@ -213,11 +213,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Multi-agent HITL (Phase D): تأكيد/رفض <id> [<token>]
     try:
         from ..multi_agent_bridge import try_handle_hitl_message
-        handled, hitl_reply = try_handle_hitl_message(
+        _hitl_result = try_handle_hitl_message(
             request,
             user_id=int(user.id) if user else 0,
             user_data=context.user_data,
         )
+        if len(_hitl_result) == 3:
+            handled, hitl_reply, _hitl_state = _hitl_result
+        else:
+            handled, hitl_reply = _hitl_result
+            _hitl_state = None
         if handled:
             await _clear_thinking()
             await message.reply_text((hitl_reply or "تم.")[:4000])
