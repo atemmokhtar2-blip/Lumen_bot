@@ -1,16 +1,4 @@
-"""Firecracker microVM backend — production-grade, fail-closed.
-
-Production path (default when ENVIRONMENT is not dev/local/test):
-  jailer → unique uid/gid → optional netns → chroot jail → Firecracker VMM
-  kernel + base rootfs + project drive + token drive (never boot-args in prod)
-
-Dev path (explicit opt-in):
-  direct firecracker binary without jailer only when TBE_FC_ALLOW_NO_JAILER=1
-  and environment is dev/local/test.
-
-Claims are honest: status=running means the VMM process is alive, not that the
-Telegram bot finished its long-poll handshake.
-"""
+"""FirecrackerSandboxBackend — start/stop/status/logs for microVMs."""
 from __future__ import annotations
 
 import hashlib
@@ -25,336 +13,35 @@ import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .backend import SandboxBackend
-from .types import SandboxHandle, SandboxProbe, SandboxSpec
+from ..backend import SandboxBackend
+from ..types import SandboxHandle, SandboxProbe, SandboxSpec
+
+from .env import (
+    _flag,
+    _is_dev_environment,
+    _bin,
+    _jailer_bin,
+    _kernel,
+    _rootfs,
+    _kvm_ok,
+    _chroot_base,
+    _production_isolation,
+    _require_jailer,
+    _stable_vm_ids,
+)
+from .process_util import _run
+from .disk import (
+    _create_ext4_image,
+    _populate_ext4_with_files,
+    _write_token_drive,
+    _inject_guest_agent,
+    _write_project_drive,
+    _which_mkfs,
+)
+from .netns import _ensure_netns
+from .vmm_api import _api_put
 
 logger = logging.getLogger(__name__)
-
-# Dedicated high uid range for microVM jailer identities (avoid system users).
-_FC_UID_BASE = 200000
-_FC_UID_SPAN = 100000
-
-
-def _flag(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _is_dev_environment() -> bool:
-    """True only for explicit local/dev/test — never when deploy signals present."""
-    markers = (
-        "KUBERNETES_SERVICE_HOST",
-        "K_SERVICE",
-        "AWS_EXECUTION_ENV",
-        "AWS_REGION",
-        "RAILWAY_ENVIRONMENT",
-        "RENDER_SERVICE_ID",
-        "FLY_APP_NAME",
-        "DYNO",
-        "WEBSITE_INSTANCE_ID",
-    )
-    for m in markers:
-        if (os.getenv(m) or "").strip():
-            return False
-    if (os.getenv("FORCE_PRODUCTION") or "").strip().lower() in {"1", "true", "yes", "on"}:
-        return False
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    return env in {"dev", "development", "local", "test"}
-
-
-def _bin() -> str:
-    return (os.environ.get("TBE_FIRECRACKER_BIN") or shutil.which("firecracker") or "").strip()
-
-
-def _jailer_bin() -> str:
-    return (os.environ.get("TBE_JAILER_BIN") or shutil.which("jailer") or "").strip()
-
-
-def _kernel() -> str:
-    return (os.environ.get("TBE_FC_KERNEL") or "").strip()
-
-
-def _rootfs() -> str:
-    return (os.environ.get("TBE_FC_ROOTFS") or "").strip()
-
-
-def _kvm_ok() -> bool:
-    return os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.R_OK | os.W_OK)
-
-
-def _chroot_base() -> Path:
-    raw = (os.environ.get("TBE_FC_CHROOT_BASE") or "/srv/jailer").strip()
-    return Path(raw)
-
-
-def _production_isolation() -> bool:
-    """Match select.is_production_sandbox_path — multi-tenant or non-dev."""
-    try:
-        from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
-        return is_production_sandbox_path()
-    except Exception:
-        # Fail closed: treat as production if we cannot import
-        if not _is_dev_environment():
-            return True
-        multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
-            "1", "true", "yes", "on"
-        }
-        return multi
-
-
-def _require_jailer() -> bool:
-    """Jailer is mandatory on the production isolation path.
-
-    Dev may opt out only with BOTH:
-      ENVIRONMENT=dev|local|test AND TBE_FC_ALLOW_NO_JAILER=1
-    TBE_FC_REQUIRE_JAILER=0 is ignored when production isolation applies.
-    """
-    if _production_isolation():
-        return True
-    # Dev path only
-    if _flag("TBE_FC_ALLOW_NO_JAILER", "0"):
-        return False
-    return _flag("TBE_FC_REQUIRE_JAILER", "1")
-
-
-def _stable_vm_ids(user_id: int, vm_id: str) -> Tuple[int, int]:
-    """Deterministic unique uid/gid in reserved range for this microVM."""
-    digest = hashlib.sha256(f"{user_id}:{vm_id}".encode()).hexdigest()
-    offset = int(digest[:8], 16) % _FC_UID_SPAN
-    uid = _FC_UID_BASE + offset
-    gid = uid
-    return uid, gid
-
-
-def _run(
-    cmd: list[str],
-    *,
-    timeout: float = 30.0,
-    cwd: Optional[str] = None,
-) -> Tuple[int, str, str]:
-    try:
-        p = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            cwd=cwd,
-        )
-        return p.returncode, p.stdout or "", p.stderr or ""
-    except Exception as exc:
-        return 1, "", f"{type(exc).__name__}:{exc}"
-
-
-def _which_mkfs() -> Optional[str]:
-    return shutil.which("mkfs.ext4")
-
-
-def _create_ext4_image(path: Path, size_mb: int) -> None:
-    """Create a sparse ext4 filesystem image at path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        path.unlink()
-    # Sparse file
-    with open(path, "wb") as f:
-        f.truncate(max(8, size_mb) * 1024 * 1024)
-    mkfs = _which_mkfs()
-    if not mkfs:
-        raise RuntimeError("mkfs.ext4_missing")
-    code, _, err = _run(
-        [mkfs, "-F", "-q", str(path)],
-        timeout=60,
-    )
-    if code != 0:
-        raise RuntimeError(f"mkfs_failed:{err[:200]}")
-
-
-def _populate_ext4_with_files(image: Path, files: dict[str, bytes], mount_point: Path) -> None:
-    """Write files into an ext4 image via loop-mount, or debugfs without mount."""
-    # Preferred: debugfs (no root mount required on many hosts)
-    debugfs = shutil.which("debugfs")
-    if debugfs:
-        tmp = image.parent / f".dbg-{image.stem}"
-        tmp.mkdir(parents=True, exist_ok=True)
-        try:
-            for rel, data in files.items():
-                local = tmp / rel.replace("/", "_")
-                local.write_bytes(data)
-                remote = rel.lstrip("/")
-                # Ensure parent dirs inside image
-                parts = remote.split("/")
-                if len(parts) > 1:
-                    acc = ""
-                    for part in parts[:-1]:
-                        acc = f"{acc}/{part}" if acc else part
-                        _run([debugfs, "-w", "-R", f"mkdir {acc}", str(image)], timeout=15)
-                cmd = f"write {local} {remote}"
-                code, _, err = _run([debugfs, "-w", "-R", cmd, str(image)], timeout=30)
-                if code != 0:
-                    raise RuntimeError(f"debugfs_write_failed:{remote}:{err[:200]}")
-            return
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    mount_point.mkdir(parents=True, exist_ok=True)
-    code, _, err = _run(["mount", "-o", "loop", str(image), str(mount_point)], timeout=30)
-    if code != 0:
-        raise RuntimeError(f"loop_mount_failed:{err[:200]}")
-    try:
-        for rel, data in files.items():
-            dest = mount_point / rel.lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
-            try:
-                os.chmod(dest, 0o400)
-            except OSError:
-                pass
-    finally:
-        _run(["umount", str(mount_point)], timeout=30)
-
-
-def _write_token_drive(path: Path, token: str, env_extra: dict[str, str]) -> None:
-    """Token drive: small ext4 with BOT_TOKEN file (mode 0400 semantics after mount)."""
-    size_mb = int((os.environ.get("TBE_FC_TOKEN_DRIVE_MB") or "8").strip() or "8")
-    _create_ext4_image(path, size_mb)
-    mount = path.parent / f".mnt-token-{path.stem}"
-    payload = (token or "").encode("utf-8")
-    files = {
-        "BOT_TOKEN": payload,
-        "TELEGRAM_BOT_TOKEN": payload,
-        "env.json": json.dumps({k: v for k, v in env_extra.items() if k and v is not None}).encode(),
-    }
-    try:
-        _populate_ext4_with_files(path, files, mount)
-    except RuntimeError:
-        # Without root loop-mount we still create a raw sidecar the operator can wire;
-        # do not put token in boot args in production.
-        if _is_dev_environment() and _flag("TBE_FC_TOKEN_IN_BOOTARGS", "0"):
-            path.write_bytes(b"TOKEN_DRIVE_PLACEHOLDER")
-            return
-        raise
-
-
-def _inject_guest_agent(project_src: Path) -> None:
-    """Copy supervisor into project tree so rootfs can exec it from /project."""
-    try:
-        from lumen.engine.services.sandbox_runtime.guest_agent import (
-            BOOT_SH_PATH,
-            SUPERVISOR_PATH,
-        )
-    except Exception:
-        return
-    dest = project_src / ".lumen_guest"
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-        if SUPERVISOR_PATH.is_file():
-            shutil.copy2(SUPERVISOR_PATH, dest / "supervisor.py")
-        if BOOT_SH_PATH.is_file():
-            shutil.copy2(BOOT_SH_PATH, dest / "lumen-guest-boot.sh")
-            try:
-                os.chmod(dest / "lumen-guest-boot.sh", 0o755)
-            except OSError:
-                pass
-    except OSError as exc:
-        logger.warning("guest_agent_inject_failed: %s", type(exc).__name__)
-
-
-def _write_project_drive(path: Path, project_path: str) -> None:
-    """Pack project directory into an ext4 image for guest mount at /project."""
-    src = Path(project_path)
-    if not src.is_dir():
-        raise RuntimeError(f"project_path_not_dir:{project_path}")
-    _inject_guest_agent(src)
-    size_mb = int((os.environ.get("TBE_FC_PROJECT_DRIVE_MB") or "512").strip() or "512")
-    # Estimate size; grow if needed (capped)
-    try:
-        total = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
-        need = max(size_mb, int(total / (1024 * 1024)) + 64)
-        size_mb = min(need, int((os.environ.get("TBE_FC_PROJECT_DRIVE_MAX_MB") or "2048").strip() or "2048"))
-    except OSError:
-        pass
-    _create_ext4_image(path, size_mb)
-    mount = path.parent / f".mnt-proj-{path.stem}"
-    mount.mkdir(parents=True, exist_ok=True)
-    code, _, err = _run(["mount", "-o", "loop", str(path), str(mount)], timeout=30)
-    if code != 0:
-        raise RuntimeError(f"project_loop_mount_failed:{err[:200]}")
-    try:
-        # Prefer rsync if available; else cp -a
-        if shutil.which("rsync"):
-            code, _, err = _run(
-                ["rsync", "-a", "--delete", str(src) + "/", str(mount) + "/"],
-                timeout=120,
-            )
-        else:
-            code, _, err = _run(["cp", "-a", str(src) + "/.", str(mount) + "/"], timeout=120)
-        if code != 0:
-            raise RuntimeError(f"project_copy_failed:{err[:200]}")
-    finally:
-        _run(["umount", str(mount)], timeout=30)
-
-
-def _ensure_netns(name: str) -> str:
-    """Ensure a network namespace exists; return path for jailer --netns."""
-    safe = "".join(c for c in name if c.isalnum() or c in "-_")[:48] or "fc-default"
-    ns_path = Path("/var/run/netns") / safe
-    if ns_path.exists():
-        return str(ns_path)
-    if not shutil.which("ip"):
-        raise RuntimeError("iproute2_missing_for_netns")
-    Path("/var/run/netns").mkdir(parents=True, exist_ok=True)
-    code, _, err = _run(["ip", "netns", "add", safe], timeout=15)
-    if code != 0 and not ns_path.exists():
-        raise RuntimeError(f"netns_create_failed:{err[:200]}")
-    return str(ns_path)
-
-
-def _api_put(sock: Path, path: str, body: dict, timeout: float = 15.0) -> None:
-    data = json.dumps(body)
-    # Prefer curl unix-socket (ubiquitous); fallback to Python http if needed.
-    if shutil.which("curl"):
-        r = subprocess.run(
-            [
-                "curl",
-                "--unix-socket",
-                str(sock),
-                "-sS",
-                "-X",
-                "PUT",
-                f"http://localhost{path}",
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                data,
-            ],
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(f"fc_api_put_failed:{path}:{(r.stderr or b'')!r}")
-        return
-    # Minimal fallback without third-party deps
-    import http.client
-    import socket as _socket
-
-    class _UnixHTTPConnection(http.client.HTTPConnection):
-        def __init__(self, socket_path: str) -> None:
-            super().__init__("localhost")
-            self._socket_path = socket_path
-
-        def connect(self) -> None:
-            self.sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-            self.sock.connect(self._socket_path)
-
-    conn = _UnixHTTPConnection(str(sock))
-    try:
-        conn.request("PUT", path, body=data, headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        if resp.status >= 300:
-            raise RuntimeError(f"fc_api_put_http:{path}:{resp.status}")
-    finally:
-        conn.close()
-
 
 class FirecrackerSandboxBackend(SandboxBackend):
     name = "firecracker"

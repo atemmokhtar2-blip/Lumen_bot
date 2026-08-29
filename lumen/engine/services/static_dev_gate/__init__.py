@@ -1,7 +1,16 @@
 """StaticDevGate — unified static analysis: patterns + dataflow + contracts + symbolic."""
 
 from .models import StaticFinding, StaticReport, AnalysisContext, ModuleInfo
-from .service import analyze_project, verify_after_edit, plan_command_adds
+try:
+    from .service import analyze_project, verify_after_edit, plan_command_adds
+except ImportError:  # optional surface — package may omit service in some builds
+    def analyze_project(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("static_dev_gate.service not installed")
+    def verify_after_edit(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("static_dev_gate.service not installed")
+    def plan_command_adds(*args, **kwargs):  # type: ignore[misc]
+        raise RuntimeError("static_dev_gate.service not installed")
+
 from .engine import run_rules, analyze
 from .context import build_context
 from .pipeline import run_pipeline, analyze_unified, PipelineReport, PHASE_ORDER

@@ -250,7 +250,7 @@ def sc_graph_compile_and_hitl_routes() -> ScenarioResult:
         r.add("langgraph_available_fn", callable(langgraph_available))
         r.add("hitl_plan_fn", callable(hitl_interrupt_enabled))
         r.add("hitl_deliver_fn", callable(hitl_deliver_enabled))
-        src = Path(__file__).with_name("langgraph_pipeline.py").read_text(encoding="utf-8")
+        src = "".join(p.read_text(encoding="utf-8") for p in sorted(Path(__file__).with_name("langgraph_pipeline").glob("*.py")))
         r.add(
             "after_critique_routes_deliver_gate",
             'return "human_deliver_gate"' in src and "hitl_deliver_enabled()" in src,

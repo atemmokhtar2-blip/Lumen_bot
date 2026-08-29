@@ -14,8 +14,8 @@ import os
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, TypedDict
 
-from .state import AgentRole, AgentState, AgentStatus
-from .task_tree import TaskStatus, TaskTree
+from ..state import AgentRole, AgentState, AgentStatus
+from ..task_tree import TaskStatus, TaskTree
 
 logger = logging.getLogger(__name__)
 _TREE_LOCK = threading.Lock()
@@ -24,86 +24,15 @@ _TREE_LOCK = threading.Lock()
 _SHARED_CHECKPOINTER = None
 
 
-def _checkpoint_db_path() -> Path:
-    raw = (os.getenv("LANGGRAPH_CHECKPOINT_PATH") or "").strip()
-    if raw:
-        return Path(raw)
-    base = (os.getenv("OUTPUT_DIR") or os.getenv("LUMEN_OUTPUT_DIR") or "/tmp/lumen_output").strip()
-    return Path(base) / "langgraph_checkpoints.sqlite"
 
-
-def _shared_checkpointer():
-    """Official durable checkpointer: SqliteSaver first, MemorySaver fallback.
-
-    Sqlite is process+restart durable (same machine). Required for real HITL resume
-    after worker restart — Memory alone is not world-class.
-    """
-    global _SHARED_CHECKPOINTER
-    if _SHARED_CHECKPOINTER is not None:
-        return _SHARED_CHECKPOINTER
-    if (os.getenv("MULTI_AGENT_CHECKPOINT") or "1").strip().lower() in {"0", "false", "no", "off"}:
-        return None
-    # Prefer official SqliteSaver
-    try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        import sqlite3
-        db = _checkpoint_db_path()
-        db.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db), check_same_thread=False)
-        if hasattr(SqliteSaver, "from_conn"):
-            _SHARED_CHECKPOINTER = SqliteSaver.from_conn(conn)
-        else:
-            _SHARED_CHECKPOINTER = SqliteSaver(conn)
-        logger.info("LangGraph SqliteSaver at %s", db)
-        return _SHARED_CHECKPOINTER
-    except Exception as exc:
-        logger.warning("SqliteSaver unavailable (%s) — trying MemorySaver", exc)
-    try:
-        from langgraph.checkpoint.memory import MemorySaver
-        _SHARED_CHECKPOINTER = MemorySaver()
-        logger.warning("LangGraph using MemorySaver (not durable across process restart)")
-        return _SHARED_CHECKPOINTER
-    except Exception as exc:
-        logger.warning("No checkpointer: %s", exc)
-        return None
-
-
-def hitl_deliver_enabled() -> bool:
-    """Second HITL gate before deliver when QA passed (default off)."""
-    import os
-    return (os.getenv("MULTI_AGENT_HITL_DELIVER") or "0").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def hitl_interrupt_enabled() -> bool:
-
-    """Official LangGraph interrupt after plan. Default ON when langgraph available."""
-    flag = (os.getenv("MULTI_AGENT_LANGGRAPH_HITL") or "1").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
-        return False
-    return langgraph_available()
-
-
-def langgraph_available() -> bool:
-    try:
-        import langgraph  # noqa: F401
-        from langgraph.graph import StateGraph  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
-def use_langgraph_pipeline() -> bool:
-    try:
-        from .production_policy import is_production
-        if is_production():
-            return True
-    except Exception:
-        pass
-    flag = (os.getenv("MULTI_AGENT_LANGGRAPH") or "1").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
-        return False
-    return langgraph_available()
-
+from .flags import (
+    _checkpoint_db_path,
+    _shared_checkpointer,
+    hitl_deliver_enabled,
+    hitl_interrupt_enabled,
+    langgraph_available,
+    use_langgraph_pipeline,
+)
 
 def _max_attempts(state: AgentState) -> int:
     try:
@@ -138,7 +67,7 @@ def _run_named(registry: Any, name: str, state: AgentState, ctx: dict) -> AgentS
         agent = registry.get(name)
     if agent is None:
         try:
-            from .registry import get_registry
+            from ..registry import get_registry
             agent = get_registry().get(name)
         except Exception:
             agent = None
@@ -304,7 +233,7 @@ def _make_builder(registry: Any, board: Any):
             tree.mark(wave[0].id, TaskStatus.RUNNING)
             isolate = bool(getattr(wave[0], "parallel_group", "") or "")
         else:
-            from .worktree_isolation import partition_wave_by_ownership, snapshot_base_commit
+            from ..worktree_isolation import partition_wave_by_ownership, snapshot_base_commit
             safe, serial = partition_wave_by_ownership(wave)
             batch = list(safe)[:max_par] if safe else list(serial)[:1]
             for n in batch:
@@ -355,7 +284,7 @@ def _make_builder(registry: Any, board: Any):
 
         work = _work_dir(state, ctx)
         notes: list[str] = []
-        from .coding_agent import run_coding_session
+        from ..coding_agent import run_coding_session
 
         base_goal = (state.spec_request or state.user_text or "")[:4000]
         ir_hint = {
@@ -387,7 +316,7 @@ def _make_builder(registry: Any, board: Any):
             session_dir = work
             _wt_session = None
             if use_iso:
-                from .worktree_isolation import (
+                from ..worktree_isolation import (
                     acquire_task_workspace,
                     prune_worktrees,
                 )
@@ -419,7 +348,7 @@ def _make_builder(registry: Any, board: Any):
             )
             # Merge isolation → work for declared task files (worktree or copy)
             if use_iso and _wt_session is not None:
-                from .worktree_isolation import merge_task_workspace, release_task_workspace
+                from ..worktree_isolation import merge_task_workspace, release_task_workspace
                 merge_rep = merge_task_workspace(
                     _wt_session, owned_files=list(_files or []), strict=True
                 )
@@ -439,7 +368,7 @@ def _make_builder(registry: Any, board: Any):
                     prune_worktrees(work)
                 except Exception:
                     pass
-                from .acceptance_check import evaluate_task
+                from ..acceptance_check import evaluate_task
                 acc_merged = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
                 result["acceptance_report"] = acc_merged
                 if not acc_merged.get("ok"):
@@ -447,7 +376,7 @@ def _make_builder(registry: Any, board: Any):
                 if not result.get("ok"):
                     result["ok"] = False
             # Professional gate: NEVER trust worker self-reported acceptance alone
-            from .acceptance_check import evaluate_task
+            from ..acceptance_check import evaluate_task
             acc_rep = evaluate_task(work, files=_files, acceptance=_acc, strict=True)
             result["acceptance_report"] = acc_rep
             # session ok requires real acceptance on work_dir (ignore worker lie)
@@ -502,8 +431,8 @@ def _make_builder(registry: Any, board: Any):
         # Ensure acceptance layer ran (even if critic role is thin)
         if not (state.extensions or {}).get("acceptance_report"):
             try:
-                from .acceptance_check import evaluate_tree
-                from .task_tree import TaskTree
+                from ..acceptance_check import evaluate_tree
+                from ..task_tree import TaskTree
                 work = _work_dir(state, ctx)
                 tree = _load_tree(state)
                 acc = evaluate_tree(work, tree)
@@ -576,7 +505,7 @@ def _make_builder(registry: Any, board: Any):
 
         # Full coding repair session on work dir
         try:
-            from .coding_agent import run_coding_session
+            from ..coding_agent import run_coding_session
             work = Path(state.generated_path) if state.generated_path else _work_dir(state, ctx)
             findings = (state.qa_report or {}).get("errors") or state.build_errors or []
             brief = "Fix these errors:\n" + "\n".join(f"- {e}" for e in findings[:15])
@@ -593,7 +522,7 @@ def _make_builder(registry: Any, board: Any):
             }
             # Require real acceptance — files_written alone is not success
             try:
-                from .acceptance_check import evaluate_task
+                from ..acceptance_check import evaluate_task
                 _rep = evaluate_task(work, files=["main.py"], acceptance=["main.py exists", "compileall passes"], strict=True)
                 result["acceptance_report"] = _rep
                 if _rep.get("ok"):
@@ -884,192 +813,3 @@ def _compile_graph(registry: Any, board: Any):
     return builder.compile(), None
 
 
-def run_langgraph_pipeline(
-    state: AgentState,
-    *,
-    context: Optional[dict[str, Any]] = None,
-    registry: Any = None,
-    board: Any = None,
-    thread_id: str | None = None,
-) -> AgentState:
-    if not langgraph_available():
-        raise RuntimeError("langgraph_not_installed: pip install langgraph langchain-core")
-    from .blackboard import get_blackboard
-    from .registry import get_registry
-
-    reg = registry or get_registry()
-    bd = board or get_blackboard()
-    graph, checkpointer = _compile_graph(reg, bd)
-    max_att = _max_attempts(state)
-    state.max_attempts = max_att
-    state.extensions = dict(state.extensions or {})
-    tid = thread_id or state.state_id or "lumen-default"
-    state.extensions["langgraph_thread_id"] = tid
-    state.extensions["orchestration"] = "langgraph+cline"
-    state.record(AgentRole.ORCHESTRATOR, "langgraph_start", f"max_attempts={max_att};hitl={hitl_interrupt_enabled()}")
-    # Official LangGraph concurrency throttle (forum best practice 2025+):
-    # max_concurrency bounds parallel Send workers to host + provider limits.
-    try:
-        max_par = max(1, min(32, int(os.getenv("MULTI_AGENT_MAX_PARALLEL") or "8")))
-    except ValueError:
-        max_par = 8
-    cfg: dict[str, Any] = {
-        "recursion_limit": max(40, max_att * 12),
-        "max_concurrency": max_par,
-    }
-    if checkpointer is not None:
-        cfg["configurable"] = {"thread_id": tid}
-    state.extensions["swarm"] = {
-        "max_concurrency": max_par,
-        "parallel_enabled": (os.getenv("MULTI_AGENT_PARALLEL") or "1").strip().lower()
-        not in {"0", "false", "no", "off"},
-        "engine": "langgraph_send",
-    }
-    result = graph.invoke(
-        {
-            "agent": state,
-            "context": dict(context or {}),
-            "last_node": "",
-            "active_task_ids": [],
-            "wave": 0,
-            "done": False,
-            "notes": [],
-            "hitl_decision": "",
-        },
-        config=cfg,
-    )
-    out = result.get("agent") if isinstance(result, dict) else state
-    if out is None:
-        out = state
-    out.extensions = dict(out.extensions or {})
-    out.extensions["orchestration"] = "langgraph+cline"
-    out.extensions["langgraph_thread_id"] = tid
-    out.extensions["langgraph_last_node"] = result.get("last_node") if isinstance(result, dict) else ""
-    # Official interrupt payload
-    inter = None
-    if isinstance(result, dict):
-        inter = result.get("__interrupt__")
-    if inter:
-        out.extensions["hitl_status"] = "awaiting_approval"
-        out.extensions["langgraph_interrupt"] = True
-        # normalize interrupt value
-        try:
-            first = inter[0] if isinstance(inter, (list, tuple)) else inter
-            val = getattr(first, "value", first)
-            out.extensions["hitl_pending"] = val if isinstance(val, dict) else {"raw": str(val)[:500]}
-        except Exception:
-            out.extensions["hitl_pending"] = {"raw": str(inter)[:500]}
-        try:
-            out.transition(AgentStatus.AWAITING_CONFIRMATION, role=AgentRole.ORCHESTRATOR, force=True)
-        except Exception:
-            try:
-                out.status = AgentStatus.AWAITING_CONFIRMATION.value
-            except Exception:
-                out.status = "waiting_confirm"
-        # Wire Telegram HITL token path to the same interrupt (official dual surface)
-        try:
-            from .hitl import request_confirmation
-            pending_payload = out.extensions.get("hitl_pending") or {}
-            hitl_type = str(pending_payload.get("type") or "approve_plan")
-            if hitl_type == "approve_deliver":
-                tool = "langgraph_deliver_approve"
-                reason = "موافقة تسليم المشروع (LangGraph HITL deliver)"
-                status = "awaiting_deliver_approval"
-                header = "📦 المشروع جاهز — موافقة التسليم مطلوبة (HITL)"
-            else:
-                tool = "langgraph_plan_approve"
-                reason = "موافقة خطة LangGraph قبل البناء"
-                status = "awaiting_approval"
-                header = "📋 الخطة جاهزة — موافقة مطلوبة (LangGraph HITL)"
-            pending = request_confirmation(
-                out,
-                tool,
-                params={"thread_id": tid, "goal": (out.user_text or "")[:200], "hitl_type": hitl_type},
-                reason=reason,
-                board=bd,
-            )
-            out.extensions["langgraph_interrupt"] = True
-            out.extensions["hitl_status"] = status
-            out.final_message = (
-                f"{header}\n"
-                f"الهدف: {(out.user_text or '')[:180]}\n"
-                f"المعرّف: `{pending.action_id}`\n"
-                f"للتأكيد: `تأكيد {pending.action_id} {pending.confirm_token}`\n"
-                f"للرفض: `رفض {pending.action_id}`\n"
-                f"thread: `{tid}`"
-            )
-        except Exception as _hitl_exc:
-            logger.warning("attach pending_action failed: %s", _hitl_exc)
-            out.final_message = out.final_message or "بانتظار موافقة HITL (LangGraph)"
-    try:
-        bd.put(out)
-    except Exception:
-        pass
-    return out
-
-
-def resume_langgraph_hitl(
-    state: AgentState,
-    decision: str | dict[str, Any] = "approved",
-    *,
-    context: Optional[dict[str, Any]] = None,
-    registry: Any = None,
-    board: Any = None,
-    thread_id: str | None = None,
-) -> AgentState:
-    """Resume after official interrupt via Command(resume=...).
-
-    Requires SqliteSaver/MemorySaver + same thread_id from the paused run.
-    """
-    if not langgraph_available():
-        raise RuntimeError("langgraph_not_installed")
-    from langgraph.types import Command
-    from .blackboard import get_blackboard
-    from .registry import get_registry
-
-    reg = registry or get_registry()
-    bd = board or get_blackboard()
-    graph, checkpointer = _compile_graph(reg, bd)
-    if checkpointer is None:
-        raise RuntimeError("checkpointer_required_for_hitl_resume")
-    tid = (
-        thread_id
-        or (state.extensions or {}).get("langgraph_thread_id")
-        or state.state_id
-        or "lumen-default"
-    )
-    cfg: dict[str, Any] = {
-        "recursion_limit": max(40, _max_attempts(state) * 12),
-        "configurable": {"thread_id": tid},
-    }
-    resume_val = decision
-    if isinstance(decision, str):
-        resume_val = decision.strip().lower() or "approved"
-    result = graph.invoke(Command(resume=resume_val), config=cfg)
-    out = result.get("agent") if isinstance(result, dict) else state
-    if out is None:
-        out = state
-    out.extensions = dict(out.extensions or {})
-    out.extensions["langgraph_thread_id"] = tid
-    out.extensions["langgraph_interrupt"] = bool(result.get("__interrupt__")) if isinstance(result, dict) else False
-    if isinstance(result, dict) and result.get("__interrupt__"):
-        out.extensions["hitl_status"] = "awaiting_approval"
-    else:
-        out.extensions["hitl_status"] = out.extensions.get("hitl_status") or "resumed"
-        out.extensions["langgraph_interrupt"] = False
-    try:
-        bd.put(out)
-    except Exception:
-        pass
-    return out
-
-
-__all__ = [
-    "build_lumen_graph",
-    "langgraph_available",
-    "run_langgraph_pipeline",
-    "resume_langgraph_hitl",
-    "hitl_interrupt_enabled",
-    "use_langgraph_pipeline",
-    "GraphState",
-]
