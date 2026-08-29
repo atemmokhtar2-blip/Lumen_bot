@@ -62,6 +62,7 @@ def test_event_routes_defined_and_fail_closed_without_temporal(monkeypatch):
 
 def test_max_parallel_cap_in_pipeline_source():
     from pathlib import Path
-    src = Path("lumen/engine/services/multi_agent/langgraph_pipeline.py").read_text(encoding="utf-8")
+    # langgraph_pipeline is a package — parallel cap logic is in graph_builder.py
+    src = Path("lumen/engine/services/multi_agent/langgraph_pipeline/graph_builder.py").read_text(encoding="utf-8")
     assert "MULTI_AGENT_MAX_PARALLEL" in src
     assert "ids[:max_par]" in src
