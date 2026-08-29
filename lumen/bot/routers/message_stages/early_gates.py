@@ -184,11 +184,28 @@ async def try_bot_token(*, message, context, user, request: str) -> bool:
         return False
     try:
         tok = normalize_bot_token(request)
-        handled = await handle_live_run_token(message, context, user, tok)
-        if handled:
+        # Retrieve the pending project payload from session state.
+        # The delivery flow stores it under multiple keys (pending_run,
+        # pending_live_run, pending_deploy) so any token-handler path can find it.
+        ud = context.user_data or {}
+        pending_run = ud.get("pending_run") or ud.get("pending_live_run") or {}
+        pending_deploy = ud.get("pending_deploy") or {}
+        # If there is no pending project at all, tell the user instead of crashing.
+        if not pending_run and not pending_deploy:
+            await message.reply_text(
+                "⚠️ لا يوجد مشروع جاهز للتشغيل حالياً.\n"
+                "أرسل طلباً لإنشاء بوت أولاً، ثم أرسل التوكن لتشغيله."
+            )
             return True
-        handled = await handle_live_deploy_token(message, context, user, tok)
-        return bool(handled)
+        # handle_live_run_token(message, context, token, pending) — trial chat run
+        if pending_run:
+            await handle_live_run_token(message, context, tok, pending_run)
+            return True
+        # handle_live_deploy_token(message, context, token, pending) — permanent host
+        if pending_deploy:
+            await handle_live_deploy_token(message, context, tok, pending_deploy)
+            return True
+        return False
     except Exception:
         logger.exception("bot token handling failed")
         return False

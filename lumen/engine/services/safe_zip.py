@@ -26,6 +26,13 @@ _DEFAULT_EXCLUDED_NAMES = frozenset({
     ".tbe_bot_token", ".cancel",
 })
 
+# Dotfiles that are SAFE to ship — templates/examples, not real secrets.
+# `.env.example` is a template with placeholder values (e.g. TELEGRAM_BOT_TOKEN=your_token_here),
+# never a real credential. It MUST be in the delivered ZIP so the user knows how to configure.
+_DOTFILE_ALLOWLIST = frozenset({
+    ".env.example",
+})
+
 
 def _read_nofollow(path: Path, *, max_bytes: int) -> bytes | None:
     try:
@@ -91,7 +98,9 @@ def write_project_zip(
                 for name in filenames:
                     # SECURITY (Vuln #4): skip ALL dotfiles, not just a fixed list.
                     # Prevents leaking .env.staging, .aws/credentials, .npmrc, etc.
-                    if name.startswith("."):
+                    # EXCEPTION: `.env.example` is a safe template (placeholder values only),
+                    # not a real secret — it MUST be included so users know how to configure.
+                    if name.startswith(".") and name not in _DOTFILE_ALLOWLIST:
                         continue
                     if name in skip_names or name.endswith((".pyc", ".pyo", ".log")):
                         continue
