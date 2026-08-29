@@ -382,7 +382,7 @@ def _make_builder(registry: Any, board: Any):
                 # app/handlers.py, requirements.txt exist so acceptance passes
                 # even if the LLM didn't create them.
                 try:
-                    from .deterministic_repair import apply_deterministic_repairs
+                    from ..deterministic_repair import apply_deterministic_repairs
                     apply_deterministic_repairs(work, extensions={"user_text": state.user_text})
                 except Exception:
                     logger.exception("deterministic repair (iso) failed")
@@ -399,7 +399,7 @@ def _make_builder(registry: Any, board: Any):
             # even if the LLM didn't create them. This is the critical fix
             # that prevents scaffold tasks from failing due to missing README.md.
             try:
-                from .deterministic_repair import apply_deterministic_repairs
+                from ..deterministic_repair import apply_deterministic_repairs
                 apply_deterministic_repairs(work, extensions={"user_text": state.user_text})
             except Exception:
                 logger.exception("deterministic repair (work) failed")
@@ -565,7 +565,7 @@ def _make_builder(registry: Any, board: Any):
             logger.exception("repair coding session failed")
 
         try:
-            from .deterministic_repair import apply_deterministic_repairs
+            from ..deterministic_repair import apply_deterministic_repairs
             root = Path(state.generated_path) if state.generated_path else _work_dir(state, ctx)
             apply_deterministic_repairs(root, extensions={"user_text": state.user_text})
         except Exception:
