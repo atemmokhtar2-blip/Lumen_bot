@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from telegram.constants import ChatAction
 
-from ..config import logger
-from ..middlewares.mongo_sync import plan_live_seconds as _plan_live_seconds
+from lumen.bot.config import logger
+from lumen.bot.middlewares.mongo_sync import plan_live_seconds as _plan_live_seconds
 
 
 async def prepare_status_and_quota(*, message, context, user, request: str, soft_note: str = "") -> object | None:

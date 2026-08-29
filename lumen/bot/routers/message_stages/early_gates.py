@@ -12,20 +12,20 @@ from typing import Any
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from ..config import logger
-from ..helpers import is_allowed, looks_like_bot_token, normalize_bot_token
-from ..resource_limits import clamp_user_text, MAX_USER_MESSAGE_CHARS
-from ..middlewares.auth import (
+from lumen.bot.config import logger
+from lumen.bot.helpers import is_allowed, looks_like_bot_token, normalize_bot_token
+from lumen.bot.resource_limits import clamp_user_text, MAX_USER_MESSAGE_CHARS
+from lumen.bot.middlewares.auth import (
     rate_limit_ok as _rate_limit_ok,
     rate_limit_wait_seconds as _rate_limit_wait_seconds,
 )
-from ..middlewares.mongo_sync import (
+from lumen.bot.middlewares.mongo_sync import (
     ensure_mongo_user as _ensure_mongo_user,
     mongo_plan_for_user as _mongo_plan_for_user,
     persist_session as _persist_session,
 )
-from ..live import handle_live_run_token, handle_live_deploy_token
-from ..message_intent import (
+from lumen.bot.live import handle_live_run_token, handle_live_deploy_token
+from lumen.bot.routers.message_intent import (
     _looks_like_generation_request,
     _free_agent_mode,
     _is_confirm_phrase,
