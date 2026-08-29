@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, health, hosts, jobs, tenants, usage, runs_ux
+from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, health, hosts, jobs, tenants, usage, runs_ux, secrets
 
 logger = logging.getLogger("lumen_api")
 
@@ -301,6 +301,8 @@ def create_app() -> web.Application:
     except Exception:
         logger.exception("observability setup failed")
     from lumen.platform.runtime_config import require_production_data_plane, is_dev
+    from lumen.platform.prod_security_gate import assert_production_security
+    assert_production_security()
     if not is_dev():
         require_production_data_plane()
     else:
@@ -393,6 +395,25 @@ window.ui = SwaggerUIBundle({
         return web.Response(text=html, content_type="text/html")
 
     async def _metrics(request):
+        """Prometheus scrape endpoint — requires METRICS_TOKEN or admin token.
+
+        Open metrics leak process/tenant cardinality and enable targeted attacks.
+        """
+        import hmac as _hmac
+        expected = (
+            (os.getenv("METRICS_TOKEN") or "").strip()
+            or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+        )
+        if not expected:
+            return web.Response(text="metrics_disabled\n", status=404)
+        auth = (request.headers.get("Authorization") or "").strip()
+        got = ""
+        if auth.lower().startswith("bearer "):
+            got = auth[7:].strip()
+        elif request.headers.get("X-Metrics-Token"):
+            got = (request.headers.get("X-Metrics-Token") or "").strip()
+        if not got or not _hmac.compare_digest(got, expected):
+            return web.Response(text="unauthorized\n", status=401)
         try:
             from lumen.platform.observability.metrics_http import metrics_payload, prometheus_available
             if not prometheus_available():
@@ -424,6 +445,8 @@ window.ui = SwaggerUIBundle({
     app.router.add_get("/v1/billing/checkout/success", billing.checkout_success)
     app.router.add_get("/v1/billing/checkout/cancel", billing.checkout_cancel)
     # Authenticated
+    app.router.add_post("/v1/telegram/secrets", secrets.submit_telegram_secret)
+    app.router.add_post("/v1/telegram/secrets/status", secrets.secret_status)
     app.router.add_get("/v1/me", tenants.me)
     app.router.add_post("/v1/me/rotate_key", tenants.rotate_key)
     app.router.add_patch("/v1/me/white-label", tenants.update_white_label)

@@ -20,12 +20,49 @@ from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
-# source_name → monotonic deadline
-_COOLDOWN_UNTIL: dict[str, float] = {}
+# ---------------------------------------------------------------------------
+# Key inventory: loaded ONCE at process start (or explicit invalidate).
+# Cooldowns: ONE backend — Redis when REDIS_URL is set, else process-local (dev only).
+# ---------------------------------------------------------------------------
+_COOLDOWN_LOCAL: dict[str, float] = {}  # monotonic; single-process lab only
+_REDIS_COOLDOWN_PREFIX = "tbe:llm:cd:"
+_REDIS_CLIENT = None  # lazy singleton
+_REDIS_INIT_TRIED = False
+
+# Boot snapshot: (gemini, groq, qwen) lists of (source, key)
+_BOOT_KEYS: dict[str, list[tuple[str, str]]] | None = None
 
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _redis():
+    """Process-wide Redis client for key cooldowns (shared across workers)."""
+    global _REDIS_CLIENT, _REDIS_INIT_TRIED
+    if _REDIS_CLIENT is not None:
+        return _REDIS_CLIENT
+    if _REDIS_INIT_TRIED and _REDIS_CLIENT is None:
+        return None
+    _REDIS_INIT_TRIED = True
+    try:
+        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+        if not url:
+            return None
+        import redis
+        client = redis.Redis.from_url(
+            url,
+            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
+            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2"),
+            decode_responses=True,
+        )
+        client.ping()
+        _REDIS_CLIENT = client
+        return _REDIS_CLIENT
+    except Exception:
+        logger.warning("LLM key cooldown Redis unavailable — single-worker local only")
+        _REDIS_CLIENT = None
+        return None
 
 
 def _normalize(raw: str) -> str:
@@ -72,26 +109,86 @@ def mark_cooldown(
         sec = float(seconds)
     if sec <= 0:
         return
-    prev = _COOLDOWN_UNTIL.get(source, 0.0)
-    until = time.monotonic() + sec
-    # never shorten an existing longer auth cooldown with a short rate blip
-    if until > prev:
-        _COOLDOWN_UNTIL[source] = until
-    logger.warning(
-        "key cooldown source=%s reason=%s for %.0fs",
-        source,
-        reason,
-        max(0.0, _COOLDOWN_UNTIL.get(source, until) - time.monotonic()),
-    )
+    r = _redis()
+    if r is not None:
+        # SINGLE backend: Redis only (no parallel local state that drifts across workers)
+        try:
+            key = f"{_REDIS_COOLDOWN_PREFIX}{source}"
+            new_ms = max(1, int(sec * 1000))
+            lua = """
+local cur = redis.call('PTTL', KEYS[1])
+local want = tonumber(ARGV[1])
+if cur == false or cur < 0 or want > cur then
+  redis.call('SET', KEYS[1], '1', 'PX', want)
+  return 1
+end
+return 0
+"""
+            r.eval(lua, 1, key, new_ms)
+            # mirror local only as read-cache for same worker (optional, same TTL clock)
+            _COOLDOWN_LOCAL[source] = time.monotonic() + sec
+        except Exception as exc:
+            logger.exception("redis cooldown failed source=%s", source)
+            raise RuntimeError(f"redis_cooldown_failed:{type(exc).__name__}") from exc
+    else:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"production", "prod", "staging"}:
+            raise RuntimeError(
+                "REDIS_URL required for LLM key cooldowns in production "
+                "(multi-worker shared state)"
+            )
+        until = time.monotonic() + sec
+        prev = _COOLDOWN_LOCAL.get(source, 0.0)
+        if until > prev:
+            _COOLDOWN_LOCAL[source] = until
+    logger.warning("key cooldown source=%s reason=%s for %.0fs", source, reason, sec)
 
 
 def is_cooling(source: str) -> bool:
-    return _COOLDOWN_UNTIL.get(source, 0.0) > time.monotonic()
+    """Single backend: Redis if configured, else local monotonic."""
+    r = _redis()
+    if r is not None:
+        try:
+            return bool(r.exists(f"{_REDIS_COOLDOWN_PREFIX}{source}"))
+        except Exception:
+            logger.exception("redis is_cooling failed source=%s", source)
+            return True  # fail closed: treat as cooling if Redis errors
+    return _COOLDOWN_LOCAL.get(source, 0.0) > time.monotonic()
 
 
 def clear_cooldown(source: str) -> None:
-    _COOLDOWN_UNTIL.pop(source, None)
+    _COOLDOWN_LOCAL.pop(source, None)
+    r = _redis()
+    if r is not None:
+        try:
+            r.delete(f"{_REDIS_COOLDOWN_PREFIX}{source}")
+        except Exception:
+            logger.exception("redis clear_cooldown failed source=%s", source)
 
+
+
+def _ensure_boot_keys() -> None:
+    """Load all provider keys once per process (boot-time / first use)."""
+    global _BOOT_KEYS
+    if _BOOT_KEYS is not None:
+        return
+    _BOOT_KEYS = {
+        "gemini": list(_gemini_keys_uncached()),
+        "groq": list(_groq_keys_uncached()),
+        "qwen": list(_qwen_keys_uncached()),
+    }
+    logger.info(
+        "LLM key pool loaded gemini=%s groq=%s qwen=%s",
+        len(_BOOT_KEYS["gemini"]),
+        len(_BOOT_KEYS["groq"]),
+        len(_BOOT_KEYS["qwen"]),
+    )
+
+
+def invalidate_key_cache() -> None:
+    """Force re-read of env/secret files after rotation."""
+    global _BOOT_KEYS
+    _BOOT_KEYS = None
 
 def collect_env_keys(
     *,
@@ -151,7 +248,16 @@ def available_keys(
         return all_keys[:1]
 
     def _until(source: str) -> float:
-        return _COOLDOWN_UNTIL.get(source, 0.0)
+        """Soonest-ready ranking: prefer Redis PTTL (shared), else local monotonic."""
+        r = _redis()
+        if r is not None:
+            try:
+                pttl = r.pttl(f"{_REDIS_COOLDOWN_PREFIX}{source}")
+                if pttl is not None and int(pttl) > 0:
+                    return time.time() + (int(pttl) / 1000.0)
+            except Exception:
+                pass
+        return _COOLDOWN_LOCAL.get(source, 0.0)
 
     ready = [(s, k) for s, k in all_keys if not is_cooling(s)]
     if ready:
@@ -161,6 +267,12 @@ def available_keys(
 
 
 def gemini_keys() -> list[tuple[str, str]]:
+    _ensure_boot_keys()
+    assert _BOOT_KEYS is not None
+    return list(_BOOT_KEYS["gemini"])
+
+
+def _gemini_keys_uncached() -> list[tuple[str, str]]:
     """GEMINI_API_KEY (+ aliases) + GEMINI_API_KEY_0..150 + bulk GEMINI_API_KEYS.
 
     Bulk formats (any one):
@@ -214,6 +326,12 @@ def gemini_keys() -> list[tuple[str, str]]:
 
 
 def groq_keys() -> list[tuple[str, str]]:
+    _ensure_boot_keys()
+    assert _BOOT_KEYS is not None
+    return list(_BOOT_KEYS["groq"])
+
+
+def _groq_keys_uncached() -> list[tuple[str, str]]:
     """GROQ_API_KEY + GROQ_API_KEY_0..100 + bulk GROQ_API_KEYS.
 
     Bulk formats (any one):
@@ -256,6 +374,12 @@ def groq_keys() -> list[tuple[str, str]]:
 
 
 def qwen_keys() -> list[tuple[str, str]]:
+    _ensure_boot_keys()
+    assert _BOOT_KEYS is not None
+    return list(_BOOT_KEYS["qwen"])
+
+
+def _qwen_keys_uncached() -> list[tuple[str, str]]:
     """Alibaba DashScope / QwenCloud keys (often sk-ws-...).
 
     QWEN_API_KEY, DASHSCOPE_API_KEY, QWEN_API_KEY_0..100, QWEN_API_KEYS bulk.
@@ -313,13 +437,13 @@ def pool_status() -> dict:
     now = time.monotonic()
     return {
         "gemini_keys_total": len(g),
-        "gemini_keys_ready": sum(1 for s, _ in g if _COOLDOWN_UNTIL.get(s, 0.0) <= now),
+        "gemini_keys_ready": sum(1 for s, _ in g if not is_cooling(s)),
         "gemini_sources": [s for s, _ in g],
         "groq_keys_total": len(q),
-        "groq_keys_ready": sum(1 for s, _ in q if _COOLDOWN_UNTIL.get(s, 0.0) <= now),
+        "groq_keys_ready": sum(1 for s, _ in q if not is_cooling(s)),
         "groq_sources": [s for s, _ in q],
         "qwen_keys_total": len(w),
-        "qwen_keys_ready": sum(1 for s, _ in w if _COOLDOWN_UNTIL.get(s, 0.0) <= now),
+        "qwen_keys_ready": sum(1 for s, _ in w if not is_cooling(s)),
         "qwen_sources": [s for s, _ in w],
     }
 

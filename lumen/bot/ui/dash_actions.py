@@ -49,7 +49,12 @@ def sync_dashboard_slots(user_id: int, state_slots: dict[str, str]) -> dict[str,
 
 
 def resolve_instance_id(target: str, slots: dict[str, str]) -> str | None:
-    """target is index '0'..'4', 'all', full id, or suffix."""
+    """Resolve dashboard target to an instance_id owned by this session.
+
+    Only indices and IDs already present in dash_* slots are accepted.
+    Never returns an arbitrary client-supplied ID (IDOR defense-in-depth;
+    HostService.get still enforces user_id ownership).
+    """
     target = (target or "").strip()
     if not target or target == "all":
         return None
@@ -60,9 +65,9 @@ def resolve_instance_id(target: str, slots: dict[str, str]) -> str | None:
         full = (slots.get(f"dash_h{i}") or "").strip()
         if not full:
             continue
-        if full == target or full.endswith(target):
+        if full == target or (len(target) >= 8 and full.endswith(target)):
             return full
-    return target if len(target) >= 8 else None
+    return None
 
 
 def format_host_result(result) -> str:
@@ -80,7 +85,11 @@ def format_host_result(result) -> str:
             if getattr(inst, "sandbox_backend", None):
                 lines.append(f"backend: {inst.sandbox_backend}")
             if getattr(inst, "project_path", None):
-                lines.append(f"path: {inst.project_path}")
+                try:
+                    from lumen.bot.ui.rtl_text import code_path
+                    lines.append(f"path: {code_path(str(inst.project_path))}")
+                except Exception:
+                    lines.append(f"path: `{inst.project_path}`")
             if getattr(inst, "last_error", None):
                 lines.append(f"error: {str(inst.last_error)[:300]}")
             if getattr(inst, "pid", None):
@@ -111,7 +120,15 @@ async def execute_dash_effect(
     from lumen.bot.config import OUTPUT_DIR
     from lumen.engine.services.hosting import get_hosting_service
 
-    svc = get_hosting_service(OUTPUT_DIR)
+    try:
+        svc = get_hosting_service(OUTPUT_DIR)
+    except Exception as exc:
+        logger.exception("HostService unavailable for dash effect=%s", effect)
+        return (
+            "❌ خدمة الاستضافة غير متاحة حالياً.\n"
+            f"• السبب: {type(exc).__name__}\n"
+            "• تأكد من DATABASE_URL (Postgres) أو ENVIRONMENT=dev للاختبار المحلي."
+        )
     try:
         from lumen.bot.ui.state_store import load_ui_state
         slots = dict(load_ui_state(user_data).slots or {})
@@ -135,7 +152,7 @@ async def execute_dash_effect(
         return format_host_result(result)
 
     iid = resolve_instance_id(target, slots)
-    if effect in {"dash_status", "dash_stop", "dash_diagnose"} and not iid:
+    if effect in {"dash_status", "dash_stop", "dash_diagnose", "dash_logs"} and not iid:
         return (
             "لا مثيل مطابق.\n"
             f"target={target!r} count={slots.get('dash_count', '?')}\n"
@@ -156,5 +173,19 @@ async def execute_dash_effect(
         def _dg():
             return svc.diagnose(user_id=user_id, instance_id=str(iid))
         return format_host_result(await asyncio.to_thread(_dg))
+
+    if effect == "dash_logs":
+        def _lg():
+            return svc.logs(user_id=user_id, instance_id=str(iid), limit=60)
+        result = await asyncio.to_thread(_lg)
+        # Prefer raw log body for readability
+        body = str(getattr(result, "message", "") or "")
+        if getattr(result, "ok", False) and body:
+            header = "📝 السجلات الحية"
+            inst = getattr(result, "instance", None)
+            if inst is not None and getattr(inst, "instance_id", None):
+                header += f" · `{str(inst.instance_id)[:12]}`"
+            return f"{header}\n\n```\n{body[:3200]}\n```"
+        return format_host_result(result)
 
     return "إجراء لوحة غير معروف."

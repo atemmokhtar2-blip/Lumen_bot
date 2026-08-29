@@ -78,7 +78,17 @@ async def try_handle_repo_dev(
                 dev = await asyncio.to_thread(_run_dev)
             except Exception as e:
                 logger.exception("RepoDev failed")
-                await status.edit_text(f"❌ فشل التنفيذ على المستودع (`{type(e).__name__}`).")
+                try:
+                    from lumen.bot.ui.actionable_errors import send_actionable_error
+                    uid = message.from_user.id if message.from_user else 0
+                    await send_actionable_error(
+                        status, kind="generic",
+                        title="فشل التنفيذ على المستودع",
+                        detail=type(e).__name__,
+                        user_id=int(uid or 0),
+                    )
+                except Exception:
+                    await status.edit_text(f"❌ فشل التنفيذ على المستودع (`{type(e).__name__}`).")
                 return True
 
 

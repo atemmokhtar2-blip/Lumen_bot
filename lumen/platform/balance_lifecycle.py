@@ -239,13 +239,19 @@ def _notify(tenant_id: str, level: str, message: str, extra: Optional[dict] = No
     chat = (os.getenv("TBE_BALANCE_ALERT_CHAT_ID") or "").strip()
     if token and chat:
         try:
-            import urllib.parse
+            import json
             import urllib.request
             text = f"[Lumen] {level}: {message} (tenant={tenant_id})"
-            q = urllib.parse.urlencode({"chat_id": chat, "text": text[:3500]})
-            urllib.request.urlopen(
-                f"https://api.telegram.org/bot{token}/sendMessage?{q}", timeout=5
+            # POST body — avoids putting message text in URL/query logs
+            # (bot token remains in path: Telegram Bot API design constraint)
+            body = json.dumps({"chat_id": chat, "text": text[:3500]}).encode("utf-8")
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=body,
+                headers={"Content-Type": "application/json", "User-Agent": "Lumen/1.0"},
+                method="POST",
             )
+            urllib.request.urlopen(req, timeout=5)
         except Exception:
             pass
 

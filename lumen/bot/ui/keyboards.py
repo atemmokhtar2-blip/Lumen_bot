@@ -50,6 +50,10 @@ def _style_for_action(action: str, explicit: str = "") -> str | None:
         return "success"
     if a in {"cancel_generate", "home", "dash_stop"}:
         return "danger"
+    if a in {"host_restart", "ask_gh_token", "ask_bot_token"}:
+        return "success"
+    if a in {"repo_sec", "dash_diagnose", "dash_logs"}:
+        return "primary"
     if a in {
         "open_dashboard",
         "open_billing",

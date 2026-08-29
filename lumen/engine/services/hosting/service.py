@@ -540,6 +540,59 @@ class HostingService:
             lines.append(f"- `{i.instance_id}` | {i.status} | @{i.bot_username or '—'} | {i.project_path}")
         return HostResult(ok=True, message="\n".join(lines), details={"count": len(items)})
 
+
+    def logs(self, *, user_id: int, instance_id: str, limit: int = 80) -> HostResult:
+        """Return recent sandbox/run logs for an instance (sanitized)."""
+        inst = self.get(instance_id, user_id=user_id)
+        if inst is None:
+            return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
+        lines: list[str] = []
+        dep = (inst.deployment_id or "").strip()
+        backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
+        try:
+            from lumen.bot.sanitize import sanitize_log_text
+            if backend == "firecracker" or dep.startswith("fc-"):
+                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                    FirecrackerSandboxBackend,
+                )
+                raw = FirecrackerSandboxBackend().logs(dep, limit=max(10, min(200, int(limit))))
+                lines = [sanitize_log_text(str(x)) for x in (raw or [])]
+            elif dep:
+                from lumen.engine.services.sandbox_runtime import select_sandbox_backend
+                b, _ = select_sandbox_backend(require_available=False)
+                raw = b.logs(dep, limit=max(10, min(200, int(limit))))
+                lines = [sanitize_log_text(str(x)) for x in (raw or [])]
+        except Exception as exc:
+            return HostResult(
+                ok=False,
+                message=f"تعذّر قراءة السجلات: {type(exc).__name__}",
+                instance=inst,
+            )
+        # Fallback: project deploy log files
+        if not lines:
+            try:
+                from lumen.bot.sanitize import sanitize_log_text as _slog
+                root = Path(inst.project_path)
+                for pth in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
+                    chunk = _slog(pth.read_text(encoding="utf-8", errors="ignore")[-6000:])
+                    lines = chunk.splitlines()[-int(limit):]
+            except Exception:
+                pass
+        if not lines:
+            return HostResult(
+                ok=True,
+                message="لا سجلات متاحة بعد لهذا المثيل.",
+                instance=inst,
+                details={"log_lines": []},
+            )
+        body = "\n".join(lines[-int(limit):])
+        return HostResult(
+            ok=True,
+            message=body[:3500],
+            instance=inst,
+            details={"log_lines": lines[-int(limit):], "line_count": len(lines)},
+        )
+
     def diagnose(self, *, user_id: int, instance_id: str) -> HostResult:
         inst = self.get(instance_id, user_id=user_id)
         if not inst:

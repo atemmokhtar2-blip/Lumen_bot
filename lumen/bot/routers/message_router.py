@@ -1462,7 +1462,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status.edit_text((tr.message or ("تم" if tr.ok else "فشل"))[:4000])
         except Exception as e:
             logger.exception("engine-only tool failed: %s", cap)
-            await status.edit_text(f"❌ فشل تنفيذ {cap}: {type(e).__name__}")
+            try:
+                from lumen.bot.ui.actionable_errors import send_actionable_error
+                await send_actionable_error(
+                    status, kind="generic",
+                    title=f"فشل تنفيذ {cap}",
+                    detail=type(e).__name__,
+                    user_id=int(user.id) if user else 0,
+                )
+            except Exception:
+                await status.edit_text(f"❌ فشل تنفيذ {cap}: {type(e).__name__}")
         return
 
     # Non-bot, non-hard messages: short deterministic help (no AI)

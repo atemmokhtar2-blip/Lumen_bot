@@ -140,13 +140,13 @@ def run_langgraph_pipeline(
             )
             out.extensions["langgraph_interrupt"] = True
             out.extensions["hitl_status"] = status
+            # Tokens stay on blackboard + Telegram user_data; UI shows buttons.
+            goal = (out.user_text or "")[:180]
             out.final_message = (
                 f"{header}\n"
-                f"الهدف: {(out.user_text or '')[:180]}\n"
-                f"المعرّف: `{pending.action_id}`\n"
-                f"للتأكيد: `تأكيد {pending.action_id} {pending.confirm_token}`\n"
-                f"للرفض: `رفض {pending.action_id}`\n"
-                f"thread: `{tid}`"
+                + (f"الطلب: {goal}\n" if goal else "")
+                + "اضغط تأكيد للمتابعة أو رفض للإلغاء.\n"
+                "أو اكتب: تأكيد  /  رفض"
             )
         except Exception as _hitl_exc:
             logger.warning("attach pending_action failed: %s", _hitl_exc)

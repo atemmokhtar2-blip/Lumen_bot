@@ -85,7 +85,11 @@ async def execute_bot_generation(
             preferred_keys=preferred_keys,
         )
         if result is None:
-            await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
+            try:
+                from lumen.bot.ui.actionable_errors import send_actionable_error
+                await send_actionable_error(status_msg, kind="generic", title="فشل التوليد", detail="نتيجة فارغة", user_id=int(uid or 0) if "uid" in dir() else 0)
+            except Exception:
+                await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
             return None
 
         # LangGraph HITL: park confirm token + surface plan approval
@@ -111,10 +115,27 @@ async def execute_bot_generation(
                     "hitl_status": "awaiting_approval",
                 }
                 remember_hitl_pending(context.user_data, st)
-                msg = (meta.get("final_message") or "").strip()
-                if msg:
-                    await status_msg.edit_text(msg[:4000])
-                    return result
+                from ..multi_agent_bridge import format_hitl_user_message, build_hitl_keyboard
+
+                class _MsgState:
+                    user_text = gen_request
+                    extensions = st.extensions
+
+                clean = format_hitl_user_message(_MsgState())
+                # Prefer engine final_message only if short and not token-dump
+                raw = (meta.get("final_message") or "").strip()
+                if raw and "تأكيد " not in raw and len(raw) < 500:
+                    clean = raw
+                kb = build_hitl_keyboard(user_id=int(uid or 0))
+                try:
+                    await status_msg.edit_text(
+                        clean[:4000],
+                        reply_markup=kb,
+                        parse_mode="Markdown",
+                    )
+                except Exception:
+                    await status_msg.edit_text(clean[:4000], reply_markup=kb)
+                return result
         except Exception:
             logger.exception("langgraph HITL surface failed")
 

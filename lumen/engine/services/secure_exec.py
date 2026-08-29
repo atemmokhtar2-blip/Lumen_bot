@@ -170,12 +170,21 @@ def validate_git_https_url(url: str) -> str:
 
 
 def _git_safe_config_args() -> list[str]:
-    """Disable hooks and dangerous protocols for untrusted repos."""
+    """Hardened git config for untrusted remotes (2026 SSRF / hook defenses).
+
+    - hooksPath=/dev/null: no pre/post-checkout scripts
+    - protocol.file/ext never: no local or external protocol smuggling
+    - core.symlinks=false: no symlink escapes into host tree
+    - http.followRedirects=false: clone URL validated once; git must not
+      follow 302 to internal/metadata hosts (Gogs GHSA-class SSRF)
+    """
     return [
         "-c", "core.hooksPath=/dev/null",
         "-c", "protocol.file.allow=never",
         "-c", "protocol.ext.allow=never",
         "-c", "core.symlinks=false",
+        "-c", "http.followRedirects=false",
+        "-c", "http.sslVerify=true",
     ]
 
 

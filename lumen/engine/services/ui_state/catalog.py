@@ -81,6 +81,16 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "Run generation",
         frozenset({EngineUiPhase.GEN_CONFIRM}),
     ),
+    "hitl_confirm": UiActionSpec(
+        "hitl_confirm",
+        "Confirm multi-agent / LangGraph HITL plan",
+        frozenset(EngineUiPhase),
+    ),
+    "hitl_reject": UiActionSpec(
+        "hitl_reject",
+        "Reject multi-agent / LangGraph HITL plan",
+        frozenset(EngineUiPhase),
+    ),
     "cancel_generate": UiActionSpec(
         "cancel_generate",
         "Cancel",
@@ -128,22 +138,27 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "dash_status": UiActionSpec(
         "dash_status",
         "HostService.status for instance",
-        frozenset({EngineUiPhase.DASHBOARD}),
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
     ),
     "dash_stop": UiActionSpec(
         "dash_stop",
         "HostService.stop for instance",
-        frozenset({EngineUiPhase.DASHBOARD}),
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
     ),
     "dash_diagnose": UiActionSpec(
         "dash_diagnose",
         "HostService.diagnose for instance",
-        frozenset({EngineUiPhase.DASHBOARD}),
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
     ),
     "dash_trial": UiActionSpec(
         "dash_trial",
         "Start trial on active project",
-        frozenset({EngineUiPhase.DASHBOARD}),
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
+    ),
+    "dash_logs": UiActionSpec(
+        "dash_logs",
+        "HostService.logs for instance",
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
     ),
     "retry_generate": UiActionSpec(
         "retry_generate",
@@ -156,6 +171,26 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         frozenset({EngineUiPhase.CONTEXT}),
     ),
     "noop": UiActionSpec("noop", "No-op", frozenset(EngineUiPhase)),
+    "host_restart": UiActionSpec(
+        "host_restart",
+        "Re-request bot token and restart HostService instance",
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT}),
+    ),
+    "ask_gh_token": UiActionSpec(
+        "ask_gh_token",
+        "Prompt user for GitHub PAT (clone/create)",
+        frozenset(EngineUiPhase),
+    ),
+    "ask_bot_token": UiActionSpec(
+        "ask_bot_token",
+        "Prompt user for Telegram bot token (host/run)",
+        frozenset(EngineUiPhase),
+    ),
+    "repo_sec": UiActionSpec(
+        "repo_sec",
+        "Reveal repo understanding section",
+        frozenset(EngineUiPhase),
+    ),
 }
 
 

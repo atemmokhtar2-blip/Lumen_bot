@@ -57,8 +57,7 @@ _DEFAULT_ALLOWED: Set[str] = {
     "host_diagnose",
     "static_analysis",
     "package_health",
-    "terminal_exec",
-    "deploy",
+    # terminal_exec / deploy intentionally OMITTED — no safe host RCE surface
 }
 
 _CONFIRMATION_REQUIRED: Set[str] = {
@@ -67,8 +66,17 @@ _CONFIRMATION_REQUIRED: Set[str] = {
     "repo_modify",
     "host_start",
     "host_stop",
+}
+
+
+_HARD_DENY: Set[str] = {
     "terminal_exec",
     "deploy",
+    "run_shell",
+    "exec",
+    "shell",
+    "bash",
+    "system",
 }
 
 
@@ -95,8 +103,8 @@ class PolicyEngine:
         name = (request.tool_name or "").strip()
         if not name:
             return PolicyDecision(PolicyVerdict.DENY, "empty tool name")
-        if name in self._denied:
-            return PolicyDecision(PolicyVerdict.DENY, f"tool '{name}' denied")
+        if name in self._denied or name in _HARD_DENY:
+            return PolicyDecision(PolicyVerdict.DENY, f"tool '{name}' denied (hard)")
         if self._allowed is not None and name not in self._allowed:
             return PolicyDecision(
                 PolicyVerdict.DENY,

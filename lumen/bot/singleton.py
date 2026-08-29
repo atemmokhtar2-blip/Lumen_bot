@@ -415,14 +415,13 @@ def clear_telegram_webhook(token: str, timeout: float = 12.0) -> bool:
         import json
         import urllib.request
 
-        url = (
-            f"https://api.telegram.org/bot{token}/"
-            "deleteWebhook?drop_pending_updates=true"
-        )
+        url = f"https://api.telegram.org/bot{token}/deleteWebhook"
+        body = b'{"drop_pending_updates":true}'
         req = urllib.request.Request(
             url,
-            method="GET",
-            headers={"User-Agent": "Lumen/1.0"},
+            data=body,
+            method="POST",
+            headers={"User-Agent": "Lumen/1.0", "Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))

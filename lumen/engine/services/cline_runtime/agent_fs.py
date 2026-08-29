@@ -333,6 +333,10 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
         "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "GEMINI_API_KEYS", "GROQ_API_KEY",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "MONGODB_URI",
         "REDIS_URL", "STRIPE_SECRET_KEY", "API_KEY_PEPPER", "TBE_TOKEN_SECRET",
+        "PLATFORM_ADMIN_TOKEN", "CALLBACK_HMAC_SECRET", "METRICS_TOKEN",
+        "SECRET_INBOX_KEY", "SECRET_KEY", "DATABASE_URL", "POSTGRES_URL",
+        "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "GITHUB_TOKEN",
+        "CLINE_API_KEY", "BOT_TOKEN",
     )
     child_env = {
         k: v for k, v in os.environ.items()

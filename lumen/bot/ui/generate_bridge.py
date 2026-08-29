@@ -85,7 +85,23 @@ async def run_guided_generation(
         return None
 
     if result is None:
-        await safe_edit_text(status_msg, "فشل التوليد (نتيجة فارغة).")
+        try:
+            from lumen.bot.ui.actionable_errors import generic_fail
+            from lumen.bot.ui.keyboards import build_inline_keyboard
+            from lumen.engine.services.ui_state.models import UiButton
+            text, markup = generic_fail(title="فشل التوليد (نتيجة فارغة)", user_id=0)
+            # Prefer open_generate for retry
+            try:
+                markup = build_inline_keyboard(
+                    ((UiButton("🔄 إعادة التوليد", "open_generate", style="success"),),
+                     (UiButton("🏠 الرئيسية", "home"),)),
+                    user_id=0,
+                )
+            except Exception:
+                pass
+            await status_msg.edit_text(text, reply_markup=markup)
+        except Exception:
+            await safe_edit_text(status_msg, "فشل التوليد (نتيجة فارغة).")
         return None
 
     success = bool(getattr(result, "success", False))
@@ -130,6 +146,10 @@ async def run_guided_generation(
         )
     except Exception:
         logger.exception("deliver_generation_result failed")
-        await safe_edit_text(status_msg, f"تم التوليد. المسار: {project_path}")
+        try:
+            from lumen.bot.ui.rtl_text import code_path
+            await safe_edit_text(status_msg, f"تم التوليد. المسار: {code_path(str(project_path))}")
+        except Exception:
+            await safe_edit_text(status_msg, f"تم التوليد. المسار: `{project_path}`")
 
     return result

@@ -20,7 +20,7 @@ from typing import Optional
 logger = logging.getLogger("lumen_bot.ui.signed_callback")
 
 _PREFIX = "L2."
-_MAC_LEN = 6
+_MAC_LEN = 8  # 64-bit; still fits Telegram 64-byte callback limit
 _DEFAULT_TTL_SEC = 6 * 3600
 _SEP = "\x1f"
 
@@ -35,13 +35,24 @@ def _b64u_decode(s: str) -> bytes:
 
 
 def _secret() -> bytes:
+    """Derive HMAC key. Prefer dedicated CALLBACK_HMAC_SECRET.
+
+    Production without an explicit secret or bot token fails closed —
+    never falls back to a public constant (callback forgery risk).
+    """
     raw = (os.getenv("CALLBACK_HMAC_SECRET") or "").strip()
     if raw:
-        return raw.encode("utf-8")
+        return hashlib.sha256(raw.encode("utf-8")).digest()
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    if not token:
-        return b"lumen-dev-callback-secret-not-for-prod"
-    return hmac.new(b"lumen-callback-v2", token.encode("utf-8"), hashlib.sha256).digest()
+    if token:
+        return hmac.new(b"lumen-callback-v2", token.encode("utf-8"), hashlib.sha256).digest()
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+    if env in {"dev", "development", "local", "test"}:
+        # Deterministic only for local unit tests — not a production key
+        return hashlib.sha256(b"lumen-dev-callback-only").digest()
+    raise RuntimeError(
+        "CALLBACK_HMAC_SECRET or TELEGRAM_BOT_TOKEN required for signed callbacks in production"
+    )
 
 
 # Short aliases keep the packed blob small under the 64-byte Telegram limit
@@ -67,6 +78,13 @@ _ACTION_SHORT: dict[str, str] = {
     "dash_stop": "dx",
     "dash_diagnose": "dd",
     "dash_trial": "dt",
+    "dash_logs": "dl",
+    "host_restart": "hr",
+    "ask_gh_token": "agt",
+    "ask_bot_token": "abt",
+    "repo_sec": "rsx",
+    "hitl_confirm": "hc",
+    "hitl_reject": "hj",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
 

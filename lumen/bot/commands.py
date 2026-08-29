@@ -37,6 +37,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
+    try:
+        from lumen.bot.ui.menu_button import configure_menu_button
+        if update.effective_chat:
+            await configure_menu_button(context.bot, chat_id=update.effective_chat.id)
+    except Exception:
+        pass
     # Restore session so pending token flow survives /start after restart
     try:
         if user and context.user_data is not None:

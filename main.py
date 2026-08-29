@@ -417,11 +417,19 @@ def main() -> None:
                     write_timeout=40.0,
                     pool_timeout=15.0,
                 )
+                async def _post_init(application):
+                    try:
+                        from lumen.bot.ui.menu_button import configure_menu_button
+                        ok = await configure_menu_button(application.bot, chat_id=None)
+                        logger.info("default MenuButtonWebApp configured=%s", ok)
+                    except Exception:
+                        logger.exception("post_init menu button failed")
                 app = (
                     Application.builder()
                     .token(TELEGRAM_BOT_TOKEN)
                     .request(_tg_request)
                     .concurrent_updates(True)
+                    .post_init(_post_init)
                     .build()
                 )
             except Exception:

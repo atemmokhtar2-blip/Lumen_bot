@@ -62,6 +62,40 @@ async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=
     )
 
 
+
+async def _handle_hitl_callback(update, context, q, action_id: str) -> bool:
+    """Root HITL: buttons confirm/reject resume LangGraph without typing tokens."""
+    if action_id not in {"hitl_confirm", "hitl_reject"}:
+        return False
+    user = update.effective_user
+    uid = int(user.id) if user else 0
+    ud = context.user_data if context.user_data is not None else {}
+    try:
+        from lumen.bot.multi_agent_bridge import try_handle_hitl_message
+        verb = "تأكيد" if action_id == "hitl_confirm" else "رفض"
+        handled, reply = try_handle_hitl_message(
+            verb,
+            user_id=uid,
+            user_data=ud,
+        )
+        if not handled:
+            reply = "لا يوجد إجراء معلّق. أعد الطلب من جديد."
+        msg = update.effective_message or (q.message if q else None)
+        if msg is not None:
+            try:
+                await msg.edit_text((reply or "تم.")[:4000], reply_markup=None)
+            except Exception:
+                await msg.reply_text((reply or "تم.")[:4000])
+        return True
+    except Exception:
+        logger.exception("hitl callback failed")
+        try:
+            await q.answer("فشل التأكيد", show_alert=True)
+        except Exception:
+            pass
+        return True
+
+
 async def handle_ui_callback(update, context) -> None:
     """Top-level UI callback — answer first, never hang on Redis/DB."""
     q = update.callback_query
@@ -166,6 +200,10 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
 
     user_data = context.user_data if context.user_data is not None else {}
     # Ensure PTB keeps the same dict when user_data was None
+    if action_id in {"hitl_confirm", "hitl_reject"}:
+        await _handle_hitl_callback(update, context, q, action_id)
+        return
+
     if context.user_data is None:
         try:
             context.user_data = user_data
@@ -174,6 +212,147 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
 
     state = load_ui_state(user_data)
     uid = int(update.effective_user.id) if update.effective_user else 0
+    msg = update.effective_message or (q.message if q else None)
+
+    # ── Direct engine-bound actions (not phase transitions) ──────────
+    if action_id == "repo_sec":
+        from .repo_sections import get_section, section_keyboard
+        body = get_section(user_data, (arg or "header").strip())
+        markup = section_keyboard(
+            user_id=uid,
+            show_run=bool((user_data or {}).get("pending_run")),
+        )
+        await _safe_render_ui(q, msg, body, markup, user_data=user_data, context=context)
+        return
+
+    if action_id == "ask_gh_token":
+        kind = (arg or "clone").strip().lower()
+        if kind == "create":
+            # Ensure pending_create_repo exists if name was stored earlier
+            if not user_data.get("pending_create_repo"):
+                user_data["pending_create_repo"] = {"name": "new-repo", "private": True}
+            prompt = (
+                "🔒 أرسل الآن توكن GitHub (PAT) بصلاحية `repo`.\n"
+                "• Classic: `ghp_...`\n• Fine-grained: `github_pat_...`\n\n"
+                "بعد الإرسال سيُحذف سرك من المحادثة تلقائياً."
+            )
+        else:
+            # clone / default — keep or restore URL from active context
+            if not user_data.get("pending_clone_auth"):
+                active = user_data.get("active_repo") or {}
+                url = str(active.get("url") or user_data.get("last_clone_url") or "")
+                user_data["pending_clone_auth"] = {"url": url}
+            prompt = (
+                "🔒 أرسل الآن توكن GitHub (PAT) بصلاحية `repo` لسحب المستودع الخاص.\n\n"
+                "بعد الإرسال سيُحذف سرك من المحادثة تلقائياً."
+            )
+        try:
+            from .secret_prompt import build_secret_prompt_markup
+            markup = build_secret_prompt_markup(kind="github", user_id=uid)
+        except Exception:
+            markup = None
+        await _safe_render_ui(q, msg, prompt, markup, user_data=user_data, context=context)
+        return
+
+    if action_id == "ask_bot_token":
+        kind = (arg or "host").strip().lower()
+        active = user_data.get("active_repo") or {}
+        path = str(
+            (user_data.get("pending_host") or {}).get("project_path")
+            or active.get("path")
+            or (user_data.get("pending_run") or {}).get("project_path")
+            or ""
+        )
+        if kind in {"host", "restart"} and path:
+            user_data["pending_host"] = {
+                "project_path": path,
+                "user_id": uid,
+            }
+            user_data.pop("pending_run", None)
+            prompt = (
+                "🚀 أرسل توكن البوت من @BotFather لبدء/إعادة الاستضافة الدائمة.\n"
+                "بعد الإرسال سيُحذف سرك من المحادثة ويُشفَّر في المحرك."
+            )
+        else:
+            if path and not user_data.get("pending_run"):
+                user_data["pending_run"] = {
+                    "project_path": path,
+                    "entry_point": "",
+                    "run_seconds": 900,
+                }
+            prompt = (
+                "🚀 أرسل توكن البوت من @BotFather للتشغيل.\n"
+                "بعد الإرسال سيُحذف سرك من المحادثة تلقائياً."
+            )
+        try:
+            from .secret_prompt import build_secret_prompt_markup
+            markup = build_secret_prompt_markup(kind="bot", user_id=uid)
+        except Exception:
+            markup = None
+        await _safe_render_ui(q, msg, prompt, markup, user_data=user_data, context=context)
+        return
+
+    if action_id == "host_restart":
+        # 1) Stop live instance via HostService  2) re-request token  3) start on next message
+        # Raw tokens are never persisted — security by design.
+        try:
+            from .dash_actions import sync_dashboard_slots, resolve_instance_id, format_host_result
+            from lumen.bot.config import OUTPUT_DIR
+            from lumen.engine.services.hosting import get_hosting_service
+            import asyncio
+
+            slots = sync_dashboard_slots(uid, dict(state.slots or {}))
+            iid = resolve_instance_id(arg or "0", slots)
+            path = ""
+            if iid:
+                for i in range(5):
+                    if (slots.get(f"dash_h{i}") or "") == iid:
+                        path = slots.get(f"dash_p{i}") or ""
+                        break
+            if not path:
+                active = user_data.get("active_repo") or {}
+                path = str(active.get("path") or state.project_ref or "")
+
+            stop_note = ""
+            if iid:
+                def _stop():
+                    return get_hosting_service(OUTPUT_DIR).stop(
+                        instance_id=str(iid), user_id=int(uid)
+                    )
+                try:
+                    stop_res = await asyncio.to_thread(_stop)
+                    stop_note = format_host_result(stop_res)
+                except Exception as exc:
+                    logger.exception("host_restart stop failed")
+                    stop_note = f"stop_error: {type(exc).__name__}"
+
+            if path:
+                user_data["pending_host"] = {
+                    "project_path": path,
+                    "user_id": uid,
+                    "restart_of": str(iid or ""),
+                }
+                prompt = (
+                    "🔄 تم طلب إيقاف المثيل. لإعادة التشغيل أرسل توكن البوت من @BotFather.\n"
+                    "لا نُخزّن التوكن الخام — سيُحذف من المحادثة فوراً بعد الاستلام."
+                )
+                if stop_note:
+                    prompt = stop_note[:1200] + "\n\n" + prompt
+            else:
+                prompt = (
+                    (stop_note + "\n\n") if stop_note else ""
+                ) + "لا يوجد مسار مشروع مرتبط بهذا المثيل. اسحب/ولّد مشروعاً أولاً."
+        except Exception:
+            logger.exception("host_restart prep failed")
+            prompt = "تعذّر تحضير إعادة التشغيل. حاول من لوحة التحكم."
+        try:
+            from .secret_prompt import build_secret_prompt_markup
+            markup = build_secret_prompt_markup(kind="bot", user_id=uid) if "توكن" in prompt else None
+        except Exception:
+            markup = None
+        await _safe_render_ui(q, msg, prompt, markup, user_data=user_data, context=context)
+        return
+
     result = apply_action(state, action_id, arg, user_id=uid or None)
 
     # Batch 4: bind live host instances into state slots for dynamic buttons

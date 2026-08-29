@@ -67,3 +67,4 @@ langgraph-checkpoint-sqlite==3.1.1
 
 # Official MCP Python SDK
 mcp>=1.0.0,<2
+aiodocker>=0.22.0

@@ -143,3 +143,41 @@ def multi_agent_health_line() -> str:
         return f"multi_agent={ok} agents=[{agents}]"
     except Exception as exc:
         return f"multi_agent=ERR:{type(exc).__name__}"
+
+
+def format_hitl_user_message(state: Any) -> str:
+    """Clean Arabic HITL prompt — no token dumps (tokens live in user_data + buttons)."""
+    if state is None:
+        return "بانتظار موافقتك للمتابعة."
+    ext = getattr(state, "extensions", None) or {}
+    pending = ext.get("pending_action") or {}
+    tool = str(pending.get("tool") or ext.get("hitl_pending", {}).get("type") or "plan")
+    goal = (getattr(state, "user_text", None) or "")[:160]
+    if "deliver" in tool:
+        title = "📦 المشروع جاهز — يلزم موافقتك للتسليم"
+    else:
+        title = "📋 الخطة جاهزة — يلزم موافقتك قبل البناء"
+    lines = [title, ""]
+    if goal:
+        lines.append(f"الطلب: {goal}")
+    lines.append("")
+    lines.append("اضغط **تأكيد** للمتابعة أو **رفض** للإلغاء.")
+    lines.append("أو اكتب: تأكيد   /   رفض")
+    return "\n".join(lines)[:3500]
+
+
+def build_hitl_keyboard(*, user_id: int = 0):
+    """Inline buttons for HITL — labels only; secrets stay in user_data pending."""
+    try:
+        from lumen.engine.services.ui_state.models import UiButton
+        from lumen.bot.ui.keyboards import build_inline_keyboard
+        rows = [
+            [
+                UiButton(text="✅ تأكيد", action="hitl_confirm", arg=""),
+                UiButton(text="❌ رفض", action="hitl_reject", arg=""),
+            ]
+        ]
+        return build_inline_keyboard(rows, user_id=int(user_id or 0))
+    except Exception:
+        logger.exception("build_hitl_keyboard failed")
+        return None
