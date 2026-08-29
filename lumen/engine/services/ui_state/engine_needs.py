@@ -116,55 +116,9 @@ def _choices_for_slot(slot: str) -> list[NeedChoice]:
 
 
 def _from_language_understanding(goal: str, *, user_id: int | None = None) -> NeedPlan | None:
-    try:
-        from lumen.engine.spec_core.language_understanding import (
-            analyze_intent,
-            build_question_plan,
-            understand,
-        )
-    except Exception:
-        return None
-    try:
-        lu = understand(goal)
-        intent = analyze_intent(goal, lu=lu)
-        qp = build_question_plan(
-            goal,
-            intent=intent,
-            lu=lu,
-            user_id=user_id,
-            remember=False,
-            max_questions=5,
-        )
-        if not qp or not getattr(qp, "questions", None):
-            # still return intent for UI
-            kind = ""
-            try:
-                kind = str(getattr(getattr(intent, "primary", None), "intent", "") or "")
-            except Exception:
-                kind = ""
-            return NeedPlan(needs=[], intent_kind=kind, source="lu_empty")
-        needs: list[EngineNeed] = []
-        for i, q in enumerate(list(qp.questions)[:5]):
-            slot = str(getattr(q, "slot", None) or getattr(q, "id", None) or f"q{i}")
-            text = str(getattr(q, "text", "") or _AR_TEXT.get(slot) or slot)
-            choices = _choices_for_slot(slot)
-            # LU may expose options
-            raw_opts = getattr(q, "options", None) or getattr(q, "choices", None) or []
-            if raw_opts and not choices:
-                for j, opt in enumerate(list(raw_opts)[:6]):
-                    label = str(opt if not isinstance(opt, dict) else opt.get("label") or opt)
-                    val = str(opt if not isinstance(opt, dict) else opt.get("value") or label)
-                    choices.append(NeedChoice(f"o{j}", label[:40], val[:200]))
-            needs.append(EngineNeed(slot=slot, text=text, choices=choices, required=True))
-        kind = ""
-        try:
-            kind = str(getattr(getattr(intent, "primary", None), "intent", "") or "")
-        except Exception:
-            pass
-        return NeedPlan(needs=needs, intent_kind=kind, source="lu")
-    except Exception:
-        logger.debug("LU need plan failed", exc_info=True)
-        return None
+    """spec_core language_understanding permanently removed — always returns None.
+    Use _from_planner_fallback instead."""
+    return None
 
 
 def _from_planner_fallback(goal: str) -> NeedPlan:

@@ -45,25 +45,7 @@ def validate_and_normalize_ir(ir: BuildIR) -> IRValidation:
         if caps and c in caps and c not in preferred:
             preferred.append(c)
 
-    try:
-        from lumen.engine.spec_core.domain_detector import decide
-        from lumen.engine.spec_core.lean_packs import pack_for_domain
-
-        dec = decide(text)
-        pack = pack_for_domain(getattr(dec, "primary", None))
-        conf = float(getattr(dec, "confidence", 0.0) or 0.0)
-        if pack and conf >= 0.30:
-            for k in pack:
-                if (not caps or k in caps) and k not in preferred:
-                    preferred.append(k)
-                if (not caps or k in caps) and k not in matched and k not in core:
-                    matched.append(k)
-            ir.metadata = dict(ir.metadata or {})
-            ir.metadata["domain_primary"] = getattr(dec, "primary", None)
-            ir.metadata["domain_confidence"] = conf
-            ir.metadata["lean_pack_applied"] = list(pack)
-    except Exception as exc:
-        warnings.append(f"domain_enrich_failed:{type(exc).__name__}")
+    # spec_core domain_detector + lean_packs permanently removed — skip domain enrichment
 
     ir.preferred_keys = preferred[:20]
     ir.capabilities_matched = matched[:20]

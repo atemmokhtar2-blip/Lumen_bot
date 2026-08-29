@@ -73,20 +73,58 @@ _SUPPORTED_HINTS = [
 ]
 
 
+# Patterns indicating the text is NOT a bot specification at all
+# (stories, essays, translations, general questions, code debugging, etc.)
+_NON_BOT_PATTERNS = [
+    r"اكتب\s*(لي\s*)?(قصة|مقال|موضوع|خاطرة|قصيدة|شعر|رواية)",
+    r"write\s+(me\s+)?(a\s+)?(story|essay|poem|article|novel|song)",
+    r"ترجم\s*(لي\s*)?(هذا|النص|الجملة|الكلمة)|translate\s+(this|the\s+text)",
+    r"صحح\s*(لي\s*)?(النص|الأخطاء|التدقيق)|proofread|spell\s*check",
+    r"لماذا\s+(السماء|الماء|الناس)|why\s+(is|are|do|does)\s",
+    r"ما\s*(هو|هي)\s+(معنى|الفائدة|السبب)|what\s+(is|are)\s+the\s+(meaning|benefit)",
+    r"كيف\s+(الحال|حالك|اصبحت)|how\s+are\s+you",
+    r"اشرح\s+(لي\s*)?(نظرية|معادلة|مفهوم)|explain\s+(the\s+)?(theory|equation|concept)",
+    r"حل\s+(مسألة|تمرين|واجب)|solve\s+(this|the|homework|exercise|assignment)",
+    r"لخص\s+(لي\s*)?(الكتاب|المقال|النص)|summarize\s+(the\s+)?(book|article|text)",
+    r"عدل\s*(لي\s*)?(صورة|فيديو)|edit\s+(my\s+)?(photo|image|video)",
+]
+_NON_BOT_RE = re.compile("|".join(_NON_BOT_PATTERNS), re.I)
+
+# Strong bot-spec indicators — if present, it IS a bot request even with essay-like words
+_BOT_INDICATORS = re.compile(
+    r"\بوت|بوت\s|telegram\s*bot|\bbot\b|/start|/help|أوامر|قناة|مجموعة|جروب|متجر|/"
+    r"[a-z]{2,20}|command|handler|callback|admin\s*(tool|bot)",
+    re.I,
+)
+
+
+def is_clearly_non_bot(text: str) -> bool:
+    """Return True when text is clearly NOT a Telegram bot specification.
+
+    Detects stories, essays, translations, general Q&A, homework, and similar
+    non-bot requests. If any strong bot indicator is present, returns False
+    (the request likely describes a bot even if it mentions writing/translation).
+    """
+    if not text or not text.strip():
+        return False
+    low = text.lower()
+    # If strong bot indicators present, it's a bot request — not non-bot
+    if _BOT_INDICATORS.search(low):
+        return False
+    # Otherwise, check if it matches non-bot patterns
+    return bool(_NON_BOT_RE.search(low))
+
+
 def check_feasibility(request: str) -> FeasibilityResult:
     text = (request or "").strip()
-    try:
-        raise ImportError('spec_core removed')
-        if is_clearly_non_bot(text):
-            return FeasibilityResult(
-                can_generate=False,
-                confidence=0.98,
-                level=ComplexityLevel.IMPOSSIBLE,
-                reason="هذا ليس طلب بوت (قصة/مقال/ترجمة...). أرسل وصف بوت تيليجرام.",
-                suggested_scope="مثال: بوت متجر فيه /start و /cart",
-            )
-    except Exception:
-        pass
+    if is_clearly_non_bot(text):
+        return FeasibilityResult(
+            can_generate=False,
+            confidence=0.98,
+            level=ComplexityLevel.IMPOSSIBLE,
+            reason="هذا ليس طلب بوت (قصة/مقال/ترجمة...). أرسل وصف بوت تيليجرام.",
+            suggested_scope="مثال: بوت متجر فيه /start و /cart",
+        )
     if len(text) < 3:
         return FeasibilityResult(
             can_generate=False,

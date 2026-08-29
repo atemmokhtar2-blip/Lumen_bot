@@ -167,7 +167,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             save_ui_state(context.user_data, ui)
             context.user_data.pop("engine_ui_await_generate", None)
             context.user_data["force_generate_once"] = True
-            context.user_data["skip_clarify_once"] = True
             context.user_data["last_bot_request"] = request[:2000]
             uid_ui = int(user.id) if user else 0
             if uid_ui:
@@ -177,7 +176,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:
             logger.exception("engine_ui await_generate handler failed")
             context.user_data["force_generate_once"] = True
-            context.user_data["skip_clarify_once"] = True
     if len((message.text or "").strip()) > MAX_USER_MESSAGE_CHARS:
         await message.reply_text(
             f"⚠️ الرسالة طويلة جداً. الحد الأقصى {MAX_USER_MESSAGE_CHARS} حرفاً."
@@ -295,7 +293,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["last_bot_request"] = request
         # Fast product path: never wait on Gemini for an explicit bot-build request.
         # User was waiting 10+ minutes with no reply while chat layer hung.
-        context.user_data["skip_clarify_once"] = True
         context.user_data["force_generate_once"] = True
         logger.info("Generation-like request → force generate-now (skip Gemini)")
 
@@ -313,7 +310,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _is_bot_spec_early = ("بوت" in (request or "")) or ("bot" in low)
         if _is_bot_spec_early or _looks_like_generation_request(request):
             context.user_data["last_bot_request"] = request
-            context.user_data["skip_clarify_once"] = True
             context.user_data["force_generate_once"] = True
             context.user_data["free_agent_path"] = True
             logger.info("Free-agent mode → force generate (skip catalog chat)")
@@ -337,7 +333,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 prior = _prior_bot_request(context.user_data)
                 if prior:
                     request = prior
-            context.user_data["skip_clarify_once"] = True
             context.user_data["force_generate_once"] = True
             logger.info("Start-intent marker forced generate-now path")
 
@@ -358,7 +353,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     if prior:
                         request = prior
                 if context.user_data is not None:
-                    context.user_data["skip_clarify_once"] = True
                     context.user_data["force_generate_once"] = True
                 # fall through into generation
             elif action == "clone_repo":
@@ -385,7 +379,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if prior:
                     request = prior
                     if context.user_data is not None:
-                        context.user_data["skip_clarify_once"] = True
                         context.user_data["force_generate_once"] = True
                 else:
                     await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
@@ -406,7 +399,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if prior:
             request = prior
             if context.user_data is not None:
-                context.user_data["skip_clarify_once"] = True
                 context.user_data["force_generate_once"] = True
             logger.info("Confirm phrase resumed prior bot request")
 
@@ -441,7 +433,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         preferred_keys = None
         if context.user_data is not None:
             context.user_data.pop("force_generate_once", None)
-            context.user_data.pop("skip_clarify_once", None)
             context.user_data["engine_direct_request"] = gen_request
             context.user_data["translated_source"] = "engine_direct"
         logger.info("generate-now engine-direct path (no translate/bridge layer) request_len=%s", len(gen_request))
@@ -565,7 +556,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if context.user_data is not None:
                 context.user_data["engine_direct_request"] = request
                 context.user_data["translated_source"] = "engine_direct"
-                context.user_data["skip_clarify_once"] = True
             logger.info("Confirm/force path engine-direct (no translate/bridge)")
         try:
             await message.reply_text("جاري تجهيز البوت الآن…")
@@ -794,7 +784,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["translated_spec_request"] = request
                 context.user_data["translated_preferred_keys"] = _translated_preferred_keys
                 context.user_data["translated_source"] = _translation_source
-                context.user_data["skip_clarify_once"] = True
                 context.user_data["force_generate_once"] = True
 
         _force_generate = bool((context.user_data or {}).get("force_generate_once"))
@@ -820,7 +809,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if context.user_data is not None:
                     context.user_data["engine_direct_request"] = gen_src
                     context.user_data["translated_source"] = "engine_direct"
-                    context.user_data["skip_clarify_once"] = True
                 _translated_generation_request = gen_src
                 logger.info("Force-generate engine-direct (no translate/bridge) len=%s", len(gen_src))
 
@@ -887,7 +875,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                             _tr.data.get("path") or context.user_data.get("last_project_path") or ""
                         )
                         context.user_data["force_generate_once"] = True
-                        context.user_data["skip_clarify_once"] = True
                         context.user_data["translated_spec_request"] = (
                             f"تعديل البوت/المشروع في {_tr.data.get('path')}: {change}"
                         )
@@ -1024,186 +1011,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
-
-    # ── Stage-5: performance / eval report ───────────────────────────────
-    try:
-        from lumen.engine.spec_core.language_understanding.evaluation_layer import (
-            is_eval_command,
-            build_performance_report,
-        )
-        if is_eval_command(request):
-            low = request.strip().lower()
-            hours = 168.0 if any(x in low for x in ("أسبوع", "اسبوع", "week", "7")) else 24.0
-            rep = build_performance_report(window_hours=hours)
-            text = rep.to_arabic()
-            try:
-                from lumen.engine.spec_core.language_understanding.evaluation_layer import (
-                    assign_ab_variant,
-                    recommend_generation_tweaks,
-                )
-                extra = []
-                if uid:
-                    ab = assign_ab_variant(int(uid))
-                    extra.append(f"• متغيرك A/B: {ab.variant}")
-                tw = recommend_generation_tweaks(int(uid) if uid else None)
-                if tw.get("prefer_features"):
-                    extra.append("• ميزات مُفضّلة عالميًا: " + ", ".join(tw["prefer_features"][:5]))
-                if tw.get("avoid_features"):
-                    extra.append("• ميزات ضعيفة: " + ", ".join(tw["avoid_features"][:4]))
-                if extra:
-                    text += "\n" + "\n".join(extra)
-                    text = text.replace("\\n", "\n")
-                    # actual newlines:
-                    text = rep.to_arabic() + chr(10) + chr(10).join(extra)
-            except Exception:
-                pass
-            await message.reply_text(text[:3500])
-            return
-    except Exception:
-        logger.exception("stage5 eval report failed")
-
-    # ── Stage-3: continuous learning from feedback ───────────────────────
-    try:
-        from lumen.engine.spec_core.language_understanding.continuous_learning import (
-            is_feedback_only,
-            learn_from_feedback_message,
-            detect_outcome,
-        )
-        if uid and is_feedback_only(request):
-            from lumen.engine.spec_core.language_understanding.memory_engine import get_memory_engine as _gme
-            last = None
-            try:
-                last = _gme().last_bot(int(uid))
-            except Exception:
-                last = None
-            sig = learn_from_feedback_message(int(uid), request)
-            bot_name = (last or {}).get("name") or "آخر بوت"
-            n_feats = 0
-            try:
-                feats = (last or {}).get("features") or []
-                if isinstance(feats, str):
-                    import json as _json
-                    feats = _json.loads(feats)
-                n_feats = len(feats) if isinstance(feats, list) else 0
-            except Exception:
-                pass
-            loop_note = ""
-            try:
-                from lumen.engine.spec_core.language_understanding.evaluation_layer import (
-                    apply_eval_to_features,
-                    user_feature_stats,
-                )
-                ust = user_feature_stats(int(uid))
-                _feats, meta5 = apply_eval_to_features(
-                    list((last or {}).get("features") or []) if isinstance((last or {}).get("features"), list) else [],
-                    int(uid),
-                    strict=False,
-                )
-                if meta5.get("dropped"):
-                    loop_note += "\n⏭️ التوليد الجاي هيتجنب: " + ", ".join(meta5["dropped"][:5])
-                if meta5.get("prefer"):
-                    loop_note += "\n⭐ هيتفضّل: " + ", ".join(list(meta5["prefer"])[:5])
-                loop_note += f"\n📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
-            except Exception:
-                pass
-            if sig.kind == "positive" or sig.kind == "complete":
-                loop_lines = []
-                try:
-                    from lumen.engine.spec_core.language_understanding.evaluation_layer import (
-                        user_feature_stats,
-                        recommend_generation_tweaks,
-                    )
-                    ust = user_feature_stats(int(uid))
-                    tw = recommend_generation_tweaks(int(uid))
-                    loop_lines.append(
-                        f"📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
-                    )
-                    if tw.get("prefer_features"):
-                        loop_lines.append("⭐ مُفضّل: " + ", ".join(tw["prefer_features"][:4]))
-                except Exception:
-                    pass
-                msg = (
-                    f"شكرًا ✅ (+{sig.score_delta})" + chr(10)
-                    + f"اتقوّت وصفة «{bot_name}» ({n_feats} ميزة) للتوليدات الجاية."
-                )
-                if loop_lines:
-                    msg += chr(10) + chr(10).join(loop_lines)
-                await message.reply_text(msg)
-            elif sig.kind == "negative":
-                loop_lines = []
-                try:
-                    from lumen.engine.spec_core.language_understanding.evaluation_layer import (
-                        user_feature_stats,
-                        recommend_generation_tweaks,
-                    )
-                    ust = user_feature_stats(int(uid))
-                    tw = recommend_generation_tweaks(int(uid))
-                    loop_lines.append(
-                        f"📊 نجاح بوتاتك: {float(ust.get('success_rate') or 0)*100:.0f}% ({ust.get('bots')} بوت)"
-                    )
-                    if tw.get("avoid_features"):
-                        loop_lines.append("⏭️ الجاي هيتجنب: " + ", ".join(tw["avoid_features"][:4]))
-                except Exception:
-                    pass
-                msg = (
-                    f"تم 📝 ({sig.score_delta})" + chr(10)
-                    + f"ميزات «{bot_name}» هتتضعف في المرات الجاية."
-                )
-                if loop_lines:
-                    msg += chr(10) + chr(10).join(loop_lines)
-                await message.reply_text(msg)
-            return
-    except Exception:
-        logger.exception("stage2 correction learn failed")
-
-    # ── L3 clarification resume (answers for pending questions) ──────────
-    _pending_q = (context.user_data or {}).get("pending_clarify") if context.user_data else None
-    _clarify_done = False
-    if isinstance(_pending_q, dict) and _pending_q.get("questions"):
-        try:
-            answers = dict(_pending_q.get("answers") or {})
-            qlist = list(_pending_q.get("questions") or [])
-            idx = int(_pending_q.get("idx") or 0)
-            base_req = str(_pending_q.get("base_request") or "")
-            low = request.lower().strip()
-            # cancel → abort clarification, do NOT generate
-            if low in {"/cancel", "cancel", "إلغاء", "الغاء"}:
-                context.user_data.pop("pending_clarify", None)
-                await message.reply_text("تم إلغاء التوضيح. اكتب وصفاً جديداً للتوليد.")
-                return
-            # تخطي / skip = skip ALL remaining and generate (no loop)
-            if low in {"تخطي", "skip", "/skip", "تخطي الكل", "skip all", "عدي", "continue"}:
-                idx = len(qlist)
-            else:
-                cur = qlist[idx] if 0 <= idx < len(qlist) else None
-                if cur:
-                    answers[str(cur.get("slot") or cur.get("id") or f"q{idx}")] = request.strip()
-                idx += 1
-            if idx < len(qlist):
-                context.user_data["pending_clarify"] = {
-                    "base_request": base_req,
-                    "questions": qlist,
-                    "answers": answers,
-                    "idx": idx,
-                }
-                nq = qlist[idx]
-                await message.reply_text(
-                    f"❓ ({idx+1}/{len(qlist)}) {nq.get('text') or nq.get('slot')}\n"
-                    "• اكتب الإجابة · تخطي (يتخطى الباقي ويولّد) · إلغاء"
-                )
-                return
-            # Done → enrich + mark so L3 does not re-ask this turn
-            context.user_data.pop("pending_clarify", None)
-            context.user_data["skip_clarify_once"] = True
-            extra = " | ".join(f"{k}: {v}" for k, v in answers.items() if v)
-            request = (base_req + ("\n" + extra if extra else "")).strip()
-            _clarify_done = True
-            await message.reply_text("👍 تمام — هولّد البوت بالمواصفات دي...")
-        except Exception:
-            logger.exception("pending_clarify resume failed")
-            if context.user_data is not None:
-                context.user_data.pop("pending_clarify", None)
-                context.user_data["skip_clarify_once"] = True
 
     try:
         from lumen.engine.services.user_memory import get_user_memory
@@ -1475,11 +1282,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # Non-bot, non-hard messages: short deterministic help (no AI)
-    # Exception: just finished L3 clarify → always continue to generate
     if (
         not _is_hard
         and not _is_bot_spec
-        and not _clarify_done
         and not (context.user_data or {}).get("force_generate_once")
     ):
         help_ar = (
@@ -1504,10 +1309,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             or bool(re.search(r"\bبوت\b", request))
         )
     )
-    # After L3 answers/skip → force generate with enriched request
-    if _clarify_done:
-        _strong_bot_spec = True
-        _ai_route_generate = True
     if context.user_data is not None and context.user_data.pop("force_generate_once", False):
         _strong_bot_spec = True
         _ai_route_generate = True
@@ -1578,74 +1379,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 return
         except Exception:
             pass
-
-    # ── L3: ask adaptive questions before thin specs (e.g. «بوت متجر») ──
-    # Skip if we just finished a clarify session this turn (prevents infinite loop)
-    _skip_l3 = False
-    if context.user_data is not None:
-        _skip_l3 = bool(context.user_data.pop("skip_clarify_once", False)) or _clarify_done
-    if not _skip_l3:
-        try:
-            from lumen.engine.spec_core.language_understanding import (
-                understand,
-                analyze_intent,
-                build_question_plan,
-            )
-            _lu = understand(request)
-            _intent = analyze_intent(request, lu=_lu)
-            _qp = build_question_plan(
-                request,
-                intent=_intent,
-                lu=_lu,
-                user_id=int(user.id) if user else None,
-                remember=True,
-                max_questions=3,
-            )
-            if (
-                _qp
-                and getattr(_qp, "should_block_generation", False)
-                and getattr(_qp, "questions", None)
-                and context.user_data is not None
-                and len(request) < 120  # rich specs skip Q&A
-            ):
-                q_payload = [
-                    {
-                        "id": getattr(q, "id", None) or getattr(q, "slot", f"q{i}"),
-                        "slot": getattr(q, "slot", None) or getattr(q, "id", f"q{i}"),
-                        "text": getattr(q, "text", "") or str(getattr(q, "slot", "")),
-                    }
-                    for i, q in enumerate(list(_qp.questions)[:3])
-                ]
-                # Prefer Arabic wording when user language is Arabic
-                _lang = getattr(_intent, "language", "") or ""
-                if _lang.startswith("ar"):
-                    _ar_map = {
-                        "payment": "طرق الدفع؟ (فودافون / محفظة / تيليجرام)",
-                        "product_or_category": "هتبيع إيه؟ (مثال: ملابس / إلكترونيات / أكل)",
-                        "audience": "مين جمهورك؟ (مبتدئين / محترفين)",
-                    }
-                    for item in q_payload:
-                        slot = str(item.get("slot") or "")
-                        if slot in _ar_map:
-                            item["text"] = _ar_map[slot]
-                        elif item.get("text") and item["text"][:1].isascii():
-                            # keep generic Arabic fallback
-                            item["text"] = item["text"]
-                if q_payload:
-                    context.user_data["pending_clarify"] = {
-                        "base_request": request,
-                        "questions": q_payload,
-                        "answers": {},
-                        "idx": 0,
-                    }
-                    await message.reply_text(
-                        "🧠 هخصص البوت ليك — جاوب على كام سؤال سريع:\n\n"
-                        f"❓ (1/{len(q_payload)}) {q_payload[0]['text']}\n"
-                        "• اكتب الإجابة · تخطي (يتخطى الباقي ويولّد) · إلغاء"
-                    )
-                    return
-        except Exception:
-            logger.exception("L3 pre-generation questions failed")
 
     # Duplicate identical prompt within TTL → reuse last project path
     try:

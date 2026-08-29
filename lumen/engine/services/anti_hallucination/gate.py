@@ -23,6 +23,67 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+def _is_clearly_non_bot(text: str) -> bool:
+    """Detect requests that are clearly not Telegram bot specifications.
+
+    Delegates to feasibility_gate.is_clearly_non_bot when available; falls back
+    to a simple inline check so the anti-hallucination gate never crashes.
+    """
+    try:
+        from lumen.engine.services.feasibility_gate import is_clearly_non_bot
+        return is_clearly_non_bot(text)
+    except Exception:
+        if not text or not text.strip():
+            return False
+        low = text.lower()
+        if re.search(r"\bbot\b|بوت|telegram|/start|/help|أوامر|جروب|متجر|قناة", low):
+            return False
+        if re.search(
+            r"اكتب\s*(لي\s*)?(قصة|مقال|موضوع)|write\s+(me\s+)?(a\s+)?(story|essay|poem)"
+            r"|ترجم\s*(لي\s*)?|translate\s+this|لماذا|why\s+is|كيف\s+الحال",
+            low,
+        ):
+            return True
+        return False
+
+
+def _detect_bot_request_arabic(text: str) -> tuple[str | None, float]:
+    """Lightweight bot-domain detection (replaces deleted spec_core function).
+
+    Returns (domain_hint, confidence) where confidence in [0.0, 1.0].
+    A higher confidence means the text is more likely a Telegram bot spec.
+    """
+    if not text or not text.strip():
+        return (None, 0.0)
+    low = text.lower()
+    domain: str | None = None
+    conf = 0.0
+    if re.search(r"متجر|سلة|cart|shop|store|منتجات|catalog", low):
+        domain, conf = "ecommerce", 0.85
+    elif re.search(r"نقاط|ولاء|loyalty|points", low):
+        domain, conf = "loyalty", 0.8
+    elif re.search(r"تذكرة|ticket|دعم|support", low):
+        domain, conf = "support", 0.8
+    elif re.search(r"اشتراك|subscription|خطة|plan", low):
+        domain, conf = "subscription", 0.8
+    elif re.search(r"إحالة|referral|دعوة", low):
+        domain, conf = "referral", 0.75
+    elif re.search(r"محفظة|wallet|رصيد|balance", low):
+        domain, conf = "wallet", 0.8
+    elif re.search(r"مسابقة|contest|سحب|giveaway", low):
+        domain, conf = "contest", 0.75
+    elif re.search(r"ملاحظة|notes|مهام|tasks|todo", low):
+        domain, conf = "productivity", 0.7
+    elif re.search(r"ترحيب|welcome|إدارة|moderation|ban|kick|mute|تحذير|warn", low):
+        domain, conf = "moderation", 0.75
+    # Strong bot indicators bump confidence even if no domain matched
+    if re.search(r"\bbot\b|بوت|telegram|/start|/help|أوامر|command", low):
+        conf = max(conf, 0.7)
+        if domain is None:
+            domain = "general_bot"
+    return (domain, conf)
+
+
 # Phrases that indicate a handler is a stub / placeholder (hallucination risk)
 _STUB_MARKERS = (
     "not implemented",
@@ -505,23 +566,22 @@ def run_anti_hallucination_gate(
     rep = AntiHallucinationReport(ok=True, ready_for_token=False)
 
     # Reject clearly non-bot user requests even if a template was emitted
-    try:
-        raise ImportError('spec_core removed')
-        if user_request and is_clearly_non_bot(user_request):
-            rep.ok = False
-            rep.ready_for_token = False
-            rep.fidelity_ok = False
-            rep.errors.append(
-                Finding(
+    if user_request and _is_clearly_non_bot(user_request):
+        rep.ok = False
+        rep.ready_for_token = False
+        rep.fidelity_ok = False
+        rep.errors.append(
+            Finding(
                     "error",
                     "invalid_request",
                     "الطلب ليس طلب بوت (مثلاً قصة/مقال). لن يُسلَّم كمشروع جاهز.",
                     "Request is not a bot specification; refusing ready_for_token.",
-                )
             )
-            rep.metadata["user_request_preview"] = (user_request or "")[:200]
-            return rep
-        domain, conf = detect_bot_request_arabic(user_request or "")
+        )
+        rep.metadata["user_request_preview"] = (user_request or "")[:200]
+        return rep
+    try:
+        domain, conf = _detect_bot_request_arabic(user_request or "")
         if user_request and conf < 0.15 and domain is None:
             # soft: continue structural checks but do not claim ready
             rep.warnings.append(
