@@ -27,7 +27,6 @@ from lumen.bot.middlewares.mongo_sync import (
 from lumen.bot.live import handle_live_run_token, handle_live_deploy_token
 from lumen.bot.routers.message_intent import (
     _looks_like_generation_request,
-    _free_agent_mode,
     _is_confirm_phrase,
     _prior_bot_request,
 )

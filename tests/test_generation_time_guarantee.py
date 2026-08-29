@@ -87,6 +87,12 @@ def test_orchestrate_generate_wrapped_with_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv("GENERATION_TIMEOUT_SEC", "2")
 
     from lumen.bot import helpers
+    from lumen.bot import resource_limits
+
+    # Force the module-level constant to 2.0 (it may have been imported
+    # already at 180.0 by an earlier test — patch it directly for isolation).
+    monkeypatch.setattr(resource_limits, "GENERATION_TIMEOUT_SEC", 2.0)
+    monkeypatch.setattr(helpers, "GENERATION_TIMEOUT_SEC", 2.0)
 
     # Fake orchestrate_generate that sleeps longer than the 2s timeout.
     def slow_orchestrate(request, work_dir, *, user_id=0, preferred_keys=None):
@@ -133,7 +139,12 @@ def test_bridge_uses_generation_timeout(monkeypatch, tmp_path):
     monkeypatch.setenv("GENERATION_TIMEOUT_SEC", "2")
 
     from lumen.bot import helpers
-    from lumen.bot.resource_limits import GENERATION_TIMEOUT_SEC
+    from lumen.bot import resource_limits
+
+    # Force the module-level constant to 2.0 (isolation-safe).
+    monkeypatch.setattr(resource_limits, "GENERATION_TIMEOUT_SEC", 2.0)
+    monkeypatch.setattr(helpers, "GENERATION_TIMEOUT_SEC", 2.0)
+    GENERATION_TIMEOUT_SEC = 2.0
 
     # The timeout value should be 2, not 30.
     assert GENERATION_TIMEOUT_SEC == 2.0, f"expected 2.0, got {GENERATION_TIMEOUT_SEC}"

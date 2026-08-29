@@ -34,13 +34,6 @@ def _looks_like_generation_request(text: str) -> bool:
 
 
 
-def _free_agent_mode() -> bool:
-    """Cline is the sole generation path — always on."""
-    return True
-
-
-
-
 _CONFIRM_ROOTS = {
     "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
     "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "انجز", "أنجز", "ولّد", "ولد",
@@ -93,27 +86,16 @@ def _prior_bot_request(user_data: dict | None) -> str:
     return ""
 
 
-def _qwen_rescue_translation(request: str, context: dict) -> dict | None:
-    """Retired — engine (multi-agent/Cline) owns understanding. Kept as no-op for callers."""
-    return None
-
-
 # Public aliases (prefer these in new code)
 looks_like_generation_request = _looks_like_generation_request
-free_agent_mode = _free_agent_mode
 is_confirm_phrase = _is_confirm_phrase
 prior_bot_request = _prior_bot_request
-qwen_rescue_translation = _qwen_rescue_translation
 
 __all__ = [
     "looks_like_generation_request",
-    "free_agent_mode",
     "is_confirm_phrase",
     "prior_bot_request",
-    "qwen_rescue_translation",
     "_looks_like_generation_request",
-    "_free_agent_mode",
     "_is_confirm_phrase",
     "_prior_bot_request",
-    "_qwen_rescue_translation",
 ]

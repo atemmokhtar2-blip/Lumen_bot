@@ -6,51 +6,38 @@
 - [x] Save research findings to RESEARCH_FINDINGS.md
 - [x] Create this todo.md plan
 
-## Phase 1: Clean Dead Code (spec_core removal — 61 refs in 26 files)
-- [x] 1a. Remove dead spec_core blocks from message_router.py (~300 lines: Stage-5 eval, Stage-3 feedback, L3 clarify) — 1701→1434 lines
-- [x] 1b. Remove spec_core refs from message_stages/pre_generate.py
-- [x] 1c. Remove dead spec_core blocks from engine services (feasibility_gate, anti_hallucination/gate, ui_state/engine_needs) — restored real logic hidden behind dead ImportError blocks
-- [x] 1d. Remove spec_core refs from engine core (ir_validate) — domain_detector+lean_packs block removed
-- [x] 1e. Remove spec_core refs from delivery.py — Stage-4 narrative + Stage-5 metrics (102 lines)
-- [x] 1f. Remove dead spec_core refs from generate_bridge.py (skip_clarify_once)
-- [x] 1g. Delete 7 dead test files (phase4/7/8/14_15, detection_phase2, qwen_translator_client, capabilities_scale)
-- [x] 1h. Verified: ZERO imports of deleted lumen.engine.spec_core package remain. Remaining "spec_core" references are: (a) comments/docstrings documenting removal, (b) _spec_core_capabilities() function name (imports LIVE catalog, returns []), (c) "spec_core_capabilities" context dict key (functional, passes caps to LLM). All functional, none dead.
-- [x] 1i. Syntax verified OK on all 8 modified files; imports verified OK on 6/7 (1 needs telegram pkg not in sandbox)
-- [x] 1j. Implemented is_clearly_non_bot() in feasibility_gate.py (real guardrail, was dead behind raise ImportError) + _is_clearly_non_bot/_detect_bot_request_arabic in anti_hallucination/gate.py
-- [x] 1k. Tests: 699 passed (up from 680), 133 failed (down from 152). Baseline confirmed identical — ZERO regressions. Fixed 19 NameError failures.
+## Phase 1: Weakness #2 — Generation Time Guarantee (COMPLETE, PUSHED)
+- [x] Add GENERATION_TIMEOUT_SEC to resource_limits.py (180s default, cap 600s)
+- [x] Wrap orchestrate_generate with run_with_engine_timeout(GENERATION_TIMEOUT_SEC) in helpers.py
+- [x] Wrap run_generation_with_bridge with GENERATION_TIMEOUT_SEC
+- [x] Add _time_budget() wall-clock cutoff in agent_loop.run_agent (150s default)
+- [x] Tighten agent_brain: timeout 90s→45s, retries 3→2, max_steps 24→12
+- [x] Write 4 tests (test_generation_time_guarantee.py) — ALL PASS
+- [x] Run existing tests — no regressions
+- [x] COMMIT 3190cec + PUSH + verify
 
-## Phase 2: Add Wall-Clock Deadline Propagation (THE critical fix)
-- [ ] 2a. Create lumen/engine/services/deadline.py — Deadline class with remaining(), expired(), clamp()
-- [ ] 2b. Add GENERATION_DEADLINE_SEC env (default 300s = 5min, configurable)
-- [ ] 2c. Wire deadline into run_generation (helpers.py) — propagated to both multi-agent AND Cline paths
-- [ ] 2d. Wire deadline into agent_loop.run_agent — check deadline before each step, stop if expired
-- [ ] 2e. Wire deadline into agent_brain.decide — clamp per-call timeout to deadline.remaining()
-- [ ] 2f. Wire deadline into orchestrator.orchestrate_generate — stop if deadline expired
-- [ ] 2g. Add stagnation detection in agent_loop — detect repeated tool calls/errors → auto-finish
-- [ ] 2h. When deadline expires: deliver PARTIAL result with clear Arabic message (not hang)
-- [ ] 2i. Update run_with_heartbeat to accept deadline — stop heartbeat when deadline expires
+## Phase 2: Weakness #1 — Simplify Message Router (ONE clear path)
+- [x] 2.1 Read full message_router.py (1434 lines) + message_intent.py — map all branches
+      DEAD CODE IDENTIFIED:
+      (a) _free_agent_mode() always returns True — 5 call sites (router L301,545,546,1348; early_gates import-only L30)
+      (b) _qwen_rescue_translation() always returns None — 1 call site (router L711) + dead test file
+      (c) The "free-agent mode" block (L301-310): condition reduces to `not force_generate_once` — _free_agent_mode() is dead noise
+      (d) The "skip chat / free-agent vs engine" block (L545-558): if _free_agent_mode() is always True, the `else` branch (L553-558) is unreachable dead code
+      (e) L1348: `if _free_agent_mode():` sets detection_preferred_keys=[] — since always True, the `else` branch is unreachable dead code
+- [x] 2.2 Delete _free_agent_mode() dead code:
+      - Removed _free_agent_mode() function + public alias from message_intent.py
+      - Removed import + all 5 call sites in message_router.py (simplified conditions to True-branch)
+      - Removed unused import from early_gates.py
+      - Deleted dead test test_qwen_rescue_fallback.py (tests retired no-op)
+- [x] 2.3 Delete _qwen_rescue_translation() dead code:
+      - Removed function + public alias from message_intent.py
+      - Removed call site + dead variable block (L695-735) in message_router.py — simplified to single `if isinstance(chat_result, dict):` path
+- [x] 2.4 Verify: syntax check + imports + 21 tests PASS (4 generation-time + 17 hitl/confirm) — no regressions
+      - Fixed test isolation bug in test_generation_time_guarantee.py (module-level constant caching)
+      - Confirmed pre-existing failures (capability_detection, firecracker) are NOT caused by these changes
+- [ ] 2.5 COMMIT + PUSH + verify
 
-## Phase 3: Simplify Message Router (ONE clear path)
-- [ ] 3a. Remove redundant active_repo binding (early bind + later bind → keep one)
-- [ ] 3b. Remove redundant force_generate_once detection (4 places → consolidate)
-- [ ] 3c. Remove dead Stage-5/Stage-3/L3 blocks (done in 1a, verify clean)
-- [ ] 3d. Document the ONE clear message path in comments
-- [ ] 3e. Verify router handles all cases through the single path
-
-## Phase 4: Fix Multi-Agent → Cline Fallback UX Equality
-- [ ] 4a. Both paths receive same deadline budget
-- [ ] 4b. Both paths produce same UX (heartbeat, progress, delivery)
-- [ ] 4c. HITL resume works with deadline (resume uses remaining deadline, not restart)
-- [ ] 4d. Fallback triggers cleanly when multi-agent fails (error_handler pattern)
-
-## Phase 5: Tests & Quality Gate
-- [ ] 5a. Write test for deadline propagation (deadline expires → partial delivery, not hang)
-- [ ] 5b. Write test for stagnation detection (repeated calls → auto-finish)
-- [ ] 5c. Run full test suite — confirm no regressions
-- [ ] 5d. Verify generated bot quality (README, token setup clarity)
-
-## Phase 6: Commit & Push
-- [ ] 6a. Commit with clear message
-- [ ] 6b. Push to origin/Lumen
-- [ ] 6c. Verify push success
-- [ ] 6d. Report to user
+## Phase 3: Weakness #4 — Clean Sprawling Code (audit + delete dead tools)
+- [ ] 3.1 Audit unused tools/services (repo_intelligence, static_dev_gate, package_reality, browser_use)
+- [ ] 3.2 Delete confirmed dead code
+- [ ] 3.3 COMMIT + PUSH + verify

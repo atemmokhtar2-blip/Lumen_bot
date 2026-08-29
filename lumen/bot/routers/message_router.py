@@ -53,10 +53,8 @@ from ..middlewares.mongo_sync import (
 
 from .message_intent import (
     _looks_like_generation_request,
-    _free_agent_mode,
     _is_confirm_phrase,
     _prior_bot_request,
-    _qwen_rescue_translation,
 )
 from .message_generation import execute_bot_generation
 from .message_stages.early_gates import (
@@ -296,9 +294,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["force_generate_once"] = True
         logger.info("Generation-like request → force generate-now (skip Gemini)")
 
-    # Free-agent mode: bare bot specs («بوت متجر…») also skip Gemini catalog chat
+    # Bare bot specs («بوت متجر…») also skip Gemini catalog chat
     # and go straight to Cline — no (cart_add)/(content_list) feature listing.
-    if context.user_data is not None and _free_agent_mode() and not (
+    if context.user_data is not None and not (
         context.user_data or {}
     ).get("force_generate_once"):
         _is_bot_spec_early = False
@@ -542,21 +540,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     if _skip_chat_for_generate:
         # User confirmed generation — skip Gemini entirely (slow / failing).
-        logger.info("Skipping chat layer; force_generate_once active free_agent=%s", _free_agent_mode())
-        if _free_agent_mode():
-            # Engine-direct: raw user text goes to multi-agent/Cline. No translate/bridge.
-            if context.user_data is not None:
-                context.user_data["engine_direct_request"] = request
-                context.user_data["translated_preferred_keys"] = []
-                context.user_data["translated_source"] = "engine_direct"
-                context.user_data["free_agent_path"] = True
-            pass
-        else:
-            # Engine owns understanding — pass raw request through.
-            if context.user_data is not None:
-                context.user_data["engine_direct_request"] = request
-                context.user_data["translated_source"] = "engine_direct"
-            logger.info("Confirm/force path engine-direct (no translate/bridge)")
+        # Engine-direct: raw user text goes to multi-agent/Cline. No translate/bridge.
+        logger.info("Skipping chat layer; force_generate_once active")
+        if context.user_data is not None:
+            context.user_data["engine_direct_request"] = request
+            context.user_data["translated_preferred_keys"] = []
+            context.user_data["translated_source"] = "engine_direct"
+            context.user_data["free_agent_path"] = True
         try:
             await message.reply_text("جاري تجهيز البوت الآن…")
         except Exception:
@@ -701,31 +691,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception:
                 pass
 
-        # Two-stage understanding pipeline:
-        # Gemini understands the user and produces a structured intent;
-        # Qwen translates that intent into the validated generation contract.
-        # If Gemini is unavailable for an explicit build request, Qwen is the
-        # direct translation rescue path; ordinary chat never uses Qwen.
-        _direct_qwen_translation = None
-        if not isinstance(chat_result, dict):
-            _direct_qwen_translation = _qwen_rescue_translation(request, chat_context)
-            if _direct_qwen_translation:
-                logger.info("Direct Qwen rescue translation validated after Gemini failure")
-
         _translated_generation_request = ""
         _translated_preferred_keys = []
         _translation_source = ""
-        if isinstance(_direct_qwen_translation, dict):
-            _translated_generation_request = str(
-                _direct_qwen_translation.get("spec_request") or ""
-            ).strip()
-            _translated_preferred_keys = [
-                str(key).strip()
-                for key in (_direct_qwen_translation.get("features_requested") or [])
-                if str(key).strip()
-            ]
-            _translation_source = "qwen_direct_after_gemini_failure"
-        elif isinstance(chat_result, dict):
+        if isinstance(chat_result, dict):
             try:
                 # Engine-direct policy: do not use Gemini/Qwen translation layers
                 # to produce generation contracts. Multi-agent/Cline owns understanding.
@@ -1344,14 +1313,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _soft_note = _pre.get("soft_note") or ""
         if context.user_data is not None and _rep is not None:
             try:
-                from lumen.engine.services.capability_detection import feature_keys
-                if _free_agent_mode():
-                    context.user_data["detection_preferred_keys"] = []
-                    context.user_data["detection_meta"] = dict(_detection_meta or {})
-                    context.user_data["detection_meta"]["free_agent"] = True
-                else:
-                    context.user_data["detection_preferred_keys"] = feature_keys(_rep, include_core=True)
-                    context.user_data["detection_meta"] = _detection_meta
+                context.user_data["detection_preferred_keys"] = []
+                context.user_data["detection_meta"] = dict(_detection_meta or {})
+                context.user_data["detection_meta"]["free_agent"] = True
             except Exception:
                 pass
         # Fallback: keep legacy blocked_features note if detection silent
