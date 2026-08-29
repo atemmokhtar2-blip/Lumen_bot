@@ -13,9 +13,10 @@ def try_handle_hitl_message(
     user_id: int,
     user_data: dict[str, Any] | None,
 ) -> tuple[bool, str]:
-    """
-    If the user message is a multi-agent confirm/reject, process it.
-    Returns (handled, reply_text).
+    """If the user message is a multi-agent confirm/reject, process it.
+
+    Returns (handled, reply_text). Verb-only messages resolve action_id/token
+    from Telegram user_data or the durable blackboard.
     """
     try:
         from lumen.engine.services.multi_agent import (
@@ -35,9 +36,6 @@ def try_handle_hitl_message(
         return False, ""
 
     verb, action_id, token = parsed
-    # Resolve state_id + action_id + token from user_data pending when the user
-    # sent a verb-only message (e.g. "تأكيد", "confirm", "رفض"). The pending ids
-    # were stored by remember_hitl_pending when the plan-approval prompt was shown.
     state_id = ""
     pending: dict = {}
     if isinstance(user_data, dict):
@@ -52,15 +50,15 @@ def try_handle_hitl_message(
         if not token:
             token = str(pending.get("confirm_token") or "")
 
-    # Recover from durable blackboard when user_data was lost (restart / multi-worker)
+    # Recover from durable blackboard (restart / multi-worker / empty user_data)
     board_state = None
     try:
         if not state_id:
             latest = latest_for_user(int(user_id or 0))
             if latest is not None:
-                state_id = latest.state_id
+                state_id = str(getattr(latest, "state_id", "") or "")
                 board_state = latest
-        if state_id and (not action_id or not token):
+        if state_id and (not action_id or (verb == "confirm" and not token)):
             board_state = board_state or get_blackboard().get(state_id)
             if board_state is not None:
                 ext = getattr(board_state, "extensions", None) or {}
@@ -83,58 +81,81 @@ def try_handle_hitl_message(
         logger.exception("HITL pending recovery failed")
 
     if not state_id:
-        return True, "لا يوجد إجراء معلّق للتأكيد. اطلب العملية من جديد."
-    if verb == "confirm" and (not action_id or not token):
-        return True, (
-            "تعذر التأكيد: بيانات الموافقة ناقصة.\n"
-            "أعد طلب التوليد ثم اضغط تأكيد مباشرة."
-        )
+        return True, "لا يوجد إجراء معلّق. اطلب التوليد من جديد ثم أكّد أو ارفض."
 
     if verb == "reject":
         ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))
         if ok and state is not None:
             ext = getattr(state, "extensions", None) or {}
-            pending = ext.get("pending_action") or {}
+            pend = ext.get("pending_action") or {}
+            tool = str(pend.get("tool") or "")
             if (
                 ext.get("langgraph_interrupt")
-                or pending.get("tool") in {"langgraph_plan_approve", "langgraph_deliver_approve"}
+                or tool in {"langgraph_plan_approve", "langgraph_deliver_approve"}
                 or ext.get("hitl_status") in {"awaiting_approval", "awaiting_deliver_approval"}
             ):
                 try:
                     from lumen.engine.services.multi_agent.langgraph_pipeline import resume_langgraph_hitl
                     state = resume_langgraph_hitl(state, "rejected")
-                except Exception:
+                except Exception as exc:
                     logger.exception("langgraph reject resume failed")
+                    if state is not None and not (state.final_message or "").strip():
+                        state.final_message = f"تم الرفض."
         if isinstance(user_data, dict):
             user_data.pop("multi_agent_pending", None)
             user_data.pop("multi_agent_state_id", None)
         if ok and state is not None:
-            return True, (state.final_message or f"تم الرفض ({action_id}).")[:4000]
-        return True, f"تعذر الرفض: {reason}"
+            return True, (state.final_message or "✅ تم رفض الخطة. يمكنك طلب توليد جديد.").strip()[:4000]
+        reason_ar = {
+            "state_not_found": "لم يُعثر على الجلسة",
+            "user_mismatch": "هذا الطلب ليس لحسابك",
+            "action_mismatch": "لا يوجد إجراء معلّق للرفض",
+        }.get(str(reason), str(reason))
+        return True, f"تعذر الرفض: {reason_ar}"
 
     # confirm
+    if not action_id or not token:
+        return True, (
+            "تعذر التأكيد: بيانات الموافقة ناقصة.\n"
+            "أعد طلب التوليد ثم اضغط ✅ تأكيد مباشرة."
+        )
+
     ok, state, reason = confirm_action(
         state_id, action_id, user_id=int(user_id or 0), confirm_token=token or "",
     )
     if not ok or state is None:
-        return True, (
-            f"تعذر التأكيد: {reason}\n"
-            "الصيغة: تأكيد <id> <token>"
-        )[:4000]
+        reason_ar = {
+            "state_not_found": "لم يُعثر على الجلسة — أعد التوليد",
+            "user_mismatch": "هذا الطلب ليس لحسابك",
+            "action_mismatch": "لا يوجد إجراء معلّق — أعد التوليد",
+            "bad_token": "انتهت صلاحية رمز التأكيد — أعد التوليد",
+            "token_reused": "تم استخدام التأكيد مسبقاً",
+            "expired": "انتهت صلاحية الموافقة — أعد التوليد",
+        }.get(str(reason), str(reason))
+        if str(reason).startswith("already_"):
+            reason_ar = "تم التعامل مع هذا الإجراء مسبقاً"
+        return True, f"تعذر التأكيد: {reason_ar}"[:4000]
 
     try:
         state = continue_after_confirm(state_id, user_id=int(user_id or 0))
-    except Exception:
+    except Exception as exc:
         logger.exception("continue_after_confirm failed")
         state = get_blackboard().get(state_id)
+        if state is not None:
+            extra = f"\n\n⚠️ التأكيد نجح لكن الاستئناف واجه: {type(exc).__name__}"
+            state.final_message = ((state.final_message or "تم التأكيد") + extra)[:4000]
 
     if isinstance(user_data, dict):
         user_data.pop("multi_agent_pending", None)
         user_data["multi_agent_state_id"] = state_id
 
     if state is None:
-        return True, "تم التأكيد لكن تعذر استكمال التنفيذ."
-    return True, (state.final_message or "تم التأكيد والتنفيذ.")[:4000]
+        return True, "تم التأكيد لكن تعذر استكمال التنفيذ. أعد التوليد."
+    msg = (state.final_message or "").strip()
+    if not msg:
+        msg = "✅ تم التأكيد — جاري متابعة البناء."
+    return True, msg[:4000]
+
 
 
 def remember_hitl_pending(user_data: dict[str, Any] | None, state: Any) -> None:

@@ -309,6 +309,9 @@ def reject_action(
     if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
         return False, state, "user_mismatch"
     pending = _load_pending(state)
+    # Verb-only reject: action_id may be empty — accept the sole pending action
+    if pending is not None and not (action_id or "").strip():
+        action_id = pending.action_id
     if pending is None or pending.action_id != action_id:
         return False, state, "action_mismatch"
     pending.status = "rejected"
