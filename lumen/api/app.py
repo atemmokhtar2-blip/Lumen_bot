@@ -214,28 +214,47 @@ async def ip_rate_limit_middleware(request: web.Request, handler):
         limit = int(os.getenv("API_IP_RPM") or "120")
         if limit > 0:
             ip = _client_ip(request)
-            key = f"ip:{ip}"
-            # Authenticated tenants get a tenant bucket as well as the IP
-            # bucket, preventing a shared proxy from collapsing all users.
-            try:
-                tenant = getattr(request, "tenant", None)
-                if tenant and getattr(tenant, "tenant_id", None):
-                    key = f"tenant:{tenant.tenant_id}"
-                else:
-                    auth = (request.headers.get("Authorization") or "").strip()
-                    if auth:
-                        digest = hashlib.sha256(auth.encode("utf-8")).hexdigest()[:32]
-                        key = f"auth:{digest}"
-            except Exception:
-                pass
             lim = get_rate_limiter()
-            if not lim.allow(key, limit=limit, window_sec=60.0):
-                retry = lim.seconds_until_allow(key, limit=limit, window_sec=60.0)
+
+            # --- Bucket 1: IP (ALWAYS checked, never skipped) ---
+            # SECURITY (Vuln #2): The IP bucket is independent and mandatory.
+            # An authenticated identity must NOT replace the IP key — that lets
+            # a single attacker behind a proxy rotate tenants/tokens to bypass
+            # the per-IP limit entirely (rate-limit bypass).
+            ip_key = f"ip:{ip}"
+            if not lim.allow(ip_key, limit=limit, window_sec=60.0):
+                retry = lim.seconds_until_allow(ip_key, limit=limit, window_sec=60.0)
                 return web.json_response(
                     {"ok": False, "error": "ip_rate_limited", "retry_after": retry},
                     status=429,
                     headers={"Retry-After": str(retry)},
                 )
+
+            # --- Bucket 2: authenticated identity (ADDITIONAL, not replacement) ---
+            # When present, enforce a second independent bucket keyed by tenant or
+            # auth-token digest. This prevents one tenant from consuming the entire
+            # IP allowance shared across a proxy/NAT. Both buckets must pass.
+            identity_key: str | None = None
+            try:
+                tenant = getattr(request, "tenant", None)
+                if tenant and getattr(tenant, "tenant_id", None):
+                    identity_key = f"tenant:{tenant.tenant_id}"
+                else:
+                    auth = (request.headers.get("Authorization") or "").strip()
+                    if auth:
+                        digest = hashlib.sha256(auth.encode("utf-8")).hexdigest()[:32]
+                        identity_key = f"auth:{digest}"
+            except Exception:
+                pass
+            if identity_key:
+                if not lim.allow(identity_key, limit=limit, window_sec=60.0):
+                    retry = lim.seconds_until_allow(identity_key, limit=limit, window_sec=60.0)
+                    return web.json_response(
+                        {"ok": False, "error": "identity_rate_limited", "retry_after": retry},
+                        status=429,
+                        headers={"Retry-After": str(retry)},
+                    )
+
             # Tighter limit on tenant creation (credential stuffing / spam tenants)
             if path == "/v1/tenants" and request.method == "POST":
                 tlimit = int(os.getenv("API_TENANT_CREATE_RPM") or "5")

@@ -8,8 +8,10 @@ Root rules:
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -86,6 +88,34 @@ def clean_child_environ(
     return env
 
 
+def _assert_host_resolves_to_public(host: str) -> None:
+    """SSRF defense (OWASP Cheat Sheet): resolve host DNS and reject private IPs.
+
+    Blocks DNS-rebinding and allowlisted-host-pointing-to-internal attacks by
+    ensuring every resolved address is a globally routable IP (not RFC1918,
+    loopback, link-local 169.254.x.x, cloud metadata, or multicast).
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"git_host_dns_unresolvable:{host}:{exc}") from exc
+    if not infos:
+        raise ValueError(f"git_host_no_dns_records:{host}")
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        ip_str = sockaddr[0]
+        # Strip zone-id (e.g. fe80::1%eth0)
+        if "%" in ip_str:
+            ip_str = ip_str.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError as exc:
+            raise ValueError(f"git_host_bad_ip:{host}:{ip_str}") from exc
+        # is_global is False for RFC1918, loopback, link-local (169.254),
+        # multicast, unspecified (0.0.0.0) — exactly the SSRF surface we block.
+        if not ip.is_global:
+            raise ValueError(f"git_host_private_ip:{host}:{ip_str}")
+
+
 def validate_git_https_url(url: str) -> str:
     """Return a normalized safe HTTPS git URL or raise ValueError."""
     raw = (url or "").strip()
@@ -117,6 +147,10 @@ def validate_git_https_url(url: str) -> str:
     host = (parsed.hostname or "").lower()
     if not host or host not in allowed_git_hosts():
         raise ValueError(f"git_host_not_allowed:{host}")
+
+    # SECURITY (Vuln #5): SSRF defense — resolve DNS and reject private/internal IPs.
+    # Prevents allowlisted-host DNS-rebinding to 169.254.169.254, 127.0.0.1, RFC1918, etc.
+    _assert_host_resolves_to_public(host)
 
     path = unquote(parsed.path or "")
     if not path or path == "/":

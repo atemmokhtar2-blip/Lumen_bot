@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from lumen.api.auth import require_tenant
+from lumen.api.ownership import reject_identity_spoof
 from lumen.api.security import safe_json_body
 from lumen.platform.usage_batches import get_usage_batch_service, register_bot
 
@@ -11,6 +12,7 @@ from lumen.platform.usage_batches import get_usage_batch_service, register_bot
 async def post_batch(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     body = await safe_json_body(request, required=True, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     body.pop("tenant_id", None)  # never trust client tenant
     result = get_usage_batch_service().ingest(
         tenant.tenant_id, body, source="api", require_ownership=True
@@ -50,6 +52,7 @@ async def register_bot_route(request: web.Request) -> web.Response:
     """Register bot_id under the authenticated tenant (call on host start)."""
     tenant = require_tenant(request)
     body = await safe_json_body(request, required=True, max_bytes=4096)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     bot_id = str(body.get("bot_id") or "").strip()[:120]
     if not bot_id:
         return web.json_response({"ok": False, "error": "bot_id_required"}, status=400)

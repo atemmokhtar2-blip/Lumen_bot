@@ -50,6 +50,18 @@ async def try_handle_token(
         )
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
+        # SECURITY (Vuln #3): validate project_path against per-user sandbox
+        try:
+            from lumen.api.security import validate_user_project_path
+            _uid = message.from_user.id if message.from_user else 0
+            _validated = str(validate_user_project_path(_uid, pending_host.get("project_path") or ""))
+            pending_host = dict(pending_host)
+            pending_host["project_path"] = _validated
+            context.user_data["pending_host"] = pending_host
+        except ValueError:
+            await status.edit_text("❌ مسار المشروع غير صالح أو خارج مساحة المستخدم المعزولة. تم رفض العملية.")
+            return True
+
         def _do_host():
             from lumen.engine.services.hosting import get_hosting_service
             svc = get_hosting_service(OUTPUT_DIR)
@@ -197,8 +209,9 @@ async def try_handle_token(
                 from lumen.engine.services.user_sandbox import get_user_sandbox
                 dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="newrepo")
             except Exception:
-                dest = Path(OUTPUT_DIR) / "clones"
-                dest.mkdir(parents=True, exist_ok=True)
+                logger.exception("sandbox allocation failed for user %s (newrepo)", uid)
+                await status.edit_text("❌ تعذّر إنشاء مساحة معزولة للمستخدم. تم رفض العملية لأسباب أمان.")
+                return True
 
             def _create():
                 return run_git_intent(
@@ -235,6 +248,14 @@ async def try_handle_token(
         git_tok = extract_token(request)
         if git_tok:
             path = str(pending_push.get("path") or "").strip()
+            # SECURITY (Vuln #3): validate path against per-user sandbox before push
+            try:
+                from lumen.api.security import validate_user_project_path
+                uid = int(user.id) if user else 0
+                path = str(validate_user_project_path(uid, path))
+            except ValueError:
+                await message.reply_text("❌ مسار المشروع غير صالح أو خارج مساحة المستخدم المعزولة. تم رفض العملية.")
+                return True
             status = await message.reply_text("🔑 جاري الدفع بالتوكن...")
             result = await asyncio.to_thread(lambda: git_push(path, token=git_tok))
             if result.ok:
@@ -260,8 +281,9 @@ async def try_handle_token(
                 from lumen.engine.services.user_sandbox import get_user_sandbox
                 dest = get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="reclone")
             except Exception:
-                dest = Path(OUTPUT_DIR) / "clones"
-                dest.mkdir(parents=True, exist_ok=True)
+                logger.exception("sandbox allocation failed for user %s (reclone)", uid)
+                await status.edit_text("❌ تعذّر إنشاء مساحة معزولة لإعادة السحب. تم رفض العملية لأسباب أمان.")
+                return True
             url = pending_clone.get("url") or ""
 
             def _reclone():

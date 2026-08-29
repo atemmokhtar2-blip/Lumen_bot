@@ -24,6 +24,19 @@ def _active_path(context: ContextTypes.DEFAULT_TYPE) -> str:
     return str(ud.get("last_project_path") or "").strip()
 
 
+def _validate_user_path(user, path: str) -> str:
+    """Validate a project path against the per-user sandbox (anti path-injection).
+
+    SECURITY (Vuln #3): Reuses the canonical ``validate_user_project_path`` from
+    ``lumen.api.security`` which uses openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)
+    for kernel-level containment — blocking ``..`` traversal, symlinks, null
+    bytes, and UNC/``file:`` schemes. Raises ``ValueError`` on any violation.
+    """
+    from lumen.api.security import validate_user_project_path
+    uid = int(user.id) if user else 0
+    return str(validate_user_project_path(uid, path))
+
+
 async def try_handle_git(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -148,6 +161,12 @@ async def try_handle_git(
         if not path:
             await message.reply_text("مفيش مستودع نشط. اسحب أو أنشئ مستودع أولاً ثم اطلب البوش.")
             return True
+        # SECURITY (Vuln #3): validate path against per-user sandbox before git ops
+        try:
+            path = _validate_user_path(user, path)
+        except ValueError:
+            await message.reply_text("❌ مسار المشروع غير صالح أو خارج مساحة المستخدم المعزولة. تم رفض العملية.")
+            return True
         if not token:
             # try without token; if needs_auth, ask
             status = await message.reply_text("📤 جاري الدفع...")
@@ -182,6 +201,12 @@ async def try_handle_git(
             await message.reply_text(
                 "حدّث مستودع نشط: اسحب مستودع أولاً، أو أرسل رابط المستودع مع «اسحب»."
             )
+            return True
+        # SECURITY (Vuln #3): validate path against per-user sandbox before git ops
+        try:
+            path = _validate_user_path(user, path)
+        except ValueError:
+            await message.reply_text("❌ مسار المشروع غير صالح أو خارج مساحة المستخدم المعزولة. تم رفض العملية.")
             return True
         status = await message.reply_text("📥 جاري سحب آخر نسخة...")
         result = await asyncio.to_thread(lambda: git_pull(path, token=token))
@@ -336,11 +361,26 @@ async def try_handle_git(
     return True
 
 
+class SandboxUnavailable(RuntimeError):
+    """Raised when a per-user sandbox cannot be allocated.
+
+    SECURITY: There is NO shared fallback. If the isolated per-user sandbox
+    cannot be created, the request MUST fail rather than write to a shared
+    directory (which would break tenant/user isolation).
+    """
+
+
 def _dest_for(uid: int) -> Path:
+    """Allocate a per-user isolated clone directory.
+
+    Fail-closed: raises :class:`SandboxUnavailable` if the sandbox cannot be
+    created. Never falls back to a shared directory.
+    """
+    from lumen.engine.services.user_sandbox import get_user_sandbox
+
     try:
-        from lumen.engine.services.user_sandbox import get_user_sandbox
         return get_user_sandbox(uid, OUTPUT_DIR).new_clone_dir(label="clone")
-    except Exception:
-        dest = Path(OUTPUT_DIR) / "clones"
-        dest.mkdir(parents=True, exist_ok=True)
-        return dest
+    except Exception as exc:  # noqa: BLE001 - re-raise as explicit domain error
+        raise SandboxUnavailable(
+            f"unable to allocate isolated sandbox for user {uid}: {exc}"
+        ) from exc
