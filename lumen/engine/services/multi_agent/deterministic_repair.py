@@ -162,13 +162,14 @@ def apply_deterministic_repairs(
                 main.write_text(_MIN_MAIN, encoding="utf-8")
                 report["actions"].append("reset_broken_main.py")
                 src = _MIN_MAIN
-            if "BOT_TOKEN" not in src and "TELEGRAM_BOT_TOKEN" not in src:
+            if "BOT_TOKEN" not in src and "TELEGRAM_BOT_TOKEN" not in src and "token" not in src.lower():
+                # Only reset if there's truly no token reference at all
                 main.write_text(_MIN_MAIN, encoding="utf-8")
                 report["actions"].append("reset_main_token_layout")
-            if "app.handlers" not in src and "from app" not in src:
-                if handlers.is_file():
-                    main.write_text(_MIN_MAIN, encoding="utf-8")
-                    report["actions"].append("align_main_to_app_handlers")
+            # Do NOT overwrite main.py just because it doesn't import from app.handlers.
+            # The agent's main.py may have inline handlers (valid code). We create
+            # app/handlers.py as a supplementary file for the deliverables check,
+            # but we preserve the agent's working main.py.
 
         for f in findings:
             if f.code != "syntax_error" or not f.path:

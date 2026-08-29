@@ -1,36 +1,32 @@
-# Lumen Root Fix — ONE Strong Path (from foundation)
+# Lumen Bot — Fix exfil_env Guardrail + Zip Delivery + Live Run
 
-## STATUS AUDIT (weaknesses 1-6)
-| # | Weakness | Status | Evidence |
-|---|----------|--------|----------|
-| 1 | Message path heavy/complex | DONE | Dead code removed (1434->1398->1361). 6 dead user_data writes purged (free_agent_path, engine_direct_request, advanced_brief, advanced_brief_ai, detection_meta, detection_preferred_keys). Commit debebcc + bc71dab. |
-| 2 | Generation time not guaranteed | DONE | 3-layer timeout (OUTER 180s / INNER 150s / PER-CALL 45s). Commit 3190cec. |
-| 3 | Multi-agent optional + fallback UX unequal | DONE | Fallback tagged metadata['fallback_used']='cline' + user sees clear Arabic signal in both call sites. Commit 0af9082. |
-| 4 | Code huge/sprawling | DONE | 3 dead modules deleted (commit 594a2e5). Audit confirmed rest is LIVE. |
-| 5 | Hosting/live depends on real env | DESIGN-OK | Dockerfile + HEALTHCHECK + live_runner (token validate, webhook clear, syntax repair, trial chat, sandbox). Not a code weakness - runtime infra. |
-| 6 | Generated code quality not guaranteed | DONE | ensure_project_readme() guarantees README with token setup for every delivered project. Commit ea3b63e. |
+## Root Cause Analysis
+- [x] Identified: `exfil_env` guardrail pattern `(print|show|dump|leak|reveal).{0,40}(api[_-]?key|token|secret|TELEGRAM_BOT|GEMINI_API)` is too aggressive
+- [x] Confirmed: On retry/next-task, `build_worker_context()` reads existing `main.py` → `repo_block` includes `print("Error: TELEGRAM_BOT_TOKEN...")` → appended to `full_goal` → `scan_user_input()` triggers `exfil_env` → agent blocked
+- [x] Confirmed: Generated `main.py` at gen_20260829_214257 contains `print("Error: TELEGRAM_BOT_TOKEN not found in environment.")`
 
-## COMPLETED (already pushed)
-- [x] Phase 0: Research & Plan
-- [x] Phase 1 (#2): Generation time guarantee - 3-layer timeout. Commit 3190cec PUSHED.
-- [x] Phase 2 (#1 partial): Simplify router - delete dead code. Commit debebcc PUSHED.
-- [x] Phase 3 (#4 partial): Delete 3 dead modules. Commit 594a2e5 PUSHED.
+## Fix 1: Refine exfil_env guardrail pattern
+- [x] Made pattern only match actual exfiltration (verb + secret + context), with negative lookahead to exclude "not found"/"missing"/"required" error-guard patterns
+- [x] Added second `exfil_send` pattern for explicit "send secret to URL/endpoint" attacks
+- [x] Test: 9/9 legitimate bot code passes, 7/7 injection attempts blocked (test_guardrail_fix.py)
+- [x] Verified: actual generated main.py + full_goal with repo_block both pass
 
-## REMAINING WORK (fix from root, push after EACH)
+## Fix 2: Only scan user's original input, not accumulated context
+- [x] Added `scan_user_request_only()` to `prompt_guard.py` — extracts only user's original request (before `---`, `TARGET FILES:`, `REPO CONTEXT:` markers) and scans just that
+- [x] Updated `agent_loop.py` to use `scan_user_request_only()` as primary scan, with secondary full-goal scan only for DANGEROUS code-exec patterns (os.system, eval, exec, etc.)
+- [x] Mock test passes, imports verified
 
-### Phase 4: Weakness #6 - Guarantee generated code quality (README + token setup)
-- [x] 4.1 Added ensure_project_readme() to helpers.py - injects clear README (token setup + run + Docker) if missing/thin
-- [x] 4.2 Wired into delivery.py after Dockerfile injection (before smoke test) - every shipped zip has README
-- [x] 4.3 5 tests in test_readme_guarantee.py - ALL PASS (inject/thin/adequate/docker/empty-request)
-- [x] 4.4 Verified no regressions + COMMIT ea3b63e + PUSH (594a2e5..ea3b63e)
+## Fix 3: Ensure zip delivery to user after successful generation
+- [x] Found root cause: `try_handle_hitl_message()` returned only text — never called `deliver_generation_result()`
+- [x] Modified `try_handle_hitl_message()` to return 3-tuple `(handled, reply, state)` — includes final AgentState
+- [x] Modified `callback_router.py` `_handle_hitl_callback()` to call `deliver_generation_result()` when state status is DELIVERED/PASSED and project_path exists
+- [x] Updated `message_router.py` to handle 3-tuple return
+- [x] All imports verified OK
 
-### Phase 5: Weakness #3 - Fallback UX parity (clear user-visible signal)
-- [x] 5.1 helpers.py: tag Cline result with metadata['fallback_used']='cline' when fallback fires
-      message_generation.py + generate_bridge.py: send user clear Arabic message when fallback_used detected
-- [x] 5.2 4 tests in test_fallback_ux_parity.py - ALL PASS (fail/succeed/exception/disabled)
-- [x] 5.3 Verified no regressions + COMMIT 0af9082 + PUSH (ea3b63e..0af9082)
-
-### Phase 6: Weakness #1 - Further router simplification
-- [x] 6.1 Audit remaining branches - identified 6 dead user_data writes (free_agent_path, engine_direct_request x6 sites, advanced_brief, advanced_brief_ai, detection_meta, detection_preferred_keys) - all confirmed dead (never read, not in session_store keep-list, no dynamic access)
-- [x] 6.2 Removed all 6 dead writes + dead local vars (_detection_meta, _rep) + unused import (metadata_from_report). Router 1398->1361 lines.
-- [x] 6.3 Verified tests (9/9 pass, 68 pass / 16 pre-existing failures identical to clean repo via git stash) + COMMIT bc71dab + PUSH (0af9082..bc71dab)
+## Fix 4: Verify full flow end-to-end
+- [x] Restarted the bot (pid 16746, polling started)
+- [ ] Send a test request → user needs to test via @lum9n_bot
+- [ ] Confirm plan
+- [ ] Wait for generation to complete
+- [ ] Verify zip file is delivered
+- [x] Committed and pushed all fixes (commit 67bf0d9)
