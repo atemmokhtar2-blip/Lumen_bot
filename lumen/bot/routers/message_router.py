@@ -51,93 +51,14 @@ from ..middlewares.mongo_sync import (
 )
 
 
-def _looks_like_generation_request(text: str) -> bool:
-    """Explicit generate intent (verbs). Does NOT include bare bot-spec descriptions.
-
-    Bare specs like «بوت متجر إلكتروني…» are handled by _looks_like_bot_spec and
-    flows through free multi-agent engine (force_generate) — Gemini translate pipeline retired.
-    """
-    value = (text or "").strip().lower()
-    # Strip decorative quotes/punctuation that users often paste from chat UIs.
-    value = re.sub(r'["“”‘’«»٬،,]+', " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if not value:
-        return False
-    if "بوت" not in value and "bot" not in value:
-        return False
-    return bool(
-        re.search(
-            r"(?:اعمل|عايز|عاوز|أريد|ابغى|أنشئ|انشئ|ابني|صمم|ولّد|ولد|سوي|سوى|generate|create|make|build).{0,80}(?:بوت|bot)"
-            r"|(?:بوت|bot).{0,80}(?:ابدأ|ابدء|نفّذ|نفذ|ولّد|ولد|start|generate|create|make|build)",
-            value,
-            re.IGNORECASE,
-        )
-    )
-
-
-
-def _free_agent_mode() -> bool:
-    """Cline is the sole generation path — always on."""
-    return True
-
-
-
-
-_CONFIRM_ROOTS = {
-    "أكد", "اكد", "تأكيد", "موافق", "نعم", "ايوه", "أيوه", "يلا",
-    "ابدأ", "ابدا", "ابدء", "نفذ", "نفّذ", "انجز", "أنجز", "ولّد", "ولد",
-    "تمام", "حاضر", "ماشي", "يلاا",
-    "confirm", "yes", "ok", "start", "go", "generate", "done",
-}
-_CONFIRM_FILLER = {"و", "اللي", "على", "كده", "كدا", "بقوة", "فورا", "دلوقتي", "الآن", "الان", "يا", "رجاء", "please", "now"}
-
-
-def _is_confirm_phrase(text: str) -> bool:
-    """True for short go-ahead phrases like 'تمام ابدا وانجز' / 'ابدأ' / 'ok'."""
-    value = (text or "").strip().lower()
-    value = re.sub(r'["“”‘’«»٬،,!.?؟]+', " ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if not value:
-        return False
-    if value in _CONFIRM_ROOTS:
-        return True
-    tokens = re.findall(r"[\w\u0600-\u06ff]+", value)
-    if not tokens or len(tokens) > 8:
-        return False
-    # Strip leading waw from tokens (وانجز → انجز)
-    norm = []
-    for t in tokens:
-        if t.startswith("و") and len(t) > 2 and t[1:] in _CONFIRM_ROOTS:
-            norm.append(t[1:])
-        else:
-            norm.append(t)
-    useful = [t for t in norm if t not in _CONFIRM_FILLER]
-    if not useful or len(useful) > 6:
-        return False
-    return all(t in _CONFIRM_ROOTS for t in useful) and any(t in _CONFIRM_ROOTS for t in useful)
-
-
-def _prior_bot_request(user_data: dict | None) -> str:
-    """Last generation-like user message from session history."""
-    if not user_data:
-        return ""
-    explicit = str(user_data.get("last_bot_request") or "").strip()
-    if explicit and _looks_like_generation_request(explicit):
-        return explicit
-    for item in reversed(list(user_data.get("chat_history") or [])):
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("role") or "") != "user":
-            continue
-        content = str(item.get("content") or "").strip()
-        if _looks_like_generation_request(content):
-            return content
-    return ""
-
-
-def _qwen_rescue_translation(request: str, context: dict) -> dict | None:
-    """Retired — engine (multi-agent/Cline) owns understanding. Kept as no-op for callers."""
-    return None
+from .message_intent import (
+    _looks_like_generation_request,
+    _free_agent_mode,
+    _is_confirm_phrase,
+    _prior_bot_request,
+    _qwen_rescue_translation,
+)
+from .message_generation import execute_bot_generation
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -573,164 +494,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         await _clear_thinking()
         status_msg = await message.reply_text("⚙️ جاري توليد البوت الآن…")
-        try:
-            await context.bot.send_chat_action(
-                chat_id=message.chat_id, action=ChatAction.TYPING
-            )
-        except Exception:
-            pass
+        await execute_bot_generation(
+            message=message,
+            context=context,
+            user=user,
+            gen_request=gen_request,
+            status_msg=status_msg,
+            preferred_keys=preferred_keys,
+            cache_key=gen_request,
+        )
 
-        # Durable writable workdir (Railway-safe)
-        work_dir: Path | None = None
-        try:
-            out_root = Path(OUTPUT_DIR)
-            out_root.mkdir(parents=True, exist_ok=True)
-            from lumen.engine.services.user_sandbox import get_user_sandbox
-            uid = int(user.id) if user else 0
-            work_dir = get_user_sandbox(uid, out_root).new_project_dir(label="gen")
-        except Exception as sandbox_exc:
-            logger.exception("sandbox workdir failed: %s", sandbox_exc)
-            # Hard-restricted fallback under /tmp only (never OUTPUT_DIR root / host paths)
-            try:
-                from lumen.engine.services.user_sandbox import allocate_fallback_workdir
-                work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
-            except Exception as fb_exc:
-                logger.exception("fallback workdir failed: %s", fb_exc)
-                await safe_edit_text(
-                    status_msg,
-                    user_facing_generation_error(code="sandbox_unavailable"),
-                )
-                return
-
-        try:
-            # Engine-direct: Multi-Agent Orchestrator + Cline owns understanding,
-            # key reading, planning, coding, and acceptance. No translator/bridge layer.
-            result = await run_with_heartbeat(
-                run_generation,
-                gen_request,
-                work_dir,
-                int(user.id) if user else 0,
-                status_msg=status_msg,
-                preferred_keys=preferred_keys,
-            )
-            if result is None:
-                await safe_edit_text(status_msg, "❌ فشل التوليد (نتيجة فارغة).")
-                return
-
-            success = bool(getattr(result, "success", False))
-            project_path = getattr(result, "project_path", None)
-            errors = list(getattr(result, "errors", None) or [])
-
-            if not success or not project_path:
-                logger.warning("generation failed errors=%s", [str(e)[:200] for e in errors[:8]])
-                _fail_code = "generation_failed"
-                try:
-                    _fe = list(getattr(result, "errors", None) or [])
-                    if _fe:
-                        _fail_code = str(_fe[0])[:80]
-                except Exception:
-                    pass
-                await safe_edit_text(
-                    status_msg,
-                    user_facing_generation_error(code=_fail_code),
-                )
-                try:
-                    from lumen.bot.ui.emit_context import emit_context_event
-                    await emit_context_event(
-                        message=message, context=context, user=user,
-                        kind="generation_failed",
-                        detail=user_facing_generation_error(code=_fail_code),
-                    )
-                except Exception:
-                    logger.exception("emit gen fail context failed")
-                return
-
-            proj = Path(str(project_path))
-            if not proj.is_dir():
-                await safe_edit_text(
-                    status_msg,
-                    "❌ التوليد انتهى بدون مجلد مشروع. أعد المحاولة.",
-                )
-                return
-
-            # Best-effort post hooks (must not block zip delivery)
-            try:
-                from lumen.platform.plan_gate import apply_post_generation
-                apply_post_generation(str(proj), user_id=int(user.id) if user else 0)
-            except Exception:
-                logger.exception("post-generation plan hooks failed")
-
-            try:
-                from ..generation_flow import deliver_generation_result
-                await deliver_generation_result(
-                    message=message,
-                    status_msg=status_msg,
-                    context=context,
-                    user=user,
-                    request=gen_request,
-                    result=result,
-                )
-            except Exception:
-                logger.exception("deliver_generation_result failed; gated zip fallback")
-                # Root: never ship untested ZIP. Smoke must pass before any fallback send.
-                try:
-                    from lumen.bot.generation_steps.helpers import _smoke_test_project
-                    smoke_ok, smoke_msg = _smoke_test_project(proj, seconds=8.0)
-                except Exception as _sm_exc:
-                    smoke_ok, smoke_msg = False, f"smoke_error:{type(_sm_exc).__name__}"
-                if not smoke_ok:
-                    await message.reply_text(
-                        "❌ التسليم الآمن فشل — لم يُرسل ZIP.\n"
-                        f"السبب: `{escape_md(str(smoke_msg)[:250])}`"
-                    )
-                else:
-                    zip_path = make_zip_from_path(proj)
-                    if zip_path and Path(zip_path).is_file():
-                        try:
-                            await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
-                        except Exception:
-                            pass
-                        try:
-                            with open(zip_path, "rb") as fh:
-                                await message.reply_document(
-                                    document=fh,
-                                    filename=Path(zip_path).name,
-                                    caption="📦 مشروع البوت (ZIP). فك الضغط واتبع README.",
-                                )
-                        except Exception:
-                            logger.exception("zip upload failed")
-                            await message.reply_text(
-                                "✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل. تم حفظه في مساحة المستخدم المعزولة."
-                            )
-                    else:
-                        await message.reply_text(
-                            "✅ المشروع اتولد وتم حفظه في مساحة المستخدم المعزولة.\n"
-                            "تعذر إنشاء ZIP — راجع السجلات."
-                        )
-
-            try:
-                if success and project_path:
-                    from ..generation_cache import get_generation_cache
-                    get_generation_cache().put(
-                        int(user.id) if user else 0,
-                        gen_request,
-                        {"project_path": str(project_path), "entry_point": "main.py"},
-                    )
-                _persist_session(user, context)
-            except Exception:
-                pass
-        except FileNotFoundError as e:
-            logger.exception("generate-now FileNotFoundError")
-            await safe_edit_text(
-                status_msg,
-                user_facing_generation_error(e),
-            )
-        except Exception as e:
-            logger.exception("generate-now path failed")
-            await safe_edit_text(
-                status_msg,
-                user_facing_generation_error(e),
-            )
         return
 
     # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
@@ -1996,188 +1769,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         logger.exception("plan quota check failed")
 
-    # Isolated per-user workspace (never share host bot dir/token space)
-    try:
-        out_root = Path(OUTPUT_DIR)
-        out_root.mkdir(parents=True, exist_ok=True)
-        from lumen.engine.services.user_sandbox import get_user_sandbox
-        uid = int(user.id) if user else 0
-        work_dir = get_user_sandbox(uid, out_root).new_project_dir(label="gen")
-    except Exception as _wd_exc:
-        logger.exception("workdir sandbox failed: %s", _wd_exc)
-        try:
-            from lumen.engine.services.user_sandbox import allocate_fallback_workdir
-            work_dir = allocate_fallback_workdir(int(user.id) if user else 0)
-        except Exception as fb_exc:
-            logger.exception("fallback workdir failed: %s", fb_exc)
-            await safe_edit_text(
-                status_msg,
-                user_facing_generation_error(code="sandbox_unavailable"),
-            )
-            try:
-                from lumen.bot.ui.emit_context import emit_context_event
-                await emit_context_event(
-                    message=message, context=context, user=user,
-                    kind="sandbox_unavailable",
-                    detail=user_facing_generation_error(code="sandbox_unavailable"),
-                )
-            except Exception:
-                logger.exception("emit sandbox context failed")
-            return
-
-    try:
-        _pref_keys = None
-        if context.user_data is not None:
-            _pref_keys = context.user_data.get("translated_preferred_keys")
-            if not _pref_keys:
-                _pref_keys = context.user_data.get("detection_preferred_keys")
-        try:
-            from lumen.platform.plan_gate import filter_preferred_keys
-            _pref_keys = filter_preferred_keys(
-                list(_pref_keys) if _pref_keys else None,
-                user_id=int(user.id) if user else 0,
-            )
-        except Exception:
-            pass
-        result = await run_with_heartbeat(
-            run_generation,
-            request,
-            work_dir,
-            int(user.id) if user else 0,
-            status_msg=status_msg,
-            preferred_keys=_pref_keys,
-        )
-
-        if result is None:
-            await status_msg.edit_text("❌ فشل التوليد (نتيجة فارغة).")
-            return
-
-        # LangGraph HITL: park confirm token on user_data + show plan approval message
-        try:
-            meta = getattr(result, "metadata", None) or {}
-            if meta.get("awaiting_hitl") or meta.get("langgraph_interrupt"):
-                from ..multi_agent_bridge import remember_hitl_pending
-                class _St:
-                    pass
-                st = _St()
-                st.state_id = meta.get("state_id")
-                st.extensions = {
-                    "pending_action": {
-                        "action_id": meta.get("pending_action_id"),
-                        "state_id": meta.get("state_id"),
-                        "tool": "langgraph_plan_approve",
-                        "confirm_token": meta.get("confirm_token"),
-                    },
-                    "langgraph_interrupt": True,
-                    "langgraph_thread_id": meta.get("langgraph_thread_id"),
-                    "hitl_status": "awaiting_approval",
-                }
-                remember_hitl_pending(context.user_data, st)
-                msg = (meta.get("final_message") or "").strip()
-                if msg:
-                    await status_msg.edit_text(msg[:4000])
-                    return
-        except Exception:
-            logger.exception("langgraph HITL surface failed")
-
-        # Explorer watermark + plan post-process (server-side, cannot be skipped by client)
-        try:
-            if result and getattr(result, "success", False) and getattr(result, "project_path", None):
-                from lumen.platform.plan_gate import apply_post_generation
-                apply_post_generation(
-                    str(result.project_path),
-                    user_id=int(user.id) if user else 0,
-                )
-        except Exception:
-            logger.exception("post-generation plan hooks failed")
-
-        try:
-            from ..generation_flow import deliver_generation_result
-            await deliver_generation_result(
-                message=message,
-                status_msg=status_msg,
-                context=context,
-                user=user,
-                request=request,
-                result=result,
-            )
-        except Exception:
-            logger.exception("deliver_generation_result failed; gated zip fallback")
-            proj = Path(str(getattr(result, "project_path", "") or ""))
-            if not proj.is_dir():
-                raise
-            try:
-                from lumen.bot.generation_steps.helpers import _smoke_test_project
-                smoke_ok, smoke_msg = _smoke_test_project(proj, seconds=8.0)
-            except Exception as _sm_exc:
-                smoke_ok, smoke_msg = False, f"smoke_error:{type(_sm_exc).__name__}"
-            if not smoke_ok:
-                await message.reply_text(
-                    "❌ التسليم الآمن فشل — لم يُرسل ZIP.\n"
-                    f"السبب: `{escape_md(str(smoke_msg)[:250])}`"
-                )
-            else:
-                zip_path = make_zip_from_path(proj)
-                if zip_path and Path(zip_path).is_file():
-                    try:
-                        await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
-                    except Exception:
-                        pass
-                    try:
-                        with open(zip_path, "rb") as fh:
-                            await message.reply_document(
-                                document=fh,
-                                filename=Path(zip_path).name,
-                                caption="📦 مشروع البوت (ZIP)",
-                            )
-                    except Exception:
-                        logger.exception("zip upload failed")
-                        await message.reply_text("✅ المشروع جاهز في مساحة المستخدم المعزولة.")
-                else:
-                    await message.reply_text("✅ المشروع جاهز في مساحة المستخدم المعزولة.")
-        try:
-            if result and getattr(result, "success", False) and getattr(result, "project_path", None):
-                from ..generation_cache import get_generation_cache
-                get_generation_cache().put(
-                    int(user.id) if user else 0,
-                    request,
-                    {
-                        "project_path": str(result.project_path),
-                        "entry_point": "main.py",
-                    },
-                )
-                if context.user_data is not None:
-                    context.user_data["last_project_path"] = str(result.project_path)
-                    context.user_data["active_bot_path"] = str(result.project_path)
-                try:
-                    from lumen.engine.services.chat_memory import get_chat_memory
-                    if user:
-                        get_chat_memory().set_facts(
-                            int(user.id),
-                            last_project_path=str(result.project_path),
-                            last_bot_request=(request or "")[:500],
-                        )
-                except Exception:
-                    logger.exception("chat_memory project fact failed")
-            _persist_session(user, context)
-        except Exception:
-            pass
-
-    except FileNotFoundError as e:
-        logger.exception("Generation FileNotFoundError")
-        await safe_edit_text(
-            status_msg,
-            user_facing_generation_error(e),
-        )
-    except Exception as e:
-        logger.exception("Generation failed")
-        await safe_edit_text(
-            status_msg,
-            user_facing_generation_error(e),
-        )
-    finally:
-        # Optional cleanup of very old temp dirs can be added later.
-        # Keep the last result for inspection on the server.
-        pass
+    # Shared generation execution (sandbox → engine → deliver)
+    await execute_bot_generation(
+        message=message,
+        context=context,
+        user=user,
+        gen_request=request,
+        status_msg=status_msg,
+        preferred_keys=(
+            context.user_data.get("preferred_keys")
+            if isinstance(context.user_data, dict)
+            else None
+        ),
+        cache_key=request,
+    )
 
 
