@@ -39,29 +39,56 @@ def try_handle_hitl_message(
     # sent a verb-only message (e.g. "تأكيد", "confirm", "رفض"). The pending ids
     # were stored by remember_hitl_pending when the plan-approval prompt was shown.
     state_id = ""
+    pending: dict = {}
     if isinstance(user_data, dict):
         state_id = str(user_data.get("multi_agent_state_id") or "")
         pending = user_data.get("multi_agent_pending") or {}
-        if not state_id and isinstance(pending, dict):
+        if not isinstance(pending, dict):
+            pending = {}
+        if not state_id:
             state_id = str(pending.get("state_id") or "")
-        if not action_id and isinstance(pending, dict):
-            action_id = str(pending.get("action_id") or action_id)
-        # When the user sends a verb-only confirm, resolve the token from the
-        # stored pending action so confirm_action's HMAC check passes without
-        # requiring the user to type the long token.
-        if not token and isinstance(pending, dict):
-            token = str(pending.get("confirm_token") or token or "")
+        if not action_id:
+            action_id = str(pending.get("action_id") or "")
+        if not token:
+            token = str(pending.get("confirm_token") or "")
 
-    if not state_id:
-        try:
+    # Recover from durable blackboard when user_data was lost (restart / multi-worker)
+    board_state = None
+    try:
+        if not state_id:
             latest = latest_for_user(int(user_id or 0))
             if latest is not None:
                 state_id = latest.state_id
-        except Exception:
-            logger.exception("latest_for_user failed")
+                board_state = latest
+        if state_id and (not action_id or not token):
+            board_state = board_state or get_blackboard().get(state_id)
+            if board_state is not None:
+                ext = getattr(board_state, "extensions", None) or {}
+                bp = ext.get("pending_action") or {}
+                if isinstance(bp, dict):
+                    if not action_id:
+                        action_id = str(bp.get("action_id") or "")
+                    if not token:
+                        token = str(bp.get("confirm_token") or "")
+                    if isinstance(user_data, dict):
+                        user_data["multi_agent_pending"] = {
+                            "action_id": action_id,
+                            "state_id": state_id,
+                            "tool": bp.get("tool") or pending.get("tool") or "langgraph_plan_approve",
+                            "confirm_token": token,
+                            "langgraph_thread_id": ext.get("langgraph_thread_id"),
+                        }
+                        user_data["multi_agent_state_id"] = state_id
+    except Exception:
+        logger.exception("HITL pending recovery failed")
 
     if not state_id:
         return True, "لا يوجد إجراء معلّق للتأكيد. اطلب العملية من جديد."
+    if verb == "confirm" and (not action_id or not token):
+        return True, (
+            "تعذر التأكيد: بيانات الموافقة ناقصة.\n"
+            "أعد طلب التوليد ثم اضغط تأكيد مباشرة."
+        )
 
     if verb == "reject":
         ok, state, reason = reject_action(state_id, action_id, user_id=int(user_id or 0))

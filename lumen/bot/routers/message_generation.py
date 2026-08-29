@@ -115,6 +115,26 @@ async def execute_bot_generation(
                     "hitl_status": "awaiting_approval",
                 }
                 remember_hitl_pending(context.user_data, st)
+                # Hydrate token/action_id from durable board if metadata was incomplete
+                try:
+                    from lumen.engine.services.multi_agent import get_blackboard
+                    sid = str(meta.get("state_id") or "")
+                    if sid and isinstance(context.user_data, dict):
+                        st_live = get_blackboard().get(sid)
+                        if st_live is not None:
+                            bp = (getattr(st_live, "extensions", None) or {}).get("pending_action") or {}
+                            if isinstance(bp, dict) and bp.get("confirm_token"):
+                                pend = dict(context.user_data.get("multi_agent_pending") or {})
+                                pend.update({
+                                    "action_id": bp.get("action_id") or pend.get("action_id"),
+                                    "state_id": sid,
+                                    "confirm_token": bp.get("confirm_token"),
+                                    "tool": bp.get("tool") or pend.get("tool") or "langgraph_plan_approve",
+                                })
+                                context.user_data["multi_agent_pending"] = pend
+                                context.user_data["multi_agent_state_id"] = sid
+                except Exception:
+                    logger.exception("HITL token hydrate failed")
                 from ..multi_agent_bridge import format_hitl_user_message, build_hitl_keyboard
 
                 class _MsgState:

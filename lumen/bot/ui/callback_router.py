@@ -64,31 +64,77 @@ async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=
 
 
 async def _handle_hitl_callback(update, context, q, action_id: str) -> bool:
-    """Root HITL: buttons confirm/reject resume LangGraph without typing tokens."""
+    """Root HITL: confirm/reject must always give visible feedback + resume off-loop."""
     if action_id not in {"hitl_confirm", "hitl_reject"}:
         return False
+    import asyncio
+
     user = update.effective_user
     uid = int(user.id) if user else 0
-    ud = context.user_data if context.user_data is not None else {}
+    # Always use the live PTB dict so pending survives
+    if context.user_data is None:
+        try:
+            context.user_data = {}
+        except Exception:
+            pass
+    ud = context.user_data if isinstance(context.user_data, dict) else {}
+    msg = update.effective_message or (q.message if q else None)
+    verb = "تأكيد" if action_id == "hitl_confirm" else "رفض"
+    progress = "⏳ جاري تأكيد الخطة ومتابعة البناء…" if action_id == "hitl_confirm" else "⏳ جاري إلغاء الخطة…"
+
     try:
+        await q.answer("تم استلام الأمر…", show_alert=False)
+    except Exception:
+        pass
+    if msg is not None:
+        try:
+            await msg.edit_text(progress, reply_markup=None)
+        except Exception:
+            try:
+                await msg.reply_text(progress)
+            except Exception:
+                pass
+
+    def _run():
         from lumen.bot.multi_agent_bridge import try_handle_hitl_message
-        verb = "تأكيد" if action_id == "hitl_confirm" else "رفض"
-        handled, reply = try_handle_hitl_message(
-            verb,
-            user_id=uid,
-            user_data=ud,
-        )
+        return try_handle_hitl_message(verb, user_id=uid, user_data=ud)
+
+    try:
+        handled, reply = await asyncio.wait_for(asyncio.to_thread(_run), timeout=180.0)
         if not handled:
             reply = "لا يوجد إجراء معلّق. أعد الطلب من جديد."
-        msg = update.effective_message or (q.message if q else None)
+        text = (reply or "تم.")[:4000]
         if msg is not None:
             try:
-                await msg.edit_text((reply or "تم.")[:4000], reply_markup=None)
+                await msg.edit_text(text, reply_markup=None)
             except Exception:
-                await msg.reply_text((reply or "تم.")[:4000])
+                try:
+                    await msg.reply_text(text)
+                except Exception:
+                    logger.exception("HITL reply delivery failed")
+        else:
+            try:
+                await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+            except Exception:
+                pass
+        return True
+    except asyncio.TimeoutError:
+        logger.error("HITL resume timed out uid=%s", uid)
+        err = "استغرق البناء وقتاً طويلاً. أعد الضغط على تأكيد أو اطلب التوليد من جديد."
+        if msg is not None:
+            try:
+                await msg.edit_text(err)
+            except Exception:
+                pass
         return True
     except Exception:
         logger.exception("hitl callback failed")
+        err = "فشل التأكيد. أعد الطلب أو اكتب: تأكيد"
+        if msg is not None:
+            try:
+                await msg.edit_text(err)
+            except Exception:
+                pass
         try:
             await q.answer("فشل التأكيد", show_alert=True)
         except Exception:
@@ -150,10 +196,12 @@ async def handle_ui_callback(update, context) -> None:
     except Exception:
         logger.debug("callback rate limit skipped", exc_info=True)
 
+    # HITL resume can run the full LangGraph build — allow long wall time.
+    _timeout = 200.0 if action_id in {"hitl_confirm", "hitl_reject"} else 25.0
     try:
         await asyncio.wait_for(
             _handle_ui_callback_body(update, context, q, action_id, arg),
-            timeout=25.0,
+            timeout=_timeout,
         )
     except asyncio.TimeoutError:
         logger.error("ui callback timeout action=%s uid=%s", action_id, uid)
