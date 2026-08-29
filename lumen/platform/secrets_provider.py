@@ -40,10 +40,46 @@ _MANAGED_KEYS = (
 )
 
 
+def _is_dev_environment() -> bool:
+    """Reuse the canonical production detection from the tenants module.
+
+    Falls back to an inline heuristic if the import fails (e.g. unit-test
+    isolation). Never invents a weaker check.
+    """
+    try:
+        from lumen.platform.tenants import _is_dev_environment as _tenants_dev
+        return _tenants_dev()
+    except Exception:  # noqa: BLE001 — keep fail-closed semantics in isolation
+        # Inline mirror of lumen.platform.tenants._production_signals_present
+        markers = (
+            "KUBERNETES_SERVICE_HOST", "K_SERVICE", "AWS_EXECUTION_ENV", "AWS_REGION",
+            "RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "DYNO",
+            "WEBSITE_INSTANCE_ID",
+        )
+        if any((os.getenv(m) or "").strip() for m in markers):
+            return False
+        if (os.getenv("FORCE_PRODUCTION") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return False
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        return env in {"dev", "development", "local", "test"}
+
+
 def _required() -> bool:
-    return (os.getenv("SECRETS_REQUIRED") or "0").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    """Whether secrets must be present at boot.
+
+    SECURITY (Vuln #6): fail-closed by default in production. ``SECRETS_REQUIRED=0``
+    is ONLY honored in a verified dev/local/test environment — it is silently
+    ignored on real deploy platforms (K8s/Railway/Render/Fly/etc.) so that a
+    stale ``ENVIRONMENT=dev`` cannot disable secret enforcement in prod.
+    """
+    raw = (os.getenv("SECRETS_REQUIRED") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        # Only honored in dev — production always fail-closed regardless.
+        return not _is_dev_environment()
+    # Unset: fail-closed in production, fail-open in dev (for local ergonomics).
+    return not _is_dev_environment()
 
 
 def _fetch_doppler() -> dict[str, str] | None:

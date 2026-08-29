@@ -22,7 +22,7 @@ _DEFAULT_EXCLUDED_DIRS = frozenset({
     ".mypy_cache", ".ruff_cache", "node_modules",
 })
 _DEFAULT_EXCLUDED_NAMES = frozenset({
-    ".env", ".env.local", ".env.production", "secrets.json",
+    "secrets.json",
     ".tbe_bot_token", ".cancel",
 })
 
@@ -89,6 +89,10 @@ def write_project_zip(
                     keep.append(d)
                 dirnames[:] = keep
                 for name in filenames:
+                    # SECURITY (Vuln #4): skip ALL dotfiles, not just a fixed list.
+                    # Prevents leaking .env.staging, .aws/credentials, .npmrc, etc.
+                    if name.startswith("."):
+                        continue
                     if name in skip_names or name.endswith((".pyc", ".pyo", ".log")):
                         continue
                     full = Path(dirpath) / name

@@ -181,6 +181,7 @@ async def dev_activate(request: web.Request) -> web.Response:
         require_admin(request)
     tenant = require_tenant(request)
     body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
     plan_id = str(body.get("plan_id") or "pro").lower()
     inv_id = str(body.get("invoice_id") or "")
     ok = get_billing().apply_plan(tenant.tenant_id, plan_id)
