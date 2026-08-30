@@ -75,6 +75,13 @@ class PlatformTenantRepository:
             raise RuntimeError("tenant_create_failed")
         return domain, ""
 
+    def update_white_label(self, tenant_id: str, **fields: object) -> Tenant | None:
+        updated = self._store.update_white_label(tenant_id, **fields)
+        return _to_domain(updated)
+
+    def rotate_key(self, tenant_id: str) -> str | None:
+        return self._store.rotate_key(tenant_id)
+
     def list_all(self) -> list[Tenant]:
         rows = self._store.list_all() if hasattr(self._store, "list_all") else []
         out: list[Tenant] = []
