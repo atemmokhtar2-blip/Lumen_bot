@@ -358,14 +358,42 @@ class LocalProcessDriver(DeploymentProvider):
             message="Bot process stopped.",
         )
 
-    def restart(self, deployment_id: str) -> DeploymentStatus:
+    def restart(self, deployment_id: str, *, bot_token: str = "",
+                project_path: str = "") -> DeploymentStatus:
+        """Smart restart: stop the old process, then start a fresh one with
+        the *same* project_path + bot_token so the edited code runs immediately.
+
+        This is the real "kill old → start new" path.  The caller (engine
+        layer) supplies the token it retrieved from the sealed SecretsManager
+        and the project_path from the deployment registry.  We stop the old
+        process first (graceful SIGTERM → SIGKILL fallback), then deploy a
+        brand-new process that picks up the updated source files on disk.
+        """
+        # 1) stop the old deployment (graceful)
+        info = _RUNNING.get(deployment_id)
+        resolved_path = project_path or (info.get("project_path") if info else "")
         self.stop(deployment_id)
-        return DeploymentStatus(
-            provider=self.name,
-            deployment_id=deployment_id,
-            status=DEPLOY_STOPPED,
-            message="Stopped. Call deploy() again with BOT_TOKEN to restart.",
+
+        if not bot_token or not resolved_path:
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id=deployment_id,
+                status=DEPLOY_STOPPED,
+                message=(
+                    "Old process stopped. Cannot restart: bot_token/project_path "
+                    "not supplied (restart-by-project needs both)."
+                ),
+            )
+
+        # 2) deploy a fresh process with the updated code + same token
+        new_status = self.deploy(
+            resolved_path,
+            env_vars={"BOT_TOKEN": bot_token},
+            service_name=Path(resolved_path).name[:40] or "generated-bot",
         )
+        if new_status.status == DEPLOY_RUNNING:
+            new_status.message = f"Restarted (old killed, new started). {new_status.message}"
+        return new_status
 
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:
         info = _RUNNING.get(deployment_id)

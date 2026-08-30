@@ -686,24 +686,41 @@ class DockerProcessDriver(DeploymentProvider):
             message=f"Stopped and removed container `{cname}`.",
         )
 
-    def restart(self, deployment_id: str) -> DeploymentStatus:
+    def restart(self, deployment_id: str, *, bot_token: str = "",
+                project_path: str = "") -> DeploymentStatus:
+        """Smart restart: stop the old container, then build+run a fresh one
+        with the *same* project_path + bot_token so edited code runs immediately.
+
+        The caller supplies the sealed token (from SecretsManager) and the
+        project_path (from the deployment registry).  We force-remove the old
+        container, then deploy() a brand-new container that rebuilds the image
+        from the updated source — so the new code is baked in and runs.
+        """
+        # 1) stop the old container (graceful force-rm)
         info = _RUNNING.get(deployment_id)
-        if not info:
+        resolved_path = project_path or (info.get("project_path") if info else "")
+        self.stop(deployment_id)
+
+        if not bot_token or not resolved_path:
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=deployment_id,
                 status=DEPLOY_FAILED,
-                message="Cannot restart: unknown deployment_id",
+                message=(
+                    "Old container stopped. Cannot restart: bot_token/project_path "
+                    "not supplied (restart-by-project needs both)."
+                ),
             )
-        path = info["project_path"]
-        # Re-deploy with same path; token must be re-supplied by caller in practice.
-        # We keep the old token only if still in env of previous — but we don't store it.
-        return DeploymentStatus(
-            provider=self.name,
-            deployment_id=deployment_id,
-            status=DEPLOY_FAILED,
-            message="Restart requires re-providing the bot token via deploy().",
+
+        # 2) deploy a fresh container with updated code + same token
+        new_status = self.deploy(
+            resolved_path,
+            env_vars={"BOT_TOKEN": bot_token},
+            service_name=Path(resolved_path).name[:40] or "generated-bot",
         )
+        if new_status.status == DEPLOY_RUNNING:
+            new_status.message = f"Restarted (old killed, new built+started). {new_status.message}"
+        return new_status
 
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:
         info = _RUNNING.get(deployment_id)

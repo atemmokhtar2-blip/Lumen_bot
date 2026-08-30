@@ -141,12 +141,36 @@ class SandboxProcessDriver(DeploymentProvider):
                 message=f"stop_error:{type(exc).__name__}:{exc}"[:300],
             )
 
-    def restart(self, deployment_id: str) -> DeploymentStatus:
-        # Restart requires original project_path/token — not stored on this adapter.
-        return DeploymentStatus(
-            status=DEPLOY_FAILED,
-            deployment_id=deployment_id or "",
-            message="sandbox_restart_requires_redeploy",
+    def restart(self, deployment_id: str, *, bot_token: str = "",
+                project_path: str = "",
+                env_vars: Optional[Dict[str, str]] = None) -> DeploymentStatus:
+        """Smart restart: stop the old sandbox VM, then start a fresh one with
+        the *same* project_path + bot_token so edited code runs immediately.
+
+        The caller supplies the sealed token (from SecretsManager) and the
+        project_path (from the deployment registry).  We stop the old sandbox,
+        then deploy() a brand-new one that boots from the updated source files.
+        """
+        # 1) stop the old sandbox (graceful)
+        self.stop(deployment_id)
+
+        if not bot_token or not project_path:
+            return DeploymentStatus(
+                status=DEPLOY_STOPPED,
+                deployment_id=deployment_id or "",
+                message=(
+                    "Old sandbox stopped. Cannot restart: bot_token/project_path "
+                    "not supplied (restart-by-project needs both)."
+                ),
+            )
+
+        # 2) deploy a fresh sandbox with updated code + same token
+        deploy_env = dict(env_vars or {})
+        deploy_env.setdefault("BOT_TOKEN", bot_token)
+        return self.deploy(
+            project_path,
+            env_vars=deploy_env,
+            service_name=Path(project_path).name[:40] or "generated-bot",
         )
 
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:

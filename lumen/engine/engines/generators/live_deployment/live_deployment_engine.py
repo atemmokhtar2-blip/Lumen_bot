@@ -193,8 +193,9 @@ class LiveDeploymentEngine(BaseEngine):
             report.verdict = verdict
             return report
 
-        # 2) Secrets
-        self._secrets.put(secret_id, bot_token)
+        # 2) Secrets — put(value, secret_id=...) so the token is retrievable
+        #    later by restart_by_project using the same secret_id
+        self._secrets.put(bot_token, secret_id=secret_id)
         report.secrets_stored = True
 
         # 3) Environment (.env) — token only on disk in .env, never logged
@@ -282,6 +283,102 @@ class LiveDeploymentEngine(BaseEngine):
     def restart_deployment(self, deployment_id: str) -> Dict[str, Any]:
         st = self._provider.restart(deployment_id)
         return st.to_dict()
+
+    def restart_by_project(
+        self,
+        project_path: str,
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Smart restart after a repo edit: kill every running deployment for
+        this project_path and start a fresh one with the *same* token so the
+        edited code runs immediately.
+
+        This is the orchestration the router calls after a successful edit:
+          1. compute the secret_id the same way run_live_deployment does
+          2. retrieve the sealed bot token from SecretsManager
+          3. find all deployments for this project via the deployment registry
+          4. for each RUNNING one: provider.restart(dep, token, path)
+          5. if none were running, deploy a brand-new one (edit-then-run)
+
+        Returns a summary dict: {restarted, deployed, errors, details}.
+        """
+        result: Dict[str, Any] = {
+            "project_path": str(project_path),
+            "restarted": 0,
+            "deployed": 0,
+            "errors": [],
+            "details": [],
+        }
+        try:
+            p = Path(project_path)
+            project_name = p.name
+        except Exception:
+            project_name = str(project_path)
+        secret_id = f"bot_token_{owner_user_id or 'anon'}_{project_name}"
+        bot_token = self._secrets.get(secret_id) or ""
+
+        # find all deployments for this project path
+        try:
+            from lumen.engine.services.deployment_registry import (
+                get_deployment_registry,
+            )
+            registry = get_deployment_registry()
+            records = registry.by_project(str(project_path)) or []
+        except Exception:
+            records = []
+
+        running_ids = [
+            (r.get("deployment_id") or "")
+            for r in records
+            if str(r.get("status") or "").lower() == "running"
+        ]
+
+        if running_ids and bot_token:
+            for dep_id in running_ids:
+                try:
+                    st = self._provider.restart(
+                        dep_id,
+                        bot_token=bot_token,
+                        project_path=str(project_path),
+                    )
+                    d = st.to_dict()
+                    result["details"].append(d)
+                    if st.status == DEPLOY_RUNNING:
+                        result["restarted"] += 1
+                    else:
+                        result["errors"].append(
+                            f"{dep_id}: {st.status} {st.message}"
+                        )
+                except Exception as e:
+                    result["errors"].append(f"{dep_id}: {type(e).__name__}: {e}")
+        elif bot_token:
+            # no running deployment found → deploy a fresh one
+            try:
+                st = self._provider.deploy(
+                    str(project_path),
+                    env_vars={"BOT_TOKEN": bot_token},
+                    service_name=project_name[:40] or "generated-bot",
+                )
+                result["details"].append(st.to_dict())
+                if st.status == DEPLOY_RUNNING:
+                    result["deployed"] += 1
+                else:
+                    result["errors"].append(f"deploy: {st.status} {st.message}")
+            except Exception as e:
+                result["errors"].append(f"deploy: {type(e).__name__}: {e}")
+        else:
+            result["errors"].append(
+                "no_bot_token: secret not found (bot was never deployed live, "
+                "or process restarted since). Nothing to restart."
+            )
+
+        _log.info(
+            "restart_by_project path=%s restarted=%d deployed=%d errors=%d",
+            project_path, result["restarted"], result["deployed"],
+            len(result["errors"]),
+        )
+        return result
 
     def get_logs(self, deployment_id: str, secret_id: Optional[str] = None) -> List[str]:
         lines = self._provider.logs(deployment_id)

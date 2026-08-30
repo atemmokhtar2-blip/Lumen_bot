@@ -36,8 +36,17 @@ class DeploymentProvider(ABC):
         """Stop a running deployment."""
 
     @abstractmethod
-    def restart(self, deployment_id: str) -> DeploymentStatus:
-        """Restart a deployment."""
+    def restart(self, deployment_id: str, *, bot_token: str = "",
+                project_path: str = "",
+                env_vars: Optional[Dict[str, str]] = None) -> DeploymentStatus:
+        """Smart restart: stop the old deployment, then start a fresh one with
+        the *same* project_path + bot_token so edited code runs immediately.
+
+        The caller (engine layer) retrieves the sealed token from
+        SecretsManager and the project_path from the deployment registry, then
+        passes both here.  When bot_token/project_path are omitted, the driver
+        stops the old deployment but cannot start a new one (returns STOPPED).
+        """
 
     @abstractmethod
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:

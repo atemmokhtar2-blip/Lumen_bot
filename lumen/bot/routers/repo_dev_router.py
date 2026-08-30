@@ -182,6 +182,39 @@ async def try_handle_repo_dev(
                     logger.debug("project_memory record_edit after repo edit failed",
                                  exc_info=True)
 
+                # ---- Smart restart: kill the old bot, start the new code ----
+                # After ANY successful edit, if a bot was deployed live for
+                # this project, kill the old process/container and start the
+                # updated version immediately. This makes "edit → see it live"
+                # real. Best-effort: never blocks the edit reply on restart.
+                try:
+                    from lumen.engine.engines.generators.live_deployment.live_deployment_engine import (
+                        LiveDeploymentEngine,
+                    )
+                    _engine = LiveDeploymentEngine()
+                    _restart_result = _engine.restart_by_project(
+                        str(active["path"]),
+                        owner_user_id=int(uid or 0),
+                    )
+                    _restarted = int(_restart_result.get("restarted") or 0)
+                    _deployed = int(_restart_result.get("deployed") or 0)
+                    _rerr = _restart_result.get("errors") or []
+                    if _restarted or _deployed:
+                        logger.info(
+                            "smart restart after edit: path=%s restarted=%d deployed=%d",
+                            active["path"], _restarted, _deployed,
+                        )
+                    elif _rerr:
+                        # only log at debug — "no_bot_token" is the normal case
+                        # when the bot was never deployed live
+                        logger.debug(
+                            "smart restart after edit (no live bot): %s",
+                            _rerr[:2],
+                        )
+                except Exception:
+                    logger.debug("smart restart after repo edit failed",
+                                 exc_info=True)
+
             # If file changed, offer zip of repo
             if dev.ok and dev.changed_files and Path(active["path"]).exists():
                 try:

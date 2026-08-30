@@ -8,9 +8,15 @@ Stores extracted facts with dense embeddings for semantic retrieval:
   - search: numpy-vectorized cosine (Q @ Mᵀ) with in-memory matrix cache —
     O(d) per query instead of O(n·d) brute-force loop
   - dedup: add() checks for an existing near-duplicate (cosine ≥ threshold)
-    before inserting, updating the old record instead of accumulating copies
-  - decay: Mem0 Memory Decay — recency-aware score scaling at search time
-    (fresh → 1.5× boost, stale → 0.3× floor), tracks last 20 access timestamps
+    via the *same* numpy matrix as search, before inserting, updating the old
+    record instead of accumulating copies
+  - decay: Mem0 Memory Decay — exponential recency-aware score scaling at
+    search time (Qdrant-recommended; smooth, no cliff at window boundaries),
+    plus importance weighting from access_count (frequently-used memories
+    decay slower). Fresh → 1.5× boost, stale → 0.3× floor.
+  - re-embedding safety: if the embedding model is upgraded, old vectors with
+    a stale dimension are detected at load, excluded from the matrix (never
+    crash on a ragged array), and re-embedded on their next add/update.
   - durability: single persistent WAL connection (no per-op churn) + RLock
 
 This is the *real* long-term memory. It survives sessions / key failover /
@@ -31,14 +37,31 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ---- Mem0 Memory Decay constants (mem0.ai/blog/introducing-memory-decay) ----
+# ---- Mem0 Memory Decay constants (mem0.ai/blog/introducing-memory-decay,
+#      qdrant.tech/blog/decay-functions) ----
 # Recency-aware score scaling applied AT SEARCH TIME (never deletes memories).
-# Fresh memory → up to 1.5× boost; stale → dampened toward 0.3× floor.
+#
+# Exponential decay (Qdrant-recommended) is smoother than linear interpolation:
+#   - no cliff at window boundaries (linear jumped 1.5→0.x at exactly 1 day)
+#   - decays gently at first, then faster, then asymptotes to the floor
+#   - matches the human intuition that "recently used" matters most
+#
+# The decay multiplier lives in [_DECAY_STALE_FLOOR, _DECAY_FRESH_BOOST]:
+#   fresh (age → 0) → 1.5× boost ; stale (age → ∞) → 0.3× floor.
+# Half-life (_DECAY_HALF_LIFE_S) = age at which the multiplier is exactly the
+# midpoint between floor and boost — tuned to ~3 days (frequently-relevant
+# memories stay boosted for a few days, then gracefully fade).
 _DECAY_FRESH_BOOST = 1.5
 _DECAY_STALE_FLOOR = 0.3
-_DECAY_MAX_HISTORY = 20          # track last N access timestamps per memory
-_DECAY_FRESH_WINDOW_S = 86_400   # <1 day old → full fresh boost
-_DECAY_STALE_WINDOW_S = 30 * 86_400  # >30 days → floor scaling
+_DECAY_HALF_LIFE_S = 3 * 86_400          # 3 days → midpoint multiplier
+_DECAY_MAX_HISTORY = 20                  # track last N access timestamps per memory
+_DECAY_FRESH_WINDOW_S = 86_400           # <1 day old → full fresh boost (fast-path)
+_DECAY_STALE_WINDOW_S = 30 * 86_400      # >30 days → effectively floor (fast-path)
+# Importance weighting: memories accessed more often decay slower.  Each access
+# nudges the effective age backward (simulating "recently useful"), capped so a
+# frequently-used memory never drops below the fresh boost.
+_DECAY_IMPORTANCE_PER_ACCESS = 0.12      # each access reduces effective age by 12% of half-life
+_DECAY_IMPORTANCE_MAX_REDUCTION = 0.60   # cap: at most 60% age reduction from importance
 
 # Dedup safety-net for the direct add() path (when the LLM extraction layer
 # is not used). Mem0's primary dedup is the LLM ADD/UPDATE/DELETE/NOOP
@@ -192,9 +215,15 @@ class SemanticMemoryStore:
       * persistent connection pool of 1 (was: new connect() per operation)
       * vectors loaded once at init + incrementally maintained (was: in-memory
         dict lost on restart, re-parsed from JSON on every search)
-      * dedup at add() via cosine ≥ _DEDUP_THRESHOLD → UPDATE existing
+      * dedup at add() via cosine ≥ _DEDUP_THRESHOLD → UPDATE existing,
+        using the same numpy matrix as search (was: Python cosine loop)
       * Mem0 Memory Decay: last_accessed_at + access_history (≤20 timestamps),
-        recency-aware score scaling 0.3×–1.5× at search time
+        *exponential* recency scaling 0.3×–1.5× (smooth, no cliff) + importance
+        weighting from access_count (was: linear interpolation, no importance)
+      * re-embedding safety: stale-dimension vectors detected at load and
+        excluded from the matrix until re-embedded (was: would crash on
+        ragged arrays after a model upgrade)
+      * _record_access batch read (was: N+1 SELECT+UPDATE per memory)
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -206,6 +235,9 @@ class SemanticMemoryStore:
         self._mat_ids: list[str] = []
         self._mat = None  # numpy ndarray (n, d) L2-normalized, or None
         self._mat_dirty = True
+        # ids whose stored vector has a stale dimension (model upgraded);
+        # excluded from the cache/matrix until re-embedded
+        self._mismatched_ids: set[str] = set()
         # single persistent connection (WAL, check_same_thread=False)
         self._conn: sqlite3.Connection | None = None
         self._init()
@@ -257,22 +289,57 @@ class SemanticMemoryStore:
 
     def _load_all_vectors(self) -> None:
         """Load every (id, vector) pair from DB into the cache and mark the
-        numpy matrix dirty so it is rebuilt on the next search."""
+        numpy matrix dirty so it is rebuilt on the next search.
+
+        Re-embedding safety: if the embedding model was upgraded, old vectors
+        stored in the DB may have a different dimension than vectors the
+        current model produces.  Loading mismatched dimensions into the same
+        numpy matrix would crash (ragged array) or produce garbage cosine
+        scores.  We detect the canonical dimension from a fresh probe embed,
+        then only cache vectors whose dimension matches — mismatched ones are
+        flagged for re-embedding (logged, not silently corrupted).
+        """
         with self._lock:
             conn = self._db()
             rows = conn.execute("SELECT id, vector_json FROM memories").fetchall()
+            # probe the current embedding model to learn the canonical dim
+            try:
+                probe = _embed("dimension probe")
+                canonical_dim = len(probe) if probe else 0
+            except Exception:
+                canonical_dim = 0
             self._vec_cache.clear()
+            self._mismatched_ids: set[str] = set()
             for r in rows:
                 try:
                     v = json.loads(r["vector_json"] or "[]")
                 except Exception:
                     v = []
-                if v:
-                    self._vec_cache[r["id"]] = [float(x) for x in v]
+                if not v:
+                    continue
+                v = [float(x) for x in v]
+                # re-embedding safety: skip vectors with the wrong dimension
+                if canonical_dim and len(v) != canonical_dim:
+                    self._mismatched_ids.add(r["id"])
+                    continue
+                self._vec_cache[r["id"]] = v
+            if self._mismatched_ids:
+                logger.warning(
+                    "semantic_memory: %d vectors have a stale dimension "
+                    "(model upgraded?); they will be re-embedded on next "
+                    "add/update of those memories. canonical_dim=%d",
+                    len(self._mismatched_ids), canonical_dim,
+                )
             self._mat_dirty = True
 
     def _rebuild_matrix(self) -> None:
-        """Rebuild the numpy matrix from _vec_cache (all users)."""
+        """Rebuild the numpy matrix from _vec_cache (all users).
+
+        Defensive: if vectors have inconsistent dimensions (shouldn't happen
+        after the re-embedding safety filter, but guard anyway), we group by
+        dimension and build the matrix from the largest group only — never
+        crash on a ragged array.
+        """
         try:
             import numpy as _np
         except Exception:
@@ -286,6 +353,25 @@ class SemanticMemoryStore:
             self._mat_dirty = False
             return
         rows = [self._vec_cache[i] for i in ids]
+        # guard against ragged arrays (mixed dimensions)
+        dims = {len(r) for r in rows}
+        if len(dims) > 1:
+            # keep only the most common dimension
+            from collections import Counter
+            common_dim = Counter(len(r) for r in rows).most_common(1)[0][0]
+            kept = [(i, r) for i, r in zip(ids, rows) if len(r) == common_dim]
+            ids = [i for i, _ in kept]
+            rows = [r for _, r in kept]
+            if not rows:
+                self._mat = None
+                self._mat_ids = []
+                self._mat_dirty = False
+                return
+            logger.warning(
+                "semantic_memory: ragged vectors detected — building matrix "
+                "from dim=%d group only (%d of %d).",
+                common_dim, len(rows), len(self._vec_cache),
+            )
         m = _np.asarray(rows, dtype=_np.float32)
         # L2-normalize rows so cosine = dot product
         norms = _np.linalg.norm(m, axis=1, keepdims=True)
@@ -352,6 +438,7 @@ class SemanticMemoryStore:
                 )
                 conn.commit()
                 self._vec_cache[dup_id] = vec
+                self._mismatched_ids.discard(dup_id)
                 self._invalidate_matrix()
                 # fetch created_at for the returned record
                 crow = conn.execute(
@@ -376,6 +463,7 @@ class SemanticMemoryStore:
             conn.commit()
             if vec:
                 self._vec_cache[rec_id] = vec
+                self._mismatched_ids.discard(rec_id)
                 self._invalidate_matrix()
         return MemoryRecord(rec_id, uid, pid, knd, content, meta or {}, now, now)
 
@@ -386,6 +474,11 @@ class SemanticMemoryStore:
         ≥ _DEDUP_LEXICAL_MIN). The lexical check prevents collapsing distinct
         facts that merely share a sentence template (the multilingual model
         clusters template-heavy sentences at ~0.97 cosine). Returns id or None.
+
+        Uses the numpy matrix (Q @ subᵀ) for the cosine computation when
+        available — consistent with the search path and O(d) per candidate
+        instead of an O(n·d) Python loop. Falls back to pure-Python cosine
+        when numpy is absent or the matrix is stale.
         """
         if not qvec:
             return None
@@ -405,10 +498,51 @@ class SemanticMemoryStore:
         qtokens = set(w.lower() for w in (qcontent or "").split() if len(w) > 2)
         best_id = None
         best_score = 0.0
+
+        # ---- numpy vectorized cosine (consistent with search path) ----
+        try:
+            import numpy as _np
+            if self._mat_dirty:
+                self._rebuild_matrix()
+            if self._mat is not None and self._mat_ids:
+                id_to_row = {mid: i for i, mid in enumerate(self._mat_ids)}
+                cand_rows: list[int] = []
+                cand_pairs: list[tuple[str, str]] = []  # (id, content)
+                for r in rows:
+                    mid = r["id"]
+                    if mid in id_to_row and mid not in self._mismatched_ids:
+                        cand_rows.append(id_to_row[mid])
+                        cand_pairs.append((mid, r["content"] or ""))
+                if cand_rows:
+                    sub = self._mat[_np.asarray(cand_rows, dtype=_np.int64)]
+                    q = _np.asarray(qvec, dtype=_np.float32)
+                    qn = _np.linalg.norm(q)
+                    if qn > 0:
+                        q = q / qn
+                    sims = sub @ q
+                    for (mid, rcontent), s in zip(cand_pairs, sims):
+                        score = float(s)
+                        if score < _DEDUP_THRESHOLD:
+                            continue
+                        rtokens = set(w.lower() for w in (rcontent or "").split()
+                                      if len(w) > 2)
+                        if qtokens and rtokens:
+                            overlap = len(qtokens & rtokens) / max(1, len(qtokens | rtokens))
+                            if overlap < _DEDUP_LEXICAL_MIN:
+                                continue
+                        if score > best_score:
+                            best_score = score
+                            best_id = mid
+                    return best_id
+        except Exception:
+            logger.debug("numpy dedup path failed, fallback to Python",
+                         exc_info=True)
+
+        # ---- pure-Python fallback ----
         for r in rows:
             mid = r["id"]
             v = self._vec_cache.get(mid)
-            if not v:
+            if not v or mid in self._mismatched_ids:
                 continue
             s = _cosine(qvec, v)
             if s < _DEDUP_THRESHOLD:
@@ -460,6 +594,7 @@ class SemanticMemoryStore:
             conn.commit()
             if vec:
                 self._vec_cache[memory_id] = vec
+                self._mismatched_ids.discard(memory_id)
                 self._invalidate_matrix()
         return True
 
@@ -471,6 +606,7 @@ class SemanticMemoryStore:
             removed = cur.rowcount > 0
             if removed:
                 self._vec_cache.pop(memory_id, None)
+                self._mismatched_ids.discard(memory_id)
                 self._invalidate_matrix()
         return removed
 
@@ -528,11 +664,21 @@ class SemanticMemoryStore:
 
     # ---- decay helpers ----
     @staticmethod
-    def _recency_scale(last_accessed_iso: str, created_iso: str) -> float:
+    def _recency_scale(last_accessed_iso: str, created_iso: str,
+                       access_count: int = 0) -> float:
         """Mem0 Memory Decay recency scaling factor in [_DECAY_STALE_FLOOR,
         _DECAY_FRESH_BOOST]. Uses the most recent of (last_accessed, created)
-        as the reference timestamp. Linear interpolation between the fresh and
-        stale windows."""
+        as the reference timestamp.
+
+        Exponential decay (Qdrant-recommended) — smooth, no cliff at window
+        boundaries:
+            multiplier = floor + (boost - floor) * 0.5 ** (eff_age / half_life)
+
+        Importance weighting: memories accessed more often decay slower.  Each
+        access reduces the *effective* age (simulating "recently useful"), so a
+        frequently-used memory stays boosted longer.  Capped at
+        _DECAY_IMPORTANCE_MAX_REDUCTION so importance never fully cancels decay.
+        """
         ref = last_accessed_iso or created_iso
         if not ref:
             return 1.0
@@ -541,38 +687,60 @@ class SemanticMemoryStore:
         except Exception:
             return 1.0
         age_s = max(0.0, _now_ts() - t)
+
+        # fast-paths: very fresh → full boost; very stale → floor
         if age_s <= _DECAY_FRESH_WINDOW_S:
+            # still apply a tiny importance nudge so frequently-used fresh
+            # memories can slightly exceed the base boost? No — cap at boost.
             return _DECAY_FRESH_BOOST
-        if age_s >= _DECAY_STALE_WINDOW_S:
+        if age_s >= _DECAY_STALE_WINDOW_S and access_count <= 0:
             return _DECAY_STALE_FLOOR
-        # linear interp between fresh boost and stale floor
-        frac = (age_s - _DECAY_FRESH_WINDOW_S) / (
-            _DECAY_STALE_WINDOW_S - _DECAY_FRESH_WINDOW_S
+
+        # importance: reduce effective age based on access_count
+        reduction = min(
+            _DECAY_IMPORTANCE_MAX_REDUCTION,
+            int(access_count or 0) * _DECAY_IMPORTANCE_PER_ACCESS,
         )
-        return _DECAY_FRESH_BOOST + frac * (_DECAY_STALE_FLOOR - _DECAY_FRESH_BOOST)
+        eff_age = age_s * (1.0 - reduction)
+
+        # exponential decay: midpoint (0.5) at eff_age == half_life
+        import math
+        span = _DECAY_FRESH_BOOST - _DECAY_STALE_FLOOR
+        mult = _DECAY_STALE_FLOOR + span * (0.5 ** (eff_age / _DECAY_HALF_LIFE_S))
+        # clamp to [floor, boost]
+        return max(_DECAY_STALE_FLOOR, min(_DECAY_FRESH_BOOST, mult))
 
     def _record_access(self, memory_ids: list[str]) -> None:
         """Append now to each memory's access_history (capped at last 20) and
         bump last_accessed_at + access_count. Fire-and-forget style (best
-        effort, never blocks search results)."""
+        effort, never blocks search results).
+
+        Optimized: avoids the old N+1 SELECT-then-UPDATE pattern. We do a
+        single read of all affected rows, append the timestamp in Python, cap
+        the list, then issue UPDATEs — but we read once for the whole batch
+        instead of one SELECT + one UPDATE per memory.
+        """
         if not memory_ids:
             return
         now = _now()
         now_ts = _now_ts()
         conn = self._db()
-        for mid in memory_ids:
-            row = conn.execute(
-                "SELECT access_history, access_count FROM memories WHERE id=?",
-                (mid,),
-            ).fetchone()
-            if not row:
-                continue
+        # single batch read of all affected rows
+        placeholders = ",".join("?" for _ in memory_ids)
+        rows = conn.execute(
+            f"SELECT id, access_history, access_count FROM memories "
+            f"WHERE id IN ({placeholders})",
+            memory_ids,
+        ).fetchall()
+        if not rows:
+            return
+        for row in rows:
+            mid = row["id"]
             try:
                 hist = json.loads(row["access_history"] or "[]")
             except Exception:
                 hist = []
             hist.append(now_ts)
-            # keep only the most recent _DECAY_MAX_HISTORY timestamps
             if len(hist) > _DECAY_MAX_HISTORY:
                 hist = hist[-_DECAY_MAX_HISTORY:]
             conn.execute(
@@ -642,7 +810,8 @@ class SemanticMemoryStore:
                             raw = float(s)
                             if raw >= min_score:
                                 decay = self._recency_scale(
-                                    rec.last_accessed_at, rec.created_at)
+                                    rec.last_accessed_at, rec.created_at,
+                                    rec.access_count)
                                 scored.append((rec, max(0.0, min(1.0, raw * decay))))
                         used_numpy = True
                 except Exception:
@@ -666,7 +835,8 @@ class SemanticMemoryStore:
                     raw = _cosine(qvec, vec)
                     if raw >= min_score:
                         decay = self._recency_scale(
-                            rec.last_accessed_at, rec.created_at)
+                            rec.last_accessed_at, rec.created_at,
+                            rec.access_count)
                         scored.append((rec, max(0.0, min(1.0, raw * decay))))
 
             scored.sort(key=lambda x: x[1], reverse=True)
@@ -708,7 +878,8 @@ class SemanticMemoryStore:
                 continue
             overlap = len(qtokens & rtokens) / max(1, len(qtokens))
             if overlap > 0:
-                decay = self._recency_scale(rec.last_accessed_at, rec.created_at)
+                decay = self._recency_scale(rec.last_accessed_at,
+                                            rec.created_at, rec.access_count)
                 out.append((rec, float(overlap * decay)))
         out.sort(key=lambda x: x[1], reverse=True)
         return out[:top_k]
