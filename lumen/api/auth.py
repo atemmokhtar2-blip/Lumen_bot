@@ -11,7 +11,6 @@ from aiohttp import web
 
 from lumen.api.security import admin_token_matches
 from lumen.platform.tenants import Tenant, get_tenant_store
-from lumen.platform.billing import get_billing
 from lumen.platform.metering import get_metering
 
 
@@ -152,15 +151,26 @@ def require_tenant(request: web.Request) -> Tenant:
             content_type="application/json",
         ) from exc
 
-    # Prefer platform Tenant object for downstream BC (billing, ownership helpers)
+    # Prefer platform Tenant object for downstream BC (ownership helpers)
     tenant = get_tenant_store().get(domain_tenant.tenant_id) or domain_tenant
 
-    ok, reason = get_billing().enforce_api(tenant.tenant_id)
-    if not ok:
+    # Billing gate via application use-case (not direct BillingService)
+    from lumen.application.handlers.billing_handlers import handle_enforce_api
+    from lumen.application.queries.enforce_api import EnforceApiQuery
+    from lumen.bootstrap import get_billing_gateway
+
+    try:
+        handle_enforce_api(
+            EnforceApiQuery(tenant_id=tenant.tenant_id),
+            billing=get_billing_gateway(),
+        )
+    except PermissionError as exc:
+        reason = str(exc) or "api_forbidden"
         raise web.HTTPTooManyRequests(
             text=f'{{"error":"{reason}"}}',
             content_type="application/json",
-        )
+        ) from exc
+
     get_metering().record(tenant.tenant_id, api_calls=1)
     request["tenant"] = tenant
     return tenant
@@ -220,12 +230,20 @@ def require_tenant_for_sse(request: web.Request, job_id: str) -> Tenant:
             content_type="application/json",
         )
 
-    ok, reason = get_billing().enforce_api(tenant.tenant_id)
-    if not ok:
+    from lumen.application.handlers.billing_handlers import handle_enforce_api
+    from lumen.application.queries.enforce_api import EnforceApiQuery
+    from lumen.bootstrap import get_billing_gateway
+    try:
+        handle_enforce_api(
+            EnforceApiQuery(tenant_id=tenant.tenant_id),
+            billing=get_billing_gateway(),
+        )
+    except PermissionError as exc:
+        reason = str(exc) or "api_forbidden"
         raise web.HTTPTooManyRequests(
             text=f'{{"error":"{reason}"}}',
             content_type="application/json",
-        )
+        ) from exc
     # Do not increment api_calls metering for the long-lived stream itself
     # (ticket mint already counted). Keep request context consistent.
     request["tenant"] = tenant
