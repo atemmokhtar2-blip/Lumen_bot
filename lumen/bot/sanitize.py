@@ -138,17 +138,34 @@ class SecretRedactFilter(logging.Filter):
 
 
 def install_secret_log_filter() -> None:
-    """Attach SecretRedactFilter to root and common app loggers once."""
+    """Attach SecretRedactFilter globally — every logger/handler path."""
     filt = SecretRedactFilter()
     root = logging.getLogger()
     if not any(isinstance(f, SecretRedactFilter) for f in root.filters):
         root.addFilter(filt)
+    for h in list(root.handlers):
+        if not any(isinstance(f, SecretRedactFilter) for f in h.filters):
+            h.addFilter(filt)
+    try:
+        for _name, log in list(logging.root.manager.loggerDict.items()):
+            if not isinstance(log, logging.Logger):
+                continue
+            if not any(isinstance(f, SecretRedactFilter) for f in log.filters):
+                log.addFilter(filt)
+            for h in list(log.handlers):
+                if not any(isinstance(f, SecretRedactFilter) for f in h.filters):
+                    h.addFilter(filt)
+    except Exception:
+        pass
     for name in (
         "lumen",
         "telegram",
         "lumen.engine",
         "lumen.platform",
+        "lumen.api",
         "api",
+        "aiohttp",
+        "asyncio",
     ):
         log = logging.getLogger(name)
         if not any(isinstance(f, SecretRedactFilter) for f in log.filters):
