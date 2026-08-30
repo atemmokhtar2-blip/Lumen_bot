@@ -77,16 +77,37 @@ _WEAK_PEPPERS = frozenset({
 
 
 def _pepper_is_strong(raw: bytes) -> bool:
-    """Reject short / known-weak peppers (root auth hardening)."""
+    """Cryptographic-strength check — denylist alone is not enough.
+
+    Requires: length >= 32, not a known-weak value, enough unique bytes,
+    and mixed character classes (resists dictionary / low-entropy secrets).
+    """
     if not raw or len(raw) < 32:
         return False
-    if raw in _WEAK_PEPPERS:
+    if raw in _WEAK_PEPPERS or raw.lower() in _WEAK_PEPPERS:
         return False
     low = raw.lower()
-    if low in _WEAK_PEPPERS:
-        return False
     if low.startswith(b"change") or low.startswith(b"lumen_dev"):
         return False
+    # Reject low-entropy / repeated patterns (e.g. "aaaaaaaa…" or "passwordpassword…")
+    if len(set(raw)) < 16:
+        return False
+    try:
+        s = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        s = ""
+    if s:
+        classes = sum(
+            [
+                any(c.islower() for c in s),
+                any(c.isupper() for c in s),
+                any(c.isdigit() for c in s),
+                any(not c.isalnum() for c in s),
+            ]
+        )
+        # token_urlsafe always has mixed classes; pure alpha words fail
+        if classes < 2:
+            return False
     return True
 
 
@@ -154,14 +175,18 @@ def _load_or_create_dev_pepper() -> bytes:
 def _key_pepper() -> bytes:
     """Server-side pepper for API key hashes.
 
-    Prefer dedicated API_KEY_PEPPER. Fall back to PLATFORM_ADMIN_TOKEN /
-    TBE_TOKEN_SECRET so existing single-node deploys keep a non-empty pepper
-    without a new secret.
+    DEV (verified local only): auto-generated strong pepper in .lumen_dev_pepper
+    (mode 0600). Weak operator values are ignored — never used.
 
-    No hardcoded constant peppers remain. In pure dev (no production signals)
-    a strong random pepper is generated once and stored locally with 0600 perms.
-    Production / unset ENVIRONMENT must set a strong API_KEY_PEPPER (or equivalent).
+    PRODUCTION: requires strong API_KEY_PEPPER (or PLATFORM_ADMIN_TOKEN /
+    TBE_TOKEN_SECRET). Weak values are rejected.
     """
+    if _is_dev_environment():
+        v = (os.getenv("API_KEY_PEPPER") or "").strip()
+        if v and _pepper_is_strong(v.encode("utf-8")):
+            return v.encode("utf-8")
+        return _load_or_create_dev_pepper()
+
     for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
         v = (os.getenv(name) or "").strip()
         if not v:
@@ -169,22 +194,16 @@ def _key_pepper() -> bytes:
         raw = v.encode("utf-8")
         if _pepper_is_strong(raw):
             return raw
-        # FAIL-CLOSED: known-weak / short peppers are NEVER accepted, even in dev.
-        # The only way a weak pepper can slip in is operator misconfiguration
-        # (e.g. leaving ENVIRONMENT=dev on a real deploy). Reject unconditionally.
         raise RuntimeError(
-            f"{name} is too weak or known-insecure (need >= 32 random chars, "
-            "no hardcoded/dev/change-me values). Refusing to start regardless of "
-            "ENVIRONMENT. Set API_KEY_PEPPER to `python -c \"import secrets;"
-            "print(secrets.token_urlsafe(48))\"` output."
+            name
+            + " is too weak (need >= 32 chars, high entropy, not a known default). "
+            "Generate with secrets.token_urlsafe(48)."
         )
-    if _is_dev_environment():
-        return _load_or_create_dev_pepper()
     raise RuntimeError(
-        "API_KEY_PEPPER is required outside dev. "
-        "Set API_KEY_PEPPER (preferred) or PLATFORM_ADMIN_TOKEN / TBE_TOKEN_SECRET. "
-        "For local testing set ENVIRONMENT=dev|local|test."
+        "API_KEY_PEPPER is required in production. "
+        "Generate with secrets.token_urlsafe(48)."
     )
+
 
 
 def _hash_key(raw: str) -> str:
