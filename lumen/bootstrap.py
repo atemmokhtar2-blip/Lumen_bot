@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from lumen.domain.repositories.billing_gateway import BillingGateway
 from lumen.domain.repositories.job_repository import JobRepository
 from lumen.domain.repositories.tenant_repository import TenantRepository
 
@@ -23,7 +24,14 @@ def get_job_repository() -> JobRepository:
     return PlatformJobRepository()
 
 
+@lru_cache(maxsize=1)
+def get_billing_gateway() -> BillingGateway:
+    from lumen.infrastructure.persistence.billing_gateway import PlatformBillingGateway
+    return PlatformBillingGateway()
+
+
 def reset_repositories() -> None:
     """Test helper — clear cached wiring."""
     get_tenant_repository.cache_clear()
     get_job_repository.cache_clear()
+    get_billing_gateway.cache_clear()
