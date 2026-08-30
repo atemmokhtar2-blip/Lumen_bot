@@ -6,12 +6,23 @@ import logging
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Load .env from project root (next to main.py), then cwd as fallback
-_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_ROOT / ".env", override=False)
-load_dotenv(override=False)
+# Filesystem .env is DEV-ONLY. Production must use Doppler/Vault/AWS/GCP.
+try:
+    from lumen.platform.secrets_provider import load_dotenv_if_dev, load_secrets_into_environ
+    load_dotenv_if_dev()
+    load_secrets_into_environ(only_missing=True)
+except Exception as _sec_exc:
+    import logging as _logging
+    _logging.getLogger("lumen_bot").error(
+        "secrets_boot_failed: %s", type(_sec_exc).__name__
+    )
+    # Re-raise in production so we never run with a silent empty secret set
+    try:
+        from lumen.platform.secrets_provider import is_production
+        if is_production():
+            raise
+    except Exception:
+        raise
 
 try:
     from lumen.platform.observability import setup_observability
