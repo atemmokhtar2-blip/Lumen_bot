@@ -10,7 +10,13 @@ from lumen.api.auth import require_admin, require_tenant
 from lumen.api.ownership import reject_identity_spoof
 from lumen.api.security import safe_json_body
 from lumen.application.commands.create_tenant import CreateTenantCommand
-from lumen.application.handlers.tenant_handlers import handle_create_tenant
+from lumen.application.commands.rotate_api_key import RotateApiKeyCommand
+from lumen.application.commands.update_white_label import UpdateWhiteLabelCommand
+from lumen.application.handlers.tenant_handlers import (
+    handle_create_tenant,
+    handle_rotate_api_key,
+    handle_update_white_label,
+)
 from lumen.bootstrap import get_tenant_repository
 from lumen.platform.plans import PLANS, get_plan, normalize_plan_id, public_plan_dict
 
@@ -84,19 +90,20 @@ async def update_white_label(request: web.Request) -> web.Response:
         )
     body = await safe_json_body(request, max_bytes=65536)
     reject_identity_spoof(body)
-    # Still via platform store until UpdateWhiteLabelCommand exists
-    from lumen.platform.tenants import get_tenant_store
-
-    updated = get_tenant_store().update_white_label(
-        tenant.tenant_id,
-        brand_name=body.get("brand_name"),
-        brand_logo_url=body.get("brand_logo_url"),
-        primary_color=body.get("primary_color"),
-        support_email=body.get("support_email"),
-        custom_domain=body.get("custom_domain"),
-        name=body.get("name"),
-    )
-    if not updated:
+    try:
+        updated = handle_update_white_label(
+            UpdateWhiteLabelCommand(
+                tenant_id=tenant.tenant_id,
+                brand_name=body.get("brand_name"),
+                brand_logo_url=body.get("brand_logo_url"),
+                primary_color=body.get("primary_color"),
+                support_email=body.get("support_email"),
+                custom_domain=body.get("custom_domain"),
+                name=body.get("name"),
+            ),
+            tenants=get_tenant_repository(),
+        )
+    except LookupError:
         raise web.HTTPNotFound(
             text='{"error":"tenant_not_found"}',
             content_type="application/json",
@@ -106,10 +113,12 @@ async def update_white_label(request: web.Request) -> web.Response:
 
 async def rotate_key(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
-    from lumen.platform.tenants import get_tenant_store
-
-    raw = get_tenant_store().rotate_key(tenant.tenant_id)
-    if not raw:
+    try:
+        raw = handle_rotate_api_key(
+            RotateApiKeyCommand(tenant_id=tenant.tenant_id),
+            tenants=get_tenant_repository(),
+        )
+    except LookupError:
         raise web.HTTPNotFound(
             text='{"error":"tenant_not_found"}',
             content_type="application/json",
