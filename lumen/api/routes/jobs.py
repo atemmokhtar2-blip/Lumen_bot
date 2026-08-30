@@ -10,7 +10,15 @@ from aiohttp import web
 
 from lumen.api.auth import require_tenant, require_tenant_for_sse, mint_sse_ticket
 from lumen.api.ownership import assert_job_owned
-from lumen.application.handlers.job_handlers import handle_get_job
+from lumen.application.commands.cancel_job import CancelJobCommand
+from lumen.application.commands.pause_job import PauseJobCommand
+from lumen.application.commands.resume_job import ResumeJobCommand
+from lumen.application.handlers.job_handlers import (
+    handle_cancel_job,
+    handle_get_job,
+    handle_pause_job,
+    handle_resume_job,
+)
 from lumen.application.queries.get_job import GetJobQuery
 from lumen.bootstrap import get_job_repository
 from lumen.platform.jobs import get_job_runner
@@ -61,54 +69,63 @@ async def list_jobs(request: web.Request) -> web.Response:
 
 
 async def cancel_job(request: web.Request) -> web.Response:
-    """POST /v1/jobs/{job_id}/cancel — soft cancel non-terminal jobs."""
     tenant = require_tenant(request)
     job_id = (request.match_info.get("job_id") or "").strip()
     if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
-    runner = get_job_runner()
-    job = runner.store.get(job_id)
-    assert_job_owned(job, tenant.tenant_id)
-    updated = runner.cancel(job_id, tenant_id=tenant.tenant_id)
-    if not updated:
+    try:
+        updated = handle_cancel_job(
+            CancelJobCommand(job_id=job_id, tenant_id=tenant.tenant_id),
+            jobs=get_job_repository(),
+        )
+    except LookupError:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    except PermissionError:
+        raise web.HTTPForbidden(text='{"error":"job_not_owned"}', content_type="application/json")
     data = updated.public_dict()
     data["input"] = {}
     return web.json_response({"ok": True, **data})
+
 
 
 async def pause_job(request: web.Request) -> web.Response:
-    """POST /v1/jobs/{job_id}/pause — cooperative pause (non-terminal)."""
     tenant = require_tenant(request)
     job_id = (request.match_info.get("job_id") or "").strip()
     if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
-    runner = get_job_runner()
-    job = runner.store.get(job_id)
-    assert_job_owned(job, tenant.tenant_id)
-    updated = runner.pause(job_id, tenant_id=tenant.tenant_id)
-    if not updated:
+    try:
+        updated = handle_pause_job(
+            PauseJobCommand(job_id=job_id, tenant_id=tenant.tenant_id),
+            jobs=get_job_repository(),
+        )
+    except LookupError:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    except PermissionError:
+        raise web.HTTPForbidden(text='{"error":"job_not_owned"}', content_type="application/json")
     data = updated.public_dict()
     data["input"] = {}
     return web.json_response({"ok": True, **data})
+
 
 
 async def resume_job(request: web.Request) -> web.Response:
-    """POST /v1/jobs/{job_id}/resume — resume a paused job."""
     tenant = require_tenant(request)
     job_id = (request.match_info.get("job_id") or "").strip()
     if not job_id or len(job_id) > 128 or ".." in job_id or "/" in job_id:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
-    runner = get_job_runner()
-    job = runner.store.get(job_id)
-    assert_job_owned(job, tenant.tenant_id)
-    updated = runner.resume(job_id, tenant_id=tenant.tenant_id)
-    if not updated:
+    try:
+        updated = handle_resume_job(
+            ResumeJobCommand(job_id=job_id, tenant_id=tenant.tenant_id),
+            jobs=get_job_repository(),
+        )
+    except LookupError:
         raise web.HTTPNotFound(text='{"error":"job_not_found"}', content_type="application/json")
+    except PermissionError:
+        raise web.HTTPForbidden(text='{"error":"job_not_owned"}', content_type="application/json")
     data = updated.public_dict()
     data["input"] = {}
     return web.json_response({"ok": True, **data})
+
 
 
 async def steer_job(request: web.Request) -> web.Response:
