@@ -76,7 +76,7 @@ def require_production_data_plane() -> None:
         raise RuntimeError(
             "Production data plane incomplete. Set: "
             + ", ".join(missing)
-            + ". File/SQLite/Mongo backends are disabled outside ENVIRONMENT=dev."
+            + ". File/SQLite/Mongo backends are disabled outside verified local dev (deploy platform signals override ENVIRONMENT=dev)."
         )
     # Auth pepper — refuse boot with missing/weak API_KEY_PEPPER
     try:
