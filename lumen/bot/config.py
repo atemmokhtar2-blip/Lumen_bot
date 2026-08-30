@@ -6,23 +6,28 @@ import logging
 import os
 from pathlib import Path
 
-# Filesystem .env is DEV-ONLY. Production must use Doppler/Vault/AWS/GCP.
+# Secrets: process-memory store. .env only in dev. Production scrubs os.environ.
 try:
-    from lumen.platform.secrets_provider import load_dotenv_if_dev, load_secrets_into_environ
+    from lumen.platform.secrets_provider import (
+        get_secret,
+        install_secret_access_bridge,
+        load_dotenv_if_dev,
+        load_secrets,
+    )
     load_dotenv_if_dev()
-    load_secrets_into_environ(only_missing=True)
+    load_secrets(only_missing=True)
+    install_secret_access_bridge()
 except Exception as _sec_exc:
     import logging as _logging
-    _logging.getLogger("lumen_bot").error(
-        "secrets_boot_failed: %s", type(_sec_exc).__name__
-    )
-    # Re-raise in production so we never run with a silent empty secret set
+    _logging.getLogger("lumen_bot").error("secrets_boot_failed: %s", type(_sec_exc).__name__)
     try:
         from lumen.platform.secrets_provider import is_production
         if is_production():
             raise
     except Exception:
         raise
+
+
 
 try:
     from lumen.platform.observability import setup_observability
@@ -39,7 +44,11 @@ try:
 except Exception:
     pass
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+try:
+    from lumen.platform.secrets_provider import get_secret as _get_secret
+    TELEGRAM_BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN", "").strip()
+except Exception:
+    TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 ALLOWED_USER_IDS = {
     int(x.strip())
     for x in os.getenv("ALLOWED_USER_IDS", "").split(",")
