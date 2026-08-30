@@ -26,9 +26,13 @@ import threading
 
 # Dynamic secrets (Doppler / Vault) BEFORE reading bot config / tokens
 try:
-    from lumen.platform.secrets_provider import load_secrets_into_environ
+    from lumen.platform.secrets_provider import (
+    assert_critical_secrets_present,
+    load_dotenv_if_dev,
+    load_secrets_into_environ,
+)
 
-    load_secrets_into_environ(only_missing=True)
+    load_dotenv_if_dev(); load_secrets_into_environ(only_missing=True); assert_critical_secrets_present()
 except Exception:
     pass
 
