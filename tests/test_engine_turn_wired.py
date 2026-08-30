@@ -86,3 +86,26 @@ def test_execute_tool_gated_receives_user_data_path():
     src = (ROOT / "lumen/engine/services/multi_agent/tools.py").read_text(encoding="utf-8")
     assert "user_data=_ud" in src or "user_data=_ud," in src
     assert 'state.extensions["user_data"]' in src or "user_data" in src
+
+
+def test_host_status_never_defers_to_router():
+    """host_* must execute HostingService — never return defer_to_router stub."""
+    import os
+    os.environ.setdefault("ENVIRONMENT", "dev")
+    from lumen.engine.services.tool_runtime import execute_tool
+
+    tr = execute_tool("host_status", {}, user_id=1)
+    msg = (tr.message or "").lower()
+    assert "defer_to_router" not in msg
+    assert "defer_to_router" not in str(tr.data or {})
+    # Either real status text or honest unavailable — both are real paths
+    assert tr.tool == "host_status"
+
+
+def test_generate_bot_defers_only_to_generate_pipeline():
+    from lumen.engine.services.tool_runtime import execute_tool
+    tr = execute_tool("generate_bot", {"spec_request": "بوت /start"}, user_id=1)
+    assert tr.ok is True
+    assert (tr.data or {}).get("defer") is True
+    assert "defer_to_generate" in (tr.message or "")
+    assert "defer_to_router" not in (tr.message or "")

@@ -254,6 +254,28 @@ def handle_user_turn(
         }
         updates["last_project_path"] = data["path"]
 
+    # repo_modify → refine via multi-agent (structural change owned by agents)
+    if isinstance(tr, dict) and (tr.get("data") or {}).get("defer_refine"):
+        change = str((tr.get("data") or {}).get("change") or text)
+        path = str((tr.get("data") or {}).get("path") or repo_path or "")
+        gen = f"تعديل البوت/المشروع في {path}: {change}" if path else change
+        return EngineTurnResult(
+            ok=True,
+            reply=(reply or tr.get("message") or "جاري التعديل عبر المحرك…")[:4000],
+            action="refine",
+            state=state,
+            tool=tool,
+            capability_id=cap or "repo_modify",
+            generate_request=gen,
+            user_data_updates={
+                **updates,
+                "force_generate_once": True,
+                "translated_source": "engine_turn_repo_modify",
+                "last_bot_request": gen[:2000],
+                "last_project_path": path or updates.get("last_project_path", ""),
+            },
+        )
+
     # Deferred generate signal from tool layer
     if isinstance(tr, dict) and tr.get("defer") and tool in _GENERATE_CAPS:
         return EngineTurnResult(

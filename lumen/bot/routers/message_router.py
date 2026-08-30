@@ -689,6 +689,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data.pop("force_generate_once", None)
             context.user_data["translated_source"] = "engine_turn"
             context.user_data["last_bot_request"] = gen_request[:2000]
+        # Surface agent preamble (e.g. repo_modify brief) before generation starts
+        if (turn.reply or "").strip():
+            try:
+                await message.reply_text(str(turn.reply)[:4000])
+            except Exception:
+                pass
         status_msg = await message.reply_text(
             "⚙️ المحرك (الوكلاء) يبدأ التوليد الآن…"
             if turn.action == "generate"

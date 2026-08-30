@@ -120,12 +120,14 @@ def execute_tool(
             return _tool_repo_understand(params, user_data=user_data or {})
         if name == "repo_modify":
             return _tool_repo_modify(params, user_data=user_data or {})
-        if name in {"generate_bot", "refine_bot", "host_start", "host_stop", "host_status"}:
-            # Handled by message_router generation/hosting paths — signal only
+        if name in {"host_start", "host_stop", "host_status", "host_diagnose"}:
+            return _tool_host(name, params, user_id=user_id, user_data=user_data or {})
+        if name in {"generate_bot", "refine_bot"}:
+            # Generation is owned by multi-agent orchestrate_generate — signal only
             return ToolResult(
                 ok=True,
                 tool=name,
-                message=f"tool:{name}:defer_to_router",
+                message=f"tool:{name}:defer_to_generate",
                 data={"defer": True, "params": params},
             )
         return ToolResult(ok=False, tool=name, message=f"أداة غير معروفة: {name}")
@@ -444,3 +446,143 @@ def _tool_repo_modify(
             "defer_refine": True,
         },
     )
+
+
+def _tool_host(
+    name: str,
+    params: dict[str, Any],
+    *,
+    user_id: int,
+    user_data: dict[str, Any],
+) -> ToolResult:
+    """Real HostingService execution — no defer to a removed chat/router path."""
+    try:
+        from lumen.engine.services.hosting import get_hosting_service
+        svc = get_hosting_service(_output_dir())
+    except Exception as exc:
+        logger.exception("HostService unavailable for tool %s", name)
+        return ToolResult(
+            ok=False,
+            tool=name,
+            message=(
+                "خدمة الاستضافة غير متاحة حالياً.\n"
+                f"• السبب: {type(exc).__name__}\n"
+                "• تأكد من DATABASE_URL أو ENVIRONMENT=dev."
+            ),
+            data={"host_unavailable": True},
+        )
+
+    uid = int(user_id or 0)
+    if name == "host_status":
+        try:
+            result = svc.status(user_id=uid)
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+            return ToolResult(
+                ok=bool(getattr(result, "ok", True)),
+                tool=name,
+                message=str(text)[:4000],
+                data={"status": True},
+            )
+        except Exception as exc:
+            logger.exception("host_status failed")
+            return ToolResult(ok=False, tool=name, message=f"فشل حالة الاستضافة: {type(exc).__name__}")
+
+    if name == "host_diagnose":
+        try:
+            diagnose = getattr(svc, "diagnose", None)
+            if callable(diagnose):
+                result = diagnose(user_id=uid)
+            else:
+                result = svc.status(user_id=uid)
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+            return ToolResult(ok=True, tool=name, message=str(text)[:4000], data={"diagnose": True})
+        except Exception as exc:
+            logger.exception("host_diagnose failed")
+            return ToolResult(ok=False, tool=name, message=f"فشل التشخيص: {type(exc).__name__}")
+
+    if name == "host_stop":
+        try:
+            items = list(svc.list_for_user(uid))
+            running = [i for i in items if getattr(i, "status", "") == "running"]
+            if not running:
+                return ToolResult(ok=False, tool=name, message="ما فيش مثيل استضافة شغال لإيقافه.")
+            target = sorted(
+                running,
+                key=lambda x: float(getattr(x, "started_at", 0) or 0),
+                reverse=True,
+            )[0]
+            instance_id = str(getattr(target, "instance_id", "") or "")
+            result = svc.stop(instance_id=instance_id, user_id=uid)
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+            return ToolResult(
+                ok=bool(getattr(result, "ok", True)),
+                tool=name,
+                message=str(text)[:4000],
+                data={"instance_id": instance_id},
+            )
+        except Exception as exc:
+            logger.exception("host_stop failed")
+            return ToolResult(ok=False, tool=name, message=f"فشل إيقاف الاستضافة: {type(exc).__name__}")
+
+    if name == "host_start":
+        project_path = str(
+            params.get("project_path")
+            or params.get("path")
+            or (user_data.get("active_repo") or {}).get("path")
+            or user_data.get("last_project_path")
+            or ""
+        ).strip()
+        if not project_path or not Path(project_path).is_dir():
+            return ToolResult(
+                ok=False,
+                tool=name,
+                message=(
+                    "ما فيش مشروع نشط للاستضافة.\n"
+                    "اسحب مستودع أو ولّد بوت أولاً، بعدين اطلب الاستضافة."
+                ),
+                data={"needs_project": True},
+            )
+        token = str(params.get("token") or params.get("bot_token") or "").strip()
+        if not token:
+            return ToolResult(
+                ok=False,
+                tool=name,
+                message=(
+                    "🚀 استضافة المشروع النشط جاهزة للتنفيذ.\n"
+                    f"• المسار: `{project_path}`\n\n"
+                    "أرسل توكن البوت من @BotFather لإكمال التشغيل عبر المحرك."
+                ),
+                data={
+                    "needs_auth": True,
+                    "needs_bot_token": True,
+                    "project_path": project_path,
+                },
+                needs_auth=True,
+            )
+        try:
+            result = svc.start(
+                project_path=project_path,
+                user_id=uid,
+                bot_token=token,
+            )
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+            return ToolResult(
+                ok=bool(getattr(result, "ok", True)),
+                tool=name,
+                message=str(text)[:4000],
+                data={"project_path": project_path},
+            )
+        except TypeError:
+            # Older signature variants
+            try:
+                result = svc.start(path=project_path, user_id=uid, token=token)
+                text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+                return ToolResult(ok=True, tool=name, message=str(text)[:4000])
+            except Exception as exc:
+                logger.exception("host_start failed")
+                return ToolResult(ok=False, tool=name, message=f"فشل بدء الاستضافة: {type(exc).__name__}")
+        except Exception as exc:
+            logger.exception("host_start failed")
+            return ToolResult(ok=False, tool=name, message=f"فشل بدء الاستضافة: {type(exc).__name__}")
+
+    return ToolResult(ok=False, tool=name, message=f"أداة استضافة غير معروفة: {name}")
