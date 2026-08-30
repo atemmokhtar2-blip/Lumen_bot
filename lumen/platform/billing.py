@@ -78,46 +78,34 @@ class BillingService:
             return None
 
     def enforce_generation(self, tenant_id: str, *, reserve: bool = True) -> tuple[bool, str]:
-        """Check generation quota. When reserve=True (default), atomically consume one unit.
+        """Plans removed — no monthly generation quota.
 
-        Atomic reserve closes the TOCTOU race where parallel requests all pass a
-        stale read before any counter is incremented.
+        Usage is gated by credits elsewhere. Optional metering still records
+        counts with unlimited limit (0).
         """
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
-        plan = get_plan(t.plan_id)
-        limit = plan.generations_per_month
         if reserve:
-            ok, reason, _ = get_metering().try_reserve_generation(tenant_id, limit)
+            ok, reason, _ = get_metering().try_reserve_generation(tenant_id, 0)
             return ok, reason
-        usage = get_metering().snapshot(tenant_id)
-        if limit > 0 and int(usage.get("generations", 0)) >= limit:
-            return False, f"generation_quota_exceeded:{limit}"
         return True, "ok"
 
     def enforce_hosting(self, tenant_id: str, current_hosted: int) -> tuple[bool, str]:
-        """24/7 hosting gate — Explorer has hosted_bots=0 (preview only)."""
+        """Plans removed — hosting not limited by plan tier."""
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
-        plan = get_plan(t.plan_id)
-        if "managed_hosting" not in plan.features or plan.hosted_bots <= 0:
-            return False, "plan_lacks_managed_hosting"
-        if current_hosted >= plan.hosted_bots:
-            return False, f"hosted_bots_quota_exceeded:{plan.hosted_bots}"
         return True, "ok"
 
     def enforce_feature(self, tenant_id: str, feature: str) -> tuple[bool, str]:
+        """Plans removed — features not gated by plan tier (credits own metering)."""
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
-        plan = get_plan(t.plan_id)
-        if feature not in plan.features:
-            return False, f"plan_lacks_feature:{feature}"
         return True, "ok"
 
     def live_preview_seconds_for(self, tenant_id: str) -> int:
@@ -183,6 +171,9 @@ class BillingService:
 
     def apply_plan(self, tenant_id: str, plan_id: str, *, stripe_customer: str = "") -> bool:
         """Set user plan (free|pro|unlimited) on the identity store (Mongo or file)."""
+        # Subscription plans removed — credits-only. No-op.
+        return True
+        # noqa: unreachable legacy body kept below for reference during migration
         store = get_tenant_store()
         meta_updates = {}
         if stripe_customer:
