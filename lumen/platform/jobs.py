@@ -95,11 +95,13 @@ class JobStore:
     """SQLite job store — **dev only**. Production must use RedisJobStore."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-        if env not in {"dev", "development", "local", "test"}:
+        # ROOT: never trust ENVIRONMENT alone — deploy platform signals force production.
+        from lumen.platform.runtime_config import is_dev
+        if not is_dev():
             raise RuntimeError(
-                "SQLite JobStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
-                "Set REDIS_URL for RedisJobStore."
+                "SQLite JobStore is forbidden outside verified local dev "
+                "(deploy markers / FORCE_PRODUCTION treat the process as production). "
+                "Set REDIS_URL and use RedisJobStore."
             )
         base = Path(os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
         self.path = Path(db_path or (base / "platform" / "jobs.sqlite3"))
@@ -407,20 +409,29 @@ class RedisJobStore:
 
 
 def _is_dev_env() -> bool:
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    return env in {"dev", "development", "local", "test"}
+    """Same semantics as runtime_config.is_dev / tenants._is_dev_environment."""
+    from lumen.platform.runtime_config import is_dev
+    return is_dev()
 
 
 def get_job_store(db_path: str | Path | None = None):
-    """Redis job metadata store in production; SQLite only in explicit dev."""
+    """Redis job store whenever not verified local-dev; SQLite only in true dev.
+
+    Production is detected via runtime_config.is_dev() which ignores a bare
+    ENVIRONMENT=dev when K8s/Railway/Render/Fly/… markers (or FORCE_PRODUCTION) are set.
+    Redis is mandatory outside verified dev — no SQLite fallback.
+    """
     from .runtime_config import redis_url, is_dev, require_production_data_plane
+
     require_production_data_plane()
     url = redis_url()
     if url:
         return RedisJobStore(url)
     if is_dev():
         return JobStore(db_path)
-    raise RuntimeError("REDIS_URL is required for the job store.")
+    raise RuntimeError(
+        "REDIS_URL is required for the job store outside verified local dev."
+    )
 
 
 class JobRunner:
