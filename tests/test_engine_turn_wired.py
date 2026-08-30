@@ -116,3 +116,23 @@ def test_generate_bot_defers_only_to_generate_pipeline():
     assert (tr.data or {}).get("defer") is True
     assert "defer_to_generate" in (tr.message or "")
     assert "defer_to_router" not in (tr.message or "")
+
+
+def test_underspecified_generate_clarifies_not_hitl():
+    from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
+
+    r = handle_user_turn("عايز اعمل بوت", user_id=99)
+    assert r.action in {"clarify", "agent_reply"}
+    assert "الخطة جاهزة" not in (r.reply or "")
+    assert r.user_data_updates.get("force_generate_once") is not True
+
+
+def test_specified_generate_still_routes_to_generate():
+    from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
+
+    r = handle_user_turn(
+        "عايز بوت جروب فيه /start ترحيب بالأعضاء و /ban للحظر و /help",
+        user_id=99,
+    )
+    assert r.action in {"generate", "refine"}
+    assert r.generate_request

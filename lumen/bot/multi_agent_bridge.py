@@ -201,7 +201,16 @@ def format_hitl_user_message(state: Any) -> str:
     ext = getattr(state, "extensions", None) or {}
     pending = ext.get("pending_action") or {}
     tool = str(pending.get("tool") or ext.get("hitl_pending", {}).get("type") or "plan")
-    goal = (getattr(state, "user_text", None) or "")[:160]
+    goal = (getattr(state, "user_text", None) or getattr(state, "spec_request", None) or "")[:400]
+    plan = ""
+    try:
+        ext_plan = ext.get("plan_summary") or ext.get("task_tree_summary") or ""
+        if isinstance(ext_plan, dict):
+            plan = str(ext_plan.get("summary") or ext_plan)[:600]
+        else:
+            plan = str(ext_plan or "")[:600]
+    except Exception:
+        plan = ""
     if "deliver" in tool:
         title = "📦 المشروع جاهز — يلزم موافقتك للتسليم"
     else:
@@ -209,6 +218,10 @@ def format_hitl_user_message(state: Any) -> str:
     lines = [title, ""]
     if goal:
         lines.append(f"الطلب: {goal}")
+    if plan and plan.strip() and plan.strip() != goal.strip():
+        lines.append("")
+        lines.append("ملخص ما سيبنيه المحرك:")
+        lines.append(plan.strip())
     lines.append("")
     lines.append("اضغط **تأكيد** للمتابعة أو **رفض** للإلغاء.")
     lines.append("أو اكتب: تأكيد   /   رفض")

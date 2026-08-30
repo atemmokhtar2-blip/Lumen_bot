@@ -13,6 +13,7 @@ No conversational LLM path. No fake success.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -174,6 +175,36 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
     }
 
 
+
+def _spec_is_underspecified(text: str) -> bool:
+    """True when user wants a bot but gave no real product brief for the agent to build."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t) < 28:
+        return True
+    low = t.lower()
+    # Verb + bot only, no product detail
+    vague = bool(
+        re.search(
+            r"(?:عايز|عاوز|أريد|ابغى|اعمل|أنشئ|انشئ|ابني|ول[ّ]?د|generate|create|make).{0,40}(?:بوت|bot)",
+            low,
+            re.I,
+        )
+    )
+    has_detail = bool(
+        re.search(
+            r"/[a-zA-Z]|أمر|اوامر|أوامر|ترحيب|حظر|متجر|حجز|قناة|جروب|مجموعة|admin|"
+            r"welcome|ban|shop|book|channel|group|feature|ميز|يرد|يرسل|يشترك",
+            t,
+            re.I,
+        )
+    )
+    if vague and not has_detail and len(t) < 100:
+        return True
+    return False
+
+
 def handle_user_turn(
     text: str,
     *,
@@ -219,9 +250,48 @@ def handle_user_turn(
     if repo_path:
         params.setdefault("path", repo_path)
 
-    # 2) Generate / refine → signal caller to run multi-agent generation pipeline
+    # 2) Generate / refine → only when the brief is enough for agents to build
     if cap in _GENERATE_CAPS or tool in _GENERATE_CAPS:
         action = "refine" if cap == "refine_bot" or tool == "refine_bot" else "generate"
+        if action == "generate" and _spec_is_underspecified(text):
+            # World-class: agents clarify — never jump to HITL on empty plan
+            decision = _agent_llm_decide(
+                (
+                    f"المستخدم طلب توليد بوت بمواصفة ناقصة:\n«{text}»\n\n"
+                    "لا تبدأ التوليد. اسأل بالعربية 2–3 أسئلة قصيرة وواضحة لمعرفة: "
+                    "وظيفة البوت، الأوامر الأساسية، والجمهور (جروب/خاص/قناة). "
+                    "JSON: tool=\"\", reply=الأسئلة فقط."
+                ),
+                repo_path=repo_path,
+            )
+            reply = (decision.get("reply") or "").strip()
+            if decision.get("error") == "no_llm_key":
+                reply = (
+                    "المواصفة ناقصة للتوليد.\n"
+                    "اكتب ماذا يفعل البوت والأوامر (مثال: بوت جروب فيه /start ترحيب و /ban حظر)."
+                )
+            elif decision.get("error") or not reply:
+                reply = (
+                    "تمام — عايز أبني بوت، بس محتاج تفاصيل:\n"
+                    "1) البوت هيعمل إيه؟\n"
+                    "2) أوامر أساسية (مثل /start /help)؟\n"
+                    "3) لجروب ولا خاص؟\n"
+                    "اكتب الوصف في رسالة واحدة وبعدها أبدأ البناء."
+                )
+            state.final_message = reply
+            return EngineTurnResult(
+                ok=True,
+                reply=reply[:4000],
+                action="clarify",
+                state=state,
+                tool="",
+                capability_id="generate_bot",
+                user_data_updates={
+                    "awaiting_bot_spec": True,
+                    "last_bot_request": text[:2000],
+                    "translated_source": "engine_turn_clarify",
+                },
+            )
         return EngineTurnResult(
             ok=True,
             reply="",
