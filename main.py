@@ -24,30 +24,23 @@ import multiprocessing
 import os
 import threading
 
-# Dynamic secrets (Doppler / Vault) BEFORE reading bot config / tokens
+# Dynamic secrets — memory store; scrub os.environ in production
 try:
     from lumen.platform.secrets_provider import (
         assert_critical_secrets_present,
-        is_production,
+        install_secret_access_bridge,
         load_dotenv_if_dev,
-        load_secrets_into_environ,
+        load_secrets,
     )
-
     load_dotenv_if_dev()
-    load_secrets_into_environ(only_missing=True)
+    load_secrets(only_missing=True)
+    install_secret_access_bridge()
     assert_critical_secrets_present()
 except Exception as _secrets_exc:
-    # Never swallow secrets failures in production
     import sys as _sys
-    _sys.stderr.write(f"FATAL secrets boot: {_secrets_exc}\n")
-    try:
-        from lumen.platform.secrets_provider import is_production as _is_prod
-        if _is_prod():
-            raise SystemExit(2) from _secrets_exc
-    except SystemExit:
-        raise
-    except Exception:
-        raise SystemExit(2) from _secrets_exc
+    _sys.stderr.write("FATAL secrets boot: %s\n" % (_secrets_exc,))
+    raise SystemExit(2) from _secrets_exc
+
 
 from telegram import Update
 from telegram.ext import (
