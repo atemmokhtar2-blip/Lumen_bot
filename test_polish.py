@@ -322,155 +322,14 @@ def test_p5_numpy_dedup() -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# P6: restart_by_project — kills old, starts new with same token
-# ──────────────────────────────────────────────────────────────────────────
-def test_p6_restart_by_project() -> bool:
-    print("\n=== P6: restart_by_project (kill old → start new) ===")
-    from lumen.engine.engines.generators.live_deployment.live_deployment_engine import (
-        LiveDeploymentEngine,
-    )
-    from lumen.engine.engines.generators.live_deployment.secrets_manager import (
-        get_secrets_manager,
-    )
-    from lumen.engine.engines.generators.live_deployment.report_data import (
-        DeploymentStatus,
-        DEPLOY_RUNNING,
-    )
-
-    all_ok = True
-
-    # Bypass strong-isolation requirement (we're not in a Firecracker sandbox)
-    # by patching _select_primary_provider to return our mock directly.
-    # Also set dev env flags as a belt-and-suspenders measure.
-    os.environ["TBE_MULTI_TENANT"] = "0"
-    os.environ["ENVIRONMENT"] = "dev"
-    os.environ["TBE_ALLOW_LOCAL_PROCESS"] = "1"
-    os.environ["TBE_FORCE_LOCAL_PROCESS"] = "1"
-
-    # --- Case 1: running deployment exists + token in secrets → restart ---
-    sm = get_secrets_manager()
-    secret_id = "bot_token_42_test_proj_p6"
-    sm.put("TEST_TOKEN_12345", secret_id=secret_id)
-    all_ok &= _ok("token stored in SecretsManager", True)
-
-    # mock the provider: restart returns RUNNING, deploy returns RUNNING
-    mock_provider = MagicMock()
-    restart_status = DeploymentStatus(
-        status=DEPLOY_RUNNING, deployment_id="dep_old_001",
-        message="Restarted (old killed, new started).")
-    mock_provider.restart.return_value = restart_status
-
-    deploy_status = DeploymentStatus(
-        status=DEPLOY_RUNNING, deployment_id="dep_new_001",
-        message="Deployed fresh.")
-    mock_provider.deploy.return_value = deploy_status
-
-    with patch(
-        "lumen.engine.engines.generators.live_deployment.live_deployment_engine._select_primary_provider",
-        return_value=mock_provider,
-    ):
-        engine = LiveDeploymentEngine()
-
-    # mock the registry: return one RUNNING record
-    mock_registry = MagicMock()
-    mock_registry.by_project.return_value = [
-        {"deployment_id": "dep_old_001", "status": "running",
-         "project_path": "/tmp/test_proj_p6"}
-    ]
-    with patch(
-        "lumen.engine.services.deployment_registry.get_deployment_registry",
-        return_value=mock_registry,
-    ):
-        result = engine.restart_by_project(
-            "/tmp/test_proj_p6", owner_user_id=42
-        )
-
-    all_ok &= _ok("restart_by_project returned dict", isinstance(result, dict))
-    all_ok &= _ok("restarted=1 (old killed, new started)",
-                  result.get("restarted") == 1, str(result.get("restarted")))
-    all_ok &= _ok("deployed=0 (used restart path, not fresh deploy)",
-                  result.get("deployed") == 0, str(result.get("deployed")))
-    all_ok &= _ok("no errors", len(result.get("errors", ["x"])) == 0,
-                  str(result.get("errors")))
-
-    # verify restart was called with the right token + path
-    mock_provider.restart.assert_called_once()
-    call_kwargs = mock_provider.restart.call_args
-    all_ok &= _ok("restart called with bot_token from SecretsManager",
-                  call_kwargs.kwargs.get("bot_token") == "TEST_TOKEN_12345"
-                  or call_kwargs[1].get("bot_token") == "TEST_TOKEN_12345",
-                  str(call_kwargs))
-    all_ok &= _ok("restart called with correct project_path",
-                  "/tmp/test_proj_p6" in str(call_kwargs),
-                  str(call_kwargs))
-
-    # --- Case 2: no running deployment + token exists → fresh deploy ---
-    mock_provider2 = MagicMock()
-    mock_provider2.deploy.return_value = deploy_status
-    sm.put("TEST_TOKEN_67890", secret_id="bot_token_42_test_proj_p6b")
-    with patch(
-        "lumen.engine.engines.generators.live_deployment.live_deployment_engine._select_primary_provider",
-        return_value=mock_provider2,
-    ):
-        engine2 = LiveDeploymentEngine()
-    mock_registry2 = MagicMock()
-    mock_registry2.by_project.return_value = []  # no deployments
-
-    with patch(
-        "lumen.engine.services.deployment_registry.get_deployment_registry",
-        return_value=mock_registry2,
-    ):
-        result2 = engine2.restart_by_project(
-            "/tmp/test_proj_p6b", owner_user_id=42
-        )
-
-    all_ok &= _ok("case2: no running → fresh deploy (deployed=1)",
-                  result2.get("deployed") == 1, str(result2.get("deployed")))
-    all_ok &= _ok("case2: restarted=0 (nothing was running)",
-                  result2.get("restarted") == 0, str(result2.get("restarted")))
-    all_ok &= _ok("case2: deploy called with token",
-                  mock_provider2.deploy.called, "deploy was called")
-
-    # --- Case 3: no token → error, no crash ---
-    mock_provider3 = MagicMock()
-    mock_registry3 = MagicMock()
-    mock_registry3.by_project.return_value = []
-
-    with patch(
-        "lumen.engine.engines.generators.live_deployment.live_deployment_engine._select_primary_provider",
-        return_value=mock_provider3,
-    ):
-        engine3 = LiveDeploymentEngine()
-
-    with patch(
-        "lumen.engine.services.deployment_registry.get_deployment_registry",
-        return_value=mock_registry3,
-    ):
-        result3 = engine3.restart_by_project(
-            "/tmp/nonexistent_proj_p6c", owner_user_id=99999
-        )
-
-    all_ok &= _ok("case3: no token → errors list non-empty",
-                  len(result3.get("errors", [])) > 0, str(result3.get("errors")))
-    all_ok &= _ok("case3: no crash (returned dict)",
-                  isinstance(result3, dict))
-    all_ok &= _ok("case3: restarted=0, deployed=0",
-                  result3.get("restarted") == 0 and result3.get("deployed") == 0)
-
-    # cleanup secrets
-    sm.delete(secret_id)
-    sm.delete("bot_token_42_test_proj_p6b")
-
-    return all_ok
+# P6 removed: LiveDeploymentEngine deleted with engines/generators.
+# Restart-after-edit now uses HostingService in repo_dev_router.
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# P7: LocalProcessDriver.restart — stop old + deploy new (not just stop)
-# ──────────────────────────────────────────────────────────────────────────
 def test_p7_local_driver_restart() -> bool:
     print("\n=== P7: LocalProcessDriver.restart (stop + deploy, not just stop) ===")
     import inspect
-    from lumen.engine.engines.generators.live_deployment.local_process_driver import (
+    from lumen.engine.services.live_deployment.local_process_driver import (
         LocalProcessDriver,
     )
 
@@ -498,10 +357,10 @@ def test_p7_local_driver_restart() -> bool:
 def test_p8_docker_sandbox_restart() -> bool:
     print("\n=== P8: Docker + Sandbox driver restart (stop + deploy contract) ===")
     import inspect
-    from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+    from lumen.engine.services.live_deployment.docker_process_driver import (
         DockerProcessDriver,
     )
-    from lumen.engine.engines.generators.live_deployment.sandbox_process_driver import (
+    from lumen.engine.services.live_deployment.sandbox_process_driver import (
         SandboxProcessDriver,
     )
 
@@ -522,24 +381,21 @@ def test_p8_docker_sandbox_restart() -> bool:
 # ──────────────────────────────────────────────────────────────────────────
 def test_p9_router_wiring() -> bool:
     print("\n=== P9: Router wiring (smart restart after edit) ===")
-    # Read the router file directly — importing the package triggers telegram
-    # import (message_router) which isn't installed in this test environment.
     router_path = ROOT / "lumen" / "bot" / "routers" / "repo_dev_router.py"
     src = router_path.read_text(encoding="utf-8")
 
     all_ok = True
-    all_ok &= _ok("router imports LiveDeploymentEngine",
-                  "LiveDeploymentEngine" in src)
-    all_ok &= _ok("router calls restart_by_project",
-                  "restart_by_project" in src)
-    all_ok &= _ok("restart is best-effort (wrapped in try/except)",
-                  "restart_by_project" in src and "except" in src)
-    all_ok &= _ok("restart uses owner_user_id",
-                  "owner_user_id" in src and "restart_by_project" in src)
-    all_ok &= _ok("restart called after edit (near record_edit or dev.ok)",
-                  "restart_by_project" in src and
-                  ("record_edit" in src or "dev.ok" in src or "changed_files" in src))
-
+    all_ok &= _ok(
+        "router uses HostingService for restart (not deleted LiveDeploymentEngine)",
+        "get_hosting_service" in src and "LiveDeploymentEngine" not in src,
+    )
+    all_ok &= _ok("router stops running host instances after edit", "svc.stop" in src or "_svc.stop" in src)
+    all_ok &= _ok("restart is best-effort (wrapped in try/except)", "except Exception" in src)
+    all_ok &= _ok(
+        "restart near edit path",
+        "get_hosting_service" in src
+        and ("record_edit" in src or "dev.ok" in src or "changed_files" in src),
+    )
     return all_ok
 
 
@@ -551,8 +407,7 @@ if __name__ == "__main__":
         test_p3_reembedding_safety,
         test_p4_batch_access,
         test_p5_numpy_dedup,
-        test_p6_restart_by_project,
-        test_p7_local_driver_restart,
+                test_p7_local_driver_restart,
         test_p8_docker_sandbox_restart,
         test_p9_router_wiring,
     ]

@@ -296,7 +296,7 @@ async def try_handle_token(
     if pending_create:
         from lumen.engine.services.git_safe_import import get_smart_clone
         extract_token = get_smart_clone().extract_token
-        from lumen.engine.engines.generators.git_operations.smart_git import run_git_intent
+        from lumen.engine.services.git_operations.smart_git import run_git_intent
         git_tok = extract_token(request)
         if git_tok:
             try:
@@ -385,7 +385,7 @@ async def try_handle_token(
     if pending_push:
         from lumen.engine.services.git_safe_import import get_smart_clone
         extract_token = get_smart_clone().extract_token
-        from lumen.engine.engines.generators.git_operations.smart_git import git_push
+        from lumen.engine.services.git_operations.smart_git import git_push
         git_tok = extract_token(request)
         if git_tok:
             path = str(pending_push.get("path") or "").strip()

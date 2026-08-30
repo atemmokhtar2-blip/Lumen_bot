@@ -336,7 +336,7 @@ class HostingService:
 
         # Isolation: sandbox_runtime ONLY — no LocalProcess fallback
         try:
-            from lumen.engine.engines.generators.live_deployment.token_validator import (
+            from lumen.engine.services.live_deployment.token_validator import (
                 TokenValidator,
             )
         except Exception as e:
@@ -416,7 +416,7 @@ class HostingService:
 
         # Normalize status using known constants
         try:
-            from lumen.engine.engines.generators.live_deployment.report_data import (
+            from lumen.engine.services.live_deployment.report_data import (
                 DEPLOY_RUNNING,
                 DEPLOY_FAILED,
             )
@@ -487,7 +487,7 @@ class HostingService:
                     inst.last_error = f"fc_stop:{type(fc_exc).__name__}"
             elif dep:
                 try:
-                    from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+                    from lumen.engine.services.live_deployment.docker_process_driver import (
                         DockerProcessDriver,
                         docker_available,
                     )
@@ -627,7 +627,7 @@ class HostingService:
                 return False
         # Docker / gVisor / DinD deployments
         try:
-            from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+            from lumen.engine.services.live_deployment.docker_process_driver import (
                 DockerProcessDriver,
                 docker_available,
             )
@@ -638,7 +638,7 @@ class HostingService:
             pass
         try:
             import subprocess
-            from lumen.engine.engines.generators.live_deployment import docker_process_driver as dpd
+            from lumen.engine.services.live_deployment import docker_process_driver as dpd
 
             info = getattr(dpd, "_RUNNING", {}).get(dep) or {}
             cname = info.get("container") or info.get("name") or ""

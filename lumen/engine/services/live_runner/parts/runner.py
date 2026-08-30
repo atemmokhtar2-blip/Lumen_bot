@@ -802,7 +802,7 @@ def run_bot_project(
     docker_err = ""
     if prefer or require_docker:
         try:
-            from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+            from lumen.engine.services.live_deployment.docker_process_driver import (
                 DockerProcessDriver,
                 docker_available,
             )
@@ -878,7 +878,7 @@ def run_bot_project(
     # Local process fallback (resource-limited) when policy allows
     if allow_local:
         try:
-            from lumen.engine.engines.generators.live_deployment.local_process_driver import (
+            from lumen.engine.services.live_deployment.local_process_driver import (
                 LocalProcessDriver,
             )
             driver = LocalProcessDriver()
@@ -893,7 +893,7 @@ def run_bot_project(
             dep_id = getattr(st, "deployment_id", "") or ""
             status = str(getattr(st, "status", "") or "").lower()
             try:
-                from lumen.engine.engines.generators.live_deployment.report_data import DEPLOY_RUNNING
+                from lumen.engine.services.live_deployment.report_data import DEPLOY_RUNNING
                 running_vals = {str(DEPLOY_RUNNING).lower(), "running", "ok", "deployed"}
             except Exception:
                 running_vals = {"running", "ok", "deployed"}

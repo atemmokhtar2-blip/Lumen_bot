@@ -122,7 +122,7 @@ def select_process_driver():
     decision = decide_isolation()
     if decision.require_strong_isolation:
         try:
-            from lumen.engine.engines.generators.live_deployment.sandbox_process_driver import (
+            from lumen.engine.services.live_deployment.sandbox_process_driver import (
                 SandboxProcessDriver,
             )
             require_strong_isolation()
@@ -134,7 +134,7 @@ def select_process_driver():
             ) from exc
 
     if decision.allow_local:
-        from lumen.engine.engines.generators.live_deployment.local_process_driver import (
+        from lumen.engine.services.live_deployment.local_process_driver import (
             LocalProcessDriver,
         )
         return LocalProcessDriver(), decision
@@ -155,7 +155,7 @@ def require_docker_runtime() -> None:
         return
     # Fall back to docker-only check for older callers
     try:
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+        from lumen.engine.services.live_deployment.docker_process_driver import (
             docker_available,
         )
 

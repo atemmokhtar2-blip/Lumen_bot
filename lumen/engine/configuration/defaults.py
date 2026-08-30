@@ -145,7 +145,7 @@ def build_default_schema() -> ConfigSchema:
             FieldSchema(
                 name="engine_packages",
                 type=str,
-                default="lumen.engine.engines.generators",
+                default="",
                 description=(
                     "Comma-separated list of packages to scan for engine "
                     "implementations."

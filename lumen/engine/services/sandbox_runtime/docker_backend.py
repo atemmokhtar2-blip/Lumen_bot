@@ -19,7 +19,7 @@ class DockerSandboxBackend(SandboxBackend):
 
     def probe(self) -> SandboxProbe:
         try:
-            from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+            from lumen.engine.services.live_deployment.docker_process_driver import (
                 docker_available,
             )
         except Exception as exc:
@@ -50,7 +50,7 @@ class DockerSandboxBackend(SandboxBackend):
         if sec and not (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip():
             os.environ["TBE_DOCKER_SECCOMP"] = sec
 
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+        from lumen.engine.services.live_deployment.docker_process_driver import (
             DockerProcessDriver,
         )
 
@@ -89,7 +89,7 @@ class DockerSandboxBackend(SandboxBackend):
         )
 
     def stop(self, handle_or_id: str) -> SandboxHandle:
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+        from lumen.engine.services.live_deployment.docker_process_driver import (
             DockerProcessDriver,
         )
         status = DockerProcessDriver().stop(handle_or_id)
@@ -101,7 +101,7 @@ class DockerSandboxBackend(SandboxBackend):
         )
 
     def status(self, handle_or_id: str) -> SandboxHandle:
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+        from lumen.engine.services.live_deployment.docker_process_driver import (
             DockerProcessDriver,
         )
         status = DockerProcessDriver().status(handle_or_id)
@@ -113,7 +113,7 @@ class DockerSandboxBackend(SandboxBackend):
         )
 
     def logs(self, handle_or_id: str, *, limit: int = 50) -> List[str]:
-        from lumen.engine.engines.generators.live_deployment.docker_process_driver import (
+        from lumen.engine.services.live_deployment.docker_process_driver import (
             DockerProcessDriver,
         )
         try:

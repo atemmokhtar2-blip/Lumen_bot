@@ -188,28 +188,24 @@ async def try_handle_repo_dev(
                 # updated version immediately. This makes "edit → see it live"
                 # real. Best-effort: never blocks the edit reply on restart.
                 try:
-                    from lumen.engine.engines.generators.live_deployment.live_deployment_engine import (
-                        LiveDeploymentEngine,
-                    )
-                    _engine = LiveDeploymentEngine()
-                    _restart_result = _engine.restart_by_project(
-                        str(active["path"]),
-                        owner_user_id=int(uid or 0),
-                    )
-                    _restarted = int(_restart_result.get("restarted") or 0)
-                    _deployed = int(_restart_result.get("deployed") or 0)
-                    _rerr = _restart_result.get("errors") or []
-                    if _restarted or _deployed:
+                    from lumen.engine.services.hosting import get_hosting_service
+                    from lumen.bot.config import OUTPUT_DIR
+                    _svc = get_hosting_service(OUTPUT_DIR)
+                    _items = list(_svc.list_for_user(int(uid or 0)))
+                    _path = str(active.get("path") or "")
+                    _restarted = 0
+                    for _inst in _items:
+                        if _path and str(getattr(_inst, "project_path", "") or "") != _path:
+                            continue
+                        if str(getattr(_inst, "status", "") or "") not in {"running", "starting"}:
+                            continue
+                        _res = _svc.stop(instance_id=_inst.instance_id, user_id=int(uid or 0))
+                        if getattr(_res, "ok", False):
+                            _restarted += 1
+                    if _restarted:
                         logger.info(
-                            "smart restart after edit: path=%s restarted=%d deployed=%d",
-                            active["path"], _restarted, _deployed,
-                        )
-                    elif _rerr:
-                        # only log at debug — "no_bot_token" is the normal case
-                        # when the bot was never deployed live
-                        logger.debug(
-                            "smart restart after edit (no live bot): %s",
-                            _rerr[:2],
+                            "smart restart after edit: path=%s stopped=%d (re-host to apply code)",
+                            _path, _restarted,
                         )
                 except Exception:
                     logger.debug("smart restart after repo edit failed",

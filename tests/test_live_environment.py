@@ -28,7 +28,7 @@ from lumen.engine.services.live_runner.service import (
     _unpin_all_hard_pins,
     validate_telegram_token,
 )
-from lumen.engine.engines.generators.live_deployment.local_process_driver import (
+from lumen.engine.services.live_deployment.local_process_driver import (
     LocalProcessDriver,
     _find_entry_point,
 )

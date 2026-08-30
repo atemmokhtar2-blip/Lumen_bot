@@ -177,7 +177,7 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
     # SSRF root gate: allowlisted public HTTPS git hosts only (blocks metadata/private IPs)
     try:
         from lumen.engine.services.secure_exec import validate_git_https_url
-        from lumen.engine.engines.generators.git_operations.smart_clone import (
+        from lumen.engine.services.git_operations.smart_clone import (
             normalize_and_validate_url,
         )
         candidate = (url or text or "").strip()

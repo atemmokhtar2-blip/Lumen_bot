@@ -64,7 +64,7 @@ def test_rate_limiter_no_memory_path_in_select_source():
 
 
 def test_smart_clone_inject_token_never_embeds():
-    from lumen.engine.engines.generators.git_operations.smart_clone import _inject_token
+    from lumen.engine.services.git_operations.smart_clone import _inject_token
     u = "https://github.com/org/repo.git"
     out = _inject_token(u, "ghp_secret_with:colon@and")
     assert out == u or "@" not in urlparse_netloc(out)
@@ -78,7 +78,7 @@ def urlparse_netloc(url: str) -> str:
 
 
 def test_smart_clone_strips_existing_userinfo():
-    from lumen.engine.engines.generators.git_operations.smart_clone import _inject_token
+    from lumen.engine.services.git_operations.smart_clone import _inject_token
     dirty = "https://x-access-token:oldtok@github.com/org/repo.git"
     out = _inject_token(dirty, "newtok")
     assert "oldtok" not in out
@@ -88,7 +88,7 @@ def test_smart_clone_strips_existing_userinfo():
 
 def test_no_token_interpolation_left_in_git_ops():
     from pathlib import Path
-    root = Path("lumen/engine/engines/generators/git_operations")
+    root = Path("lumen/engine/services/git_operations")
     bad = []
     for p in root.rglob("*.py"):
         text = p.read_text(encoding="utf-8", errors="ignore")
