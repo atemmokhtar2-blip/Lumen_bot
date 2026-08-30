@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from lumen.application.commands.create_tenant import CreateTenantCommand
+from lumen.application.commands.rotate_api_key import RotateApiKeyCommand
+from lumen.application.commands.update_white_label import UpdateWhiteLabelCommand
 from lumen.application.queries.authenticate_tenant import AuthenticateTenantQuery
 from lumen.application.queries.get_tenant import GetTenantQuery
 from lumen.domain.entities.tenant import Tenant
@@ -56,3 +58,43 @@ def handle_get_tenant(
     if tenant is None:
         raise LookupError("tenant_not_found")
     return tenant
+
+
+def handle_update_white_label(
+    cmd: UpdateWhiteLabelCommand,
+    *,
+    tenants: TenantRepository,
+) -> Tenant:
+    tid = (cmd.tenant_id or "").strip()
+    if not tid:
+        raise ValueError("tenant_id_required")
+    fields = {
+        k: v
+        for k, v in {
+            "brand_name": cmd.brand_name,
+            "brand_logo_url": cmd.brand_logo_url,
+            "primary_color": cmd.primary_color,
+            "support_email": cmd.support_email,
+            "custom_domain": cmd.custom_domain,
+            "name": cmd.name,
+        }.items()
+        if v is not None
+    }
+    updated = tenants.update_white_label(tid, **fields)
+    if updated is None:
+        raise LookupError("tenant_not_found")
+    return updated
+
+
+def handle_rotate_api_key(
+    cmd: RotateApiKeyCommand,
+    *,
+    tenants: TenantRepository,
+) -> str:
+    tid = (cmd.tenant_id or "").strip()
+    if not tid:
+        raise ValueError("tenant_id_required")
+    raw = tenants.rotate_key(tid)
+    if not raw:
+        raise LookupError("tenant_not_found")
+    return raw
