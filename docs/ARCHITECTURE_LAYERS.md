@@ -32,3 +32,16 @@ Tenant, Job, Invoice, **Balance**
 ## Composition
 
 `lumen.bootstrap`: `get_tenant_repository`, `get_job_repository`, `get_billing_gateway`.
+
+
+## Phase 3 — AI boundary
+
+Telegram NL turns enter via:
+
+```
+lumen.interfaces.telegram / lumen.bot
+  → lumen.infrastructure.ai.handle_user_turn
+      → lumen.engine.services.multi_agent.engine_turn (implementation)
+```
+
+Presentation must not import `lumen.engine.services.multi_agent.engine_turn` directly.
