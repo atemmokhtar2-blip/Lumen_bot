@@ -10,7 +10,7 @@ import time
 from aiohttp import web
 
 from lumen.api.security import admin_token_matches
-from lumen.platform.tenants import Tenant, get_tenant_store
+from lumen.domain.entities.tenant import Tenant
 from lumen.platform.metering import get_metering
 
 
@@ -113,7 +113,10 @@ def extract_bearer(request: web.Request) -> str:
 
 
 def require_tenant(request: web.Request) -> Tenant:
-    """Authenticate via application use-case; billing/metering stay infrastructure."""
+    """Authenticate + API billing gate via application layer only.
+
+    No direct TenantStore access — identity comes from TenantRepository port.
+    """
     key = extract_bearer(request)
     if not key:
         try:
@@ -123,13 +126,14 @@ def require_tenant(request: web.Request) -> Tenant:
             pass
         raise web.HTTPUnauthorized(text='{"error":"missing_api_key"}', content_type="application/json")
 
-    # Application layer (domain port) — not direct store access
+    from lumen.application.handlers.billing_handlers import handle_enforce_api
     from lumen.application.handlers.tenant_handlers import handle_authenticate_tenant
     from lumen.application.queries.authenticate_tenant import AuthenticateTenantQuery
-    from lumen.bootstrap import get_tenant_repository
+    from lumen.application.queries.enforce_api import EnforceApiQuery
+    from lumen.bootstrap import get_billing_gateway, get_tenant_repository
 
     try:
-        domain_tenant = handle_authenticate_tenant(
+        tenant = handle_authenticate_tenant(
             AuthenticateTenantQuery(api_key=key),
             tenants=get_tenant_repository(),
         )
@@ -151,14 +155,6 @@ def require_tenant(request: web.Request) -> Tenant:
             content_type="application/json",
         ) from exc
 
-    # Prefer platform Tenant object for downstream BC (ownership helpers)
-    tenant = get_tenant_store().get(domain_tenant.tenant_id) or domain_tenant
-
-    # Billing gate via application use-case (not direct BillingService)
-    from lumen.application.handlers.billing_handlers import handle_enforce_api
-    from lumen.application.queries.enforce_api import EnforceApiQuery
-    from lumen.bootstrap import get_billing_gateway
-
     try:
         handle_enforce_api(
             EnforceApiQuery(tenant_id=tenant.tenant_id),
@@ -176,11 +172,13 @@ def require_tenant(request: web.Request) -> Tenant:
     return tenant
 
 
+
 def require_tenant_for_sse(request: web.Request, job_id: str) -> Tenant:
     """Authenticate an SSE /events request via short-lived ticket only.
 
     Root security property: the long-lived tenant API key never appears in
     the EventSource URL and therefore is never written to reverse-proxy logs.
+    Identity is loaded through the application/domain ports — not TenantStore.
     """
     ticket = (request.rel_url.query.get("ticket") or "").strip()
     if not ticket:
@@ -223,16 +221,28 @@ def require_tenant_for_sse(request: web.Request, job_id: str) -> Tenant:
             content_type="application/json",
         )
 
-    tenant = get_tenant_store().get(tid)
-    if not tenant or not tenant.active:
+    from lumen.application.handlers.billing_handlers import handle_enforce_api
+    from lumen.application.handlers.tenant_handlers import handle_get_tenant
+    from lumen.application.queries.enforce_api import EnforceApiQuery
+    from lumen.application.queries.get_tenant import GetTenantQuery
+    from lumen.bootstrap import get_billing_gateway, get_tenant_repository
+
+    try:
+        tenant = handle_get_tenant(
+            GetTenantQuery(tenant_id=tid),
+            tenants=get_tenant_repository(),
+        )
+    except LookupError:
+        raise web.HTTPUnauthorized(
+            text='{"error":"invalid_tenant"}',
+            content_type="application/json",
+        )
+    if not tenant.active:
         raise web.HTTPUnauthorized(
             text='{"error":"invalid_tenant"}',
             content_type="application/json",
         )
 
-    from lumen.application.handlers.billing_handlers import handle_enforce_api
-    from lumen.application.queries.enforce_api import EnforceApiQuery
-    from lumen.bootstrap import get_billing_gateway
     try:
         handle_enforce_api(
             EnforceApiQuery(tenant_id=tenant.tenant_id),
@@ -244,10 +254,12 @@ def require_tenant_for_sse(request: web.Request, job_id: str) -> Tenant:
             text=f'{{"error":"{reason}"}}',
             content_type="application/json",
         ) from exc
+
     # Do not increment api_calls metering for the long-lived stream itself
     # (ticket mint already counted). Keep request context consistent.
     request["tenant"] = tenant
     return tenant
+
 
 
 def require_admin(request: web.Request) -> None:
