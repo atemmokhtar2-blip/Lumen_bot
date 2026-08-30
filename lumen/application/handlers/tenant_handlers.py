@@ -18,10 +18,9 @@ def handle_create_tenant(
     name = (cmd.name or "").strip()
     if not name:
         raise ValueError("name_required")
-    plan_id = (cmd.plan_id or "free").strip().lower() or "free"
     return tenants.create(
         name,
-        plan_id=plan_id,
+        plan_id="default",
         owner_telegram_id=int(cmd.owner_telegram_id or 0),
         brand_name=(cmd.brand_name or name).strip(),
         brand_logo_url=(cmd.brand_logo_url or "").strip(),
