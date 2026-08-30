@@ -1,10 +1,18 @@
-"""Job status polling endpoints — tenant ownership enforced."""
+"""Job status polling endpoints — presentation adapter.
+
+Read paths go through application handlers (domain ownership rules).
+Mutating job control still uses the job runner (infrastructure) until
+dedicated commands exist for cancel/pause/resume/steer.
+"""
 from __future__ import annotations
 
 from aiohttp import web
 
 from lumen.api.auth import require_tenant, require_tenant_for_sse, mint_sse_ticket
 from lumen.api.ownership import assert_job_owned
+from lumen.application.handlers.job_handlers import handle_get_job
+from lumen.application.queries.get_job import GetJobQuery
+from lumen.bootstrap import get_job_repository
 from lumen.platform.jobs import get_job_runner
 
 
@@ -16,13 +24,25 @@ async def get_job(request: web.Request) -> web.Response:
             text='{"error":"job_not_found"}',
             content_type="application/json",
         )
-    job = get_job_runner().store.get(job_id)
-    assert_job_owned(job, tenant.tenant_id)
-    # public_dict includes tenant_id of owner only (already verified)
+    try:
+        job = handle_get_job(
+            GetJobQuery(job_id=job_id, tenant_id=tenant.tenant_id),
+            jobs=get_job_repository(),
+        )
+    except LookupError:
+        raise web.HTTPNotFound(
+            text='{"error":"job_not_found"}',
+            content_type="application/json",
+        )
+    except PermissionError:
+        raise web.HTTPForbidden(
+            text='{"error":"job_not_owned"}',
+            content_type="application/json",
+        )
     data = job.public_dict()
-    # Never echo raw input payload on poll (may contain user secrets)
     data["input"] = {}
     return web.json_response({"ok": True, **data})
+
 
 
 async def list_jobs(request: web.Request) -> web.Response:
@@ -31,7 +51,7 @@ async def list_jobs(request: web.Request) -> web.Response:
         limit = min(100, max(1, int(request.rel_url.query.get("limit") or "20")))
     except ValueError:
         limit = 20
-    jobs = get_job_runner().store.list_for_tenant(tenant.tenant_id, limit=limit)
+    jobs = get_job_repository().list_for_tenant(tenant.tenant_id, limit=limit)
     out = []
     for j in jobs:
         d = j.public_dict()
