@@ -1,24 +1,27 @@
-"""Secrets provider — managed stores only in production.
+"""Process-memory secrets — root fix for .env / environ leakage.
 
-Resolution order:
-  1) Doppler           (DOPPLER_TOKEN + DOPPLER_PROJECT + DOPPLER_CONFIG)
-  2) HashiCorp Vault   (VAULT_ADDR + VAULT_TOKEN + VAULT_KV_PATH)
-  3) AWS Secrets Manager (AWS_SECRET_NAME, optional AWS_REGION) via boto3
-  4) GCP Secret Manager  (GCP_SECRET_NAME, optional GCP_PROJECT) via google-cloud-secret-manager
-  5) Platform-injected environ (Railway/Render/K8s) — ONLY if SECRETS_ALLOW_PLATFORM_ENV=1
-     or ENVIRONMENT is dev/local/test
+ROOT SECURITY MODEL
+-------------------
+Managed secrets (bot tokens, LLM keys, Stripe, DB URLs, peppers…) are held in an
+in-process dict only. In production they are NOT left in os.environ, so they do
+not appear in /proc/self/environ dumps, accidental dict(os.environ) logging, or
+naive /debug handlers.
 
-Hard rules:
-  - Never load a filesystem .env in production (callers must use load_dotenv_if_dev).
-  - Production fail-closed: a managed provider MUST succeed unless
-    SECRETS_ALLOW_PLATFORM_ENV=1 is set explicitly.
-  - Never log secret values.
+Boot:
+  1) load_dotenv_if_dev()     — filesystem .env NEVER in production
+  2) load_secrets()           — Doppler → Vault → AWS SM → GCP SM → (dev) environ
+  3) In production: copy managed keys into memory, then scrub them from os.environ
+  4) Application code MUST use get_secret("NAME") for managed keys
+
+Providers (production requires one unless SECRETS_ALLOW_PLATFORM_ENV=1):
+  - Doppler, HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import threading
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -46,6 +49,11 @@ _MANAGED_KEYS = (
     "LANGCHAIN_API_KEY",
     "LANGSMITH_API_KEY",
 )
+
+_LOCK = threading.RLock()
+# In-process secret store — never logged, never returned wholesale
+_STORE: dict[str, str] = {}
+_BOOTSTRAPPED = False
 
 
 def _is_dev_environment() -> bool:
@@ -75,30 +83,24 @@ def _truthy(name: str) -> bool:
 
 
 def _required() -> bool:
-    """Fail-closed secrets policy for production."""
     raw = (os.getenv("SECRETS_REQUIRED") or "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
         return True
     if raw in {"0", "false", "no", "off"}:
-        # Only honored in verified dev — ignored on real deploy platforms.
         return not _is_dev_environment()
     return not _is_dev_environment()
 
 
 def _allow_platform_env_fallback() -> bool:
-    """Platform-injected env (not .env file) allowed only when explicit or dev."""
     if _is_dev_environment():
         return True
     return _truthy("SECRETS_ALLOW_PLATFORM_ENV")
 
 
 def load_dotenv_if_dev() -> bool:
-    """Load filesystem .env ONLY in dev/local/test. Always no-op in production.
-
-    Returns True if dotenv was applied.
-    """
+    """Filesystem .env is DEV ONLY. Always skipped in production."""
     if is_production():
-        logger.info("secrets: dotenv disabled in production (use Doppler/Vault/AWS/GCP)")
+        logger.info("secrets: dotenv disabled in production")
         return False
     try:
         from dotenv import load_dotenv
@@ -164,7 +166,6 @@ def _fetch_vault() -> dict[str, str] | None:
 
 
 def _fetch_aws_secrets_manager() -> dict[str, str] | None:
-    """Optional AWS Secrets Manager (requires boto3). Secret string = JSON object."""
     name = (os.getenv("AWS_SECRET_NAME") or "").strip()
     if not name:
         return None
@@ -182,7 +183,6 @@ def _fetch_aws_secrets_manager() -> dict[str, str] | None:
             raw = resp["SecretBinary"].decode("utf-8")
         data = json.loads(raw)
         if not isinstance(data, dict):
-            logger.error("aws_secrets_manager: secret_not_json_object")
             return None
         return {str(k): str(v) for k, v in data.items() if v is not None}
     except Exception as exc:
@@ -191,7 +191,6 @@ def _fetch_aws_secrets_manager() -> dict[str, str] | None:
 
 
 def _fetch_gcp_secret_manager() -> dict[str, str] | None:
-    """Optional GCP Secret Manager. Payload must be JSON object of key/value secrets."""
     name = (os.getenv("GCP_SECRET_NAME") or "").strip()
     if not name:
         return None
@@ -202,9 +201,7 @@ def _fetch_gcp_secret_manager() -> dict[str, str] | None:
         return None
     project = (os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or "").strip()
     if not project:
-        logger.error("gcp_secret_manager: GCP_PROJECT missing")
         return None
-    # Accept short name or full resource path
     if name.startswith("projects/"):
         resource = name
     else:
@@ -213,10 +210,8 @@ def _fetch_gcp_secret_manager() -> dict[str, str] | None:
     try:
         client = secretmanager.SecretManagerServiceClient()
         resp = client.access_secret_version(request={"name": resource})
-        raw = resp.payload.data.decode("utf-8")
-        data = json.loads(raw)
+        data = json.loads(resp.payload.data.decode("utf-8"))
         if not isinstance(data, dict):
-            logger.error("gcp_secret_manager: secret_not_json_object")
             return None
         return {str(k): str(v) for k, v in data.items() if v is not None}
     except Exception as exc:
@@ -237,16 +232,93 @@ def _provider_configured() -> list[str]:
     return found
 
 
-def load_secrets_into_environ(*, only_missing: bool = True) -> dict[str, Any]:
-    """Fetch from managed providers and inject into os.environ.
+def _store_put(data: dict[str, str]) -> list[str]:
+    """Write managed keys into process memory."""
+    written: list[str] = []
+    with _LOCK:
+        for key in _MANAGED_KEYS:
+            if key not in data:
+                continue
+            val = str(data[key] or "").strip()
+            if not val:
+                continue
+            _STORE[key] = val
+            written.append(key)
+        if _truthy("SECRETS_INJECT_ALL"):
+            for key, val in data.items():
+                if key in _MANAGED_KEYS:
+                    continue
+                v = str(val or "").strip()
+                if v:
+                    _STORE[str(key)] = v
+                    written.append(str(key))
+    return written
 
-    Production: requires a successful managed provider response unless
-    SECRETS_ALLOW_PLATFORM_ENV=1 (explicit escape for K8s/Railway secret injection).
-    Never reads filesystem .env (use load_dotenv_if_dev before this in entrypoints).
+
+def _scrub_environ(keys: list[str]) -> int:
+    """Remove managed secrets from os.environ (production root mitigation)."""
+    if _is_dev_environment() and not _truthy("SECRETS_SCRUB_ENV_IN_DEV"):
+        return 0
+    # Always scrub in production
+    if not is_production() and not _truthy("SECRETS_SCRUB_ENV_IN_DEV"):
+        return 0
+    n = 0
+    for key in keys:
+        if key in os.environ:
+            try:
+                del os.environ[key]
+                n += 1
+            except Exception:
+                pass
+    # Also scrub any managed key still present from platform injection
+    for key in _MANAGED_KEYS:
+        if key in os.environ and key in _STORE:
+            try:
+                del os.environ[key]
+                n += 1
+            except Exception:
+                pass
+    return n
+
+
+def get_secret(key: str, default: str = "") -> str:
+    """Read a secret from process memory first, then (dev only) os.environ."""
+    k = (key or "").strip()
+    if not k:
+        return default
+    with _LOCK:
+        if k in _STORE and _STORE[k]:
+            return _STORE[k]
+    # Production: do not fall back to environ for managed keys (already scrubbed).
+    # Dev: allow environ / dotenv ergonomics.
+    if k in _MANAGED_KEYS and is_production():
+        return default
+    return (os.getenv(k) or default).strip() or default
+
+
+def require_secret(key: str) -> str:
+    val = get_secret(key, "")
+    if not val:
+        raise RuntimeError(f"secret_missing:{key}")
+    return val
+
+
+def secret_names_present() -> list[str]:
+    """Return names only (never values) — safe for diagnostics."""
+    with _LOCK:
+        return sorted(k for k, v in _STORE.items() if v)
+
+
+def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
+    """Load secrets into process memory; scrub os.environ in production.
+
+    ``only_missing`` applies when merging into the in-memory store.
     """
+    global _BOOTSTRAPPED
     meta: dict[str, Any] = {
         "source": "none",
-        "injected": 0,
+        "stored": 0,
+        "scrubbed_environ": 0,
         "keys": [],
         "production": is_production(),
     }
@@ -271,81 +343,123 @@ def load_secrets_into_environ(*, only_missing: bool = True) -> dict[str, Any]:
         if remote is not None:
             source = "gcp_secret_manager"
 
-    meta["source"] = source
+    # Platform / existing environ snapshot for managed keys (before scrub)
+    env_snapshot = {
+        k: (os.environ.get(k) or "").strip()
+        for k in _MANAGED_KEYS
+        if (os.environ.get(k) or "").strip()
+    }
 
     if remote is None:
         configured = _provider_configured()
         if is_production() and _required():
             if configured:
                 raise RuntimeError(
-                    "secrets_required_but_provider_failed:"
-                    + ",".join(configured)
+                    "secrets_required_but_provider_failed:" + ",".join(configured)
                 )
             if not _allow_platform_env_fallback():
                 raise RuntimeError(
                     "secrets_provider_required_in_production:"
                     "set DOPPLER_* or VAULT_* or AWS_SECRET_NAME or GCP_SECRET_NAME "
-                    "(or SECRETS_ALLOW_PLATFORM_ENV=1 only if the host injects secrets)"
+                    "(or SECRETS_ALLOW_PLATFORM_ENV=1 if host injects secrets)"
                 )
-            meta["source"] = "platform_env"
-            logger.warning(
-                "secrets: production using platform-injected environ "
-                "(SECRETS_ALLOW_PLATFORM_ENV=1) — prefer Doppler/Vault/AWS/GCP"
-            )
-            return meta
-        meta["source"] = "env" if _is_dev_environment() else "platform_env"
-        return meta
+            source = "platform_env"
+            remote = env_snapshot
+        else:
+            source = "env"
+            remote = env_snapshot
 
-    injected = 0
-    keys: list[str] = []
-    for key in _MANAGED_KEYS:
-        if key not in remote:
-            continue
-        if only_missing and (os.environ.get(key) or "").strip():
-            continue
-        os.environ[key] = remote[key]
-        injected += 1
-        keys.append(key)
+    meta["source"] = source
 
-    if _truthy("SECRETS_INJECT_ALL"):
-        for key, val in remote.items():
-            if only_missing and (os.environ.get(key) or "").strip():
-                continue
-            if key in keys:
-                continue
-            os.environ[str(key)] = str(val)
-            injected += 1
-            keys.append(str(key))
+    # Merge into store
+    to_write = dict(remote or {})
+    if only_missing:
+        with _LOCK:
+            to_write = {k: v for k, v in to_write.items() if k not in _STORE or not _STORE.get(k)}
 
-    meta["injected"] = injected
-    meta["keys"] = keys
-    # Log key NAMES only — never values
+    written = _store_put(to_write)
+    # Ensure platform snapshot also lands if remote was partial
+    if env_snapshot and source in {"doppler", "vault", "aws_secrets_manager", "gcp_secret_manager"}:
+        # Prefer remote; fill gaps from platform snapshot into memory only
+        gaps = {k: v for k, v in env_snapshot.items() if k not in (remote or {})}
+        written += _store_put(gaps)
+
+    meta["stored"] = len(written)
+    meta["keys"] = list(dict.fromkeys(written))  # names only
+
+    # ROOT FIX: strip managed secrets from process environment in production
+    scrubbed = _scrub_environ(list(_MANAGED_KEYS))
+    meta["scrubbed_environ"] = scrubbed
+    _BOOTSTRAPPED = True
+
     logger.info(
-        "secrets_provider source=%s injected=%s keys=%s",
+        "secrets_provider source=%s stored=%s scrubbed_environ=%s keys=%s",
         meta["source"],
-        injected,
-        ",".join(keys[:24]),
+        meta["stored"],
+        meta["scrubbed_environ"],
+        ",".join(meta["keys"][:24]),
     )
     return meta
 
 
+# Backward-compatible name used by main.py / api_main.py
+def load_secrets_into_environ(*, only_missing: bool = True) -> dict[str, Any]:
+    """Deprecated name — loads into MEMORY and scrubs environ in production."""
+    return load_secrets(only_missing=only_missing)
+
+
 def assert_critical_secrets_present() -> None:
-    """Fail boot if mandatory secrets are empty in production."""
     if not is_production() or not _required():
         return
     missing: list[str] = []
-    # Token may be bot-only or api-only deploy — check soft
-    soft = {"TELEGRAM_BOT_TOKEN", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"}
-    hard = {
-        "API_KEY_PEPPER",
-        "TBE_TOKEN_SECRET",
-        "REDIS_URL",
-    }
+    hard = ["API_KEY_PEPPER", "TBE_TOKEN_SECRET"]
+    if _truthy("ENABLE_API"):
+        hard.append("REDIS_URL")
     for key in hard:
-        if not (os.getenv(key) or "").strip():
-            # REDIS may be optional if API off — still recommended
-            if key == "REDIS_URL" and not _truthy("ENABLE_API"):
-                continue
+        if not get_secret(key):
             missing.append(key)
     if missing:
         raise RuntimeError("critical_secrets_missing:" + ",".join(missing))
+
+
+def install_secret_access_bridge() -> None:
+    """Route os.getenv / environ.get for managed keys through in-memory store.
+
+    After production scrub, plain os.environ no longer holds secrets; this bridge
+    keeps legitimate application reads working without re-exposing /proc/self/environ.
+    """
+    global _BOOTSTRAPPED
+    import os as _os
+
+    _orig_getenv = _os.getenv
+
+    def _getenv(key, default=None):
+        k = str(key) if key is not None else ""
+        if k in _MANAGED_KEYS:
+            with _LOCK:
+                if k in _STORE and _STORE[k]:
+                    return _STORE[k]
+            if is_production():
+                return default
+        return _orig_getenv(key, default)
+
+    _os.getenv = _getenv  # type: ignore[assignment]
+
+    try:
+        _orig_env_get = _os.environ.get
+
+        def _env_get(key, default=None):
+            k = str(key) if key is not None else ""
+            if k in _MANAGED_KEYS:
+                with _LOCK:
+                    if k in _STORE and _STORE[k]:
+                        return _STORE[k]
+                if is_production():
+                    return default
+            return _orig_env_get(key, default)
+
+        _os.environ.get = _env_get  # type: ignore[assignment]
+    except Exception:
+        logger.debug("secrets: could not patch os.environ.get")
+
+    logger.info("secrets: access bridge installed (managed keys via memory)")
