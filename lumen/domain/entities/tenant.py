@@ -35,7 +35,6 @@ class Tenant:
         return {
             "tenant_id": self.tenant_id,
             "name": self.name,
-            "plan_id": self.plan_id,
             "brand_name": self.brand_name or self.name,
             "brand_logo_url": self.brand_logo_url,
             "primary_color": self.primary_color,
