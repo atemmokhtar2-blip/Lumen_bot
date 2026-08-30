@@ -6,7 +6,6 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class CreateTenantCommand:
     name: str
-    plan_id: str = "free"
     owner_telegram_id: int = 0
     brand_name: str = ""
     brand_logo_url: str = ""
