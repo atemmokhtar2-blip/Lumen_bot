@@ -42,15 +42,12 @@ def test_standalone_chat_block_removed_marker_present():
 
 def test_engine_routing_still_present():
     src = ROUTER.read_text(encoding="utf-8")
-    # Hard tool path and delegated routers must remain
-    assert "try_handle_git" in src
-    assert "try_handle_hosting" in src
-    assert "try_handle_repo_dev" in src
-    assert "execute_tool" in src
+    # Agents own the path via engine_turn + generation + HITL
+    assert "handle_user_turn" in src
     assert "execute_bot_generation" in src
     assert "force_generate_once" in src
-    # Multi-agent HITL still wired
     assert "try_handle_hitl_message" in src
+    assert "try_handle_token" in src
 
 
 def test_no_gemini_chat_outage_user_messages():

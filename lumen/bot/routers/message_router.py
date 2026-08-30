@@ -607,18 +607,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Phase 2+3: per-user memory + smart context (dynamic only — no fixed scripts)
     uid = int(user.id) if user else 0
 
+    # Light session memory (agents still own the turn)
     try:
         from lumen.engine.services.user_memory import get_user_memory
-        _mem = get_user_memory(uid, OUTPUT_DIR)
-        _mem.add_turn("user", request)
+        get_user_memory(uid, OUTPUT_DIR).add_turn("user", request)
     except Exception:
-        _mem = None
         logger.exception("user_memory load failed")
 
-    _ctx_res = None
+    # Context binding so agents see the active project
     try:
         from lumen.engine.services.context_engine import resolve_context
         _active = (context.user_data or {}).get("active_repo") or {}
@@ -628,7 +626,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             base_dir=OUTPUT_DIR,
             active_path=str(_active.get("path") or ""),
         )
-        # If user refers to prior work with enough confidence, bind session to that path
         if (
             _ctx_res.refers_to_prior
             and _ctx_res.confidence >= 0.5
@@ -643,354 +640,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "label": _ctx_res.target_label,
                 "kind": _ctx_res.target_kind,
             }
-            if _mem:
-                _mem.set_last(
-                    intent=request[:200],
-                    project_path=_ctx_res.target_path,
-                    capability="context_prior",
-                )
-        # Phase 5: continuity plan (modify / continue prior project)
-        try:
-            from lumen.engine.services.continuity import plan_continuity
-            _active = (context.user_data or {}).get("active_repo") or {}
-            _cont = plan_continuity(
-                uid,
-                request,
-                base_dir=OUTPUT_DIR,
-                active_path=str(_active.get("path") or ""),
-                ctx=_ctx_res,
-            )
-            if (
-                _cont.active
-                and _cont.target_path
-                and Path(_cont.target_path).exists()
-            ):
-                context.user_data["active_repo"] = {
-                    "path": _cont.target_path,
-                    "url": (_active.get("url") or ""),
-                    "contract": (_active.get("contract") or {}),
-                    "from_context_engine": True,
-                    "from_continuity": True,
-                    "label": getattr(_ctx_res, "target_label", "") or Path(_cont.target_path).name,
-                    "kind": _cont.target_kind,
-                    "continuity_mode": _cont.mode,
-                }
-                context.user_data["continuity_plan"] = _cont.to_dict()
-                if _mem:
-                    _mem.set_last(
-                        intent=request[:200],
-                        project_path=_cont.target_path,
-                        capability="continuity_" + (_cont.mode or "dev"),
-                    )
-        except Exception:
-            logger.exception("continuity plan failed")
     except Exception:
         logger.exception("context_engine failed")
 
-    # --- Delegated routers (token / git / hosting / active repo) ---
+    # Bot token paste remains a specialized early handler
     from ..handlers.token_handler import try_handle_token
-    from .git_router import try_handle_git
-    from .hosting_router import try_handle_hosting
-    from .repo_dev_router import try_handle_repo_dev
-
     if await try_handle_token(update, context, request, user, message):
         return
-    if await try_handle_git(update, context, request, user, message):
-        return
-    if await try_handle_hosting(update, context, request, user, message):
-        return
-    if await try_handle_repo_dev(update, context, request, user, message):
-        return
 
-
-
-    # ChatRouter: help / list capabilities (route only)
-    # Skip help when the message is clearly a bot specification (contains /commands etc.)
-    _rt_help = chat_route(request)
-    _is_bot_spec = False
-    try:
-        from lumen.engine.services.chat_router.service import _looks_like_bot_spec
-        _is_bot_spec = _looks_like_bot_spec(request)
-    except Exception:
-        _is_bot_spec = bool(
-            re.search(r"اعمل\s*بوت|أن?شئ\s*بوت|عايز\s*بوت", request, re.I)
-            or len(re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)) >= 2
-        )
-    if not _is_bot_spec:
-        _is_bot_spec = bool(
-            (context.user_data or {}).get("force_generate_once")
-            or (context.user_data or {}).get("translated_spec_request")
-            or (context.user_data or {}).get("last_bot_request")
-            or _looks_like_generation_request(request)
-            or (
-                "bot" in request.lower()
-                and any(k in request for k in ("welcome_set", "user_ban", "telegram", "feature"))
-            )
-        )
-    if (
-        (not _is_bot_spec)
-        and _rt_help
-        and getattr(_rt_help, "ok", False)
-        and _rt_help.capability_id == "help"
-    ):
-        try:
-            from lumen.engine.services.chat_router import get_router
-            await message.reply_text(honest_help())
-        except Exception:
-            await message.reply_text("مساعدة: اسحب مستودع | ولّد بوت | استضافة | تحليل استاتيكي")
-        return
-
-    # ------------------------------------------------------------------
-    # Phase 4 — Developer partner mode (AI only, zero fixed scripts)
-    # SmartChat + memory + context: clarify, challenge, route to engines.
-    # ------------------------------------------------------------------
-    # Bind Grok to the user-cloned active_repo: ANY question not clearly another
-    # hard capability is answered from that repo's materials (not phrase whitelist).
-    _repo_bound = False
-    try:
-        _ar = (context.user_data or {}).get("active_repo") if context.user_data else None
-        _has_repo = isinstance(_ar, dict) and bool(_ar.get("path"))
-        from pathlib import Path as _P
-        _repo_path_ok = bool(_has_repo and _P(str(_ar.get("path"))).is_dir())
-    except Exception:
-        _repo_path_ok = False
-        _ar = None
-
-    _rt = chat_route(request)
-    _other_hard_ids = {
-        "clone_repo", "create_repo", "git_push", "git_pull",
-        "host_start", "host_stop", "host_status", "host_diagnose",
-        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
-        "repo_develop", "live_run", "generate_bot", "repo_modify", "help",
-    }
-    _rt_cap = str(getattr(_rt, "capability_id", "") or "") if _rt is not None else ""
-    _rt_hard_other = (
-        bool(getattr(_rt, "ok", False))
-        and _rt_cap in _other_hard_ids
-        and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
-    )
-    _looks_gen = False
-    try:
-        _looks_gen = bool(_looks_like_generation_request(request))
-    except Exception:
-        _looks_gen = False
-
-    # Never hijack bot-generation specs into repo_understand just because
-    # an active_repo exists from a previous clone.
-    if (
-        _repo_path_ok
-        and not _rt_hard_other
-        and not _looks_gen
-        and not _is_bot_spec
-        and not (context.user_data or {}).get("force_generate_once")
-        and len((request or "").strip()) >= 2
-    ):
-        class _BoundRepoRt:
-            ok = True
-            capability_id = "repo_understand"
-            confidence = 0.99
-            params = {
-                "path": str((_ar or {}).get("path") or ""),
-                "url": str((_ar or {}).get("url") or ""),
-                "text": request,
-                "raw_text": request,
-                "question": request,
-            }
-        _rt = _BoundRepoRt()
-        _repo_bound = True
-        logger.info("active_repo bound → repo_understand for free-form Q")
-    _hard_caps = {
-        "clone_repo", "create_repo", "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose",
-        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
-        "repo_develop", "live_run", "generate_bot",
-        "repo_understand", "repo_inspect", "repo_modify",
-    }
-    _is_hard = (
-        _rt is not None
-        and getattr(_rt, "ok", False)
-        and getattr(_rt, "capability_id", "") in _hard_caps
-        and float(getattr(_rt, "confidence", 0) or 0) >= 0.55
-    )
-    _slash_cmds = re.findall(r"/[a-zA-Z][a-zA-Z0-9_]{1,32}", request)
-    # AI chat path removed permanently — no LLM partner routing.
-    _ai_route_generate = bool(
-        _is_hard and getattr(_rt, "capability_id", "") == "generate_bot"
-    )
-
-    # Engine-only hard tools (Grok/chat only routes intent — engines execute)
-    _engine_only = {
-        "repo_understand", "repo_inspect", "repo_modify",
-        "static_analysis", "package_health", "upgrade_recommend", "upgrade_apply",
-        "live_run",
-    }
-    if _is_hard and getattr(_rt, "capability_id", "") in _engine_only:
-        await _clear_thinking()
-        cap = str(_rt.capability_id)
-        status = await message.reply_text(
-            "📥 المحرك يجمع المستودع..." if cap == "repo_understand"
-            else f"⚙️ جاري تنفيذ `{cap}` عبر المحرك..."
-        )
-        try:
-            from lumen.engine.services.tool_runtime import execute_tool
-            params = dict(getattr(_rt, "params", None) or {})
-            params.setdefault("text", request)
-            params.setdefault("raw_text", request)
-            # pass user_id for sandbox clone-if-needed
-            ud = dict(context.user_data or {})
-            ud["user_id"] = int(user.id) if user else 0
-            tr = execute_tool(cap, params, user_id=int(user.id) if user else 0, user_data=ud)
-            # write back active_repo if tool updated ud
-            if context.user_data is not None and isinstance(ud.get("active_repo"), dict):
-                context.user_data["active_repo"] = ud["active_repo"]
-                if ud.get("last_project_path"):
-                    context.user_data["last_project_path"] = ud["last_project_path"]
-                try:
-                    _persist_session(user, context)
-                except Exception:
-                    pass
-            await status.edit_text((tr.message or ("تم" if tr.ok else "فشل"))[:4000])
-        except Exception as e:
-            logger.exception("engine-only tool failed: %s", cap)
-            try:
-                from lumen.bot.ui.actionable_errors import send_actionable_error
-                await send_actionable_error(
-                    status, kind="generic",
-                    title=f"فشل تنفيذ {cap}",
-                    detail=type(e).__name__,
-                    user_id=int(user.id) if user else 0,
-                )
-            except Exception:
-                await status.edit_text(f"❌ فشل تنفيذ {cap}: {type(e).__name__}")
-        return
-
-    # Non-bot, non-hard messages: short deterministic help (no AI)
-    if (
-        not _is_hard
-        and not _is_bot_spec
-        and not (context.user_data or {}).get("force_generate_once")
-    ):
-        help_ar = (
-            "أرسل وصفاً واضحاً للبوت الذي تريده، مثلاً:\n"
-            "• بوت يرد على الرسائل\n"
-            "• بوت فيه /start و /help\n"
-            "أو استخدم الأوامر: /start /help /status"
-        )
-        await message.reply_text(help_ar)
-        return
-
-    # ------------------------------------------------------------------
-    # Generate only on explicit generate route or strong bot specification.
-    # Greetings / small-talk never reach generation (handled above).
-    # ------------------------------------------------------------------
-    _strong_bot_spec = bool(
-        _is_bot_spec
-        and (
-            len(_slash_cmds) >= 1
-            or len(request) >= 80
-            or bool(re.search(r"اعمل\s*بوت|أنشئ\s*بوت|انشئ\s*بوت|generate\s*bot", request, re.I))
-            or bool(re.search(r"\bبوت\b", request))
-        )
-    )
-    if context.user_data is not None and context.user_data.pop("force_generate_once", False):
-        _strong_bot_spec = True
-        _ai_route_generate = True
-        logger.info("force_generate_once honored — entering generation pipeline")
+    # ══════════════════════════════════════════════════════════════════
+    # PRIMARY PATH: multi-agent engine turn owns the message end-to-end
+    # RouterAgent → tool_runtime / generate signal — no standalone chat
+    # ══════════════════════════════════════════════════════════════════
     await _clear_thinking()
-    if not _ai_route_generate and not _strong_bot_spec:
-        return
-
-    if len(request) < 2:
-        return
-
-    # Clear any leftover clarification session state
-    if context.user_data is not None:
-        context.user_data.pop("pending_spec", None)
-
-    # Capability Detection + feasibility (Phase 2) — honest gate before generation
-    _soft_note = ""
     try:
-        from lumen.engine.services.capability_detection import telegram_preflight
-
-        _pre = telegram_preflight(request)
-        if _pre.get("should_block"):
-            await message.reply_text(_pre.get("user_message") or rejection_message("الطلب خارج النطاق", ""))
-            return
-        _soft_note = _pre.get("soft_note") or ""
-        # Fallback: keep legacy blocked_features note if detection silent
-        if not _soft_note:
-            from lumen.engine.services.feasibility_gate import check_feasibility
-            _feas = check_feasibility(request)
-            if not _feas.can_generate:
-                await message.reply_text(
-                    rejection_message(_feas.reason, _feas.suggested_scope),
-                )
-                return
-            if _feas.blocked_features:
-                _soft_note = (
-                    "\n⚠️ ملاحظة: بعض الأجزاء تحتاج ربط خارجي ولن تُفعَّل تلقائياً: "
-                    + "، ".join(_feas.blocked_features[:4])
-                )
+        from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
+        turn = handle_user_turn(
+            request,
+            user_id=uid,
+            user_data=dict(context.user_data or {}),
+        )
     except Exception:
+        logger.exception("handle_user_turn failed")
+        await message.reply_text("تعذر تشغيل المحرك على هذا الطلب. حاول مرة أخرى.")
+        return
+
+    # Apply agent side-effects into the Telegram session
+    if context.user_data is not None and isinstance(turn.user_data_updates, dict):
+        for k, v in turn.user_data_updates.items():
+            context.user_data[k] = v
         try:
-            from lumen.engine.services.feasibility_gate import check_feasibility
-            _feas = check_feasibility(request)
-            if not _feas.can_generate:
-                await message.reply_text(
-                    rejection_message(_feas.reason, _feas.suggested_scope),
-                )
-                return
+            _persist_session(user, context)
         except Exception:
-            pass
+            logger.exception("persist after engine_turn failed")
 
-    # Duplicate identical prompt within TTL → reuse last project path
-    try:
-        from ..generation_cache import get_generation_cache
-        _cached = get_generation_cache().get(int(user.id) if user else 0, request)
-        if _cached and _cached.get("project_path"):
-            from pathlib import Path as _P
-            if _P(_cached["project_path"]).is_dir():
-                await message.reply_text(
-                    "✅ نفس الطلب مؤخراً — سأستخدم النتيجة السابقة.\n"
-                    "🔑 أرسل توكن البوت من @BotFather للتشغيل، أو غيّر الوصف لإعادة التوليد."
-                )
-                if context.user_data is not None:
-                    payload = {
-                        "project_path": _cached["project_path"],
-                        "entry_point": _cached.get("entry_point") or "main.py",
-                        "run_seconds": _plan_live_seconds(user),
-                    }
-                    context.user_data["pending_run"] = payload
-                    context.user_data["pending_deploy"] = dict(payload)
-                    context.user_data["pending_live_run"] = dict(payload)
-                    _persist_session(user, context)
-                return
-    except Exception:
-        pass
-
-    # Stage-4 + quota (extracted module)
-    from .message_stages.pre_generate import prepare_status_and_quota
-
-    status_msg = await prepare_status_and_quota(
-        message=message,
-        context=context,
-        user=user,
-        request=request,
-        soft_note=locals().get("_soft_note") or "",
-    )
-    if status_msg is None:
+    # Generate / refine → multi-agent / Cline pipeline (same as force-generate)
+    if turn.action in {"generate", "refine"}:
+        gen_request = (turn.generate_request or request or "").strip()
+        if not gen_request:
+            prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
+            gen_request = prior or ""
+        if not gen_request:
+            await message.reply_text(
+                "مفيش وصف بوت واضح. ابعت وصف البوت (مثال: عايز بوت جروب يرحب ويحظر)."
+            )
+            return
+        if context.user_data is not None:
+            context.user_data.pop("force_generate_once", None)
+            context.user_data["translated_source"] = "engine_turn"
+            context.user_data["last_bot_request"] = gen_request[:2000]
+        status_msg = await message.reply_text(
+            "⚙️ المحرك (الوكلاء) يبدأ التوليد الآن…"
+            if turn.action == "generate"
+            else "⚙️ المحرك يبدأ التعديل الآن…"
+        )
+        await execute_bot_generation(
+            message=message,
+            context=context,
+            user=user,
+            gen_request=clamp_spec_request(gen_request),
+            status_msg=status_msg,
+            preferred_keys=None,
+            cache_key=gen_request,
+        )
         return
 
-    # Shared generation execution (sandbox → engine → deliver)
-    await execute_bot_generation(
-        message=message,
-        context=context,
-        user=user,
-        gen_request=request,
-        status_msg=status_msg,
-        preferred_keys=(
-            context.user_data.get("preferred_keys")
-            if isinstance(context.user_data, dict)
-            else None
-        ),
-        cache_key=request,
-    )
+    # Tool / help / confirm — reply from agent final_message
+    reply = (turn.reply or "").strip()
+    if not reply:
+        reply = "تم." if turn.ok else "تعذر تنفيذ الطلب عبر المحرك."
+    await message.reply_text(reply[:4000])
+    return

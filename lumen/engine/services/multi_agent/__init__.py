@@ -70,6 +70,7 @@ from .dynamic_planner import assemble_plan, classify_intent
 from .acceptance_check import evaluate_task, evaluate_tree
 from .coding_agent import run_coding_session
 from .layer_scenarios import run_all_layer_scenarios
+from .engine_turn import EngineTurnResult, handle_user_turn
 
 try:
     from .langgraph_pipeline import langgraph_available, run_langgraph_pipeline, use_langgraph_pipeline
@@ -175,6 +176,8 @@ __all__ = [
     "evaluate_task",
     "evaluate_tree",
     "run_coding_session",
+    "EngineTurnResult",
+    "handle_user_turn",
     "run_all_layer_scenarios",
     "langgraph_available",
     "run_langgraph_pipeline",

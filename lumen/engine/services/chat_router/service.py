@@ -451,7 +451,7 @@ class ChatRouter:
         )
 
     def help_text(self) -> str:
-        lines = ["🤖 *قدرات النظام (الشات يوجّه فقط — لا يكتب كود)*", ""]
+        lines = ["🤖 *قدرات المحرك (الوكلاء يوجّهون وينفّذون — لا شات مستقل)*", ""]
         for c in sorted(self._caps, key=lambda x: -x.priority):
             lines.append(f"• *{c.title_ar}* — {c.description_ar}")
         lines.append("")

@@ -47,6 +47,19 @@ BuildIR
        → or builtin catalog compose if CLINE_MODE=builtin
 ```
 
+
+
+## Message ownership (engine turn)
+
+Telegram NL messages are owned by ``lumen.engine.services.multi_agent.engine_turn.handle_user_turn``:
+
+1. ``RouterAgent`` selects capability/tool (via ``chat_router`` phrase routing — not a chat LLM).
+2. Tools run through ``execute_tool_gated`` → ``tool_runtime``.
+3. ``generate_bot`` / ``refine_bot`` signal the multi-agent / Cline generation pipeline.
+4. Active repo + soft intent → ``repo_understand`` (agents measure the project).
+
+There is **no** standalone conversational chat layer on the bot path.
+
 ## Tools
 
 `lumen/engine/services/tool_runtime`: capability router (`chat_router`) selects; engines **execute**. Standalone conversational chat layer removed — multi-agent/Cline owns generation and tool outcomes.

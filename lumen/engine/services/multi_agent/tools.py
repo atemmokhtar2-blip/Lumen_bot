@@ -135,7 +135,19 @@ def execute_tool_gated(
 
     try:
         from lumen.engine.services.tool_runtime.executor import execute_tool
-        result = execute_tool(tool, params, user_id=int(state.user_id or 0))
+        _ud = (state.extensions or {}).get("user_data")
+        if not isinstance(_ud, dict):
+            _ud = {}
+        # Keep active_repo available for repo_* tools
+        if state.extensions.get("active_repo") and "active_repo" not in _ud:
+            _ud = dict(_ud)
+            _ud["active_repo"] = state.extensions["active_repo"]
+        result = execute_tool(
+            tool,
+            params,
+            user_id=int(state.user_id or 0),
+            user_data=_ud,
+        )
         data = result.to_dict() if hasattr(result, "to_dict") else {
             "ok": bool(getattr(result, "ok", False)),
             "tool": tool,
