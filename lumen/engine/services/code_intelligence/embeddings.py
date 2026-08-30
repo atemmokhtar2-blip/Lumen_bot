@@ -29,6 +29,17 @@ _DEFAULT_OPENAI_MODEL = "text-embedding-3-large"
 _DEFAULT_QWEN_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 _DEFAULT_FASTEMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
+# Semantic-memory embedding model — multilingual (50+ languages incl. Arabic).
+# Same 384-dim as the English code default so it is a drop-in for the memory
+# store, but trained on multilingual parallel corpora. This is the strongest
+# fastembed-supported model for Arabic retrieval (Mr. TyDi MRR@10 ~71.5 for
+# the multilingual-e5 family vs BM25 ~36.7). Kept separate from
+# CODE_EMBEDDING_MODEL so code embeddings (English code-specialist) and
+# semantic memory (multilingual natural language) use the right model each.
+_DEFAULT_SEMANTIC_FASTEMBED_MODEL = (
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+)
+
 # Voyage constraints (docs): max 1000 strings per request
 _VOYAGE_BATCH = 64
 _HTTP_RETRIES = 3
@@ -153,6 +164,74 @@ def embed_fastembed(texts: list[str]) -> dict[str, Any]:
         "dims": len(vectors[0]) if vectors else 0,
         "neural": True,
     }
+
+
+# ---- semantic-memory embeddings (multilingual, Arabic-capable) ----
+_SEM_FASTEMBED_MODEL = None
+
+
+def _semantic_fastembed_model():
+    """Lazy-load the multilingual fastembed model (separate cache from code)."""
+    global _SEM_FASTEMBED_MODEL
+    if _SEM_FASTEMBED_MODEL is not None:
+        return _SEM_FASTEMBED_MODEL
+    from fastembed import TextEmbedding
+
+    model_name = (
+        os.getenv("SEMANTIC_EMBEDDING_MODEL") or _DEFAULT_SEMANTIC_FASTEMBED_MODEL
+    ).strip()
+    _SEM_FASTEMBED_MODEL = TextEmbedding(model_name=model_name)
+    return _SEM_FASTEMBED_MODEL
+
+
+def embed_query_semantic(text: str) -> dict[str, Any]:
+    """Embed a single natural-language query with the multilingual model.
+
+    Used by the semantic-memory store for recall. Falls back to the standard
+    neural cascade if the multilingual model is unavailable, then to empty.
+    """
+    text = str(text or "")
+    if not text.strip():
+        return {"ok": True, "provider": "empty", "vector": [], "dims": 0, "neural": True}
+    try:
+        model = _semantic_fastembed_model()
+        vecs = list(model.embed([text]))
+        if vecs:
+            v = [float(x) for x in vecs[0]]
+            return {
+                "ok": True,
+                "provider": "fastembed-semantic",
+                "model": (os.getenv("SEMANTIC_EMBEDDING_MODEL") or _DEFAULT_SEMANTIC_FASTEMBED_MODEL).strip(),
+                "vector": v,
+                "dims": len(v),
+                "neural": True,
+            }
+    except Exception as exc:
+        logger.debug("semantic multilingual embed_query failed: %s", exc)
+    # graceful fallback to the standard cascade (still neural, English-centric)
+    return embed_query(text)
+
+
+def embed_documents_semantic(texts: list[str]) -> dict[str, Any]:
+    """Embed a batch of natural-language documents with the multilingual model."""
+    texts = [str(t or "") for t in texts]
+    if not texts:
+        return {"ok": True, "provider": "empty", "vectors": [], "dims": 0, "neural": True}
+    try:
+        model = _semantic_fastembed_model()
+        vecs = [[float(x) for x in v] for v in model.embed(texts)]
+        if len(vecs) == len(texts):
+            return {
+                "ok": True,
+                "provider": "fastembed-semantic",
+                "model": (os.getenv("SEMANTIC_EMBEDDING_MODEL") or _DEFAULT_SEMANTIC_FASTEMBED_MODEL).strip(),
+                "vectors": vecs,
+                "dims": len(vecs[0]) if vecs else 0,
+                "neural": True,
+            }
+    except Exception as exc:
+        logger.debug("semantic multilingual embed_batch failed: %s", exc)
+    return embed_documents(texts)
 
 
 def _chunk(texts: list[str], size: int) -> list[list[str]]:
@@ -373,6 +452,8 @@ __all__ = [
     "embed_texts",
     "embed_query",
     "embed_documents",
+    "embed_query_semantic",
+    "embed_documents_semantic",
     "embed_fastembed",
     "cosine",
     "resolve_embedding_provider",

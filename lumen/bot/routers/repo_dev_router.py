@@ -133,6 +133,55 @@ async def try_handle_repo_dev(
                 except Exception:
                     logger.exception("version snapshot failed")
 
+                # ---- wire edit into the project-memory store (D7) ----
+                # Record the structural edit so the engine "remembers" the
+                # project's evolving UI (buttons/commands/keyboards) across
+                # sessions. This is the real integration point: every
+                # successful repo edit now updates the project card.
+                try:
+                    from lumen.engine.services.semantic_memory.project_memory import (
+                        get_project_memory_store,
+                    )
+                    pms = get_project_memory_store()
+                    edit_type = str(getattr(dev, "action", "") or "edit")
+                    # extract a target from the contract if available
+                    _target = ""
+                    try:
+                        if dev.contract and getattr(dev, "action", "").endswith("_command"):
+                            _cmds = [c.name for c in (dev.contract.commands or [])]
+                            _target = f"/{_cmds[-1]}" if _cmds else ""
+                    except Exception:
+                        _target = ""
+                    _pid = str(active["path"])
+                    # ensure a project card exists (register_project is idempotent)
+                    if not pms.get_card(_pid):
+                        _ui = {}
+                        try:
+                            if dev.contract:
+                                _ui = {
+                                    "commands": [f"/{c.name}" for c in (dev.contract.commands or [])],
+                                }
+                        except Exception:
+                            _ui = {}
+                        pms.register_project(
+                            user_id=int(uid or 0),
+                            project_id=_pid,
+                            label=Path(_pid).name,
+                            kind="repo_edit",
+                            path=_pid,
+                            source_request=(request or "")[:500],
+                            ui_elements=_ui,
+                        )
+                    pms.record_edit(
+                        project_id=_pid,
+                        edit_type=edit_type,
+                        description=(request or "")[:300],
+                        target=_target,
+                    )
+                except Exception:
+                    logger.debug("project_memory record_edit after repo edit failed",
+                                 exc_info=True)
+
             # If file changed, offer zip of repo
             if dev.ok and dev.changed_files and Path(active["path"]).exists():
                 try:
