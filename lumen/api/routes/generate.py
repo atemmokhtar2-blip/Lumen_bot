@@ -67,18 +67,23 @@ async def generate(request: web.Request) -> web.Response:
                     {
                         "ok": False,
                         "error": "sandbox_unavailable",
-                        "detail": "strong isolation required; host LocalProcess is disabled",
-                        "probes": sb_reason,
                     },
                     status=503,
                     headers={"Retry-After": "30"},
                 )
     except Exception as exc:
+        # Never return exception types/names to clients (info disclosure).
+        import logging
+        import uuid
+        rid = (request.headers.get("X-Request-ID") or "").strip() or uuid.uuid4().hex[:16]
+        logging.getLogger("lumen.api.generate").exception(
+            "sandbox_check_failed request_id=%s", rid
+        )
         return web.json_response(
             {
                 "ok": False,
-                "error": "sandbox_check_failed",
-                "detail": type(exc).__name__,
+                "error": "internal_error",
+                "request_id": rid,
             },
             status=503,
             headers={"Retry-After": "30"},
@@ -174,7 +179,16 @@ async def generate(request: web.Request) -> web.Response:
                 content_type="application/json",
                 headers={"Retry-After": "30"},
             )
-        raise
+        import logging
+        import uuid
+        rid = (request.headers.get("X-Request-ID") or "").strip() or uuid.uuid4().hex[:16]
+        logging.getLogger("lumen.api.generate").exception(
+            "generate_runtime_error request_id=%s", rid
+        )
+        raise web.HTTPInternalServerError(
+            text=f'{{"error":"internal_error","request_id":"{rid}"}}',
+            content_type="application/json",
+        )
 
     brand = tenant.brand_name or tenant.name
     if wait:
