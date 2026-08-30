@@ -142,6 +142,12 @@ def _load_smart_clone():
     return get_smart_clone()
 
 
+
+def _git_argv(*parts: str) -> list[str]:
+    """Build git argv list — never a shell string."""
+    return ["git", *[str(p) for p in parts if p is not None and str(p) != ""]]
+
+
 def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
     import shutil
 
@@ -167,6 +173,31 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
 
     if not url and not text:
         return ToolResult(ok=False, tool="clone_repo", message="مطلوب رابط مستودع")
+
+    # SSRF root gate: allowlisted public HTTPS git hosts only (blocks metadata/private IPs)
+    try:
+        from lumen.engine.services.secure_exec import validate_git_https_url
+        from lumen.engine.engines.generators.git_operations.smart_clone import (
+            normalize_and_validate_url,
+        )
+        candidate = (url or text or "").strip()
+        safe_url, _verr = normalize_and_validate_url(candidate)
+        if not safe_url:
+            return ToolResult(
+                ok=False,
+                tool="clone_repo",
+                message="رابط المستودع غير مسموح أو غير آمن",
+                data={"error": "url_rejected"},
+            )
+        validate_git_https_url(safe_url)
+        url = safe_url
+    except Exception:
+        return ToolResult(
+            ok=False,
+            tool="clone_repo",
+            message="رابط المستودع غير مسموح أو غير آمن",
+            data={"error": "url_rejected"},
+        )
 
     dest: Path
     try:
