@@ -46,23 +46,34 @@ class PlatformTenantRepository:
         *,
         plan_id: str = "free",
         owner_telegram_id: int = 0,
+        brand_name: str = "",
+        brand_logo_url: str = "",
+        primary_color: str = "#2563eb",
+        support_email: str = "",
+        custom_domain: str = "",
         **fields: object,
     ) -> tuple[Tenant, str]:
-        # Existing stores return (Tenant-like, raw_key) or Tenant + key via create()
         result = self._store.create(
             name,
             plan_id=plan_id,
             owner_telegram_id=int(owner_telegram_id or 0),
+            brand_name=brand_name or name,
+            brand_logo_url=brand_logo_url,
+            primary_color=primary_color or "#2563eb",
+            support_email=support_email,
+            custom_domain=custom_domain,
             **{k: v for k, v in fields.items() if v is not None},
         )
         if isinstance(result, tuple) and len(result) == 2:
             raw_t, key = result
-            return _to_domain(raw_t) or Tenant(tenant_id="", name=name), str(key)
-        # Some implementations may return only tenant; key unknown
-        t = _to_domain(result)
-        if t is None:
+            domain = _to_domain(raw_t)
+            if domain is None:
+                raise RuntimeError("tenant_create_failed")
+            return domain, str(key)
+        domain = _to_domain(result)
+        if domain is None:
             raise RuntimeError("tenant_create_failed")
-        return t, ""
+        return domain, ""
 
     def list_all(self) -> list[Tenant]:
         rows = self._store.list_all() if hasattr(self._store, "list_all") else []
