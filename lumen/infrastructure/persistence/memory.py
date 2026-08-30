@@ -8,6 +8,7 @@ from typing import Any
 
 from lumen.domain.entities.job import Job
 from lumen.domain.entities.tenant import Tenant
+from lumen.domain.value_objects.job_status import JobStatus
 
 
 class InMemoryTenantRepository:
@@ -44,6 +45,11 @@ class InMemoryTenantRepository:
             name=name,
             plan_id=plan_id,
             owner_telegram_id=int(owner_telegram_id or 0),
+            brand_name=str(fields.get("brand_name") or name),
+            brand_logo_url=str(fields.get("brand_logo_url") or ""),
+            primary_color=str(fields.get("primary_color") or "#2563eb"),
+            support_email=str(fields.get("support_email") or ""),
+            custom_domain=str(fields.get("custom_domain") or ""),
             api_key_hash=h,
             api_key_prefix=raw[:12],
             created_at=time.time(),
@@ -52,6 +58,37 @@ class InMemoryTenantRepository:
         self._by_id[tid] = t
         self._by_hash[h] = tid
         return t, raw
+
+    def update_white_label(self, tenant_id: str, **fields: Any) -> Tenant | None:
+        t = self._by_id.get(tenant_id)
+        if not t:
+            return None
+        for k in (
+            "brand_name",
+            "brand_logo_url",
+            "primary_color",
+            "support_email",
+            "custom_domain",
+            "name",
+        ):
+            if k in fields and fields[k] is not None:
+                setattr(t, k, str(fields[k])[:300])
+        return t
+
+    def rotate_key(self, tenant_id: str) -> str | None:
+        t = self._by_id.get(tenant_id)
+        if not t:
+            return None
+        # drop old hash
+        old = [h for h, tid in self._by_hash.items() if tid == tenant_id]
+        for h in old:
+            self._by_hash.pop(h, None)
+        raw = f"sk_test_{secrets.token_urlsafe(24)}"
+        h = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        t.api_key_hash = h
+        t.api_key_prefix = raw[:12]
+        self._by_hash[h] = tenant_id
+        return raw
 
     def list_all(self) -> list[Tenant]:
         return list(self._by_id.values())
@@ -72,3 +109,31 @@ class InMemoryJobRepository:
         out = [j for j in self._by_id.values() if j.tenant_id == tenant_id]
         out.sort(key=lambda j: j.created_at, reverse=True)
         return out[: max(1, min(100, int(limit)))]
+
+    def cancel(self, job_id: str, *, tenant_id: str) -> Job | None:
+        j = self._by_id.get(job_id)
+        if not j or j.tenant_id != tenant_id:
+            return None
+        if j.status in JobStatus.TERMINAL:
+            return j
+        j.status = JobStatus.CANCELLED
+        j.finished_at = time.time()
+        return j
+
+    def pause(self, job_id: str, *, tenant_id: str) -> Job | None:
+        j = self._by_id.get(job_id)
+        if not j or j.tenant_id != tenant_id:
+            return None
+        if j.status in JobStatus.TERMINAL:
+            return None
+        j.status = JobStatus.PAUSED
+        return j
+
+    def resume(self, job_id: str, *, tenant_id: str) -> Job | None:
+        j = self._by_id.get(job_id)
+        if not j or j.tenant_id != tenant_id:
+            return None
+        if j.status != JobStatus.PAUSED:
+            return None
+        j.status = JobStatus.RUNNING
+        return j
