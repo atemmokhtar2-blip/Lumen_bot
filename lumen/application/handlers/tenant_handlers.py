@@ -21,6 +21,11 @@ def handle_create_tenant(
         name,
         plan_id=plan_id,
         owner_telegram_id=int(cmd.owner_telegram_id or 0),
+        brand_name=(cmd.brand_name or name).strip(),
+        brand_logo_url=(cmd.brand_logo_url or "").strip(),
+        primary_color=(cmd.primary_color or "#2563eb").strip(),
+        support_email=(cmd.support_email or "").strip(),
+        custom_domain=(cmd.custom_domain or "").strip(),
     )
 
 
