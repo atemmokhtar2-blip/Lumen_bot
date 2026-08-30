@@ -34,10 +34,13 @@ def test_message_router_does_not_import_translator_chat():
 
 def test_standalone_chat_block_removed_marker_present():
     src = ROUTER.read_text(encoding="utf-8")
-    assert "STANDALONE CHAT REMOVED" in src
-    assert "engine / agents own every NL message" in src
-    # Old policy string must be gone
+    # Single agent path — no dual force-generate / pending_chat / early-repo forks
+    assert "handle_user_turn" in src
+    assert "PRIMARY PATH: multi-agent engine turn" in src
     assert "Every natural-language message goes to the standalone chat model first" not in src
+    assert "GENERATE-NOW FAST PATH" not in src
+    assert "EARLY: bound active_repo" not in src
+    assert "pending_chat_action" not in src or src.count("pending_chat_action") <= 1
 
 
 def test_engine_routing_still_present():

@@ -1,10 +1,11 @@
 """
-ChatRouter — the chat layer understands the whole bot surface.
+CapabilityRouter — maps user text → capability id + params for agents.
 
 Rules (strict):
   - Routes ONLY: maps user text → capability id + params
   - Does NOT generate code, edit files, or invent success
-  - New features register here so chat "knows" them
+  - Does NOT hold a conversational chat session
+  - Agents (engine_turn / multi-agent) own execution after routing
   - Matching is soft (phrases, stems, word overlap) for natural Arabic/English
 """
 

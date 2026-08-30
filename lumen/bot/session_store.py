@@ -118,7 +118,6 @@ class SessionStore:
                 "active_repo",
                 "chat_history",
                 "last_bot_request",
-                "pending_chat_action",
                 "translated_preferred_keys",
                 "translated_source",
                 "last_project_path",

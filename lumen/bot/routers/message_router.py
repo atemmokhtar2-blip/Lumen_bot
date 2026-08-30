@@ -3,42 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
-import tempfile
-import time
-from collections import defaultdict
 from pathlib import Path
 
 from telegram import Update
-from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..sanitize import user_facing_generation_error
 from ..resource_limits import (
     clamp_user_text,
     clamp_spec_request,
-    run_with_engine_timeout,
-    EngineTimeoutError,
     MAX_USER_MESSAGE_CHARS,
 )
 from ..helpers import (
-    is_allowed,
-    looks_like_bot_token,
-    normalize_bot_token,
-    detect_host_intent,
-    chat_route,
     escape_md,
     safe_edit_text,
-    make_zip_from_path,
-    run_generation,
-    run_generation_with_bridge,
 )
-from ..live import handle_live_run_token, handle_live_deploy_token
-from ..progress_tracker import run_with_heartbeat
 from ..session_store import get_session_store
-from ..capability_boundaries import rejection_message, get_help_text as honest_help
 from ..middlewares.auth import (
     rate_limit_ok as _rate_limit_ok,
     rate_limit_wait_seconds as _rate_limit_wait_seconds,
@@ -291,266 +272,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("اكتب وصفاً للبوت أو /help.")
         return
 
-    # Remember last explicit bot-build request for later "ابدأ / أنجز" turns.
+    # Remember last bot-build text for confirm resumes (agents still own the turn)
     if context.user_data is not None and _looks_like_generation_request(request):
         context.user_data["last_bot_request"] = request
-        # Fast product path: never wait on Gemini for an explicit bot-build request.
-        # User was waiting 10+ minutes with no reply while chat layer hung.
-        context.user_data["force_generate_once"] = True
-        logger.info("Generation-like request → force generate-now (skip Gemini)")
 
-    # Bare bot specs («بوت متجر…») also skip Gemini catalog chat
-    # and go straight to Cline — no (cart_add)/(content_list) feature listing.
-    if context.user_data is not None and not (
-        context.user_data or {}
-    ).get("force_generate_once"):
-        _is_bot_spec_early = False
-        try:
-            from lumen.engine.services.chat_router.service import _looks_like_bot_spec as _llbs
-            _is_bot_spec_early = bool(_llbs(request))
-        except Exception:
-            low = (request or "").lower()
-            _is_bot_spec_early = ("بوت" in (request or "")) or ("bot" in low)
-        if _is_bot_spec_early or _looks_like_generation_request(request):
-            context.user_data["last_bot_request"] = request
-            context.user_data["force_generate_once"] = True
-            logger.info("Free-agent mode → force generate (skip catalog chat)")
-
-    # If the user embeds start intent in a longer message (… وابدا حالا), force generation.
-    if context.user_data is not None and not (context.user_data or {}).get("force_generate_once"):
-        _tail = (request or "").strip().lower()
-        if any(
-            marker in _tail
-            for marker in (
-                "ابدا حالا", "ابدأ حالا", "ابدأ الآن", "ابدا الان", "وانجز", "و ابدأ",
-                "وابدا", "وابدأ", "ابدأ فورا", "generate now", "start now",
-            )
-        ) and (
-            _looks_like_generation_request(request)
-            or _prior_bot_request(context.user_data)
-            or "بوت" in _tail
-            or "bot" in _tail
-        ):
-            if not _looks_like_generation_request(request):
-                prior = _prior_bot_request(context.user_data)
-                if prior:
-                    request = prior
-            context.user_data["force_generate_once"] = True
-            logger.info("Start-intent marker forced generate-now path")
-
-    # Confirm a sensitive action previously planned (legacy pending_chat_action / HITL).
-    _pending_chat_action = (context.user_data or {}).get("pending_chat_action") if context.user_data else None
+    # Confirm phrase without a full spec → resume prior bot request into this turn
     _confirm_now = _is_confirm_phrase(request)
-    if _pending_chat_action and _confirm_now:
-        action = str(_pending_chat_action.get("name") or "")
-        original = str(_pending_chat_action.get("raw_text") or "")
-        if context.user_data is not None:
-            context.user_data.pop("pending_chat_action", None)
-        try:
-            if action in {"generate_bot", "refine_bot", "translate_spec", ""}:
-                if original.strip():
-                    request = original.strip()
-                else:
-                    prior = _prior_bot_request(context.user_data)
-                    if prior:
-                        request = prior
-                if context.user_data is not None:
-                    context.user_data["force_generate_once"] = True
-                # fall through into generation
-            elif action == "clone_repo":
-                from .git_router import try_handle_git
-                if await try_handle_git(update, context, original, user, message):
-                    return
-            elif action in {"host_start", "host_stop", "host_status"}:
-                from .hosting_router import try_handle_hosting
-                if await try_handle_hosting(update, context, original, user, message):
-                    return
-            elif action in {"repo_understand", "repo_inspect", "repo_modify"}:
-                from lumen.engine.services.tool_runtime import execute_tool
-                _tr = execute_tool(
-                    action,
-                    {},
-                    user_id=int(user.id) if user else 0,
-                    user_data=dict(context.user_data or {}),
-                )
-                await message.reply_text((_tr.message or "تم")[:4000])
-                return
-            else:
-                # Unknown pending action + confirm → try bot generation from history
-                prior = _prior_bot_request(context.user_data)
-                if prior:
-                    request = prior
-                    if context.user_data is not None:
-                        context.user_data["force_generate_once"] = True
-                else:
-                    await message.reply_text("لم أجد أداة تنفيذ مطابقة لهذا الطلب.")
-                    return
-        except Exception:
-            logger.exception("confirmed chat action failed: %s", action)
-            await message.reply_text("تعذر تنفيذ العملية المؤكدة. راجع سجل الخدمة للتفاصيل.")
-            return
-        if action not in {"generate_bot", "refine_bot", "translate_spec", ""} and not (
-            context.user_data or {}
-        ).get("force_generate_once"):
-            return
-
-    # Short confirmation after a prior generation-like user message in history:
-    # "تمام ابدا وانجز" must resume generation even when Gemini is down.
     if _confirm_now and not _looks_like_generation_request(request):
         prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
         if prior:
             request = prior
             if context.user_data is not None:
-                context.user_data["force_generate_once"] = True
-            logger.info("Confirm phrase resumed prior bot request")
+                context.user_data["last_bot_request"] = prior
+            logger.info("Confirm phrase resumed prior bot request into engine_turn")
 
-
-    
-    # ══════════════════════════════════════════════════════════════════
-    # GENERATE-NOW FAST PATH
-    # User confirmed (ابدأ / تمام ابدا وانجز / …) with a known bot request.
-    # Do not touch Gemini, L3, help gates, or feasibility soft-blocks.
-    # ══════════════════════════════════════════════════════════════════
-    if (context.user_data or {}).get("force_generate_once"):
-        # Instant ack so the user never stares at silence for minutes.
-        try:
-            await message.reply_text("استلمت الطلب ✅ جاري التوليد الآن…")
-        except Exception:
-            pass
-        gen_request = clamp_spec_request(request)
-        if not _looks_like_generation_request(gen_request):
-            prior = _prior_bot_request(context.user_data)
-            if prior:
-                gen_request = prior
-        if not gen_request.strip():
-            if context.user_data is not None:
-                context.user_data.pop("force_generate_once", None)
-            await message.reply_text(
-                "مفيش وصف بوت محفوظ. ابعت وصف البوت تاني (مثال: عايز بوت جروب يرحب ويحظر)."
-            )
-            return
-
-        # Engine owns understanding + keys + generation (no translator/bridge layer).
-        # Multi-agent / Cline reads LLM keys itself via model_router + key_pool.
-        preferred_keys = None
-        if context.user_data is not None:
-            context.user_data.pop("force_generate_once", None)
-            context.user_data["translated_source"] = "engine_direct"
-        logger.info("generate-now engine-direct path (no translate/bridge layer) request_len=%s", len(gen_request))
-
-        await _clear_thinking()
-        status_msg = await message.reply_text("⚙️ جاري توليد البوت الآن…")
-        await execute_bot_generation(
-            message=message,
-            context=context,
-            user=user,
-            gen_request=gen_request,
-            status_msg=status_msg,
-            preferred_keys=preferred_keys,
-            cache_key=gen_request,
-        )
-
-        return
-
-    # ── EARLY: bound active_repo → engine tools + answer (skip Gemini fluff) ──
-    # NEVER intercept bot generation/specs here — those must reach:
-    #   multi-agent / Cline engine (Gemini translate dual-path retired)
-    try:
-        _ar0 = (context.user_data or {}).get("active_repo") if context.user_data else None
-        _path0 = ""
-        if isinstance(_ar0, dict):
-            _path0 = str(_ar0.get("path") or "").strip()
-        from pathlib import Path as _PathEarly
-        _repo_ok0 = bool(_path0 and _PathEarly(_path0).is_dir())
-        _req0 = (request or "").strip()
-        _other0 = bool(re.search(
-            r"(اسحب|clone|بوش|push|pull|استضاف|host|ول[ّ]?د|اعمل\s*بوت|generate|/start|/help|/status)",
-            _req0,
-            re.I,
-        ))
-        # Bot-spec descriptions (e.g. «بوت متجر إلكتروني…») must NOT be eaten by repo tools
-        _bot_spec0 = False
-        try:
-            from lumen.engine.services.chat_router.service import _looks_like_bot_spec as _llbs
-            _bot_spec0 = bool(_llbs(_req0)) or bool(_looks_like_generation_request(_req0))
-        except Exception:
-            _bot_spec0 = bool(_looks_like_generation_request(_req0)) or bool(
-                re.match(r"^\s*بوت\b", _req0) and len(_req0) >= 18
-            )
-        if (
-            _repo_ok0
-            and not _other0
-            and not _bot_spec0
-            and not (context.user_data or {}).get("force_generate_once")
-            and len(_req0) >= 2
-            and not _req0.startswith("/")
-        ):
-            await _clear_thinking()
-            status0 = await message.reply_text("جاري قياس المستودع بالأدوات…")
-            from lumen.engine.services.tool_runtime import execute_tool
-            ud0 = dict(context.user_data or {})
-            ud0["user_id"] = int(user.id) if user else 0
-            tr0 = execute_tool(
-                "repo_understand",
-                {
-                    "path": _path0,
-                    "url": str((_ar0 or {}).get("url") or ""),
-                    "text": _req0,
-                    "raw_text": _req0,
-                },
-                user_id=int(user.id) if user else 0,
-                user_data=ud0,
-            )
-            if context.user_data is not None and isinstance(ud0.get("active_repo"), dict):
-                context.user_data["active_repo"] = ud0["active_repo"]
-                if ud0.get("last_project_path"):
-                    context.user_data["last_project_path"] = ud0["last_project_path"]
-                try:
-                    _persist_session(user, context)
-                except Exception:
-                    pass
-            msg0 = (tr0.message or "").strip()
-            if re.search(r"(سطر|أسطر|اسطر|lines|loc|ملف|files)", _req0, re.I):
-                try:
-                    from lumen.engine.services.repo_understanding.repo_tools import run_tool
-                    st = run_tool("stats", _PathEarly(_path0))
-                    lg = run_tool("largest_files", _PathEarly(_path0), limit=10)
-                    facts = (
-                        f"إجمالي الملفات: {st.get('total_files')}\n"
-                        f"إجمالي الأسطر (نصي): {st.get('total_lines')}\n"
-                        f"أسطر الكود: {st.get('code_lines')}\n"
-                        f"حسب الامتداد: {st.get('files_by_extension')}\n"
-                        f"أسطر الكود حسب الامتداد: {st.get('code_lines_by_extension')}\n"
-                        "أكبر الملفات:\n"
-                        + "\n".join(
-                            f"• {x.get('path')}: {x.get('lines')} سطر"
-                            for x in (lg.get('by_lines') or lg.get('files') or [])[:10]
-                        )
-                    )
-                    if msg0 and "engine materials only" not in msg0.lower() and len(msg0) > 40:
-                        msg0 = facts + "\n\n" + msg0
-                    else:
-                        msg0 = facts
-                except Exception:
-                    logger.exception("stats overlay failed")
-            await status0.edit_text((msg0 or ("تم" if tr0.ok else "فشل"))[:4000])
-            return
-    except Exception:
-        logger.exception("early active_repo bind failed")
-
-    # ══════════════════════════════════════════════════════════════════
-    # STANDALONE CHAT REMOVED — engine / agents own every NL message.
-    # No translator_client.chat_request, no Gemini/Groq conversational layer.
-    # Routing: chat_router (capability) → tool_runtime / delegated routers
-    #          → multi-agent/Cline for generate/refine.
-    # ══════════════════════════════════════════════════════════════════
-    if (context.user_data or {}).get("force_generate_once"):
-        # Engine-direct generation already handled above when flag was set early.
-        # If we still reach here with the flag, keep engine_direct markers.
-        if context.user_data is not None:
-            context.user_data["translated_preferred_keys"] = []
-            context.user_data["translated_source"] = "engine_direct"
-        logger.info("engine-direct path (standalone chat layer permanently removed)")
+    # Drop legacy standalone-chat pending actions (never set by agents path)
+    if context.user_data is not None:
+        context.user_data.pop("pending_chat_action", None)
+        context.user_data.pop("force_generate_once", None)
 
     # Platform metering for NL turns (no LLM chat call)
     if not request.startswith("/"):
