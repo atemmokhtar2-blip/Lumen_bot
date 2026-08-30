@@ -54,17 +54,34 @@ def _apply_security_headers(resp: web.StreamResponse, request: web.Request) -> N
         "Content-Security-Policy",
         "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     )
-    proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower()
-    if proto == "https":
-        resp.headers.setdefault(
-            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+    # ROOT: HSTS always in production — do not depend on X-Forwarded-Proto
+    # (missing proxy header or SSL-strip must not drop HSTS).
+    try:
+        from lumen.platform.runtime_config import is_dev
+        _prod = not is_dev()
+    except Exception:
+        _prod = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower() == "https"
+    if _prod:
+        resp.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
         )
     resp.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
 
 
 @web.middleware
 async def security_headers_middleware(request: web.Request, handler):
-    """OWASP-aligned response headers on every response (incl. errors)."""
+    """OWASP headers + production HTTPS enforcement (redirect) and always-on HSTS."""
+    try:
+        from lumen.platform.runtime_config import is_dev
+        prod = not is_dev()
+    except Exception:
+        prod = False
+    if prod:
+        proto = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower()
+        if proto != "https":
+            # Force TLS — blocks cleartext credential capture after SSL-strip attempts
+            https_url = request.url.with_scheme("https")
+            raise web.HTTPPermanentRedirect(location=str(https_url))
     try:
         resp = await handler(request)
     except web.HTTPException as ex:
