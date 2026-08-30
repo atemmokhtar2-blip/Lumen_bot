@@ -28,6 +28,7 @@ import threading
 try:
     from lumen.platform.secrets_provider import (
         assert_critical_secrets_present,
+        assert_environ_scrubbed,
         install_secret_access_bridge,
         load_dotenv_if_dev,
         load_secrets,
@@ -36,6 +37,7 @@ try:
     load_secrets(only_missing=True)
     install_secret_access_bridge()
     assert_critical_secrets_present()
+    assert_environ_scrubbed()
 except Exception as _secrets_exc:
     import sys as _sys
     _sys.stderr.write("FATAL secrets boot: %s\n" % (_secrets_exc,))
