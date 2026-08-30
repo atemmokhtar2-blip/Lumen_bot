@@ -22,8 +22,8 @@ Tenant, Job, Invoice, **Balance**
 | Entry | Flow |
 |-------|------|
 | `POST /v1/tenants` | `handle_create_tenant` |
-| `require_tenant` | `handle_authenticate_tenant` + **`handle_enforce_api`** |
-| SSE tenant gate | **`handle_enforce_api`** |
+| `require_tenant` | `handle_authenticate_tenant` + **`handle_enforce_api`** (no TenantStore) |
+| SSE tenant gate | `handle_get_tenant` + **`handle_enforce_api`** (no TenantStore) |
 | white-label / rotate key | application handlers |
 | jobs get/list/cancel/pause/resume | application handlers |
 | balance read | `handle_get_balance` → `BillingGateway` |
