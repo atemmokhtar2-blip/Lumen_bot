@@ -114,6 +114,7 @@ def extract_bearer(request: web.Request) -> str:
 
 
 def require_tenant(request: web.Request) -> Tenant:
+    """Authenticate via application use-case; billing/metering stay infrastructure."""
     key = extract_bearer(request)
     if not key:
         try:
@@ -122,8 +123,19 @@ def require_tenant(request: web.Request) -> Tenant:
         except Exception:
             pass
         raise web.HTTPUnauthorized(text='{"error":"missing_api_key"}', content_type="application/json")
-    tenant = get_tenant_store().authenticate(key)
-    if not tenant:
+
+    # Application layer (domain port) — not direct store access
+    from lumen.application.handlers.tenant_handlers import handle_authenticate_tenant
+    from lumen.application.queries.authenticate_tenant import AuthenticateTenantQuery
+    from lumen.bootstrap import get_tenant_repository
+
+    try:
+        domain_tenant = handle_authenticate_tenant(
+            AuthenticateTenantQuery(api_key=key),
+            tenants=get_tenant_repository(),
+        )
+    except PermissionError as exc:
+        code = str(exc) or "invalid_api_key"
         try:
             from lumen.platform.security_events import client_ip, emit
             emit(
@@ -131,11 +143,18 @@ def require_tenant(request: web.Request) -> Tenant:
                 severity="warning",
                 ip=client_ip(request),
                 path=str(request.path),
-                detail={"key_prefix": (key[:8] + "…") if len(key) > 8 else "short"},
+                detail={"key_prefix": (key[:8] + "…") if len(key) > 8 else "short", "code": code},
             )
         except Exception:
             pass
-        raise web.HTTPUnauthorized(text='{"error":"invalid_api_key"}', content_type="application/json")
+        raise web.HTTPUnauthorized(
+            text='{"error":"invalid_api_key"}',
+            content_type="application/json",
+        ) from exc
+
+    # Prefer platform Tenant object for downstream BC (billing, ownership helpers)
+    tenant = get_tenant_store().get(domain_tenant.tenant_id) or domain_tenant
+
     ok, reason = get_billing().enforce_api(tenant.tenant_id)
     if not ok:
         raise web.HTTPTooManyRequests(
