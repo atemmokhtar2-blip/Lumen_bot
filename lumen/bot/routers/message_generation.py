@@ -300,6 +300,43 @@ async def execute_bot_generation(
                         )
                 except Exception:
                     logger.exception("chat_memory project fact failed")
+                # Register a durable project card (semantic memory) so the engine
+                # remembers this project's structure + UI elements for precise edits
+                # in later sessions ("remove the help button", "add a command"...).
+                try:
+                    from lumen.engine.services.semantic_memory.project_memory import (
+                        get_project_memory_store,
+                    )
+                    _pc_store = get_project_memory_store()
+                    _structure: dict = {}
+                    _ui_elements: dict = {}
+                    try:
+                        from lumen.engine.services.bot_inspector import inspect_bot_project
+                        _insp = inspect_bot_project(str(project_path))
+                        if _insp:
+                            _structure = {
+                                "entry_point": getattr(_insp, "entry_point", "main.py"),
+                                "files": list(getattr(_insp, "files", []) or [])[:30],
+                                "language": getattr(_insp, "language", ""),
+                            }
+                            _ui_elements = {
+                                "buttons": list(getattr(_insp, "commands", []) or []),
+                                "commands": list(getattr(_insp, "commands", []) or []),
+                            }
+                    except Exception:
+                        logger.debug("bot_inspector for project card failed", exc_info=True)
+                    _pc_store.register_project(
+                        user_id=uid,
+                        project_id=str(project_path),
+                        label=Path(str(project_path)).name,
+                        kind="generated",
+                        path=str(project_path),
+                        source_request=(gen_request or "")[:500],
+                        structure=_structure,
+                        ui_elements=_ui_elements,
+                    )
+                except Exception:
+                    logger.exception("project_memory register failed")
             _persist_session(user, context)
         except Exception:
             pass

@@ -616,7 +616,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             _cm = get_chat_memory()
             _uid = int(user.id) if user else 0
             if _uid:
-                _mem_ctx = _cm.context_for_llm(_uid)
+                _mem_ctx = _cm.context_for_llm(_uid, query=request)
                 chat_history = list(_mem_ctx.get("conversation_history") or [])
         except Exception:
             logger.exception("chat_memory load failed")
@@ -647,6 +647,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     context.user_data["last_project_path"] = _bot_path
         except Exception:
             logger.exception("bot inspection for chat failed")
+
+        # Semantic memory recall — durable per-user/project memory (Mem0-inspired).
+        # Injected BEFORE chat so the model acts with full continuity: it knows the
+        # user's preferences, prior decisions, and the active project's edit history.
+        _sem_uid = int(user.id) if user else 0
+        if _sem_uid:
+            try:
+                from lumen.engine.services.semantic_memory import (
+                    memory_context_for_llm, build_memory_context,
+                )
+                from lumen.engine.services.semantic_memory.project_memory import (
+                    get_project_memory_store,
+                )
+                _sem_pid = ""
+                _ar = (context.user_data or {}).get("active_repo") or {}
+                if isinstance(_ar, dict):
+                    _sem_pid = str(_ar.get("path") or "")
+                _sem_ctx = memory_context_for_llm(
+                    user_id=_sem_uid, user_message=request,
+                    project_id=_sem_pid, top_k=8,
+                )
+                if _sem_ctx.get("semantic_memory"):
+                    chat_context["semantic_memory"] = _sem_ctx["semantic_memory"]
+                    chat_context["semantic_memory_hits"] = _sem_ctx.get("semantic_memory_hits") or []
+                # project card context (structure + UI elements + edit history)
+                if _sem_pid:
+                    _pc_ctx = get_project_memory_store().context_for_engine(_sem_pid)
+                    if _pc_ctx:
+                        chat_context["project_memory"] = _pc_ctx
+            except Exception:
+                logger.exception("semantic_memory recall for chat failed")
         try:
             from lumen.engine.services.translator_client import chat_request
             chat_result = chat_request(request, chat_context)
@@ -691,6 +722,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data["chat_history"] = updated_history[-16:]
             except Exception:
                 pass
+
+        # Semantic memory ingestion (Mem0 Algorithm 1): extract durable facts
+        # from this exchange → ADD/UPDATE/DELETE/NOOP against the semantic store.
+        # Runs after the chat answer is available so the engine "remembers" each
+        # user across sessions without replaying the whole transcript.
+        if _sem_uid and isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
+            try:
+                from lumen.engine.services.semantic_memory import ingest_exchange
+                _ingest_pid = ""
+                _ar2 = (context.user_data or {}).get("active_repo") or {}
+                if isinstance(_ar2, dict):
+                    _ingest_pid = str(_ar2.get("path") or "")
+                _recent_summary = _mem_ctx.get("conversation_summary") or ""
+                ingest_exchange(
+                    user_id=_sem_uid,
+                    user_message=request,
+                    assistant_message=str(chat_result.get("answer") or ""),
+                    project_id=_ingest_pid,
+                    recent_summary=_recent_summary,
+                    recent_turns=chat_history[-6:],
+                )
+            except Exception:
+                logger.exception("semantic_memory ingest failed")
 
         _translated_generation_request = ""
         _translated_preferred_keys = []
@@ -823,6 +877,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                                 "url": _tr.data.get("url") or "",
                             }
                             context.user_data["last_project_path"] = _tr.data["path"]
+                        # Register a durable project card for cloned repos too,
+                        # so the engine remembers the clone for later edits.
+                        try:
+                            from lumen.engine.services.semantic_memory.project_memory import (
+                                get_project_memory_store,
+                            )
+                            from pathlib import Path as _PPath
+                            get_project_memory_store().register_project(
+                                user_id=int(user.id) if user else 0,
+                                project_id=str(_tr.data["path"]),
+                                label=_PPath(str(_tr.data["path"])).name,
+                                kind="clone",
+                                path=str(_tr.data["path"]),
+                                url=str(_tr.data.get("url") or "")[:300],
+                                source_request=request[:500],
+                            )
+                        except Exception:
+                            logger.exception("project_memory clone register failed")
                     if (not _tr.ok) and _tr.data.get("needs_auth") and context.user_data is not None:
                         if _action_name == "create_repo":
                             context.user_data["pending_create_repo"] = {

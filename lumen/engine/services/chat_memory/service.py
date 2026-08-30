@@ -265,8 +265,14 @@ class ChatMemory:
             "updated_at": row["updated_at"],
         }
 
-    def context_for_llm(self, user_id: int) -> dict[str, Any]:
-        """Payload to merge into chat SERVER_CONTEXT / conversation_history."""
+    def context_for_llm(self, user_id: int, *, query: str = "") -> dict[str, Any]:
+        """Payload to merge into chat SERVER_CONTEXT / conversation_history.
+
+        Unifies short-term conversation memory (recent turns + rolling summary)
+        with long-term semantic memory (durable facts about the user/projects)
+        so every chat request has full continuity — the engine "remembers" the
+        user across sessions without replaying the whole transcript.
+        """
         state = self.get_state(user_id)
         turns = self.recent_turns(user_id, limit=_RECENT_FOR_LLM)
         history = [
@@ -274,12 +280,33 @@ class ChatMemory:
             for t in turns
             if t.get("content")
         ]
-        return {
+        payload = {
             "conversation_history": history,
             "conversation_summary": state.get("summary") or "",
             "memory_facts": state.get("facts") or {},
             "memory_turn_count": state.get("turn_count") or 0,
         }
+        # Augment with long-term semantic memory (Mem0-inspired durable recall).
+        # Falls back gracefully if the semantic store is unavailable.
+        uid = int(user_id or 0)
+        if uid:
+            try:
+                from ..semantic_memory.retrieval import memory_context_for_llm
+                _q = (query or "").strip()
+                if not _q and history:
+                    _q = history[-1].get("content") or ""
+                if _q:
+                    _sem = memory_context_for_llm(
+                        user_id=uid, user_message=_q, top_k=8,
+                    )
+                    if _sem.get("semantic_memory"):
+                        payload["semantic_memory"] = _sem["semantic_memory"]
+                        payload["semantic_memory_hits"] = (
+                            _sem.get("semantic_memory_hits") or []
+                        )
+            except Exception:
+                logger.debug("semantic_memory augment in chat_memory failed", exc_info=True)
+        return payload
 
     def clear(self, user_id: int) -> None:
         uid = int(user_id)

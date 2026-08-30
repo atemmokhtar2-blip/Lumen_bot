@@ -94,6 +94,58 @@ def _score_entry(text: str, entry: dict[str, Any]) -> tuple[float, list[str]]:
     return score, signals
 
 
+# Edit-intent cues: the user wants to modify a prior project (buttons, commands,
+# keyboards, files). These pair with semantic matching against project memory so
+# the engine binds to the right project even without an explicit "السابق" cue.
+_EDIT_CUES = re.compile(
+    r"(?:شيل|احذف|امسح|ضيف|ضيف\s*زر|زر\s*جديد|اعمل\s*زر|امر|امر\s*جديد|"
+    r"كيبورد|ازرار|عدل|عدل\s*على|تعديل|ضيف\s*زرار|شيل\s*الزر|"
+    r"remove|add|button|command|keyboard|edit|modify|delete\s+the)",
+    re.I,
+)
+
+
+def _semantic_project_match(
+    user_id: int, text: str, candidate_paths: list[str],
+) -> tuple[str, float, list[str]]:
+    """Use the semantic memory store to match the user's edit message to a project.
+
+    Returns (best_project_path, score, signals). Uses project_note/decision
+    memories scoped per-project: the project whose stored memories best match
+    the user's message semantically wins. This is the real continuity engine —
+    "remove the help button" matches the project that has a project_note about
+    "help button" even with no lexical overlap.
+    """
+    uid = int(user_id or 0)
+    if not uid or not text or not candidate_paths:
+        return "", 0.0, []
+    try:
+        from ..semantic_memory.store import get_semantic_store
+        store = get_semantic_store()
+    except Exception:
+        return "", 0.0, []
+    best_path = ""
+    best_score = 0.0
+    signals: list[str] = []
+    for pid in candidate_paths:
+        try:
+            hits = store.semantic_search(
+                user_id=uid, query=text, project_id=pid,
+                kind="", top_k=3, min_score=0.30,
+            )
+        except Exception:
+            hits = []
+        if not hits:
+            continue
+        # use the top hit score for this project
+        top_rec, top_score = hits[0]
+        if top_score > best_score:
+            best_score = top_score
+            best_path = pid
+            signals.append(f"semantic_match:{top_rec.kind}:{top_score:.2f}")
+    return best_path, best_score, signals
+
+
 def resolve_context(
     user_id: int,
     text: str,
@@ -153,6 +205,37 @@ def resolve_context(
                 best_label = e.get("label") or e.get("id") or ""
                 best_preview = e.get("source_request_preview") or ""
                 best_signals = sigs
+
+    # Semantic matching (Mem0-inspired): for edit-intent messages ("remove the
+    # help button", "add a settings command") match the user's text against the
+    # per-project semantic memory store. This binds the engine to the correct
+    # project even when there is zero lexical overlap with the project label.
+    edit_cue = bool(_EDIT_CUES.search(text))
+    if edit_cue:
+        res.signals.append("edit_cue")
+        _candidate_paths = [
+            e.get("path") or "" for e in (projects + clones)
+            if e.get("path")
+        ]
+        if not _candidate_paths and last_path:
+            _candidate_paths = [last_path]
+        _sem_path, _sem_score, _sem_signals = _semantic_project_match(
+            uid, text, _candidate_paths,
+        )
+        if _sem_path and _sem_score >= 0.30:
+            # semantic match boosts confidence — it can override a weak lexical
+            # result because it reflects genuine memory continuity.
+            _sem_boost = _sem_score * 0.6
+            if _sem_boost > best_score:
+                best_path = _sem_path
+                best_kind = "clone" if "clones" in _sem_path else "generated"
+                best_label = Path(_sem_path).name
+                best_score = _sem_boost
+                best_signals = _sem_signals
+            else:
+                # augment existing best match with semantic signal
+                best_score = min(0.95, best_score + _sem_boost * 0.4)
+                best_signals.extend(_sem_signals)
 
     # If user signals prior work but no lexical match, use last_project from memory
     if prior_cue and best_score < 0.25 and last_path and Path(last_path).exists():
