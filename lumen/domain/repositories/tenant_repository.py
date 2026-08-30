@@ -1,7 +1,7 @@
 """Tenant persistence port."""
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from lumen.domain.entities.tenant import Tenant
 
@@ -21,6 +21,12 @@ class TenantRepository(Protocol):
         **fields: object,
     ) -> tuple[Tenant, str]:
         """Return (tenant, raw_api_key). raw key shown once."""
+        ...
+
+    def update_white_label(self, tenant_id: str, **fields: Any) -> Tenant | None: ...
+
+    def rotate_key(self, tenant_id: str) -> str | None:
+        """Return new raw API key once, or None if tenant missing."""
         ...
 
     def list_all(self) -> list[Tenant]: ...
