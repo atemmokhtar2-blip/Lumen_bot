@@ -1,7 +1,7 @@
-"""Telegram presentation adapter.
+"""Telegram presentation layer.
 
-Re-exports the live bot package so callers can depend on the interface layer
-while the implementation remains in lumen.bot during the migration.
+Maps Telegram updates ↔ application / engine_turn.
+Implementation remains in lumen.bot during migration.
 """
 from lumen.bot import (  # noqa: F401
     handle_message,
