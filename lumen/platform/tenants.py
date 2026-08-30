@@ -238,10 +238,16 @@ class TenantStore:
     """File-backed tenant registry — **dev only**. Production must use MongoUserStore."""
 
     def __init__(self, root: str | Path | None = None) -> None:
-        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-        if env not in {"dev", "development", "local", "test"}:
+        # ROOT: deploy platform signals override a mistaken ENVIRONMENT=dev
+        try:
+            from lumen.platform.runtime_config import is_dev
+            _allow = is_dev()
+        except Exception:
+            _allow = _is_dev_environment()
+        if not _allow:
             raise RuntimeError(
-                "File-backed TenantStore cannot be constructed outside ENVIRONMENT=dev|local|test. "
+                "File-backed TenantStore is forbidden outside verified local dev "
+                "(K8s/Railway/Render/Fly markers or FORCE_PRODUCTION force production). "
                 "Use DATABASE_URL / PostgresTenantStore."
             )
         base = Path(root or os.getenv("OUTPUT_DIR") or _cm_default_output_dir())
