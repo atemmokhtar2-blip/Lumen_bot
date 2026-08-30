@@ -149,3 +149,32 @@ def test_domain_has_no_framework_imports():
         text = path.read_text(encoding="utf-8")
         m = banned.search(text)
         assert not m, f"{path} has banned import: {m.group(0)}"
+
+
+def test_balance_and_billing_gates():
+    from lumen.domain.entities.balance import Balance
+    from lumen.infrastructure.persistence.memory_billing import InMemoryBillingGateway
+    from lumen.application.queries.get_balance import GetBalanceQuery
+    from lumen.application.queries.enforce_api import EnforceApiQuery
+    from lumen.application.queries.enforce_generation import EnforceGenerationQuery
+    from lumen.application.handlers.billing_handlers import (
+        handle_get_balance,
+        handle_enforce_api,
+        handle_enforce_generation,
+    )
+
+    b = Balance(tenant_id="t1", current=100, reserved=40)
+    assert b.available == 60
+    with pytest.raises(PermissionError):
+        b.ensure_available(61)
+
+    gw = InMemoryBillingGateway()
+    gw.seed("t1", current=50, reserved=10)
+    assert handle_get_balance(GetBalanceQuery(tenant_id="t1"), billing=gw).available == 40
+    handle_enforce_api(EnforceApiQuery(tenant_id="t1"), billing=gw)
+    gw.api_blocked.add("t1")
+    with pytest.raises(PermissionError):
+        handle_enforce_api(EnforceApiQuery(tenant_id="t1"), billing=gw)
+    gw.gen_blocked.add("t2")
+    with pytest.raises(PermissionError):
+        handle_enforce_generation(EnforceGenerationQuery(tenant_id="t2"), billing=gw)
