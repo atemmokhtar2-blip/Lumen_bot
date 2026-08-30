@@ -30,15 +30,22 @@ def test_handle_user_turn_generate_bot():
     }
 
 
-def test_handle_user_turn_help_when_no_repo():
+def test_handle_user_turn_no_static_capabilities_menu():
+    """Must never return the old static capabilities bullet list."""
+    from lumen.engine.services.multi_agent import engine_turn as et
+    # Unit: static helper is gone
+    assert not hasattr(et, "_capabilities_help")
+    assert hasattr(et, "_agent_llm_decide")
+
+def test_handle_user_turn_soft_intent_uses_agent_llm_path():
+    """Soft intent path calls agent LLM (or honest no_llm_key) — never the menu."""
     from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
 
     r = handle_user_turn("ازيك", user_id=7)
-    assert r.ok is True
-    assert r.action in {"help", ""}
-    assert "المحرك" in r.reply or "بوت" in r.reply
-    # Must NOT pretend a conversational chat answered
-    assert r.tool in {"chat_or_other", "help", ""}
+    # Either agent_reply / tool / generate, or honest key error — never the menu header
+    assert "اطلب تنفيذ أحد الإجراءات" not in (r.reply or "")
+    assert "• توليد بوت" not in (r.reply or "")
+    assert r.action != "help" or "GROQ" in (r.reply or "") or "مفتاح" in (r.reply or "")
 
 
 def test_handle_user_turn_host_status_routes_to_tool():

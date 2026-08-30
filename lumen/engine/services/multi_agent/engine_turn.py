@@ -74,33 +74,104 @@ def _active_repo_path(user_data: dict[str, Any] | None) -> str:
     return ""
 
 
-def _capabilities_help() -> str:
+def _llm_available() -> bool:
     try:
-        from lumen.engine.services.chat_router import get_router
-        router = get_router()
-        caps = list(router.list_capabilities())
-        if caps:
-            lines = ["المحرك (الوكلاء) جاهز. اطلب تنفيذ أحد الإجراءات:"]
-            for c in sorted(caps, key=lambda x: -int(getattr(x, "priority", 0) or 0))[:16]:
-                title = getattr(c, "title_ar", None) or getattr(c, "id", "")
-                desc = getattr(c, "description_ar", "") or ""
-                if title:
-                    lines.append(f"• {title}" + (f" — {desc}" if desc else ""))
-            lines.append(
-                "\nأمثلة:\n"
-                "• عايز بوت فيه /start و /help\n"
-                "• اسحب المستودع https://github.com/...\n"
-                "• افهم المستودع / حالة الاستضافة"
-            )
-            return "\n".join(lines)
+        from lumen.engine.services.cline_runtime.model_router import select_model
+        choice = select_model(task="plan")
+        return bool(choice and choice.provider and choice.provider != "none" and choice.key_present())
     except Exception:
-        logger.exception("capabilities help failed")
-    return (
-        "المحرك جاهز. أرسل:\n"
-        "• وصف بوت للتوليد (مثال: بوت فيه /start و /help)\n"
-        "• اسحب مستودع / بوش / استضافة\n"
-        "• أو سؤال عن المستودع النشط"
+        return False
+
+
+def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
+    """One agent brain step via model_router (GROQ_API_KEYS / GEMINI / …).
+
+    Returns dict: tool, params, reply, provider, error.
+    Never invents a static capabilities menu.
+    """
+    try:
+        from lumen.engine.services.cline_runtime.model_router import select_model
+        from lumen.engine.services.cline_runtime import agent_brain
+        from lumen.engine.services.tool_runtime.registry import list_tool_names, tool_catalog_for_prompt
+    except Exception as exc:
+        return {"tool": "", "params": {}, "reply": "", "error": f"import:{type(exc).__name__}"}
+
+    choice = select_model(task="plan")
+    if not choice or choice.provider == "none" or not choice.key_present():
+        return {
+            "tool": "",
+            "params": {},
+            "reply": "",
+            "error": "no_llm_key",
+            "provider": getattr(choice, "provider", ""),
+        }
+
+    catalog = ""
+    try:
+        catalog = tool_catalog_for_prompt()
+    except Exception:
+        catalog = ", ".join(list_tool_names())
+
+    system = (
+        "You are the Lumen engine agent. You own the user turn.\n"
+        "Pick at most ONE tool from the catalog and fill params, OR answer briefly in Arabic if no tool fits.\n"
+        "Never invent success. Never list a menu of all capabilities.\n"
+        "JSON only: {\"tool\": \"name_or_empty\", \"params\": {}, \"reply\": \"arabic text\"}\n"
+        f"Tools:\n{catalog}\n"
+        + (f"Active repo path: {repo_path}\n" if repo_path else "")
     )
+    user = (text or "")[:4000]
+    provider = choice.provider
+    raw = ""
+    try:
+        if provider == "groq":
+            raw = agent_brain._call_groq(system, user, choice.model_id)
+        elif provider == "gemini":
+            raw = agent_brain._call_gemini(system, user, choice.model_id)
+        elif provider == "qwen":
+            raw = agent_brain._call_qwen(system, user, choice.model_id, choice.base_url)
+        elif provider == "xai":
+            raw = agent_brain._call_xai(system, user, choice.model_id)
+        else:
+            # Prefer groq when auto leftover
+            try:
+                raw = agent_brain._call_groq(system, user, choice.model_id)
+                provider = "groq"
+            except Exception:
+                raw = agent_brain._call_gemini(system, user, choice.model_id)
+                provider = "gemini"
+    except Exception as exc:
+        logger.exception("agent llm call failed provider=%s", provider)
+        return {
+            "tool": "",
+            "params": {},
+            "reply": "",
+            "error": f"llm:{type(exc).__name__}",
+            "provider": provider,
+        }
+
+    obj = agent_brain._extract_json_object(raw) or {}
+    tool = str(obj.get("tool") or obj.get("tool_name") or obj.get("action") or "").strip()
+    params = obj.get("params") or obj.get("args") or {}
+    if not isinstance(params, dict):
+        params = {}
+    reply = str(obj.get("reply") or obj.get("summary") or obj.get("message") or "").strip()
+    known = set(list_tool_names()) | {"generate_bot", "refine_bot"}
+    if tool and tool not in known:
+        # treat unknown tool name as reply text
+        if not reply:
+            reply = tool
+        tool = ""
+    if not reply and not tool and raw:
+        reply = str(raw).strip()[:2000]
+    return {
+        "tool": tool,
+        "params": params,
+        "reply": reply[:4000],
+        "provider": provider,
+        "error": "",
+        "raw": str(raw)[:500],
+    }
 
 
 def handle_user_turn(
@@ -175,22 +246,75 @@ def handle_user_turn(
         state.capability_id = "repo_understand"
         state.user_intent = "repo_understand"
 
-    # 4) No tool and no repo → capabilities from agent registry surface
+    # 4) Soft intent → agent LLM (GROQ_API_KEYS / GEMINI via model_router) then execute
     if tool in {"chat_or_other", ""}:
-        help_text = _capabilities_help()
-        state.final_message = help_text
-        try:
-            state.transition(AgentStatus.DELIVERED, role=AgentRole.ROUTER, force=True)
-        except Exception:
-            state.status = AgentStatus.DELIVERED.value
-        return EngineTurnResult(
-            ok=True,
-            reply=help_text,
-            action="help",
-            state=state,
-            tool="chat_or_other",
-            capability_id=cap or "help",
-        )
+        decision = _agent_llm_decide(text, repo_path=repo_path)
+        if decision.get("error") == "no_llm_key":
+            msg = (
+                "المحرك لا يجد مفتاح LLM على السيرفر.\n"
+                "أضف GROQ_API_KEYS (أو GROQ_API_KEY) في متغيرات الاستضافة ثم أعد تشغيل الخدمة."
+            )
+            state.final_message = msg
+            return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
+        if decision.get("error"):
+            msg = f"فشل عقل الوكيل ({decision.get('provider') or '?'}): {decision['error']}"
+            state.final_message = msg
+            return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
+
+        llm_tool = str(decision.get("tool") or "").strip()
+        llm_params = dict(decision.get("params") or {})
+        llm_reply = str(decision.get("reply") or "").strip()
+        state.extensions["agent_llm"] = {
+            "provider": decision.get("provider"),
+            "tool": llm_tool,
+        }
+
+        if llm_tool in _GENERATE_CAPS:
+            action = "refine" if llm_tool == "refine_bot" else "generate"
+            return EngineTurnResult(
+                ok=True,
+                reply=llm_reply,
+                action=action,
+                state=state,
+                tool=llm_tool,
+                capability_id=llm_tool,
+                generate_request=text,
+                user_data_updates={
+                    "force_generate_once": True,
+                    "translated_source": "engine_turn_llm",
+                    "last_bot_request": text[:2000],
+                    "multi_agent_state_id": state.state_id,
+                },
+            )
+
+        if llm_tool:
+            tool = llm_tool
+            cap = llm_tool
+            params = dict(llm_params)
+            params.setdefault("text", text)
+            params.setdefault("raw_text", text)
+            if repo_path:
+                params.setdefault("path", repo_path)
+            state.capability_id = tool
+            state.user_intent = tool
+            # fall through to execute_tool_gated below
+        else:
+            # Agent answered without a tool — still agent brain, not static menu
+            if not llm_reply:
+                llm_reply = "لم أستطع تحديد إجراء. اكتب الطلب بشكل أوضح (توليد بوت / سحب مستودع / استضافة)."
+            state.final_message = llm_reply
+            try:
+                state.transition(AgentStatus.DELIVERED, role=AgentRole.ROUTER, force=True)
+            except Exception:
+                state.status = AgentStatus.DELIVERED.value
+            return EngineTurnResult(
+                ok=True,
+                reply=llm_reply[:4000],
+                action="agent_reply",
+                state=state,
+                tool="",
+                capability_id=cap or "agent_llm",
+            )
 
     # 5) Host / git / repo tools → execute_tool_gated (HITL when required)
     state.route_params = params
