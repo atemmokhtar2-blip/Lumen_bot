@@ -17,17 +17,16 @@ infrastructure/  (adapters implement domain ports)
 
 | Entry | Flow |
 |-------|------|
-| `POST /v1/tenants` | route → `handle_create_tenant` → `TenantRepository` |
-| `require_tenant` (API auth) | `handle_authenticate_tenant` → `TenantRepository` |
+| `POST /v1/tenants` | `handle_create_tenant` |
+| `require_tenant` | `handle_authenticate_tenant` |
+| white-label update | `handle_update_white_label` |
+| rotate API key | `handle_rotate_api_key` |
 | `GET /v1/jobs/{id}` | `handle_get_job` (ownership in application) |
 | `GET /v1/jobs` | `JobRepository.list_for_tenant` |
+| cancel / pause / resume job | `handle_cancel_job` / `handle_pause_job` / `handle_resume_job` |
 
 ## Composition
 
 `lumen.bootstrap` wires `PlatformTenantRepository` / `PlatformJobRepository`.
 
-## Migration
-
-`lumen.bot`, `lumen.api`, `lumen.platform`, `lumen.engine` remain importable.
-Mutating job controls (cancel/pause/steer) and white-label update still touch
-platform services until dedicated commands are added.
+SSE stream + steer still use infrastructure job runner directly (long-lived transport concerns).
