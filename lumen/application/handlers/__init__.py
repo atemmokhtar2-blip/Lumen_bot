@@ -12,6 +12,11 @@ from lumen.application.handlers.job_handlers import (
     handle_pause_job,
     handle_resume_job,
 )
+from lumen.application.handlers.billing_handlers import (
+    handle_get_balance,
+    handle_enforce_api,
+    handle_enforce_generation,
+)
 
 __all__ = [
     "handle_create_tenant",
@@ -24,4 +29,7 @@ __all__ = [
     "handle_cancel_job",
     "handle_pause_job",
     "handle_resume_job",
+    "handle_get_balance",
+    "handle_enforce_api",
+    "handle_enforce_generation",
 ]
