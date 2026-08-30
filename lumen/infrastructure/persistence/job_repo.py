@@ -64,3 +64,19 @@ class PlatformJobRepository:
             if d is not None:
                 out.append(d)
         return out
+
+    def cancel(self, job_id: str, *, tenant_id: str) -> Job | None:
+        from lumen.platform.jobs import get_job_runner
+        updated = get_job_runner().cancel(job_id, tenant_id=tenant_id)
+        return _to_domain(updated)
+
+    def pause(self, job_id: str, *, tenant_id: str) -> Job | None:
+        from lumen.platform.jobs import get_job_runner
+        updated = get_job_runner().pause(job_id, tenant_id=tenant_id)
+        return _to_domain(updated)
+
+    def resume(self, job_id: str, *, tenant_id: str) -> Job | None:
+        from lumen.platform.jobs import get_job_runner
+        updated = get_job_runner().resume(job_id, tenant_id=tenant_id)
+        return _to_domain(updated)
+
