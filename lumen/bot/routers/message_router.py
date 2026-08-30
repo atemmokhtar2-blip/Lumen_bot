@@ -393,7 +393,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # ══════════════════════════════════════════════════════════════════
     await _clear_thinking()
     try:
-        from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
+        from lumen.infrastructure.ai import handle_user_turn
         turn = handle_user_turn(
             request,
             user_id=uid,
