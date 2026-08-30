@@ -353,6 +353,9 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
     if remote is None:
         configured = _provider_configured()
         if is_production() and _required():
+            # ROOT: production MUST use a managed secret store.
+            # Platform-injected environ is NOT enough unless explicitly opted in,
+            # and even then values are copied to memory and scrubbed from os.environ.
             if configured:
                 raise RuntimeError(
                     "secrets_required_but_provider_failed:" + ",".join(configured)
@@ -360,9 +363,12 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
             if not _allow_platform_env_fallback():
                 raise RuntimeError(
                     "secrets_provider_required_in_production:"
-                    "set DOPPLER_* or VAULT_* or AWS_SECRET_NAME or GCP_SECRET_NAME "
-                    "(or SECRETS_ALLOW_PLATFORM_ENV=1 if host injects secrets)"
+                    "configure DOPPLER_TOKEN+PROJECT+CONFIG or VAULT_ADDR+TOKEN "
+                    "or AWS_SECRET_NAME or GCP_SECRET_NAME "
+                    "(filesystem .env is disabled; os.environ is not a secret store)"
                 )
+            if not env_snapshot:
+                raise RuntimeError("secrets_empty_platform_env")
             source = "platform_env"
             remote = env_snapshot
         else:
@@ -408,7 +414,17 @@ def load_secrets_into_environ(*, only_missing: bool = True) -> dict[str, Any]:
     return load_secrets(only_missing=only_missing)
 
 
+def assert_environ_scrubbed() -> None:
+    """Fail if managed secrets still present in os.environ (production)."""
+    if not is_production():
+        return
+    leaked = [k for k in _MANAGED_KEYS if (os.environ.get(k) or "").strip()]
+    if leaked:
+        raise RuntimeError("secrets_still_in_environ:" + ",".join(leaked))
+
+
 def assert_critical_secrets_present() -> None:
+
     if not is_production() or not _required():
         return
     missing: list[str] = []
