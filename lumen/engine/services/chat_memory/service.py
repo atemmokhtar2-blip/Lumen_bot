@@ -6,7 +6,7 @@ calls would forget the thread. This store keeps:
   - rolling Arabic/English summary of older turns
   - sticky facts (last bot request, pending action, plan snapshot)
 
-Loaded into every chat_request SERVER_CONTEXT so any key continues the story.
+Loaded into engine / agent context so continuity survives key failover + restart.
 """
 from __future__ import annotations
 

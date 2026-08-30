@@ -49,7 +49,7 @@ BuildIR
 
 ## Tools
 
-`lumen/engine/services/tool_runtime`: chat/LLM may **select** a tool; engines **execute**.
+`lumen/engine/services/tool_runtime`: capability router (`chat_router`) selects; engines **execute**. Standalone conversational chat layer removed — multi-agent/Cline owns generation and tool outcomes.
 
 Catalog includes: `clone_repo`, `create_repo`, `git_push`, `git_pull`, `repo_inspect`, `repo_understand`, `repo_modify`, `generate_bot`, `refine_bot`, `host_*`.
 

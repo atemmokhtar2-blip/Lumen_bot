@@ -338,7 +338,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data["force_generate_once"] = True
             logger.info("Start-intent marker forced generate-now path")
 
-    # Confirm a sensitive action previously planned by the standalone chat model.
+    # Confirm a sensitive action previously planned (legacy pending_chat_action / HITL).
     _pending_chat_action = (context.user_data or {}).get("pending_chat_action") if context.user_data else None
     _confirm_now = _is_confirm_phrase(request)
     if _pending_chat_action and _confirm_now:
@@ -538,507 +538,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         logger.exception("early active_repo bind failed")
 
-    _skip_chat_for_generate = bool(
-        (context.user_data or {}).get("force_generate_once")
-    )
-    if _skip_chat_for_generate:
-        # User confirmed generation — skip Gemini entirely (slow / failing).
-        # Engine-direct: raw user text goes to multi-agent/Cline. No translate/bridge.
-        logger.info("Skipping chat layer; force_generate_once active")
+    # ══════════════════════════════════════════════════════════════════
+    # STANDALONE CHAT REMOVED — engine / agents own every NL message.
+    # No translator_client.chat_request, no Gemini/Groq conversational layer.
+    # Routing: chat_router (capability) → tool_runtime / delegated routers
+    #          → multi-agent/Cline for generate/refine.
+    # ══════════════════════════════════════════════════════════════════
+    if (context.user_data or {}).get("force_generate_once"):
+        # Engine-direct generation already handled above when flag was set early.
+        # If we still reach here with the flag, keep engine_direct markers.
         if context.user_data is not None:
             context.user_data["translated_preferred_keys"] = []
             context.user_data["translated_source"] = "engine_direct"
-        try:
-            await message.reply_text("جاري تجهيز البوت الآن…")
-        except Exception:
-            pass
+        logger.info("engine-direct path (standalone chat layer permanently removed)")
 
-    if not request.startswith("/") and not _skip_chat_for_generate:
-        # Every natural-language message goes to the standalone chat model first.
-        # Keyword detection is only used to choose an outage message; it never
-        # decides whether the model gets the message.
-        _state_question = any(
-            token in request.lower()
-            for token in (
-                "خطة", "الباقة", "اشتراكي", "رسالة", "رسائل", "حرف", "حروف",
-                "توليد", "توليدات", "استهلاك", "استخدمت", "المتبقي", "باقي",
-                "plan", "subscription", "message", "messages", "character", "usage",
-                "remaining", "quota",
-            )
-        )
-        telegram_user_id = int(user.id) if user else 0
-        # Context is best-effort. A PostgreSQL/metering failure must not prevent
-        # Gemini from answering ordinary chat with an explicit data-unavailable
-        # context; the model must never receive invented plan or usage facts.
-        live_context = {
-            "identity_known": False,
-            "telegram_user_id": telegram_user_id,
-            "data_available": False,
-            "reason": "server_context_unavailable",
-        }
+    # Platform metering for NL turns (no LLM chat call)
+    if not request.startswith("/"):
         try:
             from lumen.platform.metering import get_metering
             from lumen.platform.tenants import get_tenant_store
-
+            telegram_user_id = int(user.id) if user else 0
             tenant = get_tenant_store().get_by_telegram(telegram_user_id) if telegram_user_id else None
             if tenant is not None:
                 get_metering().record(
                     str(tenant.tenant_id),
                     messages=1,
                     characters=len(request),
-                    event="chat_message",
+                    event="engine_message",
                 )
         except Exception:
-            logger.exception("live model metering unavailable; continuing with chat")
+            logger.exception("engine message metering unavailable; continuing")
 
-        try:
-            from ..live_user_context import build_live_user_context
-            live_context = build_live_user_context(telegram_user_id)
-        except Exception:
-            logger.exception("live model context unavailable; using safe context")
-
-        _active_repo = (context.user_data or {}).get("active_repo") if context.user_data else None
-        if isinstance(_active_repo, dict):
-            live_context["active_repo"] = {
-                "path": str(_active_repo.get("path") or ""),
-                "url": str(_active_repo.get("url") or ""),
-                "facts": _active_repo.get("facts") or (_active_repo.get("dossier") or {}).get("facts") or {},
-                "key_file_names": (_active_repo.get("dossier") or {}).get("key_file_names")
-                    or list((_active_repo.get("dossier") or {}).get("key_files") or [])[:20],
-                "bound": True,
-            }
-
-        # Durable chat memory (survives key failover + worker restart)
-        chat_history = []
-        _mem_ctx: dict = {}
+        # Durable memory context for agents (not for a standalone chat model)
         try:
             from lumen.engine.services.chat_memory import get_chat_memory
-            _cm = get_chat_memory()
             _uid = int(user.id) if user else 0
             if _uid:
-                _mem_ctx = _cm.context_for_llm(_uid, query=request)
-                chat_history = list(_mem_ctx.get("conversation_history") or [])
+                get_chat_memory().append(_uid, "user", request, provider="engine")
         except Exception:
-            logger.exception("chat_memory load failed")
-            _mem_ctx = {}
-        if not chat_history and context.user_data is not None:
-            try:
-                chat_history = list(context.user_data.get("chat_history") or [])[-16:]
-            except Exception:
-                chat_history = []
-        chat_context = dict(live_context)
-        chat_context["conversation_history"] = chat_history
-        if _mem_ctx.get("conversation_summary"):
-            chat_context["conversation_summary"] = _mem_ctx["conversation_summary"]
-        if _mem_ctx.get("memory_facts"):
-            chat_context["memory_facts"] = _mem_ctx["memory_facts"]
-        # Active bot inspection so chat (Groq) can discuss real commands/weaknesses
-        try:
-            from lumen.engine.services.bot_inspector import inspect_bot_project
-            from lumen.engine.services.bot_inspector.service import resolve_user_bot_path
-            _bot_path = resolve_user_bot_path(
-                user_data=dict(context.user_data or {}),
-            )
-            if _bot_path:
-                _insp = inspect_bot_project(_bot_path)
-                chat_context["active_bot"] = _insp.to_dict()
-                chat_context["active_bot_brief"] = _insp.chat_brief()
-                if context.user_data is not None:
-                    context.user_data["last_project_path"] = _bot_path
-        except Exception:
-            logger.exception("bot inspection for chat failed")
+            logger.exception("chat_memory user append failed")
 
-        # Semantic memory recall — durable per-user/project memory (Mem0-inspired).
-        # Injected BEFORE chat so the model acts with full continuity: it knows the
-        # user's preferences, prior decisions, and the active project's edit history.
-        _sem_uid = int(user.id) if user else 0
-        if _sem_uid:
-            try:
-                from lumen.engine.services.semantic_memory import (
-                    memory_context_for_llm, build_memory_context,
-                )
-                from lumen.engine.services.semantic_memory.project_memory import (
-                    get_project_memory_store,
-                )
-                _sem_pid = ""
-                _ar = (context.user_data or {}).get("active_repo") or {}
-                if isinstance(_ar, dict):
-                    _sem_pid = str(_ar.get("path") or "")
-                _sem_ctx = memory_context_for_llm(
-                    user_id=_sem_uid, user_message=request,
-                    project_id=_sem_pid, top_k=8,
-                )
-                if _sem_ctx.get("semantic_memory"):
-                    chat_context["semantic_memory"] = _sem_ctx["semantic_memory"]
-                    chat_context["semantic_memory_hits"] = _sem_ctx.get("semantic_memory_hits") or []
-                # project card context (structure + UI elements + edit history)
-                if _sem_pid:
-                    _pc_ctx = get_project_memory_store().context_for_engine(_sem_pid)
-                    if _pc_ctx:
-                        chat_context["project_memory"] = _pc_ctx
-            except Exception:
-                logger.exception("semantic_memory recall for chat failed")
+        # Semantic memory ingest of user turn only — agent replies are recorded
+        # by tool/generation paths when they produce outcomes.
         try:
-            from lumen.engine.services.translator_client import chat_request
-            chat_result = chat_request(request, chat_context)
-        except Exception:
-            logger.exception("live model chat unavailable; continuing generation path")
-            chat_result = None
-
-        # Persist turns to durable memory + in-process user_data
-        _provider = ""
-        if isinstance(chat_result, dict):
-            _provider = str(chat_result.get("provider") or chat_result.get("model") or "")[:40]
-        try:
-            from lumen.engine.services.chat_memory import get_chat_memory
-            _cm = get_chat_memory()
-            _uid = int(user.id) if user else 0
-            if _uid:
-                _cm.append(_uid, "user", request, provider=_provider)
-                if isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
-                    _cm.append(
-                        _uid,
-                        "assistant",
-                        str(chat_result["answer"]),
-                        provider=_provider,
-                        meta={"action": (chat_result.get("action") or {}).get("name")},
-                    )
-                facts = {}
-                if (context.user_data or {}).get("last_bot_request"):
-                    facts["last_bot_request"] = context.user_data.get("last_bot_request")
-                if (context.user_data or {}).get("pending_chat_action"):
-                    facts["pending_chat_action"] = context.user_data.get("pending_chat_action")
-                if live_context.get("plan"):
-                    facts["plan"] = live_context.get("plan")
-                if facts:
-                    _cm.set_facts(_uid, **facts)
-        except Exception:
-            logger.exception("chat_memory persist failed")
-        if context.user_data is not None:
-            try:
-                updated_history = chat_history + [{"role": "user", "content": request}]
-                if isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
-                    updated_history.append({"role": "assistant", "content": str(chat_result["answer"])})
-                context.user_data["chat_history"] = updated_history[-16:]
-            except Exception:
-                pass
-
-        # Semantic memory ingestion (Mem0 Algorithm 1): extract durable facts
-        # from this exchange → ADD/UPDATE/DELETE/NOOP against the semantic store.
-        # Runs after the chat answer is available so the engine "remembers" each
-        # user across sessions without replaying the whole transcript.
-        if _sem_uid and isinstance(chat_result, dict) and str(chat_result.get("answer") or "").strip():
-            try:
+            _sem_uid = int(user.id) if user else 0
+            if _sem_uid:
                 from lumen.engine.services.semantic_memory import ingest_exchange
-                _ingest_pid = ""
-                _ar2 = (context.user_data or {}).get("active_repo") or {}
-                if isinstance(_ar2, dict):
-                    _ingest_pid = str(_ar2.get("path") or "")
-                _recent_summary = _mem_ctx.get("conversation_summary") or ""
+                _ar = (context.user_data or {}).get("active_repo") or {}
+                _sem_pid = str(_ar.get("path") or "") if isinstance(_ar, dict) else ""
+                # user-only; assistant side filled when tools answer
                 ingest_exchange(
                     user_id=_sem_uid,
                     user_message=request,
-                    assistant_message=str(chat_result.get("answer") or ""),
-                    project_id=_ingest_pid,
-                    recent_summary=_recent_summary,
-                    recent_turns=chat_history[-6:],
+                    assistant_message="",
+                    project_id=_sem_pid,
+                    recent_summary="",
+                    recent_turns=[],
                 )
-            except Exception:
-                logger.exception("semantic_memory ingest failed")
-
-        _translated_generation_request = ""
-        _translated_preferred_keys = []
-        _translation_source = ""
-        if isinstance(chat_result, dict):
-            try:
-                # Engine-direct policy: do not use Gemini/Qwen translation layers
-                # to produce generation contracts. Multi-agent/Cline owns understanding.
-                _translation = chat_result.get("translation")
-                _action = chat_result.get("action") if isinstance(chat_result.get("action"), dict) else {}
-                if str(_action.get("name") or "") in {"generate_bot", "refine_bot"}:
-                    # Signal force-generate with raw user text; engine handles the rest.
-                    if context.user_data is not None:
-                        context.user_data["force_generate_once"] = True
-                        context.user_data["translated_source"] = "engine_direct_from_chat_action"
-                    _translated_generation_request = request
-                    _translation_source = "engine_direct"
-                    logger.info("Chat action generate_bot → engine-direct (no translate layer)")
-            except Exception:
-                logger.exception("engine-direct generation handoff failed")
-
-        if _translated_generation_request:
-            request = _translated_generation_request
-            # refine_bot: merge structural features from the user's current bot
-            try:
-                _act = (chat_result or {}).get("action") if isinstance(chat_result, dict) else None
-                _an = str((_act or {}).get("name") or "") if isinstance(_act, dict) else ""
-                if _an == "refine_bot" or "refine" in (_translation_source or ""):
-                    from lumen.engine.services.bot_inspector import inspect_bot_project
-                    from lumen.engine.services.bot_inspector.service import resolve_user_bot_path
-                    _bp = resolve_user_bot_path(user_data=dict(context.user_data or {}))
-                    if _bp:
-                        _ins = inspect_bot_project(_bp)
-                        prior = list(_ins.features_hint or [])
-                        # map commands → features via command_map when features_hint empty
-                        if not prior and _ins.commands:
-                            try:
-                                from lumen.engine.services.capability_detection.catalog import feature_for_command
-                                for c in _ins.commands:
-                                    f = feature_for_command(c)
-                                    if f and f not in prior:
-                                        prior.append(f)
-                            except Exception:
-                                pass
-                        merged = []
-                        for k in list(prior) + list(_translated_preferred_keys or []):
-                            if k and k not in merged:
-                                merged.append(k)
-                        if merged:
-                            _translated_preferred_keys = merged
-                        # ensure request mentions prior bot refine
-                        if "refine" not in request.lower() and "تعديل" not in request:
-                            request = (
-                                f"تعديل البوت الحالي مع الاحتفاظ بالميزات: "
-                                f"{', '.join(prior[:20])}. التغيير المطلوب: {request}"
-                            )
-            except Exception:
-                logger.exception("refine_bot feature merge failed")
-            if context.user_data is not None:
-                context.user_data["translated_spec_request"] = request
-                context.user_data["translated_preferred_keys"] = _translated_preferred_keys
-                context.user_data["translated_source"] = _translation_source
-                context.user_data["force_generate_once"] = True
-
-        _force_generate = bool((context.user_data or {}).get("force_generate_once"))
-        _answer = str((chat_result or {}).get("answer") or "").strip() if isinstance(chat_result, dict) else ""
-        _action = (chat_result or {}).get("action") if isinstance(chat_result, dict) else None
-        _action_name = str((_action or {}).get("name") or "") if isinstance(_action, dict) else ""
-        if isinstance(_action, dict) and _action_name in {"generate_bot", "refine_bot"} and not _action.get("requires_confirmation"):
-            _force_generate = True
-        # Gemini often *says* it will generate without setting action=generate_bot.
-        if _answer and re.search(
-            r"سأقوم.*?(?:توليد|ببناء|بتجهيز)|ابدأ(?: الآن)? في توليد|بدء التوليد|start(?:ing)? generat|will (?:now )?generat",
-            _answer,
-            re.I,
-        ):
-            _force_generate = True
-
-        if _force_generate and not _translated_generation_request:
-            # Engine-direct: use prior bot request or current text. No translate/bridge.
-            prior = _prior_bot_request(context.user_data if context.user_data is not None else None)
-            gen_src = prior if prior else (request if _looks_like_generation_request(request) else "")
-            if gen_src:
-                request = gen_src
-                if context.user_data is not None:
-                    context.user_data["translated_source"] = "engine_direct"
-                _translated_generation_request = gen_src
-                logger.info("Force-generate engine-direct (no translate/bridge) len=%s", len(gen_src))
-
-        # Chat answers that are NOT a generate-now signal stay as chat only.
-        if (
-            not _translated_generation_request
-            and not _force_generate
-            and chat_result
-            and _answer
-        ):
-            if isinstance(_action, dict):
-                if _action.get("requires_confirmation"):
-                    if context.user_data is not None:
-                        # Prefer last_bot_request so later "ابدأ" still has the real spec.
-                        raw_for_pending = _prior_bot_request(context.user_data) or request
-                        context.user_data["pending_chat_action"] = {
-                            "name": _action_name or "generate_bot",
-                            "raw_text": raw_for_pending,
-                        }
-                elif _action_name == "host_status":
-                    from .hosting_router import try_handle_hosting
-                    if await try_handle_hosting(update, context, request, user, message):
-                        return
-            # Tool path: Groq only selects; engines execute
-            if isinstance(_action, dict) and _action_name in {
-                "clone_repo", "create_repo", "git_push", "git_pull", "repo_inspect", "repo_understand", "repo_modify",
-            }:
-                await _clear_thinking()
-                try:
-                    from lumen.engine.services.tool_runtime import execute_tool
-                    _params = dict(_action.get("params") or {})
-                    if _action_name == "clone_repo" and not _params.get("url"):
-                        _params["text"] = request
-                    _tr = execute_tool(
-                        _action_name,
-                        _params,
-                        user_id=int(user.id) if user else 0,
-                        user_data=dict(context.user_data or {}),
-                    )
-                    if _tr.ok and _action_name in {"clone_repo", "create_repo"} and _tr.data.get("path"):
-                        if context.user_data is not None:
-                            context.user_data["active_repo"] = {
-                                "path": _tr.data["path"],
-                                "url": _tr.data.get("url") or "",
-                            }
-                            context.user_data["last_project_path"] = _tr.data["path"]
-                        # Register a durable project card for cloned repos too,
-                        # so the engine remembers the clone for later edits.
-                        try:
-                            from lumen.engine.services.semantic_memory.project_memory import (
-                                get_project_memory_store,
-                            )
-                            from pathlib import Path as _PPath
-                            get_project_memory_store().register_project(
-                                user_id=int(user.id) if user else 0,
-                                project_id=str(_tr.data["path"]),
-                                label=_PPath(str(_tr.data["path"])).name,
-                                kind="clone",
-                                path=str(_tr.data["path"]),
-                                url=str(_tr.data.get("url") or "")[:300],
-                                source_request=request[:500],
-                            )
-                        except Exception:
-                            logger.exception("project_memory clone register failed")
-                    if (not _tr.ok) and _tr.data.get("needs_auth") and context.user_data is not None:
-                        if _action_name == "create_repo":
-                            context.user_data["pending_create_repo"] = {
-                                "name": (_params.get("name") or _tr.data.get("pending_name") or ""),
-                            }
-                        elif _action_name == "git_push":
-                            context.user_data["pending_git_push"] = {
-                                "path": _params.get("path") or _tr.data.get("path") or "",
-                            }
-                    if (
-                        _tr.ok
-                        and _action_name == "repo_modify"
-                        and _tr.data.get("defer_refine")
-                        and context.user_data is not None
-                    ):
-                        change = str(_tr.data.get("change") or request)
-                        context.user_data["last_project_path"] = str(
-                            _tr.data.get("path") or context.user_data.get("last_project_path") or ""
-                        )
-                        context.user_data["force_generate_once"] = True
-                        context.user_data["translated_spec_request"] = (
-                            f"تعديل البوت/المشروع في {_tr.data.get('path')}: {change}"
-                        )
-                        # continue into refine/generation pipeline
-                        request = context.user_data["translated_spec_request"]
-                        _force_generate = True
-                        _translated_generation_request = request
-                        await message.reply_text(
-                            (
-                                ((_answer + "\n\n") if _answer else "")
-                                + (_tr.message or "جاري التعديل عبر المحرك…")
-                            )[:4000]
-                        )
-                        # do not return — fall through to generation
-                    else:
-                        msg = (_answer + "\n\n" if _answer else "") + (_tr.message or "")
-                        await message.reply_text(msg[:4000])
-                        return
-                    if not (_translated_generation_request and _force_generate):
-                        return
-                except Exception:
-                    logger.exception("tool execution failed")
-            if not (_translated_generation_request and _force_generate):
-                await _clear_thinking()
-                await message.reply_text(_answer)
-                return
-
-        if _force_generate and _answer and not _translated_generation_request:
-            # Still show the model message, then continue into generation below.
-            await _clear_thinking()
-            try:
-                await message.reply_text(_answer)
-            except Exception:
-                pass
-        # Diagnostics: never log the raw key.
-        try:
-            from lumen.engine.services.gemini_client import status_snapshot
-            snap = status_snapshot()
         except Exception:
-            # Prefer key_pool so GEMINI_API_KEYS bulk / numbered keys count
-            _kp = False
-            try:
-                from lumen.engine.services.llm.key_pool import gemini_keys as _gk
-
-                _kp = bool(_gk())
-            except Exception:
-                _kp = bool(
-                    (
-                        os.getenv("GEMINI_API_KEY")
-                        or os.getenv("GEMINI_API_KEYS")
-                        or os.getenv("GOOGLE_API_KEY")
-                        or ""
-                    ).strip()
-                )
-            snap = {
-                "enabled": False,
-                "key_present": _kp,
-                "key_len": 0,
-                "model": os.getenv("GEMINI_MODEL") or "gemini-2.0-flash",
-                "gemini_enabled_env": os.getenv("GEMINI_ENABLED"),
-            }
-        try:
-            if _thinking_msg is not None:
-                await _thinking_msg.delete()
-                _thinking_msg = None
-        except Exception:
-            pass
-        logger.warning(
-            "chat_request returned no answer; gemini_enabled=%s key_present=%s "
-            "key_len=%s model=%s GEMINI_ENABLED=%s env_names_seen=%s",
-            snap.get("enabled"),
-            snap.get("key_present"),
-            snap.get("key_len"),
-            snap.get("model"),
-            snap.get("gemini_enabled_env"),
-            snap.get("env_names_seen"),
-        )
-
-        _generation_like = (
-            _looks_like_generation_request(request)
-            or bool((context.user_data or {}).get("force_generate_once"))
-            or bool(_translated_generation_request)
-        )
-        if _generation_like:
-            # A model outage must not block an explicit bot build request.
-            logger.warning(
-                "Gemini chat unavailable for generation request; continuing with Cline path"
-            )
-        elif _state_question:
-            await message.reply_text(
-                "تعذر الوصول إلى بيانات الخطة الآن. حاول مرة أخرى بعد قليل."
-            )
-            return
-        # Force re-resolve key at message time (not only boot)
-        try:
-            from lumen.engine.services.gemini_client import _api_key, status_snapshot as _ss
-            snap = _ss()
-            if not snap.get("key_present") and _api_key():
-                snap["key_present"] = True
-                snap["key_len"] = len(_api_key())
-        except Exception:
-            logger.exception("gemini re-resolve failed")
-        if not _generation_like and not snap.get("key_present"):
-            await message.reply_text(
-                "طبقة المحادثة غير مفعّلة: مفتاح Gemini غير موجود على السيرفر.\n"
-                "أضف أحد المتغيرات في Railway ثم أعد النشر:\n"
-                "• GEMINI_API_KEYS (مفتاح أو أكثر مفصولة بفاصلة أو سطر)\n"
-                "• أو GEMINI_API_KEY / GOOGLE_API_KEY"
-            )
-            return
-        if not _generation_like and snap.get("enabled") is False:
-            await message.reply_text(
-                "طبقة المحادثة معطّلة عبر GEMINI_ENABLED. احذف المتغير أو اضبطه على 1."
-            )
-            return
-        if _generation_like:
-            # Do not send the generic chat outage message for a build request;
-            # continue below so Cline can generate.
-            pass
-        else:
-            await message.reply_text(
-                "تعذر تشغيل طبقة المحادثة الآن (فشل استدعاء النموذج). حاول مرة أخرى بعد قليل."
-            )
-            return
+            logger.exception("semantic_memory user ingest failed")
 
     if request.startswith("/"):
         return
