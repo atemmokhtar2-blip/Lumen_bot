@@ -8,6 +8,7 @@ import sys
 def _boot_secrets() -> None:
     from lumen.platform.secrets_provider import (
         assert_critical_secrets_present,
+        assert_environ_scrubbed,
         install_secret_access_bridge,
         load_dotenv_if_dev,
         load_secrets,
@@ -17,6 +18,7 @@ def _boot_secrets() -> None:
     meta = load_secrets(only_missing=True)
     install_secret_access_bridge()
     assert_critical_secrets_present()
+    assert_environ_scrubbed()
     print(
         f"secrets_boot source={meta.get('source')} stored={meta.get('stored')} "
         f"scrubbed={meta.get('scrubbed_environ')}",
