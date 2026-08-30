@@ -223,20 +223,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "pro": "النمو (Growth)",
             "unlimited": "النمو (Growth)",
         }
+        # Subscription plans removed — credits-only.
+        extra = "\n• الفوترة: رصيد (credits) فقط — لا توجد خطط اشتراك."
         try:
-            from lumen.platform.plans import get_plan, public_plan_dict
-            pd = public_plan_dict(get_plan(plan))
-            extra = (
-                f"\n• التوليد: {pd['generations_per_month']}/شهر"
-                f"\n• الاستضافة 24/7: {pd['hosted_bots']} بوت"
-                f"\n• معاينة حية: {pd['live_preview_minutes']} دقيقة"
-                f"\n• المحرك: {pd['engine_tier']}"
-            )
+            from lumen.platform.credits import get_credit_service
+            from lumen.platform.tenants import get_tenant_store
+            # best-effort balance hint
+            bal = None
+            for t in get_tenant_store().list_all():
+                if int(getattr(t, "owner_telegram_id", 0) or 0) == int(getattr(message.from_user, "id", 0) or 0):
+                    w = get_credit_service().get_wallet(t.tenant_id)
+                    bal = int(getattr(w, "current_balance", 0) or 0)
+                    break
+            if bal is not None:
+                extra += f"\n• رصيدك: {bal}"
         except Exception:
-            extra = ""
+            pass
         await _clear_thinking()
         await message.reply_text(
-            f"👤 خطتك الحالية: {labels.get(plan, plan)}{extra}"
+            f"👤 الحساب: نظام الرصيد (بدون خطط){extra}"
         )
         return
 
