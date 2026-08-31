@@ -234,7 +234,8 @@ class ProgressHeartbeat:
                 "—\nللإلغاء: إلغاء أو /cancel"
             )
         try:
-            await self.status_msg.edit_text(text)
+            from lumen.bot.telegram_text import safe_edit_text
+            await safe_edit_text(self.status_msg, text, use_markdown=False)
             self._last_seq = seq
             self._last_edit = now
         except Exception:

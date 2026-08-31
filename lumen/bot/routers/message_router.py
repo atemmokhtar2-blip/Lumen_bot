@@ -18,6 +18,7 @@ from ..resource_limits import (
 from ..helpers import (
     escape_md,
     safe_edit_text,
+    safe_reply_text,
 )
 from ..session_store import get_session_store
 from ..middlewares.auth import (
@@ -480,7 +481,7 @@ async def _handle_message_body(
         # Surface agent preamble (e.g. repo_modify brief) before generation starts
         if (turn.reply or "").strip():
             try:
-                await message.reply_text(str(turn.reply)[:4000])
+                await safe_reply_text(message, str(turn.reply))
             except Exception:
                 pass
         status_msg = await message.reply_text(
@@ -503,5 +504,5 @@ async def _handle_message_body(
     reply = (turn.reply or "").strip()
     if not reply:
         reply = "تم." if turn.ok else "تعذر تنفيذ الطلب عبر المحرك."
-    await message.reply_text(reply[:4000])
+    await safe_reply_text(message, reply)
     return

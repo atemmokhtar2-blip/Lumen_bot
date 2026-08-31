@@ -84,33 +84,15 @@ def looks_like_bot_token(text: str) -> bool:
 
 
 def escape_md(text: object) -> str:
-    """Escape Telegram legacy Markdown special characters in dynamic text."""
-    s = str(text) if text is not None else ""
-    for ch in ("\\", "`", "*", "_", "[", "]", "(", ")"):
-        s = s.replace(ch, f"\\{ch}")
-    return s
+    """MarkdownV2 escape for dynamic segments (see lumen.bot.telegram_text)."""
+    from lumen.bot.telegram_text import escape_markdown_v2
+    return escape_markdown_v2(text)
 
 
-async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> None:
-    """edit_text with Markdown; fall back to plain text if Telegram rejects entities."""
-    if use_markdown:
-        try:
-            from telegram.constants import ParseMode
-            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
-            return
-        except Exception as e:
-            err = str(e).lower()
-            if "can't parse entities" in err or "parse entities" in err:
-                logger.warning("Markdown parse failed, retrying as plain text: %s", e)
-            else:
-                raise
-    plain = (
-        text.replace("\\", "")
-        .replace("*", "")
-        .replace("`", "")
-        .replace("_", "")
-    )
-    await message.edit_text(plain)
+async def safe_edit_text(message, text: str, *, use_markdown: bool = False, reply_markup=None) -> None:
+    """Edit with plain text by default; optional MarkdownV2 + split/truncate."""
+    from lumen.bot.telegram_text import safe_edit_text as _safe_edit
+    await _safe_edit(message, text, use_markdown=use_markdown, reply_markup=reply_markup)
 
 
 def make_zip_from_path(project_path: str | Path) -> Path | None:
@@ -422,18 +404,15 @@ def run_generation_with_bridge(
         )
 
 
-async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:
-    """reply_text that never fails silently on Markdown parse errors."""
-    try:
-        if use_markdown:
-            from telegram.constants import ParseMode
-            await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await message.reply_text(text)
-        return
-    except Exception:
-        try:
-            await message.reply_text(str(text)[:4000])
-        except Exception:
-            from .config import logger
-            logger.exception("safe_reply_text failed")
+async def safe_reply_text(message, text: str, *, use_markdown: bool = False, reply_markup=None, disable_web_page_preview: bool = True):
+    """Reply; splits long agent text; plain by default (Markdown Hell root fix)."""
+    from lumen.bot.telegram_text import safe_reply_text as _safe_reply
+    return await _safe_reply(
+        message,
+        text,
+        use_markdown=use_markdown,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )
+
+

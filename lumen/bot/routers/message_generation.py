@@ -168,7 +168,7 @@ async def execute_bot_generation(
                         parse_mode="Markdown",
                     )
                 except Exception:
-                    await status_msg.edit_text(clean[:4000], reply_markup=kb)
+                    await safe_edit_text(status_msg, clean, use_markdown=False, reply_markup=kb)
                 return result
         except Exception:
             logger.exception("langgraph HITL surface failed")
@@ -258,7 +258,7 @@ async def execute_bot_generation(
                 zip_path = make_zip_from_path(proj)
                 if zip_path and Path(zip_path).is_file():
                     try:
-                        await status_msg.edit_text("✅ تم التوليد — جاري إرسال الملف…")
+                        await safe_edit_text(status_msg, "✅ تم التوليد — جاري إرسال الملف…")
                     except Exception:
                         pass
                     try:
