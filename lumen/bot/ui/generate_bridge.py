@@ -66,6 +66,7 @@ async def run_guided_generation(
             work_dir,
             int(user.id) if user else 0,
             status_msg=status_msg,
+            user_id=int(user.id) if user else 0,
             preferred_keys=preferred_keys,
         )
     except Exception as exc:

@@ -97,6 +97,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         logger.exception("session hydrate failed")
 
+    # Busy guard: do not start parallel work while generation is running
+    try:
+        from lumen.bot.progress_tracker import is_generation_busy
+        if user and is_generation_busy(int(user.id)):
+            low = (request or "").strip().lower()
+            if low not in {"/cancel", "cancel", "إلغاء", "الغاء", "الغي", "stop", "/stop"}:
+                await message.reply_text(
+                    "⏳ البوت لسه بيولّد مشروعك دلوقتي.\n"
+                    "هتشوف تحديثات حية للأدوات في رسالة الحالة.\n"
+                    "للإلغاء: اكتب إلغاء أو /cancel"
+                )
+                return
+    except Exception:
+        logger.exception("busy guard failed")
+
     # Always write-through durable keys at the end of this update (PTB interval is not enough).
     try:
         await _handle_message_body(

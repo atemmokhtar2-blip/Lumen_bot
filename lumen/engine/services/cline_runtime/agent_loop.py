@@ -20,6 +20,16 @@ from .model_router import describe_runtime, select_model, select_model_for_goal
 
 logger = logging.getLogger(__name__)
 
+
+def _emit_progress(event: dict[str, Any]) -> None:
+    """Push live progress to Telegram (or any sink) if a reporter is active."""
+    try:
+        from lumen.bot.progress_tracker import report_progress
+        report_progress(event)
+    except Exception:
+        pass
+
+
 # Official tool surface — must match agent_fs.run_tool (no ghost names)
 AGENT_TOOL_NAMES: tuple[str, ...] = (
     "list_dir", "tree", "read_file", "read_files", "write_file", "edit_file",
@@ -207,6 +217,7 @@ def run_agent(
         return state
 
     limit = max_steps if max_steps is not None else _max_steps()
+    _emit_progress({"phase": "loop_start", "step": 0, "limit": limit, "detail": "بدء حلقة الوكيل"})
     user_id = 0
     if isinstance(ir_dict, dict):
         try:
@@ -474,6 +485,21 @@ def run_agent(
             state.steps.append(step)
             continue
 
+        _path_hint = ""
+        try:
+            if isinstance(args, dict):
+                _path_hint = str(args.get("path") or args.get("file") or args.get("target") or "")[:200]
+        except Exception:
+            _path_hint = ""
+        _emit_progress({
+            "phase": "tool_start",
+            "step": i,
+            "limit": limit,
+            "tool": str(tool),
+            "path": _path_hint,
+            "thought": (step.thought or "")[:160],
+            "files_written": len(state.files_written or []),
+        })
         _t0 = _time.monotonic()
         result = run_tool(state.work_dir, str(tool), args)
         _elapsed_ms = int((_time.monotonic() - _t0) * 1000)
@@ -495,6 +521,18 @@ def run_agent(
             state.metadata["tool_timings"] = timings[-40:]
         except Exception:
             pass
+        _emit_progress({
+            "phase": "tool_done",
+            "step": i,
+            "limit": limit,
+            "tool": str(tool),
+            "path": _path_hint or str((result or {}).get("path") or "")[:200],
+            "ok": bool((result or {}).get("ok")),
+            "thought": (step.thought or "")[:160],
+            "detail": str((result or {}).get("error") or (result or {}).get("message") or "")[:120],
+            "files_written": len(state.files_written or []),
+            "elapsed_ms": _elapsed_ms,
+        })
         state.steps.append(step)
         state.add_assistant(
             json.dumps(
