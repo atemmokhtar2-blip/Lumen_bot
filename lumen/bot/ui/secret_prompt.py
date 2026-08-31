@@ -54,7 +54,7 @@ async def prompt_for_secret(
     body: str,
     user_id: int = 0,
 ) -> Any:
-    """Send a secret request with WebApp button when available."""
+    """Send a secret request with WebApp button when available + ForceReply hint."""
     markup = build_secret_prompt_markup(kind=kind, user_id=user_id)
     extra = ""
     if markup is not None:
@@ -65,4 +65,12 @@ async def prompt_for_secret(
     else:
         extra = "\n\nالصق السر هنا — سيتم حذف رسالتك فوراً بعد الاستلام وتشفيره."
     text = (body or "").rstrip() + extra
-    return await message.reply_text(text[:4000], reply_markup=markup)
+    sent = await message.reply_text(text[:4000], reply_markup=markup)
+    # Companion ForceReply so the compose box shows a concrete example
+    try:
+        from lumen.bot.ui.input_prompt import ask_text_input
+        kind_map = {"bot": "bot_token", "github": "github_pat", "pat": "github_pat"}
+        await ask_text_input(message, kind=kind_map.get((kind or "").lower(), "bot_token"))
+    except Exception:
+        logger.exception("secret ForceReply hint failed")
+    return sent

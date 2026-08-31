@@ -175,6 +175,20 @@ async def _handle_message_body(
                         body[:4000],
                         reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=uid_ui),
                     )
+                    # Next free-text need → ForceReply placeholder
+                    if ui.phase == EngineUiPhase.GEN_SLOTS:
+                        rem3 = remaining_needs(ui.needs or [], ui.slots)
+                        if rem3 and not (rem3[0].choices or []):
+                            try:
+                                from lumen.bot.ui.input_prompt import ask_text_input
+                                await ask_text_input(
+                                    message,
+                                    kind="slot_answer",
+                                    body=f"✍️ {rem3[0].text}",
+                                    placeholder=(rem3[0].text or "")[:60] or "اكتب إجابتك…",
+                                )
+                            except Exception:
+                                logger.exception("slot ForceReply failed")
                     return
         except Exception:
             logger.exception("engine_ui GEN_SLOTS answer failed")

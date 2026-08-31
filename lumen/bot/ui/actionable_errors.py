@@ -194,3 +194,18 @@ async def send_actionable_error(
                 await target.reply_text(text[:4000])
         except Exception:
             logger.exception("send_actionable_error delivery failed")
+
+
+async def send_auth_prompt(message, *, url: str = "", op: str = "clone", user_id: int = 0):
+    """Send auth error + ForceReply placeholder for PAT paste."""
+    text, markup = needs_auth_prompt(url=url, op=op, user_id=user_id)
+    try:
+        from lumen.bot.helpers import safe_reply_text
+        await safe_reply_text(message, text, reply_markup=markup)
+    except Exception:
+        await message.reply_text((text or "")[:4000], reply_markup=markup)
+    try:
+        from lumen.bot.ui.input_prompt import ask_text_input
+        await ask_text_input(message, kind="github_pat")
+    except Exception:
+        pass

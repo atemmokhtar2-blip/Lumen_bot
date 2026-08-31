@@ -44,7 +44,10 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return "أهلاً بك في Lumen"
 
     if phase == EngineUiPhase.GEN_TYPE:
-        return "اكتب وصف البوت."
+        return (
+            "اكتب وصف البوت تحت 👇\n"
+            "مثال: بوت متجر يرد على الطلبات ويحسب الفواتير ويرسل إشعارات."
+        )
 
     if phase == EngineUiPhase.GEN_SLOTS:
         from .engine_needs import remaining_needs

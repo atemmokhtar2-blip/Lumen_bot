@@ -550,6 +550,30 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     msg = update.effective_message
     await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
 
+    # Weakness #5: ForceReply placeholder when the engine expects free text
+    try:
+        from lumen.engine.services.ui_state.models import EngineUiPhase
+        from lumen.bot.ui.input_prompt import ask_after_ui
+        if result.state.phase == EngineUiPhase.GEN_TYPE or result.state.slots.get("awaiting_text") == "1":
+            await ask_after_ui(context=context, msg=msg, kind="bot_description")
+        elif result.state.phase == EngineUiPhase.GEN_SLOTS:
+            rem = None
+            try:
+                from lumen.engine.services.ui_state.engine_needs import remaining_needs
+                rem = remaining_needs(result.state.needs or [], result.state.slots)
+            except Exception:
+                rem = None
+            if rem and not (rem[0].choices or []):
+                await ask_after_ui(
+                    context=context,
+                    msg=msg,
+                    kind="slot_answer",
+                    body=f"✍️ {rem[0].text}",
+                    placeholder=(rem[0].text or "")[:60] or "اكتب إجابتك…",
+                )
+    except Exception:
+        logger.exception("input placeholder prompt failed")
+
     # Real generation — same engine as chat path
     if result.ok and result.run_generation and result.generation_request:
         status = None

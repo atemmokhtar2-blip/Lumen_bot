@@ -287,6 +287,11 @@ async def deliver_generation_result(
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
         if _quiet:
             await safe_reply_text(message, "📦 جاهز — أرسل توكن البوت من @BotFather")
+            try:
+                from lumen.bot.ui.input_prompt import ask_text_input
+                await ask_text_input(message, kind="bot_token")
+            except Exception:
+                logger.exception("token ForceReply failed")
         else:
             await safe_reply_text(message, 
                 "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
