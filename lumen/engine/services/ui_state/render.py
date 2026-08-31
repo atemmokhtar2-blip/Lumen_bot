@@ -37,13 +37,13 @@ class UiFacts:
 
 def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     facts = facts or UiFacts()
-    from lumen.bot.telegram_text import escape_html, html_blockquote, html_card, html_section
+    from lumen.bot.telegram_text import mdv2_card, escape_markdown_v2
 
     phase = state.phase
 
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         # Homepage — balance only under open_billing (product rule)
-        return html_card(
+        return mdv2_card(
             "أهلاً بك في Lumen",
             [
                 (
@@ -58,7 +58,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         )
 
     if phase == EngineUiPhase.GEN_TYPE:
-        return html_card(
+        return mdv2_card(
             "إنشاء بوت",
             [
                 (
@@ -103,17 +103,17 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         ]
         if filled:
             sections.append(("ما تم تسجيله", " | ".join(filled[:6])))
-        return html_card("قبل التوليد", sections)
+        return mdv2_card("قبل التوليد", sections)
 
     if phase == EngineUiPhase.GEN_CONFIRM:
         desc = (state.slots.get("bot_description") or "")[:400] or "—"
-        return html_card(
+        return mdv2_card(
             "تأكيد التوليد",
             [("الوصف", desc)],
         )
 
     if phase == EngineUiPhase.GENERATING:
-        return html_card(
+        return mdv2_card(
             "جاري التوليد",
             [("الحالة", "المحرك يبني البوت الآن.\nلا تغلق الشات حتى يكتمل.")],
         )
@@ -124,7 +124,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             body = f"المسار: {state.project_ref}\n\n" + body
         if state.plane and state.plane.value != "none":
             body = f"المستوى: {state.plane.value}\n" + body
-        return html_card(
+        return mdv2_card(
             "اكتمل التوليد",
             [
                 ("المشروع", body),
@@ -171,7 +171,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         ]
         if facts.active_project:
             sections.insert(0, ("مشروع الجلسة", str(facts.active_project)))
-        return html_card(
+        return mdv2_card(
             "لوحة التحكم — استضافة حقيقية",
             sections,
             subtitle="إدارة المثيلات من HostService",
@@ -184,7 +184,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         if reserved:
             body += f"\nمحجوز: {reserved} كريدت"
         body += "\n\nالرصيد يخصم حسب التوليد والاستضافة."
-        return html_card(
+        return mdv2_card(
             "الرصيد",
             [("حسابك", body)],
             subtitle="نظام الكريدت",
@@ -195,8 +195,8 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
         raw = render_event_message(state)
         # Wrap plain event text in expandable card when not already HTML
-        if raw and "<blockquote" not in raw:
-            return html_card("تحديث", [("", raw)])
+        if raw and "**>" not in raw and "<blockquote" not in raw:
+            return mdv2_card("تحديث", [("", raw)])
         return raw
 
     if phase == EngineUiPhase.HELP:
@@ -210,11 +210,11 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         sections = [("الأوامر", main)]
         if hint and hint not in main:
             sections.append(("تفاصيل", hint[:1500]))
-        return html_card(
+        return mdv2_card(
             "المساعدة",
             sections,
             subtitle="دليل سريع للأوامر",
         )
 
-    return html_card("مرحلة", [("", escape_html(str(phase.value)))])
+    return mdv2_card("مرحلة", [("", escape_markdown_v2(str(phase.value)))])
 

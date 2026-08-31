@@ -62,7 +62,7 @@ class HostResult:
 
     def to_user_text(self) -> str:
         """User-facing hosting result — official Telegram HTML cards."""
-        from lumen.bot.telegram_text import html_bullets, html_card
+        from lumen.bot.telegram_text import mdv2_bullets, mdv2_card
 
         details: list[str] = []
         if self.message:
@@ -81,11 +81,11 @@ class HostResult:
             if inst.last_error:
                 details.append(f"آخر خطأ: {inst.last_error[:200]}")
         sections: list[tuple[str, str]] = [
-            ("النتيجة", html_bullets(details) if details else ("نجاح" if self.ok else "فشل")),
+            ("النتيجة", mdv2_bullets(details) if details else ("نجاح" if self.ok else "فشل")),
         ]
         if self.error_contract and self.error_contract.primary:
             sections.append(("تشخيص", self.error_contract.to_user_summary()[:800]))
-        return html_card(
+        return mdv2_card(
             "استضافة",
             sections,
             subtitle="نجاح العملية" if self.ok else "تعذّر الإكمال",

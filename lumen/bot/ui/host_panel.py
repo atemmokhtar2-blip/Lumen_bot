@@ -37,7 +37,7 @@ def host_panel_buttons(*, instance_index: str = "0") -> tuple[tuple[UiButton, ..
 
 def format_host_success(result: Any) -> str:
     """User-facing confirmation after HostService.start succeeded — HTML card."""
-    from lumen.bot.telegram_text import html_bullets, html_card, html_code
+    from lumen.bot.telegram_text import mdv2_bullets, mdv2_card
 
     details: list[str] = []
     inst = getattr(result, "instance", None)
@@ -61,8 +61,8 @@ def format_host_success(result: Any) -> str:
         msg = str(getattr(result, "message", "") or "").strip()
         if msg:
             details.append(msg[:400])
-    body = html_bullets(details) if details else "المثيل يعمل."
-    return html_card(
+    body = mdv2_bullets(details) if details else "المثيل يعمل."
+    return mdv2_card(
         "الاستضافة شغّالة",
         [
             ("المثيل", body),

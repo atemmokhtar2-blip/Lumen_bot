@@ -4,8 +4,8 @@ Rules
 -----
 1. Arbitrary agent/LLM text is sent as **plain text** (no parse_mode).
 2. Intentional formatting uses **MarkdownV2** or **HTML** with official escaping.
-3. UI cards use HTML ``<blockquote>`` / ``<blockquote expandable>`` (Bot API 7+)
-   for the native blue quote box + collapse arrow in Telegram clients.
+3. UI cards use **MarkdownV2** expandable blockquotes (``**>`` / ``>``) for the
+   native blue quote box + collapse arrow; HTML helpers remain as fallback.
 4. Messages longer than 4096 are split on paragraph/line boundaries so
    Telegram never drops the body.
 
@@ -67,6 +67,141 @@ def looks_like_telegram_html(text: object) -> bool:
     return any(m in s for m in markers)
 
 
+
+def looks_like_telegram_mdv2(text: object) -> bool:
+    """True when body uses our MarkdownV2 UI card markers (expandable quote / emphasis)."""
+    s = "" if text is None else str(text)
+    if not s:
+        return False
+    # Expandable blockquote first line, or intentional emphasis we emit
+    if "**>" in s or s.startswith(">") or "\n>" in s:
+        return True
+    if s.startswith("*") and s.count("*") >= 2:
+        return True
+    return False
+
+
+def mdv2_title(text: object, *, subtitle: object = "") -> str:
+    """Primary title *bold* + optional _italic_ subtitle — MarkdownV2 official."""
+    t = escape_markdown_v2("" if text is None else str(text).strip())
+    if not t:
+        return ""
+    out = f"*{t}*"
+    sub = ("" if subtitle is None else str(subtitle)).strip()
+    if sub:
+        out += f"\n_{escape_markdown_v2(sub)}_"
+    return out
+
+
+def mdv2_code(text: object) -> str:
+    """Inline code — backticks; escape ` and \\ inside."""
+    s = "" if text is None else str(text)
+    s = s.replace("\\", "\\\\").replace("`", "\\`")
+    return f"`{s}`"
+
+
+def mdv2_bullets(items: Sequence[object], *, numbered: bool = False) -> str:
+    """Plain bullet lines (NOT escaped). Escape happens once inside mdv2_blockquote."""
+    lines: list[str] = []
+    for i, it in enumerate(items or (), start=1):
+        s = ("" if it is None else str(it)).strip()
+        if not s:
+            continue
+        prefix = f"{i}." if numbered else "•"
+        lines.append(f"{prefix} {s}")
+    return chr(10).join(lines)
+
+def mdv2_blockquote(body: object, *, expandable: bool = False) -> str:
+    """Official MarkdownV2 block quote / expandable quote (blue box + arrow).
+
+    Expandable form (Bot API):
+      **>first line
+      >continued
+      >continued
+    """
+    raw = "" if body is None else str(body).strip("\n")
+    if not raw:
+        return ""
+    if expandable and raw.count("\n") < 2:
+        raw = raw + "\n\u200c\n\u200c"
+    lines = raw.split("\n")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        esc = escape_markdown_v2(line)
+        if expandable and i == 0:
+            out.append(f"**>{esc}")
+        else:
+            out.append(f">{esc}")
+    return "\n".join(out)
+
+
+def mdv2_section(title: object, body: object, *, expandable: bool = True) -> str:
+    t = escape_markdown_v2("" if title is None else str(title).strip())
+    block = mdv2_blockquote(body, expandable=expandable)
+    if t and block:
+        return f"*{t}*\n{block}"
+    return (f"*{t}*" if t else "") or block
+
+
+def mdv2_card(
+    title: object,
+    sections: Sequence[tuple[object, object]] | None = None,
+    *,
+    subtitle: object = "",
+    footer: object = "",
+) -> str:
+    """Full UI card in MarkdownV2 — title, subtitle, expandable blue sections."""
+    parts: list[str] = []
+    head = mdv2_title(title, subtitle=subtitle)
+    if head:
+        parts.append(head)
+    for sec_title, sec_body in sections or ():
+        st = ("" if sec_title is None else str(sec_title)).strip()
+        sb = ("" if sec_body is None else str(sec_body)).strip()
+        if not sb and not st:
+            continue
+        if st:
+            parts.append(mdv2_section(st, sb, expandable=True))
+        else:
+            parts.append(mdv2_blockquote(sb, expandable=True))
+    ft = ("" if footer is None else str(footer)).strip()
+    if ft:
+        if looks_like_telegram_mdv2(ft) or looks_like_telegram_html(ft):
+            parts.append(ft)
+        else:
+            parts.append(f"_{escape_markdown_v2(ft)}_")
+    return "\n\n".join(p for p in parts if p)
+
+
+def mdv2_status(
+    title: object,
+    body: object = "",
+    *,
+    ok: bool | None = None,
+    details: Sequence[object] | None = None,
+) -> str:
+    t = ("" if title is None else str(title)).strip()
+    if ok is True and t and not t.startswith("✅"):
+        t = f"✅ {t}"
+    elif ok is False and t and not t.startswith("❌"):
+        t = f"❌ {t}"
+    sections: list[tuple[str, str]] = []
+    b = ("" if body is None else str(body)).strip()
+    if b:
+        sections.append(("التفاصيل", b))
+    if details:
+        bullet = mdv2_bullets(details)
+        if bullet:
+            # bullets already escaped — pass as preformatted body without re-escape
+            # mdv2_section escapes body again; use raw lines joined for details
+            sections.append(("معلومات", "\n".join(
+                ("" if x is None else str(x)).strip() for x in details if str(x).strip()
+            )))
+    if not sections:
+        return mdv2_title(t)
+    return mdv2_card(t, sections)
+
+
 def html_title(text: object, *, subtitle: object = "") -> str:
     """Primary screen title — bold + optional italic subtitle (official HTML)."""
     t = escape_html("" if text is None else str(text).strip())
@@ -93,7 +228,7 @@ def html_bullets(items: Sequence[object], *, numbered: bool = False) -> str:
             continue
         prefix = f"{i}." if numbered else "•"
         lines.append(f"{prefix} {s}")
-    return "\n".join(lines)
+    return chr(10).join(lines)
 
 
 def html_blockquote(body: object, *, expandable: bool = False) -> str:
@@ -263,6 +398,15 @@ async def safe_edit_text(
         except Exception:
             pass
 
+    if looks_like_telegram_mdv2(body):
+        try:
+            from telegram.constants import ParseMode
+
+            await message.edit_text(body, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
+            return
+        except Exception:
+            pass
+
     if looks_like_telegram_html(body):
         try:
             from telegram.constants import ParseMode
@@ -317,6 +461,17 @@ async def safe_reply_text(
                     escape_markdown_v2(part),
                     parse_mode=ParseMode.MARKDOWN_V2,
                     **kw,
+                )
+                sent.append(await_msg)
+                ok = True
+            except Exception:
+                ok = False
+        if not ok and looks_like_telegram_mdv2(part):
+            try:
+                from telegram.constants import ParseMode
+
+                await_msg = await message.reply_text(
+                    part, parse_mode=ParseMode.MARKDOWN_V2, **kw
                 )
                 sent.append(await_msg)
                 ok = True
@@ -404,6 +559,14 @@ __all__ = [
     "escape_md",
     "escape_html",
     "looks_like_telegram_html",
+    "looks_like_telegram_mdv2",
+    "mdv2_title",
+    "mdv2_code",
+    "mdv2_bullets",
+    "mdv2_blockquote",
+    "mdv2_section",
+    "mdv2_card",
+    "mdv2_status",
     "html_title",
     "html_code",
     "html_bullets",

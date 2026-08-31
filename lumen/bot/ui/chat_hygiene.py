@@ -77,14 +77,24 @@ async def send_or_edit_ui(
     from lumen.bot.telegram_text import (
         TELEGRAM_MAX_MESSAGE,
         looks_like_telegram_html,
+        looks_like_telegram_mdv2,
         split_telegram_text,
         strip_markdown_noise,
     )
 
     raw = text or ""
-    use_html = looks_like_telegram_html(raw)
+    use_mdv2 = looks_like_telegram_mdv2(raw)
+    use_html = (not use_mdv2) and looks_like_telegram_html(raw)
     parse_kwargs: dict[str, Any] = {}
-    if use_html:
+    if use_mdv2:
+        try:
+            from telegram.constants import ParseMode
+
+            parse_kwargs["parse_mode"] = ParseMode.MARKDOWN_V2
+        except Exception:
+            use_mdv2 = False
+            use_html = looks_like_telegram_html(raw)
+    if use_html and not parse_kwargs:
         try:
             from telegram.constants import ParseMode
 
