@@ -77,6 +77,46 @@ def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> Engin
     return state
 
 
+
+def _nav_footer(phase: EngineUiPhase) -> tuple[UiButton, ...]:
+    """Fixed bottom navigation on every non-home surface (Deep Navigation fix)."""
+    if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
+        return tuple()
+    # During generation: home + cancel only (back is ambiguous mid-run)
+    if phase == EngineUiPhase.GENERATING:
+        return (
+            UiButton("الرئيسية", "home"),
+            UiButton("إلغاء", "cancel_generate", style="danger"),
+        )
+    return (
+        UiButton("رجوع", "nav_back", style="primary"),
+        UiButton("الرئيسية", "home"),
+        UiButton("إلغاء", "cancel_generate", style="danger"),
+    )
+
+
+def _with_nav(
+    rows: tuple[tuple[UiButton, ...], ...] | list,
+    phase: EngineUiPhase,
+) -> tuple[tuple[UiButton, ...], ...]:
+    """Append standard nav row; drop duplicate home/cancel/back from earlier rows."""
+    footer = _nav_footer(phase)
+    if not footer:
+        return tuple(rows)
+    drop = {"home", "cancel_generate", "nav_back"}
+    cleaned: list[tuple[UiButton, ...]] = []
+    for row in rows:
+        kept = tuple(
+            b for b in row
+            if (getattr(b, "action", "") or "") not in drop
+            and (getattr(b, "text", "") or "") not in {"رجوع", "القائمة", "إلغاء", "الرئيسية"}
+        )
+        if kept:
+            cleaned.append(kept)
+    cleaned.append(footer)
+    return tuple(cleaned)
+
+
 def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     """Dynamic keyboard from phase + remaining engine needs."""
     phase = state.phase
@@ -85,17 +125,12 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
 
     if phase == EngineUiPhase.GEN_TYPE:
         # Description-only path — no type chips (user writes free text below)
-        return (
-            (UiButton("رجوع", "home", style="danger"),),
-        )
+        return _with_nav((), phase)
 
     if phase == EngineUiPhase.GEN_SLOTS:
         rem = remaining_needs(state.needs or [], state.slots)
         if not rem:
-            return (
-                (UiButton("متابعة للتأكيد", "to_confirm"),),
-                (UiButton("القائمة", "home"),),
-            )
+            return _with_nav(((UiButton("متابعة للتأكيد", "to_confirm"),),), phase)
         need = rem[0]
         rows: list[tuple[UiButton, ...]] = []
         # choice chips in rows of 2
@@ -113,8 +148,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("توليد بما هو متاح", "to_confirm"),
             )
         )
-        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
-        return tuple(rows)
+        return _with_nav(tuple(rows), phase)
 
     if phase == EngineUiPhase.GEN_CONFIRM:
         rem = remaining_needs(state.needs or [], state.slots)
@@ -128,11 +162,10 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("تعديل", "open_generate"),
             )
         )
-        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
-        return tuple(rows)
+        return _with_nav(tuple(rows), phase)
 
     if phase == EngineUiPhase.GENERATING:
-        return ((UiButton("القائمة", "home"),),)
+        return _with_nav((), phase)
     if phase == EngineUiPhase.GEN_DONE:
         rows = []
         if (state.project_ref or "").strip():
@@ -149,13 +182,8 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 )
             )
         rows.append((UiButton("إنشاء بوت آخر", "open_generate", style="success"),))
-        rows.append(
-            (
-                UiButton("لوحة التحكم", "open_dashboard", style="primary"),
-                UiButton("القائمة", "home", style="danger"),
-            )
-        )
-        return tuple(rows)
+        rows.append((UiButton("لوحة التحكم", "open_dashboard", style="primary"),))
+        return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.DASHBOARD:
         rows: list[tuple[UiButton, ...]] = []
         # Host rows: dash_h{i}=instance_id; callback arg is index i (stable)
@@ -188,24 +216,19 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("استضافة المشروع", "post_host", style="success"),
             )
         )
-        rows.append(
-            (
-                UiButton("إنشاء بوت", "open_generate", style="success"),
-                UiButton("القائمة", "home", style="danger"),
-            )
-        )
-        return tuple(rows)
+        rows.append((UiButton("إنشاء بوت", "open_generate", style="success"),))
+        return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.BILLING:
-        return (
-            (UiButton("تحديث الرصيد", "open_billing", style="primary"),),
-            (UiButton("رجوع", "home", style="danger"),),
+        return _with_nav(
+            ((UiButton("تحديث الرصيد", "open_billing", style="primary"),),),
+            phase,
         )
     if phase == EngineUiPhase.HELP:
-        return ((UiButton("رجوع", "home", style="danger"),),)
+        return _with_nav((), phase)
     if phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
-        return buttons_for_event(kind)
-    return ((UiButton("القائمة", "home"),),)
+        return _with_nav(buttons_for_event(kind), phase)
+    return _with_nav((), phase)
 
 
 def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
@@ -265,7 +288,31 @@ def apply_action(
     dash_fx = ""
     dash_tgt = ""
 
-    if action_id == "home":
+    if action_id == "nav_back":
+        if new.phase == EngineUiPhase.GEN_SLOTS:
+            new.phase = EngineUiPhase.GEN_TYPE
+            new.slots["awaiting_text"] = "1"
+            msg = "رجعت لوصف البوت."
+        elif new.phase == EngineUiPhase.GEN_CONFIRM:
+            new.phase = EngineUiPhase.GEN_SLOTS
+            new = _refresh_needs(new, user_id=user_id)
+            msg = "رجعت لأسئلة التوليد."
+        elif new.phase in {
+            EngineUiPhase.DASHBOARD,
+            EngineUiPhase.BILLING,
+            EngineUiPhase.HELP,
+            EngineUiPhase.GEN_DONE,
+            EngineUiPhase.CONTEXT,
+            EngineUiPhase.GEN_TYPE,
+        }:
+            new.phase = EngineUiPhase.HOME
+            new.slots.pop("awaiting_text", None)
+            new.missing = []
+            msg = "القائمة الرئيسية."
+        else:
+            new.phase = EngineUiPhase.HOME
+            msg = "القائمة الرئيسية."
+    elif action_id == "home":
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
         new.missing = []

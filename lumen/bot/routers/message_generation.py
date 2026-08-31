@@ -161,14 +161,7 @@ async def execute_bot_generation(
                 if raw and "تأكيد " not in raw and len(raw) < 500:
                     clean = raw
                 kb = build_hitl_keyboard(user_id=int(uid or 0))
-                try:
-                    await safe_edit_text(status_msg, 
-                        clean[:4000],
-                        reply_markup=kb,
-                        parse_mode="Markdown",
-                    )
-                except Exception:
-                    await safe_edit_text(status_msg, clean, use_markdown=False, reply_markup=kb)
+                await safe_edit_text(status_msg, clean, use_markdown=False, reply_markup=kb)
                 return result
         except Exception:
             logger.exception("langgraph HITL surface failed")

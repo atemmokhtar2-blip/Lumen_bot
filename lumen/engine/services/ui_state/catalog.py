@@ -30,6 +30,11 @@ _NAV = frozenset(
 
 UI_ACTIONS: dict[str, UiActionSpec] = {
     "home": UiActionSpec("home", "Home", frozenset(EngineUiPhase)),
+    "nav_back": UiActionSpec(
+        "nav_back",
+        "Back one step",
+        frozenset(EngineUiPhase),  # allowed everywhere; handler decides destination
+    ),
     "open_generate": UiActionSpec(
         "open_generate",
         "Open generate",
@@ -94,14 +99,7 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "cancel_generate": UiActionSpec(
         "cancel_generate",
         "Cancel",
-        frozenset(
-            {
-                EngineUiPhase.GEN_TYPE,
-                EngineUiPhase.GEN_SLOTS,
-                EngineUiPhase.GEN_CONFIRM,
-                EngineUiPhase.GENERATING,
-            }
-        ),
+        frozenset(EngineUiPhase),  # footer on every surface
     ),
     "open_dashboard": UiActionSpec(
         "open_dashboard", "Dashboard",

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from lumen.bot.config import GENERATION_STATUS_PREVIEW_LIMIT, ZIP_MAX_MB, OUTPUT_DIR
-from lumen.bot.helpers import escape_md, make_zip_from_path, split_file_for_telegram, safe_reply_text
+from lumen.bot.helpers import escape_md, make_zip_from_path, split_file_for_telegram, safe_reply_text, safe_edit_text
 from lumen.bot.session_store import get_session_store
 
 logger = logging.getLogger("lumen_bot.generation_flow")
@@ -49,9 +49,9 @@ async def deliver_generation_result(
     try:
         if _quiet:
             brief = "✅ تم" if success else "⚠️ فشل التوليد"
-            await status_msg.edit_text(brief)
+            await safe_edit_text(status_msg, brief)
         else:
-            await status_msg.edit_text(
+            await safe_edit_text(status_msg, 
                 "\n".join(summary_lines)[:GENERATION_STATUS_PREVIEW_LIMIT]
             )
     except Exception:
