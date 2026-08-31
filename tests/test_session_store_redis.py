@@ -101,3 +101,35 @@ def test_local_memory_opt_in(monkeypatch):
     assert store.backend == "memory"
     store.save(1, {"lang": "ar"})
     assert store.load(1)["lang"] == "ar"
+
+
+def test_ptb_redis_persistence_lifecycle():
+    """Official PTB BasePersistence path: update → get → refresh."""
+    import asyncio
+    from lumen.bot.ptb_redis_persistence import RedisPersistence
+
+    backend = _MemoryBackend()
+    store = SessionStore(client=backend)
+    p = RedisPersistence(store=store, update_interval=1.0)
+
+    async def run():
+        await p.update_user_data(
+            55,
+            {
+                "engine_ui": {"phase": "gen_slots"},
+                "lang": "ar",
+                "bot_token": "should-drop",
+            },
+        )
+        all_ud = await p.get_user_data()
+        assert 55 in all_ud
+        assert all_ud[55]["lang"] == "ar"
+        assert "bot_token" not in all_ud[55]
+        ram = {"lang": "en"}
+        await p.refresh_user_data(55, ram)
+        assert ram["lang"] == "ar"
+        assert ram["engine_ui"]["phase"] == "gen_slots"
+        await p.drop_user_data(55)
+        assert store.load(55) == {}
+
+    asyncio.run(run())

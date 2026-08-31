@@ -432,14 +432,28 @@ def main() -> None:
                         logger.info("default MenuButtonWebApp configured=%s", ok)
                     except Exception:
                         logger.exception("post_init menu button failed")
-                app = (
+
+                # Official PTB persistence → Redis (restart + multi-worker safe user_data)
+                _persistence = None
+                try:
+                    from lumen.bot.ptb_redis_persistence import RedisPersistence
+                    _persistence = RedisPersistence(update_interval=5.0)
+                    logger.info("PTB RedisPersistence attached (update_interval=5s)")
+                except Exception:
+                    logger.exception(
+                        "RedisPersistence unavailable — user context will NOT survive restarts"
+                    )
+
+                _builder = (
                     Application.builder()
                     .token(TELEGRAM_BOT_TOKEN)
                     .request(_tg_request)
                     .concurrent_updates(True)
                     .post_init(_post_init)
-                    .build()
                 )
+                if _persistence is not None:
+                    _builder = _builder.persistence(_persistence)
+                app = _builder.build()
             except Exception:
                 app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
             _wire(app)

@@ -284,6 +284,31 @@ class SessionStore:
                 user_id, type(exc).__name__, str(exc)[:120],
             )
 
+    def list_user_ids(self) -> list[int]:
+        """Return known session user ids (Redis SCAN or memory keys)."""
+        prefix = _KEY_PREFIX
+        out: list[int] = []
+        client = self._client
+        try:
+            if hasattr(client, "scan_iter"):
+                for key in client.scan_iter(match=f"{prefix}*", count=200):
+                    try:
+                        ks = key if isinstance(key, str) else key.decode("utf-8")
+                        out.append(int(ks[len(prefix) :]))
+                    except Exception:
+                        continue
+            elif isinstance(client, _MemoryBackend):
+                with client._lock:
+                    for k in client._data:
+                        if k.startswith(prefix):
+                            try:
+                                out.append(int(k[len(prefix) :]))
+                            except Exception:
+                                continue
+        except Exception as exc:
+            logger.warning("list_user_ids failed: %s:%s", type(exc).__name__, str(exc)[:120])
+        return out
+
     def hydrate(self, user_id: int, user_data: dict[str, Any] | None) -> dict[str, Any]:
         """Load durable session into ``user_data`` — Redis is source of truth.
 
