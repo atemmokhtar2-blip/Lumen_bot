@@ -3,14 +3,19 @@
 Rules
 -----
 1. Arbitrary agent/LLM text is sent as **plain text** (no parse_mode).
-2. Intentional formatting uses **MarkdownV2** with full official escaping.
-3. Messages longer than 4096 are split on paragraph/line boundaries so
+2. Intentional formatting uses **MarkdownV2** or **HTML** with official escaping.
+3. UI cards use HTML ``<blockquote>`` / ``<blockquote expandable>`` (Bot API 7+)
+   for the native blue quote box + collapse arrow in Telegram clients.
+4. Messages longer than 4096 are split on paragraph/line boundaries so
    Telegram never drops the body.
 
 Legacy ``ParseMode.MARKDOWN`` is never used — it breaks on ``_``, ``*``, ``[``.
+
+Refs: https://core.telegram.org/bots/api#html-style
 """
 from __future__ import annotations
 
+import html as _html_mod
 import re
 from typing import Any, Optional, Sequence
 
@@ -33,6 +38,84 @@ def escape_markdown_v2(text: object) -> str:
 def escape_md(text: object) -> str:
     """Alias kept for callers — always MarkdownV2 escaping (not legacy Markdown)."""
     return escape_markdown_v2(text)
+
+
+def escape_html(text: object) -> str:
+    """Escape &, <, > for Telegram HTML parse_mode (official requirement)."""
+    s = "" if text is None else str(text)
+    return _html_mod.escape(s, quote=False)
+
+
+def looks_like_telegram_html(text: object) -> bool:
+    """True when body intentionally contains Telegram HTML tags we emit."""
+    s = "" if text is None else str(text)
+    if not s:
+        return False
+    markers = (
+        "<blockquote",
+        "</blockquote>",
+        "<b>",
+        "</b>",
+        "<i>",
+        "</i>",
+        "<code>",
+        "</code>",
+        "<pre>",
+        "</pre>",
+        "<tg-spoiler>",
+    )
+    return any(m in s for m in markers)
+
+
+def html_blockquote(body: object, *, expandable: bool = False) -> str:
+    """Native Telegram blue quote box. expandable=True shows the collapse arrow.
+
+    Official HTML: ``<blockquote expandable>…</blockquote>`` (Bot API 7.3+).
+    Clients only show the arrow when the quote has multiple lines.
+    """
+    raw = "" if body is None else str(body).strip("\n")
+    if not raw:
+        return ""
+    if expandable and raw.count("\n") < 2:
+        raw = raw + "\n\u200c\n\u200c"
+    inner = escape_html(raw)
+    attr = " expandable" if expandable else ""
+    return f"<blockquote{attr}>{inner}</blockquote>"
+
+
+def html_section(title: object, body: object, *, expandable: bool = True) -> str:
+    """Bold title + expandable blue box (XPic-style feature cards)."""
+    t = escape_html("" if title is None else str(title).strip())
+    block = html_blockquote(body, expandable=expandable)
+    if t and block:
+        return f"<b>{t}</b>\n{block}"
+    return t or block
+
+
+def html_card(
+    title: object,
+    sections: Sequence[tuple[object, object]] | None = None,
+    *,
+    footer: object = "",
+) -> str:
+    """Full UI card: bold title + expandable blue sections."""
+    parts: list[str] = []
+    t = ("" if title is None else str(title)).strip()
+    if t:
+        parts.append(f"<b>{escape_html(t)}</b>")
+    for sec_title, sec_body in sections or ():
+        st = ("" if sec_title is None else str(sec_title)).strip()
+        sb = ("" if sec_body is None else str(sec_body)).strip()
+        if not sb and not st:
+            continue
+        if st:
+            parts.append(html_section(st, sb, expandable=True))
+        else:
+            parts.append(html_blockquote(sb, expandable=True))
+    ft = ("" if footer is None else str(footer)).strip()
+    if ft:
+        parts.append(escape_html(ft))
+    return "\n\n".join(p for p in parts if p)
 
 
 def strip_markdown_noise(text: object) -> str:
@@ -235,6 +318,11 @@ __all__ = [
     "TELEGRAM_MAX_MESSAGE",
     "escape_markdown_v2",
     "escape_md",
+    "escape_html",
+    "looks_like_telegram_html",
+    "html_blockquote",
+    "html_section",
+    "html_card",
     "strip_markdown_noise",
     "split_telegram_text",
     "safe_edit_text",

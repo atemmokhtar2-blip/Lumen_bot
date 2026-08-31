@@ -69,15 +69,37 @@ async def send_or_edit_ui(
     markup=None,
     preferred_message=None,
 ) -> Any:
-    """Prefer edit (text or caption); never hang; always leave one surface."""
-    from lumen.bot.telegram_text import split_telegram_text, TELEGRAM_MAX_MESSAGE
+    """Prefer edit (text or caption); never hang; always leave one surface.
+
+    UI bodies that contain official Telegram HTML (``<blockquote expandable>``
+    blue cards) are sent with parse_mode=HTML so clients show the collapse arrow.
+    """
+    from lumen.bot.telegram_text import (
+        TELEGRAM_MAX_MESSAGE,
+        looks_like_telegram_html,
+        split_telegram_text,
+        strip_markdown_noise,
+    )
 
     raw = text or ""
+    use_html = looks_like_telegram_html(raw)
+    parse_kwargs: dict[str, Any] = {}
+    if use_html:
+        try:
+            from telegram.constants import ParseMode
+
+            parse_kwargs["parse_mode"] = ParseMode.HTML
+        except Exception:
+            use_html = False
+
     parts = split_telegram_text(raw, limit=TELEGRAM_MAX_MESSAGE - 8)
     body = parts[0] if parts else ""
     if len(parts) > 1:
-        body = body.rstrip() + "\n…(المزيد في الرسائل التالية)"
-    cap = body[:1024]
+        if use_html:
+            body = body.rstrip() + "\n…"
+        else:
+            body = body.rstrip() + "\n…(المزيد في الرسائل التالية)"
+    cap = strip_markdown_noise(body)[:1024] if use_html else body[:1024]
     ud = user_data if isinstance(user_data, dict) else {}
 
     async def _ok_edit(mid) -> Any:
@@ -93,10 +115,15 @@ async def send_or_edit_ui(
         has_cap = getattr(preferred_message, "caption", None) is not None or has_photo
         try:
             if has_text and not has_photo:
-                await preferred_message.edit_text(text=body, reply_markup=markup)
+                await preferred_message.edit_text(
+                    text=body, reply_markup=markup, **parse_kwargs
+                )
                 return await _ok_edit(mid)
             if has_photo or has_cap:
-                await preferred_message.edit_caption(caption=cap, reply_markup=markup)
+                # Captions: prefer plain (HTML blockquotes are poor in captions)
+                await preferred_message.edit_caption(
+                    caption=cap, reply_markup=markup
+                )
                 return await _ok_edit(mid)
         except Exception:
             logger.debug("preferred edit failed mid=%s", mid, exc_info=True)
@@ -115,6 +142,7 @@ async def send_or_edit_ui(
                         message_id=int(last),
                         text=body,
                         reply_markup=markup,
+                        **parse_kwargs,
                     )
                 else:
                     await bot.edit_message_caption(
@@ -137,10 +165,11 @@ async def send_or_edit_ui(
             chat_id=int(chat_id),
             text=body,
             reply_markup=markup,
+            **parse_kwargs,
         )
         mid = getattr(sent, "message_id", None)
         remember_message(ud, mid)
-        # Spill overflow as follow-up plain messages (agent long text)
+        # Spill overflow as follow-up (plain; HTML cards should fit one message)
         for extra in parts[1:]:
             try:
                 follow = await bot.send_message(chat_id=int(chat_id), text=extra)
@@ -150,5 +179,20 @@ async def send_or_edit_ui(
         await prune_bot_messages(bot, chat_id, ud, protect=mid)
         return sent
     except Exception:
+        # HTML parse failure → plain fallback once
+        if parse_kwargs:
+            try:
+                plain = strip_markdown_noise(body)[:TELEGRAM_MAX_MESSAGE]
+                sent = await bot.send_message(
+                    chat_id=int(chat_id),
+                    text=plain,
+                    reply_markup=markup,
+                )
+                mid = getattr(sent, "message_id", None)
+                remember_message(ud, mid)
+                await prune_bot_messages(bot, chat_id, ud, protect=mid)
+                return sent
+            except Exception:
+                pass
         logger.exception("send_or_edit_ui send failed chat=%s", chat_id)
         return None
