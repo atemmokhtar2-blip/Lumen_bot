@@ -170,10 +170,8 @@ async def safe_edit_text(
 ) -> None:
     """Edit message text. Default plain text — never fails on agent markdown noise.
 
-    When use_markdown=True, sends MarkdownV2 with the body fully escaped
-    (so dynamic content is safe; intentional bold is not applied unless the
-    caller pre-builds escaped MDV2 themselves and passes use_markdown=False
-    with parse handled externally).
+    Auto-detects our UI HTML (``<blockquote expandable>``) and uses parse_mode=HTML.
+    When use_markdown=True, sends MarkdownV2 with the body fully escaped.
     """
     body = "" if text is None else str(text)
     # editMessageText only supports a single message — truncate smartly
@@ -195,6 +193,15 @@ async def safe_edit_text(
             await message.edit_text(
                 escaped, parse_mode=ParseMode.MARKDOWN_V2, **kwargs
             )
+            return
+        except Exception:
+            pass
+
+    if looks_like_telegram_html(body):
+        try:
+            from telegram.constants import ParseMode
+
+            await message.edit_text(body, parse_mode=ParseMode.HTML, **kwargs)
             return
         except Exception:
             pass
@@ -221,7 +228,7 @@ async def safe_reply_text(
     """Reply with one or more messages if text exceeds Telegram limit.
 
     Returns the list of sent Message objects (may be empty on total failure).
-    Default is plain text (safe for agent output).
+    Default is plain text (safe for agent output). UI HTML cards auto-use HTML mode.
     """
     body = "" if text is None else str(text)
     parts = split_telegram_text(body, limit=TELEGRAM_MAX_MESSAGE - 8)
@@ -244,6 +251,17 @@ async def safe_reply_text(
                     escape_markdown_v2(part),
                     parse_mode=ParseMode.MARKDOWN_V2,
                     **kw,
+                )
+                sent.append(await_msg)
+                ok = True
+            except Exception:
+                ok = False
+        if not ok and looks_like_telegram_html(part):
+            try:
+                from telegram.constants import ParseMode
+
+                await_msg = await message.reply_text(
+                    part, parse_mode=ParseMode.HTML, **kw
                 )
                 sent.append(await_msg)
                 ok = True

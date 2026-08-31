@@ -74,29 +74,27 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         from lumen.engine.services.ui_state.render import UiFacts
         facts = UiFacts()
-    caption = render_message(ui, facts)
+    # HTML expandable blue cards (official <blockquote expandable>)
+    menu_html = render_message(ui, facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid, nav=False)
 
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 
-    # First-time hero image only. After that: text menu forever.
-    # Flag lives in user_data + session store so it survives process restarts.
+    # First-time hero image only (no HTML in caption — blockquotes need a text message).
+    # Menu body is ALWAYS a separate text message with parse_mode=HTML.
     already_welcomed = bool(ud.get("lumen_welcome_shown"))
-    sent_msg = None
     if not already_welcomed:
         welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
         if welcome_img.is_file():
             try:
                 from telegram import InputFile
+
                 with welcome_img.open("rb") as fh:
-                    sent_msg = await message.reply_photo(
+                    photo_msg = await message.reply_photo(
                         photo=InputFile(fh, filename="welcome.jpg"),
-                        caption=caption[:1024],
-                        reply_markup=markup,
                     )
-                # Mark as shown immediately so a second /start never re-sends the photo
                 ud["lumen_welcome_shown"] = True
-                ud["lumen_welcome_msg_id"] = getattr(sent_msg, "message_id", None)
+                ud["lumen_welcome_msg_id"] = getattr(photo_msg, "message_id", None)
                 if context.user_data is not None:
                     context.user_data["lumen_welcome_shown"] = True
                     context.user_data["lumen_welcome_msg_id"] = ud["lumen_welcome_msg_id"]
@@ -106,13 +104,21 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 except Exception:
                     pass
             except Exception:
-                sent_msg = None
-    if sent_msg is None:
+                pass
+
+    sent_msg = None
+    try:
+        sent_list = await safe_reply_text(message, menu_html, reply_markup=markup)
+        sent_msg = sent_list[-1] if sent_list else None
+    except Exception:
         try:
-            sent_list = await safe_reply_text(message, caption, reply_markup=markup)
-            sent_msg = sent_list[-1] if sent_list else None
+            from telegram.constants import ParseMode
+
+            sent_msg = await message.reply_text(
+                menu_html, parse_mode=ParseMode.HTML, reply_markup=markup
+            )
         except Exception:
-            await safe_reply_text(message, caption[:4000])
+            await safe_reply_text(message, menu_html[:4000])
             sent_msg = None
     if sent_msg is not None and context.user_data is not None:
         remember_message(context.user_data, getattr(sent_msg, "message_id", None))
