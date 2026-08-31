@@ -171,8 +171,9 @@ async def _handle_message_body(
                         persist_ui_session(uid_ui, dict(context.user_data))
                     facts = gather_ui_facts(uid_ui, context.user_data)
                     body = render_message(ui, facts)
-                    await message.reply_text(
-                        body[:4000],
+                    await safe_reply_text(
+                        message,
+                        body,
                         reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=uid_ui),
                     )
                     # Next free-text need → ForceReply placeholder
@@ -254,7 +255,7 @@ async def _handle_message_body(
             )
             if not _actionish:
                 await _clear_thinking()
-                await message.reply_text(complaint_reply_ar()[:4000])
+                await safe_reply_text(message, complaint_reply_ar())
                 return
     except Exception:
         logger.exception("platform_status complaint handler failed")
@@ -274,7 +275,7 @@ async def _handle_message_body(
             _hitl_state = None
         if handled:
             await _clear_thinking()
-            await message.reply_text((hitl_reply or "تم.")[:4000])
+            await safe_reply_text(message, hitl_reply or "تم.")
             return
     except Exception:
         logger.exception("multi_agent HITL bridge failed")

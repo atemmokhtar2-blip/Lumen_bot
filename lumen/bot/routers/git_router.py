@@ -113,6 +113,12 @@ async def try_handle_git(
                 "• Fine-grained: `github_pat_...`\n\n"
                 "أرسل التوكن الآن وسأُنشئ المستودع تلقائياً."
             )
+            try:
+                from lumen.bot.ui.input_prompt import ask_text_input
+                await ask_text_input(message, kind="github_pat")
+            except Exception:
+                pass
+
             return True
 
         _sent = await safe_reply_text(message, f"📦 جاري إنشاء المستودع `{name}`...")

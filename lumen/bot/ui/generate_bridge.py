@@ -99,7 +99,7 @@ async def run_guided_generation(
                 )
             except Exception:
                 pass
-            await status_msg.edit_text(text, reply_markup=markup)
+            await safe_edit_text(status_msg, text, reply_markup=markup)
         except Exception:
             await safe_edit_text(status_msg, "فشل التوليد (نتيجة فارغة).")
         return None
@@ -108,9 +108,11 @@ async def run_guided_generation(
     try:
         _meta = getattr(result, "metadata", None) or {}
         if _meta.get("fallback_used") == "cline":
-            await message.reply_text(
+            from lumen.bot.helpers import safe_reply_text
+            await safe_reply_text(
+                message,
                 "⚙️ المسار المتقدم (multi-agent) غير متاح حالياً — "
-                "جاري التوليد بالمسار المباشر (Cline). النتيجة ستكون جاهزة قريباً."
+                "جاري التوليد بالمسار المباشر (Cline). النتيجة ستكون جاهزة قريباً.",
             )
     except Exception:
         pass

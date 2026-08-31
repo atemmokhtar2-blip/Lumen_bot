@@ -13,7 +13,7 @@ from telegram.constants import ChatAction
 
 from ..config import OUTPUT_DIR, logger
 from ..sanitize import user_facing_generation_error
-from ..helpers import safe_edit_text, make_zip_from_path, run_generation, escape_md
+from ..helpers import safe_edit_text, safe_reply_text, make_zip_from_path, run_generation, escape_md
 from ..progress_tracker import run_with_heartbeat
 from ..middlewares.mongo_sync import persist_session as _persist_session
 
@@ -99,7 +99,7 @@ async def execute_bot_generation(
         try:
             _meta = getattr(result, "metadata", None) or {}
             if _meta.get("fallback_used") == "cline":
-                await message.reply_text(
+                await safe_reply_text(message, 
                     "⚙️ المسار المتقدم (multi-agent) غير متاح حالياً — "
                     "جاري التوليد بالمسار المباشر (Cline). النتيجة ستكون جاهزة قريباً."
                 )
@@ -243,7 +243,7 @@ async def execute_bot_generation(
             except Exception as _sm_exc:
                 smoke_ok, smoke_msg = False, f"smoke_error:{type(_sm_exc).__name__}"
             if not smoke_ok:
-                await message.reply_text(
+                await safe_reply_text(message, 
                     "❌ التسليم الآمن فشل — لم يُرسل ZIP.\n"
                     f"السبب: `{escape_md(str(smoke_msg)[:250])}`"
                 )
@@ -263,11 +263,11 @@ async def execute_bot_generation(
                             )
                     except Exception:
                         logger.exception("zip upload failed")
-                        await message.reply_text(
+                        await safe_reply_text(message, 
                             "✅ المشروع جاهز على السيرفر لكن رفع ZIP فشل. تم حفظه في مساحة المستخدم المعزولة."
                         )
                 else:
-                    await message.reply_text(
+                    await safe_reply_text(message, 
                         "✅ المشروع اتولد وتم حفظه في مساحة المستخدم المعزولة.\n"
                         "تعذر إنشاء ZIP — راجع السجلات."
                     )

@@ -139,7 +139,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await safe_reply_text(message, text)
     except Exception:
-        await message.reply_text(text)
+        await safe_reply_text(message, text)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

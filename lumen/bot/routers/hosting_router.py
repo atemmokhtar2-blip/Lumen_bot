@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
 from ..helpers import detect_host_intent
+from lumen.bot.helpers import safe_reply_text
 
 
 async def try_handle_hosting(
@@ -32,7 +33,7 @@ async def try_handle_hosting(
         svc = get_hosting_service(OUTPUT_DIR)
     except Exception as exc:
         logger.exception("HostService unavailable")
-        await message.reply_text(
+        await safe_reply_text(message, 
             "❌ خدمة الاستضافة غير متاحة حالياً.\n"
             f"• السبب: {type(exc).__name__}\n"
             "• تأكد من DATABASE_URL أو ENVIRONMENT=dev."
@@ -45,7 +46,7 @@ async def try_handle_hosting(
     if host_action == "start":
         project_path = active.get("path") or ""
         if not project_path or not Path(project_path).exists():
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "ما فيش مشروع نشط للاستضافة.\n"
                 "اسحب مستودع أو ولّد بوت أولاً، بعدين اكتب: استضف"
             )
@@ -68,7 +69,7 @@ async def try_handle_hosting(
                 message=message, kind="bot", body=body, user_id=int(uid or 0)
             )
         except Exception:
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "🚀 أرسل توكن البوت من @BotFather.\n"
                 "بعد الإرسال سيُحذف سرك من المحادثة."
             )
@@ -96,16 +97,16 @@ async def try_handle_hosting(
                 save_ui_state(context.user_data, st)
             except Exception:
                 pass
-            await message.reply_text(str(text)[:3500], reply_markup=markup)
+            await safe_reply_text(message, str(text)[:3500], reply_markup=markup)
         except Exception:
-            await message.reply_text(str(text)[:3500])
+            await safe_reply_text(message, str(text)[:3500])
         return True
 
     if host_action == "stop":
         items = list(svc.list_for_user(uid))
         running = [i for i in items if getattr(i, "status", "") == "running"]
         if not running:
-            await message.reply_text("ما فيش مثيل استضافة شغال لإيقافه.")
+            await safe_reply_text(message, "ما فيش مثيل استضافة شغال لإيقافه.")
             return True
         target = sorted(
             running, key=lambda x: float(getattr(x, "started_at", 0) or 0), reverse=True
@@ -121,15 +122,15 @@ async def try_handle_hosting(
             markup = build_inline_keyboard(
                 host_panel_buttons(instance_index="0"), user_id=int(uid or 0)
             )
-            await message.reply_text(str(text)[:3500], reply_markup=markup)
+            await safe_reply_text(message, str(text)[:3500], reply_markup=markup)
         except Exception:
-            await message.reply_text(str(text)[:3500])
+            await safe_reply_text(message, str(text)[:3500])
         return True
 
     if host_action == "diagnose":
         items = list(svc.list_for_user(uid))
         if not items:
-            await message.reply_text("ما فيش مثيلات لتشخيصها.")
+            await safe_reply_text(message, "ما فيش مثيلات لتشخيصها.")
             return True
         target = sorted(
             items, key=lambda x: float(getattr(x, "started_at", 0) or 0), reverse=True
@@ -145,9 +146,9 @@ async def try_handle_hosting(
             markup = build_inline_keyboard(
                 host_panel_buttons(instance_index="0"), user_id=int(uid or 0)
             )
-            await message.reply_text(str(text)[:3500], reply_markup=markup)
+            await safe_reply_text(message, str(text)[:3500], reply_markup=markup)
         except Exception:
-            await message.reply_text(str(text)[:3500])
+            await safe_reply_text(message, str(text)[:3500])
         return True
 
     return False
