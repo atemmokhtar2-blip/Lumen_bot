@@ -75,14 +75,22 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         from lumen.engine.services.ui_state.render import UiFacts
         facts = UiFacts()
-    caption = render_message(ui, facts)
+
+    # First-time onboarding message is richer than the compact home menu.
+    # The ``lumen_welcome_shown`` flag lives in user_data + session store so
+    # it survives process restarts — onboarding appears exactly once.
+    already_welcomed = bool(ud.get("lumen_welcome_shown"))
+    if already_welcomed:
+        caption = render_message(ui, facts)
+    else:
+        from lumen.engine.services.ui_state.render import render_onboarding
+        caption = render_onboarding(facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
 
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 
     # First-time hero image only. After that: text menu forever.
     # Flag lives in user_data + session store so it survives process restarts.
-    already_welcomed = bool(ud.get("lumen_welcome_shown"))
     sent_msg = None
     if not already_welcomed:
         welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
