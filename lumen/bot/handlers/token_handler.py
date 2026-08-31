@@ -9,7 +9,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..helpers import looks_like_bot_token, normalize_bot_token
+from ..helpers import safe_edit_text, safe_reply_text, looks_like_bot_token, normalize_bot_token
 from ..live import handle_live_run_token, handle_live_deploy_token
 from ..middlewares.mongo_sync import (
     persist_session as _persist_session,
@@ -54,7 +54,7 @@ async def try_handle_token(
                 if plain:
                     request = plain
                     try:
-                        await message.reply_text(
+                        await safe_reply_text(message, 
                             "✅ تم استلام السر من اللوحة الآمنة وتشفيره — جاري المتابعة."
                         )
                     except Exception:
@@ -83,9 +83,15 @@ async def try_handle_token(
             context.user_data.pop("pending_run", None)
             context.user_data.pop("pending_live_run", None)
             context.user_data.pop("pending_deploy", None)
-        status = await message.reply_text(
+        _sent = await safe_reply_text(message, 
             "🚀 جاري بدء الاستضافة الدائمة (HostService / Firecracker)..."
         )
+
+        status = _sent[-1] if _sent else None
+
+        if status is None:
+
+            return
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         # SECURITY (Vuln #3): validate project_path against per-user sandbox
@@ -101,7 +107,7 @@ async def try_handle_token(
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 await send_actionable_error(status, kind="generic", title="مسار غير صالح", detail="خارج مساحة المستخدم المعزولة", user_id=int(_uid or 0))
             except Exception:
-                await status.edit_text("❌ مسار المشروع غير صالح.")
+                await safe_edit_text(status, "❌ مسار المشروع غير صالح.")
             return True
 
         def _do_host():
@@ -132,13 +138,13 @@ async def try_handle_token(
                     project_path=str(pending_host.get("project_path") or ""),
                     user_id=int(uid or 0),
                 )
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="host", detail=type(e).__name__, project_path=str(pending_host.get("project_path") or ""), user_id=int(message.from_user.id if message.from_user else 0))
                 except Exception:
-                    await status.edit_text(f"❌ فشل الاستضافة (`{type(e).__name__}`).")
+                    await safe_edit_text(status, f"❌ فشل الاستضافة (`{type(e).__name__}`).")
             try:
                 from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
                 await emit_context_event(
@@ -167,9 +173,9 @@ async def try_handle_token(
                     from lumen.bot.ui.keyboards import build_inline_keyboard
                     uid = message.from_user.id if message.from_user else 0
                     markup = build_inline_keyboard(host_panel_buttons(), user_id=int(uid or 0))
-                    await status.edit_text(format_host_success(result), reply_markup=markup)
+                    await safe_edit_text(status, format_host_success(result), reply_markup=markup)
                 except Exception:
-                    await status.edit_text(result.to_user_text())
+                    await safe_edit_text(status, result.to_user_text())
         else:
             try:
                 from lumen.bot.ui.actionable_errors import host_error
@@ -179,9 +185,9 @@ async def try_handle_token(
                     project_path=str(pending_host.get("project_path") or ""),
                     user_id=int(uid or 0),
                 )
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
-                await status.edit_text(result.to_user_text())
+                await safe_edit_text(status, result.to_user_text())
             try:
                 from lumen.bot.ui.emit_context import emit_context_event, classify_host_failure
                 await emit_context_event(
@@ -284,7 +290,7 @@ async def try_handle_token(
                 logger.exception("token project recovery failed")
 
         # Token sent but no project is pending — do NOT treat as bot description
-        await message.reply_text(
+        await safe_reply_text(message, 
             "استلمت توكن بوت، لكن مفيش مشروع جاهز للتشغيل دلوقتي.\n"
             "ولّد بوت أو اسحب مستودع أولاً، وبعد رسالة «أرسل توكن البوت» ابعت التوكن."
         )
@@ -305,7 +311,13 @@ async def try_handle_token(
             except Exception:
                 logger.exception("PAT scrub before create_repo failed")
             name = str(pending_create.get("name") or "").strip()
-            status = await message.reply_text(f"🔑 جاري إنشاء المستودع `{name}`...")
+            _sent = await safe_reply_text(message, f"🔑 جاري إنشاء المستودع `{name}`...")
+
+            status = _sent[-1] if _sent else None
+
+            if status is None:
+
+                return
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
             uid = int(user.id) if user else 0
             try:
@@ -317,7 +329,7 @@ async def try_handle_token(
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="generic", title="مساحة معزولة", detail="تعذّر الإنشاء — رُفض لأسباب أمان", user_id=int(user.id) if user else 0)
                 except Exception:
-                    await status.edit_text("❌ تعذّر إنشاء مساحة معزولة.")
+                    await safe_edit_text(status, "❌ تعذّر إنشاء مساحة معزولة.")
                 return True
 
             def _create():
@@ -337,13 +349,13 @@ async def try_handle_token(
                     text, markup = create_repo_error(
                         detail=type(e).__name__, user_id=_uid
                     )
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import send_actionable_error
                         await send_actionable_error(status, kind="create", detail=type(e).__name__, user_id=int(user.id) if user else 0)
                     except Exception:
-                        await status.edit_text(f"❌ فشل الإنشاء (`{type(e).__name__}`).")
+                        await safe_edit_text(status, f"❌ فشل الإنشاء (`{type(e).__name__}`).")
                 return True
             if result.ok:
                 context.user_data.pop("pending_create_repo", None)
@@ -360,9 +372,9 @@ async def try_handle_token(
                         body += f"\n• الرابط: {code_url(result.url)}"
                     if result.path:
                         body += f"\n• المسار: {code_path(result.path)}"
-                    await status.edit_text(body)
+                    await safe_edit_text(status, body)
                 except Exception:
-                    await status.edit_text(f"✅ {result.message}")
+                    await safe_edit_text(status, f"✅ {result.message}")
             else:
                 try:
                     from lumen.bot.ui.actionable_errors import create_repo_error
@@ -371,13 +383,13 @@ async def try_handle_token(
                         detail=str(getattr(result, "message", "") or "create_failed"),
                         user_id=_uid,
                     )
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import send_actionable_error
                         await send_actionable_error(status, kind="create", detail=str(result.message or ""), user_id=int(user.id) if user else 0)
                     except Exception:
-                        await status.edit_text(f"❌ {result.message}")
+                        await safe_edit_text(status, f"❌ {result.message}")
             return True
 
     # Push: PAT after auth failure
@@ -399,25 +411,31 @@ async def try_handle_token(
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(message, kind="generic", title="مسار غير صالح", detail="خارج العزل", user_id=int(user.id) if user else 0)
                 except Exception:
-                    await message.reply_text("❌ مسار المشروع غير صالح.")
+                    await safe_reply_text(message, "❌ مسار المشروع غير صالح.")
                 return True
-            status = await message.reply_text("🔑 جاري الدفع بالتوكن...")
+            _sent = await safe_reply_text(message, "🔑 جاري الدفع بالتوكن...")
+
+            status = _sent[-1] if _sent else None
+
+            if status is None:
+
+                return
             result = await asyncio.to_thread(lambda: git_push(path, token=git_tok))
             if result.ok:
                 context.user_data.pop("pending_git_push", None)
-                await status.edit_text(f"✅ {result.message}")
+                await safe_edit_text(status, f"✅ {result.message}")
             else:
                 try:
                     from lumen.bot.ui.actionable_errors import git_op_error
                     _uid = int(user.id) if user else 0
                     text, markup = git_op_error(op="push", detail="push_failed", user_id=_uid)
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import send_actionable_error
                         await send_actionable_error(status, kind="push", detail="push_failed", user_id=int(user.id) if user else 0)
                     except Exception:
-                        await status.edit_text("❌ فشلت العملية.")
+                        await safe_edit_text(status, "❌ فشلت العملية.")
             return True
 
     # Private repo: user sends GitHub PAT after auth failure
@@ -434,7 +452,13 @@ async def try_handle_token(
                 await scrub_and_confirm(update_message=message, bot=context.bot)
             except Exception:
                 logger.exception("PAT scrub before reclone failed")
-            status = await message.reply_text("🔑 جاري إعادة سحب المستودع بالتوكن...")
+            _sent = await safe_reply_text(message, "🔑 جاري إعادة سحب المستودع بالتوكن...")
+
+            status = _sent[-1] if _sent else None
+
+            if status is None:
+
+                return
             await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
             uid = int(user.id) if user else 0
             try:
@@ -446,7 +470,7 @@ async def try_handle_token(
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="generic", title="مساحة معزولة", detail="إعادة السحب مرفوضة", user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text("❌ تعذّر إنشاء مساحة معزولة.")
+                    await safe_edit_text(status, "❌ تعذّر إنشاء مساحة معزولة.")
                 return True
             url = pending_clone.get("url") or ""
 
@@ -468,19 +492,19 @@ async def try_handle_token(
                     text, markup = private_clone_error(
                         url=url, detail=type(e).__name__, user_id=int(uid or 0)
                     )
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import git_op_error
                         _uid = int(user.id) if user else 0
                         text, markup = git_op_error(op="clone", detail=type(e).__name__, user_id=_uid)
-                        await status.edit_text(text, reply_markup=markup)
+                        await safe_edit_text(status, text, reply_markup=markup)
                     except Exception:
                         try:
                             from lumen.bot.ui.actionable_errors import send_actionable_error
                             await send_actionable_error(status, kind="clone", detail=type(e).__name__, url=url, user_id=int(uid or 0))
                         except Exception:
-                            await status.edit_text(f"❌ فشل السحب بالتوكن (`{type(e).__name__}`).")
+                            await safe_edit_text(status, f"❌ فشل السحب بالتوكن (`{type(e).__name__}`).")
                 return True
 
             finally:
@@ -499,19 +523,19 @@ async def try_handle_token(
                     text, markup = private_clone_error(
                         url=url, detail=detail, user_id=int(uid or 0)
                     )
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     err_msg = f"❌ {result.message}"
                     if result.stderr:
                         err_msg += f"\n`{result.stderr[:250]}`"
-                    await status.edit_text(err_msg)
+                    await safe_edit_text(status, err_msg)
                 if not result.needs_auth:
                     context.user_data.pop("pending_clone_auth", None)
                 return True
 
             context.user_data.pop("pending_clone_auth", None)
             try:
-                await status.edit_text("🔍 جاري فهم المستودع...")
+                await safe_edit_text(status, "🔍 جاري فهم المستودع...")
                 from lumen.engine.services.repo_understanding import understand_repo
 
                 def _do_u():
@@ -567,7 +591,7 @@ async def try_handle_token(
                 header = sections.get("header") or "✅ تم فهم المستودع"
                 if _is_runnable:
                     header += "\n\n🚀 للتشغيل الحقيقي: أرسل توكن البوت من @BotFather أو اضغط الزر."
-                await status.edit_text(
+                await safe_edit_text(status, 
                     header,
                     reply_markup=section_keyboard(
                         user_id=int(uid or 0), show_run=bool(_is_runnable)
@@ -576,7 +600,7 @@ async def try_handle_token(
             except Exception as e:
                 logger.exception("understand after private clone failed")
                 from lumen.bot.ui.rtl_text import code_path, code_url
-                await status.edit_text(
+                await safe_edit_text(status, 
                     "✅ تم السحب\n"
                     f"• الرابط: {code_url(result.url or '')}\n"
                     f"• المسار: {code_path(result.path or '')}\n"

@@ -70,7 +70,13 @@ async def send_or_edit_ui(
     preferred_message=None,
 ) -> Any:
     """Prefer edit (text or caption); never hang; always leave one surface."""
-    body = (text or "")[:4000]
+    from lumen.bot.telegram_text import split_telegram_text, TELEGRAM_MAX_MESSAGE
+
+    raw = text or ""
+    parts = split_telegram_text(raw, limit=TELEGRAM_MAX_MESSAGE - 8)
+    body = parts[0] if parts else ""
+    if len(parts) > 1:
+        body = body.rstrip() + "\n…(المزيد في الرسائل التالية)"
     cap = body[:1024]
     ud = user_data if isinstance(user_data, dict) else {}
 
@@ -134,6 +140,13 @@ async def send_or_edit_ui(
         )
         mid = getattr(sent, "message_id", None)
         remember_message(ud, mid)
+        # Spill overflow as follow-up plain messages (agent long text)
+        for extra in parts[1:]:
+            try:
+                follow = await bot.send_message(chat_id=int(chat_id), text=extra)
+                remember_message(ud, getattr(follow, "message_id", None))
+            except Exception:
+                logger.exception("overflow follow-up send failed")
         await prune_bot_messages(bot, chat_id, ud, protect=mid)
         return sent
     except Exception:

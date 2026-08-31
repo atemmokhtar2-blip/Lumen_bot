@@ -5,7 +5,6 @@ import asyncio
 from pathlib import Path
 
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from .capability_boundaries import get_help_text
@@ -110,7 +109,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 sent_msg = None
     if sent_msg is None:
         try:
-            sent_msg = await message.reply_text(caption[:4000], reply_markup=markup)
+            sent_list = await safe_reply_text(message, caption, reply_markup=markup)
+            sent_msg = sent_list[-1] if sent_list else None
         except Exception:
             await safe_reply_text(message, caption[:4000])
             sent_msg = None
@@ -137,7 +137,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = get_help_text()
     try:
-        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        await safe_reply_text(message, text)
     except Exception:
         await message.reply_text(text)
 

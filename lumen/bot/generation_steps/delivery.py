@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from lumen.bot.config import GENERATION_STATUS_PREVIEW_LIMIT, ZIP_MAX_MB, OUTPUT_DIR
-from lumen.bot.helpers import escape_md, make_zip_from_path, split_file_for_telegram
+from lumen.bot.helpers import escape_md, make_zip_from_path, split_file_for_telegram, safe_reply_text
 from lumen.bot.session_store import get_session_store
 
 logger = logging.getLogger("lumen_bot.generation_flow")
@@ -58,7 +58,7 @@ async def deliver_generation_result(
         logger.exception("status edit failed")
 
     if not success or not project_path:
-        await message.reply_text("لم يُنشأ مشروع جاهز. جرّب وصفاً أوضح.")
+        await safe_reply_text(message, "لم يُنشأ مشروع جاهز. جرّب وصفاً أوضح.")
         return
 
     # Mandatory pre-delivery gate: never send a project before deterministic verification.
@@ -68,11 +68,11 @@ async def deliver_generation_result(
         ah = _ah.to_dict()
         ready = bool(_ah.ready_for_token)
         if not ready:
-            await message.reply_text(_ah.to_user_text(lang="ar")[:GENERATION_STATUS_PREVIEW_LIMIT])
+            await safe_reply_text(message, _ah.to_user_text(lang="ar")[:GENERATION_STATUS_PREVIEW_LIMIT])
             return
     except Exception:
         logger.exception("mandatory pre-delivery verification failed")
-        await message.reply_text("❌ تعذر إكمال فحص المشروع قبل التسليم؛ لم يتم إرسال ملف غير متحقق منه.")
+        await safe_reply_text(message, "❌ تعذر إكمال فحص المشروع قبل التسليم؛ لم يتم إرسال ملف غير متحقق منه.")
         return
 
     # Ensure every delivered project has a production Dockerfile (image deploy path)
@@ -93,13 +93,13 @@ async def deliver_generation_result(
 
     # Pre-delivery 10s smoke test — code must load before we ship a zip.
     try:
-        await message.reply_text("🧪 جاري اختبار المشروع ~10 ثوانٍ قبل التسليم...")
+        await safe_reply_text(message, "🧪 جاري اختبار المشروع ~10 ثوانٍ قبل التسليم...")
     except Exception:
         pass
     smoke_ok, smoke_msg = _smoke_test_project(project_path, seconds=10.0)
     if not smoke_ok:
         logger.error("pre-delivery smoke failed: %s", smoke_msg)
-        await message.reply_text(
+        await safe_reply_text(message, 
             "❌ فشل اختبار التشغيل — *لم يُرسل* ملف المشروع.\n"
             "المسار الجذري: الكود لازم يمر على compile + import + handlers قبل التسليم.\n"
             f"التفاصيل: `{escape_md(str(smoke_msg)[:300])}`\n"
@@ -116,7 +116,7 @@ async def deliver_generation_result(
             pass
         return
     try:
-        await message.reply_text(f"✅ اختبار 10 ثوانٍ ناجح ({smoke_msg})")
+        await safe_reply_text(message, f"✅ اختبار 10 ثوانٍ ناجح ({smoke_msg})")
     except Exception:
         pass
 
@@ -126,7 +126,7 @@ async def deliver_generation_result(
     try:
         zip_path = make_zip_from_path(project_path)
         if not zip_path or not zip_path.exists():
-            await message.reply_text("تم التوليد لكن تعذر إنشاء ملف zip.")
+            await safe_reply_text(message, "تم التوليد لكن تعذر إنشاء ملف zip.")
             return
         size_mb = zip_path.stat().st_size / (1024 * 1024)
 
@@ -178,12 +178,12 @@ async def deliver_generation_result(
         else:
             parts = split_file_for_telegram(zip_path, max_mb=min(45.0, ZIP_MAX_MB))
             if not parts:
-                await message.reply_text(
+                await safe_reply_text(message, 
                     f"❌ تعذر تقسيم ملف المشروع الكبير ({size_mb:.1f} MB)، ولم يكتمل التسليم."
                 )
                 return
             total = len(parts)
-            await message.reply_text(
+            await safe_reply_text(message, 
                 f"📦 المشروع أكبر من رسالة واحدة ({size_mb:.1f} MB)، سأرسل {total} أجزاء مرقمة. "
                 "نزّلها كلها وادمجها بالترتيب: cat project.zip.part* > project.zip"
             )
@@ -198,7 +198,7 @@ async def deliver_generation_result(
     except Exception as exc:
         last_err = f"{type(exc).__name__}: {exc}"
         logger.exception("zip delivery failed: %s", last_err)
-        await message.reply_text(
+        await safe_reply_text(message, 
             "❌ فشل تسليم ملف المشروع بعد نجاح التوليد. لم يتم اعتبار البوت جاهزاً للتشغيل.\n"
             f"سبب التسليم: `{escape_md(last_err[:180])}`"
         )
@@ -207,7 +207,7 @@ async def deliver_generation_result(
     # The mandatory gate above is authoritative. Do not overwrite its result
     # with stale/missing metadata from an older generation result shape.
     if not delivery_ok:
-        await message.reply_text("❌ لم يكتمل تسليم ملف المشروع، لذلك لن يتم فتح مسار التشغيل.")
+        await safe_reply_text(message, "❌ لم يكتمل تسليم ملف المشروع، لذلك لن يتم فتح مسار التشغيل.")
         return
     ready = bool(ready and success)
     ah = ah or meta.get("anti_hallucination") or {}
@@ -219,7 +219,7 @@ async def deliver_generation_result(
                 run_anti_hallucination_gate,
             )
             _ah = run_anti_hallucination_gate(project_path, user_request=request or "")
-            await message.reply_text(_ah.to_user_text(lang="ar"))
+            await safe_reply_text(message, _ah.to_user_text(lang="ar"))
             ah = _ah.to_dict()
             ready = ready and bool(_ah.ready_for_token)
         elif ah:
@@ -247,7 +247,7 @@ async def deliver_generation_result(
                     for e in (ah.get("errors") or [])[:3]:
                         if isinstance(e, dict):
                             lines.append(f"🔴 {e.get('ar') or e.get('code')}")
-            await message.reply_text("\n".join(lines)[: (200 if _quiet else GENERATION_STATUS_PREVIEW_LIMIT)])
+            await safe_reply_text(message, "\n".join(lines)[: (200 if _quiet else GENERATION_STATUS_PREVIEW_LIMIT)])
     except Exception:
         logger.exception("anti_hallucination report failed")
 
@@ -279,16 +279,16 @@ async def deliver_generation_result(
                 get_session_store().save(int(user.id), context.user_data)
         except Exception:
             logger.exception("pending deployment session persistence failed")
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "⚠️ تم التحقق من المشروع، لكن تعذر حفظ جلسة التشغيل. أعد المحاولة قبل إرسال التوكن."
             )
             return
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
         if _quiet:
-            await message.reply_text("📦 جاهز — أرسل توكن البوت من @BotFather")
+            await safe_reply_text(message, "📦 جاهز — أرسل توكن البوت من @BotFather")
         else:
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
                 + cmd_line
                 + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
@@ -315,7 +315,7 @@ async def deliver_generation_result(
                 "• استضافة دائمة — Firecracker\n"
                 "• ZIP أو معاينة الملفات"
             )
-            await message.reply_text(
+            await safe_reply_text(message, 
                 body,
                 reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=int(getattr(user, "id", 0) or 0)),
             )
@@ -323,7 +323,7 @@ async def deliver_generation_result(
             logger.exception("post-generation UI menu failed")
 
     else:
-        await message.reply_text(
+        await safe_reply_text(message, 
             "⚠️ المشروع اتولّد لكن التحقق ضد الهلوسة رفض تسليمه كجاهز.\n"
             "راجع التقرير أعلاه."
         )

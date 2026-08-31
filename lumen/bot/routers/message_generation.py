@@ -162,7 +162,7 @@ async def execute_bot_generation(
                     clean = raw
                 kb = build_hitl_keyboard(user_id=int(uid or 0))
                 try:
-                    await status_msg.edit_text(
+                    await safe_edit_text(status_msg, 
                         clean[:4000],
                         reply_markup=kb,
                         parse_mode="Markdown",

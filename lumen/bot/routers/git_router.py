@@ -9,7 +9,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from ..config import OUTPUT_DIR, logger
-from ..helpers import make_zip_from_path
+from ..helpers import safe_edit_text, safe_reply_text, make_zip_from_path
 from ..middlewares.mongo_sync import (
     persist_session as _persist_session,
     plan_live_seconds as _plan_live_seconds,
@@ -96,7 +96,7 @@ async def try_handle_git(
     if intent == "create_repo":
         name = extract_repo_name(request)
         if not name:
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "📦 لإنشاء مستودع، حدّد الاسم.\n"
                 "مثال: `أنشئ مستودع my-bot`\n"
                 "ومع التوكن: `أنشئ مستودع my-bot` ثم التوكن في نفس الرسالة أو بعده."
@@ -107,7 +107,7 @@ async def try_handle_git(
                 "name": name,
                 "private": True,
             }
-            await message.reply_text(
+            await safe_reply_text(message, 
                 f"🔒 لإنشاء المستودع `{name}` على GitHub أحتاج توكن PAT:\n\n"
                 "• Classic: `ghp_...` (صلاحية `repo`)\n"
                 "• Fine-grained: `github_pat_...`\n\n"
@@ -115,7 +115,16 @@ async def try_handle_git(
             )
             return True
 
-        status = await message.reply_text(f"📦 جاري إنشاء المستودع `{name}`...")
+        _sent = await safe_reply_text(message, f"📦 جاري إنشاء المستودع `{name}`...")
+
+
+        status = _sent[-1] if _sent else None
+
+
+        if status is None:
+
+
+            return
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         def _create():
@@ -133,18 +142,18 @@ async def try_handle_git(
             try:
                 from lumen.bot.ui.actionable_errors import create_repo_error
                 text, markup = create_repo_error(name=name, detail=type(e).__name__, user_id=int(uid or 0))
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import git_op_error
                     text, markup = git_op_error(op="create", user_id=int(uid or 0))
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import send_actionable_error
                         await send_actionable_error(status, kind="create", user_id=int(uid or 0))
                     except Exception:
-                        await status.edit_text("❌ فشل الإنشاء.")
+                        await safe_edit_text(status, "❌ فشل الإنشاء.")
             return True
 
         if result.ok:
@@ -162,17 +171,17 @@ async def try_handle_git(
                     body += f"\n• الرابط: {code_url(result.url)}"
                 if result.path:
                     body += f"\n• المسار: {code_path(result.path)}"
-                await status.edit_text(body)
+                await safe_edit_text(status, body)
             except Exception:
-                await status.edit_text(f"✅ {result.message}")
+                await safe_edit_text(status, f"✅ {result.message}")
         elif result.needs_auth:
             context.user_data["pending_create_repo"] = {"name": name, "private": True}
             try:
                 from lumen.bot.ui.actionable_errors import needs_auth_prompt
                 text, markup = needs_auth_prompt(op="create", user_id=int(uid or 0))
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
-                await status.edit_text(
+                await safe_edit_text(status, 
                     "🔒 التوكن غير صالح أو بلا صلاحية `repo`. أرسل PAT صحيح."
                 )
         else:
@@ -183,20 +192,20 @@ async def try_handle_git(
                     detail=str(getattr(result, "message", "") or ""),
                     user_id=int(uid or 0),
                 )
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="create", detail=str(result.message or ""), name=name, user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text(f"❌ {result.message}")
+                    await safe_edit_text(status, f"❌ {result.message}")
         return True
 
     # ── PUSH ──────────────────────────────────────────────────────
     if intent == "push":
         path = _active_path(context)
         if not path:
-            await message.reply_text("مفيش مستودع نشط. اسحب أو أنشئ مستودع أولاً ثم اطلب البوش.")
+            await safe_reply_text(message, "مفيش مستودع نشط. اسحب أو أنشئ مستودع أولاً ثم اطلب البوش.")
             return True
         # SECURITY (Vuln #3): validate path against per-user sandbox before git ops
         try:
@@ -206,50 +215,62 @@ async def try_handle_git(
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 await send_actionable_error(message, kind="generic", title="مسار غير صالح", detail="خارج العزل", user_id=int(uid or 0))
             except Exception:
-                await message.reply_text("❌ مسار المشروع غير صالح.")
+                await safe_reply_text(message, "❌ مسار المشروع غير صالح.")
             return True
         if not token:
             # try without token; if needs_auth, ask
-            status = await message.reply_text("📤 جاري الدفع...")
+            _sent = await safe_reply_text(message, "📤 جاري الدفع...")
+
+            status = _sent[-1] if _sent else None
+
+            if status is None:
+
+                return
             result = await asyncio.to_thread(lambda: git_push(path, token=None))
             if result.ok:
-                await status.edit_text(f"✅ {result.message}")
+                await safe_edit_text(status, f"✅ {result.message}")
                 return True
             if result.needs_auth or True:
                 context.user_data["pending_git_push"] = {"path": path}
-                await status.edit_text(
+                await safe_edit_text(status, 
                     "🔒 الدفع يحتاج صلاحية.\n\n"
                     "أرسل توكن GitHub (PAT) بصلاحية `repo` الآن وسأُكمل البوش."
                 )
                 return True
-        status = await message.reply_text("📤 جاري الدفع بالتوكن...")
+        _sent = await safe_reply_text(message, "📤 جاري الدفع بالتوكن...")
+
+        status = _sent[-1] if _sent else None
+
+        if status is None:
+
+            return
         result = await asyncio.to_thread(lambda: git_push(path, token=token))
         if result.ok:
             context.user_data.pop("pending_git_push", None)
-            await status.edit_text(f"✅ {result.message}")
+            await safe_edit_text(status, f"✅ {result.message}")
         elif result.needs_auth:
             context.user_data["pending_git_push"] = {"path": path}
             try:
                 from lumen.bot.ui.actionable_errors import needs_auth_prompt
                 text, markup = needs_auth_prompt(user_id=int(uid or 0), op="clone")
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="needs_auth", user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text("🔒 التوكن مرفوض. أرسل PAT.")
+                    await safe_edit_text(status, "🔒 التوكن مرفوض. أرسل PAT.")
         else:
             try:
                 from lumen.bot.ui.actionable_errors import git_op_error
                 text, markup = git_op_error(op="pull", detail="server_logs", user_id=int(uid or 0))
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="git", detail="op_failed", user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text("❌ فشلت العملية.")
+                    await safe_edit_text(status, "❌ فشلت العملية.")
         return True
 
     # ── PULL (update existing active repo) ────────────────────────
@@ -257,7 +278,7 @@ async def try_handle_git(
         path = _active_path(context)
         if not path:
             # fall through to clone if URL present; else guide user
-            await message.reply_text(
+            await safe_reply_text(message, 
                 "حدّث مستودع نشط: اسحب مستودع أولاً، أو أرسل رابط المستودع مع «اسحب»."
             )
             return True
@@ -269,12 +290,18 @@ async def try_handle_git(
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 await send_actionable_error(message, kind="generic", title="مسار غير صالح", detail="خارج العزل", user_id=int(uid or 0))
             except Exception:
-                await message.reply_text("❌ مسار المشروع غير صالح.")
+                await safe_reply_text(message, "❌ مسار المشروع غير صالح.")
             return True
-        status = await message.reply_text("📥 جاري سحب آخر نسخة...")
+        _sent = await safe_reply_text(message, "📥 جاري سحب آخر نسخة...")
+
+        status = _sent[-1] if _sent else None
+
+        if status is None:
+
+            return
         result = await asyncio.to_thread(lambda: git_pull(path, token=token))
         if result.ok:
-            await status.edit_text(f"✅ {result.message}")
+            await safe_edit_text(status, f"✅ {result.message}")
         elif result.needs_auth:
             context.user_data["pending_clone_auth"] = {
                 "url": result.url or "",
@@ -284,36 +311,45 @@ async def try_handle_git(
             try:
                 from lumen.bot.ui.actionable_errors import needs_auth_prompt
                 text, markup = needs_auth_prompt(user_id=int(uid or 0), op="clone")
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import needs_auth_prompt
                     text, markup = needs_auth_prompt(user_id=int(uid or 0), op="clone")
-                    await status.edit_text(text, reply_markup=markup)
+                    await safe_edit_text(status, text, reply_markup=markup)
                 except Exception:
                     try:
                         from lumen.bot.ui.actionable_errors import send_actionable_error
                         await send_actionable_error(status, kind="needs_auth", user_id=int(uid or 0))
                     except Exception:
-                        await status.edit_text("🔒 المستودع خاص. أرسل PAT.")
+                        await safe_edit_text(status, "🔒 المستودع خاص. أرسل PAT.")
         else:
             try:
                 from lumen.bot.ui.actionable_errors import git_op_error
                 text, markup = git_op_error(op="pull", detail="server_logs", user_id=int(uid or 0))
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="git", detail="op_failed", user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text("❌ فشلت العملية.")
+                    await safe_edit_text(status, "❌ فشلت العملية.")
         return True
 
     # ── CLONE (default) ───────────────────────────────────────────
     if intent != "clone" and not looks_like_clone_request(request):
         return False
 
-    status = await message.reply_text("📥 جاري سحب المستودع...")
+    _sent = await safe_reply_text(message, "📥 جاري سحب المستودع...")
+
+
+    status = _sent[-1] if _sent else None
+
+
+    if status is None:
+
+
+        return
     await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
     dest = _dest_for(uid)
 
@@ -329,26 +365,26 @@ async def try_handle_git(
             text, markup = private_clone_error(
                 detail=type(e).__name__, user_id=int(uid or 0)
             )
-            await status.edit_text(text, reply_markup=markup)
+            await safe_edit_text(status, text, reply_markup=markup)
         except Exception:
             try:
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 await send_actionable_error(status, kind="clone", detail=type(e).__name__, user_id=int(uid or 0))
             except Exception:
-                await status.edit_text(f"❌ فشل سحب المستودع (`{type(e).__name__}`).")
+                await safe_edit_text(status, f"❌ فشل سحب المستودع (`{type(e).__name__}`).")
         return True
 
     if result is None:
         try:
             from lumen.bot.ui.actionable_errors import git_op_error
             text, markup = git_op_error(op="clone", detail="empty_result", user_id=int(uid or 0))
-            await status.edit_text(text, reply_markup=markup)
+            await safe_edit_text(status, text, reply_markup=markup)
         except Exception:
             try:
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 await send_actionable_error(status, kind="clone", detail="empty_result", user_id=int(uid or 0))
             except Exception:
-                await status.edit_text("❌ فشل سحب المستودع: نتيجة فارغة")
+                await safe_edit_text(status, "❌ فشل سحب المستودع: نتيجة فارغة")
         return True
 
     if result.ok:
@@ -373,7 +409,7 @@ async def try_handle_git(
                 logger.exception("post-clone dossier gather failed")
             _persist_session(user, context)
             try:
-                await status.edit_text("🔍 جاري فهم المستودع...")
+                await safe_edit_text(status, "🔍 جاري فهم المستودع...")
                 from lumen.engine.services.repo_understanding import understand_repo
 
                 def _do_u():
@@ -421,7 +457,7 @@ async def try_handle_git(
                         "\n\n🚀 للتشغيل الحقيقي: أرسل توكن البوت من @BotFather "
                         "أو اضغط الزر — يُحذف السر من المحادثة تلقائياً."
                     )
-                await status.edit_text(
+                await safe_edit_text(status, 
                     header,
                     reply_markup=section_keyboard(
                         user_id=int(uid or 0), show_run=bool(_is_runnable)
@@ -430,7 +466,7 @@ async def try_handle_git(
             except Exception as e:
                 logger.exception("Repo understanding failed")
                 from lumen.bot.ui.rtl_text import code_path, code_url
-                await status.edit_text(
+                await safe_edit_text(status, 
                     "✅ تم سحب المستودع\n"
                     f"• الرابط: {code_url(result.url or '')}\n"
                     f"• المسار: {code_path(result.path or '')}\n"
@@ -462,9 +498,9 @@ async def try_handle_git(
                     detail="يتطلب مصادقة",
                     user_id=int(uid or 0),
                 )
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
-                await status.edit_text(
+                await safe_edit_text(status, 
                     "🔒 المستودع خاص أو يحتاج صلاحية.\n\n"
                     "أرسل الآن توكن GitHub (PAT) بصلاحية `repo`."
                 )
@@ -477,13 +513,13 @@ async def try_handle_git(
                 text, markup = generic_fail(
                     title="فشل سحب المستودع", detail=err, user_id=int(uid or 0)
                 )
-                await status.edit_text(text, reply_markup=markup)
+                await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
                 try:
                     from lumen.bot.ui.actionable_errors import send_actionable_error
                     await send_actionable_error(status, kind="clone", detail=str(err)[:300], user_id=int(uid or 0))
                 except Exception:
-                    await status.edit_text(f"❌ {err}")
+                    await safe_edit_text(status, f"❌ {err}")
     return True
 
 

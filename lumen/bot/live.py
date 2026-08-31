@@ -50,7 +50,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             elapsed = int(time.monotonic() - started)
             phase = phases[min(i, len(phases) - 1)]
             try:
-                await status.edit_text(f"{phase}\n⏳ مرّ {elapsed}ث — لسه شغال، متقلقش.")
+                await safe_edit_text(status, f"{phase}\n⏳ مرّ {elapsed}ث — لسه شغال، متقلقش.")
             except Exception:
                 pass
             i = min(i + 1, len(phases) - 1)
@@ -87,14 +87,14 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
                 project_path=str(project_path or ""),
                 user_id=int(uid or 0),
             )
-            await status.edit_text(text, reply_markup=markup)
+            await safe_edit_text(status, text, reply_markup=markup)
         except Exception:
             try:
                 from lumen.bot.ui.actionable_errors import send_actionable_error
                 uid = message.from_user.id if message.from_user else 0
                 await send_actionable_error(status, kind="live", detail=type(e).__name__, project_path=str(project_path or ""), user_id=int(uid or 0))
             except Exception:
-                await status.edit_text(f"❌ فشل التشغيل الحي (`{type(e).__name__}`).")
+                await safe_edit_text(status, f"❌ فشل التشغيل الحي (`{type(e).__name__}`).")
         context.user_data.pop("pending_run", None)
         return
     finally:
@@ -109,7 +109,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
     text_out = report.to_user_text()
     if len(text_out) > 3500:
         text_out = text_out[:3500] + "\n…"
-    await status.edit_text(text_out)
+    await safe_edit_text(status, text_out)
 
 
 def _local_process_fallback_allowed() -> bool:
@@ -157,9 +157,9 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
                 project_path=str(project_path or ""),
                 user_id=int(uid or 0),
             )
-            await status.edit_text(text, reply_markup=markup)
+            await safe_edit_text(status, text, reply_markup=markup)
         except Exception:
-            await status.edit_text(
+            await safe_edit_text(status, 
                 f"❌ فشلت الاستضافة الدائمة (`{type(e1).__name__}`)."
             )
         context.user_data.pop("pending_deploy", None)
@@ -185,8 +185,8 @@ async def handle_live_deploy_token(message, context, token: str, pending: dict) 
             project_path=str(project_path or ""),
             user_id=int(uid or 0),
         )
-        await status.edit_text(text, reply_markup=markup)
+        await safe_edit_text(status, text, reply_markup=markup)
     except Exception:
         logger.exception("host panel after deploy failed")
         text_out = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
-        await status.edit_text(str(text_out)[:3500])
+        await safe_edit_text(status, str(text_out)[:3500])
