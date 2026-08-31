@@ -5,7 +5,6 @@ import asyncio
 from pathlib import Path
 
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from .capability_boundaries import get_help_text
@@ -137,10 +136,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("⛔ غير مصرح.")
         return
     text = get_help_text()
-    try:
-        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        await message.reply_text(text)
+    await safe_reply_text(message, text, use_markdown=True)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

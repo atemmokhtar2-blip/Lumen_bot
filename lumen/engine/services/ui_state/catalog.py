@@ -30,6 +30,22 @@ _NAV = frozenset(
 
 UI_ACTIONS: dict[str, UiActionSpec] = {
     "home": UiActionSpec("home", "Home", frozenset(EngineUiPhase)),
+    "back": UiActionSpec(
+        "back",
+        "Go back to the logically previous phase",
+        frozenset(
+            {
+                EngineUiPhase.GEN_TYPE,
+                EngineUiPhase.GEN_SLOTS,
+                EngineUiPhase.GEN_CONFIRM,
+                EngineUiPhase.GEN_DONE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+                EngineUiPhase.CONTEXT,
+            }
+        ),
+    ),
     "open_generate": UiActionSpec(
         "open_generate",
         "Open generate",
@@ -100,6 +116,11 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.GEN_SLOTS,
                 EngineUiPhase.GEN_CONFIRM,
                 EngineUiPhase.GENERATING,
+                EngineUiPhase.GEN_DONE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+                EngineUiPhase.CONTEXT,
             }
         ),
     ),

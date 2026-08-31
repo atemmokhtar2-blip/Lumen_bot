@@ -84,33 +84,53 @@ def looks_like_bot_token(text: str) -> bool:
 
 
 def escape_md(text: object) -> str:
-    """Escape Telegram legacy Markdown special characters in dynamic text."""
-    s = str(text) if text is not None else ""
-    for ch in ("\\", "`", "*", "_", "[", "]", "(", ")"):
-        s = s.replace(ch, f"\\{ch}")
-    return s
+    """Escape Telegram MarkdownV2 special characters in dynamic text.
+
+    Uses the real ``telegramify-markdown`` / python-telegram-bot escape path
+    (see ``lumen.bot.telegram_render``) so ALL MarkdownV2 special characters
+    are escaped — including ``. - ! ~ # + = | { }`` which the previous
+    hand-rolled legacy escape silently missed, causing Telegram parse failures.
+
+    Returned text is safe to embed inside MarkdownV2 messages (e.g. inside
+    inline ``\\`code\\``` blocks or as plain fragments).
+    """
+    from .telegram_render import escape_markdown_v2
+
+    return escape_markdown_v2(text)
 
 
-async def safe_edit_text(message, text: str, *, use_markdown: bool = True) -> None:
-    """edit_text with Markdown; fall back to plain text if Telegram rejects entities."""
+async def safe_edit_text(message, text: str, *, use_markdown: bool = True, reply_markup=None) -> None:
+    """edit_text with MarkdownV2 + automatic long-message splitting.
+
+    Falls back to plain text if Telegram rejects entities (cause logged, not
+    hidden). Long text is split across messages (delivered in full), never
+    truncated. ``reply_markup`` (optional InlineKeyboardMarkup) is attached to
+    the edited message when provided.
+    """
     if use_markdown:
         try:
-            from telegram.constants import ParseMode
-            await message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+            from .telegram_render import edit_long_markdown
+
+            await edit_long_markdown(message, text, reply_markup=reply_markup)
             return
         except Exception as e:
-            err = str(e).lower()
-            if "can't parse entities" in err or "parse entities" in err:
-                logger.warning("Markdown parse failed, retrying as plain text: %s", e)
+            logger.warning("edit_long_markdown failed, legacy fallback: %s", e)
+    # Plain-text fallback path (kept for explicit use_markdown=False callers).
+    try:
+        from .telegram_render import chunk_plain
+
+        first = True
+        for piece in chunk_plain(text):
+            if first:
+                await message.edit_text(piece, reply_markup=reply_markup) if reply_markup is not None else await message.edit_text(piece)
+                first = False
             else:
-                raise
-    plain = (
-        text.replace("\\", "")
-        .replace("*", "")
-        .replace("`", "")
-        .replace("_", "")
-    )
-    await message.edit_text(plain)
+                chat_id = getattr(getattr(message, "chat", None), "id", None)
+                bot = getattr(message, "bot", None)
+                if bot is not None and chat_id is not None:
+                    await bot.send_message(chat_id=chat_id, text=piece)
+    except Exception:
+        logger.exception("safe_edit_text plain fallback failed")
 
 
 def make_zip_from_path(project_path: str | Path) -> Path | None:
@@ -403,17 +423,35 @@ def run_generation_with_bridge(
 
 
 async def safe_reply_text(message, text: str, *, use_markdown: bool = False) -> None:
-    """reply_text that never fails silently on Markdown parse errors."""
-    try:
-        if use_markdown:
-            from telegram.constants import ParseMode
-            await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await message.reply_text(text)
-        return
-    except Exception:
+    """reply_text with MarkdownV2 + automatic long-message splitting.
+
+    When ``use_markdown`` is True, sends as MarkdownV2 via the real
+    ``telegramify-markdown`` pipeline (correct escaping for ALL special chars,
+    splitting of long text into consecutive messages instead of truncation).
+    Falls back to plain text if Telegram rejects entities (cause logged, not
+    hidden). Long text is always delivered in full, never cut at ``[:4000]``.
+    """
+    if use_markdown:
         try:
-            await message.reply_text(str(text)[:4000])
-        except Exception:
-            from .config import logger
-            logger.exception("safe_reply_text failed")
+            from .telegram_render import send_long_markdown
+
+            await send_long_markdown(message, None, text)
+            return
+        except Exception as e:
+            logger.warning("send_long_markdown failed, plain fallback: %s", e)
+    # Plain-text path (default + fallback).
+    try:
+        from .telegram_render import chunk_plain
+
+        first = True
+        for piece in chunk_plain(text):
+            if first:
+                await message.reply_text(piece)
+                first = False
+            else:
+                chat_id = getattr(getattr(message, "chat", None), "id", None)
+                bot = getattr(message, "bot", None)
+                if bot is not None and chat_id is not None:
+                    await bot.send_message(chat_id=chat_id, text=piece)
+    except Exception:
+        logger.exception("safe_reply_text failed")

@@ -42,42 +42,40 @@ def buttons_for_event(kind: UiEventKind | str) -> tuple[tuple[UiButton, ...], ..
     except ValueError:
         return ((UiButton("القائمة", "home"),),)
 
+    # Weakness 4: event-specific action buttons only.
+    # The unified bottom nav [رجوع][الصفحة الرئيسية][إلغاء] is appended
+    # by buttons_for_state(), so we no longer include redundant "home" rows.
     if k is UiEventKind.GENERATION_FAILED:
         return (
             (UiButton("إعادة المحاولة", "retry_generate"), UiButton("تعديل الوصف", "open_generate")),
-            (UiButton("المساعدة", "open_help"), UiButton("القائمة", "home")),
+            (UiButton("المساعدة", "open_help"),),
         )
     if k is UiEventKind.INSUFFICIENT_QUOTA:
         return (
             (UiButton("عرض الخطة", "open_billing"),),
-            (UiButton("القائمة", "home"),),
         )
     if k is UiEventKind.HOST_LIMIT:
         return (
             (UiButton("لوحة التحكم", "open_dashboard"), UiButton("الخطة", "open_billing")),
-            (UiButton("القائمة", "home"),),
         )
     if k is UiEventKind.HOST_FAILED:
         return (
             (UiButton("لوحة التحكم", "open_dashboard"),),
-            (UiButton("المساعدة", "open_help"), UiButton("القائمة", "home")),
+            (UiButton("المساعدة", "open_help"),),
         )
     if k is UiEventKind.SANDBOX_UNAVAILABLE:
         return (
             (UiButton("المساعدة", "open_help"),),
-            (UiButton("القائمة", "home"),),
         )
     if k is UiEventKind.NO_PROJECT:
         return (
             (UiButton("إنشاء بوت", "open_generate"),),
-            (UiButton("القائمة", "home"),),
         )
     if k is UiEventKind.CLARIFY_NEEDED:
         return (
             (UiButton("أكمل الناقص", "resume_slots"), UiButton("توليد بما هو متاح", "to_confirm")),
-            (UiButton("القائمة", "home"),),
         )
-    return ((UiButton("القائمة", "home"),),)
+    return ()
 
 
 def apply_event(

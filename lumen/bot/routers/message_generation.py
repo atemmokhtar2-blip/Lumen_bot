@@ -14,7 +14,7 @@ from telegram.constants import ChatAction
 from ..config import OUTPUT_DIR, logger
 from ..sanitize import user_facing_generation_error
 from ..helpers import safe_edit_text, make_zip_from_path, run_generation, escape_md
-from ..progress_tracker import run_with_heartbeat
+from ..progress_tracker import run_with_heartbeat, AgentProgressFeed
 from ..middlewares.mongo_sync import persist_session as _persist_session
 
 log = logging.getLogger("lumen_bot.routers.message_generation")
@@ -76,12 +76,17 @@ async def execute_bot_generation(
         pass
 
     try:
+        # Weakness 2 fix: create a live progress feed so the heartbeat streams
+        # the agent's REAL actions (read file, wrote code, browsed...) every ~3s
+        # instead of the old dead-wait (20s interval + 4 static generic messages).
+        feed = AgentProgressFeed()
         result = await run_with_heartbeat(
             run_generation,
             gen_request,
             work_dir,
             uid,
             status_msg=status_msg,
+            feed=feed,
             preferred_keys=preferred_keys,
         )
         if result is None:
@@ -159,14 +164,7 @@ async def execute_bot_generation(
                 if raw and "تأكيد " not in raw and len(raw) < 500:
                     clean = raw
                 kb = build_hitl_keyboard(user_id=int(uid or 0))
-                try:
-                    await status_msg.edit_text(
-                        clean[:4000],
-                        reply_markup=kb,
-                        parse_mode="Markdown",
-                    )
-                except Exception:
-                    await status_msg.edit_text(clean[:4000], reply_markup=kb)
+                await safe_edit_text(status_msg, clean, reply_markup=kb)
                 return result
         except Exception:
             logger.exception("langgraph HITL surface failed")
