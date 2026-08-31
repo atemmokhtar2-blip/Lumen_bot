@@ -5,6 +5,7 @@ Each public coroutine returns True when the update is fully handled (caller must
 """
 from __future__ import annotations
 
+from lumen.bot.helpers import safe_reply_text
 import asyncio
 import os
 from typing import Any
@@ -141,7 +142,24 @@ async def try_engine_ui_text(
             save_ui_state(user_data, st)
             body = render_message(st, UiFacts())[:2000]
             kb = build_inline_keyboard(buttons_for_state(st), user_id=int(user.id) if user else 0)
-            await message.reply_text(body, reply_markup=kb)
+            await safe_reply_text(message, body, reply_markup=kb)
+            try:
+                from lumen.engine.services.ui_state.models import EngineUiPhase as _P
+                from lumen.engine.services.ui_state.engine_needs import remaining_needs
+                from lumen.bot.ui.input_prompt import ask_text_input
+                if st.phase == _P.GEN_SLOTS:
+                    rem = remaining_needs(st.needs or [], st.slots)
+                    if rem and not (rem[0].choices or []):
+                        await ask_text_input(
+                            message,
+                            kind="slot_answer",
+                            body=f"✍️ {rem[0].text}",
+                            placeholder=(rem[0].text or "")[:60] or "اكتب إجابتك…",
+                        )
+                elif st.phase == _P.GEN_TYPE or st.slots.get("awaiting_text") == "1":
+                    await ask_text_input(message, kind="bot_description")
+            except Exception:
+                logger.exception("early_gates ForceReply failed")
             return True
         except Exception:
             logger.exception("engine UI GEN_SLOTS text failed")

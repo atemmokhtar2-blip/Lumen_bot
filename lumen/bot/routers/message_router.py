@@ -466,7 +466,7 @@ async def _handle_message_body(
         )
     except Exception:
         logger.exception("handle_user_turn failed")
-        await message.reply_text("تعذر تشغيل المحرك على هذا الطلب. حاول مرة أخرى.")
+        await safe_reply_text(message, "تعذر تشغيل المحرك على هذا الطلب. حاول مرة أخرى.")
         return
 
     # Apply agent side-effects into the Telegram session

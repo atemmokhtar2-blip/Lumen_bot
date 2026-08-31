@@ -1,3 +1,4 @@
+from lumen.bot.helpers import safe_edit_text, safe_reply_text
 """Active-repository development turns (modify/analyze existing clone)."""
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ async def try_handle_repo_dev(
                         user_id=int(uid or 0),
                     )
                 except Exception:
-                    await status.edit_text(f"❌ فشل التنفيذ على المستودع (`{type(e).__name__}`).")
+                    await safe_edit_text(status, f"❌ فشل التنفيذ على المستودع (`{type(e).__name__}`).")
                 return True
 
 
@@ -102,7 +103,7 @@ async def try_handle_repo_dev(
             text_out = dev.message
             if dev.changed_files:
                 text_out += "\n• ملفات تغيّرت: " + ", ".join(f"`{f}`" for f in dev.changed_files)
-            await status.edit_text(text_out)
+            await safe_edit_text(status, text_out)
             try:
                 from lumen.engine.services.user_memory import get_user_memory
                 mem = get_user_memory(uid, OUTPUT_DIR)
