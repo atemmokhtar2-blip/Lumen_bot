@@ -16,9 +16,9 @@ def _boot_secrets() -> None:
 
     load_dotenv_if_dev()
     meta = load_secrets(only_missing=True)
-    install_secret_access_bridge()
     assert_critical_secrets_present()
     assert_environ_scrubbed()
+    install_secret_access_bridge()
     print(
         f"secrets_boot source={meta.get('source')} stored={meta.get('stored')} "
         f"scrubbed={meta.get('scrubbed_environ')}",
