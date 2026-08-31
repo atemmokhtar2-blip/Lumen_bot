@@ -67,7 +67,7 @@
 - [x] اختبارات جديدة للنقاط الخمس  # Phase 3: 12, Phase 4: 9, Phase 5: 17 = 38 new tests all pass
 
 ## مرحلة 8: Commit + Push + Verify
-- [ ] Commit برسالة واضحة
-- [ ] Push إلى فرع جديد
-- [ ] التحقق من نجاح Push
-- [ ] إنشاء PR
+- [x] Commit برسالة واضحة (96ee1ad — 17 files, +1667 -132)
+- [x] Push إلى فرع جديد (fix/telegram-ux-5-weaknesses pushed to origin)
+- [x] التحقق من نجاح Push (origin/fix/telegram-ux-5-weaknesses visible)
+- [x] إنشاء PR (#41 OPEN: https://github.com/atemmokhtar2-blip/Lumen_bot/pull/41)
