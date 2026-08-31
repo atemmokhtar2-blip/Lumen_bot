@@ -16,12 +16,13 @@
 - [x] اختبارات جديدة: test_pro_ux_render.py — 38 test تتحقق من كل شاشة
 
 ## المرحلة 2: Validation للإدخال
-- [ ] bot_token: validation (format: digits:alphanum35)
-- [ ] bot_name: validation (no spaces, length 3-64)
-- [ ] github_token: validation (ghp_ or github_pat_)
-- [ ] webhook_url: validation (https URL)
-- [ ] رسائل خطأ validation واضحة بالعربية
-- [ ] اختبار: validation ترفض وتقبل صح
+- [x] bot_token: validation (format: digits:alphanum35)
+- [x] bot_name: validation (no spaces, length 3-64, starts with letter)
+- [x] github_token: validation (ghp_ or github_pat_)
+- [x] webhook_url: validation (https URL only)
+- [x] رسائل خطأ validation واضحة بالعربية
+- [x] اختبار: validation ترفض وتقبل صح (43 test)
+- [x] تكامل: message_router يستخدم validate_slot قبل تخزين القيمة
 
 ## المرحلة 3: Onboarding flow
 - [ ] أول /start: شرح + أمثلة بوتات جاهزة + دعوة للتجربة

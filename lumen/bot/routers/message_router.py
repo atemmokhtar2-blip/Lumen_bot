@@ -106,6 +106,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 rem = remaining_needs(ui.needs or [], ui.slots)
                 slot = (ui.slots.get("awaiting_slot") or (rem[0].slot if rem else "")).strip()
                 if slot:
+                    # Validate structured inputs (bot_token, bot_name, etc.)
+                    # before storing — clear Arabic error if invalid.
+                    from lumen.bot.ui.input_validation import validate_slot
+                    vr = validate_slot(slot, request)
+                    if not vr.ok:
+                        await message.reply_text(
+                            f"⚠️ {vr.error_ar}\n\n"
+                            "حاول مرة أخرى 👇"
+                        )
+                        # Re-send ForceReply so the user can try again
+                        try:
+                            from lumen.bot.ui.force_reply import send_force_reply_prompt
+                            bot = getattr(context, "bot", None)
+                            chat_id = int(getattr(getattr(message, "chat", None), "id", 0))
+                            if bot is not None and chat_id:
+                                await send_force_reply_prompt(
+                                    bot=bot,
+                                    chat_id=chat_id,
+                                    prompt_text=vr.error_ar,
+                                    slot=slot,
+                                    phase=ui.phase.value if ui.phase else None,
+                                )
+                        except Exception:
+                            logger.debug("force_reply on validation fail failed", exc_info=True)
+                        return
                     ui.slots[slot] = request[:500]
                     ui.slots.pop("awaiting_text", None)
                     ui.slots.pop("awaiting_slot", None)
