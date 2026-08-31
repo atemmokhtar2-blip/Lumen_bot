@@ -54,6 +54,20 @@ _TOOL_AR = {
     "starting": "بدء التوليد",
     "loop_start": "بدء حلقة الوكيل",
     "decided": "قرار الخطوة",
+    "plan": "تخطيط",
+    "plan_start": "بدء التخطيط",
+    "plan_done": "انتهى التخطيط",
+    "work_start": "بدء التنفيذ",
+    "work_alive": "التنفيذ جارٍ",
+    "work_done": "انتهى التنفيذ",
+    "critique_start": "مراجعة الجودة",
+    "critique_done": "انتهت المراجعة",
+    "repair_start": "إصلاح",
+    "repair_done": "انتهى الإصلاح",
+    "deliver_start": "تسليم المشروع",
+    "deliver_done": "تم التسليم",
+    "temporal": "مسار Temporal",
+    "hitl": "انتظار موافقتك",
 }
 
 
@@ -104,40 +118,45 @@ def _format_event(
     history: list[dict[str, Any]] | None = None,
 ) -> str:
     tool = str(event.get("tool") or event.get("phase") or "").strip()
-    thought = str(event.get("thought") or "").strip().replace("\n", " ")[:140]
+    thought = str(event.get("thought") or "").strip().replace("\n", " ")[:160]
     path = str(event.get("path") or event.get("file") or "").strip()
     ok = event.get("ok")
-    detail = str(event.get("detail") or "").strip()[:120]
+    detail = str(event.get("detail") or "").strip()[:140]
     files_n = event.get("files_written")
+    ms = event.get("elapsed_ms")
 
     lines = [
-        "⚙️ المحرك شغال — تحديث مباشر",
-        f"⏱ {elapsed}ث" + (f"  ·  خطوة {step}/{limit}" if limit else f"  ·  خطوة {step}"),
+        "⚙️ المحرك شغال — خطوات حقيقية",
+        f"⏱ {elapsed}ث" + (f"  ·  خطوة {step}/{limit}" if limit else (f"  ·  خطوة {step}" if step else "")),
     ]
 
-    # Trail of recent real actions (so user sees continuous work)
     hist = [h for h in (history or []) if h.get("tool") or h.get("phase")]
     if hist:
-        bits = []
-        for h in hist[-4:]:
+        lines.append("📋 آخر ما تم:")
+        for h in hist[-5:]:
             ht = str(h.get("tool") or h.get("phase") or "")
             mark = "✅" if h.get("ok") is True else ("⚠️" if h.get("ok") is False else "•")
-            bits.append(f"{mark} {_label(ht)}")
-        if bits:
-            lines.append("📋 " + " → ".join(bits))
+            bit = f"  {mark} {_label(ht)}"
+            hp = str(h.get("path") or "").strip()
+            if hp:
+                short = hp if len(hp) <= 40 else "…" + hp[-38:]
+                bit += f" → {short}"
+            lines.append(bit)
 
     if tool:
-        status = " ✅" if ok is True else (" ⚠️" if ok is False else "")
+        status = " ✅" if ok is True else (" ⚠️" if ok is False else " …")
         lines.append(f"🔧 الآن: {_label(tool)}{status}")
     if path:
-        short = path if len(path) <= 52 else "…" + path[-50:]
+        short = path if len(path) <= 56 else "…" + path[-54:]
         lines.append(f"📄 {short}")
+    if detail:
+        lines.append(f"ℹ️ {detail}")
     if thought:
         lines.append(f"💭 {thought}")
-    elif detail:
-        lines.append(f"ℹ️ {detail}")
+    if isinstance(ms, (int, float)) and ms > 0:
+        lines.append(f"⌛ آخر أداة: {int(ms)}ms")
     if isinstance(files_n, int) and files_n > 0:
-        lines.append(f"📁 ملفات مكتوبة حتى الآن: {files_n}")
+        lines.append(f"📁 ملفات مكتوبة: {files_n}")
     lines.append("—\nللإلغاء: إلغاء أو /cancel")
     return "\n".join(lines)[:3500]
 
@@ -189,8 +208,8 @@ class ProgressSink:
 
 
 class ProgressHeartbeat:
-    POLL = 0.8
-    KEEP_ALIVE = 8.0
+    POLL = 0.6
+    KEEP_ALIVE = 2.5
 
     def __init__(self, status_msg, *, interval: float | None = None, bot=None, chat_id=None) -> None:
         self.status_msg = status_msg
@@ -227,10 +246,18 @@ class ProgressHeartbeat:
                 history=history,
             )
         else:
+            phase_hints = (
+                "تجهيز مسار التوليد…",
+                "تحميل السياق والأدوات…",
+                "انتظار أول قرار من الوكيل…",
+                "المحرك يفكر في الخطوة الأولى…",
+            )
+            hint = phase_hints[min(elapsed // 4, len(phase_hints) - 1)]
             text = (
-                "⚙️ المحرك شغال — تجهيز الوكيل…\n"
+                "⚙️ المحرك شغال\n"
                 f"⏱ مرّ {elapsed} ثانية\n"
-                "هتشوف كل خطوة حقيقية هنا أول ما تبدأ.\n"
+                f"🔄 {hint}\n"
+                "كل أداة حقيقية (قراءة/كتابة/أمر) هتظهر هنا فورًا.\n"
                 "—\nللإلغاء: إلغاء أو /cancel"
             )
         try:

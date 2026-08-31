@@ -54,6 +54,16 @@ async def _start_and_wait(payload: dict[str, Any], *, wait: bool = True) -> dict
         id=wid,
         task_queue=task_queue,
     )
+    try:
+        from lumen.engine.services.progress_bus import report_progress
+        report_progress({
+            "phase": "temporal",
+            "tool": "temporal",
+            "detail": f"workflow {wid[:20]}… بدأ",
+            "step": 0,
+        })
+    except Exception:
+        pass
     if not wait:
         return {
             "ok": True,
@@ -61,7 +71,36 @@ async def _start_and_wait(payload: dict[str, Any], *, wait: bool = True) -> dict
             "async": True,
             "engine": "temporal_sequential_activities",
         }
-    result = await handle.result()
+    # Poll so Telegram progress bus sees non-static stages while workflow runs
+    result = None
+    tick = 0
+    while True:
+        tick += 1
+        try:
+            desc = await handle.describe()
+            status = getattr(getattr(desc, "status", None), "name", None) or str(
+                getattr(desc, "status", "") or ""
+            )
+            try:
+                from lumen.engine.services.progress_bus import report_progress
+                report_progress({
+                    "phase": "temporal",
+                    "tool": "temporal",
+                    "detail": f"حالة المسار: {status}",
+                    "step": tick,
+                })
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            result = await asyncio.wait_for(handle.result(), timeout=3.0)
+            break
+        except asyncio.TimeoutError:
+            continue
+        except Exception:
+            result = await handle.result()
+            break
     return {
         "ok": bool((result or {}).get("ok")),
         "workflow_id": wid,

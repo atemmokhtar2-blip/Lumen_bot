@@ -503,17 +503,31 @@ def run_agent(
             continue
 
         _path_hint = ""
+        _detail_hint = ""
         try:
             if isinstance(args, dict):
-                _path_hint = str(args.get("path") or args.get("file") or args.get("target") or "")[:200]
+                _path_hint = str(
+                    args.get("path") or args.get("file") or args.get("target")
+                    or args.get("name") or ""
+                )[:200]
+                if tool in {"run_shell", "bash", "shell"}:
+                    _detail_hint = str(args.get("command") or args.get("cmd") or "")[:160]
+                elif tool in {"grep_codebase", "code_search", "glob_files"}:
+                    _detail_hint = str(args.get("query") or args.get("pattern") or args.get("glob") or "")[:120]
+                elif tool in {"browser_navigate", "browser_content"}:
+                    _detail_hint = str(args.get("url") or args.get("query") or "")[:120]
+                elif tool in {"write_file", "edit_file", "search_replace"}:
+                    _detail_hint = str(args.get("path") or args.get("file") or "")[:120]
         except Exception:
             _path_hint = ""
+            _detail_hint = ""
         _emit_progress({
             "phase": "tool_start",
             "step": i,
             "limit": limit,
             "tool": str(tool),
             "path": _path_hint,
+            "detail": _detail_hint,
             "thought": (step.thought or "")[:160],
             "files_written": len(state.files_written or []),
         })
@@ -546,7 +560,10 @@ def run_agent(
             "path": _path_hint or str((result or {}).get("path") or "")[:200],
             "ok": bool((result or {}).get("ok")),
             "thought": (step.thought or "")[:160],
-            "detail": str((result or {}).get("error") or (result or {}).get("message") or "")[:120],
+            "detail": (
+                str((result or {}).get("error") or (result or {}).get("message") or "")[:120]
+                or _detail_hint
+            ),
             "files_written": len(state.files_written or []),
             "elapsed_ms": _elapsed_ms,
         })
