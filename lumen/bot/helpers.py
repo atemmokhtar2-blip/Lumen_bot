@@ -234,6 +234,17 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             logger.exception("generation llm budget gate failed (dev)")
         # Track whether the Cline fallback path was used (weakness #3: fallback UX parity).
         _fallback_fired = False
+        try:
+            from lumen.engine.services.progress_bus import report_progress
+            report_progress({
+                "phase": "starting",
+                "tool": "starting",
+                "detail": "تجهيز مسار التوليد",
+                "step": 0,
+            })
+        except Exception:
+            pass
+
         # Multi-agent Phase A orchestrator (blackboard). Disable with MULTI_AGENT_ORCHESTRATOR=0
         # If orchestrator cannot run (missing langgraph, etc.) → fall through to Cline.
         try:
@@ -307,6 +318,15 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
             pass
 
         logger.info("run_generation → Cline engine-direct path")
+        try:
+            from lumen.engine.services.progress_bus import report_progress
+            report_progress({
+                "phase": "coding_agent",
+                "tool": "coding_agent",
+                "detail": "مسار Cline المباشر",
+            })
+        except Exception:
+            pass
         _cline_result = run_generation_with_bridge(
             request,
             work_dir,

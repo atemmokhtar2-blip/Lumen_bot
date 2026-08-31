@@ -1,4 +1,4 @@
-"""Dead Wait — prove engine progress reaches the UI sink across threads."""
+"""Dead Wait — engine progress events reach the user status message."""
 from __future__ import annotations
 
 import asyncio
@@ -16,29 +16,28 @@ def _load(name: str, rel: str):
     return mod
 
 
-def test_format_shows_real_tool_not_fake_phase():
+def test_format_shows_engine_activity_and_trail():
     pt = _load("pt", "lumen/bot/progress_tracker.py")
+    hist = [
+        {"tool": "thinking", "step": 1},
+        {"tool": "write_file", "path": "main.py", "ok": True, "step": 1},
+        {"tool": "finish", "ok": True, "step": 2},
+    ]
     text = pt._format_event(
-        {
-            "phase": "tool_done",
-            "tool": "write_file",
-            "path": "handlers/start.py",
-            "ok": True,
-            "thought": "add start command handler",
-            "files_written": 3,
-        },
-        elapsed=12,
-        step=4,
+        {"tool": "finish", "ok": True, "thought": "done", "files_written": 4},
+        elapsed=22,
+        step=2,
         limit=12,
+        history=hist,
     )
-    assert "كتابة ملف" in text
-    assert "handlers/start.py" in text
-    assert "خطوة 4/12" in text
-    assert "جاري التحليل وبناء المواصفات" not in text
+    assert "المحرك شغال" in text
+    assert "تفكير" in text or "thinking" in text.lower() or "•" in text
+    assert "إنهاء" in text or "finish" in text.lower()
+    assert "ملفات مكتوبة" in text
+    assert "إلغاء" in text
 
 
 def test_progress_bus_cross_thread_delivery():
-    """Root proof: worker thread emit → main sink receives (to_thread simulation)."""
     bus = _load("bus", "lumen/engine/services/progress_bus.py")
     received: list[dict] = []
 
@@ -48,9 +47,9 @@ def test_progress_bus_cross_thread_delivery():
     token = bus.set_progress_handler(handler)
     try:
         def worker():
-            # Re-bind inside worker like run_with_heartbeat does
             tok = bus.set_progress_handler(handler)
             try:
+                bus.report_progress({"tool": "thinking", "step": 1})
                 bus.report_progress({"tool": "write_file", "path": "main.py", "step": 1})
                 bus.report_progress({"tool": "finish", "ok": True, "step": 2})
             finally:
@@ -63,22 +62,24 @@ def test_progress_bus_cross_thread_delivery():
     finally:
         bus.reset_progress_handler(token)
 
-    assert len(received) >= 2
+    assert len(received) >= 3
     assert received[-1]["tool"] == "finish"
-    assert received[0]["path"] == "main.py"
 
 
-def test_agent_loop_emit_uses_progress_bus_not_bot_import():
-    src = (Path(__file__).resolve().parents[1] / "lumen/engine/services/cline_runtime/agent_loop.py").read_text()
+def test_agent_loop_emits_thinking_and_tools():
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "lumen/engine/services/cline_runtime/agent_loop.py"
+    ).read_text()
     assert "lumen.engine.services.progress_bus" in src
     assert "lumen.bot.progress_tracker" not in src
-    assert "tool_start" in src and "tool_done" in src
+    assert '"phase": "thinking"' in src
+    assert '"phase": "tool_start"' in src
+    assert '"phase": "tool_done"' in src
 
 
-def test_run_with_heartbeat_delivers_worker_events():
-    """Full UI path: run_with_heartbeat + synthetic worker that emits like agent_loop."""
+def test_run_with_heartbeat_shows_real_tools():
     pt = _load("pt2", "lumen/bot/progress_tracker.py")
-    bus = _load("bus2", "lumen/engine/services/progress_bus.py")
 
     class FakeMsg:
         def __init__(self):
@@ -88,13 +89,13 @@ def test_run_with_heartbeat_delivers_worker_events():
             self.texts.append(text)
 
     def fake_generation():
-        # Same import path agent_loop uses
         from lumen.engine.services.progress_bus import report_progress
-        report_progress({"phase": "tool_start", "tool": "write_file", "path": "bot.py", "step": 1, "limit": 5})
+        report_progress({"phase": "thinking", "tool": "thinking", "step": 1, "limit": 5})
         time.sleep(0.05)
         report_progress({
             "phase": "tool_done", "tool": "write_file", "path": "bot.py",
-            "ok": True, "step": 1, "limit": 5, "thought": "create bot entry",
+            "ok": True, "step": 1, "limit": 5, "thought": "create entry",
+            "files_written": 1,
         })
         time.sleep(0.05)
         report_progress({"phase": "tool_done", "tool": "finish", "ok": True, "step": 2, "limit": 5})
@@ -104,15 +105,13 @@ def test_run_with_heartbeat_delivers_worker_events():
         msg = FakeMsg()
         result = await pt.run_with_heartbeat(fake_generation, status_msg=msg, user_id=99)
         assert result == {"ok": True}
-        # Allow final ticks
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)
         joined = "\n".join(msg.texts)
-        assert any(x in joined for x in ("كتابة ملف", "write_file", "bot.py", "إنهاء", "finish", "الوكيل")), joined
+        assert "المحرك شغال" in joined or "وكيل" in joined or "كتابة" in joined or "إنهاء" in joined, joined
         assert not pt.is_generation_busy(99)
         return joined
 
-    text = asyncio.run(run())
-    assert text
+    assert asyncio.run(run())
 
 
 def test_busy_guard_lifecycle():

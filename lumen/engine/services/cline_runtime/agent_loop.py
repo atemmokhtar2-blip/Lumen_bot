@@ -343,7 +343,24 @@ def run_agent(
         except Exception:
             pass
         msgs = [m.to_dict() for m in state.messages]
+        _emit_progress({
+            "phase": "thinking",
+            "step": i,
+            "limit": limit,
+            "tool": "thinking",
+            "detail": f"الوكيل يفكر في الخطوة {i}/{limit}…",
+            "files_written": len(state.files_written or []),
+        })
         decision = decide(msgs, choice=choice)
+        _emit_progress({
+            "phase": "decided",
+            "step": i,
+            "limit": limit,
+            "tool": str(decision.get("tool") or "thinking"),
+            "thought": str(decision.get("thought") or "")[:160],
+            "detail": "اتخذ قرار الخطوة",
+            "files_written": len(state.files_written or []),
+        })
         # Phase A cost: accumulate real provider usage when present
         try:
             u = decision.get("usage") or {}

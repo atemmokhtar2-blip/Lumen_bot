@@ -1,13 +1,8 @@
-"""Live generation progress — real agent events on the Telegram status message.
+"""Live generation progress wired to the real engine event stream.
 
-Architecture
-------------
-Engine code (agent_loop, coding_agent) emits via ``lumen.engine.services.progress_bus``
-(no bot imports). ``run_with_heartbeat`` installs a handler that feeds a thread-safe
-sink; an asyncio task edits the Telegram status message with tool/file/step details.
-
-The handler is re-bound **inside** the worker thread so events are never lost when
-``asyncio.to_thread`` does not preserve contextvars the way we need.
+User-facing status message is driven by ``progress_bus`` events from:
+  - agent_loop (thinking → tool_start → tool_done)
+  - coding_agent / orchestrator phases
 """
 from __future__ import annotations
 
@@ -27,6 +22,7 @@ _BUSY: dict[int, float] = {}
 _BUSY_LOCK = threading.Lock()
 
 _TOOL_AR = {
+    "thinking": "تفكير الوكيل",
     "list_dir": "استعراض المجلدات",
     "tree": "مسح شجرة المشروع",
     "read_file": "قراءة ملف",
@@ -54,11 +50,14 @@ _TOOL_AR = {
     "generate_bot": "توليد بوت",
     "refine_bot": "تعديل بوت",
     "coding_agent": "وكيل البرمجة",
+    "orchestrate": "تنسيق الوكلاء",
+    "starting": "بدء التوليد",
+    "loop_start": "بدء حلقة الوكيل",
+    "decided": "قرار الخطوة",
 }
 
 
 def report_progress(event: dict[str, Any] | None) -> None:
-    """Public alias — prefer engine progress_bus from agent code."""
     bus_report(event)
 
 
@@ -92,43 +91,64 @@ def is_generation_busy(user_id: int, *, stale_after: float = 600.0) -> bool:
         return True
 
 
-def _format_event(event: dict[str, Any], *, elapsed: int, step: int, limit: int) -> str:
-    phase = str(event.get("phase") or "step")
-    tool = str(event.get("tool") or phase or "").strip()
-    thought = str(event.get("thought") or "").strip().replace("\n", " ")[:120]
+def _label(tool: str) -> str:
+    return _TOOL_AR.get(tool, tool or "…")
+
+
+def _format_event(
+    event: dict[str, Any],
+    *,
+    elapsed: int,
+    step: int,
+    limit: int,
+    history: list[dict[str, Any]] | None = None,
+) -> str:
+    tool = str(event.get("tool") or event.get("phase") or "").strip()
+    thought = str(event.get("thought") or "").strip().replace("\n", " ")[:140]
     path = str(event.get("path") or event.get("file") or "").strip()
     ok = event.get("ok")
-    detail = str(event.get("detail") or "").strip()[:100]
-    tool_ar = _TOOL_AR.get(tool, tool)
+    detail = str(event.get("detail") or "").strip()[:120]
+    files_n = event.get("files_written")
 
     lines = [
-        "⚙️ جاري البناء عبر الوكيل…",
-        f"⏱ {elapsed}ث  ·  خطوة {step}" + (f"/{limit}" if limit else ""),
+        "⚙️ المحرك شغال — تحديث مباشر",
+        f"⏱ {elapsed}ث" + (f"  ·  خطوة {step}/{limit}" if limit else f"  ·  خطوة {step}"),
     ]
+
+    # Trail of recent real actions (so user sees continuous work)
+    hist = [h for h in (history or []) if h.get("tool") or h.get("phase")]
+    if hist:
+        bits = []
+        for h in hist[-4:]:
+            ht = str(h.get("tool") or h.get("phase") or "")
+            mark = "✅" if h.get("ok") is True else ("⚠️" if h.get("ok") is False else "•")
+            bits.append(f"{mark} {_label(ht)}")
+        if bits:
+            lines.append("📋 " + " → ".join(bits))
+
     if tool:
-        status = ""
-        if ok is True:
-            status = " ✅"
-        elif ok is False:
-            status = " ⚠️"
-        lines.append(f"🔧 {tool_ar}{status}")
+        status = " ✅" if ok is True else (" ⚠️" if ok is False else "")
+        lines.append(f"🔧 الآن: {_label(tool)}{status}")
     if path:
-        short = path if len(path) <= 48 else "…" + path[-46:]
-        lines.append(f"📄 `{short}`")
+        short = path if len(path) <= 52 else "…" + path[-50:]
+        lines.append(f"📄 {short}")
     if thought:
         lines.append(f"💭 {thought}")
-    if detail and detail != thought:
+    elif detail:
         lines.append(f"ℹ️ {detail}")
-    files_n = event.get("files_written")
     if isinstance(files_n, int) and files_n > 0:
-        lines.append(f"📁 ملفات مكتوبة: {files_n}")
+        lines.append(f"📁 ملفات مكتوبة حتى الآن: {files_n}")
+    lines.append("—\nللإلغاء: إلغاء أو /cancel")
     return "\n".join(lines)[:3500]
 
 
 class ProgressSink:
+    HISTORY = 6
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: dict[str, Any] | None = None
+        self._history: list[dict[str, Any]] = []
         self._seq = 0
         self._step = 0
         self._limit = 0
@@ -149,22 +169,30 @@ class ProgressSink:
                     pass
             ev["_seq"] = self._seq
             self._latest = ev
+            phase = str(ev.get("phase") or "")
+            if ev.get("tool") or phase in {
+                "tool_start", "tool_done", "thinking", "decided",
+                "coding_agent", "orchestrate", "loop_start",
+            }:
+                self._history.append(ev)
+                self._history = self._history[-self.HISTORY :]
 
-    def snapshot(self) -> tuple[int, dict[str, Any] | None, int, int]:
+    def snapshot(self):
         with self._lock:
             return (
                 self._seq,
                 dict(self._latest) if self._latest else None,
                 self._step,
                 self._limit,
+                [dict(x) for x in self._history],
             )
 
 
 class ProgressHeartbeat:
-    POLL = 1.0
-    KEEP_ALIVE = 10.0
+    POLL = 0.8
+    KEEP_ALIVE = 8.0
 
-    def __init__(self, status_msg, *, interval: float | None = None) -> None:
+    def __init__(self, status_msg, *, interval: float | None = None, bot=None, chat_id=None) -> None:
         self.status_msg = status_msg
         self.interval = float(interval or self.POLL)
         self._stop = asyncio.Event()
@@ -173,6 +201,8 @@ class ProgressHeartbeat:
         self.sink = ProgressSink()
         self._last_seq = 0
         self._last_edit = 0.0
+        self._bot = bot
+        self._chat_id = chat_id
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
@@ -183,18 +213,25 @@ class ProgressHeartbeat:
                 await self._tick()
 
     async def _tick(self) -> None:
-        seq, event, step, limit = self.sink.snapshot()
+        seq, event, step, limit, history = self.sink.snapshot()
         elapsed = int(time.monotonic() - self._started)
         now = time.monotonic()
         if seq == self._last_seq and (now - self._last_edit) < self.KEEP_ALIVE:
             return
-        if event:
-            text = _format_event(event, elapsed=elapsed, step=step or seq, limit=limit)
+        if event or history:
+            text = _format_event(
+                event or {},
+                elapsed=elapsed,
+                step=step or seq,
+                limit=limit,
+                history=history,
+            )
         else:
             text = (
-                "⚙️ جاري تجهيز الوكيل وبدء البناء…\n"
+                "⚙️ المحرك شغال — تجهيز الوكيل…\n"
                 f"⏱ مرّ {elapsed} ثانية\n"
-                "كل أداة ينفّذها الوكيل هتظهر هنا مباشرة."
+                "هتشوف كل خطوة حقيقية هنا أول ما تبدأ.\n"
+                "—\nللإلغاء: إلغاء أو /cancel"
             )
         try:
             await self.status_msg.edit_text(text)
@@ -202,12 +239,17 @@ class ProgressHeartbeat:
             self._last_edit = now
         except Exception:
             pass
+        # Keep chat "typing…" so Telegram shows activity
+        if self._bot is not None and self._chat_id is not None:
+            try:
+                await self._bot.send_chat_action(chat_id=self._chat_id, action="typing")
+            except Exception:
+                pass
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        # Flush latest agent events before teardown (short jobs finish before first poll)
         try:
             await self._tick()
         except Exception:
@@ -233,20 +275,29 @@ async def run_with_heartbeat(
     *args,
     status_msg,
     user_id: int = 0,
+    context=None,
     **kwargs,
 ) -> Any:
-    """Run blocking generation while streaming progress_bus events to Telegram."""
-    hb = ProgressHeartbeat(status_msg)
+    bot = None
+    chat_id = None
+    try:
+        bot = getattr(context, "bot", None) if context is not None else None
+        chat_id = getattr(status_msg, "chat_id", None) or getattr(
+            getattr(status_msg, "chat", None), "id", None
+        )
+    except Exception:
+        pass
+
+    hb = ProgressHeartbeat(status_msg, bot=bot, chat_id=chat_id)
     sink = hb.sink
 
     def _on_event(event: dict[str, Any]) -> None:
         sink.push(event)
 
     def _thread_main() -> Any:
-        # Re-bind inside the worker thread — critical for reliable delivery
         token = set_progress_handler(_on_event)
         try:
-            bus_report({"phase": "starting", "detail": "بدء حلقة التوليد", "step": 0})
+            bus_report({"phase": "starting", "tool": "starting", "detail": "بدء حلقة التوليد", "step": 0})
             return fn(*args, **kwargs)
         finally:
             reset_progress_handler(token)
@@ -254,9 +305,8 @@ async def run_with_heartbeat(
     uid = int(user_id or 0)
     if uid:
         mark_generation_busy(uid)
-    # Also bind on the event-loop thread so any sync pre-work can report
     token_main = set_progress_handler(_on_event)
-    sink.push({"phase": "starting", "detail": "بدء حلقة الوكيل"})
+    sink.push({"phase": "starting", "tool": "starting", "detail": "بدء المحرك"})
     hb.start()
     try:
         timeout = _heartbeat_timeout()

@@ -83,6 +83,7 @@ async def execute_bot_generation(
             uid,
             status_msg=status_msg,
             user_id=int(uid or 0),
+            context=context,
             preferred_keys=preferred_keys,
         )
         if result is None:
