@@ -512,14 +512,18 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             except Exception:
                 pass
 
-    # Facts I/O (Neon/Mongo) off event loop — include hosts only for dashboard
-    include_hosts = result.state.phase.value == "dashboard"
-    if action_id in {"open_billing", "open_dashboard", "home", "open_generate"}:
+    # Facts I/O (Neon/Mongo) off event loop — include hosts only for dashboard.
+    # Root lag: waiting up to 8s on every click for wallet/plan. Keep a short
+    # budget for menu actions; only dashboard needs hosts + cache bust.
+    include_hosts = result.state.phase == EngineUiPhase.DASHBOARD
+    light_actions = {"open_help", "home", "open_generate", "nav_back", "open_billing"}
+    if action_id == "open_dashboard":
         try:
             from .facts import invalidate_facts_cache
             invalidate_facts_cache(uid)
         except Exception:
             pass
+    facts_timeout = 2.0 if action_id in light_actions else (6.0 if include_hosts else 3.0)
     try:
         import asyncio
         from functools import partial
@@ -527,13 +531,16 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             asyncio.to_thread(
                 partial(gather_ui_facts, uid, user_data, include_hosts=include_hosts)
             ),
-            timeout=8.0,
+            timeout=facts_timeout,
         )
     except Exception:
         try:
-            facts = gather_ui_facts(uid, user_data, include_hosts=include_hosts)
+            facts = gather_ui_facts(uid, user_data, include_hosts=False)
         except TypeError:
             facts = gather_ui_facts(uid, user_data)
+        except Exception:
+            from lumen.engine.services.ui_state.render import UiFacts
+            facts = UiFacts(user_id=int(uid or 0))
     if result.state.phase == EngineUiPhase.HELP:
         facts.generate_hint = _help_body()
 
@@ -550,9 +557,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     msg = update.effective_message
     await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
 
-    # Weakness #5: ForceReply placeholder when the engine expects free text
+    # ForceReply placeholder when the engine expects free text.
+    # EngineUiPhase is module-level only — never re-import here (UnboundLocalError).
     try:
-        from lumen.engine.services.ui_state.models import EngineUiPhase
         from lumen.bot.ui.input_prompt import ask_after_ui
         if result.state.phase == EngineUiPhase.GEN_TYPE or result.state.slots.get("awaiting_text") == "1":
             await ask_after_ui(context=context, msg=msg, kind="bot_description")
