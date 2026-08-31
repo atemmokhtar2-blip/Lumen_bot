@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 
 def _emit_progress(event: dict[str, Any]) -> None:
-    """Push live progress to Telegram (or any sink) if a reporter is active."""
+    """Push live progress to UI sink via engine progress_bus (no bot imports)."""
     try:
-        from lumen.bot.progress_tracker import report_progress
+        from lumen.engine.services.progress_bus import report_progress
         report_progress(event)
     except Exception:
         pass

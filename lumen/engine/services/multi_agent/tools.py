@@ -73,6 +73,15 @@ def execute_tool_gated(
     state.extensions["selected_tool"] = tool
     risk = tool_risk(tool)
     state.extensions["tool_risk"] = risk
+    try:
+        from lumen.engine.services.progress_bus import report_progress
+        report_progress({
+            "phase": "orchestrator_tool",
+            "tool": str(tool),
+            "detail": f"تنفيذ أداة المنسّق: {tool}",
+        })
+    except Exception:
+        pass
 
     # Unknown tools fail closed
     if tool not in set(list_tools()) | {"chat_or_other", "generate_bot", "refine_bot"}:

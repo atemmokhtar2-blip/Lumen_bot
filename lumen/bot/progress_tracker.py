@@ -1,29 +1,28 @@
-"""Live generation progress — real agent events, not fake rotating phases.
+"""Live generation progress — real agent events on the Telegram status message.
 
-Root model (Dead Wait fix)
---------------------------
-``run_agent`` emits structured events via ``report_progress`` (contextvar).
-A background asyncio task drains those events and edits the Telegram status
-message so the user sees the actual tool / file / step — not a static spinner.
+Architecture
+------------
+Engine code (agent_loop, coding_agent) emits via ``lumen.engine.services.progress_bus``
+(no bot imports). ``run_with_heartbeat`` installs a handler that feeds a thread-safe
+sink; an asyncio task edits the Telegram status message with tool/file/step details.
 
-Also exposes a per-user busy flag so concurrent messages/buttons during
-generation get a clear response instead of a second parallel generation.
+The handler is re-bound **inside** the worker thread so events are never lost when
+``asyncio.to_thread`` does not preserve contextvars the way we need.
 """
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import os
 import threading
 import time
 from typing import Any, Callable, Optional
 
-# Thread-safe sink set by run_with_heartbeat (works across asyncio.to_thread)
-_progress_sink: contextvars.ContextVar[Optional["ProgressSink"]] = contextvars.ContextVar(
-    "lumen_progress_sink", default=None
+from lumen.engine.services.progress_bus import (
+    report_progress as bus_report,
+    reset_progress_handler,
+    set_progress_handler,
 )
 
-# user_id -> generation started monotonic time (busy guard)
 _BUSY: dict[int, float] = {}
 _BUSY_LOCK = threading.Lock()
 
@@ -52,16 +51,15 @@ _TOOL_AR = {
     "browser_screenshot": "لقطة شاشة",
     "run_skill": "تشغيل مهارة",
     "finish": "إنهاء وبناء النتيجة",
+    "generate_bot": "توليد بوت",
+    "refine_bot": "تعديل بوت",
+    "coding_agent": "وكيل البرمجة",
 }
 
 
 def report_progress(event: dict[str, Any] | None) -> None:
-    """Called from the agent thread after each meaningful step."""
-    if not event:
-        return
-    sink = _progress_sink.get()
-    if sink is not None:
-        sink.push(event)
+    """Public alias — prefer engine progress_bus from agent code."""
+    bus_report(event)
 
 
 def mark_generation_busy(user_id: int) -> None:
@@ -96,12 +94,12 @@ def is_generation_busy(user_id: int, *, stale_after: float = 600.0) -> bool:
 
 def _format_event(event: dict[str, Any], *, elapsed: int, step: int, limit: int) -> str:
     phase = str(event.get("phase") or "step")
-    tool = str(event.get("tool") or "").strip()
+    tool = str(event.get("tool") or phase or "").strip()
     thought = str(event.get("thought") or "").strip().replace("\n", " ")[:120]
     path = str(event.get("path") or event.get("file") or "").strip()
     ok = event.get("ok")
     detail = str(event.get("detail") or "").strip()[:100]
-    tool_ar = _TOOL_AR.get(tool, tool or phase)
+    tool_ar = _TOOL_AR.get(tool, tool)
 
     lines = [
         "⚙️ جاري البناء عبر الوكيل…",
@@ -128,8 +126,6 @@ def _format_event(event: dict[str, Any], *, elapsed: int, step: int, limit: int)
 
 
 class ProgressSink:
-    """Thread-safe event buffer drained by the asyncio UI loop."""
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: dict[str, Any] | None = None
@@ -156,14 +152,17 @@ class ProgressSink:
 
     def snapshot(self) -> tuple[int, dict[str, Any] | None, int, int]:
         with self._lock:
-            return self._seq, (dict(self._latest) if self._latest else None), self._step, self._limit
+            return (
+                self._seq,
+                dict(self._latest) if self._latest else None,
+                self._step,
+                self._limit,
+            )
 
 
 class ProgressHeartbeat:
-    """Edit status message whenever a new agent event arrives (or keep-alive)."""
-
-    POLL = 1.2
-    KEEP_ALIVE = 12.0
+    POLL = 1.0
+    KEEP_ALIVE = 10.0
 
     def __init__(self, status_msg, *, interval: float | None = None) -> None:
         self.status_msg = status_msg
@@ -195,7 +194,7 @@ class ProgressHeartbeat:
             text = (
                 "⚙️ جاري تجهيز الوكيل وبدء البناء…\n"
                 f"⏱ مرّ {elapsed} ثانية\n"
-                "سيتم عرض كل أداة ينفّذها الوكيل هنا."
+                "كل أداة ينفّذها الوكيل هتظهر هنا مباشرة."
             )
         try:
             await self.status_msg.edit_text(text)
@@ -208,6 +207,11 @@ class ProgressHeartbeat:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        # Flush latest agent events before teardown (short jobs finish before first poll)
+        try:
+            await self._tick()
+        except Exception:
+            pass
         self._stop.set()
         if self._task:
             try:
@@ -231,22 +235,37 @@ async def run_with_heartbeat(
     user_id: int = 0,
     **kwargs,
 ) -> Any:
-    """Run blocking generation in a thread while streaming agent events to Telegram."""
+    """Run blocking generation while streaming progress_bus events to Telegram."""
     hb = ProgressHeartbeat(status_msg)
-    token = _progress_sink.set(hb.sink)
+    sink = hb.sink
+
+    def _on_event(event: dict[str, Any]) -> None:
+        sink.push(event)
+
+    def _thread_main() -> Any:
+        # Re-bind inside the worker thread — critical for reliable delivery
+        token = set_progress_handler(_on_event)
+        try:
+            bus_report({"phase": "starting", "detail": "بدء حلقة التوليد", "step": 0})
+            return fn(*args, **kwargs)
+        finally:
+            reset_progress_handler(token)
+
     uid = int(user_id or 0)
     if uid:
         mark_generation_busy(uid)
-    hb.sink.push({"phase": "starting", "detail": "بدء حلقة الوكيل"})
+    # Also bind on the event-loop thread so any sync pre-work can report
+    token_main = set_progress_handler(_on_event)
+    sink.push({"phase": "starting", "detail": "بدء حلقة الوكيل"})
     hb.start()
     try:
         timeout = _heartbeat_timeout()
         return await asyncio.wait_for(
-            asyncio.to_thread(fn, *args, **kwargs),
+            asyncio.to_thread(_thread_main),
             timeout=timeout,
         )
     finally:
-        _progress_sink.reset(token)
+        reset_progress_handler(token_main)
         await hb.stop()
         if uid:
             clear_generation_busy(uid)

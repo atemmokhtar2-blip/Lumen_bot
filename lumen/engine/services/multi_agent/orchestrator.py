@@ -304,6 +304,15 @@ def orchestrate_generate(
 
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    try:
+        from lumen.engine.services.progress_bus import report_progress
+        report_progress({
+            "phase": "orchestrate",
+            "detail": "بدء مسار الوكلاء المتعددين",
+            "step": 0,
+        })
+    except Exception:
+        pass
 
     try:
         from lumen.platform.queue_backpressure import check_enqueue_allowed

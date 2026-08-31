@@ -234,6 +234,15 @@ def run_coding_session(
 
     try:
         from lumen.engine.services.cline_runtime.agent_loop import run_agent
+        try:
+            from lumen.engine.services.progress_bus import report_progress
+            report_progress({
+                "phase": "coding_agent",
+                "detail": "بدء وكيل البرمجة (Cline)",
+                "step": 0,
+            })
+        except Exception:
+            pass
 
         state = run_agent(
             work_dir=str(work),
