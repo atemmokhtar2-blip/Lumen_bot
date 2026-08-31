@@ -67,6 +67,35 @@ def looks_like_telegram_html(text: object) -> bool:
     return any(m in s for m in markers)
 
 
+def html_title(text: object, *, subtitle: object = "") -> str:
+    """Primary screen title — bold + optional italic subtitle (official HTML)."""
+    t = escape_html("" if text is None else str(text).strip())
+    if not t:
+        return ""
+    out = f"<b>{t}</b>"
+    sub = ("" if subtitle is None else str(subtitle)).strip()
+    if sub:
+        out += f"\n<i>{escape_html(sub)}</i>"
+    return out
+
+
+def html_code(text: object) -> str:
+    """Inline monospaced token/id/path — official <code>."""
+    return f"<code>{escape_html('' if text is None else str(text))}</code>"
+
+
+def html_bullets(items: Sequence[object], *, numbered: bool = False) -> str:
+    """Bullet or numbered list body (plain lines; wrap with blockquote outside)."""
+    lines: list[str] = []
+    for i, it in enumerate(items or (), start=1):
+        s = ("" if it is None else str(it)).strip()
+        if not s:
+            continue
+        prefix = f"{i}." if numbered else "•"
+        lines.append(f"{prefix} {s}")
+    return "\n".join(lines)
+
+
 def html_blockquote(body: object, *, expandable: bool = False) -> str:
     """Native Telegram blue quote box. expandable=True shows the collapse arrow.
 
@@ -84,7 +113,7 @@ def html_blockquote(body: object, *, expandable: bool = False) -> str:
 
 
 def html_section(title: object, body: object, *, expandable: bool = True) -> str:
-    """Bold title + expandable blue box (XPic-style feature cards)."""
+    """Bold section label + blue box (expandable by default for long copy)."""
     t = escape_html("" if title is None else str(title).strip())
     block = html_blockquote(body, expandable=expandable)
     if t and block:
@@ -96,13 +125,17 @@ def html_card(
     title: object,
     sections: Sequence[tuple[object, object]] | None = None,
     *,
+    subtitle: object = "",
     footer: object = "",
 ) -> str:
-    """Full UI card: bold title + expandable blue sections."""
+    """Full UI card: bold title, optional subtitle, expandable blue sections.
+
+    This is the standard surface for every user-facing menu/status screen.
+    """
     parts: list[str] = []
-    t = ("" if title is None else str(title)).strip()
-    if t:
-        parts.append(f"<b>{escape_html(t)}</b>")
+    head = html_title(title, subtitle=subtitle)
+    if head:
+        parts.append(head)
     for sec_title, sec_body in sections or ():
         st = ("" if sec_title is None else str(sec_title)).strip()
         sb = ("" if sec_body is None else str(sec_body)).strip()
@@ -114,8 +147,41 @@ def html_card(
             parts.append(html_blockquote(sb, expandable=True))
     ft = ("" if footer is None else str(footer)).strip()
     if ft:
-        parts.append(escape_html(ft))
+        # Footer may already be HTML from callers; escape only plain
+        if looks_like_telegram_html(ft):
+            parts.append(ft)
+        else:
+            parts.append(f"<i>{escape_html(ft)}</i>")
     return "\n\n".join(p for p in parts if p)
+
+
+def html_status(
+    title: object,
+    body: object = "",
+    *,
+    ok: bool | None = None,
+    details: Sequence[object] | None = None,
+) -> str:
+    """Compact status card for ops results (hosting, generate, token).
+
+    ok=True → success tone in title; ok=False → failure; None → neutral.
+    """
+    t = ("" if title is None else str(title)).strip()
+    if ok is True and t and not t.startswith("✅"):
+        t = f"✅ {t}"
+    elif ok is False and t and not t.startswith("❌"):
+        t = f"❌ {t}"
+    sections: list[tuple[str, str]] = []
+    b = ("" if body is None else str(body)).strip()
+    if b:
+        sections.append(("التفاصيل", b))
+    if details:
+        bullet = html_bullets(details)
+        if bullet:
+            sections.append(("معلومات", bullet))
+    if not sections:
+        return html_title(t)
+    return html_card(t, sections)
 
 
 def strip_markdown_noise(text: object) -> str:
@@ -338,9 +404,13 @@ __all__ = [
     "escape_md",
     "escape_html",
     "looks_like_telegram_html",
+    "html_title",
+    "html_code",
+    "html_bullets",
     "html_blockquote",
     "html_section",
     "html_card",
+    "html_status",
     "strip_markdown_noise",
     "split_telegram_text",
     "safe_edit_text",

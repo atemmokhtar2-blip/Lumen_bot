@@ -61,25 +61,35 @@ class HostResult:
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_user_text(self) -> str:
-        icon = "✅" if self.ok else "❌"
-        lines = [f"{icon} *استضافة*", f"• {self.message}"]
+        """User-facing hosting result — official Telegram HTML cards."""
+        from lumen.bot.telegram_text import html_bullets, html_card
+
+        details: list[str] = []
+        if self.message:
+            details.append(str(self.message)[:400])
         if self.instance:
             inst = self.instance
-            lines.append(f"• الحالة: `{inst.status}`")
+            details.append(f"الحالة: {inst.status}")
             if inst.bot_username:
-                lines.append(f"• البوت: @{inst.bot_username}")
+                details.append(f"البوت: @{inst.bot_username}")
             if inst.instance_id:
-                lines.append(f"• المعرّف: `{inst.instance_id}`")
+                details.append(f"المعرّف: {inst.instance_id}")
             if inst.pid:
-                lines.append(f"• PID: `{inst.pid}`")
+                details.append(f"PID: {inst.pid}")
             if inst.project_path:
-                lines.append(f"• المسار: `{inst.project_path}`")
+                details.append(f"المسار: {inst.project_path}")
             if inst.last_error:
-                lines.append(f"• آخر خطأ: {inst.last_error[:200]}")
+                details.append(f"آخر خطأ: {inst.last_error[:200]}")
+        sections: list[tuple[str, str]] = [
+            ("النتيجة", html_bullets(details) if details else ("نجاح" if self.ok else "فشل")),
+        ]
         if self.error_contract and self.error_contract.primary:
-            lines.append("• تشخيص:")
-            lines.append(self.error_contract.to_user_summary())
-        return "\n".join(lines)
+            sections.append(("تشخيص", self.error_contract.to_user_summary()[:800]))
+        return html_card(
+            "استضافة",
+            sections,
+            subtitle="نجاح العملية" if self.ok else "تعذّر الإكمال",
+        )
 
 
 class HostingService:

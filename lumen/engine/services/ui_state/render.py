@@ -54,6 +54,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
                     "• المساعدة — شرح سريع للأوامر",
                 ),
             ],
+            subtitle="منصة توليد واستضافة بوتات تيليجرام",
         )
 
     if phase == EngineUiPhase.GEN_TYPE:
@@ -66,6 +67,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
                     "مثال: بوت متجر يرد على الطلبات ويحسب الفواتير ويرسل إشعارات.",
                 ),
             ],
+            subtitle="رسالة واحدة واضحة تكفي للبدء",
         )
 
     if phase == EngineUiPhase.GEN_SLOTS:
@@ -169,7 +171,11 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         ]
         if facts.active_project:
             sections.insert(0, ("مشروع الجلسة", str(facts.active_project)))
-        return html_card("لوحة التحكم — استضافة حقيقية", sections)
+        return html_card(
+            "لوحة التحكم — استضافة حقيقية",
+            sections,
+            subtitle="إدارة المثيلات من HostService",
+        )
 
     if phase == EngineUiPhase.BILLING:
         bal = int(facts.credits_available or facts.credits_balance or 0)
@@ -178,7 +184,11 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         if reserved:
             body += f"\nمحجوز: {reserved} كريدت"
         body += "\n\nالرصيد يخصم حسب التوليد والاستضافة."
-        return html_card("الرصيد", [("حسابك", body)])
+        return html_card(
+            "الرصيد",
+            [("حسابك", body)],
+            subtitle="نظام الكريدت",
+        )
 
     if phase == EngineUiPhase.CONTEXT:
         from .ui_events import render_event_message
@@ -200,7 +210,11 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         sections = [("الأوامر", main)]
         if hint and hint not in main:
             sections.append(("تفاصيل", hint[:1500]))
-        return html_card("المساعدة", sections)
+        return html_card(
+            "المساعدة",
+            sections,
+            subtitle="دليل سريع للأوامر",
+        )
 
     return html_card("مرحلة", [("", escape_html(str(phase.value)))])
 

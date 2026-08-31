@@ -36,32 +36,40 @@ def host_panel_buttons(*, instance_index: str = "0") -> tuple[tuple[UiButton, ..
 
 
 def format_host_success(result: Any) -> str:
-    """User-facing confirmation after HostService.start succeeded."""
-    lines = ["✅ الاستضافة شغّالة"]
+    """User-facing confirmation after HostService.start succeeded — HTML card."""
+    from lumen.bot.telegram_text import html_bullets, html_card, html_code
+
+    details: list[str] = []
     inst = getattr(result, "instance", None)
     if inst is not None:
         status = str(getattr(inst, "status", "") or "")
         if status:
-            lines.append(f"• الحالة: `{status}`")
+            details.append(f"الحالة: {status}")
         un = str(getattr(inst, "bot_username", "") or "")
         if un:
-            lines.append(f"• البوت: @{un}")
+            details.append(f"البوت: @{un}")
         iid = str(getattr(inst, "instance_id", "") or "")
         if iid:
-            lines.append(f"• المعرّف: `{iid[:16]}`")
+            details.append(f"المعرّف: {iid[:16]}")
         be = str(getattr(inst, "sandbox_backend", "") or "")
         if be:
-            lines.append(f"• العزل: `{be}`")
+            details.append(f"العزل: {be}")
         path = str(getattr(inst, "project_path", "") or "")
         if path:
-            lines.append(f"• المسار: {code_path(path)}")
+            details.append(f"المسار: {code_path(path)}")
     else:
         msg = str(getattr(result, "message", "") or "").strip()
         if msg:
-            lines.append(msg[:400])
-    lines.append("")
-    lines.append("استخدم الأزرار أدناه لإدارة المثيل.")
-    return "\n".join(lines)[:3500]
+            details.append(msg[:400])
+    body = html_bullets(details) if details else "المثيل يعمل."
+    return html_card(
+        "الاستضافة شغّالة",
+        [
+            ("المثيل", body),
+            ("التالي", "استخدم الأزرار أدناه لإدارة المثيل\n(حالة · سجلات · تشخيص · إيقاف)."),
+        ],
+        subtitle="HostService · تشغيل حقيقي",
+    )[:3500]
 
 
 async def attach_host_panel(

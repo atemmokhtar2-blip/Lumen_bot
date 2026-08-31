@@ -1,5 +1,7 @@
-"""Honest capability list for /help and rejection messages."""
+"""Honest capability list for /help and rejection messages — Telegram HTML UI."""
 from __future__ import annotations
+
+from lumen.bot.telegram_text import html_bullets, html_card
 
 CAN_DO_AR = [
     "توليد بوت تيليجرام بأوامر ومعالجات حقيقية (Python)",
@@ -19,31 +21,46 @@ CANNOT_DO_AR = [
 
 
 def get_help_text() -> str:
-    can = "\n".join(f"• {x}" for x in CAN_DO_AR)
-    cannot = "\n".join(f"• {x}" for x in CANNOT_DO_AR)
-    return (
-        "🤖 *ماذا أستطيع؟*\n"
-        f"{can}\n\n"
-        "🚫 *ماذا لا أستطيع؟*\n"
-        f"{cannot}\n\n"
-        "أرسل وصفاً واضحاً للبوت، أو /start"
+    """Full /help body — official expandable blue cards."""
+    return html_card(
+        "المساعدة — قدرات Lumen",
+        [
+            ("ماذا أستطيع؟", html_bullets(CAN_DO_AR)),
+            ("ماذا لا أستطيع؟", html_bullets(CANNOT_DO_AR)),
+            (
+                "كيف تبدأ",
+                "أرسل وصفاً واضحاً للبوت من زر إنشاء بوت،\n"
+                "أو اضغط /start للعودة للقائمة الرئيسية.",
+            ),
+        ],
+        subtitle="حدود صادقة — بدون وعود وهمية",
     )
 
 
 def rejection_message(reason: str, suggested: str = "") -> str:
-    parts = [
-        "⚠️ لا أستطيع توليد هذا البوت كما هو مطلوب.",
-        "",
-        f"السبب: {reason}",
+    """Capability rejection — HTML card, never markdown asterisks."""
+    sections: list[tuple[str, str]] = [
+        ("السبب", (reason or "غير محدد").strip() or "غير محدد"),
     ]
-    if suggested:
-        parts += ["", f"💡 بديل مقترح:\n{suggested}"]
-    parts += [
-        "",
-        "أقدر أساعدك في بوتات أوامر تيليجرام، متجر محلي، نقاط، تذاكر، اشتراكات.",
-        "اكتب /help لعرض الحدود بوضوح.",
-    ]
-    return "\n".join(parts)
+    if (suggested or "").strip():
+        sections.append(("بديل مقترح", suggested.strip()))
+    sections.append(
+        (
+            "أقدر أساعدك في",
+            html_bullets(
+                [
+                    "بوتات أوامر تيليجرام",
+                    "متجر محلي / نقاط / تذاكر / اشتراكات",
+                ]
+            ),
+        )
+    )
+    return html_card(
+        "تعذّر توليد هذا البوت",
+        sections,
+        subtitle="الطلب خارج حدود المحرك الحالية",
+        footer="اكتب /help لعرض الحدود بوضوح.",
+    )
 
 
 __all__ = ["get_help_text", "rejection_message", "CAN_DO_AR", "CANNOT_DO_AR"]
