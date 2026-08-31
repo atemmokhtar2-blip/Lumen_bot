@@ -5,12 +5,13 @@ Does NOT use catalog templates. Writes a real project under work_dir.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
 import time as _time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .agent_acceptance import check_agent_project
 from .agent_brain import decide
@@ -19,6 +20,35 @@ from .agent_state import AgentState, AgentStep
 from .model_router import describe_runtime, select_model, select_model_for_goal
 
 logger = logging.getLogger(__name__)
+
+# ContextVar carrying the live progress callback (Weakness 2: Dead Wait).
+#
+# The agent loop runs deep inside the call chain:
+#   run_with_heartbeat → run_generation → run_generation_with_bridge
+#     → execute_ir → execute_cline_ir → provider_agent.build → run_agent
+# (or the multi-agent orchestrator path: orchestrate_generate → coding_agent
+#   → run_agent).
+#
+# Rather than threading an ``on_step`` kwarg through every intermediate
+# signature (bloat), we set this ContextVar once in ``run_with_heartbeat``
+# (in the asyncio event loop) and ``asyncio.to_thread`` copies the context
+# into the worker thread, so ``run_agent`` can read it as a fallback.
+_CURRENT_ON_STEP: contextvars.ContextVar[
+    "Callable[[int, str | None, dict | None, bool], None] | None"
+] = contextvars.ContextVar("_CURRENT_ON_STEP", default=None)
+
+
+def set_progress_callback(cb: "Callable[[int, str | None, dict | None, bool], None] | None") -> contextvars.Token:
+    """Set the live progress callback in the current context (Weakness 2).
+
+    Returns a token so the caller can reset it (``_CURRENT_ON_STEP.reset(tok)``).
+    """
+    return _CURRENT_ON_STEP.set(cb)
+
+
+def reset_progress_callback(token: contextvars.Token) -> None:
+    """Reset the progress callback to its prior value."""
+    _CURRENT_ON_STEP.reset(token)
 
 # Official tool surface — must match agent_fs.run_tool (no ghost names)
 AGENT_TOOL_NAMES: tuple[str, ...] = (
@@ -132,12 +162,30 @@ GOAL:
 
 
 
+def _emit_step(on_step, index: int, tool_name: str | None, args: dict | None, ok: bool) -> None:
+    """Push a live progress action to the UI heartbeat (Weakness 2: Dead Wait).
+
+    Best-effort: never let a UI callback error abort the agent loop.
+    If the explicit ``on_step`` argument is None, fall back to the ContextVar
+    set by ``run_with_heartbeat`` (so we don't need to thread it through the
+    entire call chain).
+    """
+    cb = on_step if on_step is not None else _CURRENT_ON_STEP.get()
+    if cb is None:
+        return
+    try:
+        cb(index, tool_name, args, ok)
+    except Exception:
+        logger.debug("on_step callback failed", exc_info=True)
+
+
 def run_agent(
     *,
     work_dir: str | Path,
     goal: str,
     ir_dict: dict[str, Any] | None = None,
     max_steps: int | None = None,
+    on_step: "Callable[[int, str | None, dict | None, bool], None] | None" = None,
 ) -> AgentState:
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
@@ -386,6 +434,7 @@ def run_agent(
                 "Valid tools: " + ", ".join(AGENT_TOOL_NAMES) + "."
             )
             state.steps.append(step)
+            _emit_step(on_step, i, None, None, False)
             state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")
             continue
 
@@ -437,6 +486,7 @@ def run_agent(
             step.tool_name = "finish"
             step.tool_result = result
             state.steps.append(step)
+            _emit_step(on_step, i, "finish", args, bool((result or {}).get("ok")))
             state.add_assistant(step.thought or decision.get("summary") or "done")
             acc = check_agent_project(state.work_dir, goal=goal)
             state.metadata["acceptance"] = acc
@@ -472,6 +522,7 @@ def run_agent(
             state.add_assistant(step.thought or "(no tool)")
             state.add_user("Call a tool or finish. JSON only.")
             state.steps.append(step)
+            _emit_step(on_step, i, None, None, False)
             continue
 
         _t0 = _time.monotonic()
@@ -496,6 +547,7 @@ def run_agent(
         except Exception:
             pass
         state.steps.append(step)
+        _emit_step(on_step, i, str(tool) if tool else None, args, bool((result or {}).get("ok")))
         state.add_assistant(
             json.dumps(
                 {"thought": step.thought, "tool": tool, "args": _safe_args(args)},

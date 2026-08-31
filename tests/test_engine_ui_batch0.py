@@ -23,11 +23,14 @@ def test_unknown_action_fail_closed():
 
 
 def test_home_to_generate_shell():
+    """open_generate jumps straight to free-text (bot_type=custom)."""
     st = EngineUiState(phase=EngineUiPhase.HOME)
     r = apply_action(st, "open_generate")
     assert r.ok is True
     assert r.state.phase == EngineUiPhase.GEN_TYPE
-    assert "bot_type" in missing_for_state(r.state)
+    # open_generate sets bot_type=custom automatically; next missing is description
+    assert r.state.slots.get("bot_type") == "custom"
+    assert "bot_description" in missing_for_state(r.state)
 
 
 def test_action_not_allowed_in_phase():
@@ -39,11 +42,12 @@ def test_action_not_allowed_in_phase():
 
 def test_buttons_encode_under_64_bytes():
     rows = buttons_for_phase(EngineUiPhase.HOME)
+    uid = 12345
     for row in rows:
         for btn in row:
-            data = encode_callback(btn.action, btn.arg)
+            data = encode_callback(btn.action, btn.arg, user_id=uid)
             assert len(data.encode("utf-8")) <= 64
-            parsed = decode_callback(data)
+            parsed = decode_callback(data, user_id=uid)
             assert parsed is not None
             assert parsed[0] == btn.action
 
@@ -72,6 +76,7 @@ def test_from_dict_invalid_phase_defaults_home():
     assert st.phase == EngineUiPhase.HOME
 
 def test_render_dashboard_lists_hosts():
+    """Dashboard shows bot username + Arabic status; server internals hidden."""
     from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, HostRow, UiFacts, render_message
     st = EngineUiState(phase=EngineUiPhase.DASHBOARD)
     facts = UiFacts(
@@ -79,20 +84,40 @@ def test_render_dashboard_lists_hosts():
         active_project="/data/u1/bot",
     )
     text = render_message(st, facts)
-    assert "host-1" in text
-    assert "running" in text
-    assert "firecracker" in text
-    assert "/data/u1/bot" in text
+    # Bot username is shown (human-facing)
+    assert "mybot" in text
+    # Arabic status is shown (not raw English "running")
+    assert "يعمل" in text
+    # Project folder name is shown (masked, not full server path)
+    assert "bot" in text
+    # Server filesystem layout must NOT be exposed
+    assert "/data/u1/" not in text
+    assert "host-1" not in text  # internal instance id hidden
+    assert "firecracker" not in text  # internal backend name hidden
 
 
 def test_render_billing_no_fake_payment():
+    """Billing shows credits balance + cost breakdown; no fake payment UI."""
     from lumen.engine.services.ui_state import EngineUiPhase, EngineUiState, UiFacts, render_message
     st = EngineUiState(phase=EngineUiPhase.BILLING)
-    facts = UiFacts(plan_label="Free — مجاني", generations_per_month="10", hosted_bots_limit="1")
+    facts = UiFacts(
+        plan_label="Free — مجاني",
+        generations_per_month="10",
+        hosted_bots_limit="1",
+        credits_available=100,
+        gen_cost_credits=50,
+        host_hourly_credits=10,
+    )
     text = render_message(st, facts)
-    assert "Free" in text
-    assert "10" in text
-    assert "دفع" in text  # honest note that payment UI is not live
+    # Credits balance is shown
+    assert "100" in text
+    assert "كريديت" in text
+    # Cost breakdown is shown (how credits are consumed)
+    assert "50" in text  # generation cost
+    assert "10" in text  # hosting cost
+    # No fake payment buttons or checkout language
+    assert "checkout" not in text.lower()
+    assert "stripe" not in text.lower()
 
 
 def test_open_generate_sets_awaiting_text():
@@ -107,5 +132,6 @@ def test_open_generate_sets_awaiting_text():
 
 def test_encode_await_generate():
     from lumen.bot.ui.keyboards import encode_callback, decode_callback
-    d = encode_callback("await_generate_text")
-    assert decode_callback(d) == ("await_generate_text", "")
+    uid = 99999
+    d = encode_callback("await_generate_text", user_id=uid)
+    assert decode_callback(d, user_id=uid) == ("await_generate_text", "")

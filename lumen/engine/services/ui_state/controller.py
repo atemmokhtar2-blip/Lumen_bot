@@ -43,6 +43,44 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Weakness 4 fix — Unified Bottom Navigation
+#
+# Every non-HOME phase gets a consistent last row [رجوع][الصفحة الرئيسية][إلغاء]
+# so the user is never trapped and always has a clear escape path.
+# --------------------------------------------------------------------------- #
+def _previous_phase(phase: EngineUiPhase) -> EngineUiPhase:
+    """Logically previous phase for the 'back' button (Weakness 4)."""
+    prev_map = {
+        EngineUiPhase.GEN_SLOTS: EngineUiPhase.GEN_TYPE,
+        EngineUiPhase.GEN_CONFIRM: EngineUiPhase.GEN_SLOTS,
+        EngineUiPhase.GEN_TYPE: EngineUiPhase.HOME,
+        EngineUiPhase.GEN_DONE: EngineUiPhase.HOME,
+        EngineUiPhase.DASHBOARD: EngineUiPhase.HOME,
+        EngineUiPhase.BILLING: EngineUiPhase.HOME,
+        EngineUiPhase.HELP: EngineUiPhase.HOME,
+        EngineUiPhase.CONTEXT: EngineUiPhase.HOME,
+    }
+    return prev_map.get(phase, EngineUiPhase.HOME)
+
+
+def _bottom_nav(phase: EngineUiPhase) -> tuple[UiButton, ...]:
+    """Unified bottom navigation row [رجوع][الصفحة الرئيسية][إلغاء].
+
+    For GENERATING: only [إلغاء] makes sense (can't go back mid-generation).
+    For HOME: no bottom nav (it IS home).
+    """
+    if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
+        return ()  # no bottom nav on the root menu
+    if phase == EngineUiPhase.GENERATING:
+        return (UiButton("إلغاء", "cancel_generate", style="danger"),)
+    return (
+        UiButton("رجوع", "back"),
+        UiButton("الصفحة الرئيسية", "home"),
+        UiButton("إلغاء", "cancel_generate", style="danger"),
+    )
+
+
 def _copy_state(state: EngineUiState) -> EngineUiState:
     return EngineUiState(
         phase=state.phase,
@@ -78,49 +116,48 @@ def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> Engin
 
 
 def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
-    """Dynamic keyboard from phase + remaining engine needs."""
+    """Dynamic keyboard from phase + remaining engine needs.
+
+    Every non-HOME phase gets a unified bottom navigation row
+    [رجوع][الصفحة الرئيسية][إلغاء] as the last row (Weakness 4 fix).
+    """
     phase = state.phase
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         return _home_buttons()
 
+    # Build the phase-specific rows, then append the unified bottom nav.
+    rows: list[tuple[UiButton, ...]] = []
+
     if phase == EngineUiPhase.GEN_TYPE:
         # Description-only path — no type chips (user writes free text below)
-        return (
-            (UiButton("رجوع", "home", style="danger"),),
-        )
+        # Bottom nav provides [رجوع][الصفحة الرئيسية][إلغاء]
+        rows = []
 
-    if phase == EngineUiPhase.GEN_SLOTS:
+    elif phase == EngineUiPhase.GEN_SLOTS:
         rem = remaining_needs(state.needs or [], state.slots)
         if not rem:
-            return (
-                (UiButton("متابعة للتأكيد", "to_confirm"),),
-                (UiButton("القائمة", "home"),),
-            )
-        need = rem[0]
-        rows: list[tuple[UiButton, ...]] = []
-        # choice chips in rows of 2
-        row: list[UiButton] = []
-        for c in need.choices:
-            row.append(UiButton(c.label[:32], "fill_slot", c.choice_id))
-            if len(row) == 2:
+            rows.append((UiButton("متابعة للتأكيد", "to_confirm"),))
+        else:
+            need = rem[0]
+            # choice chips in rows of 2
+            row: list[UiButton] = []
+            for c in need.choices:
+                row.append(UiButton(c.label[:32], "fill_slot", c.choice_id))
+                if len(row) == 2:
+                    rows.append(tuple(row))
+                    row = []
+            if row:
                 rows.append(tuple(row))
-                row = []
-        if row:
-            rows.append(tuple(row))
-        rows.append(
-            (
-                UiButton("تخطي هذا", "skip_need"),
-                UiButton("توليد بما هو متاح", "to_confirm"),
+            rows.append(
+                (
+                    UiButton("تخطّي هذا", "skip_need"),
+                    UiButton("توليد بما هو متاح", "to_confirm"),
+                )
             )
-        )
-        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
-        return tuple(rows)
 
-    if phase == EngineUiPhase.GEN_CONFIRM:
+    elif phase == EngineUiPhase.GEN_CONFIRM:
         rem = remaining_needs(state.needs or [], state.slots)
-        rows = []
         if rem:
-            # engine still wants something — offer continue slots or force generate
             rows.append((UiButton("أكمل الناقص", "resume_slots"),))
         rows.append(
             (
@@ -128,13 +165,12 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("تعديل", "open_generate"),
             )
         )
-        rows.append((UiButton("إلغاء", "cancel_generate", style="danger"),))
-        return tuple(rows)
 
-    if phase == EngineUiPhase.GENERATING:
-        return ((UiButton("القائمة", "home"),),)
-    if phase == EngineUiPhase.GEN_DONE:
+    elif phase == EngineUiPhase.GENERATING:
+        # Only [إلغاء] — can't go back or home mid-generation (would orphan it)
         rows = []
+
+    elif phase == EngineUiPhase.GEN_DONE:
         if (state.project_ref or "").strip():
             rows.append(
                 (
@@ -149,15 +185,9 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 )
             )
         rows.append((UiButton("إنشاء بوت آخر", "open_generate", style="success"),))
-        rows.append(
-            (
-                UiButton("لوحة التحكم", "open_dashboard", style="primary"),
-                UiButton("القائمة", "home", style="danger"),
-            )
-        )
-        return tuple(rows)
-    if phase == EngineUiPhase.DASHBOARD:
-        rows: list[tuple[UiButton, ...]] = []
+        rows.append((UiButton("لوحة التحكم", "open_dashboard", style="primary"),))
+
+    elif phase == EngineUiPhase.DASHBOARD:
         # Host rows: dash_h{i}=instance_id; callback arg is index i (stable)
         for i in range(5):
             iid = (state.slots.get(f"dash_h{i}") or "").strip()
@@ -188,24 +218,27 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("استضافة المشروع", "post_host", style="success"),
             )
         )
-        rows.append(
-            (
-                UiButton("إنشاء بوت", "open_generate", style="success"),
-                UiButton("القائمة", "home", style="danger"),
-            )
-        )
-        return tuple(rows)
-    if phase == EngineUiPhase.BILLING:
-        return (
-            (UiButton("تحديث الرصيد", "open_billing", style="primary"),),
-            (UiButton("رجوع", "home", style="danger"),),
-        )
-    if phase == EngineUiPhase.HELP:
-        return ((UiButton("رجوع", "home", style="danger"),),)
-    if phase == EngineUiPhase.CONTEXT:
+        rows.append((UiButton("إنشاء بوت", "open_generate", style="success"),))
+
+    elif phase == EngineUiPhase.BILLING:
+        rows.append((UiButton("تحديث الرصيد", "open_billing", style="primary"),))
+
+    elif phase == EngineUiPhase.HELP:
+        rows = []
+
+    elif phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
-        return buttons_for_event(kind)
-    return ((UiButton("القائمة", "home"),),)
+        rows.extend(list(buttons_for_event(kind)))
+
+    else:
+        rows = []
+
+    # --- Weakness 4: append unified bottom navigation as the last row ---
+    nav = _bottom_nav(phase)
+    if nav:
+        rows.append(nav)
+
+    return tuple(rows)
 
 
 def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
@@ -270,6 +303,25 @@ def apply_action(
         new.slots.pop("awaiting_text", None)
         new.missing = []
         msg = "القائمة الرئيسية."
+    elif action_id == "back":
+        # Weakness 4 fix: unified "back" button — go to the logically previous phase.
+        prev = _previous_phase(state.phase)
+        new.phase = prev
+        new.slots.pop("awaiting_text", None)
+        if prev == EngineUiPhase.HOME:
+            new.missing = []
+            msg = "القائمة الرئيسية."
+        elif prev == EngineUiPhase.GEN_SLOTS:
+            new = _refresh_needs(new, user_id=user_id)
+            rem = remaining_needs(new.needs or [], new.slots)
+            new.missing = [n.slot for n in rem]
+            msg = (rem[0].text if rem else "مراجعة الخيارات.")
+        elif prev == EngineUiPhase.GEN_TYPE:
+            new.slots["awaiting_text"] = "1"
+            msg = "اكتب وصف البوت تحت."
+        else:
+            new.missing = []
+            msg = "العودة."
     elif action_id == "open_generate":
         # Jump straight to free-text description — no shop/notify/chat chips
         new.phase = EngineUiPhase.GEN_TYPE

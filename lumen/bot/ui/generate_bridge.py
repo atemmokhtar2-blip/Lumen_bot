@@ -20,7 +20,7 @@ async def run_guided_generation(
     from lumen.bot.config import OUTPUT_DIR
     from lumen.bot.sanitize import user_facing_generation_error
     from lumen.bot.helpers import run_generation, safe_edit_text
-    from lumen.bot.progress_tracker import run_with_heartbeat
+    from lumen.bot.progress_tracker import run_with_heartbeat, AgentProgressFeed
 
     gen_request = (gen_request or "").strip()
     if not gen_request:
@@ -60,12 +60,19 @@ async def run_guided_generation(
 
     preferred_keys = None
     try:
+        # Weakness 2 fix: create a live progress feed so the heartbeat streams
+        # the agent's REAL actions (read file, wrote code, browsed...) every ~3s
+        # instead of the old dead-wait generic messages.  Mirrors the chat path
+        # in message_generation.py — without this, the UI-guided path (button
+        # presses) showed only static "analyzing…" text for the whole build.
+        feed = AgentProgressFeed()
         result = await run_with_heartbeat(
             run_generation,
             gen_request,
             work_dir,
             int(user.id) if user else 0,
             status_msg=status_msg,
+            feed=feed,
             preferred_keys=preferred_keys,
         )
     except Exception as exc:

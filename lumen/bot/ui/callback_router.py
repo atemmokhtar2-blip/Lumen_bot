@@ -210,6 +210,21 @@ async def handle_ui_callback(update, context) -> None:
         logger.exception("auth check failed on callback")
         return
 
+    # 1b) Restore durable session from DB (SQLite WAL) so the bot remembers the
+    # user across restarts / load-balancing. Without this, callback-driven flows
+    # (button presses) start from empty RAM context.user_data even though the
+    # DB holds pending_run / chat_history / last_bot_request etc. Mirrors the
+    # load already done in message_router (text) and commands (/start).
+    try:
+        if user is not None and context.user_data is not None:
+            from lumen.bot.session_store import get_session_store
+
+            saved = get_session_store().load(int(user.id))
+            for k, v in (saved or {}).items():
+                context.user_data.setdefault(k, v)
+    except Exception:
+        logger.debug("callback session restore failed", exc_info=True)
+
     # 2) Signed parse + closed catalog
     parsed = decode_callback(q.data or "", user_id=uid)
     if parsed is None:
@@ -237,6 +252,25 @@ async def handle_ui_callback(update, context) -> None:
             return
     except Exception:
         logger.debug("callback rate limit skipped", exc_info=True)
+
+    # ── Busy guard (Weakness 2: Dead Wait) ──────────────────────────────
+    # If a generation is already running for this user, block any action that
+    # would start a *new* generation or mutate the UI state in a conflicting
+    # way.  Allowed while busy: navigation away (home, help, billing) and the
+    # explicit cancel.  Everything else gets a friendly in-progress notice so
+    # the user is never left wondering "did my button press do anything?".
+    ud = context.user_data if context.user_data is not None else {}
+    _SAFE_WHILE_BUSY = {"home", "open_help", "help", "open_billing", "cancel_generation"}
+    if ud.get("lumen_generating") and action_id not in _SAFE_WHILE_BUSY:
+        try:
+            await q.answer(
+                "⏳ جاري بناء البوت الآن… انتظر حتى ينتهي.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        logger.info("busy guard blocked action=%s uid=%s", action_id, uid)
+        return
 
     # HITL resume can run the full LangGraph build — allow long wall time.
     _timeout = 200.0 if action_id in {"hitl_confirm", "hitl_reject"} else 25.0
@@ -525,9 +559,38 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     msg = update.effective_message
     await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
 
+    # Weakness 5 fix: when the state is awaiting free-text input, send a
+    # ForceReply message with input_field_placeholder so the user sees a
+    # grayed-out hint in the input field (form-like experience).
+    if not (result.ok and result.run_generation and result.generation_request):
+        try:
+            from .force_reply import should_send_force_reply, send_force_reply_prompt
+            if should_send_force_reply(result.state):
+                bot = getattr(context, "bot", None) if context is not None else None
+                chat_id = None
+                if q is not None and getattr(q, "message", None) is not None:
+                    chat_id = getattr(q.message.chat, "id", None)
+                elif msg is not None:
+                    chat_id = getattr(getattr(msg, "chat", None), "id", None)
+                if bot is not None and chat_id is not None:
+                    slot = (result.state.slots.get("awaiting_slot") or "").strip() or None
+                    await send_force_reply_prompt(
+                        bot=bot,
+                        chat_id=int(chat_id),
+                        prompt_text=result.message_ar or "اكتب إجابتك:",
+                        slot=slot,
+                        phase=result.state.phase.value if result.state.phase else None,
+                    )
+        except Exception:
+            logger.debug("force_reply prompt failed", exc_info=True)
+
     # Real generation — same engine as chat path
     if result.ok and result.run_generation and result.generation_request:
         status = None
+        # ── Busy guard (Weakness 2): mark generation in progress so
+        # concurrent button presses get a friendly notice instead of a
+        # second parallel generation or a corrupted UI state.
+        user_data["lumen_generating"] = True
         try:
             if msg:
                 status = await msg.reply_text("جاري توليد البوت عبر المحرك…")
@@ -575,6 +638,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 )
         except Exception:
             logger.exception("guided generation bridge failed")
+        finally:
+            # ── Busy guard: always clear the flag, even on failure ──
+            user_data.pop("lumen_generating", None)
             if msg is not None:
                 try:
                     await msg.reply_text(

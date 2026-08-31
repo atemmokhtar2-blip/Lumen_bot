@@ -5,7 +5,6 @@ import asyncio
 from pathlib import Path
 
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from .capability_boundaries import get_help_text
@@ -76,14 +75,22 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         from lumen.engine.services.ui_state.render import UiFacts
         facts = UiFacts()
-    caption = render_message(ui, facts)
+
+    # First-time onboarding message is richer than the compact home menu.
+    # The ``lumen_welcome_shown`` flag lives in user_data + session store so
+    # it survives process restarts — onboarding appears exactly once.
+    already_welcomed = bool(ud.get("lumen_welcome_shown"))
+    if already_welcomed:
+        caption = render_message(ui, facts)
+    else:
+        from lumen.engine.services.ui_state.render import render_onboarding
+        caption = render_onboarding(facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
 
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 
     # First-time hero image only. After that: text menu forever.
     # Flag lives in user_data + session store so it survives process restarts.
-    already_welcomed = bool(ud.get("lumen_welcome_shown"))
     sent_msg = None
     if not already_welcomed:
         welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
@@ -137,10 +144,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("⛔ غير مصرح.")
         return
     text = get_help_text()
-    try:
-        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    except Exception:
-        await message.reply_text(text)
+    await safe_reply_text(message, text, use_markdown=True)
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -122,9 +122,18 @@ class SessionStore:
                 "translated_source",
                 "last_project_path",
                 "active_bot_path",
+                # Engine UI state (phase / slots / needs) so the user does NOT lose
+                # their place in the conversation after a restart or worker swap.
+                # Without this, persist_ui_session() was a no-op for UI state and
+                # the user was forced back to /start (Weakness 1: Lost Context).
+                "engine_ui",
             )
             if k in data and data[k] is not None
         }
+        # Cap engine_ui.needs to avoid unbounded blob growth in the session DB.
+        ui = keep.get("engine_ui")
+        if isinstance(ui, dict) and isinstance(ui.get("needs"), list):
+            ui["needs"] = ui["needs"][:12]
         payload = json.dumps(keep, ensure_ascii=False, default=str)
         with self._lock:
             with self._conn() as conn:
