@@ -313,6 +313,9 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
     """Load secrets into process memory; scrub os.environ in production.
 
     ``only_missing`` applies when merging into the in-memory store.
+    Idempotent: if already bootstrapped, re-scrub and return without
+    re-requiring a provider (avoids secrets_empty_platform_env on re-entry
+    from config.py after main.py already loaded + scrubbed).
     """
     global _BOOTSTRAPPED
     meta: dict[str, Any] = {
@@ -322,6 +325,14 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
         "keys": [],
         "production": is_production(),
     }
+
+    if _BOOTSTRAPPED:
+        with _LOCK:
+            meta["source"] = "memory"
+            meta["stored"] = sum(1 for k in _MANAGED_KEYS if _STORE.get(k))
+            meta["keys"] = [k for k in _MANAGED_KEYS if _STORE.get(k)]
+        meta["scrubbed_environ"] = _scrub_environ(list(_MANAGED_KEYS))
+        return meta
 
     remote: dict[str, str] | None = None
     source = "none"
@@ -415,10 +426,16 @@ def load_secrets_into_environ(*, only_missing: bool = True) -> dict[str, Any]:
 
 
 def assert_environ_scrubbed() -> None:
-    """Fail if managed secrets still present in os.environ (production)."""
+    """Fail if managed secrets still present in the real os.environ (production).
+
+    Uses membership on the environ mapping (``k in os.environ``), not
+    ``os.environ.get``, because the access bridge patches ``.get`` to return
+    values from the in-memory store. Checking via ``.get`` would always false-
+    positive after the bridge is installed.
+    """
     if not is_production():
         return
-    leaked = [k for k in _MANAGED_KEYS if (os.environ.get(k) or "").strip()]
+    leaked = [k for k in _MANAGED_KEYS if k in os.environ]
     if leaked:
         raise RuntimeError("secrets_still_in_environ:" + ",".join(leaked))
 

@@ -16,9 +16,9 @@ try:
     )
     load_dotenv_if_dev()
     load_secrets(only_missing=True)
-    install_secret_access_bridge()
     from lumen.platform.secrets_provider import assert_environ_scrubbed as _aes
     _aes()
+    install_secret_access_bridge()
 except Exception as _sec_exc:
     import logging as _logging
     _logging.getLogger("lumen_bot").error("secrets_boot_failed: %s", type(_sec_exc).__name__)
