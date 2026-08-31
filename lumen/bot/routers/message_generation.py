@@ -79,6 +79,10 @@ async def execute_bot_generation(
         # Weakness 2 fix: create a live progress feed so the heartbeat streams
         # the agent's REAL actions (read file, wrote code, browsed...) every ~3s
         # instead of the old dead-wait (20s interval + 4 static generic messages).
+        # ── Busy guard (Weakness 2): mark generation in progress ──
+        _ud = context.user_data if (context and context.user_data is not None) else None
+        if _ud is not None:
+            _ud["lumen_generating"] = True
         feed = AgentProgressFeed()
         result = await run_with_heartbeat(
             run_generation,
@@ -347,6 +351,11 @@ async def execute_bot_generation(
         logger.exception("Generation failed")
         await safe_edit_text(status_msg, user_facing_generation_error(e))
         return None
+    finally:
+        # ── Busy guard: always clear the flag, even on failure ──
+        _ud = context.user_data if (context and context.user_data is not None) else None
+        if _ud is not None:
+            _ud.pop("lumen_generating", None)
 
 
 __all__ = ["allocate_generation_workdir", "execute_bot_generation"]

@@ -32,14 +32,14 @@ def test_feed_push_and_latest():
     assert total == 1
     assert "قراءة ملف" in text
     assert "main.py" in text
-    assert "✓" in text  # ok=True
+    assert "✅" in text  # ok=True (green check)
 
     feed.push(2, "write_file", {"path": "bot.py"}, False)
     text, step, total = feed.latest()
     assert step == 2
     assert total == 2
     assert "كتابة ملف" in text
-    assert "↻" in text  # ok=False (retry indicator)
+    assert "🔄" in text  # ok=False (retry)
 
 
 def test_feed_thread_safety():
@@ -92,7 +92,7 @@ def test_format_agent_action_no_tool():
     from lumen.bot.progress_tracker import format_agent_action
 
     text = format_agent_action(1, None, None, False)
-    assert "الخطوة" in text  # "thinking..." fallback
+    assert "يفكّر" in text  # "thinking..." fallback — no step number leak
 
 
 # --------------------------------------------------------------------------- #

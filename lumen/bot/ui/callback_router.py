@@ -253,6 +253,25 @@ async def handle_ui_callback(update, context) -> None:
     except Exception:
         logger.debug("callback rate limit skipped", exc_info=True)
 
+    # ── Busy guard (Weakness 2: Dead Wait) ──────────────────────────────
+    # If a generation is already running for this user, block any action that
+    # would start a *new* generation or mutate the UI state in a conflicting
+    # way.  Allowed while busy: navigation away (home, help, billing) and the
+    # explicit cancel.  Everything else gets a friendly in-progress notice so
+    # the user is never left wondering "did my button press do anything?".
+    ud = context.user_data if context.user_data is not None else {}
+    _SAFE_WHILE_BUSY = {"home", "open_help", "help", "open_billing", "cancel_generation"}
+    if ud.get("lumen_generating") and action_id not in _SAFE_WHILE_BUSY:
+        try:
+            await q.answer(
+                "⏳ جاري بناء البوت الآن… انتظر حتى ينتهي.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        logger.info("busy guard blocked action=%s uid=%s", action_id, uid)
+        return
+
     # HITL resume can run the full LangGraph build — allow long wall time.
     _timeout = 200.0 if action_id in {"hitl_confirm", "hitl_reject"} else 25.0
     try:
@@ -568,6 +587,10 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     # Real generation — same engine as chat path
     if result.ok and result.run_generation and result.generation_request:
         status = None
+        # ── Busy guard (Weakness 2): mark generation in progress so
+        # concurrent button presses get a friendly notice instead of a
+        # second parallel generation or a corrupted UI state.
+        user_data["lumen_generating"] = True
         try:
             if msg:
                 status = await msg.reply_text("جاري توليد البوت عبر المحرك…")
@@ -615,6 +638,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 )
         except Exception:
             logger.exception("guided generation bridge failed")
+        finally:
+            # ── Busy guard: always clear the flag, even on failure ──
+            user_data.pop("lumen_generating", None)
             if msg is not None:
                 try:
                     await msg.reply_text(
