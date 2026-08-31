@@ -133,3 +133,37 @@ def test_ptb_redis_persistence_lifecycle():
         assert store.load(55) == {}
 
     asyncio.run(run())
+
+
+def test_restart_simulation_full_cycle():
+    """Simulate process A write → process B read (true restart / other worker)."""
+    import asyncio
+    from lumen.bot.ptb_redis_persistence import RedisPersistence
+
+    shared = _MemoryBackend()
+
+    async def run():
+        store_a = SessionStore(client=shared)
+        p_a = RedisPersistence(store=store_a, update_interval=1.0)
+        ud_a = {
+            "engine_ui": {"phase": "gen_slots", "slots": {"bot_type": "shop"}},
+            "lang": "ar",
+            "pending_run": {"project_path": "/tmp/bot"},
+            "last_bot_request": "بوت متجر",
+        }
+        await p_a.update_user_data(1001, ud_a)
+
+        store_b = SessionStore(client=shared)
+        p_b = RedisPersistence(store=store_b, update_interval=1.0)
+        all_users = await p_b.get_user_data()
+        assert 1001 in all_users
+        assert all_users[1001]["engine_ui"]["phase"] == "gen_slots"
+        assert all_users[1001]["lang"] == "ar"
+        assert all_users[1001]["pending_run"]["project_path"] == "/tmp/bot"
+
+        ud_b = {"lang": "en"}  # stale RAM
+        await p_b.refresh_user_data(1001, ud_b)
+        assert ud_b["lang"] == "ar"
+        assert ud_b["engine_ui"]["phase"] == "gen_slots"
+
+    asyncio.run(run())

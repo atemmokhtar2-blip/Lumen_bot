@@ -42,7 +42,7 @@ class RedisPersistence(BasePersistence[UD, CD, BD]):
         self,
         store: SessionStore | None = None,
         *,
-        update_interval: float = 5.0,
+        update_interval: float = 1.0,
         store_user_data: bool = True,
         store_chat_data: bool = False,
         store_bot_data: bool = False,
@@ -55,16 +55,16 @@ class RedisPersistence(BasePersistence[UD, CD, BD]):
             callback_data=store_callback_data,
         )
         super().__init__(store_data=store_data, update_interval=float(update_interval))
-        self._store = store  # lazy via get_session_store if None
+        # Eager connect — fail closed if Redis unavailable (no silent RAM-only mode)
+        self._store = store if store is not None else get_session_store()
+        _ = self._store.backend
         self._chat: Dict[int, CD] = {}
         self._bot: BD = {}
         self._conversations: Dict[str, ConversationDict] = {}
         self._callback_data: Optional[CDCData] = None
 
     def _ss(self) -> SessionStore:
-        if self._store is not None:
-            return self._store
-        return get_session_store()
+        return self._store
 
     # ── load (startup) ─────────────────────────────────────────────────────
 

@@ -19,11 +19,20 @@ def save_ui_state(user_data: dict[str, Any], state: EngineUiState) -> None:
 
 
 def persist_ui_session(user_id: int, user_data: dict[str, Any]) -> None:
-    """Persist durable keys (incl. engine_ui) to Redis session store."""
+    """Persist durable keys (incl. engine_ui) to Redis immediately (write-through).
+
+    PTB only flushes persistence on an interval; this writes now so a crash
+    seconds later does not lose phase / pending_* / lang.
+    """
+    if not user_id or not isinstance(user_data, dict):
+        return
     try:
         from lumen.bot.session_store import get_session_store
 
         get_session_store().save(int(user_id), dict(user_data))
-    except Exception:
-        # Never break the message path on session save failure; log at store layer.
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("lumen_bot.ui").error(
+            "persist_ui_session failed uid=%s: %s:%s",
+            user_id, type(exc).__name__, str(exc)[:160],
+        )

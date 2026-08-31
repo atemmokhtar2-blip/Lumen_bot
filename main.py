@@ -434,28 +434,40 @@ def main() -> None:
                         logger.exception("post_init menu button failed")
 
                 # Official PTB persistence → Redis (restart + multi-worker safe user_data)
-                _persistence = None
-                try:
-                    from lumen.bot.ptb_redis_persistence import RedisPersistence
-                    _persistence = RedisPersistence(update_interval=5.0)
-                    logger.info("PTB RedisPersistence attached (update_interval=5s)")
-                except Exception:
-                    logger.exception(
-                        "RedisPersistence unavailable — user context will NOT survive restarts"
-                    )
+                # Fail closed: without Redis, context loss is guaranteed on restart.
+                from lumen.bot.ptb_redis_persistence import RedisPersistence
+                _persistence = RedisPersistence(update_interval=1.0)
+                logger.info(
+                    "PTB RedisPersistence attached backend=%s update_interval=1s",
+                    getattr(getattr(_persistence, "_store", None), "backend", "?"),
+                )
 
-                _builder = (
+                app = (
                     Application.builder()
                     .token(TELEGRAM_BOT_TOKEN)
                     .request(_tg_request)
                     .concurrent_updates(True)
                     .post_init(_post_init)
+                    .persistence(_persistence)
+                    .build()
                 )
-                if _persistence is not None:
-                    _builder = _builder.persistence(_persistence)
-                app = _builder.build()
             except Exception:
-                app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+                # Last-resort builder: still require persistence (no silent RAM-only)
+                try:
+                    from lumen.bot.ptb_redis_persistence import RedisPersistence
+                    _persistence = RedisPersistence(update_interval=1.0)
+                    app = (
+                        Application.builder()
+                        .token(TELEGRAM_BOT_TOKEN)
+                        .persistence(_persistence)
+                        .build()
+                    )
+                    logger.warning("Application built via fallback path WITH RedisPersistence")
+                except Exception:
+                    logger.exception(
+                        "FATAL: cannot attach RedisPersistence — refusing silent RAM-only mode"
+                    )
+                    raise
             _wire(app)
             global _active_application
             _active_application = app

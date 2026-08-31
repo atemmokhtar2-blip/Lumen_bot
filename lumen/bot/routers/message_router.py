@@ -97,6 +97,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         logger.exception("session hydrate failed")
 
+    # Always write-through durable keys at the end of this update (PTB interval is not enough).
+    try:
+        await _handle_message_body(
+            update=update,
+            context=context,
+            user=user,
+            message=message,
+            request=request,
+            _show_thinking=_show_thinking,
+            _clear_thinking=_clear_thinking,
+        )
+    finally:
+        try:
+            if user and context.user_data is not None:
+                from lumen.bot.ui.state_store import persist_ui_session
+                persist_ui_session(int(user.id), dict(context.user_data))
+        except Exception:
+            logger.exception("final session persist failed")
+
+
+async def _handle_message_body(
+    *,
+    update,
+    context,
+    user,
+    message,
+    request: str,
+    _show_thinking,
+    _clear_thinking,
+) -> None:
     # Engine UI: answer current need slot with free text when in GEN_SLOTS
     if context.user_data and not (request or "").startswith("/"):
         try:
