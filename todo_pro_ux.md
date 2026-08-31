@@ -30,16 +30,16 @@
 - [x] اختبار: onboarding يظهر مرة واحدة فقط
 
 ## المرحلة 4: مراجعة وتكامل
-- [ ] فحص: لا مصطلحات تقنية مكشوفة (HostService, instance, plane, intent_kind, slots)
-- [ ] فحص: كل النصوص MarkdownV2-safe (إيموجي + تنسيق)
-- [ ] فحص: chat_hygiene تعمل مع الرسائل الجديدة
-- [ ] اختبارات شاملة (جديدة + موجودة)
+- [x] فحص: لا مصطلحات تقنية مكشوفة (HostService, instance, plane, intent_kind, slots)
+- [x] فحص: كل النصوص MarkdownV2-safe (إيموجي + تنسيق)
+- [x] فحص: chat_hygiene تعمل مع الرسائل الجديدة + event sanitization
+- [x] اختبارات شاملة (جديدة + موجودة)
 
 ## المرحلة 5: Commit + Push + PR
 - [x] Commit رسالة واضحة (المرحلة 1)
 - [x] Push إلى فرع (المرحلة 1)
 - [ ] تحديث PR أو إنشاء PR جديد (المرحلة 1)
-- [ ] Commit + Push (المرحلة 2)
-- [ ] Commit + Push (المرحلة 3)
+- [x] Commit + Push (المرحلة 2)
+- [x] Commit + Push (المرحلة 3)
 - [ ] Commit + Push (المرحلة 4)
 - [ ] PR نهائي
