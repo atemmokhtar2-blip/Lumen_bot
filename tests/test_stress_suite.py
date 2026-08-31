@@ -110,14 +110,33 @@ def test_docker_path_guard_message():
 # Session persistence
 # ---------------------------------------------------------------------------
 def test_session_survives_reload(tmp_path, monkeypatch):
-    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
-    from lumen.bot.session_store import SessionStore
+    """Session must survive across store instances (simulates restart / other worker)."""
+    from lumen.bot.session_store import SessionStore, _MemoryBackend
 
-    store = SessionStore(tmp_path / "s.sqlite3")
-    store.save(42, {"pending_run": {"project_path": "/tmp/p", "entry_point": "main.py"}})
-    store2 = SessionStore(tmp_path / "s.sqlite3")
+    backend = _MemoryBackend()
+    store = SessionStore(client=backend)
+    store.save(
+        42,
+        {
+            "pending_run": {"project_path": "/tmp/p", "entry_point": "main.py"},
+            "engine_ui": {"phase": "gen_slots", "slots": {"bot_type": "shop"}},
+            "lang": "ar",
+            "bot_token": "123456:SHOULD_NOT_PERSIST_AAAAAAAA",
+        },
+    )
+    store2 = SessionStore(client=backend)
     data = store2.load(42)
     assert data["pending_run"]["project_path"] == "/tmp/p"
+    assert data["engine_ui"]["phase"] == "gen_slots"
+    assert data["lang"] == "ar"
+    assert "bot_token" not in data
+
+    # hydrate overwrites durable keys (multi-worker source of truth)
+    ud = {"lang": "en", "scratch": "ram-only"}
+    store2.hydrate(42, ud)
+    assert ud["lang"] == "ar"
+    assert ud["engine_ui"]["phase"] == "gen_slots"
+    assert ud["scratch"] == "ram-only"
 
 
 # ---------------------------------------------------------------------------

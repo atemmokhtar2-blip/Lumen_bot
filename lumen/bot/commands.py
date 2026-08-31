@@ -43,11 +43,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await configure_menu_button(context.bot, chat_id=update.effective_chat.id)
     except Exception:
         pass
-    # Restore session so pending token flow survives /start after restart
+    # Hydrate durable session (Redis source of truth) before /start UI
     try:
         if user and context.user_data is not None:
-            for k, v in (get_session_store().load(int(user.id)) or {}).items():
-                context.user_data.setdefault(k, v)
+            get_session_store().hydrate(int(user.id), context.user_data)
     except Exception:
         pass
 

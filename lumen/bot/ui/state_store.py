@@ -19,10 +19,11 @@ def save_ui_state(user_data: dict[str, Any], state: EngineUiState) -> None:
 
 
 def persist_ui_session(user_id: int, user_data: dict[str, Any]) -> None:
-    """Best-effort durable save via existing SessionStore (redacts secrets)."""
+    """Persist durable keys (incl. engine_ui) to Redis session store."""
     try:
         from lumen.bot.session_store import get_session_store
 
         get_session_store().save(int(user_id), dict(user_data))
     except Exception:
+        # Never break the message path on session save failure; log at store layer.
         pass

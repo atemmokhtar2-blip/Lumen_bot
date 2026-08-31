@@ -89,6 +89,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not await gate_groups(update=update, context=context, message=message, user=user):
         return
 
+    # Hydrate durable session BEFORE any UI/flow logic (Redis is source of truth).
+    # Must run before Engine UI slots so phase/state survive restart & multi-worker.
+    try:
+        if user and context.user_data is not None:
+            get_session_store().hydrate(int(user.id), context.user_data)
+    except Exception:
+        logger.exception("session hydrate failed")
+
     # Engine UI: answer current need slot with free text when in GEN_SLOTS
     if context.user_data and not (request or "").startswith("/"):
         try:
@@ -253,15 +261,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _clear_thinking()
             await message.reply_text(_ops)
             return
-    except Exception:
-        pass
-
-    # Restore durable session (pending_run etc.) after restarts — before token handling
-    try:
-        if user and context.user_data is not None:
-            saved = get_session_store().load(int(user.id))
-            for k, v in (saved or {}).items():
-                context.user_data.setdefault(k, v)
     except Exception:
         pass
 

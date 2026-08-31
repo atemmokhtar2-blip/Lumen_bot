@@ -265,6 +265,15 @@ async def handle_ui_callback(update, context) -> None:
 
 
 async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str) -> None:
+    # Hydrate durable session first (Redis source of truth across workers/restarts)
+    try:
+        uid_h = int(update.effective_user.id) if update.effective_user else 0
+        if uid_h and context.user_data is not None:
+            from lumen.bot.session_store import get_session_store
+            get_session_store().hydrate(uid_h, context.user_data)
+    except Exception:
+        logger.exception("session hydrate failed on callback")
+
     # One-shot welcome photo: delete permanently on first button press
     try:
         ud0 = context.user_data if context.user_data is not None else {}
