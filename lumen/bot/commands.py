@@ -75,7 +75,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from lumen.engine.services.ui_state.render import UiFacts
         facts = UiFacts()
     caption = render_message(ui, facts)
-    markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid)
+    markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid, nav=False)
 
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 

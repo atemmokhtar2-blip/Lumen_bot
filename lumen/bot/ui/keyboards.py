@@ -87,13 +87,41 @@ def _make_inline_button(btn: UiButton, *, user_id: int):
             return InlineKeyboardButton(text=text, callback_data=callback_data)
 
 
-def build_inline_keyboard(rows: Sequence[Sequence[UiButton]], *, user_id: int = 0):
-    """Build markup. ``user_id`` is required in production so buttons are non-transferable."""
+def build_inline_keyboard(
+    rows: Sequence[Sequence[UiButton]],
+    *,
+    user_id: int = 0,
+    nav: bool | str = "auto",
+    phase: str | None = None,
+):
+    """Build markup. ``user_id`` binds signed callbacks.
+
+    nav:
+      - "auto" (default): append bottom nav unless rows already end with home/cancel
+        or look like the HOME menu (open_generate present without gen flow)
+      - True: always append standard footer (CONTEXT phase)
+      - False: never append (HOME menu, pure confirm dialogs that pass nav=False)
+    """
     from telegram import InlineKeyboardMarkup
+    from lumen.engine.services.ui_state.nav import with_nav, last_row_is_nav
+    from lumen.engine.services.ui_state.models import EngineUiPhase
+
+    row_list = [tuple(r) for r in (rows or []) if r]
+    acts = {getattr(b, "action", "") for r in row_list for b in r}
+
+    if nav is True:
+        ph = phase or EngineUiPhase.CONTEXT.value
+        row_list = list(with_nav(row_list, ph))
+    elif nav == "auto":
+        is_home_menu = "open_generate" in acts and "open_dashboard" in acts and "nav_back" not in acts
+        if not is_home_menu and not last_row_is_nav(row_list):
+            ph = phase or EngineUiPhase.CONTEXT.value
+            row_list = list(with_nav(row_list, ph))
+    # nav is False → leave as-is
 
     uid = int(user_id or 0)
     kb: list[list] = []
-    for row in rows:
+    for row in row_list:
         line = [_make_inline_button(btn, user_id=uid) for btn in row]
         if line:
             kb.append(line)

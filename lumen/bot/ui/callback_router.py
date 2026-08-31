@@ -279,7 +279,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         from lumen.bot.progress_tracker import is_generation_busy
         uid_busy = int(update.effective_user.id) if update.effective_user else 0
         if uid_busy and is_generation_busy(uid_busy) and action_id not in {
-            "cancel_generate", "home", "hitl_reject",
+            "cancel_generate", "home", "nav_back", "hitl_reject",
         }:
             try:
                 if q is not None:
