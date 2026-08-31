@@ -13,14 +13,21 @@ Boot:
   3) In production: copy managed keys into memory, then scrub them from os.environ
   4) Application code MUST use get_secret("NAME") for managed keys
 
-Providers (production requires one unless SECRETS_ALLOW_PLATFORM_ENV=1):
+Providers (preferred in production):
   - Doppler, HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager
+
+TEMPORARY (default until managed store is wired on deploy):
+  Platform-injected environ (Railway/Render/Fly vars) is accepted when no
+  managed provider is configured. Set SECRETS_REQUIRE_MANAGED_PROVIDER=1 to
+  re-enable the strict Doppler/Vault/AWS/GCP-only gate.
+  Explicit SECRETS_ALLOW_PLATFORM_ENV=0 also disables the temporary fallback.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import secrets as _secrets_mod
 import threading
 import urllib.parse
 import urllib.request
@@ -92,9 +99,25 @@ def _required() -> bool:
 
 
 def _allow_platform_env_fallback() -> bool:
+    """Whether production may load secrets from platform-injected os.environ.
+
+    TEMPORARY DEFAULT: allow (Railway/Render/Fly env vars) so deploys boot
+    without Doppler/Vault. Re-strict with:
+      SECRETS_REQUIRE_MANAGED_PROVIDER=1
+    or:
+      SECRETS_ALLOW_PLATFORM_ENV=0
+    """
     if _is_dev_environment():
         return True
-    return _truthy("SECRETS_ALLOW_PLATFORM_ENV")
+    if _truthy("SECRETS_REQUIRE_MANAGED_PROVIDER"):
+        return False
+    raw = (os.getenv("SECRETS_ALLOW_PLATFORM_ENV") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    # Temporary default: allow platform env until managed provider is configured.
+    return True
 
 
 def load_dotenv_if_dev() -> bool:
@@ -382,6 +405,10 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
                 raise RuntimeError("secrets_empty_platform_env")
             source = "platform_env"
             remote = env_snapshot
+            logger.warning(
+                "secrets: TEMPORARY platform_env fallback active "
+                "(set SECRETS_REQUIRE_MANAGED_PROVIDER=1 to enforce Doppler/Vault/AWS/GCP)"
+            )
         else:
             source = "env"
             remote = env_snapshot
@@ -400,6 +427,23 @@ def load_secrets(*, only_missing: bool = True) -> dict[str, Any]:
         # Prefer remote; fill gaps from platform snapshot into memory only
         gaps = {k: v for k, v in env_snapshot.items() if k not in (remote or {})}
         written += _store_put(gaps)
+
+    # TEMPORARY: if platform_env path and critical signing secrets are absent,
+    # mint strong process-local values so boot is not blocked. Prefer setting
+    # them in Railway for stable hashes across restarts.
+    if source in {"platform_env", "env"}:
+        ephemeral: dict[str, str] = {}
+        with _LOCK:
+            if not (_STORE.get("API_KEY_PEPPER") or "").strip():
+                ephemeral["API_KEY_PEPPER"] = _secrets_mod.token_urlsafe(48)
+            if not (_STORE.get("TBE_TOKEN_SECRET") or "").strip():
+                ephemeral["TBE_TOKEN_SECRET"] = _secrets_mod.token_urlsafe(48)
+        if ephemeral:
+            written += _store_put(ephemeral)
+            logger.warning(
+                "secrets: ephemeral in-memory %s (set explicitly on platform for stability)",
+                ",".join(sorted(ephemeral)),
+            )
 
     meta["stored"] = len(written)
     meta["keys"] = list(dict.fromkeys(written))  # names only
