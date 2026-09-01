@@ -78,15 +78,26 @@ def build_dashboard_rich_html(
     parts: list[str] = ["<h3>لوحة المشاريع والاستضافة</h3>"]
     if active_project:
         parts.append(f"<p><b>مشروع الجلسة:</b> {escape_rich(active_project)}</p>")
+    headers = ["#", "المشروع", "الحالة", "اليوزر", "الخلفية"]
     if empty or not host_rows:
-        parts.append("<p>لا توجد مشاريع مستضافة حالياً.</p>")
+        # Always render a native table so the feature is visible even with 0 hosts
         parts.append(
-            "<p>أنشئ بوتاً من الزر أدناه، ثم انشره للاستضافة الدائمة ليظهر هنا.</p>"
+            build_table_html(
+                headers,
+                [["—", "لا مشاريع بعد", "—", "—", "—"]],
+                caption="0 مشروع مستضاف",
+                bordered=True,
+                striped=True,
+                compact=True,
+            )
+        )
+        parts.append(
+            "<p>أنشئ بوتاً من الزر أدناه، ثم انشره للاستضافة الدائمة ليظهر في الجدول.</p>"
         )
     else:
         parts.append(
             build_table_html(
-                ["#", "المشروع", "الحالة", "اليوزر", "الخلفية"],
+                headers,
                 host_rows,
                 caption=f"{len(host_rows)} مشروع",
                 bordered=True,
