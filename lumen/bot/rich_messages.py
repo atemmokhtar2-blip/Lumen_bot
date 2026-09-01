@@ -1,20 +1,21 @@
-"""Telegram Bot API 10.1+ Rich Messages (native tables).
+"""Telegram Bot API 10.1+ Rich Messages — native tables.
 
-Uses official sendRichMessage / editMessageText(rich_message=...) via PTB
-do_api_request — PTB 22.7 has no typed wrapper yet.
+PTB 22.7 has no typed send_rich_message. We call the official endpoint via
+do_api_request and intentionally avoid strict Message deserialization (22.7
+does not model rich_message fields and would raise after a successful send).
 
-Fallback: caller keeps existing HTML card path when rich fails.
+On any failure the caller keeps the existing HTML card path.
 """
 from __future__ import annotations
 
 import html as html_lib
 import logging
+import re
 from typing import Any, Sequence
 
 logger = logging.getLogger(__name__)
 
-# Prefix so send path can detect rich HTML payloads built by us
-RICH_HTML_MARKER = "<!--lumen-rich-v1-->"
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def escape_rich(text: object) -> str:
@@ -23,7 +24,13 @@ def escape_rich(text: object) -> str:
 
 def looks_like_rich_html(text: object) -> bool:
     s = "" if text is None else str(text)
-    return RICH_HTML_MARKER in s or "<table" in s
+    return "<table" in s and ("<th>" in s or "<td>" in s)
+
+
+def _clean_html(html: str) -> str:
+    """Strip comments / nulls — Telegram rich HTML parser is strict."""
+    s = _HTML_COMMENT_RE.sub("", html or "")
+    return s.strip()
 
 
 def build_table_html(
@@ -35,7 +42,7 @@ def build_table_html(
     striped: bool = True,
     compact: bool = True,
 ) -> str:
-    """Official Rich HTML <table> (Bot API 10.1+)."""
+    """Official Rich HTML <table> (core.telegram.org/bots/api)."""
     attrs: list[str] = []
     if bordered:
         attrs.append("bordered")
@@ -44,24 +51,21 @@ def build_table_html(
     if compact:
         attrs.append("compact")
     open_tag = "<table" + ((" " + " ".join(attrs)) if attrs else "") + ">"
-    parts = [open_tag]
+    lines = [open_tag]
     if caption:
-        parts.append(f"<caption>{escape_rich(caption)}</caption>")
-    # header row
-    parts.append("<tr>")
+        lines.append(f"<caption>{escape_rich(caption)}</caption>")
+    lines.append("<tr>")
     for h in headers:
-        parts.append(f"<th>{escape_rich(h)}</th>")
-    parts.append("</tr>")
+        lines.append(f"<th>{escape_rich(h)}</th>")
+    lines.append("</tr>")
     for row in rows:
-        parts.append("<tr>")
-        for cell in row:
-            parts.append(f"<td>{escape_rich(cell)}</td>")
-        # pad missing cells
-        for _ in range(len(headers) - len(row)):
-            parts.append("<td></td>")
-        parts.append("</tr>")
-    parts.append("</table>")
-    return "".join(parts)
+        lines.append("<tr>")
+        cells = list(row) + [""] * max(0, len(headers) - len(row))
+        for cell in cells[: len(headers)]:
+            lines.append(f"<td>{escape_rich(cell)}</td>")
+        lines.append("</tr>")
+    lines.append("</table>")
+    return "".join(lines)
 
 
 def build_dashboard_rich_html(
@@ -70,36 +74,31 @@ def build_dashboard_rich_html(
     active_project: str = "",
     empty: bool = False,
 ) -> str:
-    """Rich HTML body for لوحة التحكم — native table when hosts exist."""
-    chunks: list[str] = [RICH_HTML_MARKER]
-    chunks.append("<h3>🖥️ لوحة المشاريع والاستضافة</h3>")
+    """Dashboard body for sendRichMessage (RTL Arabic)."""
+    parts: list[str] = ["<h3>لوحة المشاريع والاستضافة</h3>"]
     if active_project:
-        chunks.append(
-            f"<p><b>مشروع الجلسة:</b> {escape_rich(active_project)}</p>"
-        )
+        parts.append(f"<p><b>مشروع الجلسة:</b> {escape_rich(active_project)}</p>")
     if empty or not host_rows:
-        chunks.append(
-            "<p>📭 لا توجد مشاريع مستضافة حالياً.</p>"
-            "<p>ابدأ بإنشاء بوت من الزر أدناه، ثم انشره للاستضافة الدائمة.</p>"
+        parts.append("<p>لا توجد مشاريع مستضافة حالياً.</p>")
+        parts.append(
+            "<p>أنشئ بوتاً من الزر أدناه، ثم انشره للاستضافة الدائمة ليظهر هنا.</p>"
         )
     else:
-        table = build_table_html(
-            ["#", "المشروع", "الحالة", "اليوزر", "الخلفية"],
-            host_rows,
-            caption=f"{len(host_rows)} مشروع",
-            bordered=True,
-            striped=True,
-            compact=True,
+        parts.append(
+            build_table_html(
+                ["#", "المشروع", "الحالة", "اليوزر", "الخلفية"],
+                host_rows,
+                caption=f"{len(host_rows)} مشروع",
+                bordered=True,
+                striped=True,
+                compact=True,
+            )
         )
-        chunks.append(table)
-    chunks.append(
-        "<p><b>إجراءات:</b> تحديث القائمة · حالة الكل · تجربة · نشر</p>"
-    )
-    return "\n".join(chunks)
+    parts.append("<p><b>إجراءات:</b> تحديث · حالة · تجربة · نشر</p>")
+    return "".join(parts)
 
 
 def collect_dashboard_rows(state: Any, facts: Any) -> tuple[list[list[str]], bool]:
-    """Build table rows from UI state slots or facts.hosts."""
     rows: list[list[str]] = []
     slots = getattr(state, "slots", None) or {}
     for i in range(5):
@@ -109,23 +108,46 @@ def collect_dashboard_rows(state: Any, facts: Any) -> tuple[list[list[str]], boo
         st = slots.get(f"dash_s{i}") or "?"
         un = slots.get(f"dash_u{i}") or "—"
         be = slots.get(f"dash_b{i}") or "—"
-        short = iid[-12:] if len(iid) > 12 else iid
-        rows.append([str(i + 1), short, str(st), f"@{un}" if un and not str(un).startswith("@") else str(un), str(be)])
+        short = iid[-12:] if len(str(iid)) > 12 else str(iid)
+        un_s = str(un)
+        if un_s and un_s != "—" and not un_s.startswith("@"):
+            un_s = f"@{un_s}"
+        rows.append([str(i + 1), short, str(st), un_s, str(be)])
     if not rows and getattr(facts, "hosts", None):
         for i, h in enumerate(list(facts.hosts)[:8]):
             un = getattr(h, "bot_username", None) or "—"
-            if un and not str(un).startswith("@") and un != "—":
-                un = f"@{un}"
+            un_s = str(un)
+            if un_s and un_s != "—" and not un_s.startswith("@"):
+                un_s = f"@{un_s}"
             rows.append(
                 [
                     str(i + 1),
                     str(getattr(h, "instance_id", "") or "")[-12:],
                     str(getattr(h, "status", "") or "?"),
-                    str(un),
+                    un_s,
                     str(getattr(h, "backend", None) or "—"),
                 ]
             )
     return rows, len(rows) == 0
+
+
+def _markup_dict(reply_markup: Any) -> Any:
+    if reply_markup is None:
+        return None
+    to_dict = getattr(reply_markup, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return reply_markup
+
+
+def _message_id_from_result(result: Any) -> int | None:
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        mid = result.get("message_id")
+        return int(mid) if mid is not None else None
+    mid = getattr(result, "message_id", None)
+    return int(mid) if mid is not None else None
 
 
 async def send_rich_message(
@@ -136,21 +158,30 @@ async def send_rich_message(
     reply_markup: Any = None,
     is_rtl: bool = True,
 ) -> Any:
-    """Official sendRichMessage. Raises on hard failure."""
-    from telegram import Message
+    """Official sendRichMessage. Returns raw API result (dict or Message)."""
+    html_clean = _clean_html(html)
+    if not html_clean:
+        raise ValueError("empty rich html")
 
-    rich: dict[str, Any] = {"html": html, "is_rtl": bool(is_rtl)}
+    rich: dict[str, Any] = {
+        "html": html_clean,
+        "is_rtl": bool(is_rtl),
+        "skip_entity_detection": True,
+    }
     kwargs: dict[str, Any] = {
         "chat_id": int(chat_id),
         "rich_message": rich,
     }
-    if reply_markup is not None:
-        to_dict = getattr(reply_markup, "to_dict", None)
-        kwargs["reply_markup"] = to_dict() if callable(to_dict) else reply_markup
+    mk = _markup_dict(reply_markup)
+    if mk is not None:
+        kwargs["reply_markup"] = mk
+
+    # return_type=None: PTB 22.7 cannot deserialize rich Message fields and
+    # would raise *after* Telegram already accepted the send.
     return await bot.do_api_request(
         "sendRichMessage",
         api_kwargs=kwargs,
-        return_type=Message,
+        return_type=None,
     )
 
 
@@ -163,22 +194,24 @@ async def edit_rich_message(
     reply_markup: Any = None,
     is_rtl: bool = True,
 ) -> Any:
-    """editMessageText with rich_message (Bot API 10.1+)."""
-    from telegram import Message
-
-    rich: dict[str, Any] = {"html": html, "is_rtl": bool(is_rtl)}
+    html_clean = _clean_html(html)
+    rich: dict[str, Any] = {
+        "html": html_clean,
+        "is_rtl": bool(is_rtl),
+        "skip_entity_detection": True,
+    }
     kwargs: dict[str, Any] = {
         "chat_id": int(chat_id),
         "message_id": int(message_id),
         "rich_message": rich,
     }
-    if reply_markup is not None:
-        to_dict = getattr(reply_markup, "to_dict", None)
-        kwargs["reply_markup"] = to_dict() if callable(to_dict) else reply_markup
+    mk = _markup_dict(reply_markup)
+    if mk is not None:
+        kwargs["reply_markup"] = mk
     return await bot.do_api_request(
         "editMessageText",
         api_kwargs=kwargs,
-        return_type=Message,
+        return_type=None,
     )
 
 
@@ -191,46 +224,61 @@ async def send_or_edit_rich_ui(
     preferred_message: Any = None,
     user_data: dict[str, Any] | None = None,
 ) -> Any:
-    """Try edit rich → else delete+send rich. Returns Message or None."""
+    """Strong path: delete old surface → sendRichMessage. Edit only as soft try.
+
+    Returns truthy result on success, None on failure (caller must HTML-fallback).
+    """
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 
     ud = user_data if isinstance(user_data, dict) else {}
     mid = getattr(preferred_message, "message_id", None) if preferred_message else None
 
+    # Soft try: convert in place (works only if previous message was already rich)
     if mid is not None:
         try:
-            msg = await edit_rich_message(
+            result = await edit_rich_message(
                 bot,
                 chat_id=chat_id,
                 message_id=int(mid),
                 html=html,
                 reply_markup=markup,
             )
-            remember_message(ud, mid)
-            await prune_bot_messages(bot, chat_id, ud, protect=mid)
-            return msg
-        except Exception:
-            logger.debug("edit_rich_message failed mid=%s — will send new", mid, exc_info=True)
+            remember_message(ud, int(mid))
+            await prune_bot_messages(bot, chat_id, ud, protect=int(mid))
+            logger.info("rich edit ok chat=%s mid=%s", chat_id, mid)
+            return result if result is not None else True
+        except Exception as e:
+            logger.warning(
+                "rich edit failed chat=%s mid=%s err=%s — delete+send",
+                chat_id,
+                mid,
+                e,
+            )
             try:
                 await bot.delete_message(chat_id=chat_id, message_id=int(mid))
             except Exception:
                 pass
 
     try:
-        msg = await send_rich_message(
+        result = await send_rich_message(
             bot, chat_id=chat_id, html=html, reply_markup=markup
         )
-        new_mid = getattr(msg, "message_id", None)
-        remember_message(ud, new_mid)
-        await prune_bot_messages(bot, chat_id, ud, protect=new_mid)
-        return msg
-    except Exception:
-        logger.exception("send_rich_message failed chat=%s", chat_id)
+        new_mid = _message_id_from_result(result)
+        if new_mid is not None:
+            remember_message(ud, new_mid)
+            await prune_bot_messages(bot, chat_id, ud, protect=new_mid)
+        else:
+            # API accepted but shape unknown — still treat as success so we
+            # do NOT double-send HTML fallback on top of a live rich message.
+            logger.info("rich send ok chat=%s (no message_id in result)", chat_id)
+        logger.info("rich send ok chat=%s mid=%s", chat_id, new_mid)
+        return result if result is not None else True
+    except Exception as e:
+        logger.error("send_rich_message FAILED chat=%s err=%s", chat_id, e, exc_info=True)
         return None
 
 
 __all__ = [
-    "RICH_HTML_MARKER",
     "looks_like_rich_html",
     "build_table_html",
     "build_dashboard_rich_html",
