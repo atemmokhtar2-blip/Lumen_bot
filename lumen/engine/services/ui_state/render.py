@@ -200,14 +200,21 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return raw
 
     if phase == EngineUiPhase.HELP:
+        from lumen.bot.telegram_text import looks_like_telegram_html
+
         hint = (facts.generate_hint or "").strip()
-        main = (
-            "• إنشاء بوت — اكتب وصفاً واحداً\n"
-            "• الرصيد — رصيدك الحالي\n"
-            "• لوحة التحكم — مشاريعك والاستضافة\n"
-            "• /start — القائمة الرئيسية"
+        # get_help_text() is already a full HTML card — never nest/escape it again
+        if hint and looks_like_telegram_html(hint):
+            return hint
+        main = chr(10).join(
+            [
+                "• إنشاء بوت — اكتب وصفاً واحداً",
+                "• الرصيد — رصيدك الحالي",
+                "• لوحة التحكم — مشاريعك والاستضافة",
+                "• /start — القائمة الرئيسية",
+            ]
         )
-        sections = [("الأوامر", main)]
+        sections: list[tuple[str, str]] = [("الأوامر", main)]
         if hint and hint not in main:
             sections.append(("تفاصيل", hint[:1500]))
         return html_card(

@@ -42,13 +42,23 @@ async def _safe_render_ui(q, msg, text: str, markup, *, user_data=None, context=
     if bot is None and preferred is not None:
         bot = getattr(preferred, "get_bot", lambda: None)()
     if chat_id is None:
-        # last resort legacy path
+        # last resort legacy path — still apply HTML when UI tags present
         try:
+            from lumen.bot.telegram_text import looks_like_telegram_html
+            from telegram.constants import ParseMode
+
+            pk = {}
+            if looks_like_telegram_html(text or ""):
+                pk["parse_mode"] = ParseMode.HTML
             if preferred is not None and getattr(preferred, "text", None):
-                await preferred.edit_text(text=(text or "")[:4000], reply_markup=markup)
+                await preferred.edit_text(
+                    text=(text or "")[:4000], reply_markup=markup, **pk
+                )
                 return
             if preferred is not None:
-                await preferred.reply_text((text or "")[:4000], reply_markup=markup)
+                await preferred.reply_text(
+                    (text or "")[:4000], reply_markup=markup, **pk
+                )
         except Exception:
             logger.exception("legacy render failed")
         return
