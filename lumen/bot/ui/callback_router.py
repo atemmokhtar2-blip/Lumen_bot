@@ -565,7 +565,47 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         markup = None
 
     msg = update.effective_message
+
+    # Dashboard: prefer official Rich Messages native table (Bot API 10.1+)
+    if result.state.phase == EngineUiPhase.DASHBOARD:
+        try:
+            from lumen.bot.rich_messages import (
+                build_dashboard_rich_html,
+                collect_dashboard_rows,
+                send_or_edit_rich_ui,
+            )
+
+            host_rows, is_empty = collect_dashboard_rows(result.state, facts)
+            rich_html = build_dashboard_rich_html(
+                host_rows=host_rows,
+                active_project=str(getattr(facts, "active_project", "") or ""),
+                empty=is_empty,
+            )
+            bot = getattr(context, "bot", None)
+            chat_id = None
+            preferred = None
+            if q is not None and getattr(q, "message", None) is not None:
+                preferred = q.message
+                chat_id = getattr(q.message.chat, "id", None)
+            elif msg is not None:
+                preferred = msg
+                chat_id = getattr(getattr(msg, "chat", None), "id", None)
+            if bot is not None and chat_id is not None:
+                rich_msg = await send_or_edit_rich_ui(
+                    bot=bot,
+                    chat_id=int(chat_id),
+                    html=rich_html,
+                    markup=markup,
+                    preferred_message=preferred,
+                    user_data=user_data,
+                )
+                if rich_msg is not None:
+                    return
+        except Exception:
+            logger.exception("rich dashboard failed — HTML fallback action=%s", action_id)
+
     await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
+
 
     # ForceReply placeholder when the engine expects free text.
     # EngineUiPhase is module-level only — never re-import here (UnboundLocalError).
