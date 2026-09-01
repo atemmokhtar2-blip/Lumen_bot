@@ -1,6 +1,9 @@
 # Hosting Contract (from code)
 
-**Machine-readable source of truth:** `lumen/engine/services/hosting/contract.py`  
+**Machine-readable source of truth:**
+- `lumen/engine/services/hosting/contract.py` (field lists / gates)
+- `lumen/engine/schemas/hosting_contract.py` (`HostInstanceRecord` Pydantic door)
+- `HostingService._inst_from_row` always validates through `HostInstanceRecord`  
 **Human-readable companion:** this file  
 **Enforcement:** `tests/test_hosting_contract_phase0.py` (must stay green)
 

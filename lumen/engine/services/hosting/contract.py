@@ -1,17 +1,14 @@
 """PERMANENT_HOST plane contract — frozen from code (Phase 0).
 
-This module is the machine-readable source of truth for the hosting product
-contract. It does **not** change runtime behavior of HostingService.start/stop.
+Layers:
+  1) This module — frozen field lists, gate order, security invariants.
+  2) lumen.engine.schemas.hosting_contract.HostInstanceRecord — Pydantic
+     validation at the trust boundary (DB/API dict → HostInstance).
+  3) HostingService._inst_from_row — always loads through HostInstanceRecord.
+  4) tests/test_hosting_contract_phase0.py — must stay green.
 
-Rules encoded here MUST stay aligned with:
-  - lumen.engine.services.hosting.service.HostInstance
-  - lumen.engine.services.hosting.market_gate
-  - lumen.engine.services.isolation_policy
-  - lumen.engine.services.sandbox_runtime.select
-  - lumen.engine.services.live_runner  (TRIAL only)
-
-If a test in tests/test_hosting_contract_phase0.py fails, the code drifted
-from this contract — fix the code or deliberately revise this module + docs.
+Aligned with HostInstance, market_gate, isolation_policy, sandbox select,
+and live_runner (TRIAL_CHAT only).
 """
 from __future__ import annotations
 

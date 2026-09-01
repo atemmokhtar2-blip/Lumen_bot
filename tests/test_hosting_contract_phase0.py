@@ -174,3 +174,121 @@ def test_contract_module_exports_are_final_tuples() -> None:
     assert isinstance(host_contract.HOST_INSTANCE_FIELDS, tuple)
     assert isinstance(host_contract.START_GATE_ORDER, tuple)
     assert isinstance(host_contract.DEV_ONLY_BACKENDS, frozenset)
+
+
+def test_pydantic_host_instance_record_validates_and_builds() -> None:
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+    rec = HostInstanceRecord.from_row(
+        {
+            "instance_id": "host-abc123",
+            "user_id": 42,
+            "project_path": "/tmp/user/project",
+            "status": "running",
+            "token_fp": "a" * 16,
+            "last_diagnosis": "{}",
+        }
+    )
+    inst = rec.to_host_instance()
+    assert inst.instance_id == "host-abc123"
+    assert inst.user_id == 42
+    assert inst.status == "running"
+    assert inst.last_diagnosis == {}
+
+
+def test_pydantic_rejects_raw_token_in_token_fp() -> None:
+    from pydantic import ValidationError
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+    with pytest.raises(ValidationError):
+        HostInstanceRecord.from_row(
+            {
+                "instance_id": "host-x",
+                "user_id": 1,
+                "project_path": "/p",
+                "status": "stopped",
+                "token_fp": "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+            }
+        )
+
+
+def test_pydantic_rejects_missing_required() -> None:
+    from pydantic import ValidationError
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+    with pytest.raises(ValidationError):
+        HostInstanceRecord.from_row({"user_id": 1, "project_path": "/p"})
+
+
+def test_service_inst_from_row_uses_pydantic_contract() -> None:
+    src = (REPO_ROOT / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "HostInstanceRecord" in src
+    assert "to_host_instance" in src
+
+
+def test_service_uses_contract_token_fingerprint() -> None:
+    src = (REPO_ROOT / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "token_fingerprint" in src
+    assert "hexdigest()[:16]" not in src
+
+
+def test_start_source_contains_gate_markers_in_order() -> None:
+    src = (REPO_ROOT / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    start_at = src.find("def start(")
+    assert start_at > 0
+    stop_at = src.find("\n    def stop(", start_at)
+    body = src[start_at : stop_at if stop_at > 0 else start_at + 15000]
+    markers = [
+        "is_under_sandbox",
+        "decide_isolation",
+        "strong_sandbox_available",
+        "evaluate_market_gate",
+    ]
+    positions = [body.find(m) for m in markers]
+    assert all(p >= 0 for p in positions), positions
+    assert positions == sorted(positions), list(zip(markers, positions))
+
+
+def test_market_gate_evaluate_live_dev_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("TBE_MARKET_GATE", "0")
+    from lumen.engine.services.hosting.market_gate import evaluate_market_gate
+
+    gate = evaluate_market_gate()
+    assert gate.ok is True
+
+
+def test_market_gate_evaluate_live_production_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MARKET_GATE", "1")
+    monkeypatch.setenv("TBE_TOKEN_SECRET", "short")
+    monkeypatch.setenv("TBE_SCALE_MODE", "1")
+    monkeypatch.setenv("TBE_DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "0")
+    monkeypatch.setenv("TBE_SANDBOX_BACKEND", "firecracker")
+    monkeypatch.delenv("TBE_FC_KERNEL", raising=False)
+    monkeypatch.delenv("TBE_FC_ROOTFS", raising=False)
+    from lumen.engine.services.hosting.market_gate import evaluate_market_gate
+
+    gate = evaluate_market_gate()
+    assert gate.ok is False
+    assert gate.missing
+
+
+def test_isolation_decide_multi_tenant_requires_strong(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
+    from lumen.engine.services.isolation_policy import decide_isolation
+
+    d = decide_isolation()
+    assert d.require_strong_isolation is True
+    assert d.allow_local is False
+
+
+def test_planes_pydantic_frozen() -> None:
+    from lumen.engine.schemas.hosting_contract import PERMANENT_PLANE, TRIAL_PLANE
+
+    assert PERMANENT_PLANE.long_running is True
+    assert TRIAL_PLANE.long_running is False
+    assert "hosting" in PERMANENT_PLANE.module
+    assert "live_runner" in TRIAL_PLANE.module

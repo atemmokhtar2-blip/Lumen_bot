@@ -109,10 +109,10 @@ class HostingService:
         return self.state_dir / "instances.lock"
 
     def _inst_from_row(self, row: dict) -> HostInstance:
-        return HostInstance(**{
-            k: v for k, v in row.items()
-            if k in HostInstance.__dataclass_fields__
-        })
+        """Load instance via Pydantic trust-boundary contract (HostInstanceRecord)."""
+        from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+        return HostInstanceRecord.from_row(dict(row or {})).to_host_instance()
 
     def _load_unlocked(self) -> None:
         """Reload registry from SQLite (source of truth); migrate legacy JSON once."""
@@ -251,10 +251,10 @@ class HostingService:
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة السوق: {gate_exc}")
 
-        import hashlib
-        token_norm = (bot_token or "").strip()
+        from lumen.engine.services.hosting.contract import token_fingerprint
 
-        token_fp = hashlib.sha256(token_norm.encode()).hexdigest()[:16] if token_norm else ""
+        token_norm = (bot_token or "").strip()
+        token_fp = token_fingerprint(token_norm)
 
         # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
         scale = (os.environ.get("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
