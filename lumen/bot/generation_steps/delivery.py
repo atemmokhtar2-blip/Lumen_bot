@@ -270,54 +270,44 @@ async def deliver_generation_result(
         logger.exception("anti_hallucination report failed")
 
     if ready and context.user_data is not None:
+        # Phase 1: do NOT auto-bind TRIAL_CHAT pending_* after generation.
+        # Plane is chosen explicitly: post_trial → LiveRunner, post_host → HostingService.
+        # Auto pending_live_run caused silent trial when the user pasted a token early.
         try:
             from lumen.bot.ui.project_resolve import resolve_entry_point, bind_active_repo
             _entry = resolve_entry_point(Path(str(project_path)))
         except Exception:
             _entry = "main.py"
-        pending_payload = {
-            "project_path": str(project_path),
-            "owner_user_id": user.id if user else None,
-            "entry_point": _entry,
-            "run_seconds": int(__import__("os").environ.get("LIVE_RUN_SECONDS", 1800)),
-            "sandbox": True,
-            "plane": "trial_chat",
-        }
         try:
-            if context.user_data is not None:
-                bind_active_repo(context.user_data, Path(str(project_path)), entry=_entry)
+            bind_active_repo(context.user_data, Path(str(project_path)), entry=_entry)
         except Exception:
             pass
-        # All three keys so any token-handler path finds the project
-        context.user_data["pending_deploy"] = dict(pending_payload)
-        context.user_data["pending_live_run"] = dict(pending_payload)
-        context.user_data["pending_run"] = dict(pending_payload)
+        # Clear stale plane bindings from a previous session
+        for _k in ("pending_deploy", "pending_live_run", "pending_run", "pending_host"):
+            context.user_data.pop(_k, None)
         try:
             if user:
                 get_session_store().save(int(user.id), context.user_data)
         except Exception:
-            logger.exception("pending deployment session persistence failed")
-            await safe_reply_text(message, 
-                "⚠️ تم التحقق من المشروع، لكن تعذر حفظ جلسة التشغيل. أعد المحاولة قبل إرسال التوكن."
+            logger.exception("post-generation session persistence failed")
+            await safe_reply_text(
+                message,
+                "⚠️ تم التحقق من المشروع، لكن تعذر حفظ الجلسة. أعد المحاولة.",
             )
             return
         vcmds = meta.get("verified_commands") or ah.get("verified_commands") or []
         cmd_line = ("\nأوامر مؤكدة: " + ", ".join(f"/{c}" for c in vcmds[:12])) if vcmds else ""
-        if _quiet:
-            await safe_reply_text(message, "📦 جاهز — أرسل توكن البوت من @BotFather")
-            try:
-                from lumen.bot.ui.input_prompt import ask_text_input
-                await ask_text_input(message, kind="bot_token")
-            except Exception:
-                logger.exception("token ForceReply failed")
-        else:
-            await safe_reply_text(message, 
+        if not _quiet:
+            await safe_reply_text(
+                message,
                 "📦 المشروع جاهز بعد التحقق ضد الهلوسة."
                 + cmd_line
-                + "\n🔑 أرسل توكن البوت من @BotFather لتجربته."
+                + "\nاختر المسار من الأزرار: تجربة مؤقتة أو استضافة دائمة.",
             )
+        else:
+            await safe_reply_text(message, "📦 جاهز — اختر تجربة أو استضافة دائمة")
 
-        # Batch 3: engine UI post-generation menu (trial vs permanent host)
+        # Engine UI: explicit plane choice (TRIAL_CHAT vs PERMANENT_HOST)
         try:
             from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
             from lumen.engine.services.ui_state.controller import buttons_for_state
@@ -328,19 +318,21 @@ async def deliver_generation_result(
                 project_ref=str(project_path),
                 last_action="generation_done",
             )
-            if context.user_data is not None:
-                save_ui_state(context.user_data, ui)
-                if user:
-                    persist_ui_session(int(user.id), dict(context.user_data))
+            save_ui_state(context.user_data, ui)
+            if user:
+                persist_ui_session(int(user.id), dict(context.user_data))
             body = (
                 "ما التالي؟\n"
-                "• تجربة في الشات — تشغيل مؤقت\n"
-                "• استضافة دائمة — Firecracker\n"
+                "• تجربة في الشات — تشغيل مؤقت (LiveRunner / TRIAL_CHAT)\n"
+                "• استضافة دائمة — Firecracker (HostingService / PERMANENT_HOST)\n"
                 "• ZIP أو معاينة الملفات"
             )
-            await safe_reply_text(message, 
+            await safe_reply_text(
+                message,
                 body,
-                reply_markup=build_inline_keyboard(buttons_for_state(ui), user_id=int(getattr(user, "id", 0) or 0)),
+                reply_markup=build_inline_keyboard(
+                    buttons_for_state(ui), user_id=int(getattr(user, "id", 0) or 0)
+                ),
             )
         except Exception:
             logger.exception("post-generation UI menu failed")

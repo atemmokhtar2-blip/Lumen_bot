@@ -91,13 +91,15 @@ async def execute_post_side_effect(
         if not (root / entry).is_file() and not any((root / n).is_file() for n in ("main.py", "bot.py")):
             return f"المشروع موجود لكن لا نقطة دخول واضحة تحت `{root}`."
         seconds = _live_seconds(user)
+        from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
+
         payload = {
             "project_path": str(root),
             "owner_user_id": uid or None,
             "entry_point": entry,
             "run_seconds": seconds,
             "sandbox": True,
-            "plane": "trial_chat",
+            "plane": RuntimePlane.TRIAL_CHAT.value,
         }
         ud["pending_run"] = dict(payload)
         ud["pending_live_run"] = dict(payload)
@@ -105,7 +107,6 @@ async def execute_post_side_effect(
         ud.pop("pending_host", None)
         bind_active_repo(ud, root, entry=entry)
         _persist(uid, ud)
-        from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
         label = plane_label_ar(RuntimePlane.TRIAL_CHAT)
         return (
             f"✅ {label} — مربوط بـ `{root}`\n"
@@ -119,11 +120,13 @@ async def execute_post_side_effect(
         assert root is not None
         entry = resolve_entry_point(root)
         backend = _host_backend_hint()
+        from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
+
         ud["pending_host"] = {
             "project_path": str(root),
             "user_id": uid,
             "entry_point": entry,
-            "plane": "permanent_host",
+            "plane": RuntimePlane.PERMANENT_HOST.value,
             "backend_hint": backend,
         }
         # Token must hit HostService, not trial LiveRunner
@@ -132,7 +135,6 @@ async def execute_post_side_effect(
         ud.pop("pending_deploy", None)
         bind_active_repo(ud, root, entry=entry)
         _persist(uid, ud)
-        from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
         label = plane_label_ar(RuntimePlane.PERMANENT_HOST)
         warn = ""
         if "firecracker" in backend and "ready" not in backend and "available" not in backend:
