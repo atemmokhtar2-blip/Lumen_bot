@@ -76,3 +76,31 @@ def test_service_calls_prepare_before_sandbox() -> None:
     sbx = src.find("start_sandboxed_bot")
     assert prep > 0 and sbx > 0
     assert prep < sbx
+
+
+def test_ingress_stable_url(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TBE_HOST_BASE_DOMAIN", "hosts.example.com")
+    monkeypatch.setenv("TBE_PUBLIC_URL_SCHEME", "https")
+    monkeypatch.setenv("TBE_TRAEFIK_DYNAMIC_DIR", str(tmp_path))
+    from lumen.engine.services.hosting.ingress import (
+        public_url_for_instance,
+        write_traefik_route,
+    )
+
+    url = public_url_for_instance("host-abc12")
+    assert url == "https://host-abc12.hosts.example.com"
+    r = write_traefik_route(instance_id="host-abc12", backend_url="http://10.0.0.2:8080")
+    assert r["written"] is True
+    assert (tmp_path / "lumen-host-host-abc12.yaml").is_file()
+
+
+def test_production_rejects_non_firecracker_in_service_source() -> None:
+    src = Path("lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "is_production_sandbox_path" in src
+    assert 'backend_name != "firecracker"' in src
+
+
+def test_health_monitor_interval_default() -> None:
+    from lumen.engine.services.hosting.health_monitor import interval_sec
+
+    assert interval_sec() >= 10

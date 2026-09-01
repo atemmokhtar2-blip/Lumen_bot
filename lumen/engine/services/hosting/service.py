@@ -44,12 +44,15 @@ class HostInstance:
     bot_username: str = ""
     status: str = "stopped"  # starting | running | stopped | failed
     deployment_id: str = ""
-    sandbox_backend: str = ""  # firecracker | gvisor | dind | docker
+    sandbox_backend: str = ""  # firecracker only in production
     pid: int | None = None
     started_at: float = 0.0
     last_error: str = ""
     last_diagnosis: dict[str, Any] = field(default_factory=dict)
     token_fp: str = ""  # sha256[:16] of bot token — never store raw token
+    public_base_url: str = ""  # stable ingress URL (Traefik/Caddy by name, not random port)
+    version_ref: str = ""  # git commit sha of project snapshot at deploy
+    last_health_at: float = 0.0  # unix time of last successful health probe
 
 
 @dataclass
@@ -409,6 +412,20 @@ class HostingService:
                 message=f"فشل تشغيل الصندوق المعزول ({backend_name}): {message[:300]}",
                 details={"backend": backend_name, "meta": dict(handle.meta or {})},
             )
+        # Production / multi-tenant: Firecracker only — never accept weak backends
+        try:
+            from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
+            if is_production_sandbox_path() and backend_name != "firecracker":
+                return HostResult(
+                    ok=False,
+                    message=(
+                        f"مسار الإنتاج يرفض backend={backend_name}. "
+                        "الاستضافة التجارية تتطلب Firecracker microVM فقط."
+                    ),
+                    details={"backend": backend_name},
+                )
+        except Exception:
+            pass
         # Permanent host: refuse "running" without bot health when FC reports meta
         meta = dict(handle.meta or {})
         if backend_name == "firecracker" and meta.get("bot_healthy") is False and meta.get("claim", "").endswith("failed"):
@@ -432,6 +449,16 @@ class HostingService:
         instance_id = f"host-{uuid.uuid4().hex[:10]}"
         running_like = st in ("running", "deploy_running") or "running" in st.lower()
         failed_like = "fail" in st.lower()
+        from lumen.engine.services.hosting.ingress import (
+            public_url_for_instance,
+            write_traefik_route,
+        )
+        public_url = public_url_for_instance(instance_id)
+        try:
+            write_traefik_route(instance_id=instance_id, enabled=running_like)
+        except Exception:
+            pass
+        version_ref = str((prepared.details or {}).get("version_ref") or "")
         inst = HostInstance(
             instance_id=instance_id,
             user_id=user_id,
@@ -445,6 +472,9 @@ class HostingService:
             started_at=time.time(),
             last_error="" if not failed_like else message,
             token_fp=token_fp,
+            public_base_url=public_url,
+            version_ref=version_ref,
+            last_health_at=time.time() if running_like else 0.0,
         )
 
         # Normalize status using known constants
@@ -751,4 +781,9 @@ def get_hosting_service(state_dir: str | Path | None = None) -> HostingService:
     global _SERVICE
     if _SERVICE is None:
         _SERVICE = HostingService(state_dir=state_dir)
+        try:
+            from lumen.engine.services.hosting.health_monitor import start_background
+            start_background(lambda: _SERVICE)
+        except Exception:
+            pass
     return _SERVICE

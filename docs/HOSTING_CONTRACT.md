@@ -226,3 +226,14 @@ Scaffolds exist under `lumen/engine/services/platform_generators/`:
 - No deletion of LiveRunner (still required for trial).  
 - No platform field migration yet.  
 - No weak “works on my machine” hosting path.
+
+
+## HostInstance extended fields (root hardening)
+
+| Field | Purpose |
+|-------|---------|
+| `public_base_url` | Stable ingress URL (`{instance_id}.{TBE_HOST_BASE_DOMAIN}`) — Traefik/Caddy by name, not random ports |
+| `version_ref` | Git commit of project snapshot at deploy time |
+| `last_health_at` | Unix time of last successful orchestrator health probe (~30s loop) |
+
+Production isolation remains **Firecracker only**. Docker is dev-only and still uses seccomp profiles when selected.

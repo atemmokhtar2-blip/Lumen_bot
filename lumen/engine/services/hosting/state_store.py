@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS instances (
     last_error TEXT DEFAULT '',
     last_diagnosis TEXT DEFAULT '{}',
     token_fp TEXT DEFAULT '',
+    public_base_url TEXT DEFAULT '',
+    version_ref TEXT DEFAULT '',
+    last_health_at REAL DEFAULT 0,
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_instances_user ON instances(user_id);
@@ -76,6 +79,15 @@ class HostingStateStore:
             conn.execute("ALTER TABLE instances ADD COLUMN sandbox_backend TEXT DEFAULT ''")
         except Exception:
             pass
+        for col, decl in (
+            ("public_base_url", "TEXT DEFAULT ''"),
+            ("version_ref", "TEXT DEFAULT ''"),
+            ("last_health_at", "REAL DEFAULT 0"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE instances ADD COLUMN {col} {decl}")
+            except Exception:
+                pass
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         d = dict(row)
@@ -118,8 +130,9 @@ class HostingStateStore:
                 INSERT INTO instances (
                     instance_id, user_id, project_path, entry_point, bot_username,
                     status, deployment_id, sandbox_backend, pid, started_at, last_error,
-                    last_diagnosis, token_fp, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    last_diagnosis, token_fp, public_base_url, version_ref, last_health_at,
+                    updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     project_path=excluded.project_path,
@@ -133,6 +146,9 @@ class HostingStateStore:
                     last_error=excluded.last_error,
                     last_diagnosis=excluded.last_diagnosis,
                     token_fp=excluded.token_fp,
+                    public_base_url=excluded.public_base_url,
+                    version_ref=excluded.version_ref,
+                    last_health_at=excluded.last_health_at,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -149,6 +165,9 @@ class HostingStateStore:
                     inst.get("last_error") or "",
                     diag,
                     inst.get("token_fp") or "",
+                    inst.get("public_base_url") or "",
+                    inst.get("version_ref") or "",
+                    float(inst.get("last_health_at") or 0),
                     time.time(),
                 ),
             )

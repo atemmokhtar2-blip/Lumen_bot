@@ -40,6 +40,9 @@ HOST_INSTANCE_FIELDS: Final[Tuple[str, ...]] = (
     "last_error",
     "last_diagnosis",
     "token_fp",
+    "public_base_url",
+    "version_ref",
+    "last_health_at",
 )
 
 HOST_RESULT_FIELDS: Final[Tuple[str, ...]] = (
@@ -118,7 +121,7 @@ SECURITY_INVARIANTS: Final[Tuple[str, ...]] = (
 # Known product gaps frozen at Phase 0 (to be closed in later phases)
 PHASE0_KNOWN_GAPS: Final[Tuple[str, ...]] = (
     "host_instance_has_no_first_class_platform_field",
-    "webhook_public_url_not_on_host_instance",
+    "webhook_registration_not_yet_wired_to_public_base_url",
     "multi_platform_egress_policy_not_unified",
 )
 

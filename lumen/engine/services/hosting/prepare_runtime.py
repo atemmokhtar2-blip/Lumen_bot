@@ -134,6 +134,58 @@ def _install_requirements_target(root: Path, req: Path) -> tuple[bool, str]:
     return True, f"installed_to:{HOST_DEPS_DIRNAME}"
 
 
+
+def snapshot_project_version(root: Path) -> str:
+    """Git commit of current tree for deploy versioning (empty if git unavailable)."""
+    import subprocess
+    try:
+        if not (root / ".git").exists():
+            subprocess.run(
+                ["git", "init"],
+                cwd=str(root),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(root),
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=hosting@lumen.local",
+                "-c",
+                "user.name=Lumen Hosting",
+                "commit",
+                "-m",
+                "lumen-host-deploy",
+                "--allow-empty",
+            ],
+            cwd=str(root),
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        r = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if r.returncode == 0:
+            return (r.stdout or "").strip()[:40]
+    except Exception as exc:
+        logger.info("git snapshot skipped: %s", type(exc).__name__)
+    return ""
+
+
 def prepare_project_for_host(
     project_path: str | Path,
     *,
@@ -183,6 +235,8 @@ def prepare_project_for_host(
     else:
         details["pip"] = "skipped"
 
+    version_ref = snapshot_project_version(root)
+    details["version_ref"] = version_ref
     return PrepareResult(
         ok=True,
         entry_point=entry,
@@ -197,4 +251,5 @@ __all__ = [
     "prepare_project_for_host",
     "resolve_entry_point",
     "HOST_DEPS_DIRNAME",
+    "snapshot_project_version",
 ]
