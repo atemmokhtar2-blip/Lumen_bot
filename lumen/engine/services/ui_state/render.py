@@ -44,7 +44,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         # Homepage — balance only under open_billing (product rule)
         return html_card(
-            "أهلاً بك في Lumen",
+            "مرحباً بك في Lumen 🔮",
             [
                 (
                     "ماذا تقدر تعمل؟",
@@ -54,7 +54,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
                     "• المساعدة — شرح سريع للأوامر",
                 ),
             ],
-            subtitle="منصة توليد واستضافة بوتات تيليجرام",
+            subtitle="المنصة الأولى لإنشاء وإدارة بوتات المحادثة دون برمجة",
         )
 
     if phase == EngineUiPhase.GEN_TYPE:
