@@ -75,6 +75,17 @@ Risk tiers drive HITL confirmation for high/critical actions.
 - Per-user sandbox under `OUTPUT_DIR` via `user_sandbox`.
 - Job queue + backpressure for heavy work (especially API generate).
 
+## Hosting (two planes)
+
+| Plane | Code | Role |
+|-------|------|------|
+| **TRIAL_CHAT** | `lumen/engine/services/live_runner/` | Short-lived preview only |
+| **PERMANENT_HOST** | `lumen/engine/services/hosting/` | Long-running commercial host (Firecracker in production) |
+
+Production isolation is fail-closed: multi-tenant / non-dev → Firecracker only (`isolation_policy`, `sandbox_runtime.select`, `hosting.market_gate`).
+
+Full field contract, ordered start gates, and market-gate checklist: [HOSTING_CONTRACT.md](HOSTING_CONTRACT.md).
+
 
 ## Platform extensions (post Phase E)
 
