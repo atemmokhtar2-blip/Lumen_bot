@@ -155,6 +155,13 @@ def run_langgraph_pipeline(
         bd.put(out)
     except Exception:
         pass
+
+    try:
+        from lumen.engine.services.presentation import decide_and_attach
+        decide_and_attach(out)
+    except Exception:
+        logger.exception("runner presentation attach failed")
+
     return out
 
 
@@ -263,6 +270,13 @@ def resume_langgraph_hitl(
         bd.put(out)
     except Exception:
         pass
+
+    try:
+        from lumen.engine.services.presentation import decide_and_attach
+        decide_and_attach(out)
+    except Exception:
+        logger.exception("runner presentation attach failed")
+
     return out
 
 

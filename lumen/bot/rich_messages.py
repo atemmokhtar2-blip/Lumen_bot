@@ -297,4 +297,61 @@ __all__ = [
     "send_rich_message",
     "edit_rich_message",
     "send_or_edit_rich_ui",
+    "html_from_table_spec",
+    "send_table_spec",
 ]
+
+
+def html_from_table_spec(spec: Any) -> str:
+    """Build Rich HTML from engine TableSpec / dict."""
+    if spec is None:
+        return ""
+    if isinstance(spec, dict):
+        headers = [str(h) for h in (spec.get("headers") or [])]
+        rows = [[str(c) for c in r] for r in (spec.get("rows") or []) if isinstance(r, (list, tuple))]
+        title = str(spec.get("title") or "")
+        caption = str(spec.get("caption") or "")
+    else:
+        headers = list(getattr(spec, "headers", None) or [])
+        rows = [list(r) for r in (getattr(spec, "rows", None) or [])]
+        title = str(getattr(spec, "title", "") or "")
+        caption = str(getattr(spec, "caption", "") or "")
+    if len(headers) < 2 or not rows:
+        return ""
+    parts: list[str] = []
+    if title:
+        parts.append(f"<h3>{escape_rich(title)}</h3>")
+    parts.append(
+        build_table_html(
+            headers,
+            rows,
+            caption=caption,
+            bordered=True,
+            striped=True,
+            compact=True,
+        )
+    )
+    return "".join(parts)
+
+
+async def send_table_spec(
+    bot: Any,
+    *,
+    chat_id: int,
+    spec: Any,
+    reply_markup: Any = None,
+    preferred_message: Any = None,
+    user_data: dict[str, Any] | None = None,
+) -> Any:
+    """Send engine-chosen table via Rich Messages (fallback None)."""
+    html = html_from_table_spec(spec)
+    if not html:
+        return None
+    return await send_or_edit_rich_ui(
+        bot=bot,
+        chat_id=int(chat_id),
+        html=html,
+        markup=reply_markup,
+        preferred_message=preferred_message,
+        user_data=user_data,
+    )

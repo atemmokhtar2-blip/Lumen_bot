@@ -385,6 +385,13 @@ def orchestrate_generate(
 
     status_u = str(out.status).upper()
     awaiting = status_u == "AWAITING_CONFIRMATION" or bool((out.extensions or {}).get("langgraph_interrupt"))
+    # Smart presentation: agents/engine decide if a native table clarifies the result
+    try:
+        from lumen.engine.services.presentation import decide_and_attach
+        decide_and_attach(out)
+    except Exception:
+        logger.exception("presentation decide_and_attach failed")
+
     success = bool(out.qa_passed) or status_u in {"PASSED", "DELIVERED"}
     # HITL pause is not a hard failure — surface message for the user to confirm
     errors = list(out.build_errors or [])
