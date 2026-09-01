@@ -117,6 +117,7 @@ async def try_handle_token(
                 user_id=message.from_user.id if message.from_user else 0,
                 project_path=pending_host.get("project_path") or "",
                 bot_token=normalize_bot_token(request),
+                entry_point=str(pending_host.get("entry_point") or ""),
             )
 
         # Scrub secret from chat BEFORE long host work (reduces residual exposure)

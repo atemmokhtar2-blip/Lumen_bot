@@ -112,6 +112,20 @@ def main() -> int:
         return 3
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     os.environ["BOT_TOKEN"] = token
+    # Host-prepared deps (pip --target on API/worker) — required when egress is Telegram-only
+    extra_paths: list[str] = []
+    host_deps = (os.environ.get("LUMEN_HOST_DEPS") or "").strip()
+    if host_deps:
+        extra_paths.append(host_deps)
+    for rel in (".tbe_host_deps", ".tbe_deps"):
+        pth = PROJECT / rel
+        if pth.is_dir():
+            extra_paths.append(str(pth))
+    if extra_paths:
+        prev = (os.environ.get("PYTHONPATH") or "").strip()
+        merged = os.pathsep.join(extra_paths + ([prev] if prev else []))
+        os.environ["PYTHONPATH"] = merged
+        _log(f"lumen-pythonpath {merged}")
     try:
         entry = _find_entry()
     except FileNotFoundError:

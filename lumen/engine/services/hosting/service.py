@@ -180,6 +180,7 @@ class HostingService:
         project_path: str | Path,
         bot_token: str,
         bot_username: str = "",
+        entry_point: str = "",
     ) -> HostResult:
         path = Path(project_path).resolve()
         if not path.is_dir():
@@ -263,6 +264,18 @@ class HostingService:
         token_norm = (bot_token or "").strip()
         token_fp = token_fingerprint(token_norm)
 
+        # Part 1 — real server run: resolve entry + install deps on host (has network)
+        from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
+
+        prepared = prepare_project_for_host(path, entry_point=entry_point or "")
+        if not prepared.ok:
+            return HostResult(
+                ok=False,
+                message=prepared.message or "فشل تجهيز المشروع للتشغيل على السيرفر",
+                details=dict(prepared.details or {}),
+            )
+        entry_resolved = prepared.entry_point
+
         # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
         scale = (os.environ.get("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
         multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -291,9 +304,11 @@ class HostingService:
                     bot_token=token_norm,
                     meta={
                         "bot_username": bot_username or "",
+                        "entry_point": entry_resolved,
                         "artifact_uri": artifact_uri,
                         "artifact_sha256": digest,
                         "artifact_job_key": pre_id,
+                        "prepare": dict(prepared.details or {}),
                     },
                 )
                 plan = estimate_nodes_for(20_000)
@@ -369,6 +384,7 @@ class HostingService:
             "TELEGRAM_BOT_TOKEN": bot_token,
             "BOT_TOKEN": bot_token,
         }
+        env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
             from lumen.engine.services.sandbox_runtime import start_sandboxed_bot
             _backend, handle = start_sandboxed_bot(
@@ -420,7 +436,7 @@ class HostingService:
             instance_id=instance_id,
             user_id=user_id,
             project_path=str(path),
-            entry_point="",
+            entry_point=entry_resolved or "",
             bot_username=username,
             status="running" if running_like else ("failed" if failed_like else (st or "unknown")),
             deployment_id=str(dep_id),
