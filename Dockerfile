@@ -1,5 +1,5 @@
 # Production image — hardened (Phase 3 + Phase 4 policy)
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 LABEL org.opencontainers.image.source="https://github.com/atemmokhtar2-blip/Lumen_bot" \
       org.opencontainers.image.title="Lumen" \
