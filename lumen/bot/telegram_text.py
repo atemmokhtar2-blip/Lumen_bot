@@ -398,20 +398,20 @@ async def safe_edit_text(
         except Exception:
             pass
 
-    if looks_like_telegram_mdv2(body):
-        try:
-            from telegram.constants import ParseMode
-
-            await message.edit_text(body, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
-            return
-        except Exception:
-            pass
-
     if looks_like_telegram_html(body):
         try:
             from telegram.constants import ParseMode
 
             await message.edit_text(body, parse_mode=ParseMode.HTML, **kwargs)
+            return
+        except Exception:
+            pass
+
+    if looks_like_telegram_mdv2(body):
+        try:
+            from telegram.constants import ParseMode
+
+            await message.edit_text(body, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
             return
         except Exception:
             pass
@@ -466,23 +466,23 @@ async def safe_reply_text(
                 ok = True
             except Exception:
                 ok = False
-        if not ok and looks_like_telegram_mdv2(part):
-            try:
-                from telegram.constants import ParseMode
-
-                await_msg = await message.reply_text(
-                    part, parse_mode=ParseMode.MARKDOWN_V2, **kw
-                )
-                sent.append(await_msg)
-                ok = True
-            except Exception:
-                ok = False
         if not ok and looks_like_telegram_html(part):
             try:
                 from telegram.constants import ParseMode
 
                 await_msg = await message.reply_text(
                     part, parse_mode=ParseMode.HTML, **kw
+                )
+                sent.append(await_msg)
+                ok = True
+            except Exception:
+                ok = False
+        if not ok and looks_like_telegram_mdv2(part):
+            try:
+                from telegram.constants import ParseMode
+
+                await_msg = await message.reply_text(
+                    part, parse_mode=ParseMode.MARKDOWN_V2, **kw
                 )
                 sent.append(await_msg)
                 ok = True

@@ -1,7 +1,7 @@
 """Honest capability list for /help and rejection messages — Telegram HTML UI."""
 from __future__ import annotations
 
-from lumen.bot.telegram_text import mdv2_bullets, mdv2_card
+from lumen.bot.telegram_text import html_bullets, html_card
 
 CAN_DO_AR = [
     "توليد بوت تيليجرام بأوامر ومعالجات حقيقية (Python)",
@@ -22,11 +22,11 @@ CANNOT_DO_AR = [
 
 def get_help_text() -> str:
     """Full /help body — official expandable blue cards."""
-    return mdv2_card(
+    return html_card(
         "المساعدة — قدرات Lumen",
         [
-            ("ماذا أستطيع؟", mdv2_bullets(CAN_DO_AR)),
-            ("ماذا لا أستطيع؟", mdv2_bullets(CANNOT_DO_AR)),
+            ("ماذا أستطيع؟", html_bullets(CAN_DO_AR)),
+            ("ماذا لا أستطيع؟", html_bullets(CANNOT_DO_AR)),
             (
                 "كيف تبدأ",
                 "أرسل وصفاً واضحاً للبوت من زر إنشاء بوت،\n"
@@ -47,7 +47,7 @@ def rejection_message(reason: str, suggested: str = "") -> str:
     sections.append(
         (
             "أقدر أساعدك في",
-            mdv2_bullets(
+            html_bullets(
                 [
                     "بوتات أوامر تيليجرام",
                     "متجر محلي / نقاط / تذاكر / اشتراكات",
@@ -55,7 +55,7 @@ def rejection_message(reason: str, suggested: str = "") -> str:
             ),
         )
     )
-    return mdv2_card(
+    return html_card(
         "تعذّر توليد هذا البوت",
         sections,
         subtitle="الطلب خارج حدود المحرك الحالية",

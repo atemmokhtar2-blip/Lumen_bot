@@ -74,14 +74,14 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         from lumen.engine.services.ui_state.render import UiFacts
         facts = UiFacts()
-    # HTML expandable blue cards (official <blockquote expandable>)
-    menu_html = render_message(ui, facts)
+    # Official Telegram HTML cards (<blockquote expandable> blue box + arrow)
+    menu_body = render_message(ui, facts)
     markup = build_inline_keyboard(buttons_for_phase(EngineUiPhase.HOME), user_id=uid, nav=False)
 
     from lumen.bot.ui.chat_hygiene import remember_message, prune_bot_messages
 
     # First-time hero image only (no HTML in caption — blockquotes need a text message).
-    # Menu body is ALWAYS a separate text message with parse_mode=HTML.
+    # Menu body is ALWAYS a separate text message; safe_reply auto-sets parse_mode=HTML.
     already_welcomed = bool(ud.get("lumen_welcome_shown"))
     if not already_welcomed:
         welcome_img = Path(__file__).resolve().parent / "assets" / "welcome.jpg"
@@ -108,17 +108,17 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     sent_msg = None
     try:
-        sent_list = await safe_reply_text(message, menu_html, reply_markup=markup)
+        sent_list = await safe_reply_text(message, menu_body, reply_markup=markup)
         sent_msg = sent_list[-1] if sent_list else None
     except Exception:
         try:
             from telegram.constants import ParseMode
 
             sent_msg = await message.reply_text(
-                menu_html, parse_mode=ParseMode.HTML, reply_markup=markup
+                menu_body, parse_mode=ParseMode.HTML, reply_markup=markup
             )
         except Exception:
-            await safe_reply_text(message, menu_html[:4000])
+            await safe_reply_text(message, menu_body[:4000])
             sent_msg = None
     if sent_msg is not None and context.user_data is not None:
         remember_message(context.user_data, getattr(sent_msg, "message_id", None))

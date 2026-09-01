@@ -83,24 +83,24 @@ async def send_or_edit_ui(
     )
 
     raw = text or ""
-    use_mdv2 = looks_like_telegram_mdv2(raw)
-    use_html = (not use_mdv2) and looks_like_telegram_html(raw)
+    # Prefer HTML for UI cards (Arabic-safe). MDV2 only when no HTML tags.
+    use_html = looks_like_telegram_html(raw)
+    use_mdv2 = (not use_html) and looks_like_telegram_mdv2(raw)
     parse_kwargs: dict[str, Any] = {}
-    if use_mdv2:
-        try:
-            from telegram.constants import ParseMode
-
-            parse_kwargs["parse_mode"] = ParseMode.MARKDOWN_V2
-        except Exception:
-            use_mdv2 = False
-            use_html = looks_like_telegram_html(raw)
-    if use_html and not parse_kwargs:
+    if use_html:
         try:
             from telegram.constants import ParseMode
 
             parse_kwargs["parse_mode"] = ParseMode.HTML
         except Exception:
             use_html = False
+    elif use_mdv2:
+        try:
+            from telegram.constants import ParseMode
+
+            parse_kwargs["parse_mode"] = ParseMode.MARKDOWN_V2
+        except Exception:
+            use_mdv2 = False
 
     parts = split_telegram_text(raw, limit=TELEGRAM_MAX_MESSAGE - 8)
     body = parts[0] if parts else ""
