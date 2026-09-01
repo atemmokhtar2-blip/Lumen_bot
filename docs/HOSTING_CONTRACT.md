@@ -1,9 +1,12 @@
 # Hosting Contract (from code)
 
-**Source of truth:** branch `Lumen`, commit aligned at authoring time.  
+**Machine-readable source of truth:** `lumen/engine/services/hosting/contract.py`  
+**Human-readable companion:** this file  
+**Enforcement:** `tests/test_hosting_contract_phase0.py` (must stay green)
+
 **Scope:** product contract for permanent bot hosting. Extracted from actual modules — not aspirational design.
 
-This document is **Phase 0** of the Hosting Path program. It freezes definitions and failure gates before any behavior change.
+This document is **Phase 0** of the Hosting Path program. It freezes definitions and failure gates before any behavior change. If the Python contract and this doc disagree, **fix the doc**; if the contract and `HostInstance` disagree, **tests fail** until resolved.
 
 ---
 
