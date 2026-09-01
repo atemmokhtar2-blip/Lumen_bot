@@ -162,6 +162,19 @@ async def execute_bot_generation(
                     clean = raw
                 kb = build_hitl_keyboard(user_id=int(uid or 0))
                 await safe_edit_text(status_msg, clean, use_markdown=False, reply_markup=kb)
+                # Strong engine→Telegram table at HITL gate
+                try:
+                    from lumen.bot.presentation_send import send_engine_presentation
+                    _bot = getattr(context, "bot", None)
+                    _cid = getattr(getattr(message, "chat", None), "id", None)
+                    await send_engine_presentation(
+                        bot=_bot,
+                        chat_id=_cid,
+                        metadata=meta if isinstance(meta, dict) else {},
+                        user_data=context.user_data if isinstance(getattr(context, "user_data", None), dict) else None,
+                    )
+                except Exception:
+                    logger.exception("HITL presentation table failed")
                 return result
         except Exception:
             logger.exception("langgraph HITL surface failed")
@@ -224,6 +237,22 @@ async def execute_bot_generation(
             logger.exception("post-generation plan hooks failed")
 
         try:
+            # Push engine presentation table before zip delivery
+            try:
+                from lumen.bot.presentation_send import send_engine_presentation
+                _bot = getattr(context, "bot", None)
+                _cid = getattr(getattr(message, "chat", None), "id", None)
+                _meta = dict(getattr(result, "metadata", None) or {})
+                await send_engine_presentation(
+                    bot=_bot,
+                    chat_id=_cid,
+                    metadata=_meta,
+                    stages=list(getattr(result, "stages", None) or []),
+                    user_data=context.user_data if isinstance(getattr(context, "user_data", None), dict) else None,
+                )
+            except Exception:
+                logger.exception("pre-delivery presentation table failed")
+
             from ..generation_flow import deliver_generation_result
 
             await deliver_generation_result(

@@ -3,6 +3,7 @@ from .table_policy import (
     TableSpec,
     attach_presentation_table,
     decide_and_attach,
+    ensure_agent_presentation,
     decide_table_for_state,
     should_use_table,
     table_from_comparison,
@@ -23,4 +24,5 @@ __all__ = [
     "decide_table_for_state",
     "attach_presentation_table",
     "decide_and_attach",
+    "ensure_agent_presentation",
 ]

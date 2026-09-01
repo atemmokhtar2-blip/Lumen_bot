@@ -418,6 +418,10 @@ def orchestrate_generate(
             "pending_action_id": pending.get("action_id"),
             "confirm_token": pending.get("confirm_token"),
             "awaiting_hitl": awaiting,
+            # Engine → Telegram presentation bridge (Rich tables)
+            "presentation": (out.extensions or {}).get("presentation"),
+            "stages": (out.extensions or {}).get("stages"),
+            "build_success": bool(getattr(out, "build_success", False)),
         },
     )
 

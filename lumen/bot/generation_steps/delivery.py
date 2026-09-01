@@ -57,38 +57,23 @@ async def deliver_generation_result(
     except Exception:
         logger.exception("status edit failed")
 
-    # Engine presentation: native Rich table when stages/metrics warrant it
+    # Engine presentation: native Rich table from agent metadata/stages
     try:
-        from lumen.engine.services.presentation.table_policy import (
-            table_from_explicit,
-            table_from_stages,
+        from lumen.bot.presentation_send import send_engine_presentation
+        bot = getattr(context, "bot", None)
+        if bot is None and message is not None:
+            bot = getattr(message, "get_bot", lambda: None)()
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        ud = getattr(context, "user_data", None) if context is not None else None
+        await send_engine_presentation(
+            bot=bot,
+            chat_id=chat_id,
+            metadata=meta,
+            stages=stages,
+            user_data=ud if isinstance(ud, dict) else None,
         )
-        from lumen.bot.rich_messages import send_table_spec
-
-        pres = meta.get("presentation") if isinstance(meta, dict) else None
-        spec = table_from_explicit(pres) if isinstance(pres, dict) else None
-        if spec is None and stages:
-            stage_dicts = []
-            for s in stages:
-                if isinstance(s, dict):
-                    stage_dicts.append(s)
-                else:
-                    stage_dicts.append({
-                        "name": getattr(s, "name", None) or getattr(s, "stage", None) or "stage",
-                        "success": getattr(s, "success", None),
-                        "detail": getattr(s, "detail", None) or getattr(s, "message", None) or "",
-                    })
-            spec = table_from_stages(stage_dicts)
-        if spec is not None:
-            bot = getattr(context, "bot", None)
-            if bot is None and message is not None:
-                bot = getattr(message, "get_bot", lambda: None)()
-            chat_id = getattr(getattr(message, "chat", None), "id", None)
-            if bot is not None and chat_id is not None:
-                await send_table_spec(bot, chat_id=int(chat_id), spec=spec)
     except Exception:
         logger.exception("engine rich table presentation failed")
-
 
     if not success or not project_path:
         await safe_reply_text(message, "لم يُنشأ مشروع جاهز. جرّب وصفاً أوضح.")

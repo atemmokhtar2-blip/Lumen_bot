@@ -186,6 +186,110 @@ def table_from_metrics(metrics: dict[str, Any] | None) -> TableSpec | None:
     )
 
 
+
+def synthesize_agent_stages(state: Any) -> list[dict[str, Any]]:
+    """Build stage rows from agent state when explicit stages are missing."""
+    ext = getattr(state, "extensions", None) or {}
+    if not isinstance(ext, dict):
+        ext = {}
+    stages: list[dict[str, Any]] = []
+    # Prefer real stages on extensions
+    raw = ext.get("stages") or getattr(state, "stages", None)
+    if isinstance(raw, (list, tuple)) and raw:
+        for i, s in enumerate(raw):
+            if isinstance(s, dict):
+                stages.append(s)
+            else:
+                stages.append({
+                    "name": getattr(s, "name", None) or f"stage-{i+1}",
+                    "success": getattr(s, "success", None),
+                    "detail": getattr(s, "detail", "") or "",
+                })
+        return stages
+
+    plan = ext.get("execution_plan") or ext.get("plan") or getattr(state, "strict_spec", None)
+    stages.append({
+        "name": "التخطيط",
+        "success": bool(plan),
+        "detail": "خطة جاهزة" if plan else "لا خطة",
+    })
+    build_ok = bool(getattr(state, "build_success", False))
+    stages.append({
+        "name": "البناء",
+        "success": build_ok,
+        "detail": (getattr(state, "generated_path", None) or "")[-40:] or ("تم" if build_ok else "فشل"),
+    })
+    qa_ok = bool(getattr(state, "qa_passed", False))
+    qa = getattr(state, "qa_report", None) or {}
+    err_n = 0
+    if isinstance(qa, dict):
+        err_n = len(qa.get("errors") or [])
+    stages.append({
+        "name": "فحص الجودة",
+        "success": qa_ok,
+        "detail": f"{err_n} أخطاء" if err_n else ("نجح" if qa_ok else "لم يكتمل"),
+    })
+    attempts = int(getattr(state, "attempts", 0) or 0)
+    if attempts:
+        stages.append({
+            "name": "المحاولات",
+            "success": True,
+            "detail": str(attempts),
+        })
+    status = str(getattr(state, "status", "") or "")
+    if status:
+        stages.append({
+            "name": "الحالة النهائية",
+            "success": status.upper() in {"PASSED", "DELIVERED", "COMPLETED", "DONE", "SUCCESS", "AWAITING_CONFIRMATION"},
+            "detail": status[:32],
+        })
+    return stages
+
+
+def ensure_agent_presentation(state: Any) -> TableSpec | None:
+    """Force a useful table from agent state when possible; attach on state."""
+    if state is None:
+        return None
+    ext = getattr(state, "extensions", None)
+    if not isinstance(ext, dict):
+        try:
+            state.extensions = {}
+            ext = state.extensions
+        except Exception:
+            return None
+    # If agent already set presentation tables, keep them
+    existing = table_from_explicit(ext.get("presentation") if isinstance(ext.get("presentation"), dict) else None)
+    if existing is not None:
+        return existing
+
+    # Inject synthesized stages for policy
+    if not ext.get("stages"):
+        ext["stages"] = synthesize_agent_stages(state)
+
+    spec = decide_table_for_state(state)
+    if spec is None:
+        # Last resort: stages table from synthesis (even 2 rows)
+        rows = []
+        for i, s in enumerate(ext.get("stages") or []):
+            if not isinstance(s, dict):
+                continue
+            ok = s.get("success")
+            status = "نجاح" if ok else ("فشل" if ok is False else "—")
+            rows.append([str(i + 1), str(s.get("name") or f"#{i+1}")[:28], status, str(s.get("detail") or "")[:32]])
+        if len(rows) >= 2:
+            spec = TableSpec(
+                headers=["#", "المرحلة", "الحالة", "ملاحظة"],
+                rows=rows[:20],
+                caption=f"{len(rows)} مرحلة",
+                kind="stages",
+                reason="synthesized agent stages",
+                title="مسار المحرك",
+            )
+    if spec is not None:
+        attach_presentation_table(state, spec)
+    return spec
+
+
 def decide_table_for_state(state: Any) -> TableSpec | None:
     """Engine/agent smart choice — explicit presentation wins, then heuristics."""
     ext = getattr(state, "extensions", None) or {}
@@ -264,10 +368,14 @@ def attach_presentation_table(state: Any, spec: TableSpec | None) -> Any:
 
 
 def decide_and_attach(state: Any) -> TableSpec | None:
-    spec = decide_table_for_state(state)
-    if spec is not None:
-        attach_presentation_table(state, spec)
-    return spec
+    # Prefer full ensure (synthesis + explicit + heuristics)
+    try:
+        return ensure_agent_presentation(state)
+    except Exception:
+        spec = decide_table_for_state(state)
+        if spec is not None:
+            attach_presentation_table(state, spec)
+        return spec
 
 
 __all__ = [
@@ -281,4 +389,6 @@ __all__ = [
     "decide_table_for_state",
     "attach_presentation_table",
     "decide_and_attach",
+    "synthesize_agent_stages",
+    "ensure_agent_presentation",
 ]
