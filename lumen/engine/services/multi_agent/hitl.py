@@ -25,10 +25,11 @@ _AUDIT_LOCK = threading.Lock()
 
 
 def _ttl_seconds() -> float:
+    # Default 1h — generation + user reaction must not race a short window.
     try:
-        return max(60.0, min(86400.0, float(os.environ.get("MULTI_AGENT_HITL_TTL_SEC") or "900")))
+        return max(300.0, min(86400.0, float(os.environ.get("MULTI_AGENT_HITL_TTL_SEC") or "3600")))
     except ValueError:
-        return 900.0
+        return 3600.0
 
 
 def _hmac_secret() -> bytes:
@@ -93,7 +94,14 @@ class PendingAction:
         )
 
     def is_expired(self) -> bool:
-        return time.time() > float(self.expires_at or 0.0)
+        exp = float(self.expires_at or 0.0)
+        if exp <= 0.0:
+            # Missing expires_at must NOT instant-expire (serialization gaps).
+            created = float(self.created_at or 0.0)
+            if created <= 0.0:
+                return False
+            exp = created + _ttl_seconds()
+        return time.time() > exp
 
 
 def _params_digest(params: dict[str, Any] | None) -> str:
@@ -262,15 +270,21 @@ def confirm_action(
         _audit("expired", action_id=action_id)
         return False, state, "expired"
 
-    # Token required for high/critical
-    expected = pending.confirm_token or _sign(
+    # Token: button path often sends verb-only (empty token). For the owning user,
+    # bind the board token so confirm is not rejected as "expired token".
+    expected = (pending.confirm_token or "").strip() or _sign(
         pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
     )
-    if not confirm_token or not hmac.compare_digest(str(confirm_token), str(expected)):
+    supplied = (confirm_token or "").strip()
+    if not supplied and expected and int(user_id or 0) in {0, int(pending.user_id or 0)}:
+        supplied = expected
+        _audit("token_bound_from_pending", action_id=action_id, user_id=user_id)
+    if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
         _audit("confirm_fail", reason="bad_token", action_id=action_id)
         state.record(AgentRole.HITL, "bad_token", action_id)
         board.put(state)
         return False, state, "bad_token"
+    confirm_token = supplied
 
     if not _consume_token(action_id, confirm_token):
         _audit("confirm_fail", reason="token_reused", action_id=action_id)

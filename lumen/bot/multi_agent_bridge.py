@@ -51,6 +51,31 @@ def try_handle_hitl_message(
         if not token:
             token = str(pending.get("confirm_token") or "")
 
+    # Always prefer durable blackboard pending for this user (multi-worker safe)
+    try:
+        if not state_id or not action_id or (verb == "confirm" and not token):
+            latest = latest_for_user(int(user_id or 0))
+            if latest is not None:
+                if not state_id:
+                    state_id = str(getattr(latest, "state_id", "") or "")
+                ext = getattr(latest, "extensions", None) or {}
+                bp = ext.get("pending_action") or {}
+                if isinstance(bp, dict):
+                    if not action_id:
+                        action_id = str(bp.get("action_id") or "")
+                    if not token:
+                        token = str(bp.get("confirm_token") or "")
+                    if isinstance(user_data, dict) and (action_id or token):
+                        user_data["multi_agent_pending"] = {
+                            "action_id": action_id or bp.get("action_id"),
+                            "state_id": state_id or bp.get("state_id"),
+                            "tool": bp.get("tool") or "langgraph_plan_approve",
+                            "confirm_token": token or bp.get("confirm_token") or "",
+                        }
+                        user_data["multi_agent_state_id"] = state_id
+    except Exception:
+        logger.exception("HITL board hydrate failed")
+
     # Recover from durable blackboard (restart / multi-worker / empty user_data)
     board_state = None
     try:
@@ -129,9 +154,11 @@ def try_handle_hitl_message(
             "state_not_found": "لم يُعثر على الجلسة — أعد التوليد",
             "user_mismatch": "هذا الطلب ليس لحسابك",
             "action_mismatch": "لا يوجد إجراء معلّق — أعد التوليد",
-            "bad_token": "انتهت صلاحية رمز التأكيد — أعد التوليد",
+            "bad_token": "رمز التأكيد غير مطابق — اضغط تأكيد مرة أخرى من الأزرار أو أعد التوليد",
             "token_reused": "تم استخدام التأكيد مسبقاً",
-            "expired": "انتهت صلاحية الموافقة — أعد التوليد",
+            "expired": "انتهت مهلة الموافقة (انتهت الصلاحية) — أعد التوليد",
+            "state_not_found": "لم يُعثر على جلسة التوليد — أعد التوليد",
+            "user_mismatch": "التأكيد يجب أن يكون من نفس الحساب",
         }.get(str(reason), str(reason))
         if str(reason).startswith("already_"):
             reason_ar = "تم التعامل مع هذا الإجراء مسبقاً"
