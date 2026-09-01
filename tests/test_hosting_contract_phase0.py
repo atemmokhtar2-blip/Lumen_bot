@@ -292,3 +292,34 @@ def test_planes_pydantic_frozen() -> None:
     assert TRIAL_PLANE.long_running is False
     assert "hosting" in PERMANENT_PLANE.module
     assert "live_runner" in TRIAL_PLANE.module
+
+
+def test_save_path_validates_through_pydantic() -> None:
+    src = (REPO_ROOT / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "from_host_instance" in src
+    assert "to_persist_dict" in src
+    # _save_unlocked must not write raw asdict without validation
+    save_at = src.find("def _save_unlocked")
+    assert save_at > 0
+    chunk = src[save_at : save_at + 400]
+    assert "HostInstanceRecord" in chunk
+    assert "asdict(inst)" not in chunk
+
+
+def test_roundtrip_record_persist_dict() -> None:
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+    from lumen.engine.services.hosting.service import HostInstance
+
+    inst = HostInstance(
+        instance_id="host-rt1",
+        user_id=7,
+        project_path="/sandbox/u/p",
+        status="running",
+        token_fp="b" * 16,
+    )
+    rec = HostInstanceRecord.from_host_instance(inst)
+    d = rec.to_persist_dict()
+    back = HostInstanceRecord.from_row(d).to_host_instance()
+    assert back.instance_id == inst.instance_id
+    assert back.user_id == inst.user_id
+    assert back.token_fp == inst.token_fp

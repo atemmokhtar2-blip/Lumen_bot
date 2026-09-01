@@ -112,6 +112,25 @@ class HostInstanceRecord(BaseModel):
         """Validate a DB/API dict at the trust boundary."""
         return cls.model_validate(row)
 
+    @classmethod
+    def from_host_instance(cls, inst: Any) -> "HostInstanceRecord":
+        """Validate a runtime HostInstance before persistence."""
+        from dataclasses import asdict
+
+        if hasattr(inst, "__dataclass_fields__"):
+            payload = asdict(inst)
+        elif isinstance(inst, dict):
+            payload = inst
+        else:
+            payload = dict(inst)
+        return cls.model_validate(payload)
+
+    def to_persist_dict(self) -> dict[str, Any]:
+        """Canonical dict for state stores (JSON-serializable)."""
+        data = self.model_dump()
+        # last_diagnosis stays dict; stores may json.dumps it
+        return data
+
 
 class HostPlane(BaseModel):
     """Plane identity — TRIAL vs PERMANENT (documentation + API clarity)."""

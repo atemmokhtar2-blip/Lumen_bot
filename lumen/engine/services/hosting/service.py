@@ -147,9 +147,12 @@ class HostingService:
             self._instances = {}
 
     def _save_unlocked(self) -> None:
-        """Persist each instance to SQLite (transactional source of truth)."""
+        """Persist each instance after Pydantic contract validation (trust boundary)."""
+        from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
         for inst in self._instances.values():
-            self._store.upsert(asdict(inst))
+            record = HostInstanceRecord.from_host_instance(inst)
+            self._store.upsert(record.to_persist_dict())
 
     def _save(self) -> None:
         with exclusive_state_lock(self._lock_path()):
