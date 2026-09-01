@@ -41,13 +41,19 @@ def _live_seconds(user) -> int:
     return int(os.environ.get("LIVE_RUN_SECONDS", "1800") or 1800)
 
 
-def _persist(uid: int, ud: dict) -> None:
+def _persist(uid: int, ud: dict) -> str:
+    """Persist session. Returns empty string on success, Arabic warning on failure."""
     try:
         from lumen.bot.session_store import get_session_store
         if uid:
             get_session_store().save(uid, dict(ud))
-    except Exception:
+        return ""
+    except Exception as exc:
         logger.exception("session persist failed")
+        return (
+            "\n⚠️ تعذر حفظ الجلسة على الخادم "
+            f"({type(exc).__name__}). أبقِ هذه المحادثة مفتوحة وأعد اختيار المسار إن انقطع الاتصال."
+        )
 
 
 def _host_backend_hint() -> str:
@@ -106,13 +112,32 @@ async def execute_post_side_effect(
         ud["pending_deploy"] = dict(payload)
         ud.pop("pending_host", None)
         bind_active_repo(ud, root, entry=entry)
-        _persist(uid, ud)
+        persist_note = _persist(uid, ud)
         label = plane_label_ar(RuntimePlane.TRIAL_CHAT)
+        if message is not None:
+            try:
+                from lumen.bot.ui.secret_prompt import prompt_for_secret
+
+                body = (
+                    f"✅ {label} — مربوط بـ `{root}`\n"
+                    f"• نقطة الدخول: `{entry}`\n"
+                    f"• المدة التقريبية: {seconds // 60} دقيقة\n"
+                    f"• المستوى: trial_chat (LiveRunner — ليس HostService)\n"
+                    f"{persist_note}\n"
+                    "يلزم توكن البوت من @BotFather للتجربة المؤقتة."
+                )
+                await prompt_for_secret(
+                    message=message, kind="bot", body=body, user_id=int(uid or 0)
+                )
+                return ""
+            except Exception:
+                logger.exception("trial secret prompt failed")
         return (
             f"✅ {label} — مربوط بـ `{root}`\n"
             f"• نقطة الدخول: `{entry}`\n"
             f"• المدة التقريبية: {seconds // 60} دقيقة\n"
-            f"• المستوى: trial_chat (LiveRunner — ليس HostService)\n\n"
+            f"• المستوى: trial_chat (LiveRunner — ليس HostService)\n"
+            f"{persist_note}\n\n"
             "أرسل توكن البوت من @BotFather الآن لبدء التشغيل التجريبي."
         )
 
@@ -134,7 +159,7 @@ async def execute_post_side_effect(
         ud.pop("pending_live_run", None)
         ud.pop("pending_deploy", None)
         bind_active_repo(ud, root, entry=entry)
-        _persist(uid, ud)
+        persist_note = _persist(uid, ud)
         label = plane_label_ar(RuntimePlane.PERMANENT_HOST)
         warn = ""
         if "firecracker" in backend and "ready" not in backend and "available" not in backend:
@@ -142,12 +167,30 @@ async def execute_post_side_effect(
                 "\n⚠️ تنبيه: مسار الإنتاج يتطلب Firecracker "
                 f"({backend}). على بيئة التطوير قد يُستخدم بديل مصرّح فقط."
             )
+        if message is not None:
+            try:
+                from lumen.bot.ui.secret_prompt import prompt_for_secret
+
+                body = (
+                    f"✅ {label} — مربوط بـ `{root}`\n"
+                    f"• نقطة الدخول: `{entry}`\n"
+                    f"• العزل المتوقع: {backend}\n"
+                    f"• المستوى: permanent_host (HostService.start)\n"
+                    f"{warn}{persist_note}\n\n"
+                    "يلزم توكن البوت من @BotFather لبدء الاستضافة الدائمة."
+                )
+                await prompt_for_secret(
+                    message=message, kind="bot", body=body, user_id=int(uid or 0)
+                )
+                return ""
+            except Exception:
+                logger.exception("host secret prompt failed")
         return (
             f"✅ {label} — مربوط بـ `{root}`\n"
             f"• نقطة الدخول: `{entry}`\n"
             f"• العزل المتوقع: {backend}\n"
             f"• المستوى: permanent_host (HostService.start)\n"
-            f"{warn}\n\n"
+            f"{warn}{persist_note}\n\n"
             "أرسل توكن البوت من @BotFather الآن لبدء الاستضافة الدائمة."
         )
 

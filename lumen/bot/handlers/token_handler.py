@@ -211,34 +211,18 @@ async def try_handle_token(
             pending_run = dict(pending_live)
             context.user_data["pending_run"] = pending_run
         if not pending_run and pending_deploy:
-            pending_run = {
-                "project_path": pending_deploy.get("project_path") or "",
-                "entry_point": pending_deploy.get("entry_point") or "",
-                "run_seconds": _plan_live_seconds(user),
-            }
-            context.user_data["pending_run"] = pending_run
-        if not pending_run:
-            active = (context.user_data or {}).get("active_repo") or {}
-            if active.get("path") and Path(active["path"]).exists():
-                entry = ""
-                try:
-                    cdict = active.get("contract") or {}
-                    eps = cdict.get("entry_points") or []
-                    if eps:
-                        entry = (eps[0] or {}).get("path") or ""
-                except Exception:
-                    entry = ""
-                if not entry:
-                    for cand in ("bot.py", "main.py", "app.py"):
-                        if (Path(active["path"]) / cand).exists():
-                            entry = cand
-                            break
+            # Only honor deploy pending when it was explicitly plane-bound
+            plane = str(pending_deploy.get("plane") or "").strip()
+            if plane in {"trial_chat", "TRIAL_CHAT"} or pending_deploy.get("sandbox"):
                 pending_run = {
-                    "project_path": active["path"],
-                    "entry_point": entry,
+                    "project_path": pending_deploy.get("project_path") or "",
+                    "entry_point": pending_deploy.get("entry_point") or "",
                     "run_seconds": _plan_live_seconds(user),
+                    "plane": plane or "trial_chat",
                 }
                 context.user_data["pending_run"] = pending_run
+        # Phase 1: never invent trial pending from active_repo or disk recovery.
+        # User must choose «تجربة في الشات» or «استضافة دائمة» first.
         if pending_run and pending_run.get("project_path"):
             try:
                 from lumen.bot.ui.token_hygiene import scrub_and_confirm
@@ -249,50 +233,14 @@ async def try_handle_token(
             _persist_session(user, context)
             return True
 
-        # Recover last generated project from user sandbox if session lost
-        if not pending_run or not pending_run.get("project_path"):
-            try:
-                from lumen.engine.services.user_sandbox import get_user_sandbox
-                from lumen.bot.config import OUTPUT_DIR
-                uid = int(user.id) if user else 0
-                sb = get_user_sandbox(uid, OUTPUT_DIR)
-                root = Path(sb.root)
-                search_roots = [sb.projects_dir, root]
-                candidates = []
-                for base in search_roots:
-                    if not base.is_dir():
-                        continue
-                    for main_py in base.rglob("main.py"):
-                        parent = main_py.parent
-                        if parent.name in {"generated_bot", "bot"} or (parent / "app" / "handlers.py").exists():
-                            candidates.append(parent)
-                    if candidates:
-                        break
-                if not candidates and root.is_dir():
-                    for main_py in sorted(root.rglob("main.py"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
-                        candidates.append(main_py.parent)
-                if candidates:
-                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                    proj = candidates[0]
-                    pending_run = {
-                        "project_path": str(proj),
-                        "entry_point": "main.py",
-                        "run_seconds": _plan_live_seconds(user),
-                    }
-                    context.user_data["pending_run"] = pending_run
-                    context.user_data["pending_live_run"] = dict(pending_run)
-                    context.user_data["pending_deploy"] = dict(pending_run)
-                    logger.info("token recovery: using latest project %s", proj)
-                    await handle_live_run_token(message, context, token_text, pending_run)
-                    _persist_session(user, context)
-                    return True
-            except Exception:
-                logger.exception("token project recovery failed")
-
-        # Token sent but no project is pending — do NOT treat as bot description
-        await safe_reply_text(message, 
-            "استلمت توكن بوت، لكن مفيش مشروع جاهز للتشغيل دلوقتي.\n"
-            "ولّد بوت أو اسحب مستودع أولاً، وبعد رسالة «أرسل توكن البوت» ابعت التوكن."
+        # Token sent but no explicit plane pending
+        await safe_reply_text(
+            message,
+            "استلمت توكن بوت، لكن مفيش مسار تشغيل محدد.\n"
+            "بعد التوليد اختر من الأزرار:\n"
+            "• تجربة في الشات — تشغيل مؤقت\n"
+            "• استضافة دائمة — HostService / Firecracker\n"
+            "أو اكتب: استضف",
         )
         return True
 

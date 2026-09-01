@@ -113,3 +113,30 @@ def test_execute_post_trial_clears_host(tmp_path, monkeypatch) -> None:
     assert "pending_host" not in ctx.user_data
     assert ctx.user_data.get("pending_live_run", {}).get("plane") == RuntimePlane.TRIAL_CHAT.value
     assert "LiveRunner" in note or "trial" in note.lower() or "تجربة" in note
+
+
+def test_firecracker_env_imports_shutil() -> None:
+    src = (REPO_ROOT / "lumen/engine/services/sandbox_runtime/firecracker_backend/env.py").read_text(
+        encoding="utf-8"
+    )
+    assert "import shutil" in src
+    from lumen.engine.services.sandbox_runtime.firecracker_backend.env import _bin
+
+    # Must not raise NameError
+    assert isinstance(_bin(), str)
+
+
+def test_host_backend_hint_no_nameerror() -> None:
+    from lumen.bot.ui.post_actions import _host_backend_hint
+
+    hint = _host_backend_hint()
+    assert "NameError" not in hint
+    assert isinstance(hint, str) and len(hint) > 0
+
+
+def test_token_handler_no_active_repo_auto_trial() -> None:
+    src = (REPO_ROOT / "lumen/bot/handlers/token_handler.py").read_text(encoding="utf-8")
+    # Phase 1 fix: no inventing pending_run from active_repo path alone
+    assert "active.get(\"path\")" not in src or "never invent" in src.lower() or "Phase 1" in src
+    assert "token recovery: using latest project" not in src
+    assert "استضافة دائمة" in src or "HostService" in src
