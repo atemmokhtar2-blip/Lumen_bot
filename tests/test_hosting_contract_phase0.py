@@ -323,3 +323,28 @@ def test_roundtrip_record_persist_dict() -> None:
     assert back.instance_id == inst.instance_id
     assert back.user_id == inst.user_id
     assert back.token_fp == inst.token_fp
+
+
+def test_sqlite_upsert_persists_sandbox_backend(tmp_path, monkeypatch) -> None:
+    """Regression: INSERT columns must include sandbox_backend (binding count bug)."""
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    from lumen.engine.services.hosting.state_store import HostingStateStore
+    from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+    db = tmp_path / "instances.sqlite3"
+    store = HostingStateStore(db)
+    rec = HostInstanceRecord.from_row(
+        {
+            "instance_id": "host-sbx1",
+            "user_id": 9,
+            "project_path": "/tmp/p",
+            "status": "running",
+            "sandbox_backend": "firecracker",
+            "token_fp": "c" * 16,
+        }
+    )
+    store.upsert(rec.to_persist_dict())
+    row = store.get("host-sbx1")
+    assert row is not None
+    assert row.get("sandbox_backend") == "firecracker"
+    assert row.get("token_fp") == "c" * 16

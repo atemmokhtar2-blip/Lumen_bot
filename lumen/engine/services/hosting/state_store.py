@@ -117,9 +117,9 @@ class HostingStateStore:
                 """
                 INSERT INTO instances (
                     instance_id, user_id, project_path, entry_point, bot_username,
-                    status, deployment_id, pid, started_at, last_error,
+                    status, deployment_id, sandbox_backend, pid, started_at, last_error,
                     last_diagnosis, token_fp, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     project_path=excluded.project_path,
@@ -127,6 +127,7 @@ class HostingStateStore:
                     bot_username=excluded.bot_username,
                     status=excluded.status,
                     deployment_id=excluded.deployment_id,
+                    sandbox_backend=excluded.sandbox_backend,
                     pid=excluded.pid,
                     started_at=excluded.started_at,
                     last_error=excluded.last_error,

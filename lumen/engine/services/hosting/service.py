@@ -124,7 +124,11 @@ class HostingService:
                     data = json.loads(self.state_file.read_text(encoding="utf-8"))
                     for row in data.get("instances", []):
                         inst = self._inst_from_row(row)
-                        self._store.upsert(asdict(inst))
+                        from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+
+                        self._store.upsert(
+                            HostInstanceRecord.from_host_instance(inst).to_persist_dict()
+                        )
                     rows = self._store.list_all()
                     # archive legacy file
                     try:
