@@ -88,14 +88,19 @@ def _governor_limits_for_band(band: str) -> dict[str, int]:
     """
     band = (band or "medium").strip().lower()
     if band == "easy":
-        return {"max_steps": 6, "history_keep_start": 10, "history_keep_end": 5,
-                "prompt_chars_start": 12000, "prompt_chars_end": 7000}
+        # 4–6 range: center on 5 for simple welcome / single-purpose bots
+        return {"max_steps": 5, "history_keep_start": 8, "history_keep_end": 4,
+                "prompt_chars_start": 10000, "prompt_chars_end": 6000,
+                "no_progress_limit": 2}
     if band == "hard":
-        return {"max_steps": 15, "history_keep_start": 14, "history_keep_end": 7,
-                "prompt_chars_start": 16000, "prompt_chars_end": 9000}
-    # medium default
-    return {"max_steps": 10, "history_keep_start": 12, "history_keep_end": 6,
-            "prompt_chars_start": 14000, "prompt_chars_end": 8000}
+        # 12–15 range
+        return {"max_steps": 14, "history_keep_start": 12, "history_keep_end": 6,
+                "prompt_chars_start": 15000, "prompt_chars_end": 8000,
+                "no_progress_limit": 4}
+    # medium: 8–10 range
+    return {"max_steps": 9, "history_keep_start": 10, "history_keep_end": 5,
+            "prompt_chars_start": 12000, "prompt_chars_end": 7000,
+            "no_progress_limit": 3}
 
 
 def _governor_progress_caps(
@@ -304,6 +309,7 @@ def run_agent(
         "prompt_chars_start": _gov_limits["prompt_chars_start"],
         "prompt_chars_end": _gov_limits["prompt_chars_end"],
         "repeated_tool_limit": 3,
+        "no_progress_limit": int(_gov_limits.get("no_progress_limit") or 3),
         "steps_log": [],
         "stop_reason_detail": None,
         "total_prompt_tokens": 0,
@@ -405,19 +411,28 @@ def run_agent(
     _deadline = _loop_start + _budget_sec
     state.metadata["time_budget_sec"] = _budget_sec
 
-    # Loop Governor runtime state
+    # Loop Governor runtime state (first-class — no process-global env mutation)
     _gov = state.metadata.get("loop_governor") or {}
-    _hist_start = int(_gov.get("history_keep_start") or 12)
-    _hist_end = int(_gov.get("history_keep_end") or 6)
-    _chars_start = int(_gov.get("prompt_chars_start") or 14000)
-    _chars_end = int(_gov.get("prompt_chars_end") or 8000)
+    _hist_start = int(_gov.get("history_keep_start") or 10)
+    _hist_end = int(_gov.get("history_keep_end") or 5)
+    _chars_start = int(_gov.get("prompt_chars_start") or 12000)
+    _chars_end = int(_gov.get("prompt_chars_end") or 7000)
     _repeated_limit = int(_gov.get("repeated_tool_limit") or 3)
+    _no_progress_limit = int(_gov.get("no_progress_limit") or 3)
     _last_fingerprint: str | None = None
     _repeat_count = 0
+    _no_progress_streak = 0
+    _files_at_last_progress = 0
     _gov_steps_log: list[dict[str, Any]] = list(_gov.get("steps_log") or [])
+    # Tools that are allowed without counting as "progress" (inspection only)
+    _INSPECT_TOOLS = {
+        "list_dir", "tree", "read_file", "read_files", "grep_codebase",
+        "glob_files", "find_symbol", "get_symbol_source", "find_references",
+        "blast_radius", "code_search", "browser_content", "browser_screenshot",
+    }
 
     for i in range(limit):
-        # --- Progressive context shrinkage (Loop Governor) ---
+        # --- Progressive context shrinkage (Loop Governor) — passed to decide() ---
         _keep, _pchars = _governor_progress_caps(
             step_index=i,
             limit=limit,
@@ -426,9 +441,6 @@ def run_agent(
             prompt_chars_start=_chars_start,
             prompt_chars_end=_chars_end,
         )
-        # agent_brain._system_and_user reads these env vars on every decide()
-        os.environ["CLINE_HISTORY_KEEP"] = str(_keep)
-        os.environ["CLINE_PROMPT_MAX_CHARS"] = str(_pchars)
 
         # TIME-BUDGET CUTOFF: stop the loop if the wall-clock budget is exhausted.
         _now = _time.monotonic()
@@ -474,7 +486,12 @@ def run_agent(
             "detail": f"الوكيل يفكر في الخطوة {i}/{limit}…",
             "files_written": len(state.files_written or []),
         })
-        decision = decide(msgs, choice=choice)
+        decision = decide(
+            msgs,
+            choice=choice,
+            history_keep=_keep,
+            prompt_max_chars=_pchars,
+        )
         _emit_progress({
             "phase": "decided",
             "step": i,
@@ -774,6 +791,57 @@ def run_agent(
             path = str(result["path"])
             if path not in state.files_written:
                 state.files_written.append(path)
+        if tool == "edit_file" and result.get("ok") and args.get("path"):
+            path = str(args["path"])
+            if path not in state.files_written:
+                state.files_written.append(path)
+
+        # --- Loop Governor: no-progress hard-stop ---
+        # Progress = new files written OR a mutating tool that succeeded.
+        _mutating = tool not in _INSPECT_TOOLS and tool not in {None, "", "finish"}
+        _new_files = len(state.files_written) > _files_at_last_progress
+        _tool_ok = bool((result or {}).get("ok"))
+        if _new_files or (_mutating and _tool_ok and tool in {
+            "write_file", "edit_file", "apply_edits", "apply_patch", "search_replace", "run_shell"
+        }):
+            _no_progress_streak = 0
+            _files_at_last_progress = len(state.files_written)
+        else:
+            # Inspect-only or failed mutating step → no progress
+            if tool not in {None, "", "finish"}:
+                _no_progress_streak += 1
+        if _no_progress_streak >= _no_progress_limit and i >= 1:
+            state.stop_reason = "no_progress"
+            state.ok = bool(state.files_written)
+            state.warnings.append(
+                f"no_progress_streak:{_no_progress_streak}>={_no_progress_limit}"
+            )
+            _gov = state.metadata.setdefault("loop_governor", {})
+            _gov["stop_reason_detail"] = {
+                "reason": "no_progress",
+                "streak": _no_progress_streak,
+                "limit": _no_progress_limit,
+                "files_written": len(state.files_written),
+                "last_tool": str(tool),
+                "step": i,
+            }
+            _gov_steps_log.append({
+                "step": i,
+                "event": "hard_stop_no_progress",
+                "streak": _no_progress_streak,
+                "tool": str(tool),
+                "files_written": len(state.files_written),
+                "history_keep": _keep,
+                "prompt_chars": _pchars,
+                "elapsed_sec": round(_time.monotonic() - _loop_start, 2),
+            })
+            _gov["steps_log"] = _gov_steps_log
+            logger.warning(
+                "agent_loop hard-stop: no progress for %d steps (step %d/%d, files=%d)",
+                _no_progress_streak, i, limit, len(state.files_written),
+            )
+            break
+
         # Phase A: force finish path when core deliverables already satisfy acceptance
         try:
             from pathlib import Path as _P
@@ -833,10 +901,6 @@ def run_agent(
                     break
         except Exception:
             pass
-        if tool == "edit_file" and result.get("ok") and args.get("path"):
-            path = str(args["path"])
-            if path not in state.files_written:
-                state.files_written.append(path)
     else:
         state.stop_reason = "max_steps"
         state.warnings.append(f"hit_max_steps_{limit}")
@@ -909,9 +973,14 @@ def run_agent(
             pass
         if not _gov.get("stop_reason_detail") and state.stop_reason:
             _gov["stop_reason_detail"] = {"reason": state.stop_reason}
-        # Snapshot final progressive caps used
-        _gov["final_history_keep"] = os.environ.get("CLINE_HISTORY_KEEP")
-        _gov["final_prompt_chars"] = os.environ.get("CLINE_PROMPT_MAX_CHARS")
+        # Snapshot final progressive caps used (from last step locals if available)
+        try:
+            _gov["final_history_keep"] = _keep
+            _gov["final_prompt_chars"] = _pchars
+        except NameError:
+            _gov["final_history_keep"] = None
+            _gov["final_prompt_chars"] = None
+        _gov["no_progress_streak_final"] = locals().get("_no_progress_streak")
     except Exception as _gov_fin_exc:
         try:
             state.metadata.setdefault("loop_governor", {})["finalize_error"] = type(_gov_fin_exc).__name__

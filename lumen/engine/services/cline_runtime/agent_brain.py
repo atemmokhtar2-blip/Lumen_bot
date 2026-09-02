@@ -214,8 +214,17 @@ def _normalize_decision(obj: dict[str, Any] | None, raw_text: str) -> dict[str, 
     }
 
 
-def _system_and_user(messages: list[dict[str, Any]]) -> tuple[str, str]:
-    """Compact history to fit low TPM tiers (e.g. Groq on_demand ~8k)."""
+def _system_and_user(
+    messages: list[dict[str, Any]],
+    *,
+    history_keep: int | None = None,
+    prompt_max_chars: int | None = None,
+) -> tuple[str, str]:
+    """Compact history to fit low TPM tiers (e.g. Groq on_demand ~8k).
+
+    history_keep / prompt_max_chars: first-class overrides from Loop Governor.
+    Env vars remain as fallback when caller does not pass explicit caps.
+    """
     system_parts: list[str] = []
     user_parts: list[str] = []
     for m in messages:
@@ -230,16 +239,25 @@ def _system_and_user(messages: list[dict[str, Any]]) -> tuple[str, str]:
         else:
             user_parts.append(f"[{role.upper()}]\n{content[:2000]}")
     # keep only last N non-system chunks to control TPM
-    try:
-        keep = max(4, min(16, int(os.getenv("CLINE_HISTORY_KEEP") or "10")))
-    except ValueError:
-        keep = 10
+    if history_keep is not None:
+        keep = max(4, min(16, int(history_keep)))
+    else:
+        try:
+            keep = max(4, min(16, int(os.getenv("CLINE_HISTORY_KEEP") or "10")))
+        except ValueError:
+            keep = 10
     if len(user_parts) > keep:
         user_parts = user_parts[-keep:]
     system = "\n\n".join(system_parts)
     user = "\n\n".join(user_parts)
     # hard cap combined chars (~4 chars/token rough)
-    max_chars = int(os.getenv("CLINE_PROMPT_MAX_CHARS") or "12000")
+    if prompt_max_chars is not None:
+        max_chars = max(4000, min(20000, int(prompt_max_chars)))
+    else:
+        try:
+            max_chars = int(os.getenv("CLINE_PROMPT_MAX_CHARS") or "12000")
+        except ValueError:
+            max_chars = 12000
     if len(system) + len(user) > max_chars:
         budget = max(2000, max_chars - len(system))
         user = user[-budget:]
@@ -751,10 +769,21 @@ def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) 
     return content
 
 
-def decide(messages: list[dict[str, Any]], *, choice: ModelChoice | None = None) -> dict[str, Any]:
-    """One reasoning step with smart retries (parse fail / transient HTTP)."""
+def decide(
+    messages: list[dict[str, Any]],
+    *,
+    choice: ModelChoice | None = None,
+    history_keep: int | None = None,
+    prompt_max_chars: int | None = None,
+) -> dict[str, Any]:
+    """One reasoning step with smart retries (parse fail / transient HTTP).
+
+    history_keep / prompt_max_chars: optional Loop Governor caps (first-class).
+    """
     choice = choice or select_model(task="build")
-    system, user = _system_and_user(messages)
+    system, user = _system_and_user(
+        messages, history_keep=history_keep, prompt_max_chars=prompt_max_chars
+    )
     if not system:
         system = "You are an autonomous coding agent building a software project."
 
