@@ -332,6 +332,26 @@ class ProjectMemoryStore:
             applied=True,
             extra={"strategy": entry.get("strategy"), "error": entry["error"][:200]},
         )
+        # Link into semantic memory so next session recall() finds the solution
+        try:
+            from lumen.engine.services.semantic_memory.store import get_semantic_store
+            get_semantic_store().add(
+                user_id=int(card.user_id or 0),
+                content=(
+                    f"خطأ محلول: {entry['error'][:200]} | "
+                    f"الحل: {entry['solution'][:200]} | "
+                    f"أداة={entry.get('tool') or '-'} استراتيجية={entry.get('strategy') or '-'}"
+                ),
+                kind="decision",
+                project_id=str(project_id or ""),
+                meta={
+                    "type": "resolved_error",
+                    "tool": entry.get("tool") or "",
+                    "strategy": entry.get("strategy") or "",
+                },
+            )
+        except Exception:
+            pass
         return self.get_card(project_id)
 
     def list_resolved_errors(self, project_id: str, *, limit: int = 20) -> list[dict[str, Any]]:

@@ -620,7 +620,7 @@ def run_agent(
         )
         _pm = get_project_memory_store()
         _card = _pm.get_active_card(_uid, path=str(state.work_dir or ""), project_id=_pid)
-        if _card is None and _uid > 0:
+        if _card is None:
             # Ensure a card exists for this generation workspace so later recovery can attach
             try:
                 _card = _pm.register_project(
