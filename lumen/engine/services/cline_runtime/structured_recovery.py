@@ -1,50 +1,61 @@
 """Structured recovery for the Cline agent loop (Phase-2).
 
-Replaces "LLM sees error and hopes" with typed policies:
-  - network/git/host failures → limited retry + backoff + strategy hint
-  - write/edit failures → force read_file then partial patch
+Replaces "LLM sees error and hopes" with typed, enforced policies:
+  - network/git/host/shell failures → limited retry + backoff + strategy change
+  - write/edit failures → ENFORCED read_file then partial patch (sub-agent)
   - parse failures → ultra-short repair prompt (no full history resend)
 
-No LangGraph. Same model via decide(); recovery uses a tight message window.
+No LangGraph. Recovery sub-agent uses the same model via decide() with a
+dedicated system prompt and a minimal message window.
 """
 from __future__ import annotations
 
+import json
 import logging
-import time
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Tool categories for recovery policy
+# Explicit tool names (agent_fs + tool_runtime surface)
 _NETWORK_TOOLS = frozenset({
-    "run_shell", "browser_navigate", "browser_click", "browser_fill",
+    "run_shell",
+    "browser_navigate", "browser_click", "browser_fill",
     "run_skill",
+    "clone_repo", "git_push", "git_pull", "create_repo",
+    "host_start", "host_stop", "host_status", "host_logs",
 })
-# shell often wraps git/clone/host; classify by error text too
 _WRITE_TOOLS = frozenset({
     "write_file", "edit_file", "apply_edits", "apply_patch", "search_replace",
 })
-_PARSE_SENTINEL = "parse_fail"
+_NETWORK_ERR = (
+    "timeout", "timed out", "connection", "network", "403", "401", "502", "503",
+    "git ", "clone", "host", "econn", "dns", "permission denied", "could not resolve",
+    "ssh", "auth", "unauthorized", "rate limit", "429",
+)
 
-_DEFAULT_MAX_TOTAL = 4          # total recovery attempts per agent run
-_DEFAULT_MAX_PER_KEY = 2        # per tool-fingerprint / category key
+_DEFAULT_MAX_TOTAL = 4
+_DEFAULT_MAX_PER_KEY = 2
 
 
 @dataclass
 class RecoveryAction:
-    """What the loop should do next for a failed step."""
-    mode: str  # network_retry | force_read_patch | parse_repair | none
+    """What the loop must do for a failed step."""
+
+    mode: str  # network_retry | force_read_patch | parse_repair | generic
     prompt: str
     backoff_sec: float = 0.0
-    force_tool: str | None = None  # soft hint, not enforced by runtime
+    force_tool: str | None = None
+    force_args: dict[str, Any] = field(default_factory=dict)
+    strategy: str = ""  # e.g. simplify_shell | read_then_patch | short_parse
     key: str = ""
     category: str = ""
 
 
 @dataclass
 class StructuredRecovery:
-    """Tracks recovery attempts and builds policy-driven repair actions."""
+    """Tracks recovery_attempts and builds enforced policy actions."""
 
     max_total: int = _DEFAULT_MAX_TOTAL
     max_per_key: int = _DEFAULT_MAX_PER_KEY
@@ -56,34 +67,50 @@ class StructuredRecovery:
         return {
             "max_total": self.max_total,
             "max_per_key": self.max_per_key,
+            "recovery_attempts": self.total_attempts,
             "total_attempts": self.total_attempts,
             "per_key": dict(self.per_key),
             "history": list(self.history)[-20:],
             "exhausted": self.total_attempts >= self.max_total,
         }
 
-    def _classify(self, tool: str | None, result: dict[str, Any] | None, *, parse_fail: bool = False) -> str:
+    def _classify(
+        self,
+        tool: str | None,
+        result: dict[str, Any] | None,
+        *,
+        parse_fail: bool = False,
+    ) -> str:
         if parse_fail:
             return "parse"
-        tool_s = str(tool or "")
-        err = str((result or {}).get("error") or (result or {}).get("message") or "").lower()
-        if tool_s in _WRITE_TOOLS or any(x in err for x in ("write", "edit", "patch", "file not", "enoent", "permission denied")):
-            if tool_s in _WRITE_TOOLS:
-                return "write"
-        if tool_s in _NETWORK_TOOLS or any(
-            x in err for x in ("timeout", "timed out", "connection", "network", "403", "401", "502", "503", "git ", "clone", "host", "econn", "dns")
-        ):
-            return "network"
+        tool_s = str(tool or "").strip()
+        err = str(
+            (result or {}).get("error")
+            or (result or {}).get("message")
+            or (result or {}).get("stderr")
+            or ""
+        ).lower()
         if tool_s in _WRITE_TOOLS:
             return "write"
         if tool_s in _NETWORK_TOOLS:
             return "network"
+        if any(x in err for x in _NETWORK_ERR):
+            return "network"
+        if any(x in err for x in ("write", "edit", "patch", "enoent", "file not", "is a directory")):
+            return "write"
         return "generic"
 
     def _key(self, category: str, tool: str | None, args: dict[str, Any] | None) -> str:
         path = ""
         if isinstance(args, dict):
-            path = str(args.get("path") or args.get("file") or args.get("command") or args.get("cmd") or "")[:120]
+            path = str(
+                args.get("path")
+                or args.get("file")
+                or args.get("url")
+                or args.get("command")
+                or args.get("cmd")
+                or ""
+            )[:120]
         return f"{category}:{tool or '-'}:{path}"
 
     def can_attempt(self, key: str) -> bool:
@@ -102,86 +129,113 @@ class StructuredRecovery:
         parse_fail: bool = False,
         parse_err: str = "",
     ) -> RecoveryAction | None:
-        """Return a recovery action or None if exhausted / not applicable."""
-        result = result or {}
-        if not parse_fail and result.get("ok"):
-            return None
-
         category = self._classify(tool, result, parse_fail=parse_fail)
         key = self._key(category, tool, args)
         if not self.can_attempt(key):
-            logger.info("recovery exhausted for key=%s total=%d", key, self.total_attempts)
             return None
 
-        err = str(result.get("error") or result.get("message") or parse_err or "unknown")[:300]
-        path = ""
-        if isinstance(args, dict):
-            path = str(args.get("path") or args.get("file") or "")[:200]
+        err = str(
+            parse_err
+            or (result or {}).get("error")
+            or (result or {}).get("message")
+            or (result or {}).get("stderr")
+            or "unknown"
+        )
+        args = dict(args or {})
+        attempt_n = int(self.per_key.get(key) or 0) + 1
 
         if category == "parse":
-            action = RecoveryAction(
+            return RecoveryAction(
                 mode="parse_repair",
-                category=category,
+                category="parse",
                 key=key,
+                strategy="short_parse",
                 prompt=(
                     "PARSE REPAIR ONLY. Reply with ONE JSON object, nothing else:\n"
-                    '{"thought":"fix parse","tool":"list_dir","args":{"path":"."},"finish":false,"summary":""}\n'
-                    f"Prior error: {err[:120]}"
+                    '{"thought":"fix parse","tool":"list_dir","args":{"path":"."},'
+                    '"finish":false,"summary":""}\n'
+                    f"Prior error: {err[:100]}"
                 ),
             )
-        elif category == "write":
-            target = path or "."
-            action = RecoveryAction(
+
+        if category == "write":
+            target = str(args.get("path") or args.get("file") or "").strip() or "."
+            return RecoveryAction(
                 mode="force_read_patch",
-                category=category,
+                category="write",
                 key=key,
+                strategy="read_then_patch",
                 force_tool="read_file",
+                force_args={"path": target},
                 prompt=(
-                    "WRITE RECOVERY: previous write/edit failed. "
-                    f"1) call read_file on path={target!r} "
-                    "2) then edit_file or apply_patch with a MINIMAL partial fix only. "
-                    "Do not rewrite the whole file. "
+                    "WRITE RECOVERY (enforced): read_file already applied on the target. "
+                    f"Now edit_file or apply_patch path={target!r} with a MINIMAL partial fix only. "
+                    "Do not rewrite the whole file. Do not call write_file for an existing file. "
                     f"Error: {err[:160]}"
                 ),
             )
-        elif category == "network":
-            attempt_n = int(self.per_key.get(key) or 0) + 1
+
+        if category == "network":
             backoff = min(1.5 * attempt_n, 4.0)
-            action = RecoveryAction(
+            # Strategy change: simplify shell commands on retry
+            strategy = "backoff_retry"
+            strategy_hint = (
+                "Retry with a different strategy: smaller command, list_dir/cwd first, "
+                "no identical command."
+            )
+            cmd = str(args.get("command") or args.get("cmd") or "")
+            if tool == "run_shell" and cmd:
+                strategy = "simplify_shell"
+                strategy_hint = (
+                    "SHELL STRATEGY CHANGE: do not repeat the same command. "
+                    "First list_dir or a cheaper probe, then a simpler command. "
+                    f"Failed command was: {cmd[:120]}"
+                )
+            elif str(tool or "").startswith("git") or tool == "clone_repo":
+                strategy = "git_retry"
+                strategy_hint = (
+                    "GIT/CLONE STRATEGY CHANGE: verify URL/permissions; prefer shallow clone; "
+                    "do not repeat the identical call."
+                )
+            elif str(tool or "").startswith("host"):
+                strategy = "host_retry"
+                strategy_hint = (
+                    "HOST STRATEGY CHANGE: check status before start; avoid duplicate host_start."
+                )
+            return RecoveryAction(
                 mode="network_retry",
-                category=category,
+                category="network",
                 key=key,
+                strategy=strategy,
                 backoff_sec=backoff,
                 prompt=(
-                    "NETWORK/SHELL RECOVERY: prior call failed. "
-                    f"Retry with a different strategy (attempt {attempt_n}). "
-                    "Prefer a smaller command, check cwd with list_dir, avoid repeating the exact same command. "
+                    f"NETWORK RECOVERY (attempt {attempt_n}): {strategy_hint} "
                     f"Error: {err[:160]}"
                 ),
             )
-        else:
-            action = RecoveryAction(
-                mode="generic",
-                category=category,
-                key=key,
-                prompt=(
-                    f"STEP RECOVERY: tool={tool} failed ({err[:140]}). "
-                    "Fix this single step only. Prefer read_file before write. JSON tool call only."
-                ),
-            )
 
-        return action
+        return RecoveryAction(
+            mode="generic",
+            category=category,
+            key=key,
+            strategy="generic_fix",
+            prompt=(
+                f"STEP RECOVERY: tool={tool} failed ({err[:140]}). "
+                "Fix this single step only. Prefer read_file before write. JSON tool call only."
+            ),
+        )
 
     def commit(self, action: RecoveryAction) -> None:
-        """Record that a recovery action was applied."""
         self.total_attempts += 1
         self.per_key[action.key] = int(self.per_key.get(action.key) or 0) + 1
         self.history.append({
             "key": action.key,
             "mode": action.mode,
             "category": action.category,
-            "total": self.total_attempts,
+            "strategy": action.strategy,
+            "recovery_attempts": self.total_attempts,
             "per_key": self.per_key[action.key],
+            "force_tool": action.force_tool,
         })
 
     def recovery_system_prompt(self) -> str:
@@ -198,17 +252,17 @@ class StructuredRecovery:
         tool: str | None,
         args: dict[str, Any] | None,
         result: dict[str, Any] | None,
+        enforced_read: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Minimal message window for recovery decide() — no full history."""
-        import json as _json
-        safe_args = {}
+        safe_args: dict[str, Any] = {}
         if isinstance(args, dict):
             for k, v in args.items():
                 if k == "content" and isinstance(v, str) and len(v) > 200:
                     safe_args[k] = v[:200] + f"...({len(v)} chars)"
                 else:
                     safe_args[k] = v
-        err_body = {
+        err_body: dict[str, Any] = {
             "tool": tool,
             "args": safe_args,
             "result": {
@@ -217,11 +271,21 @@ class StructuredRecovery:
                 "message": str((result or {}).get("message") or "")[:400],
             },
         }
+        if enforced_read is not None:
+            err_body["enforced_read_file"] = {
+                "ok": bool(enforced_read.get("ok")),
+                "path": enforced_read.get("path"),
+                "content_head": str(enforced_read.get("content") or enforced_read.get("data") or "")[:800],
+            }
         return [
             {"role": "system", "content": self.recovery_system_prompt()},
             {
                 "role": "user",
-                "content": action.prompt + "\n\nFAILED_STEP:\n" + _json.dumps(err_body, ensure_ascii=False)[:1800],
+                "content": (
+                    action.prompt
+                    + "\n\nFAILED_STEP:\n"
+                    + json.dumps(err_body, ensure_ascii=False)[:2000]
+                ),
             },
         ]
 
