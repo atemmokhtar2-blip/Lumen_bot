@@ -720,8 +720,15 @@ def run_agent(
             t = str(r.get("tool") or "")
             if t == "list_dir":
                 ents = r.get("entries") or r.get("items") or r.get("files") or []
+                names = []
                 if isinstance(ents, list):
-                    _bits.append("list_dir: " + ", ".join(str(x)[:40] for x in ents[:12]))
+                    for x in ents[:12]:
+                        if isinstance(x, dict):
+                            names.append(str(x.get("name") or x.get("path") or "")[:40])
+                        else:
+                            names.append(str(x)[:40])
+                if names:
+                    _bits.append("list_dir: " + ", ".join(n for n in names if n))
             elif t == "glob_files":
                 files = r.get("files") or r.get("matches") or []
                 if isinstance(files, list) and files:

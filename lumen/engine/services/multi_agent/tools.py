@@ -143,7 +143,7 @@ def execute_tool_gated(
         return state
 
     try:
-        from lumen.engine.services.tool_runtime.executor import execute_tool
+        from lumen.engine.services.tool_runtime.executor import execute_tool, run_tools_parallel
         _ud = (state.extensions or {}).get("user_data")
         if not isinstance(_ud, dict):
             _ud = {}
@@ -151,12 +151,33 @@ def execute_tool_gated(
         if state.extensions.get("active_repo") and "active_repo" not in _ud:
             _ud = dict(_ud)
             _ud["active_repo"] = state.extensions["active_repo"]
-        result = execute_tool(
-            tool,
-            params,
-            user_id=int(state.user_id or 0),
-            user_data=_ud,
-        )
+        uid = int(state.user_id or 0)
+        # Phase-3: repo inspect + host_status are independent — run together
+        if tool in {"repo_inspect", "repo_understand"}:
+            par = run_tools_parallel(
+                [
+                    {"tool": tool, "params": params},
+                    {"tool": "host_status", "params": {}},
+                ],
+                user_id=uid,
+                user_data=_ud,
+                max_parallel=3,
+            )
+            result = par[0] if par else execute_tool(tool, params, user_id=uid, user_data=_ud)
+            state.extensions["parallel_tools"] = [
+                {
+                    "tool": getattr(r, "tool", ""),
+                    "ok": bool(getattr(r, "ok", False)),
+                }
+                for r in (par or [])
+            ]
+        else:
+            result = execute_tool(
+                tool,
+                params,
+                user_id=uid,
+                user_data=_ud,
+            )
         data = result.to_dict() if hasattr(result, "to_dict") else {
             "ok": bool(getattr(result, "ok", False)),
             "tool": tool,
