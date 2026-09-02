@@ -54,14 +54,29 @@ async def telegram_host_webhook(request: web.Request) -> web.Response:
         logger.warning("host webhook secret failed instance=%s", instance_id)
         raise web.HTTPForbidden()
 
+    inst = None
     try:
         from lumen.engine.services.hosting.redis_state import get_instance
 
         inst = get_instance(instance_id)
     except Exception:
         inst = None
+    if not inst or str((inst or {}).get("status") or "") != "running":
+        # Fallback: control-plane HostingService registry
+        try:
+            from lumen.engine.services.hosting import get_hosting_service
+            from lumen.bot.config import OUTPUT_DIR
+
+            live = get_hosting_service(OUTPUT_DIR).get(instance_id)
+            if live is not None and str(getattr(live, "status", "") or "") == "running":
+                inst = {
+                    "instance_id": live.instance_id,
+                    "status": live.status,
+                    "last_diagnosis": dict(getattr(live, "last_diagnosis", None) or {}),
+                }
+        except Exception:
+            pass
     if not inst or str(inst.get("status") or "") != "running":
-        # Still 200 to avoid Telegram retry storms for stopped bots
         return web.json_response({"ok": True, "ignored": "not_running"})
 
     try:

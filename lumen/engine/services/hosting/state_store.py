@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS instances (
     public_base_url TEXT DEFAULT '',
     webhook_public_url TEXT DEFAULT '',
     internal_port INTEGER DEFAULT 0,
+    platform TEXT DEFAULT 'telegram',
+    cpu_quota REAL DEFAULT 0.5,
+    memory_mb INTEGER DEFAULT 256,
     version_ref TEXT DEFAULT '',
     last_health_at REAL DEFAULT 0,
     updated_at REAL NOT NULL
@@ -85,6 +88,9 @@ class HostingStateStore:
             ("public_base_url", "TEXT DEFAULT ''"),
             ("webhook_public_url", "TEXT DEFAULT ''"),
             ("internal_port", "INTEGER DEFAULT 0"),
+            ("platform", "TEXT DEFAULT 'telegram'"),
+            ("cpu_quota", "REAL DEFAULT 0.5"),
+            ("memory_mb", "INTEGER DEFAULT 256"),
             ("version_ref", "TEXT DEFAULT ''"),
             ("last_health_at", "REAL DEFAULT 0"),
         ):
@@ -134,9 +140,9 @@ class HostingStateStore:
                 INSERT INTO instances (
                     instance_id, user_id, project_path, entry_point, bot_username,
                     status, deployment_id, sandbox_backend, pid, started_at, last_error,
-                    last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, version_ref, last_health_at,
+                    last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at,
                     updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     project_path=excluded.project_path,
@@ -153,6 +159,9 @@ class HostingStateStore:
                     public_base_url=excluded.public_base_url,
                     webhook_public_url=excluded.webhook_public_url,
                     internal_port=excluded.internal_port,
+                    platform=excluded.platform,
+                    cpu_quota=excluded.cpu_quota,
+                    memory_mb=excluded.memory_mb,
                     version_ref=excluded.version_ref,
                     last_health_at=excluded.last_health_at,
                     updated_at=excluded.updated_at
@@ -174,6 +183,9 @@ class HostingStateStore:
                     inst.get("public_base_url") or "",
                     inst.get("webhook_public_url") or "",
                     int(inst.get("internal_port") or 0),
+                    inst.get("platform") or "telegram",
+                    float(inst.get("cpu_quota") or 0.5),
+                    int(inst.get("memory_mb") or 256),
                     inst.get("version_ref") or "",
                     float(inst.get("last_health_at") or 0),
                     time.time(),

@@ -122,7 +122,9 @@ def test_security_invariants_mention_token_and_sandbox() -> None:
 
 def test_phase0_gaps_explicit() -> None:
     gaps = host_contract.PHASE0_KNOWN_GAPS
-    assert any("platform" in g for g in gaps)
+    # platform is first-class now; remaining gap is multi-platform egress
+    assert any("multi_platform" in g for g in gaps)
+    assert not any("no_first_class_platform" in g for g in gaps)
 
 
 def test_host_instance_has_no_platform_field_yet() -> None:

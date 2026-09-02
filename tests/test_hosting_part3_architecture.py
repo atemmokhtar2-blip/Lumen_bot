@@ -55,10 +55,18 @@ def test_webhook_manager_url_and_mode(monkeypatch):
 def test_gateway_writes_via_ingress(monkeypatch, tmp_path):
     monkeypatch.setenv("TBE_TRAEFIK_DYNAMIC_DIR", str(tmp_path / "tr"))
     monkeypatch.setenv("TBE_CADDY_DYNAMIC_DIR", str(tmp_path / "cd"))
+    monkeypatch.setenv("TBE_HOST_BASE_DOMAIN", "hosts.example.com")
+    monkeypatch.setenv("TBE_INGRESS_BACKEND_URL", "http://127.0.0.1:8080")
     from lumen.hosting.gateway import write_routes_for_instance, nginx_snippet
 
     r = write_routes_for_instance("bot-x", enabled=True)
-    assert "traefik" in r or "error" in r
+    assert r.get("ok") is True
+    assert (r.get("traefik") or {}).get("written") is True
+    yaml_path = Path((r["traefik"]["path"]))
+    body = yaml_path.read_text(encoding="utf-8")
+    assert "PathPrefix" in body
+    assert "/v1/hooks/telegram/bot-x" in body
+    assert "127.0.0.1:8080" in body
     sn = nginx_snippet("bot-x")
     assert "bot-x" in sn and "proxy_pass" in sn
 

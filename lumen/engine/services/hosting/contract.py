@@ -125,8 +125,7 @@ SECURITY_INVARIANTS: Final[Tuple[str, ...]] = (
 
 # Known product gaps frozen at Phase 0 (to be closed in later phases)
 PHASE0_KNOWN_GAPS: Final[Tuple[str, ...]] = (
-    "host_instance_has_no_first_class_platform_field",
-        "multi_platform_egress_policy_not_unified",
+    "multi_platform_egress_policy_not_unified",  # discord/whatsapp egress still telegram-centric
 )
 
 

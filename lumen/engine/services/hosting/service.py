@@ -697,6 +697,11 @@ class HostingService:
         except Exception:
             pass
         try:
+            from lumen.hosting.gateway import remove_routes_for_instance
+            remove_routes_for_instance(inst.instance_id)
+        except Exception:
+            pass
+        try:
             from lumen.engine.services.hosting.backup_manager import backup_project
             backup_project(inst.project_path, instance_id=inst.instance_id)
         except Exception:

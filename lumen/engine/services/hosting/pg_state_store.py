@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS tbe_host_instances (
   public_base_url TEXT NOT NULL DEFAULT '',
   webhook_public_url TEXT NOT NULL DEFAULT '',
   internal_port BIGINT NOT NULL DEFAULT 0,
+  platform TEXT NOT NULL DEFAULT 'telegram',
+  cpu_quota DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  memory_mb BIGINT NOT NULL DEFAULT 256,
   version_ref TEXT NOT NULL DEFAULT '',
   last_health_at DOUBLE PRECISION NOT NULL DEFAULT 0,
   updated_at DOUBLE PRECISION NOT NULL DEFAULT 0
@@ -80,7 +83,7 @@ class PgHostStateStore:
         keys = [
             "instance_id", "user_id", "project_path", "entry_point", "bot_username",
             "status", "deployment_id", "sandbox_backend", "pid", "started_at", "last_error",
-            "last_diagnosis", "token_fp", "public_base_url", "webhook_public_url", "internal_port", "version_ref",
+            "last_diagnosis", "token_fp", "public_base_url", "webhook_public_url", "internal_port", "platform", "cpu_quota", "memory_mb", "version_ref",
             "last_health_at", "updated_at",
         ]
         return {k: row[i] for i, k in enumerate(keys)}
@@ -88,7 +91,7 @@ class PgHostStateStore:
     def list_all(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT instance_id, user_id, project_path, entry_point, bot_username, status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, version_ref, last_health_at, updated_at FROM tbe_host_instances")
+                cur.execute("SELECT instance_id, user_id, project_path, entry_point, bot_username, status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at, updated_at FROM tbe_host_instances")
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -113,6 +116,9 @@ class PgHostStateStore:
             "public_base_url": inst.get("public_base_url") or "",
             "webhook_public_url": inst.get("webhook_public_url") or "",
             "internal_port": int(inst.get("internal_port") or 0),
+            "platform": inst.get("platform") or "telegram",
+            "cpu_quota": float(inst.get("cpu_quota") or 0.5),
+            "memory_mb": int(inst.get("memory_mb") or 256),
             "version_ref": inst.get("version_ref") or "",
             "last_health_at": float(inst.get("last_health_at") or 0),
             "updated_at": time.time(),
@@ -124,11 +130,11 @@ class PgHostStateStore:
                     INSERT INTO tbe_host_instances (
                       instance_id, user_id, project_path, entry_point, bot_username,
                       status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
-                      token_fp, public_base_url, webhook_public_url, internal_port, version_ref, last_health_at, updated_at
+                      token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at, updated_at
                     ) VALUES (
                       %(instance_id)s, %(user_id)s, %(project_path)s, %(entry_point)s, %(bot_username)s,
                       %(status)s, %(deployment_id)s, %(sandbox_backend)s, %(pid)s, %(started_at)s, %(last_error)s, %(last_diagnosis)s,
-                      %(token_fp)s, %(public_base_url)s, %(webhook_public_url)s, %(internal_port)s, %(version_ref)s, %(last_health_at)s, %(updated_at)s
+                      %(token_fp)s, %(public_base_url)s, %(webhook_public_url)s, %(internal_port)s, %(platform)s, %(cpu_quota)s, %(memory_mb)s, %(version_ref)s, %(last_health_at)s, %(updated_at)s
                     )
                     ON CONFLICT (instance_id) DO UPDATE SET
                       user_id=EXCLUDED.user_id,
@@ -146,6 +152,9 @@ class PgHostStateStore:
                       public_base_url=EXCLUDED.public_base_url,
                       webhook_public_url=EXCLUDED.webhook_public_url,
                       internal_port=EXCLUDED.internal_port,
+                      platform=EXCLUDED.platform,
+                      cpu_quota=EXCLUDED.cpu_quota,
+                      memory_mb=EXCLUDED.memory_mb,
                       version_ref=EXCLUDED.version_ref,
                       last_health_at=EXCLUDED.last_health_at,
                       updated_at=EXCLUDED.updated_at
