@@ -406,6 +406,40 @@ def acquire_bot_singleton(
 
 
 
+def set_telegram_webhook(
+    token: str,
+    url: str,
+    *,
+    secret_token: str = "",
+    timeout: float = 12.0,
+) -> bool:
+    """Register Telegram webhook to a stable public URL (ingress by name)."""
+    token = (token or "").strip()
+    url = (url or "").strip()
+    if not token or not url.startswith("https://"):
+        return False
+    try:
+        import json
+        import urllib.request
+
+        payload = {"url": url, "drop_pending_updates": True}
+        if secret_token:
+            payload["secret_token"] = secret_token[:256]
+        api = f"https://api.telegram.org/bot{token}/setWebhook"
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            api,
+            data=body,
+            method="POST",
+            headers={"User-Agent": "Lumen/1.0", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return bool(data.get("ok"))
+    except Exception:
+        return False
+
+
 def clear_telegram_webhook(token: str, timeout: float = 12.0) -> bool:
     """deleteWebhook so polling is the only update consumer."""
     token = (token or "").strip()

@@ -101,3 +101,35 @@ def test_service_get_and_list_use_redis() -> None:
     src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
     assert "host_redis.get_instance" in src
     assert "host_redis.list_for_user" in src
+
+
+def test_set_telegram_webhook_helper_exists() -> None:
+    from lumen.bot.singleton import set_telegram_webhook, clear_telegram_webhook
+
+    assert callable(set_telegram_webhook)
+    assert callable(clear_telegram_webhook)
+
+
+def test_host_webhook_route_module() -> None:
+    src = (REPO / "lumen/api/routes/host_webhooks.py").read_text(encoding="utf-8")
+    assert "telegram_host_webhook" in src
+    assert "lumen:host:tgq:" in src
+
+
+def test_app_registers_host_webhook_and_versions() -> None:
+    src = (REPO / "lumen/api/app.py").read_text(encoding="utf-8")
+    assert "/v1/hooks/telegram/{instance_id}" in src
+    assert "host_list_versions" in src
+    assert "host_restore_version" in src
+
+
+def test_service_webhook_mode_gate_in_source() -> None:
+    src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "TBE_HOST_WEBHOOK_MODE" in src
+    assert "set_telegram_webhook" in src
+
+
+def test_worker_durable_upsert() -> None:
+    src = (REPO / "lumen/engine/services/hosting/worker.py").read_text(encoding="utf-8")
+    assert "get_host_state_store" in src
+    assert "store.upsert" in src

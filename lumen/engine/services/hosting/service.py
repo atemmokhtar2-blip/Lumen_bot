@@ -398,11 +398,15 @@ class HostingService:
         for iid in to_stop:
             self.stop(instance_id=iid, user_id=user_id)
 
-        # Clear webhook so the hosted bot can poll exclusively
+        # Webhook vs polling: default polling (clear webhook). Opt-in stable URL webhook.
         try:
-            from lumen.bot.singleton import clear_telegram_webhook
-
-            clear_telegram_webhook(token_norm)
+            from lumen.bot.singleton import clear_telegram_webhook, set_telegram_webhook
+            use_wh = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if not use_wh:
+                clear_telegram_webhook(token_norm)
+            # if use_wh: setWebhook after instance_id is known (below)
         except Exception:
             pass
 
@@ -574,6 +578,29 @@ class HostingService:
 
         self._instances[instance_id] = inst
         self._save()
+        # Opt-in: register Telegram webhook on stable public URL
+        try:
+            use_wh = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "0").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if use_wh and inst.public_base_url and inst.status == "running":
+                from lumen.bot.singleton import set_telegram_webhook
+                secret = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
+                hook = inst.public_base_url.rstrip("/") + f"/v1/hooks/telegram/{inst.instance_id}"
+                # Prefer API public base if domain points to API gateway
+                api_base = (os.environ.get("TBE_PUBLIC_API_BASE") or "").rstrip("/")
+                if api_base.startswith("https://"):
+                    hook = api_base + f"/v1/hooks/telegram/{inst.instance_id}"
+                ok_wh = set_telegram_webhook(token_norm, hook, secret_token=secret)
+                if not ok_wh:
+                    inst.last_error = (inst.last_error or "") + " webhook_register_failed"
+                    self._save()
+                else:
+                    inst.last_diagnosis = dict(inst.last_diagnosis or {})
+                    inst.last_diagnosis["webhook_url"] = hook
+                    self._save()
+        except Exception:
+            pass
         return HostResult(
             ok=True,
             message=f"البوت شغال كخدمة استضافة ({inst.status})",

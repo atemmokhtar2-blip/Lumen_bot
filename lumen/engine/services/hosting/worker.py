@@ -196,6 +196,14 @@ def process_one(queue=None, fleet=None) -> bool:
                     host_redis.put_instance(payload)
                 except Exception:
                     logger.exception("worker redis put failed")
+                try:
+                    from lumen.engine.services.hosting.state_store import get_host_state_store
+                    from lumen.bot.config import OUTPUT_DIR
+                    from pathlib import Path as _Path
+                    store = get_host_state_store(_Path(OUTPUT_DIR) / "hosting" / "instances.sqlite3")
+                    store.upsert(payload)
+                except Exception:
+                    logger.exception("worker durable state upsert failed")
                 logger.info(
                     "job %s running backend=firecracker dep=%s instance=%s",
                     job.job_id, handle.deployment_id, iid,

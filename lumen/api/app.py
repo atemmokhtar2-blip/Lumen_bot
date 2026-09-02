@@ -480,9 +480,15 @@ window.ui = SwaggerUIBundle({
     app.router.add_get("/v1/jobs/{job_id}/file", runs_ux.job_file_content)
     app.router.add_get("/v1/runs/agent-reports", runs_ux.list_agent_reports)
     app.router.add_post("/v1/hosts/start", hosts.host_start)
+    from lumen.api.routes import host_webhooks
+    app.router.add_post(
+        "/v1/hooks/telegram/{instance_id}", host_webhooks.telegram_host_webhook
+    )
     app.router.add_post("/v1/hosts/stop", hosts.host_stop)
     app.router.add_get("/v1/hosts", hosts.host_status)
     app.router.add_post("/v1/hosts/diagnose", hosts.host_diagnose)
+    app.router.add_post("/v1/hosts/versions", hosts.host_list_versions)
+    app.router.add_post("/v1/hosts/versions/restore", hosts.host_restore_version)
     app.router.add_get("/v1/usage", billing.usage)
     app.router.add_get("/v1/billing/balance", billing.balance_status)
     app.router.add_get("/v1/invoices", billing.invoices)

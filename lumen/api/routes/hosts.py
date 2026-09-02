@@ -113,10 +113,14 @@ async def host_start(request: web.Request) -> web.Response:
             else {
                 "instance_id": inst.instance_id,
                 "status": inst.status,
-                # never echo raw host filesystem beyond sandbox-relative hint
                 "project_path": inst.project_path,
                 "bot_username": inst.bot_username,
                 "pid": inst.pid,
+                "sandbox_backend": getattr(inst, "sandbox_backend", "") or "",
+                "public_base_url": getattr(inst, "public_base_url", "") or "",
+                "version_ref": getattr(inst, "version_ref", "") or "",
+                "last_health_at": getattr(inst, "last_health_at", 0) or 0,
+                "entry_point": getattr(inst, "entry_point", "") or "",
             },
         },
         status=200 if result.ok else 422,
@@ -168,6 +172,10 @@ async def host_status(request: web.Request) -> web.Response:
                     "bot_username": i.bot_username,
                     "pid": i.pid,
                     "last_error": i.last_error,
+                    "sandbox_backend": getattr(i, "sandbox_backend", "") or "",
+                    "public_base_url": getattr(i, "public_base_url", "") or "",
+                    "version_ref": getattr(i, "version_ref", "") or "",
+                    "last_health_at": getattr(i, "last_health_at", 0) or 0,
                 }
                 for i in instances
             ],
@@ -191,3 +199,50 @@ async def host_diagnose(request: web.Request) -> web.Response:
     return web.json_response(
         {"ok": result.ok, "message": result.message, "details": result.details}
     )
+
+
+async def host_list_versions(request: web.Request) -> web.Response:
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    project_path = str(body.get("project_path") or "").strip()
+    try:
+        safe_path = validate_tenant_project_path(tenant.tenant_id, project_path)
+    except ValueError:
+        raise web.HTTPBadRequest(
+            text='{"error":"project_path_outside_sandbox"}',
+            content_type="application/json",
+        )
+    from lumen.engine.services.hosting.versions import list_versions
+
+    return web.json_response({"ok": True, "versions": list_versions(safe_path)})
+
+
+async def host_restore_version(request: web.Request) -> web.Response:
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    project_path = str(body.get("project_path") or "").strip()
+    version_ref = str(body.get("version_ref") or "").strip()
+    if not version_ref:
+        raise web.HTTPBadRequest(
+            text='{"error":"version_ref_required"}',
+            content_type="application/json",
+        )
+    try:
+        safe_path = validate_tenant_project_path(tenant.tenant_id, project_path)
+    except ValueError:
+        raise web.HTTPBadRequest(
+            text='{"error":"project_path_outside_sandbox"}',
+            content_type="application/json",
+        )
+    from lumen.engine.services.hosting.versions import restore_version
+
+    try:
+        result = await asyncio.to_thread(lambda: restore_version(safe_path, version_ref))
+    except FileNotFoundError:
+        raise web.HTTPNotFound(
+            text='{"error":"version_not_found"}',
+            content_type="application/json",
+        )
+    return web.json_response({"ok": True, **result})
