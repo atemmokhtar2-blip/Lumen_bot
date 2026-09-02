@@ -112,6 +112,88 @@ def _with_network_recovery(
 
 
 
+# Tools safe to run concurrently (read-only / inspect — no shared mutable side effects).
+_PARALLEL_SAFE_TOOL_RUNTIME = frozenset({
+    "repo_inspect", "repo_understand", "host_status", "host_diagnose",
+})
+
+
+def run_tools_parallel(
+    calls: list[dict[str, Any]],
+    *,
+    user_id: int = 0,
+    user_data: dict[str, Any] | None = None,
+    max_parallel: int = 3,
+) -> list[Any]:
+    """Run independent tool_runtime tools concurrently (max 3) via asyncio.gather.
+
+    Each call: {"tool"|"name": str, "params"|"args": dict}.
+    Non-safe tools run sequentially after the parallel batch.
+    Returns ToolResult-like objects in the same order as calls.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    max_parallel = max(1, min(int(max_parallel or 3), 3))
+    calls = list(calls or [])
+    if not calls:
+        return []
+
+    results: list[Any] = [None] * len(calls)
+    parallel_idx: list[int] = []
+    sequential_idx: list[int] = []
+
+    for i, call in enumerate(calls):
+        call = call or {}
+        name = str(call.get("tool") or call.get("name") or "").strip()
+        if name in _PARALLEL_SAFE_TOOL_RUNTIME:
+            parallel_idx.append(i)
+        else:
+            sequential_idx.append(i)
+
+    def _run_one(idx: int) -> tuple[int, Any]:
+        call = calls[idx] or {}
+        name = str(call.get("tool") or call.get("name") or "").strip()
+        params = dict(call.get("params") or call.get("args") or {})
+        try:
+            return idx, execute_tool(name, params, user_id=user_id, user_data=user_data)
+        except Exception as exc:
+            return idx, ToolResult(
+                ok=False, tool=name,
+                message=f"{type(exc).__name__}:{exc}",
+                data={"parallel": True},
+            )
+
+    async def _async_batch(indices: list[int]) -> None:
+        loop = asyncio.get_event_loop()
+        futs = [loop.run_in_executor(None, _run_one, i) for i in indices]
+        done = await asyncio.gather(*futs)
+        for idx, out in done:
+            results[idx] = out
+
+    # Parallel batches
+    try:
+        for start in range(0, len(parallel_idx), max_parallel):
+            batch = parallel_idx[start:start + max_parallel]
+            if not batch:
+                continue
+            asyncio.run(_async_batch(batch))
+    except RuntimeError:
+        with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+            futs = {pool.submit(_run_one, i): i for i in parallel_idx}
+            for fut in as_completed(futs):
+                idx, out = fut.result()
+                results[idx] = out
+
+    # Sequential unsafe
+    for idx in sequential_idx:
+        _, out = _run_one(idx)
+        results[idx] = out
+
+    return results
+
+
+
 def execute_tool(
     name: str,
     params: dict[str, Any] | None = None,

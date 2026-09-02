@@ -660,7 +660,7 @@ def run_agent(
             if _card_txt:
                 state.metadata["project_card_id"] = _card.project_id
                 state.metadata["project_card_injected"] = True
-                state.add_user(
+                state.add_system(
                     "PROJECT_CARD (active project memory - use for continuity):\n"
                     + _card_txt[:2500]
                 )
@@ -674,7 +674,7 @@ def run_agent(
             )
             if _sem:
                 state.metadata["semantic_memory_injected"] = True
-                state.add_user(
+                state.add_system(
                     "SEMANTIC_MEMORY (relevant facts before planning):\n"
                     + _sem[:2500]
                 )
