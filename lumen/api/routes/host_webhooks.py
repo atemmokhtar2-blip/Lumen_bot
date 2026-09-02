@@ -87,6 +87,11 @@ async def telegram_host_webhook(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("host webhook enqueue failed instance=%s", instance_id)
 
+    try:
+        from lumen.engine.services.hosting.usage_billing import record_request
+        record_request(instance_id, 1)
+    except Exception:
+        pass
     return web.json_response({"ok": True})
 
 

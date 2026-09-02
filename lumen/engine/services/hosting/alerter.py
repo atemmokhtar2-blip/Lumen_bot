@@ -59,7 +59,57 @@ def _telegram(text: str) -> bool:
     return _post_json(url, {"chat_id": chat, "text": text[:3500]})
 
 
+def _email(subject: str, body: str) -> bool:
+    host = (os.environ.get("TBE_ALERT_SMTP_HOST") or "").strip()
+    to_addr = (os.environ.get("TBE_ALERT_EMAIL_TO") or "").strip()
+    if not host or not to_addr:
+        return False
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+
+        port = int(os.environ.get("TBE_ALERT_SMTP_PORT") or "587")
+        user = (os.environ.get("TBE_ALERT_SMTP_USER") or "").strip()
+        password = (os.environ.get("TBE_ALERT_SMTP_PASSWORD") or "").strip()
+        from_addr = (os.environ.get("TBE_ALERT_EMAIL_FROM") or user or "alerts@lumen.local").strip()
+        msg = MIMEText(body[:8000], "plain", "utf-8")
+        msg["Subject"] = subject[:200]
+        msg["From"] = from_addr
+        msg["To"] = to_addr
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.ehlo()
+            if (os.environ.get("TBE_ALERT_SMTP_TLS") or "1").strip() not in {"0", "false"}:
+                try:
+                    s.starttls()
+                except Exception:
+                    pass
+            if user and password:
+                s.login(user, password)
+            s.sendmail(from_addr, [to_addr], msg.as_string())
+        return True
+    except Exception as exc:
+        logger.warning("alert email failed: %s", type(exc).__name__)
+        return False
+
+
+def alert_resource(
+    *,
+    instance_id: str,
+    user_id: int,
+    metric: str,
+    value: float,
+    threshold: float,
+) -> dict[str, Any]:
+    return alert_instance_failed(
+        instance_id=instance_id,
+        user_id=user_id,
+        reason=f"resource:{metric}={value}>{threshold}",
+        extra={"metric": metric, "value": value, "threshold": threshold},
+    )
+
+
 def alert_instance_failed(
+
     *,
     instance_id: str,
     user_id: int,
@@ -74,8 +124,9 @@ def alert_instance_failed(
         f"[Lumen Host] instance={instance_id} user={user_id} "
         f"dep={deployment_id} FAILED: {reason}"
     )[:3500]
-    results = {"telegram": False, "webhook": False, "sent": False}
+    results = {"telegram": False, "webhook": False, "email": False, "sent": False}
     results["telegram"] = _telegram(msg)
+    results["email"] = _email("[Lumen Host] instance failed", msg)
     wh = (os.environ.get("TBE_ALERT_WEBHOOK_URL") or "").strip()
     if wh:
         results["webhook"] = _post_json(
@@ -90,7 +141,7 @@ def alert_instance_failed(
                 "ts": time.time(),
             },
         )
-    results["sent"] = bool(results["telegram"] or results["webhook"])
+    results["sent"] = bool(results["telegram"] or results["webhook"] or results["email"])
     if results["sent"]:
         logger.warning("alert sent instance=%s reason=%s", instance_id, reason[:80])
     return results

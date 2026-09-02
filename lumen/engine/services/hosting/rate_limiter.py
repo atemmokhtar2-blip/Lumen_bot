@@ -20,11 +20,21 @@ _lock = Lock()
 _starts: dict[int, Deque[float]] = defaultdict(deque)
 
 
-def max_concurrent(user_id: int = 0) -> int:
+def max_concurrent(user_id: int = 0, tenant_id: str | None = None) -> int:
+    # Plan hosted_bots (credits product still exposes a soft concurrent cap)
+    try:
+        from lumen.platform.plans import get_plan
+        plan_cap = int(getattr(get_plan(None), "hosted_bots", 0) or 0)
+        if 0 < plan_cap < 10**8:
+            env_cap = int((os.environ.get("TBE_HOST_MAX_CONCURRENT_PER_USER") or str(plan_cap)).strip())
+            return max(1, min(plan_cap, env_cap) if env_cap else plan_cap)
+    except Exception:
+        pass
     try:
         return max(1, int((os.environ.get("TBE_HOST_MAX_CONCURRENT_PER_USER") or "5").strip()))
     except Exception:
         return 5
+
 
 
 def max_starts_per_hour(user_id: int = 0) -> int:
@@ -34,10 +44,10 @@ def max_starts_per_hour(user_id: int = 0) -> int:
         return 20
 
 
-def check_can_start(*, user_id: int, running_count: int) -> tuple[bool, str]:
+def check_can_start(*, user_id: int, running_count: int, tenant_id: str | None = None) -> tuple[bool, str]:
     """Return (ok, reason)."""
     uid = int(user_id or 0)
-    lim_c = max_concurrent(uid)
+    lim_c = max_concurrent(uid, tenant_id=tenant_id)
     if running_count >= lim_c:
         return False, f"host_concurrent_limit:{running_count}>={lim_c}"
     lim_h = max_starts_per_hour(uid)

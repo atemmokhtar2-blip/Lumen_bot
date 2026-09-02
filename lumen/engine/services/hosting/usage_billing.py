@@ -89,6 +89,7 @@ def compute_session_usage(inst: Any, *, ended_at: float | None = None) -> dict[s
         "storage_gb_hours": round(storage_gb * hours, 6),
         "started_at": started,
         "ended_at": end,
+        "requests": request_count(getattr(inst, "instance_id", "") or ""),
     }
 
 
@@ -100,6 +101,7 @@ def compute_credits(usage: dict[str, Any]) -> float:
     credits += _fenv("TBE_HOST_CREDIT_PER_STORAGE_GB_HOUR", 0.002) * float(
         usage.get("storage_gb_hours") or 0
     )
+    credits += _fenv("TBE_HOST_CREDIT_PER_REQUEST", 0.0001) * float(usage.get("requests") or 0)
     return round(max(0.0, credits), 6)
 
 
@@ -139,3 +141,28 @@ __all__ = [
     "settle_instance",
     "project_storage_bytes",
 ]
+
+
+def record_request(instance_id: str, n: int = 1) -> None:
+    """Increment request counter for an instance (Redis)."""
+    try:
+        from lumen.engine.services.hosting.redis_state import _client
+        r = _client()
+        if r is None:
+            return
+        key = f"lumen:host:req:{instance_id}"
+        r.incrby(key, int(n))
+        r.expire(key, 86400 * 7)
+    except Exception:
+        pass
+
+
+def request_count(instance_id: str) -> int:
+    try:
+        from lumen.engine.services.hosting.redis_state import _client
+        r = _client()
+        if r is None:
+            return 0
+        return int(r.get(f"lumen:host:req:{instance_id}") or 0)
+    except Exception:
+        return 0

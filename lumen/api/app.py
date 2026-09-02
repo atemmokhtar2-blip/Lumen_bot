@@ -492,6 +492,12 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/hosts/logs", hosts.host_logs)
     app.router.add_post("/v1/hosts/redeploy", hosts.host_redeploy)
     app.router.add_post("/v1/hosts/delete", hosts.host_delete)
+    from lumen.api.routes import projects_host as projects_host
+    app.router.add_get("/v1/projects", projects_host.list_projects)
+    app.router.add_post("/v1/projects", projects_host.project_start)
+    app.router.add_get("/v1/projects/{id}/logs", projects_host.project_logs)
+    app.router.add_post("/v1/projects/{id}/redeploy", projects_host.project_redeploy)
+    app.router.add_delete("/v1/projects/{id}", projects_host.project_delete)
     app.router.add_get("/v1/usage", billing.usage)
     app.router.add_get("/v1/billing/balance", billing.balance_status)
     app.router.add_get("/v1/invoices", billing.invoices)

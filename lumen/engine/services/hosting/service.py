@@ -467,13 +467,19 @@ class HostingService:
         }
         env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
-            from lumen.engine.services.sandbox_runtime import start_permanent_host_bot
-            _backend, handle = start_permanent_host_bot(
+            from lumen.engine.services.hosting.orchestration import start_host as _orch_start
+            from lumen.engine.services.hosting.secrets_env import inject_secrets_env, seal_project_secrets
+            try:
+                seal_project_secrets(path, {"BOT_TOKEN": token_norm, "TELEGRAM_BOT_TOKEN": token_norm})
+            except Exception:
+                pass
+            _env = inject_secrets_env(path, env)
+            _backend, handle = _orch_start(
                 project_path=str(path),
                 bot_token=token_norm,
                 user_id=int(user_id),
                 service_name=f"host-u{user_id}",
-                env_vars=env,
+                env_vars=_env,
             )
         except Exception as sbx_exc:
             return HostResult(
@@ -867,6 +873,11 @@ def get_hosting_service(state_dir: str | Path | None = None) -> HostingService:
         try:
             from lumen.engine.services.hosting.health_monitor import start_background
             start_background(lambda: _SERVICE)
+        except Exception:
+            pass
+        try:
+            from lumen.engine.services.hosting.ops_scheduler import start_ops_scheduler
+            start_ops_scheduler(lambda: _SERVICE)
         except Exception:
             pass
     return _SERVICE
