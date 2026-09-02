@@ -123,14 +123,14 @@ def test_security_invariants_mention_token_and_sandbox() -> None:
 def test_phase0_gaps_explicit() -> None:
     gaps = host_contract.PHASE0_KNOWN_GAPS
     assert any("platform" in g for g in gaps)
-    assert any("webhook" in g for g in gaps)
 
 
 def test_host_instance_has_no_platform_field_yet() -> None:
-    """Gap freeze: platform is not on HostInstance until Phase 2."""
+    """platform is not on HostInstance; webhook_public_url is (Part 2 networking)."""
     names = {f.name for f in fields(HostInstance)}
     assert "platform" not in names
-    assert "webhook_public_url" not in names
+    assert "webhook_public_url" in names
+    assert "internal_port" in names
 
 
 def test_hosting_contract_doc_exists_and_references_planes() -> None:

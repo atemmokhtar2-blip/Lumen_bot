@@ -81,14 +81,11 @@ async def project_redeploy(request: web.Request) -> web.Response:
     inst = svc.get(instance_id, user_id=uid)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"project_not_found"}', content_type="application/json")
-    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
     result = await asyncio.to_thread(
-        lambda: svc.start(
+        lambda: svc.redeploy(
+            instance_id=instance_id,
             user_id=uid,
-            project_path=inst.project_path,
             bot_token=bot_token,
-            bot_username=inst.bot_username or "",
-            entry_point=getattr(inst, "entry_point", "") or "",
         )
     )
     return web.json_response(

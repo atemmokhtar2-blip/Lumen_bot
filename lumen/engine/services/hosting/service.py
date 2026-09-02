@@ -51,6 +51,8 @@ class HostInstance:
     last_diagnosis: dict[str, Any] = field(default_factory=dict)
     token_fp: str = ""  # sha256[:16] of bot token — never store raw token
     public_base_url: str = ""  # stable ingress URL (Traefik/Caddy by name, not random port)
+    webhook_public_url: str = ""  # https://…/v1/hooks/telegram/{instance_id}
+    internal_port: int = 0  # logical service port for reverse-proxy (not random host map)
     version_ref: str = ""  # git commit sha of project snapshot at deploy
     last_health_at: float = 0.0  # unix time of last successful health probe
 
@@ -424,15 +426,12 @@ class HostingService:
             if env not in {"dev", "development", "local", "test"}:
                 return HostResult(ok=False, message=f"rate_limit_unavailable:{type(rl_exc).__name__}")
 
-        # Webhook vs polling: default polling (clear webhook). Opt-in stable URL webhook.
+        # Webhook vs polling: clear only when forced to polling
         try:
-            from lumen.bot.singleton import clear_telegram_webhook, set_telegram_webhook
-            use_wh = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "0").strip().lower() in {
-                "1", "true", "yes", "on",
-            }
-            if not use_wh:
+            from lumen.bot.singleton import clear_telegram_webhook
+            mode = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "auto").strip().lower()
+            if mode in {"0", "false", "no", "off", "polling"}:
                 clear_telegram_webhook(token_norm)
-            # if use_wh: setWebhook after instance_id is known (below)
         except Exception:
             pass
 
@@ -559,9 +558,24 @@ class HostingService:
             last_error="" if not failed_like else message,
             token_fp=token_fp,
             public_base_url=public_url,
+            webhook_public_url="",  # filled below
+            internal_port=0,
             version_ref=version_ref,
             last_health_at=time.time() if running_like else 0.0,
         )
+        # Stable logical port for reverse-proxy backends (deterministic, not random host map)
+        try:
+            import hashlib
+            h = int(hashlib.sha256(instance_id.encode()).hexdigest()[:6], 16)
+            inst.internal_port = 8000 + (h % 1000)  # 8000–8999
+        except Exception:
+            inst.internal_port = 8080
+        # Always materialize webhook URL when public API/domain is configured
+        api_base = (os.environ.get("TBE_PUBLIC_API_BASE") or "").rstrip("/")
+        if api_base.startswith("https://"):
+            inst.webhook_public_url = f"{api_base}/v1/hooks/telegram/{instance_id}"
+        elif public_url:
+            inst.webhook_public_url = public_url.rstrip("/") + f"/v1/hooks/telegram/{instance_id}"
 
         # Normalize status using known constants
         try:
@@ -627,27 +641,27 @@ class HostingService:
         except Exception:
             pass
 
-        # Opt-in: register Telegram webhook on stable public URL
+        # Webhook: register when stable URL exists unless explicitly forced to polling
         try:
-            use_wh = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "0").strip().lower() in {
-                "1", "true", "yes", "on",
-            }
-            if use_wh and inst.public_base_url and inst.status == "running":
-                from lumen.bot.singleton import set_telegram_webhook
-                secret = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
-                hook = inst.public_base_url.rstrip("/") + f"/v1/hooks/telegram/{inst.instance_id}"
-                # Prefer API public base if domain points to API gateway
-                api_base = (os.environ.get("TBE_PUBLIC_API_BASE") or "").rstrip("/")
-                if api_base.startswith("https://"):
-                    hook = api_base + f"/v1/hooks/telegram/{inst.instance_id}"
-                ok_wh = set_telegram_webhook(token_norm, hook, secret_token=secret)
-                if not ok_wh:
-                    inst.last_error = (inst.last_error or "") + " webhook_register_failed"
-                    self._save()
-                else:
+            mode = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "auto").strip().lower()
+            force_poll = mode in {"0", "false", "no", "off", "polling"}
+            force_wh = mode in {"1", "true", "yes", "on", "webhook"}
+            hook = (inst.webhook_public_url or "").strip()
+            if inst.status == "running" and hook.startswith("https://") and (force_wh or (mode in {"auto", ""} and not force_poll)):
+                # auto: register when URL is configured (product path)
+                if force_wh or mode in {"auto", ""}:
+                    from lumen.bot.singleton import set_telegram_webhook
+                    secret = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
+                    ok_wh = set_telegram_webhook(token_norm, hook, secret_token=secret)
                     inst.last_diagnosis = dict(inst.last_diagnosis or {})
                     inst.last_diagnosis["webhook_url"] = hook
+                    inst.last_diagnosis["webhook_registered"] = bool(ok_wh)
+                    if not ok_wh:
+                        inst.last_error = ((inst.last_error or "") + " webhook_register_failed").strip()
                     self._save()
+            elif force_poll:
+                inst.last_diagnosis = dict(inst.last_diagnosis or {})
+                inst.last_diagnosis["webhook_mode"] = "polling"
         except Exception:
             pass
         return HostResult(
@@ -746,7 +760,39 @@ class HostingService:
                 result.instance = new_inst
         return result
 
+    def redeploy(
+        self,
+        *,
+        instance_id: str,
+        user_id: int,
+        bot_token: str = "",
+    ) -> HostResult:
+        """One-shot: re-prepare project (deps/version) then restart same instance_id."""
+        inst = self.get(instance_id, user_id=user_id)
+        if inst is None:
+            return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
+        try:
+            from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
+            prep = prepare_project_for_host(
+                inst.project_path,
+                entry_point=getattr(inst, "entry_point", "") or "",
+            )
+            if not prep.ok:
+                return HostResult(ok=False, message=f"فشل تجهيز إعادة النشر: {prep.message}", instance=inst)
+            if prep.entry_point:
+                inst.entry_point = prep.entry_point
+            if prep.details.get("version_ref"):
+                inst.version_ref = str(prep.details.get("version_ref") or "")
+        except Exception as exc:
+            return HostResult(
+                ok=False,
+                message=f"redeploy_prepare:{type(exc).__name__}",
+                instance=inst,
+            )
+        return self.restart(instance_id=instance_id, user_id=user_id, bot_token=bot_token)
+
     def status(self, *, user_id: int, instance_id: str | None = None) -> HostResult:
+
         items = self.list_for_user(user_id)
         if instance_id:
             inst = self.get(instance_id, user_id=user_id)

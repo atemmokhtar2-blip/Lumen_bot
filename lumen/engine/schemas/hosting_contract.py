@@ -45,6 +45,8 @@ class HostInstanceRecord(BaseModel):
     last_diagnosis: dict[str, Any] = Field(default_factory=dict)
     token_fp: str = Field(default="", max_length=64)
     public_base_url: str = ""
+    webhook_public_url: str = ""
+    internal_port: int = 0
     version_ref: str = Field(default="", max_length=64)
     last_health_at: float = 0.0
 
@@ -109,6 +111,8 @@ class HostInstanceRecord(BaseModel):
             last_diagnosis=dict(self.last_diagnosis or {}),
             token_fp=self.token_fp or "",
             public_base_url=self.public_base_url or "",
+            webhook_public_url=self.webhook_public_url or "",
+            internal_port=int(self.internal_port or 0),
             version_ref=self.version_ref or "",
             last_health_at=float(self.last_health_at or 0.0),
         )

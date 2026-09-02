@@ -233,6 +233,8 @@ Scaffolds exist under `lumen/engine/services/platform_generators/`:
 | Field | Purpose |
 |-------|---------|
 | `public_base_url` | Stable ingress URL (`{instance_id}.{TBE_HOST_BASE_DOMAIN}`) — Traefik/Caddy by name, not random ports |
+| `webhook_public_url` | `https://…/v1/hooks/telegram/{instance_id}` when TBE_PUBLIC_API_BASE or domain set |
+| `internal_port` | Deterministic logical port 8000–8999 for reverse-proxy backends |
 | `version_ref` | Git commit of project snapshot at deploy time |
 | `last_health_at` | Unix time of last successful orchestrator health probe (~30s loop) |
 

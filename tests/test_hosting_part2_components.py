@@ -105,3 +105,26 @@ def test_log_aggregator_writes_project_logs(tmp_path, monkeypatch):
 def test_restart_reuses_instance_id_in_source():
     src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
     assert "new_inst.instance_id = old_id" in src or "instance_id = old_id" in src
+
+
+def test_host_instance_has_webhook_and_port_fields():
+    from dataclasses import fields
+    from lumen.engine.services.hosting.service import HostInstance
+
+    names = {f.name for f in fields(HostInstance)}
+    assert "webhook_public_url" in names
+    assert "internal_port" in names
+
+
+def test_service_has_redeploy_and_webhook_logic():
+    src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "def redeploy(" in src
+    assert "webhook_public_url" in src
+    assert "internal_port" in src
+    assert "set_telegram_webhook" in src
+
+
+def test_host_restart_prefers_sealed_restart():
+    src = (REPO / "lumen/bot/ui/callback_router.py").read_text(encoding="utf-8")
+    assert ".restart(" in src
+    assert "sealed" in src.lower() or "bot_token=\"\"" in src or "bot_token=''" in src

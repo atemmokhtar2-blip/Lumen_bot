@@ -61,6 +61,12 @@ def format_host_success(result: Any) -> str:
         pub = str(getattr(inst, "public_base_url", "") or "")
         if pub:
             details.append(f"الرابط العام: {pub}")
+        wh = str(getattr(inst, "webhook_public_url", "") or "")
+        if wh:
+            details.append(f"Webhook: {wh}")
+        port = int(getattr(inst, "internal_port", 0) or 0)
+        if port:
+            details.append(f"المنفذ المنطقي: {port}")
         ver = str(getattr(inst, "version_ref", "") or "")
         if ver:
             details.append(f"الإصدار: {ver[:12]}")

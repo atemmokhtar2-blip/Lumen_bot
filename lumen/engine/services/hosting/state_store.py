@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS instances (
     last_diagnosis TEXT DEFAULT '{}',
     token_fp TEXT DEFAULT '',
     public_base_url TEXT DEFAULT '',
+    webhook_public_url TEXT DEFAULT '',
+    internal_port INTEGER DEFAULT 0,
     version_ref TEXT DEFAULT '',
     last_health_at REAL DEFAULT 0,
     updated_at REAL NOT NULL
@@ -81,6 +83,8 @@ class HostingStateStore:
             pass
         for col, decl in (
             ("public_base_url", "TEXT DEFAULT ''"),
+            ("webhook_public_url", "TEXT DEFAULT ''"),
+            ("internal_port", "INTEGER DEFAULT 0"),
             ("version_ref", "TEXT DEFAULT ''"),
             ("last_health_at", "REAL DEFAULT 0"),
         ):
@@ -130,9 +134,9 @@ class HostingStateStore:
                 INSERT INTO instances (
                     instance_id, user_id, project_path, entry_point, bot_username,
                     status, deployment_id, sandbox_backend, pid, started_at, last_error,
-                    last_diagnosis, token_fp, public_base_url, version_ref, last_health_at,
+                    last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, version_ref, last_health_at,
                     updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(instance_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     project_path=excluded.project_path,
@@ -147,6 +151,8 @@ class HostingStateStore:
                     last_diagnosis=excluded.last_diagnosis,
                     token_fp=excluded.token_fp,
                     public_base_url=excluded.public_base_url,
+                    webhook_public_url=excluded.webhook_public_url,
+                    internal_port=excluded.internal_port,
                     version_ref=excluded.version_ref,
                     last_health_at=excluded.last_health_at,
                     updated_at=excluded.updated_at
@@ -166,6 +172,8 @@ class HostingStateStore:
                     diag,
                     inst.get("token_fp") or "",
                     inst.get("public_base_url") or "",
+                    inst.get("webhook_public_url") or "",
+                    int(inst.get("internal_port") or 0),
                     inst.get("version_ref") or "",
                     float(inst.get("last_health_at") or 0),
                     time.time(),

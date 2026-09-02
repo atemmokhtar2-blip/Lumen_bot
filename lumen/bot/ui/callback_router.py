@@ -438,18 +438,25 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 active = user_data.get("active_repo") or {}
                 path = str(active.get("path") or state.project_ref or "")
 
+            # One-shot restart via sealed secrets when possible
             stop_note = ""
             if iid:
-                def _stop():
-                    return get_hosting_service(OUTPUT_DIR).stop(
-                        instance_id=str(iid), user_id=int(uid)
+                def _restart():
+                    return get_hosting_service(OUTPUT_DIR).restart(
+                        instance_id=str(iid), user_id=int(uid), bot_token=""
                     )
                 try:
-                    stop_res = await asyncio.to_thread(_stop)
-                    stop_note = format_host_result(stop_res)
+                    rr = await asyncio.to_thread(_restart)
+                    if getattr(rr, "ok", False):
+                        prompt = format_host_result(rr)
+                        await _safe_render_ui(
+                            q, msg, prompt, None, user_data=user_data, context=context
+                        )
+                        return
+                    stop_note = format_host_result(rr)
                 except Exception as exc:
-                    logger.exception("host_restart stop failed")
-                    stop_note = f"stop_error: {type(exc).__name__}"
+                    logger.exception("host_restart sealed path failed")
+                    stop_note = f"restart_error: {type(exc).__name__}"
 
             if path:
                 user_data["pending_host"] = {
@@ -458,14 +465,21 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     "restart_of": str(iid or ""),
                 }
                 prompt = (
-                    "🔄 تم طلب إيقاف المثيل. لإعادة التشغيل أرسل توكن البوت من @BotFather.\n"
-                    "لا نُخزّن التوكن الخام — سيُحذف من المحادثة فوراً بعد الاستلام."
+                    "🔄 لإعادة التشغيل أرسل توكن البوت من @BotFather
+"
+                    "(لم تُوجد أسرار مشفّرة كافية على المشروع).
+"
+                    "سيُحذف التوكن من المحادثة فوراً بعد الاستلام."
                 )
                 if stop_note:
-                    prompt = stop_note[:1200] + "\n\n" + prompt
+                    prompt = stop_note[:1200] + "
+
+" + prompt
             else:
                 prompt = (
-                    (stop_note + "\n\n") if stop_note else ""
+                    (stop_note + "
+
+") if stop_note else ""
                 ) + "لا يوجد مسار مشروع مرتبط بهذا المثيل. اسحب/ولّد مشروعاً أولاً."
         except Exception:
             logger.exception("host_restart prep failed")
