@@ -604,6 +604,66 @@ def run_agent(
             sys_prompt = sys_prompt + "\n\n" + context_to_agent_block(repo_ctx)
         except Exception:
             pass
+
+    # --- Phase-3: fold Project Card + semantic memory into FIRST system message ---
+    try:
+        _uid = int(state.metadata.get("user_id") or 0)
+        _pid = ""
+        if isinstance(ir_dict, dict):
+            _pid = str(
+                ir_dict.get("project_id")
+                or (ir_dict.get("metadata") or {}).get("project_id")
+                or ""
+            )
+        from lumen.engine.services.semantic_memory.project_memory import (
+            get_project_memory_store,
+        )
+        _pm = get_project_memory_store()
+        _card = _pm.get_active_card(_uid, path=str(state.work_dir or ""), project_id=_pid)
+        if _card is None and _uid > 0:
+            # Ensure a card exists for this generation workspace so later recovery can attach
+            try:
+                _card = _pm.register_project(
+                    user_id=_uid,
+                    project_id=_pid or None,
+                    label=str(goal or "")[:80] or "project",
+                    kind="generated",
+                    path=str(state.work_dir or ""),
+                    source_request=str(goal or "")[:500],
+                )
+            except Exception as _reg_exc:
+                state.warnings.append(f"project_register_skip:{type(_reg_exc).__name__}")
+                _card = None
+        if _card:
+            _card_txt = _pm.context_for_engine(_card.project_id, max_history=12)
+            if _card_txt:
+                state.metadata["project_card_id"] = _card.project_id
+                state.metadata["project_card_injected"] = True
+                sys_prompt = (
+                    sys_prompt
+                    + "\n\nPROJECT_CARD (active project memory - use for continuity):\n"
+                    + _card_txt[:2500]
+                )
+        try:
+            from lumen.engine.services.semantic_memory.retrieval import build_memory_context
+            _sem = build_memory_context(
+                user_id=_uid,
+                user_message=str(goal or "")[:500],
+                project_id=str(getattr(_card, "project_id", None) or _pid or ""),
+                top_k=6,
+            )
+            if _sem:
+                state.metadata["semantic_memory_injected"] = True
+                sys_prompt = (
+                    sys_prompt
+                    + "\n\nSEMANTIC_MEMORY (relevant facts before planning):\n"
+                    + _sem[:2500]
+                )
+        except Exception as _sem_exc:
+            state.warnings.append(f"semantic_memory_skip:{type(_sem_exc).__name__}")
+    except Exception as _mem_exc:
+        state.warnings.append(f"project_memory_skip:{type(_mem_exc).__name__}")
+
     state.add_system(sys_prompt)
     # Pre-mark files already packed into context as read (repair policy)
     pre_read = []
@@ -639,49 +699,6 @@ def run_agent(
     recovery = StructuredRecovery()
     state.metadata["recovery"] = recovery.to_metadata()
     state.metadata["recovery_attempts"] = recovery.total_attempts
-
-    # --- Phase-3: Project Card + semantic memory injection (before first decide) ---
-    try:
-        _uid = int(state.metadata.get("user_id") or 0)
-        _pid = ""
-        if isinstance(ir_dict, dict):
-            _pid = str(
-                ir_dict.get("project_id")
-                or (ir_dict.get("metadata") or {}).get("project_id")
-                or ""
-            )
-        from lumen.engine.services.semantic_memory.project_memory import (
-            get_project_memory_store,
-        )
-        _pm = get_project_memory_store()
-        _card = _pm.get_active_card(_uid, path=str(state.work_dir or ""), project_id=_pid)
-        if _card:
-            _card_txt = _pm.context_for_engine(_card.project_id, max_history=12)
-            if _card_txt:
-                state.metadata["project_card_id"] = _card.project_id
-                state.metadata["project_card_injected"] = True
-                state.add_system(
-                    "PROJECT_CARD (active project memory - use for continuity):\n"
-                    + _card_txt[:2500]
-                )
-        try:
-            from lumen.engine.services.semantic_memory.retrieval import build_memory_context
-            _sem = build_memory_context(
-                user_id=_uid,
-                user_message=str(goal or "")[:500],
-                project_id=str(getattr(_card, "project_id", None) or _pid or ""),
-                top_k=6,
-            )
-            if _sem:
-                state.metadata["semantic_memory_injected"] = True
-                state.add_system(
-                    "SEMANTIC_MEMORY (relevant facts before planning):\n"
-                    + _sem[:2500]
-                )
-        except Exception as _sem_exc:
-            state.warnings.append(f"semantic_memory_skip:{type(_sem_exc).__name__}")
-    except Exception as _mem_exc:
-        state.warnings.append(f"project_memory_skip:{type(_mem_exc).__name__}")
 
     # --- Phase-3: parallel inspect of workspace (max 3 independent tools) ---
     try:

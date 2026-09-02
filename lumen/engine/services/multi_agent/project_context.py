@@ -1,6 +1,7 @@
 """Project context packer — real workspace snapshot for Worker/Planner.
 
 Uses official cline agent_fs tools (tree/list_dir/read_file), not ad-hoc scripts.
+Phase-3: parallel inspect/read via run_tools_parallel (max 3).
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ def pack_project_context(
     max_files: int = 12,
     max_bytes_per_file: int = 2500,
 ) -> dict[str, Any]:
-    """Snapshot tree + key file heads via agent_fs.run_tool."""
+    """Snapshot tree + key file heads via agent_fs parallel tools when possible."""
     root = Path(project_path)
     out: dict[str, Any] = {
         "ok": False,
@@ -22,24 +23,43 @@ def pack_project_context(
         "tree": "",
         "files": {},
         "errors": [],
+        "parallel": False,
     }
     if not root.is_dir():
         out["errors"].append("not_a_dir")
         return out
 
     try:
-        from lumen.engine.services.cline_runtime.agent_fs import run_tool
+        from lumen.engine.services.cline_runtime.agent_fs import run_tool, run_tools_parallel
     except Exception as exc:
         out["errors"].append(f"agent_fs_import:{type(exc).__name__}")
         return out
 
-    tree_res = run_tool(str(root), "tree", {"path": ".", "max_depth": 4})
-    if tree_res.get("ok"):
-        out["tree"] = str(tree_res.get("tree") or "")[:3000]
-    else:
-        out["errors"].append(str(tree_res.get("error") or "tree_failed"))
+    # Parallel batch 1: tree + list_dir + glob py (independent inspect)
+    try:
+        batch1 = run_tools_parallel(
+            str(root),
+            [
+                {"tool": "tree", "args": {"path": ".", "max_depth": 4}},
+                {"tool": "list_dir", "args": {"path": "."}},
+                {"tool": "glob_files", "args": {"pattern": "*.py"}},
+            ],
+            max_parallel=3,
+        )
+        out["parallel"] = True
+        tree_res = batch1[0] if batch1 else {}
+        if tree_res.get("ok"):
+            out["tree"] = str(tree_res.get("tree") or "")[:3000]
+        else:
+            out["errors"].append(str(tree_res.get("error") or "tree_failed"))
+    except Exception as exc:
+        tree_res = run_tool(str(root), "tree", {"path": ".", "max_depth": 4})
+        if tree_res.get("ok"):
+            out["tree"] = str(tree_res.get("tree") or "")[:3000]
+        else:
+            out["errors"].append(str(tree_res.get("error") or "tree_failed"))
+        out["errors"].append(f"parallel_fallback:{type(exc).__name__}")
 
-    # Prefer entry + requirements + modules
     candidates: list[str] = []
     for name in ("main.py", "bot.py", "requirements.txt", "README.md", ".env.example"):
         if (root / name).is_file():
@@ -50,16 +70,35 @@ def pack_project_context(
             break
 
     files: dict[str, str] = {}
-    for rel in candidates[:max_files]:
-        res = run_tool(str(root), "read_file", {"path": rel})
-        if not res.get("ok"):
-            out["errors"].append(f"read_fail:{rel}")
-            continue
-        content = str(res.get("content") or "")
-        if len(content) > max_bytes_per_file:
-            content = content[:max_bytes_per_file] + f"\n...[truncated {len(content)} chars]"
-        files[rel] = content
-        # mark as read for repair policy if agent_loop shares metadata later
+    rels = candidates[:max_files]
+    if rels:
+        try:
+            read_calls = [{"tool": "read_file", "args": {"path": rel}} for rel in rels]
+            # process in chunks of 3
+            read_results: list[dict[str, Any]] = []
+            for i in range(0, len(read_calls), 3):
+                chunk = read_calls[i:i+3]
+                read_results.extend(run_tools_parallel(str(root), chunk, max_parallel=3))
+            out["parallel"] = True
+            for rel, res in zip(rels, read_results):
+                if not isinstance(res, dict) or not res.get("ok"):
+                    out["errors"].append(f"read_fail:{rel}")
+                    continue
+                content = str(res.get("content") or "")
+                if len(content) > max_bytes_per_file:
+                    content = content[:max_bytes_per_file] + f"\n...[truncated {len(content)} chars]"
+                files[rel] = content
+        except Exception as exc:
+            out["errors"].append(f"parallel_read_fallback:{type(exc).__name__}")
+            for rel in rels:
+                res = run_tool(str(root), "read_file", {"path": rel})
+                if not res.get("ok"):
+                    out["errors"].append(f"read_fail:{rel}")
+                    continue
+                content = str(res.get("content") or "")
+                if len(content) > max_bytes_per_file:
+                    content = content[:max_bytes_per_file] + f"\n...[truncated {len(content)} chars]"
+                files[rel] = content
 
     out["files"] = files
     out["ok"] = bool(out["tree"] or files)
