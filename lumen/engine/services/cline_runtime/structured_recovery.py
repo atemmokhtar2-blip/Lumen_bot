@@ -290,4 +290,26 @@ class StructuredRecovery:
         ]
 
 
-__all__ = ["StructuredRecovery", "RecoveryAction"]
+def network_retry_params(tool: str, params: dict[str, Any] | None, strategy: str) -> dict[str, Any]:
+    """Mutate params for a concrete network/git/host retry (tool_runtime path)."""
+    p = dict(params or {})
+    tool = (tool or "").strip()
+    if tool == "clone_repo":
+        # Strategy change: force shallow, drop branch pin on retry
+        p["depth"] = 1
+        p.pop("branch", None)
+        p["_recovery_strategy"] = strategy or "git_retry"
+    elif tool in {"git_pull", "git_push"}:
+        p["_recovery_strategy"] = strategy or "git_retry"
+    elif tool.startswith("host"):
+        p["_recovery_strategy"] = strategy or "host_retry"
+    elif tool == "run_shell":
+        # Do not auto-rewrite commands; mark recovery only
+        p["_recovery_strategy"] = strategy or "simplify_shell"
+    else:
+        p["_recovery_strategy"] = strategy or "backoff_retry"
+    return p
+
+
+__all__ = ["StructuredRecovery", "RecoveryAction", "network_retry_params"]
+

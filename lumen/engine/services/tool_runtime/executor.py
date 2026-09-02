@@ -33,6 +33,78 @@ def _output_dir() -> Path:
         return root
 
 
+def _with_network_recovery(
+    name: str,
+    params: dict[str, Any],
+    result: "ToolResult",
+    *,
+    user_id: int = 0,
+    user_data: dict[str, Any] | None = None,
+    runner,
+) -> "ToolResult":
+    """One structured recovery retry for network/git/host tool failures."""
+    if result.ok:
+        return result
+    _NETWORK = {
+        "clone_repo", "create_repo", "git_push", "git_pull",
+        "host_start", "host_stop", "host_status", "host_diagnose",
+    }
+    if name not in _NETWORK:
+        return result
+    # Avoid nested recovery
+    if (params or {}).get("_recovery_attempted"):
+        return result
+    try:
+        from lumen.engine.services.cline_runtime.structured_recovery import (
+            StructuredRecovery,
+            network_retry_params,
+        )
+        rec = StructuredRecovery(max_total=2, max_per_key=1)
+        action = rec.plan(
+            tool=name,
+            args=params,
+            result={
+                "ok": False,
+                "error": result.message,
+                "message": result.message,
+                **(result.data or {}),
+            },
+        )
+        if action is None:
+            return result
+        rec.commit(action)
+        if action.backoff_sec > 0:
+            import time as _time
+            _time.sleep(min(float(action.backoff_sec), 4.0))
+        retry_params = network_retry_params(name, params, action.strategy)
+        retry_params["_recovery_attempted"] = True
+        logger.info(
+            "tool_runtime recovery retry tool=%s strategy=%s attempt=%s",
+            name, action.strategy, rec.total_attempts,
+        )
+        retry_result = runner(retry_params)
+        # Attach recovery metadata
+        try:
+            data = dict(retry_result.data or {})
+            data["recovery"] = rec.to_metadata()
+            data["recovery_attempts"] = rec.total_attempts
+            data["recovery_strategy"] = action.strategy
+            retry_result = ToolResult(
+                ok=retry_result.ok,
+                tool=retry_result.tool,
+                message=retry_result.message,
+                data=data,
+                needs_auth=retry_result.needs_auth,
+            )
+        except Exception:
+            pass
+        return retry_result
+    except Exception as exc:
+        logger.warning("network recovery failed: %s", type(exc).__name__)
+        return result
+
+
+
 def execute_tool(
     name: str,
     params: dict[str, Any] | None = None,
@@ -107,13 +179,29 @@ def execute_tool(
 
     try:
         if name == "clone_repo":
-            return _tool_clone_repo(params, user_id=user_id)
+            return _with_network_recovery(
+                name, params, _tool_clone_repo(params, user_id=user_id),
+                user_id=user_id, user_data=user_data,
+                runner=lambda p: _tool_clone_repo(p, user_id=user_id),
+            )
         if name == "create_repo":
-            return _tool_create_repo(params, user_id=user_id)
+            return _with_network_recovery(
+                name, params, _tool_create_repo(params, user_id=user_id),
+                user_id=user_id, user_data=user_data,
+                runner=lambda p: _tool_create_repo(p, user_id=user_id),
+            )
         if name == "git_push":
-            return _tool_git_push(params, user_id=user_id, user_data=user_data)
+            return _with_network_recovery(
+                name, params, _tool_git_push(params, user_id=user_id, user_data=user_data),
+                user_id=user_id, user_data=user_data,
+                runner=lambda p: _tool_git_push(p, user_id=user_id, user_data=user_data),
+            )
         if name == "git_pull":
-            return _tool_git_pull(params, user_id=user_id, user_data=user_data)
+            return _with_network_recovery(
+                name, params, _tool_git_pull(params, user_id=user_id, user_data=user_data),
+                user_id=user_id, user_data=user_data,
+                runner=lambda p: _tool_git_pull(p, user_id=user_id, user_data=user_data),
+            )
         if name == "repo_inspect":
             return _tool_repo_inspect(params, user_data=user_data or {})
         if name == "repo_understand":

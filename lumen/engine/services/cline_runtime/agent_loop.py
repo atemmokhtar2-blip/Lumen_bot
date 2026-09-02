@@ -1044,6 +1044,7 @@ def run_agent(
             else:
                 recovery.commit(_ra)
                 _recovery_applied = True
+                _recovery_tool_ok = False
                 state.metadata["recovery"] = recovery.to_metadata()
                 state.metadata["recovery_attempts"] = recovery.total_attempts
                 if _ra.backoff_sec > 0:
@@ -1169,6 +1170,9 @@ def run_agent(
                             "ok": bool((_rec_result or {}).get("ok") if isinstance(_rec_result, dict) else False),
                             "detail": f"recovery:{_ra.mode}:{_ra.strategy}",
                         })
+                        _recovery_tool_ok = bool(
+                            isinstance(_rec_result, dict) and _rec_result.get("ok")
+                        )
                         if _np_reason:
                             state.stop_reason = _np_reason
                             state.ok = bool(state.files_written)
@@ -1179,9 +1183,23 @@ def run_agent(
                 except Exception as _rec_exc:
                     state.warnings.append(f"recovery_subagent:{type(_rec_exc).__name__}")
                     logger.warning("recovery sub-agent failed: %s", _rec_exc)
+                    # Recovery attempted but sub-agent crashed → count as no progress
+                    _np_reason = gov.note_tool_result(
+                        tool=str(tool or ""),
+                        result=result if isinstance(result, dict) else {},
+                        files_written=list(state.files_written or []),
+                    )
+                    state.metadata["loop_governor"] = gov.to_metadata()
+                    if _np_reason:
+                        state.stop_reason = _np_reason
+                        state.ok = bool(state.files_written)
+                        break
 
-        # --- Loop Governor no-progress (only if recovery did not handle progress) ---
-        if not _recovery_applied:
+        # --- Loop Governor no-progress ---
+        # Count original failure when: no recovery, or recovery ran but did not fix.
+        if (not _recovery_applied) or (
+            _recovery_applied and not locals().get("_recovery_tool_ok", False)
+        ):
             _np_reason = gov.note_tool_result(
                 tool=str(tool or ""),
                 result=result if isinstance(result, dict) else {},
