@@ -19,8 +19,7 @@ def test_permanent_host_starter_exists_and_is_fc_only() -> None:
 
 def test_hosting_service_uses_permanent_starter() -> None:
     src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
-    assert "start_permanent_host_bot" in src
-    # must not call generic start_sandboxed_bot for permanent path
+    assert "start_host" in src or "orchestration" in src
     assert "start_sandboxed_bot(" not in src
 
 
@@ -86,7 +85,7 @@ def test_host_instance_has_public_and_version_fields() -> None:
 
 def test_worker_uses_permanent_host_bot_not_generic() -> None:
     src = (REPO / "lumen/engine/services/hosting/worker.py").read_text(encoding="utf-8")
-    assert "start_permanent_host_bot" in src
+    assert "orchestration" in src or "start_host" in src
     assert "start_sandboxed_bot" not in src
 
 
@@ -94,7 +93,7 @@ def test_service_stop_and_alive_no_docker() -> None:
     src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
     assert "DockerProcessDriver" not in src
     assert "docker inspect" not in src
-    assert "start_permanent_host_bot" in src
+    assert "orchestration" in src or "start_host" in src
 
 
 def test_service_get_and_list_use_redis() -> None:

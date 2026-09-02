@@ -89,7 +89,7 @@ def run_once(hosting_service) -> dict:
                 reason,
             )
             try:
-                from lumen.engine.services.hosting.alerter import alert_instance_failed
+                from lumen.hosting.alerter import alert_instance_failed
                 alert_instance_failed(
                     instance_id=str(getattr(inst, "instance_id", "")),
                     user_id=int(getattr(inst, "user_id", 0) or 0),
@@ -99,7 +99,7 @@ def run_once(hosting_service) -> dict:
             except Exception:
                 pass
             try:
-                from lumen.engine.services.hosting.log_aggregator import aggregate_and_ship
+                from lumen.hosting.log_aggregator import aggregate_and_ship
                 aggregate_and_ship(
                     str(getattr(inst, "instance_id", "")),
                     str(getattr(inst, "deployment_id", "") or ""),

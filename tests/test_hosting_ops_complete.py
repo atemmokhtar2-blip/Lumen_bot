@@ -42,5 +42,5 @@ def test_worker_uses_orchestration():
     assert "orchestration" in src
 
 def test_alerter_has_email():
-    from lumen.engine.services.hosting import alerter
+    from lumen.hosting import alerter
     assert hasattr(alerter, "_email")

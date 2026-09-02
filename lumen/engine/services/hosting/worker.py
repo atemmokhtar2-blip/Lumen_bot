@@ -123,9 +123,15 @@ def process_one(queue=None, fleet=None) -> bool:
             zpath = fetch_artifact(artifact_uri, artifact_key)
             build_path = str(extract_artifact(zpath, work_id))
 
-        # PERMANENT_HOST only: Firecracker via start_permanent_host_bot (never Docker select)
+        # Host orchestration plane (Firecracker in prod via lumen.hosting.orchestration)
         os.environ.setdefault("TBE_WORKER_BUILD", "1")
         try:
+            from lumen.hosting.rate_limiter import check_can_start, record_start
+            # running_count approx from queue on this node
+            ok_rl, reason_rl = check_can_start(user_id=int(job.user_id), running_count=int(running or 0))
+            if not ok_rl:
+                q.mark_failed(job.job_id, f"rate_limit:{reason_rl}"[:500])
+                return True
             from pathlib import Path as _P
             from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
             from lumen.engine.services.hosting.orchestration import start_host as start_permanent_host_bot
@@ -210,6 +216,10 @@ def process_one(queue=None, fleet=None) -> bool:
                     store.upsert(payload)
                 except Exception:
                     logger.exception("worker durable state upsert failed")
+                try:
+                    record_start(int(job.user_id))
+                except Exception:
+                    pass
                 logger.info(
                     "job %s running backend=firecracker dep=%s instance=%s",
                     job.job_id, handle.deployment_id, iid,
@@ -219,6 +229,12 @@ def process_one(queue=None, fleet=None) -> bool:
                     job.job_id,
                     (handle.message or f"sandbox_failed:{backend.name}")[:500],
                 )
+                try:
+                    from lumen.hosting.alerter import alert_instance_failed
+                    alert_instance_failed(instance_id=job.job_id, user_id=int(job.user_id),
+                                           reason=(handle.message or "sandbox_failed")[:300])
+                except Exception:
+                    pass
         except Exception as sbx_exc:
             q.mark_failed(job.job_id, f"sandbox:{type(sbx_exc).__name__}:{sbx_exc}"[:500])
             return True
