@@ -18,6 +18,7 @@ from .agent_brain import decide
 from .agent_fs import run_tool
 from .agent_state import AgentState, AgentStep
 from .model_router import describe_runtime, select_model, select_model_for_goal
+from .structured_recovery import StructuredRecovery
 
 logger = logging.getLogger(__name__)
 
@@ -634,6 +635,10 @@ def run_agent(
     _deadline = gov.loop_start + _budget_sec
     state.metadata["time_budget_sec"] = _budget_sec
 
+    # Phase-2 Structured Recovery controller
+    recovery = StructuredRecovery()
+    state.metadata["recovery"] = recovery.to_metadata()
+
     for i in range(limit):
         gov.step_index = i
         _keep, _pchars = gov.context_caps()
@@ -781,6 +786,21 @@ def run_agent(
             )
             state.steps.append(step)
             state.warnings.append(f"parse_fail_step_{i}:{err[:80]}")
+            # Phase-2 parse recovery — short prompt, no full history resend
+            _ra = recovery.plan(
+                tool=None, args=None,
+                result={"ok": False, "error": err},
+                parse_fail=True, parse_err=err,
+            )
+            if _ra:
+                recovery.commit(_ra)
+                state.metadata["recovery"] = recovery.to_metadata()
+                state.add_user(_ra.prompt)
+            if recovery.total_attempts >= recovery.max_total and not state.files_written:
+                state.stop_reason = "recovery_exhausted"
+                state.ok = False
+                state.warnings.append("recovery_exhausted_on_parse")
+                break
             continue
 
         tool = decision.get("tool")
@@ -901,12 +921,24 @@ def run_agent(
                 + ", ".join(acc.get("missing") or [])
                 + ". Continue writing the missing files, then call finish again."
             )
+            _br = gov.note_blocked_step(tool="finish", reason="acceptance_soft_fail")
+            state.metadata["loop_governor"] = gov.to_metadata()
+            if _br:
+                state.stop_reason = _br
+                state.ok = bool(state.files_written)
+                break
             continue
 
         if not tool:
             state.add_assistant(step.thought or "(no tool)")
             state.add_user("Call a tool or finish. JSON only.")
             state.steps.append(step)
+            _br = gov.note_blocked_step(tool="no_tool", reason="missing_tool")
+            state.metadata["loop_governor"] = gov.to_metadata()
+            if _br:
+                state.stop_reason = _br
+                state.ok = bool(state.files_written)
+                break
             continue
 
         _path_hint = ""
@@ -1010,6 +1042,106 @@ def run_agent(
                 gov.no_progress_streak, i, limit, len(state.files_written),
             )
             break
+
+        
+        # --- Phase-2 Structured Recovery on tool failure ---
+        if isinstance(result, dict) and not result.get("ok") and tool and tool != "finish":
+            _ra = recovery.plan(tool=str(tool), args=args, result=result)
+            if _ra is None:
+                if recovery.total_attempts >= recovery.max_total:
+                    state.stop_reason = "recovery_exhausted"
+                    state.ok = bool(state.files_written)
+                    state.warnings.append("recovery_exhausted")
+                    state.metadata["recovery"] = recovery.to_metadata()
+                    logger.warning(
+                        "agent_loop recovery exhausted (step %d/%d total=%d)",
+                        i, limit, recovery.total_attempts,
+                    )
+                    break
+            else:
+                recovery.commit(_ra)
+                state.metadata["recovery"] = recovery.to_metadata()
+                if _ra.backoff_sec > 0:
+                    try:
+                        _time.sleep(min(float(_ra.backoff_sec), 5.0))
+                    except Exception:
+                        pass
+                state.add_user(_ra.prompt)
+                # Sub-agent: one decide() with minimal window (same model)
+                try:
+                    _rec_msgs = recovery.build_recovery_messages(
+                        action=_ra, tool=str(tool), args=args, result=result
+                    )
+                    _rec_decision = decide(
+                        _rec_msgs,
+                        choice=choice,
+                        history_keep=2,
+                        prompt_max_chars=4000,
+                    )
+                    try:
+                        _ru = _rec_decision.get("usage") or {}
+                        if _ru:
+                            gov.note_decide(
+                                tool=_rec_decision.get("tool"),
+                                finish=bool(_rec_decision.get("finish")),
+                                parse_ok=bool(_rec_decision.get("parse_ok", True)),
+                                usage=_ru,
+                                history_keep=2,
+                                prompt_chars=4000,
+                                cache_hit=bool(_rec_decision.get("cache_hit")),
+                            )
+                    except Exception:
+                        pass
+                    _rec_tool = _rec_decision.get("tool")
+                    _rec_args = dict(_rec_decision.get("args") or {})
+                    if _rec_decision.get("parse_ok") and _rec_tool and _rec_tool != "finish":
+                        _rec_result = run_tool(state.work_dir, str(_rec_tool), _rec_args)
+                        state.steps.append(
+                            AgentStep(
+                                index=i,
+                                thought=str(_rec_decision.get("thought") or "recovery")[:500],
+                                tool_name=str(_rec_tool),
+                                tool_args=_rec_args,
+                                tool_result=_rec_result if isinstance(_rec_result, dict) else {"ok": False},
+                                raw_model=str(_rec_decision.get("raw") or "")[:500],
+                            )
+                        )
+                        state.add_assistant(
+                            json.dumps(
+                                {"thought": "recovery", "tool": _rec_tool, "args": _safe_args(_rec_args)},
+                                ensure_ascii=False,
+                            )[:2000]
+                        )
+                        state.add_tool_result(
+                            str(_rec_tool),
+                            _rec_result if isinstance(_rec_result, dict) else {},
+                        )
+                        if (
+                            _rec_tool in {"write_file", "edit_file", "apply_edits", "apply_patch"}
+                            and isinstance(_rec_result, dict)
+                            and _rec_result.get("ok")
+                        ):
+                            _rp = str((_rec_result.get("path") or _rec_args.get("path") or ""))
+                            if _rp and _rp not in state.files_written:
+                                state.files_written.append(_rp)
+                        gov.note_tool_result(
+                            tool=str(_rec_tool),
+                            result=_rec_result if isinstance(_rec_result, dict) else {},
+                            files_written=list(state.files_written or []),
+                        )
+                        state.metadata["loop_governor"] = gov.to_metadata()
+                        _emit_progress({
+                            "phase": "recovery",
+                            "step": i,
+                            "limit": limit,
+                            "tool": str(_rec_tool),
+                            "ok": bool((_rec_result or {}).get("ok") if isinstance(_rec_result, dict) else False),
+                            "detail": f"recovery:{_ra.mode}",
+                        })
+                except Exception as _rec_exc:
+                    state.warnings.append(f"recovery_subagent:{type(_rec_exc).__name__}")
+                    logger.warning("recovery sub-agent failed: %s", _rec_exc)
+
 
         # Phase A: force finish path when core deliverables already satisfy acceptance
         try:
@@ -1129,6 +1261,10 @@ def run_agent(
     state.metadata["files_written"] = list(state.files_written)
 
     # --- Finalize Loop Governor report ---
+    try:
+        state.metadata["recovery"] = recovery.to_metadata()
+    except Exception:
+        pass
     try:
         gov.finalize(state)
     except Exception as _gov_fin_exc:
