@@ -143,6 +143,20 @@ class HostingService:
             self._instances = {
                 r["instance_id"]: self._inst_from_row(r) for r in rows
             }
+            # Redis hydrate: merge instances visible to other workers
+            try:
+                from lumen.engine.services.hosting import redis_state as host_redis
+                # Best-effort: any Redis keys we can list via user scans is limited;
+                # refresh known ids from store already loaded, and accept Redis as
+                # newer status if present.
+                for iid, inst in list(self._instances.items()):
+                    remote = host_redis.get_instance(iid)
+                    if not remote:
+                        continue
+                    if float(remote.get("last_health_at") or 0) >= float(inst.last_health_at or 0):
+                        self._instances[iid] = self._inst_from_row(remote)
+            except Exception:
+                pass
         except Exception:
             self._instances = {}
 
@@ -172,10 +186,31 @@ class HostingService:
             self._save_unlocked()
 
     def list_for_user(self, user_id: int) -> list[HostInstance]:
-        return [i for i in self._instances.values() if i.user_id == user_id]
+        out = {i.instance_id: i for i in self._instances.values() if i.user_id == user_id}
+        try:
+            from lumen.engine.services.hosting import redis_state as host_redis
+            for remote in host_redis.list_for_user(int(user_id)):
+                iid = str(remote.get("instance_id") or "")
+                if not iid:
+                    continue
+                inst = self._inst_from_row(remote)
+                out[iid] = inst
+                self._instances[iid] = inst
+        except Exception:
+            pass
+        return list(out.values())
 
     def get(self, instance_id: str, user_id: int | None = None) -> HostInstance | None:
         inst = self._instances.get(instance_id)
+        if inst is None:
+            try:
+                from lumen.engine.services.hosting import redis_state as host_redis
+                remote = host_redis.get_instance(str(instance_id))
+                if remote:
+                    inst = self._inst_from_row(remote)
+                    self._instances[str(instance_id)] = inst
+            except Exception:
+                inst = None
         if inst is None:
             return None
         if user_id is not None and inst.user_id != user_id:
@@ -553,8 +588,8 @@ class HostingService:
         try:
             stopped = False
             dep = (inst.deployment_id or "").strip()
-            backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
-            if backend == "firecracker" or dep.startswith("fc-"):
+            # Permanent host plane: stop via Firecracker only (no Docker fallback)
+            if dep:
                 try:
                     from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                         FirecrackerSandboxBackend,
@@ -562,27 +597,7 @@ class HostingService:
                     FirecrackerSandboxBackend().stop(dep)
                     stopped = True
                 except Exception as fc_exc:
-                    inst.last_error = f"fc_stop:{type(fc_exc).__name__}"
-            elif dep:
-                try:
-                    from lumen.engine.services.live_deployment.docker_process_driver import (
-                        DockerProcessDriver,
-                        docker_available,
-                    )
-                    if docker_available():
-                        DockerProcessDriver().stop(dep)
-                        stopped = True
-                except Exception:
-                    pass
-                if not stopped:
-                    try:
-                        from lumen.engine.services.sandbox_runtime import select_sandbox_backend
-
-                        backend, _ = select_sandbox_backend(require_available=False)
-                        backend.stop(dep)
-                        stopped = True
-                    except Exception:
-                        pass
+                    inst.last_error = f"fc_stop:{type(fc_exc).__name__}:{fc_exc}"[:300]
         except Exception as e:
             inst.status = "stopped"
             inst.last_error = str(e)
@@ -636,8 +651,8 @@ class HostingService:
                 raw = FirecrackerSandboxBackend().logs(dep, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
             elif dep:
-                from lumen.engine.services.sandbox_runtime import select_sandbox_backend
-                b, _ = select_sandbox_backend(require_available=False)
+                from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
+                b = FirecrackerSandboxBackend()
                 raw = b.logs(dep, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
         except Exception as exc:
@@ -703,34 +718,7 @@ class HostingService:
                 return bool(meta.get("bot_marker") or meta.get("bot_healthy"))
             except Exception:
                 return False
-        # Docker / gVisor / DinD deployments
-        try:
-            from lumen.engine.services.live_deployment.docker_process_driver import (
-                DockerProcessDriver,
-                docker_available,
-            )
-            if docker_available():
-                st = DockerProcessDriver().status(dep)
-                return str(getattr(st, "status", "")).lower() == "running"
-        except Exception:
-            pass
-        try:
-            import subprocess
-            from lumen.engine.services.live_deployment import docker_process_driver as dpd
-
-            info = getattr(dpd, "_RUNNING", {}).get(dep) or {}
-            cname = info.get("container") or info.get("name") or ""
-            if cname:
-                r = subprocess.run(
-                    ["docker", "inspect", "-f", "{{.State.Running}}", cname],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                )
-                return (r.stdout or "").strip().lower() == "true"
-        except Exception:
-            return False
+        # Permanent host plane: no Docker liveness — Firecracker only
         return False
 
 
@@ -753,9 +741,10 @@ class HostingService:
                 lines = FirecrackerSandboxBackend().logs(dep, limit=200)
                 run_log = sanitize_log_text("\n".join(lines)[-8000:])
             elif dep:
-                from lumen.engine.services.sandbox_runtime import select_sandbox_backend
-                b, _ = select_sandbox_backend(require_available=False)
-                lines = b.logs(dep, limit=200)
+                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                    FirecrackerSandboxBackend,
+                )
+                lines = FirecrackerSandboxBackend().logs(dep, limit=200)
                 if lines:
                     run_log = sanitize_log_text("\n".join(lines)[-8000:])
         except Exception:

@@ -82,3 +82,22 @@ def test_host_instance_has_public_and_version_fields() -> None:
     assert "public_base_url" in names
     assert "version_ref" in names
     assert "last_health_at" in names
+
+
+def test_worker_uses_permanent_host_bot_not_generic() -> None:
+    src = (REPO / "lumen/engine/services/hosting/worker.py").read_text(encoding="utf-8")
+    assert "start_permanent_host_bot" in src
+    assert "start_sandboxed_bot" not in src
+
+
+def test_service_stop_and_alive_no_docker() -> None:
+    src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "DockerProcessDriver" not in src
+    assert "docker inspect" not in src
+    assert "start_permanent_host_bot" in src
+
+
+def test_service_get_and_list_use_redis() -> None:
+    src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "host_redis.get_instance" in src
+    assert "host_redis.list_for_user" in src

@@ -123,16 +123,42 @@ def process_one(queue=None, fleet=None) -> bool:
             zpath = fetch_artifact(artifact_uri, artifact_key)
             build_path = str(extract_artifact(zpath, work_id))
 
-        # Single production path: sandbox_runtime (never bare LocalProcess)
+        # PERMANENT_HOST only: Firecracker via start_permanent_host_bot (never Docker select)
         os.environ.setdefault("TBE_WORKER_BUILD", "1")
         try:
-            from lumen.engine.services.sandbox_runtime import start_sandboxed_bot
-            backend, handle = start_sandboxed_bot(
+            from pathlib import Path as _P
+            from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
+            from lumen.engine.services.sandbox_runtime import start_permanent_host_bot
+            from lumen.engine.services.hosting.ingress import (
+                public_url_for_instance,
+                write_traefik_route,
+                write_caddy_route,
+            )
+            from lumen.engine.services.hosting import redis_state as host_redis
+            from lumen.engine.services.hosting.contract import token_fingerprint
+            import time as _time
+
+            prep = prepare_project_for_host(
+                build_path,
+                entry_point=str(meta.get("entry_point") or ""),
+            )
+            if not prep.ok:
+                q.mark_failed(job.job_id, f"prepare:{prep.message}"[:500])
+                return True
+            try:
+                from lumen.engine.services.hosting.versions import publish_version
+                if prep.details.get("version_ref"):
+                    publish_version(build_path, str(prep.details["version_ref"]))
+            except Exception:
+                pass
+            env = {"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token}
+            env.update({k: str(v) for k, v in (prep.env_vars or {}).items() if k and v})
+            backend, handle = start_permanent_host_bot(
                 project_path=build_path,
                 bot_token=token,
                 user_id=int(job.user_id),
                 service_name=f"user-{job.user_id}",
-                env_vars={"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token},
+                env_vars=env,
             )
             if handle.ok and handle.status == "running":
                 q.mark_running(
@@ -140,9 +166,39 @@ def process_one(queue=None, fleet=None) -> bool:
                     deployment_id=handle.deployment_id or "",
                     image_tag=str((handle.meta or {}).get("runtime") or backend.name),
                 )
+                iid = f"host-{job.job_id.replace('job_', '')[:10]}" if job.job_id else handle.deployment_id
+                iid = (iid or handle.deployment_id or f"host-{int(_time.time())}")[:64]
+                public = public_url_for_instance(iid)
+                try:
+                    write_traefik_route(instance_id=iid, enabled=True)
+                    write_caddy_route(instance_id=iid, enabled=True)
+                except Exception:
+                    pass
+                payload = {
+                    "instance_id": iid,
+                    "user_id": int(job.user_id),
+                    "project_path": str(build_path),
+                    "entry_point": prep.entry_point or "",
+                    "bot_username": str(meta.get("bot_username") or ""),
+                    "status": "running",
+                    "deployment_id": handle.deployment_id or "",
+                    "sandbox_backend": "firecracker",
+                    "pid": None,
+                    "started_at": _time.time(),
+                    "last_error": "",
+                    "last_diagnosis": {},
+                    "token_fp": token_fingerprint(token),
+                    "public_base_url": public,
+                    "version_ref": str((prep.details or {}).get("version_ref") or ""),
+                    "last_health_at": _time.time(),
+                }
+                try:
+                    host_redis.put_instance(payload)
+                except Exception:
+                    logger.exception("worker redis put failed")
                 logger.info(
-                    "job %s running backend=%s dep=%s",
-                    job.job_id, backend.name, handle.deployment_id,
+                    "job %s running backend=firecracker dep=%s instance=%s",
+                    job.job_id, handle.deployment_id, iid,
                 )
             else:
                 q.mark_failed(
