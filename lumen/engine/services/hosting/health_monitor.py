@@ -88,6 +88,17 @@ def run_once(hosting_service) -> dict:
                 getattr(inst, "instance_id", ""),
                 reason,
             )
+            # Best-effort: stop dead FC deployment so ports/TAP are released.
+            # Full restart requires sealed token (not stored on HostInstance).
+            try:
+                dep = (getattr(inst, "deployment_id", None) or "").strip()
+                if dep:
+                    from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+                        FirecrackerSandboxBackend,
+                    )
+                    FirecrackerSandboxBackend().stop(dep)
+            except Exception:
+                pass
     try:
         if hasattr(hosting_service, "_save"):
             hosting_service._save()
