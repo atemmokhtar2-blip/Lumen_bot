@@ -54,6 +54,13 @@ def _with_network_recovery(
     # Avoid nested recovery
     if (params or {}).get("_recovery_attempted"):
         return result
+    # Non-retriable outcomes (auth / policy / missing input) — do not spin
+    data = dict(result.data or {})
+    if any(data.get(k) for k in (
+        "needs_auth", "needs_bot_token", "needs_project", "denied",
+        "rate_limited", "needs_confirmation", "missing_binary",
+    )):
+        return result
     try:
         from lumen.engine.services.cline_runtime.structured_recovery import (
             StructuredRecovery,
@@ -209,7 +216,12 @@ def execute_tool(
         if name == "repo_modify":
             return _tool_repo_modify(params, user_data=user_data or {})
         if name in {"host_start", "host_stop", "host_status", "host_diagnose"}:
-            return _tool_host(name, params, user_id=user_id, user_data=user_data or {})
+            return _with_network_recovery(
+                name, params,
+                _tool_host(name, params, user_id=user_id, user_data=user_data or {}),
+                user_id=user_id, user_data=user_data,
+                runner=lambda p: _tool_host(name, p, user_id=user_id, user_data=user_data or {}),
+            )
         if name in {"generate_bot", "refine_bot"}:
             # Generation is owned by multi-agent orchestrate_generate — signal only
             return ToolResult(
