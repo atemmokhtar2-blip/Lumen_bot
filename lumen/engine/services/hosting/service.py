@@ -724,13 +724,27 @@ class HostingService:
                 instance=inst,
             )
         self.stop(instance_id=instance_id, user_id=user_id)
-        return self.start(
+        result = self.start(
             user_id=user_id,
             project_path=path,
             bot_token=token,
             bot_username=username,
             entry_point=entry,
         )
+        # Lifecycle: keep stable instance_id for the user-facing project identity
+        if result.ok and result.instance is not None:
+            new_inst = result.instance
+            old_id = instance_id
+            if new_inst.instance_id != old_id:
+                self._instances.pop(new_inst.instance_id, None)
+                new_inst.instance_id = old_id
+                self._instances[old_id] = new_inst
+                try:
+                    self._save()
+                except Exception:
+                    pass
+                result.instance = new_inst
+        return result
 
     def status(self, *, user_id: int, instance_id: str | None = None) -> HostResult:
         items = self.list_for_user(user_id)
@@ -772,7 +786,7 @@ class HostingService:
                     collect_instance_logs,
                     ship_to_loki,
                 )
-                raw = collect_instance_logs(inst.instance_id, dep, limit=max(10, min(200, int(limit))))
+                raw = collect_instance_logs(inst.instance_id, dep, limit=max(10, min(200, int(limit))), project_path=str(inst.project_path or ""))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
                 try:
                     ship_to_loki(inst.instance_id, lines)

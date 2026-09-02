@@ -68,3 +68,40 @@ def test_network_documents_firecracker():
 
     notes = permanent_host_network_notes()
     assert "Firecracker" in notes or "firecracker" in notes.lower()
+
+
+def test_prepare_sets_guest_space_env(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    (tmp_path / "main.py").write_text("print(1)\n", encoding="utf-8")
+    from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
+
+    r = prepare_project_for_host(tmp_path, install_deps=False)
+    assert r.ok
+    assert r.env_vars.get("LUMEN_DATA_DIR") == "/project/data"
+    assert r.env_vars.get("LUMEN_LOGS_DIR") == "/project/logs"
+    assert r.env_vars.get("DATABASE_PATH") == "/project/data/bot.db"
+
+
+def test_supervisor_source_ensures_space_dirs():
+    src = (REPO / "lumen/engine/services/sandbox_runtime/guest_agent/supervisor.py").read_text(
+        encoding="utf-8"
+    )
+    assert "LUMEN_DATA_DIR" in src
+    assert 'PROJECT / "data"' in src or "data_dir" in src
+    assert "bot.stdout.log" in src
+
+
+def test_log_aggregator_writes_project_logs(tmp_path, monkeypatch):
+    monkeypatch.setenv("TBE_LOG_AGGREGATE_DIR", str(tmp_path / "central"))
+    (tmp_path / "proj" / "logs").mkdir(parents=True)
+    (tmp_path / "proj" / "logs" / "bot.stdout.log").write_text("hello-bot\n", encoding="utf-8")
+    from lumen.hosting.log_aggregator import collect_instance_logs
+
+    lines = collect_instance_logs("i1", "", project_path=str(tmp_path / "proj"), limit=10)
+    assert any("hello-bot" in x for x in lines)
+    assert (tmp_path / "proj" / "logs" / "host.jsonl").is_file()
+
+
+def test_restart_reuses_instance_id_in_source():
+    src = (REPO / "lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
+    assert "new_inst.instance_id = old_id" in src or "instance_id = old_id" in src

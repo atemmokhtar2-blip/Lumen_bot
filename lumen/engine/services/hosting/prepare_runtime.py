@@ -214,6 +214,11 @@ def prepare_project_for_host(
     env: dict[str, str] = {
         "LUMEN_BOT_ENTRY": entry,
         "LUMEN_PROJECT_ROOT": "/project",
+        "LUMEN_DATA_DIR": "/project/data",
+        "LUMEN_LOGS_DIR": "/project/logs",
+        "LUMEN_STATIC_DIR": "/project/static",
+        "DATABASE_PATH": "/project/data/bot.db",
+        "SQLITE_PATH": "/project/data/bot.db",
     }
 
     details: dict[str, Any] = {"entry_point": entry}

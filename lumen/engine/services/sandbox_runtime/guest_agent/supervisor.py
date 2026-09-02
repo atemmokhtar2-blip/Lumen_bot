@@ -112,6 +112,27 @@ def main() -> int:
         return 3
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     os.environ["BOT_TOKEN"] = token
+    # Project Space (Part 2) — durable paths inside /project
+    for sub in ("data", "logs", "static"):
+        try:
+            (PROJECT / sub).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    data_dir = Path(os.environ.get("LUMEN_DATA_DIR") or str(PROJECT / "data"))
+    logs_dir = Path(os.environ.get("LUMEN_LOGS_DIR") or str(PROJECT / "logs"))
+    static_dir = Path(os.environ.get("LUMEN_STATIC_DIR") or str(PROJECT / "static"))
+    for d in (data_dir, logs_dir, static_dir):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    os.environ["LUMEN_DATA_DIR"] = str(data_dir)
+    os.environ["LUMEN_LOGS_DIR"] = str(logs_dir)
+    os.environ["LUMEN_STATIC_DIR"] = str(static_dir)
+    os.environ.setdefault("LUMEN_PROJECT_ROOT", str(PROJECT))
+    # Common bot frameworks look for SQLITE / DATA paths
+    os.environ.setdefault("DATABASE_PATH", str(data_dir / "bot.db"))
+    os.environ.setdefault("SQLITE_PATH", str(data_dir / "bot.db"))
     # Host-prepared deps (pip --target on API/worker) — required when egress is Telegram-only
     extra_paths: list[str] = []
     host_deps = (os.environ.get("LUMEN_HOST_DEPS") or "").strip()
@@ -140,6 +161,12 @@ def main() -> int:
     restarts = 0
     while restarts <= MAX_RESTARTS:
         _log(f"lumen-bot-started entry={entry}")
+        log_file = None
+        try:
+            log_path = logs_dir / "bot.stdout.log"
+            log_file = open(log_path, "ab", buffering=0)
+        except Exception:
+            log_file = None
         try:
             proc = subprocess.Popen(
                 [sys.executable, str(entry)],
@@ -149,6 +176,11 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
             )
         except Exception as exc:
+            if log_file:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
             _log(f"lumen-bot-fatal spawn:{type(exc).__name__}")
             return 6
 
@@ -160,8 +192,18 @@ def main() -> int:
                     sys.stdout.buffer.flush()
                 except Exception:
                     break
+                if log_file is not None:
+                    try:
+                        log_file.write(raw)
+                    except Exception:
+                        pass
         except Exception:
             pass
+        if log_file is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
         code = proc.wait()
         _log(f"lumen-bot-exit {code}")
         if code == 0:

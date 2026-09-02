@@ -32,7 +32,13 @@ def _local_dir() -> Path:
     return p
 
 
-def collect_instance_logs(instance_id: str, deployment_id: str, *, limit: int = 200) -> list[str]:
+def collect_instance_logs(
+    instance_id: str,
+    deployment_id: str,
+    *,
+    limit: int = 200,
+    project_path: str = "",
+) -> list[str]:
     lines: list[str] = []
     dep = (deployment_id or "").strip()
     if dep:
@@ -41,21 +47,54 @@ def collect_instance_logs(instance_id: str, deployment_id: str, *, limit: int = 
                 FirecrackerSandboxBackend,
             )
 
-            lines = list(FirecrackerSandboxBackend().logs(dep, limit=max(10, min(500, limit))) or [])
+            lines = list(
+                FirecrackerSandboxBackend().logs(dep, limit=max(10, min(500, limit))) or []
+            )
         except Exception as exc:
-            lines = [f"log_collect_error:{type(exc).__name__}"]
-    # persist ring
+            lines = ["log_collect_error:%s" % type(exc).__name__]
+    root = (project_path or "").strip()
+    if root:
+        try:
+            from pathlib import Path as _P
+
+            plog = _P(root) / "logs" / "bot.stdout.log"
+            if plog.is_file():
+                tail = plog.read_text(encoding="utf-8", errors="ignore").splitlines()[-limit:]
+                lines = list(lines) + ["[project/logs] %s" % x for x in tail]
+        except Exception:
+            pass
     try:
-        path = _local_dir() / f"{instance_id}.jsonl"
+        path = _local_dir() / ("%s.jsonl" % instance_id)
         with path.open("a", encoding="utf-8") as fh:
             for line in lines[-limit:]:
-                fh.write(json.dumps({"ts": time.time(), "line": str(line)[:2000]}, ensure_ascii=False) + "\n")
-        # trim file size roughly
+                fh.write(
+                    json.dumps(
+                        {"ts": time.time(), "line": str(line)[:2000]}, ensure_ascii=False
+                    )
+                    + chr(10)
+                )
         if path.stat().st_size > 5_000_000:
             content = path.read_text(encoding="utf-8", errors="ignore").splitlines()[-2000:]
-            path.write_text("\n".join(content) + "\n", encoding="utf-8")
+            path.write_text(chr(10).join(content) + chr(10), encoding="utf-8")
     except Exception:
         pass
+    if root:
+        try:
+            from pathlib import Path as _P
+
+            pl = _P(root) / "logs"
+            pl.mkdir(parents=True, exist_ok=True)
+            with (pl / "host.jsonl").open("a", encoding="utf-8") as fh:
+                for line in lines[-min(50, max(1, limit)):]:
+                    fh.write(
+                        json.dumps(
+                            {"ts": time.time(), "line": str(line)[:2000]},
+                            ensure_ascii=False,
+                        )
+                        + chr(10)
+                    )
+        except Exception:
+            pass
     return lines
 
 
@@ -119,8 +158,8 @@ def ship_to_elasticsearch(instance_id: str, lines: list[str]) -> bool:
         return False
 
 
-def aggregate_and_ship(instance_id: str, deployment_id: str, *, limit: int = 100) -> dict[str, Any]:
-    lines = collect_instance_logs(instance_id, deployment_id, limit=limit)
+def aggregate_and_ship(instance_id: str, deployment_id: str, *, limit: int = 100, project_path: str = "") -> dict[str, Any]:
+    lines = collect_instance_logs(instance_id, deployment_id, limit=limit, project_path=project_path)
     loki = ship_to_loki(instance_id, lines)
     es = ship_to_elasticsearch(instance_id, lines)
     return {"lines": len(lines), "loki": loki, "elasticsearch": es}
@@ -140,6 +179,7 @@ def aggregate_all_running(hosting_service, *, limit: int = 80) -> dict[str, Any]
             str(getattr(inst, "instance_id", "")),
             str(getattr(inst, "deployment_id", "") or ""),
             limit=limit,
+            project_path=str(getattr(inst, "project_path", "") or ""),
         )
         stats["lines"] += int(r.get("lines") or 0)
         stats["loki"] += 1 if r.get("loki") else 0
