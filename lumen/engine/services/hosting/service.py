@@ -156,10 +156,16 @@ class HostingService:
     def _save_unlocked(self) -> None:
         """Persist each instance after Pydantic contract validation (trust boundary)."""
         from lumen.engine.schemas.hosting_contract import HostInstanceRecord
+        from lumen.engine.services.hosting import redis_state as host_redis
 
         for inst in self._instances.values():
             record = HostInstanceRecord.from_host_instance(inst)
-            self._store.upsert(record.to_persist_dict())
+            payload = record.to_persist_dict()
+            self._store.upsert(payload)
+            try:
+                host_redis.put_instance(payload)
+            except Exception:
+                pass
 
     def _save(self) -> None:
         with exclusive_state_lock(self._lock_path()):
@@ -278,6 +284,13 @@ class HostingService:
                 details=dict(prepared.details or {}),
             )
         entry_resolved = prepared.entry_point
+        version_ref = str((prepared.details or {}).get("version_ref") or "")
+        try:
+            if version_ref:
+                from lumen.engine.services.hosting.versions import publish_version
+                publish_version(path, version_ref)
+        except Exception:
+            pass
 
         # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
         scale = (os.environ.get("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -389,8 +402,8 @@ class HostingService:
         }
         env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
-            from lumen.engine.services.sandbox_runtime import start_sandboxed_bot
-            _backend, handle = start_sandboxed_bot(
+            from lumen.engine.services.sandbox_runtime import start_permanent_host_bot
+            _backend, handle = start_permanent_host_bot(
                 project_path=str(path),
                 bot_token=token_norm,
                 user_id=int(user_id),
@@ -456,6 +469,8 @@ class HostingService:
         public_url = public_url_for_instance(instance_id)
         try:
             write_traefik_route(instance_id=instance_id, enabled=running_like)
+            from lumen.engine.services.hosting.ingress import write_caddy_route
+            write_caddy_route(instance_id=instance_id, enabled=running_like)
         except Exception:
             pass
         version_ref = str((prepared.details or {}).get("version_ref") or "")

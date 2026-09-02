@@ -167,3 +167,50 @@ def start_sandboxed_bot(
     handle.meta["backend"] = backend.name
     handle.meta["production_path"] = is_production_sandbox_path()
     return backend, handle
+
+
+def start_permanent_host_bot(
+    *,
+    project_path: str,
+    bot_token: str,
+    user_id: int = 0,
+    service_name: str = "",
+    env_vars: Optional[dict] = None,
+):
+    """PERMANENT_HOST path — Firecracker microVM only. Never Docker/gVisor/DinD.
+
+    Root isolation fix: permanent hosting must not call select_sandbox_backend(),
+    which may pick weaker backends in misconfigured environments.
+    """
+    from .types import SandboxSpec
+
+    backend = FirecrackerSandboxBackend()
+    probe = backend.probe()
+    if not probe.available:
+        raise RuntimeError(
+            f"permanent_host_requires_firecracker:{probe.reason}. "
+            "Install firecracker+jailer+kernel+rootfs. "
+            "Docker/gVisor are not accepted for commercial hosting."
+        )
+    if is_production_sandbox_path():
+        # Double-gate: never allow opt-out env to weaken this path
+        req = _requested_backend()
+        if req in _DEV_ONLY:
+            raise RuntimeError(
+                f"permanent_host_rejects_dev_backend:{req}"
+            )
+    spec = SandboxSpec(
+        project_path=str(project_path),
+        bot_token=bot_token,
+        user_id=int(user_id or 0),
+        service_name=service_name or f"host-u{user_id}",
+        env_vars=dict(env_vars or {}),
+    )
+    handle = backend.start(spec)
+    handle.meta = dict(handle.meta or {})
+    handle.meta["probe"] = probe.reason
+    handle.meta["backend"] = backend.name
+    handle.meta["production_path"] = is_production_sandbox_path()
+    handle.meta["permanent_host"] = True
+    return backend, handle
+

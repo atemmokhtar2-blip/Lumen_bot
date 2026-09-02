@@ -120,6 +120,52 @@ def remove_traefik_route(instance_id: str) -> None:
     write_traefik_route(instance_id=instance_id, enabled=False)
 
 
+def caddy_dynamic_dir() -> Path | None:
+    raw = (os.environ.get("TBE_CADDY_DYNAMIC_DIR") or "").strip()
+    return Path(raw) if raw else None
+
+
+def write_caddy_route(
+    *,
+    instance_id: str,
+    backend_url: str = "",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Caddy JSON/snippet by hostname — alternative to Traefik when TBE_CADDY_DYNAMIC_DIR set."""
+    domain = base_domain()
+    public = public_url_for_instance(instance_id)
+    result: dict[str, Any] = {"public_base_url": public, "written": False, "path": ""}
+    ddir = caddy_dynamic_dir()
+    if not ddir or not domain:
+        return result
+    try:
+        ddir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return result
+    path = ddir / f"lumen-host-{instance_id}.caddy"
+    result["path"] = str(path)
+    if not enabled:
+        try:
+            path.unlink(missing_ok=True)  # type: ignore[call-arg]
+        except Exception:
+            try:
+                if path.is_file():
+                    path.unlink()
+            except Exception:
+                pass
+        return result
+    host = f"{instance_id}.{domain}".lower()
+    service_url = backend_url or (os.environ.get("TBE_INGRESS_DEFAULT_BACKEND") or "http://127.0.0.1:9")
+    body = f"{host} {{\n\treverse_proxy {service_url}\n}}\n"
+    try:
+        path.write_text(body, encoding="utf-8")
+        result["written"] = True
+    except Exception as exc:
+        logger.warning("caddy route write failed: %s", exc)
+    return result
+
+
+
 __all__ = [
     "base_domain",
     "public_url_for_instance",

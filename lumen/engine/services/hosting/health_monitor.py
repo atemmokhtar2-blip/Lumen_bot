@@ -38,20 +38,12 @@ def check_instance(inst, *, get_backend_status: Callable | None = None) -> tuple
     try:
         if get_backend_status is not None:
             return get_backend_status(inst)
-        from lumen.engine.services.sandbox_runtime.select import select_sandbox_backend
+        # Permanent host health is Firecracker-plane only (no docker status confusion)
+        from lumen.engine.services.sandbox_runtime.firecracker_backend import (
+            FirecrackerSandboxBackend,
+        )
 
-        b, _ = select_sandbox_backend(require_available=False)
-        if backend and getattr(b, "name", "") != backend:
-            # Prefer named backend when possible
-            try:
-                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
-                    FirecrackerSandboxBackend,
-                )
-
-                if backend == "firecracker":
-                    b = FirecrackerSandboxBackend()
-            except Exception:
-                pass
+        b = FirecrackerSandboxBackend()
         if not hasattr(b, "status"):
             return True, "backend_no_status_method"
         handle = b.status(dep)

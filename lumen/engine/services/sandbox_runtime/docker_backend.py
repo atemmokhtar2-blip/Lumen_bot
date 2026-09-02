@@ -49,6 +49,18 @@ class DockerSandboxBackend(SandboxBackend):
         sec = seccomp_profile_path()
         if sec and not (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip():
             os.environ["TBE_DOCKER_SECCOMP"] = sec
+        # Fail closed: Docker path (dev only) must not run without seccomp unless explicit opt-out
+        allow_no = (os.environ.get("TBE_DOCKER_ALLOW_NO_SECCOMP") or "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        active_sec = (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip()
+        if not active_sec and not allow_no:
+            return SandboxHandle(
+                backend=self.name,
+                deployment_id="",
+                status="failed",
+                message="docker_seccomp_required: set TBE_DOCKER_SECCOMP profile or only use Firecracker",
+            )
 
         from lumen.engine.services.live_deployment.docker_process_driver import (
             DockerProcessDriver,
