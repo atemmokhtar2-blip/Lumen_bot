@@ -233,6 +233,40 @@ class LoopGovernor:
             return "repeated_tool_loop"
         return None
 
+    def note_blocked_step(self, *, tool: str | None, reason: str) -> str | None:
+        """Record a step that did not execute a mutating tool (policy/parse block).
+
+        Always counts as no-progress. Returns stop reason when limit hit.
+        """
+        tool_s = str(tool or "") or "blocked"
+        self.no_progress_streak += 1
+        self.steps_log.append({
+            "step": self.step_index,
+            "event": "blocked",
+            "tool": tool_s,
+            "reason": str(reason)[:120],
+            "streak": self.no_progress_streak,
+            "elapsed_sec": round(_time.monotonic() - self.loop_start, 2) if self.loop_start else 0,
+        })
+        if self.no_progress_streak >= self.no_progress_limit and self.step_index >= 1:
+            self.stop_reason_detail = {
+                "reason": "no_progress",
+                "streak": self.no_progress_streak,
+                "limit": self.no_progress_limit,
+                "last_tool": tool_s,
+                "blocked_reason": str(reason)[:120],
+                "step": self.step_index,
+            }
+            self.steps_log.append({
+                "step": self.step_index,
+                "event": "hard_stop_no_progress",
+                "streak": self.no_progress_streak,
+                "tool": tool_s,
+                "via": "blocked",
+            })
+            return "no_progress"
+        return None
+
     def note_tool_result(
         self,
         *,
@@ -294,14 +328,16 @@ class LoopGovernor:
             "prompt_chars_end": self.prompt_chars_end,
             "repeated_tool_limit": self.repeated_tool_limit,
             "no_progress_limit": self.no_progress_limit,
+            "no_progress_streak": self.no_progress_streak,
+            "repeat_count": self.repeat_count,
+            "step_index": self.step_index,
             "steps_log": list(self.steps_log)[-60:],
             "stop_reason_detail": self.stop_reason_detail,
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "total_tokens_est": self.total_tokens_est,
-            "no_progress_streak": self.no_progress_streak,
-            "repeat_count": self.repeat_count,
         }
+
 
     def finalize(self, state: "AgentState") -> None:
         meta = self.to_metadata()
@@ -792,6 +828,15 @@ def run_agent(
                 step.tool_result = {"ok": False, "error": "read_before_edit_required", "path": target}
                 state.steps.append(step)
                 state.warnings.append(f"policy_read_before_edit:{target}")
+                _br = gov.note_blocked_step(tool=str(tool), reason=f"read_before_edit:{target}")
+                state.metadata["loop_governor"] = gov.to_metadata()
+                if _br:
+                    state.stop_reason = _br
+                    state.ok = bool(state.files_written)
+                    state.warnings.append(
+                        f"no_progress_streak:{gov.no_progress_streak}>={gov.no_progress_limit}"
+                    )
+                    break
                 continue
         if tool == "read_file":
             rp = str(args.get("path") or "")
@@ -809,6 +854,15 @@ def run_agent(
                 step.tool_result = {"ok": False, "error": "prefer_edit_not_overwrite", "path": wp}
                 state.steps.append(step)
                 state.warnings.append(f"policy_prefer_edit:{wp}")
+                _br = gov.note_blocked_step(tool=str(tool), reason=f"prefer_edit:{wp}")
+                state.metadata["loop_governor"] = gov.to_metadata()
+                if _br:
+                    state.stop_reason = _br
+                    state.ok = bool(state.files_written)
+                    state.warnings.append(
+                        f"no_progress_streak:{gov.no_progress_streak}>={gov.no_progress_limit}"
+                    )
+                    break
                 continue
 
         if decision.get("finish") or tool == "finish":
