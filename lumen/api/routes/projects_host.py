@@ -118,7 +118,27 @@ async def project_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "deleted": instance_id})
 
 
+async def project_restart(request: web.Request) -> web.Response:
+    """POST /v1/projects/{id}/restart — uses sealed secrets if bot_token omitted."""
+    tenant = require_tenant(request)
+    instance_id = str(request.match_info.get("id") or "").strip()
+    body = await safe_json_body(request, required=False, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    bot_token = str((body or {}).get("bot_token") or (body or {}).get("token") or "").strip()
+    uid = _uid(tenant.tenant_id)
+    result = await asyncio.to_thread(
+        lambda: get_hosting_service().restart(
+            instance_id=instance_id, user_id=uid, bot_token=bot_token
+        )
+    )
+    return web.json_response(
+        {"ok": result.ok, "message": result.message, "project": _inst_json(result.instance)},
+        status=200 if result.ok else 422,
+    )
+
+
 async def project_start(request: web.Request) -> web.Response:
+
     """POST /v1/projects — start host: {project_path, bot_token}"""
     from lumen.api.routes import hosts as hosts_mod
 
@@ -131,4 +151,5 @@ __all__ = [
     "project_redeploy",
     "project_delete",
     "project_start",
+    "project_restart",
 ]

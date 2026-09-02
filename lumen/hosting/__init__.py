@@ -7,6 +7,12 @@ from lumen.hosting.rate_limiter import check_can_start, max_concurrent, record_s
 from lumen.hosting.secrets_env import seal_project_secrets, inject_secrets_env, load_project_secrets
 from lumen.hosting.usage_billing import compute_session_usage, settle_instance, record_request
 from lumen.hosting.ops_scheduler import start_ops_scheduler
+from lumen.hosting.project_space import (
+    ensure_project_space,
+    write_runtime_manifest,
+    load_runtime_manifest,
+    ProjectSpace,
+)
 
 __all__ = [
     "resolve_backend_name", "start_host", "stop_host",
@@ -17,4 +23,8 @@ __all__ = [
     "seal_project_secrets", "inject_secrets_env", "load_project_secrets",
     "compute_session_usage", "settle_instance", "record_request",
     "start_ops_scheduler",
+    "ensure_project_space",
+    "write_runtime_manifest",
+    "load_runtime_manifest",
+    "ProjectSpace",
 ]

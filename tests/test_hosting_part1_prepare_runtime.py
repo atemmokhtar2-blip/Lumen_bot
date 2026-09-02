@@ -73,9 +73,11 @@ def test_guest_supervisor_uses_host_deps() -> None:
 def test_service_calls_prepare_before_sandbox() -> None:
     src = Path("lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
     prep = src.find("prepare_project_for_host")
-    sbx = src.find("start_permanent_host_bot")
+    sbx = src.find("start_host")
     if sbx < 0:
-        sbx = src.find("start_sandboxed_bot")
+        sbx = src.find("start_permanent_host_bot")
+    if sbx < 0:
+        sbx = src.find("_orch_start")
     assert prep > 0 and sbx > 0
     assert prep < sbx
 

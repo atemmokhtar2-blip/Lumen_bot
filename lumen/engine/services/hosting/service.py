@@ -620,6 +620,12 @@ class HostingService:
             seal_project_secrets(path, {"BOT_TOKEN": token_norm, "TELEGRAM_BOT_TOKEN": token_norm})
         except Exception:
             pass
+        try:
+            from lumen.hosting.project_space import ensure_project_space, register_space_index
+            sp = ensure_project_space(path, user_id=int(user_id))
+            register_space_index(sp)
+        except Exception:
+            pass
 
         # Opt-in: register Telegram webhook on stable public URL
         try:
@@ -688,6 +694,43 @@ class HostingService:
             pass
         self._save()
         return HostResult(ok=True, message="تم إيقاف الاستضافة", instance=inst)
+
+    def restart(
+        self,
+        *,
+        instance_id: str,
+        user_id: int,
+        bot_token: str = "",
+    ) -> HostResult:
+        """Stop then start. Token optional if sealed secrets exist on project."""
+        inst = self.get(instance_id, user_id=user_id)
+        if inst is None:
+            return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
+        path = inst.project_path
+        entry = getattr(inst, "entry_point", "") or ""
+        username = inst.bot_username or ""
+        token = (bot_token or "").strip()
+        if not token:
+            try:
+                from lumen.hosting.secrets_env import load_project_secrets
+                sealed = load_project_secrets(path)
+                token = (sealed.get("BOT_TOKEN") or sealed.get("TELEGRAM_BOT_TOKEN") or "").strip()
+            except Exception:
+                token = ""
+        if not token or ":" not in token:
+            return HostResult(
+                ok=False,
+                message="إعادة التشغيل تحتاج توكن — أرسل التوكن أو تأكد من وجود أسرار مشفّرة للمشروع",
+                instance=inst,
+            )
+        self.stop(instance_id=instance_id, user_id=user_id)
+        return self.start(
+            user_id=user_id,
+            project_path=path,
+            bot_token=token,
+            bot_username=username,
+            entry_point=entry,
+        )
 
     def status(self, *, user_id: int, instance_id: str | None = None) -> HostResult:
         items = self.list_for_user(user_id)

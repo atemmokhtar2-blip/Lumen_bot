@@ -497,6 +497,8 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/projects", projects_host.project_start)
     app.router.add_get("/v1/projects/{id}/logs", projects_host.project_logs)
     app.router.add_post("/v1/projects/{id}/redeploy", projects_host.project_redeploy)
+    app.router.add_post("/v1/projects/{id}/restart", projects_host.project_restart)
+    app.router.add_post("/projects/{id}/restart", projects_host.project_restart)
     app.router.add_delete("/v1/projects/{id}", projects_host.project_delete)
     # Product paths (no version prefix) — same handlers
     app.router.add_get("/projects", projects_host.list_projects)

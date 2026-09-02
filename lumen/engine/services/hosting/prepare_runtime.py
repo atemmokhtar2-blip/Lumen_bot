@@ -195,6 +195,11 @@ def prepare_project_for_host(
     root = Path(project_path).resolve()
     if not root.is_dir():
         return PrepareResult(ok=False, message="مسار المشروع غير موجود")
+    try:
+        from lumen.hosting.project_space import ensure_project_space
+        ensure_project_space(root)
+    except Exception as _sp_exc:
+        logger.info("project_space ensure skipped: %s", type(_sp_exc).__name__)
 
     entry = resolve_entry_point(root, entry_point)
     if not entry:
@@ -237,6 +242,18 @@ def prepare_project_for_host(
 
     version_ref = snapshot_project_version(root)
     details["version_ref"] = version_ref
+    try:
+        from lumen.hosting.project_space import write_runtime_manifest
+        write_runtime_manifest(
+            root,
+            entry_point=entry,
+            backend="firecracker",
+            env_keys=sorted(env.keys()),
+            details={"version_ref": version_ref, **{k: details.get(k) for k in ("requirements",) if k in details}},
+        )
+        details["runtime_manifest"] = ".lumen_runtime.json"
+    except Exception as _rm:
+        logger.info("runtime manifest skipped: %s", type(_rm).__name__)
     return PrepareResult(
         ok=True,
         entry_point=entry,

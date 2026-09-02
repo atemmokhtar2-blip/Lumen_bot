@@ -57,3 +57,14 @@ def telegram_egress_hint() -> str:
         "  - api.telegram.org 443/tcp\n"
         "Block link-local 169.254.0.0/16 and RFC1918 to your control plane."
     )
+
+
+def permanent_host_network_notes() -> str:
+    """Document networking for Firecracker permanent hosts (not Docker bridge)."""
+    return (
+        "Permanent host (Firecracker): each microVM uses a TAP device + egress policy.\n"
+        "Public identity is name-based via TBE_HOST_BASE_DOMAIN + Traefik/Caddy files\n"
+        "from lumen.engine.services.hosting.ingress (not random published ports).\n"
+        "Webhook path: /v1/hooks/telegram/{instance_id} when TBE_HOST_WEBHOOK_MODE=1.\n"
+        "Default bot traffic: outbound polling to api.telegram.org only."
+    )
