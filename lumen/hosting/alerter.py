@@ -108,7 +108,40 @@ def alert_resource(
     )
 
 
+def notify_user(user_id: int, text: str) -> bool:
+    """DM the project owner via the platform Telegram bot (user-facing alerts)."""
+    token = (
+        (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+        or (os.environ.get("BOT_TOKEN") or "").strip()
+        or (os.environ.get("TBE_ALERT_TELEGRAM_BOT_TOKEN") or "").strip()
+    )
+    if not token or not user_id:
+        return False
+    try:
+        import json
+        import urllib.request
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": int(user_id),
+            "text": (text or "")[:3500],
+            "disable_web_page_preview": True,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "Lumen-Host/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return bool(data.get("ok"))
+    except Exception as exc:
+        logger.warning("notify_user failed uid=%s: %s", user_id, type(exc).__name__)
+        return False
+
+
 def alert_instance_failed(
+
 
     *,
     instance_id: str,
@@ -127,6 +160,10 @@ def alert_instance_failed(
     results = {"telegram": False, "webhook": False, "email": False, "sent": False}
     results["telegram"] = _telegram(msg)
     results["email"] = _email("[Lumen Host] instance failed", msg)
+    results["user"] = notify_user(
+        int(user_id),
+        f"⚠️ تنبيه استضافة\nالمثيل: {instance_id}\nالسبب: {reason[:500]}",
+    )
     wh = (os.environ.get("TBE_ALERT_WEBHOOK_URL") or "").strip()
     if wh:
         results["webhook"] = _post_json(
@@ -141,7 +178,7 @@ def alert_instance_failed(
                 "ts": time.time(),
             },
         )
-    results["sent"] = bool(results["telegram"] or results["webhook"] or results["email"])
+    results["sent"] = bool(results.get("telegram") or results.get("webhook") or results.get("email") or results.get("user"))
     if results["sent"]:
         logger.warning("alert sent instance=%s reason=%s", instance_id, reason[:80])
     return results

@@ -152,7 +152,7 @@ async def execute_dash_effect(
         return format_host_result(result)
 
     iid = resolve_instance_id(target, slots)
-    if effect in {"dash_status", "dash_stop", "dash_diagnose", "dash_logs"} and not iid:
+    if effect in {"dash_status", "dash_stop", "dash_diagnose", "dash_logs", "dash_backup", "dash_versions"} and not iid:
         return (
             "لا مثيل مطابق.\n"
             f"target={target!r} count={slots.get('dash_count', '?')}\n"
@@ -178,14 +178,51 @@ async def execute_dash_effect(
         def _lg():
             return svc.logs(user_id=user_id, instance_id=str(iid), limit=60)
         result = await asyncio.to_thread(_lg)
-        # Prefer raw log body for readability
         body = str(getattr(result, "message", "") or "")
         if getattr(result, "ok", False) and body:
-            header = "📝 السجلات الحية"
+            header = "📝 السجلات الحية (مجمّعة)"
             inst = getattr(result, "instance", None)
             if inst is not None and getattr(inst, "instance_id", None):
                 header += f" · `{str(inst.instance_id)[:12]}`"
             return f"{header}\n\n```\n{body[:3200]}\n```"
         return format_host_result(result)
+
+    if effect == "dash_backup":
+        def _bk():
+            inst = svc.get(str(iid), user_id=user_id)
+            if inst is None:
+                return {"ok": False, "error": "المثيل غير موجود"}
+            from lumen.hosting.backup_manager import backup_project
+            return backup_project(inst.project_path, instance_id=inst.instance_id)
+        res = await asyncio.to_thread(_bk)
+        if not res.get("ok"):
+            return f"❌ فشل النسخ الاحتياطي: {res.get('error', 'unknown')}"
+        return (
+            f"✅ تم النسخ الاحتياطي\n"
+            f"• الملفات: {res.get('file_count')}\n"
+            f"• الحجم: {res.get('bytes')} بايت\n"
+            f"• المسار: `{str(res.get('path') or '')[-80:]}`\n"
+            f"• S3: {res.get('s3') or 'محلي فقط'}"
+        )
+
+    if effect == "dash_versions":
+        def _vr():
+            inst = svc.get(str(iid), user_id=user_id)
+            if inst is None:
+                return None
+            from lumen.engine.services.hosting.versions import list_versions
+            return list_versions(inst.project_path)
+        vers = await asyncio.to_thread(_vr)
+        if vers is None:
+            return "❌ المثيل غير موجود"
+        if not vers:
+            return "لا إصدارات محفوظة بعد لهذا المشروع."
+        lines = ["📦 إصدارات النشر:"]
+        for v in list(vers)[:10]:
+            lines.append(
+                f"• `{str(v.get('version_ref') or '')[:12]}` — "
+                f"{v.get('artifact_uri') or v.get('job_key') or ''}"
+            )
+        return "\n".join(lines)[:3500]
 
     return "إجراء لوحة غير معروف."

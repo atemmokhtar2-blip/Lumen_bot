@@ -27,6 +27,10 @@ def host_panel_buttons(*, instance_index: str = "0") -> tuple[tuple[UiButton, ..
         ),
         (
             UiButton("🩺 تشخيص", "dash_diagnose", idx, style="primary"),
+            UiButton("💾 نسخة احتياطية", "dash_backup", idx, style="primary"),
+        ),
+        (
+            UiButton("📦 الإصدارات", "dash_versions", idx, style="primary"),
             UiButton("🔄 إعادة تشغيل", "host_restart", idx, style="success"),
         ),
         (
@@ -54,9 +58,16 @@ def format_host_success(result: Any) -> str:
         be = str(getattr(inst, "sandbox_backend", "") or "")
         if be:
             details.append(f"العزل: {be}")
+        pub = str(getattr(inst, "public_base_url", "") or "")
+        if pub:
+            details.append(f"الرابط العام: {pub}")
+        ver = str(getattr(inst, "version_ref", "") or "")
+        if ver:
+            details.append(f"الإصدار: {ver[:12]}")
         path = str(getattr(inst, "project_path", "") or "")
         if path:
             details.append(f"المسار: {code_path(path)}")
+        details.append("الأسرار: مشفّرة (AES) على القرص — لا تُخزَّن كنص واضح")
     else:
         msg = str(getattr(result, "message", "") or "").strip()
         if msg:

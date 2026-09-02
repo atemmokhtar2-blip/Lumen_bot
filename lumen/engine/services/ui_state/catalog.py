@@ -158,6 +158,16 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "HostService.logs for instance",
         frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
     ),
+    "dash_backup": UiActionSpec(
+        "dash_backup",
+        "Backup project data via hosting.backup_manager",
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
+    ),
+    "dash_versions": UiActionSpec(
+        "dash_versions",
+        "List deploy versions for hosted project",
+        frozenset({EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.GEN_DONE, EngineUiPhase.CONTEXT, EngineUiPhase.HOST_CONFIRM}),
+    ),
     "retry_generate": UiActionSpec(
         "retry_generate",
         "Retry generation from last description",

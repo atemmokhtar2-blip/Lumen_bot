@@ -456,6 +456,16 @@ def apply_action(
         dash_fx = "dash_logs"
         dash_tgt = arg
         msg = "جلب السجلات من HostService..."
+    elif action_id == "dash_backup":
+        new.phase = EngineUiPhase.DASHBOARD
+        dash_fx = "dash_backup"
+        dash_tgt = arg
+        msg = "نسخ احتياطي لبيانات المشروع..."
+    elif action_id == "dash_versions":
+        new.phase = EngineUiPhase.DASHBOARD
+        dash_fx = "dash_versions"
+        dash_tgt = arg
+        msg = "قائمة إصدارات النشر..."
     elif action_id == "dash_trial":
         new.phase = EngineUiPhase.DASHBOARD
         # Reuse trial plane on active project
