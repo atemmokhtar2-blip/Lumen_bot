@@ -412,6 +412,18 @@ class HostingService:
         for iid in to_stop:
             self.stop(instance_id=iid, user_id=user_id)
 
+        # Host rate limits (concurrent + starts/hour)
+        try:
+            from lumen.engine.services.hosting.rate_limiter import check_can_start, record_start
+            running_n = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
+            ok_rl, reason_rl = check_can_start(user_id=int(user_id), running_count=running_n)
+            if not ok_rl:
+                return HostResult(ok=False, message=f"حد الاستضافة: {reason_rl}")
+        except Exception as rl_exc:
+            env = (os.environ.get("ENVIRONMENT") or "").lower()
+            if env not in {"dev", "development", "local", "test"}:
+                return HostResult(ok=False, message=f"rate_limit_unavailable:{type(rl_exc).__name__}")
+
         # Webhook vs polling: default polling (clear webhook). Opt-in stable URL webhook.
         try:
             from lumen.bot.singleton import clear_telegram_webhook, set_telegram_webhook
@@ -592,6 +604,17 @@ class HostingService:
 
         self._instances[instance_id] = inst
         self._save()
+        try:
+            from lumen.engine.services.hosting.rate_limiter import record_start
+            record_start(int(user_id))
+        except Exception:
+            pass
+        try:
+            from lumen.engine.services.hosting.secrets_env import seal_project_secrets
+            seal_project_secrets(path, {"BOT_TOKEN": token_norm, "TELEGRAM_BOT_TOKEN": token_norm})
+        except Exception:
+            pass
+
         # Opt-in: register Telegram webhook on stable public URL
         try:
             use_wh = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "0").strip().lower() in {
@@ -647,6 +670,16 @@ class HostingService:
 
         inst.status = "stopped"
         inst.pid = None
+        try:
+            from lumen.engine.services.hosting.usage_billing import settle_instance
+            settle_instance(inst)
+        except Exception:
+            pass
+        try:
+            from lumen.engine.services.hosting.backup_manager import backup_project
+            backup_project(inst.project_path, instance_id=inst.instance_id)
+        except Exception:
+            pass
         self._save()
         return HostResult(ok=True, message="تم إيقاف الاستضافة", instance=inst)
 
@@ -685,12 +718,17 @@ class HostingService:
         backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
         try:
             from lumen.bot.sanitize import sanitize_log_text
-            if backend == "firecracker" or dep.startswith("fc-"):
-                from lumen.engine.services.sandbox_runtime.firecracker_backend import (
-                    FirecrackerSandboxBackend,
+            if backend == "firecracker" or dep.startswith("fc-") or dep:
+                from lumen.engine.services.hosting.log_aggregator import (
+                    collect_instance_logs,
+                    ship_to_loki,
                 )
-                raw = FirecrackerSandboxBackend().logs(dep, limit=max(10, min(200, int(limit))))
+                raw = collect_instance_logs(inst.instance_id, dep, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
+                try:
+                    ship_to_loki(inst.instance_id, lines)
+                except Exception:
+                    pass
             elif dep:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import FirecrackerSandboxBackend
                 b = FirecrackerSandboxBackend()

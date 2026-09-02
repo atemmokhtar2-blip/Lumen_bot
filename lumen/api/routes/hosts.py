@@ -246,3 +246,94 @@ async def host_restore_version(request: web.Request) -> web.Response:
             content_type="application/json",
         )
     return web.json_response({"ok": True, **result})
+
+
+async def host_logs(request: web.Request) -> web.Response:
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    instance_id = str(body.get("instance_id") or "").strip()
+    limit = int(body.get("limit") or 100)
+    if not instance_id:
+        raise web.HTTPBadRequest(text='{"error":"instance_id_required"}', content_type="application/json")
+    uid = _tenant_user_id(tenant.tenant_id)
+    result = await asyncio.to_thread(
+        lambda: get_hosting_service().logs(user_id=uid, instance_id=instance_id, limit=limit)
+    )
+    return web.json_response(
+        {
+            "ok": result.ok,
+            "message": result.message,
+            "details": result.details,
+            "instance_id": instance_id,
+        },
+        status=200 if result.ok else 422,
+    )
+
+
+async def host_redeploy(request: web.Request) -> web.Response:
+    """Stop then start again — requires bot_token in body (not stored plaintext)."""
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    instance_id = str(body.get("instance_id") or "").strip()
+    bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
+    if not instance_id or not bot_token:
+        raise web.HTTPBadRequest(
+            text='{"error":"instance_id_and_bot_token_required"}',
+            content_type="application/json",
+        )
+    uid = _tenant_user_id(tenant.tenant_id)
+    svc = get_hosting_service()
+    inst = svc.get(instance_id, user_id=uid)
+    if inst is None:
+        raise web.HTTPNotFound(text='{"error":"instance_not_found"}', content_type="application/json")
+    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
+    result = await asyncio.to_thread(
+        lambda: svc.start(
+            user_id=uid,
+            project_path=inst.project_path,
+            bot_token=bot_token,
+            bot_username=inst.bot_username or "",
+            entry_point=getattr(inst, "entry_point", "") or "",
+        )
+    )
+    return web.json_response(
+        {
+            "ok": result.ok,
+            "message": result.message,
+            "instance": None
+            if not result.instance
+            else {
+                "instance_id": result.instance.instance_id,
+                "status": result.instance.status,
+                "public_base_url": getattr(result.instance, "public_base_url", "") or "",
+                "version_ref": getattr(result.instance, "version_ref", "") or "",
+            },
+        },
+        status=200 if result.ok else 422,
+    )
+
+
+async def host_delete(request: web.Request) -> web.Response:
+    """Stop instance and remove from registry (project files retained)."""
+    tenant = require_tenant(request)
+    body = await safe_json_body(request, max_bytes=65536)
+    reject_identity_spoof(body, tenant_id=tenant.tenant_id)
+    instance_id = str(body.get("instance_id") or "").strip()
+    if not instance_id:
+        raise web.HTTPBadRequest(text='{"error":"instance_id_required"}', content_type="application/json")
+    uid = _tenant_user_id(tenant.tenant_id)
+    svc = get_hosting_service()
+    inst = svc.get(instance_id, user_id=uid)
+    if inst is None:
+        raise web.HTTPNotFound(text='{"error":"instance_not_found"}', content_type="application/json")
+    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
+    try:
+        svc._instances.pop(instance_id, None)
+        svc._save()
+        from lumen.engine.services.hosting.redis_state import delete_instance
+        delete_instance(instance_id, user_id=uid)
+    except Exception:
+        pass
+    return web.json_response({"ok": True, "message": "instance_deleted", "instance_id": instance_id})
