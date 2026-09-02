@@ -239,3 +239,7 @@ Scaffolds exist under `lumen/engine/services/platform_generators/`:
 | `last_health_at` | Unix time of last successful orchestrator health probe (~30s loop) |
 
 Production isolation remains **Firecracker only**. Docker is dev-only and still uses seccomp profiles when selected.
+
+| `cpu_quota` | HostInstance architecture field |
+
+| `memory_mb` | HostInstance architecture field |

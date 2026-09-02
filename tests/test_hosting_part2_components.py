@@ -121,7 +121,7 @@ def test_service_has_redeploy_and_webhook_logic():
     assert "def redeploy(" in src
     assert "webhook_public_url" in src
     assert "internal_port" in src
-    assert "set_telegram_webhook" in src
+    assert "apply_to_instance" in src or "set_telegram_webhook" in src
 
 
 def test_host_restart_prefers_sealed_restart():

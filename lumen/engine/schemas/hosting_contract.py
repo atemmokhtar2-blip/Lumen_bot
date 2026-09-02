@@ -47,6 +47,9 @@ class HostInstanceRecord(BaseModel):
     public_base_url: str = ""
     webhook_public_url: str = ""
     internal_port: int = 0
+    platform: str = "telegram"
+    cpu_quota: float = 0.5
+    memory_mb: int = 256
     version_ref: str = Field(default="", max_length=64)
     last_health_at: float = 0.0
 
@@ -113,6 +116,9 @@ class HostInstanceRecord(BaseModel):
             public_base_url=self.public_base_url or "",
             webhook_public_url=self.webhook_public_url or "",
             internal_port=int(self.internal_port or 0),
+            platform=self.platform or "telegram",
+            cpu_quota=float(self.cpu_quota or 0.5),
+            memory_mb=int(self.memory_mb or 256),
             version_ref=self.version_ref or "",
             last_health_at=float(self.last_health_at or 0.0),
         )

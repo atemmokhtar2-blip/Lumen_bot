@@ -126,11 +126,12 @@ def test_phase0_gaps_explicit() -> None:
 
 
 def test_host_instance_has_no_platform_field_yet() -> None:
-    """platform is not on HostInstance; webhook_public_url is (Part 2 networking)."""
+    """Part 3: platform is first-class on HostInstance (telegram default)."""
     names = {f.name for f in fields(HostInstance)}
-    assert "platform" not in names
+    assert "platform" in names
     assert "webhook_public_url" in names
     assert "internal_port" in names
+    assert "cpu_quota" in names and "memory_mb" in names
 
 
 def test_hosting_contract_doc_exists_and_references_planes() -> None:

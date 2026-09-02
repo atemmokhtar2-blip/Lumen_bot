@@ -43,6 +43,9 @@ HOST_INSTANCE_FIELDS: Final[Tuple[str, ...]] = (
     "public_base_url",
     "webhook_public_url",
     "internal_port",
+    "platform",
+    "cpu_quota",
+    "memory_mb",
     "version_ref",
     "last_health_at",
 )

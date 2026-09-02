@@ -74,16 +74,9 @@ async def telegram_host_webhook(request: web.Request) -> web.Response:
     except Exception:
         raise web.HTTPBadRequest()
 
-    # Enqueue for consumers (guest agent / future forwarder)
     try:
-        from lumen.engine.services.hosting.redis_state import _client
-
-        r = _client()
-        if r is not None:
-            key = f"lumen:host:tgq:{instance_id}"
-            r.lpush(key, json.dumps(data, ensure_ascii=False))
-            r.ltrim(key, 0, 99)
-            r.expire(key, 3600)
+        from lumen.hosting.webhook_manager import enqueue_update
+        enqueue_update(instance_id, data)
     except Exception:
         logger.exception("host webhook enqueue failed instance=%s", instance_id)
 

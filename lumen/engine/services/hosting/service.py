@@ -53,6 +53,9 @@ class HostInstance:
     public_base_url: str = ""  # stable ingress URL (Traefik/Caddy by name, not random port)
     webhook_public_url: str = ""  # https://…/v1/hooks/telegram/{instance_id}
     internal_port: int = 0  # logical service port for reverse-proxy (not random host map)
+    platform: str = "telegram"  # telegram | discord | whatsapp
+    cpu_quota: float = 0.5
+    memory_mb: int = 256
     version_ref: str = ""  # git commit sha of project snapshot at deploy
     last_health_at: float = 0.0  # unix time of last successful health probe
 
@@ -570,12 +573,16 @@ class HostingService:
             inst.internal_port = 8000 + (h % 1000)  # 8000–8999
         except Exception:
             inst.internal_port = 8080
-        # Always materialize webhook URL when public API/domain is configured
-        api_base = (os.environ.get("TBE_PUBLIC_API_BASE") or "").rstrip("/")
-        if api_base.startswith("https://"):
-            inst.webhook_public_url = f"{api_base}/v1/hooks/telegram/{instance_id}"
-        elif public_url:
-            inst.webhook_public_url = public_url.rstrip("/") + f"/v1/hooks/telegram/{instance_id}"
+        # Resources from capacity defaults
+        try:
+            from lumen.hosting.project_manifest import default_resources_from_env
+            _res = default_resources_from_env()
+            inst.cpu_quota = float(_res.cpu)
+            inst.memory_mb = int(_res.memory_mb)
+        except Exception:
+            inst.cpu_quota = 0.5
+            inst.memory_mb = 256
+        inst.platform = "telegram"
 
         # Normalize status using known constants
         try:
@@ -641,29 +648,17 @@ class HostingService:
         except Exception:
             pass
 
-        # Webhook: register when stable URL exists unless explicitly forced to polling
+        # Webhook manager + gateway routes + project manifest (architecture plane)
         try:
-            mode = (os.environ.get("TBE_HOST_WEBHOOK_MODE") or "auto").strip().lower()
-            force_poll = mode in {"0", "false", "no", "off", "polling"}
-            force_wh = mode in {"1", "true", "yes", "on", "webhook"}
-            hook = (inst.webhook_public_url or "").strip()
-            if inst.status == "running" and hook.startswith("https://") and (force_wh or (mode in {"auto", ""} and not force_poll)):
-                # auto: register when URL is configured (product path)
-                if force_wh or mode in {"auto", ""}:
-                    from lumen.bot.singleton import set_telegram_webhook
-                    secret = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
-                    ok_wh = set_telegram_webhook(token_norm, hook, secret_token=secret)
-                    inst.last_diagnosis = dict(inst.last_diagnosis or {})
-                    inst.last_diagnosis["webhook_url"] = hook
-                    inst.last_diagnosis["webhook_registered"] = bool(ok_wh)
-                    if not ok_wh:
-                        inst.last_error = ((inst.last_error or "") + " webhook_register_failed").strip()
-                    self._save()
-            elif force_poll:
-                inst.last_diagnosis = dict(inst.last_diagnosis or {})
-                inst.last_diagnosis["webhook_mode"] = "polling"
+            from lumen.hosting.webhook_manager import apply_to_instance
+            from lumen.hosting.gateway import write_routes_for_instance
+            from lumen.hosting.project_manifest import write_manifest_for_instance
+            apply_to_instance(instance_id=instance_id, bot_token=token_norm, inst=inst)
+            write_routes_for_instance(instance_id, enabled=(inst.status == "running"))
+            write_manifest_for_instance(inst)
+            self._save()
         except Exception:
-            pass
+            logger.exception("architecture plane (webhook/gateway/manifest) failed")
         return HostResult(
             ok=True,
             message=f"البوت شغال كخدمة استضافة ({inst.status})",
