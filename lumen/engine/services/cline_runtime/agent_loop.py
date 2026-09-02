@@ -640,6 +640,82 @@ def run_agent(
     state.metadata["recovery"] = recovery.to_metadata()
     state.metadata["recovery_attempts"] = recovery.total_attempts
 
+    # --- Phase-3: Project Card + semantic memory injection (before first decide) ---
+    try:
+        _uid = int(state.metadata.get("user_id") or 0)
+        _pid = ""
+        if isinstance(ir_dict, dict):
+            _pid = str(
+                ir_dict.get("project_id")
+                or (ir_dict.get("metadata") or {}).get("project_id")
+                or ""
+            )
+        from lumen.engine.services.semantic_memory.project_memory import (
+            get_project_memory_store,
+        )
+        _pm = get_project_memory_store()
+        _card = _pm.get_active_card(_uid, path=str(state.work_dir or ""), project_id=_pid)
+        if _card:
+            _card_txt = _pm.context_for_engine(_card.project_id, max_history=12)
+            if _card_txt:
+                state.metadata["project_card_id"] = _card.project_id
+                state.metadata["project_card_injected"] = True
+                state.add_user(
+                    "PROJECT_CARD (active project memory - use for continuity):\n"
+                    + _card_txt[:2500]
+                )
+        try:
+            from lumen.engine.services.semantic_memory.retrieval import build_memory_context
+            _sem = build_memory_context(
+                user_id=_uid,
+                user_message=str(goal or "")[:500],
+                project_id=str(getattr(_card, "project_id", None) or _pid or ""),
+                top_k=6,
+            )
+            if _sem:
+                state.metadata["semantic_memory_injected"] = True
+                state.add_user(
+                    "SEMANTIC_MEMORY (relevant facts before planning):\n"
+                    + _sem[:2500]
+                )
+        except Exception as _sem_exc:
+            state.warnings.append(f"semantic_memory_skip:{type(_sem_exc).__name__}")
+    except Exception as _mem_exc:
+        state.warnings.append(f"project_memory_skip:{type(_mem_exc).__name__}")
+
+    # --- Phase-3: parallel inspect of workspace (max 3 independent tools) ---
+    try:
+        from .agent_fs import run_tools_parallel
+        _par_calls = [
+            {"tool": "list_dir", "args": {"path": "."}},
+            {"tool": "glob_files", "args": {"pattern": "*.py"}},
+            {"tool": "glob_files", "args": {"pattern": "requirements*.txt"}},
+        ]
+        _par_results = run_tools_parallel(str(state.work_dir), _par_calls, max_parallel=3)
+        state.metadata["parallel_inspect"] = [
+            {"tool": (r or {}).get("tool"), "ok": bool((r or {}).get("ok"))}
+            for r in (_par_results or [])
+        ]
+        _bits = []
+        for r in _par_results or []:
+            if not isinstance(r, dict) or not r.get("ok"):
+                continue
+            t = str(r.get("tool") or "")
+            if t == "list_dir":
+                ents = r.get("entries") or r.get("items") or r.get("files") or []
+                if isinstance(ents, list):
+                    _bits.append("list_dir: " + ", ".join(str(x)[:40] for x in ents[:12]))
+            elif t == "glob_files":
+                files = r.get("files") or r.get("matches") or []
+                if isinstance(files, list) and files:
+                    _bits.append("glob: " + ", ".join(str(x)[:60] for x in files[:8]))
+        if _bits:
+            state.add_user(
+                "PARALLEL_INSPECT (workspace snapshot):\n" + "\n".join(_bits)[:1800]
+            )
+    except Exception as _par_exc:
+        state.warnings.append(f"parallel_inspect_skip:{type(_par_exc).__name__}")
+
     for i in range(limit):
         gov.step_index = i
         _keep, _pchars = gov.context_caps()
@@ -1173,6 +1249,24 @@ def run_agent(
                         _recovery_tool_ok = bool(
                             isinstance(_rec_result, dict) and _rec_result.get("ok")
                         )
+
+                        # Persist resolved error → solution on project card
+                        if _recovery_tool_ok:
+                            try:
+                                _pid = str(state.metadata.get("project_card_id") or "")
+                                if _pid:
+                                    from lumen.engine.services.semantic_memory.project_memory import (
+                                        get_project_memory_store,
+                                    )
+                                    get_project_memory_store().record_resolved_error(
+                                        _pid,
+                                        error=str((result or {}).get("error") or (result or {}).get("message") or "")[:400],
+                                        solution=f"recovery:{_ra.mode}:{_ra.strategy} tool={_rec_tool}",
+                                        tool=str(tool or ""),
+                                        strategy=str(getattr(_ra, "strategy", "") or _ra.mode),
+                                    )
+                            except Exception as _re_exc:
+                                state.warnings.append(f"record_resolved_skip:{type(_re_exc).__name__}")
                         if _np_reason:
                             state.stop_reason = _np_reason
                             state.ok = bool(state.files_written)

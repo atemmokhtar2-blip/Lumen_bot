@@ -288,6 +288,80 @@ class ProjectMemoryStore:
                 conn.commit()
                 return cur.rowcount > 0
 
+    
+    def record_resolved_error(
+        self,
+        project_id: str,
+        *,
+        error: str,
+        solution: str,
+        tool: str = "",
+        strategy: str = "",
+        extra: dict[str, Any] | None = None,
+    ) -> ProjectCard | None:
+        """Store a resolved error + linked solution on the project card.
+
+        Kept in meta['resolved_errors'] (newest first, capped) and mirrored into
+        edit_history with edit_type='resolved_error' for ordered continuity.
+        """
+        card = self.get_card(project_id)
+        if not card:
+            return None
+        entry = {
+            "error": str(error or "")[:500],
+            "solution": str(solution or "")[:500],
+            "tool": str(tool or "")[:80],
+            "strategy": str(strategy or "")[:80],
+            "at": _now(),
+        }
+        if extra and isinstance(extra, dict):
+            entry["extra"] = {str(k)[:40]: str(v)[:120] for k, v in list(extra.items())[:8]}
+        resolved = list((card.meta or {}).get("resolved_errors") or [])
+        # de-dupe by error head
+        head = entry["error"][:120]
+        resolved = [r for r in resolved if str((r or {}).get("error") or "")[:120] != head]
+        resolved.insert(0, entry)
+        card.meta = dict(card.meta or {})
+        card.meta["resolved_errors"] = resolved[:40]
+        self.upsert_card(card)
+        self.record_edit(
+            project_id,
+            edit_type="resolved_error",
+            description=f"{entry['error'][:160]} → {entry['solution'][:160]}",
+            target=entry.get("tool") or "",
+            applied=True,
+            extra={"strategy": entry.get("strategy"), "error": entry["error"][:200]},
+        )
+        return self.get_card(project_id)
+
+    def list_resolved_errors(self, project_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        card = self.get_card(project_id)
+        if not card:
+            return []
+        items = list((card.meta or {}).get("resolved_errors") or [])
+        return items[: max(1, min(int(limit or 20), 40))]
+
+    def get_active_card(
+        self,
+        user_id: int,
+        *,
+        path: str = "",
+        project_id: str = "",
+    ) -> ProjectCard | None:
+        """Resolve the active project card for a user (by id, path, or most recent)."""
+        if project_id:
+            card = self.get_card(project_id)
+            if card and int(card.user_id or 0) == int(user_id or 0):
+                return card
+        path_n = str(path or "").rstrip("/")
+        cards = self.list_cards(int(user_id or 0))
+        if path_n:
+            for c in cards:
+                cp = str(c.path or "").rstrip("/")
+                if cp and (cp == path_n or path_n.startswith(cp + "/") or cp.startswith(path_n + "/")):
+                    return c
+        return cards[0] if cards else None
+
     def context_for_engine(self, project_id: str, *, max_history: int = 20) -> str:
         """Compact project card for the AI/engines to reason about edits."""
         card = self.get_card(project_id)
@@ -311,6 +385,19 @@ class ProjectMemoryStore:
             for e in hist:
                 mark = "✓" if e.get("applied") else "·"
                 lines.append(f"  {mark} [{e.get('type')}] {e.get('description')}")
+        
+        resolved = list((card.meta or {}).get("resolved_errors") or [])
+        if resolved:
+            lines.append("- أخطاء محلولة سابقة:")
+            for r in resolved[:6]:
+                err = str((r or {}).get("error") or "")[:100]
+                sol = str((r or {}).get("solution") or "")[:100]
+                tool = str((r or {}).get("tool") or "")
+                bit = f"  • [{tool}] {err}" if tool else f"  • {err}"
+                if sol:
+                    bit += f" → {sol}"
+                lines.append(bit)
+
         return "\n".join(lines)[:3000]
 
 
