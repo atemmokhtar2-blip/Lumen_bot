@@ -465,21 +465,15 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     "restart_of": str(iid or ""),
                 }
                 prompt = (
-                    "🔄 لإعادة التشغيل أرسل توكن البوت من @BotFather
-"
-                    "(لم تُوجد أسرار مشفّرة كافية على المشروع).
-"
+                    "🔄 لإعادة التشغيل أرسل توكن البوت من @BotFather.\n"
+                    "(لم تُوجد أسرار مشفّرة كافية على المشروع).\n"
                     "سيُحذف التوكن من المحادثة فوراً بعد الاستلام."
                 )
                 if stop_note:
-                    prompt = stop_note[:1200] + "
-
-" + prompt
+                    prompt = stop_note[:1200] + "\n\n" + prompt
             else:
                 prompt = (
-                    (stop_note + "
-
-") if stop_note else ""
+                    (stop_note + "\n\n") if stop_note else ""
                 ) + "لا يوجد مسار مشروع مرتبط بهذا المثيل. اسحب/ولّد مشروعاً أولاً."
         except Exception:
             logger.exception("host_restart prep failed")
