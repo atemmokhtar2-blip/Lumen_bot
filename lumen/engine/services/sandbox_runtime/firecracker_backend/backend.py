@@ -220,8 +220,25 @@ class FirecrackerSandboxBackend(SandboxBackend):
             pol_mem_mib = int(float(pol_mem)) if pol_mem.replace(".", "", 1).isdigit() else 256
         except Exception:
             pol_mem_mib = 256
-        mem_mib = int((os.environ.get("TBE_FC_MEM_MIB") or str(pol_mem_mib)).strip() or "256")
-        vcpus = int((os.environ.get("TBE_FC_VCPUS") or "1").strip() or "1")
+        # ── Pro-aware resource resolution (priority: spec > env > policy) ──
+        # spec.memory / spec.cpus are set by start_permanent_host_bot from the
+        # Pro entitlement (512 MB / 0.5 CPU for Pro).  If not set, fall back to
+        # env vars, then to the hard sandbox policy default.
+        spec_mem = str(getattr(spec, "memory", "") or "").strip()
+        if spec_mem:
+            _sm = spec_mem.lower().replace("m", "").replace("mi", "")
+            spec_mem_mib = int(float(_sm)) if _sm.replace(".", "", 1).isdigit() else 0
+        else:
+            spec_mem_mib = 0
+        if spec_mem_mib > 0:
+            mem_mib = spec_mem_mib
+        else:
+            mem_mib = int((os.environ.get("TBE_FC_MEM_MIB") or str(pol_mem_mib)).strip() or "256")
+        spec_cpus = str(getattr(spec, "cpus", "") or "").strip()
+        if spec_cpus and spec_cpus.replace(".", "", 1).isdigit():
+            vcpus = max(1, int(float(spec_cpus)))
+        else:
+            vcpus = int((os.environ.get("TBE_FC_VCPUS") or "1").strip() or "1")
 
         # Rate limiters (bytes/s style — Firecracker refill_time in ms)
         blk_bw = int((os.environ.get("TBE_FC_BLOCK_BW_BPS") or str(50 * 1024 * 1024)).strip())

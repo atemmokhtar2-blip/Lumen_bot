@@ -127,6 +127,34 @@ def process_one(queue=None, fleet=None) -> bool:
         os.environ.setdefault("TBE_WORKER_BUILD", "1")
         try:
             from lumen.hosting.rate_limiter import check_can_start, record_start
+
+            # ── Pro plan bot limit enforcement (FAIL-CLOSED) ──
+            # The enqueue path in service.py checks the limit, but a race condition
+            # can let a user enqueue multiple jobs while none are "running" yet.
+            # This worker-side check is the authoritative gate: count the user's
+            # running bots across the cluster and block if at/over the plan limit.
+            try:
+                from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                _limits = resolve_plan_limits(int(job.user_id))
+                _running_user = int(q.count_running_for_user(int(job.user_id)))
+                if _running_user >= _limits.max_bots:
+                    q.mark_failed(
+                        job.job_id,
+                        f"pro_bot_limit_exceeded:running={_running_user}>={_limits.max_bots}"[:500],
+                    )
+                    logger.warning(
+                        "worker pro bot-limit blocked uid=%s running=%s max=%s job=%s",
+                        job.user_id, _running_user, _limits.max_bots, job.job_id,
+                    )
+                    return True
+            except Exception:
+                logger.warning(
+                    "worker pro bot-limit check FAILED (fail-closed) uid=%s job=%s",
+                    job.user_id, job.job_id, exc_info=True,
+                )
+                q.mark_failed(job.job_id, "entitlement_check_failed"[:500])
+                return True
+
             # running_count approx from queue on this node
             ok_rl, reason_rl = check_can_start(user_id=int(job.user_id), running_count=int(running or 0))
             if not ok_rl:

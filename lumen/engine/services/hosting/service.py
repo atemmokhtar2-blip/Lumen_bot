@@ -354,12 +354,19 @@ class HostingService:
                 from lumen.engine.services.hosting.deploy_queue import get_deploy_queue
                 from lumen.engine.services.hosting.capacity import estimate_nodes_for, local_node_capacity
                 q = get_deploy_queue()
-                # Pro plan bot limit (resolved from entitlement, not just env)
+                # Pro plan bot limit (resolved from entitlement, FAIL-CLOSED)
+                # If the entitlement resolver throws we block the enqueue instead
+                # of falling back to a high env default (50) that would let a Pro
+                # user exceed their 3-bot limit.
                 try:
                     from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
                     max_bots = resolve_plan_limits(int(user_id)).max_bots
                 except Exception:
-                    max_bots = int((os.environ.get("TBE_MAX_BOTS_PER_USER") or "50").strip() or "50")
+                    logger.warning("pro plan bot-limit resolve FAILED (fail-closed) uid=%s", user_id, exc_info=True)
+                    return HostResult(
+                        ok=False,
+                        message="تعذر التحقق من حدود الاشتراك حالياً. حاول مرة أخرى بعد لحظات.",
+                    )
                 running_u = 0
                 if hasattr(q, "count_running_for_user"):
                     running_u = int(q.count_running_for_user(int(user_id)))
@@ -427,7 +434,11 @@ class HostingService:
             from lumen.engine.services.hosting.rate_limiter import check_can_start, record_start
             running_n = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
 
-            # ── Pro plan bot limit enforcement ──
+            # ── Pro plan bot limit enforcement (FAIL-CLOSED) ──
+            # If the entitlement resolver throws (Redis down, import error, etc.)
+            # we must NOT fall through to check_can_start (which uses a higher
+            # env default).  Instead we block the start so a Pro user can never
+            # exceed their plan limit due to an infrastructure hiccup.
             try:
                 from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
                 _limits = resolve_plan_limits(int(user_id))
@@ -440,7 +451,11 @@ class HostingService:
                         ),
                     )
             except Exception:
-                logger.debug("pro plan bot-limit check failed uid=%s", user_id, exc_info=True)
+                logger.warning("pro plan bot-limit check FAILED (fail-closed) uid=%s", user_id, exc_info=True)
+                return HostResult(
+                    ok=False,
+                    message="تعذر التحقق من حدود الاشتراك حالياً. حاول مرة أخرى بعد لحظات.",
+                )
 
             ok_rl, reason_rl = check_can_start(user_id=int(user_id), running_count=running_n)
             if not ok_rl:

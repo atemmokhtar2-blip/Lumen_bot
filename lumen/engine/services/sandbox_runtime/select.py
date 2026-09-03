@@ -181,9 +181,40 @@ def start_permanent_host_bot(
 
     Root isolation fix: permanent hosting must not call select_sandbox_backend(),
     which may pick weaker backends in misconfigured environments.
+
+    Pro plan resources (RAM/CPU) are resolved from the entitlement and passed
+    into the SandboxSpec so the Firecracker backend enforces them via cgroups.
     """
     from .types import SandboxSpec
 
+    # ── Resolve Pro-aware resources (RAM / CPU) ──
+    # Pro users get 512 MB RAM, 0.5 CPU.  Non-Pro get env defaults.
+    # On resolution failure, fall back to env defaults (fail-open for resources
+    # is acceptable — the user gets LESS than promised, never more).
+    mem_mib = 0
+    vcpus = 0
+    try:
+        from lumen.hosting.project_manifest import default_resources_for_user
+        _res = default_resources_for_user(int(user_id or 0))
+        mem_mib = int(_res.memory_mb)
+        # 0.5 CPU → 1 vcpu with 50% throttle; for simplicity map cpu*2 rounded up
+        vcpus = max(1, int(_res.cpu * 2 + 0.999))
+    except Exception:
+        pass
+
+    spec_kwargs: dict = dict(
+        project_path=str(project_path),
+        bot_token=bot_token,
+        user_id=int(user_id or 0),
+        service_name=service_name or f"host-u{user_id}",
+        env_vars=dict(env_vars or {}),
+    )
+    if mem_mib > 0:
+        spec_kwargs["memory"] = f"{mem_mib}m"
+    if vcpus > 0:
+        spec_kwargs["cpus"] = str(vcpus)
+
+    spec = SandboxSpec(**spec_kwargs)
     backend = FirecrackerSandboxBackend()
     probe = backend.probe()
     if not probe.available:
@@ -199,13 +230,6 @@ def start_permanent_host_bot(
             raise RuntimeError(
                 f"permanent_host_rejects_dev_backend:{req}"
             )
-    spec = SandboxSpec(
-        project_path=str(project_path),
-        bot_token=bot_token,
-        user_id=int(user_id or 0),
-        service_name=service_name or f"host-u{user_id}",
-        env_vars=dict(env_vars or {}),
-    )
     handle = backend.start(spec)
     handle.meta = dict(handle.meta or {})
     handle.meta["probe"] = probe.reason
