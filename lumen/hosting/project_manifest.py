@@ -88,6 +88,26 @@ def default_resources_from_env() -> ResourceSpec:
     return ResourceSpec(cpu=max(0.1, cpu), memory_mb=max(64, mem), disk_mb=max(64, disk))
 
 
+def default_resources_for_user(user_id: int) -> ResourceSpec:
+    """Resolve resources for a user via Pro entitlement, falling back to env.
+
+    Pro users get 512 MB RAM, 0.5 CPU, 2048 MB (2 GB) disk.
+    Non-Pro users get the env defaults (TBE_BOT_CPU / TBE_BOT_MEMORY_MB / TBE_USER_DISK_MB).
+    """
+    try:
+        from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+
+        limits = resolve_plan_limits(int(user_id or 0))
+        return ResourceSpec(
+            cpu=max(0.1, limits.cpu),
+            memory_mb=max(64, limits.memory_mb),
+            disk_mb=max(64, limits.disk_mb),
+        )
+    except Exception:
+        logger.debug("pro resource resolution failed uid=%s — env fallback", user_id, exc_info=True)
+        return default_resources_from_env()
+
+
 def build_manifest_from_instance(inst: Any) -> ProjectManifest:
     res = default_resources_from_env()
     cpu = float(getattr(inst, "cpu_quota", 0) or 0) or res.cpu
@@ -155,5 +175,6 @@ __all__ = [
     "load_manifest",
     "write_manifest_for_instance",
     "default_resources_from_env",
+    "default_resources_for_user",
     "MANIFEST_NAME",
 ]

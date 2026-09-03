@@ -259,7 +259,7 @@ class HostingService:
                 return HostResult(ok=False, message="مسار المشروع خارج مساحة عزل المستخدم")
             try:
                 from lumen.engine.services.disk_quota import enforce_user_quota
-                enforce_user_quota(sandbox.root)
+                enforce_user_quota(sandbox.root, user_id=int(user_id))
             except RuntimeError as exc:
                 return HostResult(ok=False, message=f"حصة التخزين ممتلئة: {exc}")
         except Exception:
@@ -354,7 +354,12 @@ class HostingService:
                 from lumen.engine.services.hosting.deploy_queue import get_deploy_queue
                 from lumen.engine.services.hosting.capacity import estimate_nodes_for, local_node_capacity
                 q = get_deploy_queue()
-                max_bots = int((os.environ.get("TBE_MAX_BOTS_PER_USER") or "50").strip() or "50")
+                # Pro plan bot limit (resolved from entitlement, not just env)
+                try:
+                    from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                    max_bots = resolve_plan_limits(int(user_id)).max_bots
+                except Exception:
+                    max_bots = int((os.environ.get("TBE_MAX_BOTS_PER_USER") or "50").strip() or "50")
                 running_u = 0
                 if hasattr(q, "count_running_for_user"):
                     running_u = int(q.count_running_for_user(int(user_id)))
@@ -421,6 +426,22 @@ class HostingService:
         try:
             from lumen.engine.services.hosting.rate_limiter import check_can_start, record_start
             running_n = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
+
+            # ── Pro plan bot limit enforcement ──
+            try:
+                from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                _limits = resolve_plan_limits(int(user_id))
+                if running_n >= _limits.max_bots:
+                    return HostResult(
+                        ok=False,
+                        message=(
+                            f"وصلت إلى الحد الأقصى ({_limits.max_bots}) بوت مستضاف لحسابك."
+                            + (" — اشترك في Lumen Pro لاستضافة حتى 3 بوتات." if not _limits.is_pro else "")
+                        ),
+                    )
+            except Exception:
+                logger.debug("pro plan bot-limit check failed uid=%s", user_id, exc_info=True)
+
             ok_rl, reason_rl = check_can_start(user_id=int(user_id), running_count=running_n)
             if not ok_rl:
                 return HostResult(ok=False, message=f"حد الاستضافة: {reason_rl}")
@@ -573,10 +594,10 @@ class HostingService:
             inst.internal_port = 8000 + (h % 1000)  # 8000–8999
         except Exception:
             inst.internal_port = 8080
-        # Resources from capacity defaults
+        # Resources from capacity defaults — Pro plan aware
         try:
-            from lumen.hosting.project_manifest import default_resources_from_env
-            _res = default_resources_from_env()
+            from lumen.hosting.project_manifest import default_resources_for_user
+            _res = default_resources_for_user(int(user_id or 0))
             inst.cpu_quota = float(_res.cpu)
             inst.memory_mb = int(_res.memory_mb)
         except Exception:

@@ -58,6 +58,8 @@ _DURABLE_KEYS = frozenset({
     # Multi-agent / HITL continuity
     "multi_agent_state_id",
     "multi_agent_pending",
+    # Lumen Pro subscription (Telegram Stars) — must survive restart
+    "pro_plan",
 })
 
 _SECRET_KEYS = frozenset({

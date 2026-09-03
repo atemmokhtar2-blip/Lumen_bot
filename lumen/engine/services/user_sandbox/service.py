@@ -81,7 +81,7 @@ class UserSandbox:
     def new_project_dir(self, label: str = "bot") -> Path:
         try:
             from lumen.engine.services.disk_quota import enforce_user_quota
-            enforce_user_quota(self.root)
+            enforce_user_quota(self.root, user_id=int(self.user_id or 0))
         except RuntimeError:
             raise
         except Exception:

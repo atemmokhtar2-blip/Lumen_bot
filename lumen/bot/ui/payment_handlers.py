@@ -50,11 +50,11 @@ async def handle_successful_payment(update, context) -> None:
     currency = getattr(sp, "currency", "") or ""
     amount = int(getattr(sp, "total_amount", 0) or 0)
 
-    # Verify this is our Pro plan invoice
-    if payload != PRO_PLAN_INVOICE_PAYLOAD or currency != "XTR":
+    # Verify this is our Pro plan invoice — payload + currency + exact amount
+    if payload != PRO_PLAN_INVOICE_PAYLOAD or currency != "XTR" or amount != PRO_PLAN_PRICE_STARS:
         logger.warning(
-            "successful_payment mismatch payload=%s currency=%s amount=%s uid=%s",
-            payload, currency, amount, uid,
+            "successful_payment mismatch payload=%s currency=%s amount=%s expected=%s uid=%s",
+            payload, currency, amount, PRO_PLAN_PRICE_STARS, uid,
         )
         return
 

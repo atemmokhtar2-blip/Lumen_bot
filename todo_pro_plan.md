@@ -31,6 +31,6 @@
 - [x] Stray duplicate `pro_plan.py` cleaned up
 
 ## 6. Deploy
-- [ ] Commit all changes to git
-- [ ] Push to Lumen branch
-- [ ] Verify push reached remote
+- [x] Commit all changes to git (a949fe9)
+- [x] Push to Lumen branch (3a0d620..a949fe9)
+- [x] Verify push reached remote (3 independent sources: ls-remote, gh api, HEAD match)
