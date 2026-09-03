@@ -63,19 +63,21 @@ class ProEntitlement:
 
 
 def _load_pro_record(user_id: int) -> dict[str, Any] | None:
-    """Load the pro_plan record from the durable session store (Redis).
+    """Load the pro_plan record from the durable subscription store.
 
-    This is the secure path — we do NOT trust caller-supplied user_data because
-    a client cannot forge a Redis write.  If Redis is down we return None
+    Reads from Redis first (fast path), then falls back to MongoDB (permanent
+    source of truth) if Redis has no record (flush / TTL expiry / drop_user_data).
+    On MongoDB fallback, Redis is self-healed (re-populated).
+
+    We do NOT trust caller-supplied user_data because a client cannot forge a
+    MongoDB or Redis write.  If both stores are down we return None
     (fail-closed: no Pro benefits, but base bot access still works).
     """
     if not user_id:
         return None
     try:
-        from lumen.bot.session_store import get_session_store
-
-        saved = get_session_store().load(int(user_id))
-        rec = saved.get("pro_plan") if isinstance(saved, dict) else None
+        from lumen.bot.ui.subscription_store import read_subscription
+        rec = read_subscription(int(user_id))
         return rec if isinstance(rec, dict) else None
     except Exception:
         logger.debug("pro entitlement load failed uid=%s", user_id, exc_info=True)

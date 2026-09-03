@@ -2,10 +2,15 @@
 
   - pre_checkout_query: must answer within 10s or Telegram cancels the invoice.
   - successful_payment: grant the Pro plan subscription on confirmed payment.
+
+The subscription is persisted to MongoDB (permanent source of truth) AND Redis
+(fast-read cache) via subscription_store.write_subscription().  This ensures
+the subscription survives Redis flush, TTL expiry, bot deletion, and re-entry.
 """
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger("lumen_bot.ui.payments")
 
@@ -33,6 +38,11 @@ async def handle_successful_payment(update, context) -> None:
       - total_amount: star amount
       - invoice_payload: our PRO_PLAN_INVOICE_PAYLOAD
       - telegram_payment_charge_id: charge ID for refunds
+
+    The subscription is written to:
+      1. MongoDB (users.metadata.pro_subscription) — permanent, no TTL
+      2. Redis (lumen:tg:session:{uid}.pro_plan) — fast-read cache
+      3. context.user_data — in-process for the current request
     """
     msg = update.effective_message
     if msg is None or not getattr(msg, "successful_payment", None):
@@ -65,22 +75,34 @@ async def handle_successful_payment(update, context) -> None:
         getattr(sp, "telegram_payment_charge_id", "?"),
     )
 
-    # Grant the subscription — record in user_data + best-effort persistent store
+    # Grant the subscription — record in user_data + MongoDB (permanent) + Redis (cache)
     user_data = context.user_data if context.user_data is not None else {}
+    pro_record: dict[str, Any] = {}
     try:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-        user_data["pro_plan"] = {
+        pro_record = {
             "plan_id": PRO_PLAN_ID,
             "started_at": now.isoformat(),
             "expires_at": (now + timedelta(days=30)).isoformat(),
             "stars_paid": amount,
             "charge_id": getattr(sp, "telegram_payment_charge_id", ""),
         }
+        user_data["pro_plan"] = dict(pro_record)
     except Exception:
         logger.exception("failed to record pro_plan in user_data uid=%s", uid)
 
-    # Best-effort: persist to session store
+    # ── Persist to MongoDB (permanent source of truth) + Redis (cache) ──
+    # This is the CRITICAL write: the subscription must survive Redis flush,
+    # TTL expiry, bot deletion, and re-entry.  MongoDB is the permanent DB.
+    if pro_record:
+        try:
+            from lumen.bot.ui.subscription_store import write_subscription
+            write_subscription(uid, pro_record)
+        except Exception:
+            logger.error("subscription_store write FAILED uid=%s", uid, exc_info=True)
+
+    # Also persist the full session to Redis (secondary, best-effort)
     try:
         from lumen.bot.ui.state_store import persist_ui_session
         persist_ui_session(uid, dict(user_data))
@@ -90,14 +112,16 @@ async def handle_successful_payment(update, context) -> None:
     # Acknowledge to the user
     try:
         await msg.reply_text(
-            "✅ تم تفعيل اشتراك Lumen Pro بنجاح!\n\n"
-            "🚀 استمتع بـ:\n"
-            "• 2 GB تخزين\n"
-            "• 512 MB RAM\n"
-            "• 0.5 CPU\n"
-            "• حتى 3 بوتات\n"
-            "• مدة: شهر\n\n"
-            "استخدم /start للعودة للقائمة الرئيسية."
+            "\u2705 \u062a\u0645 \u062a\u0641\u0639\u064a\u0644 \u0627\u0634\u062a\u0631\u0627\u0643 Lumen Pro \u0628\u0646\u062c\u0627\u062d!\n\n"
+            "\U0001F680 \u0627\u0633\u062a\u0645\u062a\u0639 \u0628\u0640:\n"
+            "\u2022 2 GB \u062a\u062e\u0632\u064a\u0646\n"
+            "\u2022 512 MB RAM\n"
+            "\u2022 0.5 CPU\n"
+            "\u2022 \u062d\u062a\u0649 3 \u0628\u0648\u062a\u0627\u062a\n"
+            "\u2022 \u0645\u062f\u0629: \u0634\u0647\u0631\n\n"
+            "\U0001F4BE \u0627\u0634\u062a\u0631\u0627\u0643\u0643 \u0645\u062d\u0641\u0648\u0638 \u0641\u064a \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u0628\u0634\u0643\u0644 \u062f\u0627\u0626\u0645.\n"
+            "\u064a\u0628\u0642\u0649 \u0627\u0634\u062a\u0631\u0627\u0643\u0643 \u062d\u062a\u0649 \u0644\u0648 \u0645\u0633\u062d\u062a \u0627\u0644\u0628\u0648\u062a \u0648\u062f\u062e\u0644\u062a \u0645\u0631\u0629 \u062b\u0627\u0646\u064a\u0629.\n\n"
+            "\u0627\u0633\u062a\u062e\u062f\u0645 /start \u0644\u0644\u0639\u0648\u062f\u0629 \u0644\u0644\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629."
         )
     except Exception:
         logger.exception("successful_payment reply failed uid=%s", uid)

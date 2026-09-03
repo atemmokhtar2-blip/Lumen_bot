@@ -49,6 +49,7 @@ PRO_PLAN_INCLUDES: tuple[ProPlanInclude, ...] = (
     ProPlanInclude("🔒", "بيئة معزولة لكل بوت"),
     ProPlanInclude("📊", "مراقبة وحالة لحظية"),
     ProPlanInclude("💰", "رصيد كريديتات شهري"),
+    ProPlanInclude("💾", "اشتراك محفوظ في قاعدة البيانات — يبقى حتى لو مسحت البوت"),
 )
 
 # ── Rich Messages table spec ───────────────────────────────────
@@ -67,11 +68,16 @@ def pro_plan_includes_text() -> str:
 
 
 def pro_plan_invoice_description() -> str:
-    """Short description for the Telegram invoice (≤255 chars)."""
+    """Short description for the Telegram invoice (≤255 chars).
+
+    Explicitly states that the subscription is saved in the database and
+    survives bot deletion / re-entry — building user trust.
+    """
     return (
         f"اشتراك Lumen Pro شهري — "
         f"2GB تخزين، 512MB RAM، 0.5 CPU، "
-        f"حتى {PRO_PLAN_BOT_LIMIT} بوتات، مدة {PRO_PLAN_DURATION_LABEL}."
+        f"حتى {PRO_PLAN_BOT_LIMIT} بوتات، مدة {PRO_PLAN_DURATION_LABEL}. "
+        f"💾 اشتراكك محفوظ في قاعدة البيانات — يبقى حتى لو مسحت البوت ورجعت."
     )
 
 

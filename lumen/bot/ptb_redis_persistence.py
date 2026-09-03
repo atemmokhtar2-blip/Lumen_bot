@@ -151,10 +151,32 @@ class RedisPersistence(BasePersistence[UD, CD, BD]):
             conv[key] = new_state
 
     async def drop_user_data(self, user_id: int) -> None:
+        """Drop user session from Redis — but PRESERVE the paid Pro subscription.
+
+        PTB calls this when Application.drop_user_data() is invoked.  Clearing the
+        entire Redis key would wipe ``pro_plan`` — a PAID entitlement that must
+        survive.  After clearing, we re-hydrate ``pro_plan`` from MongoDB
+        (the permanent source of truth) so the subscription is never lost.
+        """
+        uid = int(user_id)
         try:
-            self._ss().clear(int(user_id))
+            self._ss().clear(uid)
         except Exception:
-            logger.exception("drop_user_data failed uid=%s", user_id)
+            logger.exception("drop_user_data clear failed uid=%s", uid)
+            return
+
+        # Re-hydrate pro_plan from MongoDB so the paid subscription survives
+        try:
+            from lumen.bot.ui.subscription_store import read_subscription
+            rec = read_subscription(uid)
+            if rec and isinstance(rec, dict):
+                # read_subscription already self-heals Redis, but be explicit
+                logger.info(
+                    "drop_user_data: preserved pro_subscription uid=%s from MongoDB",
+                    uid,
+                )
+        except Exception:
+            logger.debug("drop_user_data pro_plan re-hydrate failed uid=%s", uid, exc_info=True)
 
     async def drop_chat_data(self, chat_id: int) -> None:
         self._chat.pop(int(chat_id), None)

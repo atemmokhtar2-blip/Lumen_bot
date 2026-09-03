@@ -70,6 +70,10 @@ _SECRET_KEYS = frozenset({
 
 _KEY_PREFIX = "lumen:tg:session:"
 _DEFAULT_TTL_SEC = 30 * 24 * 3600  # 30 days
+# When a paid Pro subscription is present, extend TTL so the subscription
+# record survives even if the user is inactive.  45 days > 30-day subscription
+# gives a 15-day grace window for Redis to hold the record past expiry.
+_PRO_SUBSCRIPTION_TTL_SEC = 45 * 24 * 3600  # 45 days
 
 
 class _RedisLike(Protocol):
@@ -129,6 +133,21 @@ def _ttl_sec() -> int:
         return max(60, int(raw))
     except ValueError:
         return _DEFAULT_TTL_SEC
+
+
+def _ttl_sec_for_data(data: dict[str, Any] | None) -> int:
+    """Return TTL for a session — extended when a paid Pro subscription is present.
+
+    The base TTL is 30 days.  If ``pro_plan`` is in the payload (a paid
+    subscription), use 45 days so the subscription record survives inactivity
+    past the 30-day subscription window.  MongoDB remains the permanent source
+    of truth regardless, but this keeps Redis from prematurely evicting it.
+    """
+    if data and isinstance(data, dict) and "pro_plan" in data:
+        rec = data.get("pro_plan")
+        if isinstance(rec, dict) and rec.get("plan_id"):
+            return _PRO_SUBSCRIPTION_TTL_SEC
+    return _ttl_sec()
 
 
 def _redis_key(user_id: int) -> str:
@@ -205,7 +224,7 @@ class SessionStore:
             r.ping()
             self._client = r
             self._backend_name = "redis"
-            logger.info("session_store backend=redis ttl=%s", _ttl_sec())
+            logger.info("session_store backend=redis ttl=%s (pro=%s)", _ttl_sec(), _PRO_SUBSCRIPTION_TTL_SEC)
             return
 
         # No Redis URL — only allowed in explicit local/dev with opt-in
@@ -268,8 +287,9 @@ class SessionStore:
                 merged[k] = v
             payload = json.dumps(merged, ensure_ascii=False, default=str)
             key = _redis_key(user_id)
+            ttl = _ttl_sec_for_data(merged)
             try:
-                self._client.set(key, payload, ex=_ttl_sec())
+                self._client.set(key, payload, ex=ttl)
             except Exception as exc:
                 logger.error(
                     "session_store save failed uid=%s: %s:%s",
