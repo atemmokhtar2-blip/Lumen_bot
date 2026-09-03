@@ -190,6 +190,31 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             subtitle="نظام الكريدت",
         )
 
+    if phase == EngineUiPhase.PRO_PLAN:
+        from .pro_plan import (
+            PRO_PLAN_TITLE,
+            PRO_PLAN_PRICE_USD,
+            PRO_PLAN_PRICE_STARS,
+            PRO_PLAN_DURATION_LABEL,
+            PRO_PLAN_BOT_LIMIT,
+            pro_plan_includes_text,
+        )
+
+        includes = pro_plan_includes_text()
+        body = (
+            f"السعر: ${PRO_PLAN_PRICE_USD} شهريًا — {PRO_PLAN_PRICE_STARS} ⭐\n"
+            f"المدة: {PRO_PLAN_DURATION_LABEL}\n\n"
+            f"✅ الاشتراك يشمل:\n{includes}\n\n"
+            f"💳 نظام الرصيد: كريديتات تُخصم حسب الاستخدام.\n"
+            f"🤖 حتى {PRO_PLAN_BOT_LIMIT} بوتات مع استضافة دائمة.\n\n"
+            f"اضغط «اشترك — {PRO_PLAN_PRICE_STARS} ⭐» للدفع بنجوم تيليجرام."
+        )
+        return html_card(
+            PRO_PLAN_TITLE,
+            [("تفاصيل الخطة", body)],
+            subtitle=f"${PRO_PLAN_PRICE_USD}/شهر — {PRO_PLAN_PRICE_STARS} ⭐",
+        )
+
     if phase == EngineUiPhase.CONTEXT:
         from .ui_events import render_event_message
 

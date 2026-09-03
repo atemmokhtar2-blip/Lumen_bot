@@ -612,6 +612,99 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         except Exception:
             logger.exception("rich dashboard failed — HTML fallback action=%s", action_id)
 
+    # Lumen Pro plan details: official Rich Messages native table (Bot API 10.1+)
+    if result.state.phase == EngineUiPhase.PRO_PLAN:
+        try:
+            from lumen.bot.rich_messages import (
+                build_table_html,
+                send_or_edit_rich_ui,
+            )
+            from lumen.engine.services.ui_state.pro_plan import (
+                PRO_PLAN_TITLE,
+                PRO_PLAN_PRICE_USD,
+                PRO_PLAN_PRICE_STARS,
+                PRO_PLAN_DURATION_LABEL,
+                PRO_PLAN_TABLE_HEADERS,
+                PRO_PLAN_TABLE_CAPTION,
+                pro_plan_table_rows,
+                pro_plan_includes_text,
+            )
+
+            rows = pro_plan_table_rows()
+            table_html = build_table_html(
+                PRO_PLAN_TABLE_HEADERS,
+                rows,
+                caption=PRO_PLAN_TABLE_CAPTION,
+                bordered=True,
+                striped=True,
+                compact=True,
+            )
+            includes = pro_plan_includes_text()
+            rich_html = (
+                f"<h3>{PRO_PLAN_TITLE}</h3>"
+                + table_html
+                + f"<p><b>السعر:</b> ${PRO_PLAN_PRICE_USD} شهريًا — {PRO_PLAN_PRICE_STARS} ⭐</p>"
+                + f"<p><b>المدة:</b> {PRO_PLAN_DURATION_LABEL}</p>"
+                + f"<p><b>✅ الاشتراك يشمل:</b><br>{includes.replace(chr(10), '<br>')}</p>"
+                + f"<p><b>💳 نظام الرصيد:</b> كريديتات تُخصم حسب الاستخدام.</p>"
+                + f"<p>اضغط «اشترك — {PRO_PLAN_PRICE_STARS} ⭐» للدفع بنجوم تيليجرام.</p>"
+            )
+            bot = getattr(context, "bot", None)
+            chat_id = None
+            preferred = None
+            if q is not None and getattr(q, "message", None) is not None:
+                preferred = q.message
+                chat_id = getattr(q.message.chat, "id", None)
+            elif msg is not None:
+                preferred = msg
+                chat_id = getattr(getattr(msg, "chat", None), "id", None)
+            if bot is not None and chat_id is not None:
+                rich_msg = await send_or_edit_rich_ui(
+                    bot=bot,
+                    chat_id=int(chat_id),
+                    html=rich_html,
+                    markup=markup,
+                    preferred_message=preferred,
+                    user_data=user_data,
+                )
+                if rich_msg is not None:
+                    return
+        except Exception:
+            logger.exception("rich pro_plan failed — HTML fallback action=%s", action_id)
+
+    # buy_pro_plan: send Telegram Stars (XTR) invoice — in-Telegram payment only
+    if result.ok and action_id == "buy_pro_plan":
+        try:
+            from lumen.engine.services.ui_state.pro_plan import (
+                PRO_PLAN_TITLE,
+                PRO_PLAN_PRICE_STARS,
+                PRO_PLAN_INVOICE_PAYLOAD,
+                pro_plan_invoice_description,
+            )
+            from telegram import LabeledPrice
+
+            bot = getattr(context, "bot", None)
+            chat_id = None
+            if q is not None and getattr(q, "message", None) is not None:
+                chat_id = getattr(q.message.chat, "id", None)
+            elif msg is not None:
+                chat_id = getattr(getattr(msg, "chat", None), "id", None)
+            if bot is not None and chat_id is not None:
+                await bot.send_invoice(
+                    chat_id=int(chat_id),
+                    title=PRO_PLAN_TITLE,
+                    description=pro_plan_invoice_description(),
+                    payload=PRO_PLAN_INVOICE_PAYLOAD,
+                    currency="XTR",
+                    prices=[LabeledPrice(label=PRO_PLAN_TITLE, amount=PRO_PLAN_PRICE_STARS)],
+                    # provider_token must be empty for Telegram Stars (XTR)
+                    provider_token="",
+                )
+                return
+        except Exception:
+            logger.exception("send_invoice (Stars) failed action=buy_pro_plan")
+
+
     await _safe_render_ui(q, msg, text, markup, user_data=user_data, context=context)
 
 

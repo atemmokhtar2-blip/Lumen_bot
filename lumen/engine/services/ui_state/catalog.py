@@ -19,6 +19,7 @@ _NAV = frozenset(
         EngineUiPhase.IDLE,
         EngineUiPhase.DASHBOARD,
         EngineUiPhase.BILLING,
+        EngineUiPhase.PRO_PLAN,
         EngineUiPhase.HELP,
         EngineUiPhase.GEN_TYPE,
         EngineUiPhase.GEN_SLOTS,
@@ -108,6 +109,21 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "open_billing": UiActionSpec(
         "open_billing", "Billing",
         _NAV | frozenset({EngineUiPhase.CONTEXT}),
+    ),
+    "show_more_plans": UiActionSpec(
+        "show_more_plans",
+        "Reveal Pro plan button on Billing",
+        frozenset({EngineUiPhase.BILLING}),
+    ),
+    "view_pro_plan": UiActionSpec(
+        "view_pro_plan",
+        "Open Lumen Pro plan details",
+        frozenset({EngineUiPhase.BILLING, EngineUiPhase.PRO_PLAN, EngineUiPhase.CONTEXT}),
+    ),
+    "buy_pro_plan": UiActionSpec(
+        "buy_pro_plan",
+        "Send Telegram Stars invoice for Lumen Pro",
+        frozenset({EngineUiPhase.PRO_PLAN, EngineUiPhase.CONTEXT}),
     ),
     "open_help": UiActionSpec(
         "open_help", "Help",

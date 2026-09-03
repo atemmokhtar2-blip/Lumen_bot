@@ -79,12 +79,17 @@ _ACTION_SHORT: dict[str, str] = {
     "dash_diagnose": "dd",
     "dash_trial": "dt",
     "dash_logs": "dl",
+    "dash_backup": "dbk",
+    "dash_versions": "dv",
     "host_restart": "hr",
     "ask_gh_token": "agt",
     "ask_bot_token": "abt",
     "repo_sec": "rsx",
     "hitl_confirm": "hc",
     "hitl_reject": "hj",
+    "show_more_plans": "smp",
+    "view_pro_plan": "vpp",
+    "buy_pro_plan": "bpp",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
 

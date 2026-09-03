@@ -181,8 +181,25 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         rows.append((UiButton("إنشاء بوت", "open_generate", style="success"),))
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.BILLING:
+        rows: list[tuple[UiButton, ...]] = [
+            (UiButton("تحديث الرصيد", "open_billing", style="primary"),),
+        ]
+        # Pro plan revealed only after "عرض المزيد" (keeps keyboard short)
+        if (state.slots or {}).get("billing_expanded") == "1":
+            rows.append(
+                (UiButton("🚀 Lumen Pro", "view_pro_plan", style="success"),),
+            )
+        else:
+            rows.append(
+                (UiButton("عرض المزيد", "show_more_plans", style="primary"),),
+            )
+        return _with_nav(tuple(rows), phase)
+    if phase == EngineUiPhase.PRO_PLAN:
         return _with_nav(
-            ((UiButton("تحديث الرصيد", "open_billing", style="primary"),),),
+            (
+                (UiButton("اشترك — 2000 ⭐", "buy_pro_plan", style="success"),),
+                (UiButton("رجوع للرصيد", "open_billing", style="primary"),),
+            ),
             phase,
         )
     if phase == EngineUiPhase.HELP:
@@ -259,6 +276,11 @@ def apply_action(
             new.phase = EngineUiPhase.GEN_SLOTS
             new = _refresh_needs(new, user_id=user_id)
             msg = "رجعت لأسئلة التوليد."
+        elif new.phase == EngineUiPhase.PRO_PLAN:
+            new.phase = EngineUiPhase.BILLING
+            new.slots["billing_expanded"] = "1"
+            new.missing = []
+            msg = "الرصيد."
         elif new.phase in {
             EngineUiPhase.DASHBOARD,
             EngineUiPhase.BILLING,
@@ -269,6 +291,7 @@ def apply_action(
         }:
             new.phase = EngineUiPhase.HOME
             new.slots.pop("awaiting_text", None)
+            new.slots.pop("billing_expanded", None)
             new.missing = []
             msg = "القائمة الرئيسية."
         else:
@@ -277,6 +300,8 @@ def apply_action(
     elif action_id == "home":
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
+        new.slots.pop("billing_expanded", None)
+        new.slots.pop("pro_buy_requested", None)
         new.missing = []
         msg = "القائمة الرئيسية."
     elif action_id == "open_generate":
@@ -413,6 +438,19 @@ def apply_action(
         new.phase = EngineUiPhase.BILLING
         new.missing = []
         msg = "الخطة."
+    elif action_id == "show_more_plans":
+        new.phase = EngineUiPhase.BILLING
+        new.slots["billing_expanded"] = "1"
+        msg = "خطط إضافية."
+    elif action_id == "view_pro_plan":
+        new.phase = EngineUiPhase.PRO_PLAN
+        new.missing = []
+        msg = "🚀 Lumen Pro"
+    elif action_id == "buy_pro_plan":
+        # Stays on PRO_PLAN; the router sends the Telegram Stars invoice.
+        new.phase = EngineUiPhase.PRO_PLAN
+        new.slots["pro_buy_requested"] = "1"
+        msg = "جارٍ إرسال فاتورة الدفع بنجوم تيليجرام…"
     elif action_id == "open_help":
         new.phase = EngineUiPhase.HELP
         new.missing = []

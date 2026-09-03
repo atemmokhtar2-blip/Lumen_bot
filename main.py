@@ -50,6 +50,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
@@ -393,6 +394,15 @@ def main() -> None:
         # L2. = HMAC-signed callbacks; lumen:ui: = legacy (ignored by decoder)
         application.add_handler(
             CallbackQueryHandler(handle_ui_callback, pattern=r"^(L2\.|lumen:ui:)")
+        )
+        # Telegram Stars (XTR) payment handlers — in-Telegram Pro plan checkout
+        from lumen.bot.ui.payment_handlers import (
+            handle_pre_checkout,
+            handle_successful_payment,
+        )
+        application.add_handler(PreCheckoutQueryHandler(handle_pre_checkout))
+        application.add_handler(
+            MessageHandler(filters.SUCCESSFUL_PAYMENT, handle_successful_payment)
         )
         # Never leave an unknown slash command without a Telegram response.
         application.add_handler(MessageHandler(filters.COMMAND, unknown_cmd))

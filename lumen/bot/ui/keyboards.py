@@ -46,7 +46,7 @@ def _style_for_action(action: str, explicit: str = "") -> str | None:
     if s:
         return s
     a = (action or "").strip().lower()
-    if a in {"open_generate", "confirm_generate", "post_trial", "post_host", "dash_trial"}:
+    if a in {"open_generate", "confirm_generate", "post_trial", "post_host", "dash_trial", "buy_pro_plan", "view_pro_plan"}:
         return "success"
     if a in {"cancel_generate", "home", "dash_stop"}:
         return "danger"
@@ -61,6 +61,7 @@ def _style_for_action(action: str, explicit: str = "") -> str | None:
         "dash_diagnose",
         "post_zip",
         "post_preview",
+        "show_more_plans",
     }:
         return "primary"
     return None
