@@ -331,7 +331,7 @@ class MongoReferralRepository:
 
 
     def top_referrers(self, *, limit: int = 10) -> list[dict]:
-        """Top referrers by qualified bot-users (stats first, else aggregate referrals)."""
+        """Top referrers by qualified count (admin leaderboard)."""
         lim = max(1, min(50, int(limit or 10)))
         try:
             cur = self.stats.find(
@@ -357,7 +357,6 @@ class MongoReferralRepository:
                 )
             if out:
                 return out
-            # Fallback: aggregate from referrals collection (stats may lag)
             pipeline = [
                 {
                     "$group": {
