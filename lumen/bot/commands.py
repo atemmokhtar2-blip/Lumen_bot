@@ -82,6 +82,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             await message.reply_text(
                                 "هذا المحيل وصل للحد الأقصى من الدعوات."
                             )
+                        elif err == "existing_user_not_eligible":
+                            await message.reply_text(
+                                "رابط الإحالة للمستخدمين الجدد فقط. "
+                                "حسابك استخدم البوت من قبل ولن يُحتسب لأي محيل."
+                            )
                         elif err == "referral_backend_unavailable":
                             await message.reply_text(
                                 "نظام الإحالة غير متاح: الخادم لا يرى رابط Mongo. "
