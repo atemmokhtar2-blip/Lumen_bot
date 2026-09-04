@@ -1159,6 +1159,25 @@ def decide(
                     decision["usage"] = fr.get("usage")
         except Exception:
             pass
+        # Live credit charge at the source (every decide path: main + recovery).
+        # Bound context comes from agent_loop; without context this is a no-op.
+        if decision.get("usage") and not decision.get("cache_hit"):
+            try:
+                from lumen.platform.credits.llm_live import (
+                    InsufficientCreditsError,
+                    charge_bound_usage,
+                )
+                receipt = charge_bound_usage(
+                    decision.get("usage") if isinstance(decision.get("usage"), dict) else {},
+                    provider=str(decision.get("provider") or choice.provider or ""),
+                    model_id=str(decision.get("model_id") or choice.model_id or ""),
+                )
+                if isinstance(receipt, dict):
+                    decision["credit_charge"] = receipt
+            except InsufficientCreditsError:
+                raise
+            except Exception:
+                logger.debug("bound llm charge soft-fail in decide", exc_info=True)
         if decision.get("parse_ok") or decision.get("tool"):
             if cache_on:
                 try:

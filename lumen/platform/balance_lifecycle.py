@@ -514,6 +514,27 @@ class BalanceLifecycle:
             return False, "insufficient_balance"
         return True, "ok"
 
+    def is_generation_allowed(self, tenant_id: str) -> tuple[bool, str]:
+        """Fail-closed gate for starting a new generation.
+
+        Unlike hosting (which may continue during grace), new generations
+        require available credits > 0 and must not be suspended.
+        """
+        tid = str(tenant_id or "")
+        if not tid:
+            return True, "no_tenant"
+        state = self._store.get(tid)
+        if state.suspended or state.phase == "suspended":
+            return False, "suspended_due_to_balance"
+        try:
+            w = self._credits.get_wallet(tid)
+            available = int(getattr(w, "available", 0) or 0)
+        except Exception:
+            return False, "wallet_unavailable"
+        if available <= 0:
+            return False, "insufficient_balance"
+        return True, "ok"
+
     def tick(self, tenant_ids: list[str] | None = None) -> dict[str, Any]:
         ids = tenant_ids or []
         if not ids:

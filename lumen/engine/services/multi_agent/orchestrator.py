@@ -323,6 +323,21 @@ def orchestrate_generate(
         if (os.getenv("ENVIRONMENT") or "").strip().lower() in {"production", "prod", "staging"}:
             return GenerationResult(success=False, errors=[f"backpressure_error:{type(_bp).__name__}"], metadata={"backpressure": True})
 
+    # Fail-closed: suspended or zero-balance tenants cannot start new generations
+    try:
+        from lumen.platform.balance_lifecycle import get_balance_lifecycle
+        _tid = f"tg:{int(user_id or 0)}" if int(user_id or 0) else ""
+        if _tid:
+            ok_gen, reason_gen = get_balance_lifecycle().is_generation_allowed(_tid)
+            if not ok_gen:
+                return GenerationResult(
+                    success=False,
+                    errors=[f"insufficient_credits:{reason_gen}"],
+                    metadata={"insufficient_credits": True, "reason": reason_gen, "tenant_id": _tid},
+                )
+    except Exception:
+        logger.debug("generation balance gate skipped", exc_info=True)
+
     inside = (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip().lower() in {"1", "true", "yes"}
     try:
         from .temporal_client_run import run_generate_via_temporal, temporal_configured

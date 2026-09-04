@@ -571,6 +571,8 @@ def run_agent(
         except (TypeError, ValueError):
             user_id = 0
     state.metadata["user_id"] = user_id
+    if user_id and not state.metadata.get("tenant_id"):
+        state.metadata["tenant_id"] = f"tg:{int(user_id)}"
     # Do NOT clear_cancel here — generation start already cleared in
     # run_with_heartbeat. Clearing again would wipe a cancel issued while
     # multi-agent was planning before the first agent_loop step.
@@ -810,13 +812,63 @@ def run_agent(
             "provider": choice.provider,
             "model": choice.model_id,
         })
-        decision = decide(
-            msgs,
-            choice=choice,
-            history_keep=_keep,
-            prompt_max_chars=_pchars,
-            task=task,
-        )
+        _charge_token = None
+        try:
+            from lumen.platform.credits.llm_live import (
+                InsufficientCreditsError,
+                bind_charge_context,
+                clear_charge_context,
+            )
+            _charge_token = bind_charge_context(
+                tenant_id=str(state.metadata.get("tenant_id") or ""),
+                user_id=int(state.metadata.get("user_id") or 0),
+                state_id=str(state.metadata.get("state_id") or state.work_dir or ""),
+                step=i,
+                call_index=int((state.metadata.get("usage") or {}).get("calls") or 0),
+            )
+        except Exception:
+            InsufficientCreditsError = Exception  # type: ignore
+            clear_charge_context = lambda *a, **k: None  # type: ignore
+            _charge_token = None
+        try:
+            decision = decide(
+                msgs,
+                choice=choice,
+                history_keep=_keep,
+                prompt_max_chars=_pchars,
+                task=task,
+            )
+        except InsufficientCreditsError as _ice:
+            state.ok = False
+            state.stop_reason = "insufficient_credits"
+            state.errors.append(
+                f"insufficient_credits:needed={getattr(_ice, 'needed', 0)}:"
+                f"available={getattr(_ice, 'available', 0)}:step={getattr(_ice, 'step', i)}"
+            )
+            state.metadata["insufficient_credits"] = {
+                "tenant_id": getattr(_ice, "tenant_id", ""),
+                "needed": getattr(_ice, "needed", 0),
+                "available": getattr(_ice, "available", 0),
+                "reason": getattr(_ice, "reason", "insufficient_balance"),
+                "step": getattr(_ice, "step", i),
+            }
+            _emit_progress({
+                "phase": "stopped",
+                "step": i,
+                "limit": limit,
+                "detail": "توقف: رصيد غير كافٍ لتكلفة خطوة الذكاء الاصطناعي",
+                "stop_reason": "insufficient_credits",
+            })
+            try:
+                clear_charge_context(_charge_token)
+            except Exception:
+                pass
+            break
+        finally:
+            try:
+                clear_charge_context(_charge_token)
+            except Exception:
+                pass
         # Per-step R2 reallocation (local router only) — Foundry routes each prompt itself
         try:
             if (diff or {}).get("router") == "r2_allocator" or (
@@ -888,44 +940,19 @@ def run_agent(
                 state.metadata["usage"] = accu
         except Exception:
             u = {}
-        # Live LLM credit charge — stop immediately when wallet cannot cover this step
-        if u and not decision.get("cache_hit"):
-            try:
-                from lumen.platform.credits.llm_live import (
-                    InsufficientCreditsError,
-                    charge_from_agent_state,
-                )
-                charge_from_agent_state(
-                    state,
-                    u if isinstance(u, dict) else {},
-                    step=i,
-                    call_index=int((state.metadata.get("usage") or {}).get("calls") or 0),
-                    provider=str(decision.get("provider") or ""),
-                    model_id=str(decision.get("model_id") or ""),
-                )
-            except InsufficientCreditsError as _ice:
-                state.ok = False
-                state.stop_reason = "insufficient_credits"
-                state.errors.append(
-                    f"insufficient_credits:needed={_ice.needed}:available={_ice.available}:step={_ice.step}"
-                )
-                state.metadata["insufficient_credits"] = {
-                    "tenant_id": _ice.tenant_id,
-                    "needed": _ice.needed,
-                    "available": _ice.available,
-                    "reason": _ice.reason,
-                    "step": _ice.step,
-                }
-                _emit_progress({
-                    "phase": "stopped",
-                    "step": i,
-                    "limit": limit,
-                    "detail": "توقف: رصيد غير كافٍ لتكلفة خطوة الذكاء الاصطناعي",
-                    "stop_reason": "insufficient_credits",
-                })
-                break
-            except Exception:
-                logger.debug("live llm charge soft-fail", exc_info=True)
+        # Live charge happens inside decide() via bound contextvars.
+        # Accumulate charge receipt on state when present.
+        try:
+            _cr = decision.get("credit_charge") if isinstance(decision, dict) else None
+            if isinstance(_cr, dict) and _cr.get("charged"):
+                state.metadata["llm_credits_charged"] = int(
+                    state.metadata.get("llm_credits_charged") or 0
+                ) + int(_cr.get("credits") or 0)
+                _charges = list(state.metadata.get("llm_charges") or [])
+                _charges.append(_cr)
+                state.metadata["llm_charges"] = _charges[-50:]
+        except Exception:
+            pass
         try:
             gov.note_decide(
                 tool=decision.get("tool"),
@@ -1299,12 +1326,55 @@ def run_agent(
                         result=result,
                         enforced_read=_enforced_read if isinstance(_enforced_read, dict) else None,
                     )
-                    _rec_decision = decide(
-                        _rec_msgs,
-                        choice=choice, task=task,
-                        history_keep=2,
-                        prompt_max_chars=4000,
-                    )
+                    _rec_charge_token = None
+                    try:
+                        from lumen.platform.credits.llm_live import (
+                            InsufficientCreditsError as _ICE_Rec,
+                            bind_charge_context as _bind_rec,
+                            clear_charge_context as _clear_rec,
+                        )
+                        _rec_charge_token = _bind_rec(
+                            tenant_id=str(state.metadata.get("tenant_id") or ""),
+                            user_id=int(state.metadata.get("user_id") or 0),
+                            state_id=str(state.metadata.get("state_id") or state.work_dir or ""),
+                            step=i,
+                            call_index=int((state.metadata.get("usage") or {}).get("calls") or 0) + 1000,
+                        )
+                    except Exception:
+                        _ICE_Rec = Exception  # type: ignore
+                        _clear_rec = lambda *a, **k: None  # type: ignore
+                        _rec_charge_token = None
+                    try:
+                        _rec_decision = decide(
+                            _rec_msgs,
+                            choice=choice, task=task,
+                            history_keep=2,
+                            prompt_max_chars=4000,
+                        )
+                    except _ICE_Rec as _ice:
+                        state.ok = False
+                        state.stop_reason = "insufficient_credits"
+                        state.errors.append(
+                            f"insufficient_credits:needed={getattr(_ice, 'needed', 0)}:"
+                            f"available={getattr(_ice, 'available', 0)}:step={i}"
+                        )
+                        state.metadata["insufficient_credits"] = {
+                            "tenant_id": getattr(_ice, "tenant_id", ""),
+                            "needed": getattr(_ice, "needed", 0),
+                            "available": getattr(_ice, "available", 0),
+                            "reason": getattr(_ice, "reason", "insufficient_balance"),
+                            "step": i,
+                        }
+                        try:
+                            _clear_rec(_rec_charge_token)
+                        except Exception:
+                            pass
+                        break
+                    finally:
+                        try:
+                            _clear_rec(_rec_charge_token)
+                        except Exception:
+                            pass
                     try:
                         _ru = _rec_decision.get("usage") or {}
                         if _ru:

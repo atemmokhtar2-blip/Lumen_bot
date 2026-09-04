@@ -201,6 +201,8 @@ def user_facing_generation_error(exc: BaseException | None = None, *, code: str 
         c = "system_busy"
     elif "guardrails" in low:
         c = "input_blocked"
+    elif "insufficient_credits" in low or "insufficient_balance" in low:
+        c = "insufficient_credits"
     elif "quota" in low or "insufficient" in low:
         c = "quota_exceeded"
     elif "timeout" in low:
@@ -210,6 +212,14 @@ def user_facing_generation_error(exc: BaseException | None = None, *, code: str 
         c = raw.split(":")[0].strip()[:48] or "generation_failed"
     else:
         c = "generation_failed"
+    if c == "insufficient_credits":
+        return (
+            "❌ توقف التوليد: رصيدك غير كافٍ لتغطية تكلفة خطوات الذكاء الاصطناعي."
+            + chr(10)
+            + "اشحن رصيدك ثم أعد المحاولة."
+            + chr(10)
+            + "رمز الخطأ: `insufficient_credits`"
+        )
     return (
         "❌ تعذر إكمال التوليد."
         + chr(10)

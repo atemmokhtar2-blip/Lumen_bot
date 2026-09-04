@@ -48,6 +48,17 @@ def _loop(get_service: Callable) -> None:
                         logger.info("scheduled host backups completed")
                     except Exception:
                         logger.exception("scheduled backup failed")
+                # Balance lifecycle tick (grace → suspend) + rate any pending usage batches
+                try:
+                    from lumen.platform.balance_lifecycle import get_balance_lifecycle
+                    get_balance_lifecycle().tick()
+                except Exception:
+                    logger.debug("balance lifecycle tick skipped", exc_info=True)
+                try:
+                    from lumen.platform.rating_engine import get_rating_engine
+                    get_rating_engine().rate_pending(limit=50)
+                except Exception:
+                    logger.debug("rate_pending skipped", exc_info=True)
         except Exception:
             logger.exception("ops scheduler iteration failed")
         _stop.wait(_log_interval())

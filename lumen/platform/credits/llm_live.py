@@ -16,6 +16,7 @@ Design rules:
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import math
 import os
@@ -63,6 +64,89 @@ def tenant_id_from_user(user_id: int | str | None) -> str:
     if uid <= 0:
         return ""
     return f"tg:{uid}"
+
+# Bound per agent step so decide() / _record_usage can charge without plumbing
+# tenant_id through every provider call.
+_CHARGE_CTX: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "lumen_llm_charge_ctx", default=None
+)
+
+
+def bind_charge_context(
+    *,
+    tenant_id: str = "",
+    user_id: int = 0,
+    state_id: str = "",
+    step: int = 0,
+    call_index: int = 0,
+) -> contextvars.Token:
+    """Bind charging context for the current agent step (call from agent_loop)."""
+    tid = str(tenant_id or "").strip() or tenant_id_from_user(user_id)
+    ctx = {
+        "tenant_id": tid,
+        "user_id": int(user_id or 0),
+        "state_id": str(state_id or ""),
+        "step": int(step or 0),
+        "call_index": int(call_index or 0),
+    }
+    return _CHARGE_CTX.set(ctx)
+
+
+def clear_charge_context(token: contextvars.Token | None = None) -> None:
+    try:
+        if token is not None:
+            _CHARGE_CTX.reset(token)
+        else:
+            _CHARGE_CTX.set(None)
+    except Exception:
+        try:
+            _CHARGE_CTX.set(None)
+        except Exception:
+            pass
+
+
+def get_charge_context() -> dict[str, Any] | None:
+    try:
+        ctx = _CHARGE_CTX.get()
+        return dict(ctx) if isinstance(ctx, dict) else None
+    except Exception:
+        return None
+
+
+def charge_bound_usage(
+    usage: dict[str, Any] | None,
+    *,
+    provider: str = "",
+    model_id: str = "",
+    credit_service: Any = None,
+) -> dict[str, Any] | None:
+    """Charge using the bound context. Raises InsufficientCreditsError on fail.
+
+    Returns receipt or None when no context / skipped.
+    """
+    ctx = get_charge_context()
+    if not ctx:
+        return None
+    tid = str(ctx.get("tenant_id") or "")
+    if not tid:
+        return None
+    # bump call_index in context for multi-attempt decide retries
+    call_index = int(ctx.get("call_index") or 0) + 1
+    ctx["call_index"] = call_index
+    try:
+        _CHARGE_CTX.set(ctx)
+    except Exception:
+        pass
+    return charge_llm_step(
+        tid,
+        usage,
+        state_id=str(ctx.get("state_id") or ""),
+        step=int(ctx.get("step") or 0),
+        call_index=call_index,
+        provider=provider,
+        model_id=model_id,
+        credit_service=credit_service,
+    )
 
 
 def credits_for_llm_usage(usage: dict[str, Any] | None, *, credit_service: Any = None) -> int:
@@ -320,4 +404,8 @@ __all__ = [
     "credits_for_llm_usage",
     "charge_llm_step",
     "charge_from_agent_state",
+    "bind_charge_context",
+    "clear_charge_context",
+    "get_charge_context",
+    "charge_bound_usage",
 ]
