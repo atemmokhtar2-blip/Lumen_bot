@@ -55,6 +55,43 @@ def _rate_allow(key: str, *, limit: int) -> bool:
         return True
 
 
+
+def _telegram_user_already_known(telegram_id: int) -> bool:
+    """True if this Telegram user touched the platform before this invite.
+
+    Checks Mongo users (same DB as referrals) and tenant store.
+    Fail-closed on positive match; ignore store outages (return False only if
+    no evidence of prior account — register still requires Mongo for persistence).
+    """
+    tid = int(telegram_id or 0)
+    if tid <= 0:
+        return True
+    # 1) Mongo users collection (canonical identity for Telegram)
+    try:
+        from lumen.platform.mongo_users import get_mongo_db, resolve_mongodb_uri
+        if resolve_mongodb_uri():
+            db = get_mongo_db()
+            users = db["users"]
+            if users.find_one({"owner_telegram_id": tid}, projection={"_id": 1}):
+                return True
+            if users.find_one({"telegram_id": tid}, projection={"_id": 1}):
+                return True
+            if users.find_one({"telegram_user_id": tid}, projection={"_id": 1}):
+                return True
+    except Exception:
+        logger.debug("referral existing-user mongo check soft-fail", exc_info=True)
+    # 2) Tenant store (Postgres / file in dev)
+    try:
+        from lumen.platform.tenants import get_tenant_store
+        store = get_tenant_store()
+        if hasattr(store, "get_by_telegram"):
+            if store.get_by_telegram(tid) is not None:
+                return True
+    except Exception:
+        logger.debug("referral existing-user tenant check soft-fail", exc_info=True)
+    return False
+
+
 def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralResult:
     from lumen.platform.referrals import get_referral_repository
 
@@ -72,6 +109,19 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         if existing is not None:
             return RegisterReferralResult(
                 ok=True, referral=existing, already_registered=True
+            )
+
+        # STRICT: only brand-new platform users count for the referrer.
+        # Anyone who already used the bot (users/tenant row exists) cannot
+        # attach to a referral link later and farm rewards.
+        if _telegram_user_already_known(referred):
+            logger.info(
+                "referral rejected existing_user referred_tg=%s referrer_tg=%s",
+                referred,
+                referrer,
+            )
+            return RegisterReferralResult(
+                ok=False, error="existing_user_not_eligible"
             )
 
         lim = int(REFERRAL_REGISTER_RATE_PER_MIN)
