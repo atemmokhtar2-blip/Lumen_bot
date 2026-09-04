@@ -62,6 +62,7 @@ from lumen.bot import (
     PORT,
     logger,
     start_cmd,
+    referral_cmd,
     help_cmd,
     status_cmd,
     lang_cmd,
@@ -385,6 +386,7 @@ def main() -> None:
 
     def _wire(application: Application) -> None:
         application.add_handler(CommandHandler("start", start_cmd))
+        application.add_handler(CommandHandler("referral", referral_cmd))
         application.add_handler(CommandHandler("help", help_cmd))
         application.add_handler(CommandHandler("status", status_cmd))
         application.add_handler(CommandHandler("lang", lang_cmd))
