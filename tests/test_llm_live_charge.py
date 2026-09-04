@@ -444,3 +444,31 @@ def test_agent_loop_stops_on_insufficient_credits(credits_simple, monkeypatch):
     assert any("insufficient_credits" in e for e in (state.errors or []))
     assert credits_simple.get_wallet("tg:99").current_balance == 0
     assert call_count["n"] <= 2
+
+
+def test_record_usage_charges_at_source(credits_simple):
+    """ROOT: _record_usage itself deducts when context is bound."""
+    from lumen.engine.services.cline_runtime import agent_brain
+    from lumen.platform.credits.llm_live import (
+        InsufficientCreditsError,
+        bind_charge_context,
+        clear_charge_context,
+    )
+
+    credits_simple.credit_credits("tg:101", 5, idempotency_key="fund-tg101-001")
+    tok = bind_charge_context(tenant_id="tg:101", state_id="src", step=1, call_index=0)
+    try:
+        agent_brain._record_usage(
+            "openai",
+            "gpt-test",
+            {"usage": {"prompt_tokens": 1000, "completion_tokens": 0, "total_tokens": 1000}},
+        )
+        assert credits_simple.get_wallet("tg:101").current_balance == 4  # -1 for 1k prompt
+        with pytest.raises(InsufficientCreditsError):
+            agent_brain._record_usage(
+                "openai",
+                "gpt-test",
+                {"usage": {"prompt_tokens": 10000, "completion_tokens": 10000, "total_tokens": 20000}},
+            )
+    finally:
+        clear_charge_context(tok)

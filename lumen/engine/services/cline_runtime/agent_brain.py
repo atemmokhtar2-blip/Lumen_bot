@@ -30,27 +30,75 @@ def get_last_call_usage() -> dict:
 
 
 def _record_usage(provider: str, model_id: str, body: dict | None = None, *, prompt_chars: int = 0) -> None:
-    """Extract real token usage from provider JSON; fall back to char estimate."""
+    """Extract real token usage from provider JSON; fall back to char estimate.
+
+    ROOT-CAUSE live billing: when charge context is bound, deduct credits here
+    (the exact moment a provider call consumed tokens). Raises
+    InsufficientCreditsError so the agent loop stops on this call.
+    """
     global _LAST_CALL_USAGE
     usage: dict = {"provider": provider, "model_id": model_id or ""}
     body = body or {}
-    # Gemini
     um = body.get("usageMetadata") or body.get("usage_metadata") or {}
     if um:
         usage["prompt_tokens"] = int(um.get("promptTokenCount") or um.get("prompt_tokens") or 0)
         usage["completion_tokens"] = int(um.get("candidatesTokenCount") or um.get("completion_tokens") or 0)
         usage["total_tokens"] = int(um.get("totalTokenCount") or um.get("total_tokens") or 0)
-    # OpenAI-compatible (Groq, xAI, llama)
     ou = body.get("usage") or {}
     if ou and not usage.get("total_tokens"):
-        usage["prompt_tokens"] = int(ou.get("prompt_tokens") or 0)
-        usage["completion_tokens"] = int(ou.get("completion_tokens") or 0)
+        usage["prompt_tokens"] = int(ou.get("prompt_tokens") or ou.get("input_tokens") or 0)
+        usage["completion_tokens"] = int(ou.get("completion_tokens") or ou.get("output_tokens") or 0)
         usage["total_tokens"] = int(ou.get("total_tokens") or 0)
+        if not usage["total_tokens"]:
+            usage["total_tokens"] = int(usage["prompt_tokens"]) + int(usage["completion_tokens"])
     if not usage.get("total_tokens") and prompt_chars:
-        # rough estimate only when API omitted usage
         usage["prompt_tokens_est"] = max(1, prompt_chars // 4)
         usage["estimated"] = True
     _LAST_CALL_USAGE = usage
+
+    # Live charge at source — only when agent_loop bound a charge context
+    try:
+        from lumen.platform.credits.llm_live import (
+            InsufficientCreditsError,
+            charge_bound_usage,
+            get_charge_context,
+        )
+        if get_charge_context():
+            receipt = charge_bound_usage(
+                usage,
+                provider=str(provider or ""),
+                model_id=str(model_id or ""),
+            )
+            if isinstance(receipt, dict):
+                usage["credit_charge"] = receipt
+                _LAST_CALL_USAGE = usage
+    except Exception as exc:
+        # Re-raise billing stop only; never hide InsufficientCreditsError
+        try:
+            from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
+            if isinstance(exc, _ICE):
+                raise
+        except ImportError:
+            pass
+        if type(exc).__name__ == "InsufficientCreditsError":
+            raise
+        logger.debug("live charge after record_usage non-fatal: %s", type(exc).__name__)
+
+
+def _safe_record_usage(provider: str, model_id: str, body: dict | None = None, *, prompt_chars: int = 0) -> None:
+    """Call _record_usage; re-raise InsufficientCreditsError; swallow other record errors."""
+    try:
+        _record_usage(provider, model_id, body, prompt_chars=prompt_chars)
+    except Exception as exc:
+        try:
+            from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
+            if isinstance(exc, _ICE):
+                raise
+        except ImportError:
+            pass
+        if type(exc).__name__ == "InsufficientCreditsError":
+            raise
+        logger.debug("safe_record_usage non-fatal: %s", type(exc).__name__)
 
 
 ALLOWED_TOOLS = {
@@ -352,10 +400,7 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
             parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
             text = "".join(str(p.get("text") or "") for p in parts)
             if text.strip():
-                try:
-                    _record_usage("gemini", model, body, prompt_chars=len(prompt))
-                except Exception:
-                    pass
+                _safe_record_usage("gemini", model, body, prompt_chars=len(prompt))
                 return text
             last_err = RuntimeError("gemini_empty_response")
     raise RuntimeError(str(last_err) if last_err else "gemini_exhausted")
@@ -388,10 +433,7 @@ def _call_xai(system: str, user: str, model_id: str) -> str:
     if not choices:
         raise RuntimeError("xai_empty_choices")
     content = str((choices[0].get("message") or {}).get("content") or "")
-    try:
-        _record_usage("xai", model, body, prompt_chars=len(system) + len(user))
-    except Exception:
-        pass
+    _safe_record_usage("xai", model, body, prompt_chars=len(system) + len(user))
     return content
 
 
@@ -561,10 +603,7 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
             logger.info(
                 "groq ok source=%s model=%s json_mode=%s", source, model, with_json
             )
-            try:
-                _record_usage("groq", model, body_j, prompt_chars=len(system) + len(user))
-            except Exception:
-                pass
+            _safe_record_usage("groq", model, body_j, prompt_chars=len(system) + len(user))
             return content
 
     status = {}
@@ -688,6 +727,11 @@ def _call_qwen(system: str, user: str, model_id: str, base_url: str | None = Non
                 last_error = "qwen_empty_content"
                 continue
             logger.info("qwen ok source=%s model=%s base=%s", source, model, base)
+            try:
+                body_j = resp.json() if resp is not None else {}
+            except Exception:
+                body_j = {}
+            _safe_record_usage("qwen", model, body_j, prompt_chars=len(system) + len(user))
             return content
 
         if not key_done:
@@ -717,7 +761,22 @@ def _call_ollama(system: str, user: str, model_id: str, base_url: str | None) ->
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"ollama_http_{resp.status_code}")
-    return str((resp.json().get("message") or {}).get("content") or "")
+    body = resp.json() if resp is not None else {}
+    content = str((body.get("message") or {}).get("content") or "")
+    _safe_record_usage(
+        "ollama",
+        model_id or "llama",
+        {
+            "usage": {
+                "prompt_tokens": int(body.get("prompt_eval_count") or 0),
+                "completion_tokens": int(body.get("eval_count") or 0),
+                "total_tokens": int(body.get("prompt_eval_count") or 0)
+                + int(body.get("eval_count") or 0),
+            }
+        },
+        prompt_chars=len(system) + len(user),
+    )
+    return content
 
 
 def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) -> str:
@@ -773,6 +832,7 @@ def _call_llamacpp(system: str, user: str, model_id: str, base_url: str | None) 
         content = str(msg.get("reasoning_content") or "").strip()
     if not content:
         raise RuntimeError("llamacpp_empty_content")
+    _safe_record_usage("llamacpp", model, body, prompt_chars=len(system) + len(user))
     return content
 
 
@@ -816,10 +876,7 @@ def _call_openai_compat(
     content = str(msg.get("content") or msg.get("reasoning_content") or "").strip()
     if not content:
         raise RuntimeError("openai_compat_empty_content")
-    try:
-        _record_usage("openai_compat", model_id, body, prompt_chars=len(system) + len(user))
-    except Exception:
-        pass
+    _safe_record_usage("openai_compat", model_id, body, prompt_chars=len(system) + len(user))
     return content
 
 
@@ -850,6 +907,11 @@ def _call_anthropic(system: str, user: str, model_id: str, api_key: str) -> str:
     text = text.strip()
     if not text:
         raise RuntimeError("anthropic_empty_content")
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+    _safe_record_usage("anthropic", model_id, body, prompt_chars=len(system) + len(user))
     return text
 
 
@@ -917,7 +979,15 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
         if not key.startswith("sk-or-") and "openrouter" not in key.lower():
             try:
                 return _call_anthropic(system, user, model_id, key)
-            except Exception:
+            except Exception as _anth_exc:
+                try:
+                    from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
+                    if isinstance(_anth_exc, _ICE):
+                        raise
+                except ImportError:
+                    pass
+                if type(_anth_exc).__name__ == "InsufficientCreditsError":
+                    raise
                 or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
                 if not or_key:
                     raise
@@ -991,13 +1061,19 @@ def _invoke_choice(choice: ModelChoice, system: str, user: str, *, task: str = "
             task=task,
             deployment=choice.model_id or None,
         )
+        fr = {}
         try:
             from lumen.engine.services.llm.foundry_router import get_last_result
-            fr = get_last_result()
-            # stash for decide metadata
+            fr = get_last_result() or {}
             _invoke_choice.last_foundry = fr  # type: ignore[attr-defined]
         except Exception:
-            pass
+            fr = {}
+        _safe_record_usage(
+            "foundry",
+            str((fr.get("model") if isinstance(fr, dict) else None) or choice.model_id or ""),
+            {"usage": (fr.get("usage") if isinstance(fr, dict) else None) or {}},
+            prompt_chars=len(sys_f) + len(user_f),
+        )
         return str(out.get("content") or "")
     if provider in {"openai", "openrouter", "deepseek", "anthropic"}:
         return _dispatch_catalog_provider(provider, system, user, choice)
@@ -1093,6 +1169,14 @@ def decide(
             raw = _invoke_choice(choice, system, user, task=task)
             provider = choice.provider
         except Exception as exc:
+            try:
+                from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
+                if isinstance(exc, _ICE):
+                    raise
+            except ImportError:
+                pass
+            if type(exc).__name__ == "InsufficientCreditsError":
+                raise
             last_error = f"{type(exc).__name__}:{exc}"
             logger.warning(
                 "agent_brain attempt %s/%s provider=%s failed: %s",
@@ -1159,25 +1243,13 @@ def decide(
                     decision["usage"] = fr.get("usage")
         except Exception:
             pass
-        # Live credit charge at the source (every decide path: main + recovery).
-        # Bound context comes from agent_loop; without context this is a no-op.
-        if decision.get("usage") and not decision.get("cache_hit"):
-            try:
-                from lumen.platform.credits.llm_live import (
-                    InsufficientCreditsError,
-                    charge_bound_usage,
-                )
-                receipt = charge_bound_usage(
-                    decision.get("usage") if isinstance(decision.get("usage"), dict) else {},
-                    provider=str(decision.get("provider") or choice.provider or ""),
-                    model_id=str(decision.get("model_id") or choice.model_id or ""),
-                )
-                if isinstance(receipt, dict):
-                    decision["credit_charge"] = receipt
-            except InsufficientCreditsError:
-                raise
-            except Exception:
-                logger.debug("bound llm charge soft-fail in decide", exc_info=True)
+        # Live charge applied inside _record_usage (source of each HTTP call).
+        try:
+            _u = decision.get("usage") if isinstance(decision.get("usage"), dict) else {}
+            if isinstance(_u.get("credit_charge"), dict):
+                decision["credit_charge"] = _u["credit_charge"]
+        except Exception:
+            pass
         if decision.get("parse_ok") or decision.get("tool"):
             if cache_on:
                 try:
