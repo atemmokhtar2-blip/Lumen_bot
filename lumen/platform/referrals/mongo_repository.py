@@ -109,6 +109,13 @@ class MongoReferralRepository:
             self.col.insert_one(doc)
         except self._DuplicateKeyError as exc:
             raise ReferralError("referred_already_registered") from exc
+        # Race-safe cap: parallel inserts can pass pre-check — roll back if over max
+        if self.count_for_referrer(ref.referrer_telegram_id) > int(REFERRAL_MAX_PER_REFERRER):
+            try:
+                self.col.delete_one({"referred_telegram_id": ref.referred_telegram_id})
+            except Exception:
+                logger.warning("referral over-cap rollback failed", exc_info=True)
+            raise ReferralError("referrer_invite_cap_reached")
         self._bump_stats(ref.referrer_telegram_id, pending_delta=1, invited_delta=1)
         return ref
 
@@ -343,6 +350,9 @@ class MemoryReferralRepository:
         if self.count_for_referrer(ref.referrer_telegram_id) >= int(REFERRAL_MAX_PER_REFERRER):
             raise ReferralError("referrer_invite_cap_reached")
         self._by_referred[ref.referred_telegram_id] = ref
+        if self.count_for_referrer(ref.referrer_telegram_id) > int(REFERRAL_MAX_PER_REFERRER):
+            self._by_referred.pop(ref.referred_telegram_id, None)
+            raise ReferralError("referrer_invite_cap_reached")
         return ref
 
     def get_by_referred(self, referred_telegram_id: int) -> Optional[Referral]:
