@@ -59,6 +59,7 @@ class ConversationStore(Protocol):
     ) -> Message: ...
     def list_messages(self, conversation_id: str, *, user_id: int, limit: int = 30) -> list[Message]: ...
     def purge_older_than(self, days: int = 30) -> int: ...
+    def search_messages(self, user_id: int, query: str, *, limit: int = 20) -> list[Message]: ...
 
 
 class MemoryConversationStore:
@@ -163,6 +164,24 @@ class MemoryConversationStore:
             if limit > 0:
                 rows = rows[-int(limit) :]
             return rows
+
+
+    def search_messages(self, user_id: int, query: str, *, limit: int = 20) -> list[Message]:
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        hits: list[Message] = []
+        with self._lock:
+            for cid, msgs in self._msgs.items():
+                c = self._convs.get(cid)
+                if not c or int(c.user_id) != int(user_id):
+                    continue
+                for m in reversed(msgs):
+                    if q in (m.content or "").lower():
+                        hits.append(m)
+                        if len(hits) >= int(limit):
+                            return hits
+        return hits
 
     def purge_older_than(self, days: int = 30) -> int:
         cutoff = time.time() - max(1, int(days)) * 86400
@@ -315,6 +334,23 @@ class PostgresConversationStore:
                 ) t ORDER BY created_at ASC
                 """,
                 (str(conversation_id), int(limit)),
+            ).fetchall()
+        return [self._row_msg(r) for r in rows if r]
+
+
+    def search_messages(self, user_id: int, query: str, *, limit: int = 20) -> list[Message]:
+        q = (query or "").strip()
+        if not q:
+            return []
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.* FROM lumen_messages m
+                JOIN lumen_conversations c ON c.id = m.conversation_id
+                WHERE c.user_id=%s AND m.content ILIKE %s
+                ORDER BY m.created_at DESC LIMIT %s
+                """,
+                (int(user_id), f"%{q}%", int(limit)),
             ).fetchall()
         return [self._row_msg(r) for r in rows if r]
 

@@ -109,7 +109,14 @@ class ConversationService:
             "message_count": conv.message_count,
         }
 
+    def search(self, user_id: int, query: str, *, limit: int = 20) -> list[Message]:
+        return self._store.search_messages(int(user_id), query, limit=limit)
+
+    def purge_expired(self, *, days: int = 30) -> int:
+        return int(self._store.purge_older_than(days=days) or 0)
+
     def export_json(self, user_id: int, conversation_id: str) -> dict[str, Any]:
+
         conv = self._store.get_conversation(str(conversation_id), user_id=int(user_id))
         if not conv:
             return {"ok": False, "error": "not_found"}

@@ -642,6 +642,41 @@ def run_agent(
         state.metadata["repo_context_error"] = type(_rc_exc).__name__
         repo_ctx = None
     sys_prompt = _system_prompt(state.work_dir, goal, ir_dict)
+    # ROOT: load WhatsApp-style conversation history into agent context
+    try:
+        _cuid = int(state.metadata.get("user_id") or 0)
+        _ccid = ""
+        if isinstance(ir_dict, dict):
+            _ccid = str(
+                ir_dict.get("conversation_id")
+                or (ir_dict.get("metadata") or {}).get("conversation_id")
+                or ""
+            )
+        if _cuid:
+            from lumen.platform.conversations import get_conversation_service
+            _csvc = get_conversation_service()
+            _cobj = _csvc.ensure_active(_cuid, conversation_id=_ccid or None)
+            state.metadata["conversation_id"] = _cobj.id
+            _cctx = _csvc.context_for_llm(_cuid, _cobj.id)
+            _lines = []
+            if _cctx.get("summary"):
+                _lines.append(f"PRIOR SUMMARY: {str(_cctx['summary'])[:1500]}")
+            for _m in (_cctx.get("messages") or [])[-20:]:
+                _role = str(_m.get("role") or "user").upper()
+                _lines.append(f"{_role}: {str(_m.get('content') or '')[:600]}")
+            if _lines:
+                _block = (
+                    "\n\nCONVERSATION HISTORY (sliding window — stay consistent with this thread):\n"
+                    + "\n".join(_lines)
+                )
+                # Respect token budget roughly via char cap
+                if len(sys_prompt) + len(_block) > 24000:
+                    _block = _block[: max(2000, 24000 - len(sys_prompt))]
+                sys_prompt = sys_prompt + _block
+                state.metadata["conversation_context_msgs"] = len(_cctx.get("messages") or [])
+    except Exception as _conv_exc:
+        state.warnings.append(f"conversation_context_skip:{type(_conv_exc).__name__}")
+
     sys_prompt = sys_prompt + (
         "\n\nMULTI-FILE TOOLS:\n"
         "- grep_codebase(pattern), glob_files(pattern), read_files(paths=[...])\n"

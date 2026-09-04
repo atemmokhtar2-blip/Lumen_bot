@@ -343,3 +343,18 @@ async def deliver_generation_result(
             "راجع التقرير أعلاه."
         )
 
+    # Persist assistant outcome into active conversation thread
+    try:
+        if user:
+            from lumen.bot.conversation_ui import record_user_and_assistant
+            note = "✅ تم التوليد" if success else "⚠️ فشل/جزئي التوليد"
+            if project_path:
+                note += f" — {project_path}"
+            record_user_and_assistant(
+                int(user.id),
+                context.user_data if isinstance(context.user_data, dict) else {},
+                user_text="",
+                assistant_text=note[:500],
+            )
+    except Exception:
+        logger.debug("conversation assistant record after generation soft-fail", exc_info=True)

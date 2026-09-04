@@ -532,4 +532,15 @@ async def _handle_message_body(
     if not reply:
         reply = "تم." if turn.ok else "تعذر تنفيذ الطلب عبر المحرك."
     await safe_reply_text(message, reply)
+    try:
+        if user:
+            from lumen.bot.conversation_ui import record_user_and_assistant
+            record_user_and_assistant(
+                int(user.id),
+                context.user_data or {},
+                user_text="",
+                assistant_text=reply,
+            )
+    except Exception:
+        logger.debug("conversation assistant record soft-fail", exc_info=True)
     return

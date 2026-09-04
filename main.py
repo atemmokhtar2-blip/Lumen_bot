@@ -394,11 +394,15 @@ def main() -> None:
             cmd_new_conversation,
             cmd_conversations,
             cmd_history,
+            cmd_export,
+            cmd_search,
             handle_conversation_callback,
         )
         application.add_handler(CommandHandler("new", cmd_new_conversation))
         application.add_handler(CommandHandler("conversations", cmd_conversations))
         application.add_handler(CommandHandler("history", cmd_history))
+        application.add_handler(CommandHandler("export", cmd_export))
+        application.add_handler(CommandHandler("search", cmd_search))
         application.add_handler(
             CallbackQueryHandler(handle_conversation_callback, pattern=r"^conv:")
         )

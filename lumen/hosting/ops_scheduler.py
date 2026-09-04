@@ -48,6 +48,16 @@ def _loop(get_service: Callable) -> None:
                         logger.info("scheduled host backups completed")
                     except Exception:
                         logger.exception("scheduled backup failed")
+                # Conversation retention (30d default)
+                try:
+                    from lumen.platform.conversations import get_conversation_service
+                    n = get_conversation_service().purge_expired(days=int(
+                        __import__("os").environ.get("LUMEN_CONV_RETENTION_DAYS") or "30"
+                    ))
+                    if n:
+                        logger.info("purged %s expired conversations", n)
+                except Exception:
+                    logger.debug("conversation purge soft-fail", exc_info=True)
                 # Balance lifecycle tick (grace → suspend) + rate any pending usage batches
                 try:
                     from lumen.platform.balance_lifecycle import get_balance_lifecycle

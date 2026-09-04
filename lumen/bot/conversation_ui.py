@@ -215,3 +215,52 @@ def llm_context_block(user_id: int, user_data: dict) -> str:
     for m in ctx.get("messages") or []:
         lines.append(f"{m.get('role', 'user').upper()}: {m.get('content', '')[:800]}")
     return "\n".join(lines)
+
+
+async def cmd_export(update, context) -> None:
+    """ /export — export active conversation as JSON text."""
+    user = update.effective_user
+    if not user:
+        return
+    uid = int(user.id)
+    try:
+        from lumen.platform.conversations import get_conversation_service
+        from lumen.bot.session_store import get_session_store
+        get_session_store().hydrate(uid, context.user_data)
+        svc = get_conversation_service()
+        cid = str(context.user_data.get("current_conversation_id") or "")
+        conv = svc.ensure_active(uid, conversation_id=cid or None)
+        data = svc.export_json(uid, conv.id)
+        import json
+        blob = json.dumps(data, ensure_ascii=False, indent=2)
+        if len(blob) > 3500:
+            blob = blob[:3500] + "\n…(truncated)"
+        await update.effective_message.reply_text(f"```json\n{blob}\n```", parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("cmd_export")
+        await update.effective_message.reply_text(f"تعذر التصدير: {type(exc).__name__}")
+
+
+async def cmd_search(update, context) -> None:
+    """ /search <query> — search across user conversations."""
+    user = update.effective_user
+    if not user:
+        return
+    uid = int(user.id)
+    q = " ".join(context.args or []).strip()
+    if not q:
+        await update.effective_message.reply_text("استخدم: /search كلمة البحث")
+        return
+    try:
+        from lumen.platform.conversations import get_conversation_service
+        hits = get_conversation_service().search(uid, q, limit=15)
+        if not hits:
+            await update.effective_message.reply_text("مفيش نتائج.")
+            return
+        lines = [f"نتائج البحث عن: {q}"]
+        for m in hits:
+            lines.append(f"• [{m.role}] {(m.content or '')[:120]}")
+        await update.effective_message.reply_text("\n".join(lines)[:3500])
+    except Exception as exc:
+        logger.exception("cmd_search")
+        await update.effective_message.reply_text(f"تعذر البحث: {type(exc).__name__}")
