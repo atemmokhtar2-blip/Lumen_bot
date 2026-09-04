@@ -71,15 +71,21 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
                 referrer_id = parse_referrer_from_start_payload(payload)
                 if referrer_id is not None:
-                    result = await asyncio.to_thread(
-                        handle_register_referral,
-                        RegisterReferralCommand(
-                            referrer_telegram_id=int(referrer_id),
-                            referred_telegram_id=int(user.id),
-                        ),
-                    )
                     try:
-                        if result.ok and not result.already_registered:
+                        result = await asyncio.to_thread(
+                            handle_register_referral,
+                            RegisterReferralCommand(
+                                referrer_telegram_id=int(referrer_id),
+                                referred_telegram_id=int(user.id),
+                            ),
+                        )
+                    except RuntimeError:
+                        await message.reply_text(
+                            "نظام الإحالة غير متاح حالياً (إعدادات الخادم)."
+                        )
+                        result = None
+                    try:
+                        if result is not None and result.ok and not result.already_registered:
                             await message.reply_text(
                                 "مرحباً بك في Lumen — تم تسجيل دعوتك. "
                                 "أرسل أي رسالة للبوت حتى تُحتسب الإحالة للمحيل."
@@ -348,6 +354,8 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception:
             share_kb = None
         await message.reply_text(text, reply_markup=share_kb)
+    except RuntimeError:
+        await message.reply_text("نظام الإحالة غير متاح حالياً (إعدادات الخادم).")
     except Exception:
         await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
 
@@ -389,5 +397,7 @@ async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             ]
         )
         await message.reply_text(text)
+    except RuntimeError:
+        await message.reply_text("نظام الإحالة غير متاح حالياً (إعدادات الخادم).")
     except Exception:
         await message.reply_text("تعذر جلب الإحصائيات.")
