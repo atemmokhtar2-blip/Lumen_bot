@@ -173,6 +173,64 @@ class MongoReferralRepository:
         # rebuild from referrals if stats missing
         return self._rebuild_stats(rid)
 
+
+    def claim_reward_slot(
+        self,
+        referrer_telegram_id: int,
+        *,
+        batch_id: str,
+        min_qualified: int,
+    ) -> bool:
+        """CAS: reward_paid false + qualified_count >= target → paid true."""
+        from pymongo import ReturnDocument
+
+        rid = int(referrer_telegram_id)
+        bid = str(batch_id or "").strip()
+        if not bid:
+            return False
+        # Prefer live count over possibly stale stats counter
+        live = self.count_qualified(rid)
+        if live < int(min_qualified):
+            return False
+        doc = self.stats.find_one_and_update(
+            {
+                "referrer_telegram_id": rid,
+                "reward_paid": {"$ne": True},
+            },
+            {
+                "$set": {
+                    "reward_paid": True,
+                    "reward_batch_id": bid,
+                    "qualified_count": live,
+                    "updated_at": time.time(),
+                },
+                "$setOnInsert": {
+                    "total_invited": live,
+                    "pending_count": 0,
+                    "rejected_count": 0,
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if not doc:
+            return False
+        # If another worker already set a different batch, we lost
+        return str(doc.get("reward_batch_id") or "") == bid and bool(doc.get("reward_paid"))
+
+    def release_reward_slot(self, referrer_telegram_id: int) -> None:
+        rid = int(referrer_telegram_id)
+        self.stats.update_one(
+            {"referrer_telegram_id": rid, "reward_paid": True},
+            {
+                "$set": {
+                    "reward_paid": False,
+                    "reward_batch_id": None,
+                    "updated_at": time.time(),
+                }
+            },
+        )
+
     def mark_reward_paid(
         self, referrer_telegram_id: int, *, batch_id: str
     ) -> ReferralStats:
@@ -307,6 +365,26 @@ class MemoryReferralRepository:
             reward_paid=paid,
             reward_batch_id=batch,
         )
+
+
+    def claim_reward_slot(
+        self,
+        referrer_telegram_id: int,
+        *,
+        batch_id: str,
+        min_qualified: int,
+    ) -> bool:
+        rid = int(referrer_telegram_id)
+        if self.count_qualified(rid) < int(min_qualified):
+            return False
+        paid, _ = self._reward_paid.get(rid, (False, None))
+        if paid:
+            return False
+        self._reward_paid[rid] = (True, str(batch_id))
+        return True
+
+    def release_reward_slot(self, referrer_telegram_id: int) -> None:
+        self._reward_paid.pop(int(referrer_telegram_id), None)
 
     def mark_reward_paid(
         self, referrer_telegram_id: int, *, batch_id: str
