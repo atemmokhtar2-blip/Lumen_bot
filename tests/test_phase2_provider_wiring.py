@@ -70,3 +70,39 @@ def test_catalog_gemini_key_pool():
     assert m is not None
     # key_present should not crash without pool
     assert isinstance(m.key_present(), bool)
+
+
+def test_invoke_choice_routes_openai():
+    from unittest.mock import patch
+    from lumen.engine.services.cline_runtime.model_router import ModelChoice
+    from lumen.engine.services.cline_runtime import agent_brain
+
+    choice = ModelChoice("openai", "gpt-4o-mini", "OPENAI_API_KEY", base_url="https://api.openai.com/v1")
+    with patch.object(agent_brain, "_call_openai_compat", return_value='{"tool":"finish","reply":"ok"}') as m:
+        out = agent_brain._invoke_choice(choice, "sys", "user")
+        assert "finish" in out
+        m.assert_called_once()
+
+
+def test_invoke_choice_routes_deepseek():
+    from unittest.mock import patch
+    import os
+    os.environ["DEEPSEEK_API_KEY"] = "sk-ds"
+    from lumen.engine.services.cline_runtime.model_router import ModelChoice
+    from lumen.engine.services.cline_runtime import agent_brain
+
+    choice = ModelChoice(
+        "deepseek", "deepseek-v4-flash", "DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com",
+    )
+    with patch.object(agent_brain, "_call_openai_compat", return_value='{"tool":"finish"}') as m:
+        agent_brain._invoke_choice(choice, "s", "u")
+        assert m.call_args[0][2] == "deepseek-v4-flash"
+
+
+def test_decide_uses_invoke_choice():
+    import inspect
+    from lumen.engine.services.cline_runtime import agent_brain
+    src = inspect.getsource(agent_brain.decide)
+    assert "_invoke_choice" in src
+    assert "_failover_choice" in src

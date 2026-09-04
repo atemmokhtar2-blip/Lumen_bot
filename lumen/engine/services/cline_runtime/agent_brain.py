@@ -203,12 +203,15 @@ def _normalize_decision(obj: dict[str, Any] | None, raw_text: str) -> dict[str, 
     finish = bool(obj.get("finish")) or tool_s == "finish"
     if finish:
         tool_s = "finish"
+    reply = str(obj.get("reply") or obj.get("summary") or obj.get("message") or "")[:2000]
     return {
         "thought": str(obj.get("thought") or obj.get("reasoning") or "")[:2000],
         "tool": tool_s or None,
         "args": args,
+        "params": args,  # alias for engine_turn / callers
         "finish": finish,
-        "summary": str(obj.get("summary") or obj.get("message") or "")[:2000],
+        "summary": reply,
+        "reply": reply,
         "raw": (raw_text or "")[:1500],
         "parse_ok": True,
     }
@@ -937,6 +940,48 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
 
 
 
+def _invoke_choice(choice: ModelChoice, system: str, user: str) -> str:
+    """Single dispatch: every provider ModelChoice can run goes through here."""
+    provider = (choice.provider or "").strip()
+    if provider in {"openai", "openrouter", "deepseek", "foundry", "anthropic"}:
+        return _dispatch_catalog_provider(provider, system, user, choice)
+    if provider == "gemini":
+        return _call_gemini(system, user, choice.model_id)
+    if provider == "groq":
+        return _call_groq(system, user, choice.model_id)
+    if provider == "qwen":
+        return _call_qwen(system, user, choice.model_id, choice.base_url)
+    if provider == "xai":
+        return _call_xai(system, user, choice.model_id)
+    if provider == "ollama":
+        return _call_ollama(system, user, choice.model_id, choice.base_url)
+    if provider in {"llamacpp", "openai_compat", "tablet"}:
+        return _call_llamacpp(system, user, choice.model_id, choice.base_url)
+    raise RuntimeError(f"unsupported_provider:{provider or 'none'}")
+
+
+def _failover_choice(failed: ModelChoice, *, task: str = "build") -> ModelChoice | None:
+    """Next available catalog model excluding the failed provider."""
+    try:
+        from lumen.engine.services.llm.model_catalog import available_models
+        from .model_router import _task_to_role, _choice_from_catalog_model
+
+        role = _task_to_role(task)
+        pool = available_models(role=role) or available_models()
+        candidates = [m for m in pool if m.provider != (failed.provider or "")]
+        if not candidates:
+            return None
+        if role in {"plan", "critique", "reason"}:
+            candidates = sorted(candidates, key=lambda m: (-int(m.strength), int(m.cost_tier)))
+        else:
+            candidates = sorted(candidates, key=lambda m: (int(m.cost_tier), -int(m.strength)))
+        return _choice_from_catalog_model(candidates[0])
+    except Exception:
+        logger.debug("failover_choice failed", exc_info=True)
+        return None
+
+
+
 def decide(
     messages: list[dict[str, Any]],
     *,
@@ -988,101 +1033,36 @@ def decide(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            if provider in {"openai", "openrouter", "deepseek", "foundry", "anthropic"}:
-                raw = _dispatch_catalog_provider(provider, system, user, choice)
-            elif provider == "qwen":
-                raw = _call_qwen(system, user, choice.model_id, choice.base_url)
-            elif provider == "groq":
-                try:
-                    raw = _call_groq(system, user, choice.model_id)
-                except Exception as groq_exc:
-                    # groq→gemini cross-provider failover (TPM exhaustion on
-                    # groq free tier is org-level; fall back to gemini which
-                    # has 30 keys × multiple models = much higher throughput).
-                    try:
-                        from lumen.engine.services.llm.key_pool import gemini_available
-                        if gemini_available():
-                            logger.warning(
-                                "groq failed (%s) — trying gemini cross-provider failover",
-                                groq_exc,
-                            )
-                            raw = _call_gemini(
-                                system,
-                                user,
-                                (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
-                            )
-                            provider = "gemini"
-                        else:
-                            # last resort: qwen (if configured)
-                            from lumen.engine.services.llm.key_pool import qwen_keys
-                            if not qwen_keys():
-                                raise groq_exc
-                            raw = _call_qwen(
-                                system,
-                                user,
-                                (os.getenv("QWEN_MODEL") or "qwen-plus"),
-                                None,
-                            )
-                            provider = "qwen"
-                    except Exception:
-                        raise groq_exc
-            elif provider == "gemini":
-                try:
-                    raw = _call_gemini(system, user, choice.model_id)
-                except Exception as gemini_exc:
-                    # gemini→groq cross-provider failover (prevents quota/parse death spiral)
-                    try:
-                        from lumen.engine.services.llm.key_pool import groq_keys
-                        if groq_keys():
-                            logger.warning(
-                                "gemini failed (%s) — trying groq cross-provider failover",
-                                gemini_exc,
-                            )
-                            raw = _call_groq(
-                                system,
-                                user,
-                                (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
-                            )
-                            provider = "groq"
-                        else:
-                            raise gemini_exc
-                    except Exception:
-                        raise gemini_exc
-            elif provider == "xai":
-                raw = _call_xai(system, user, choice.model_id)
-            elif provider == "ollama":
-                raw = _call_ollama(system, user, choice.model_id, choice.base_url)
-            elif provider in {"llamacpp", "openai_compat", "tablet"}:
-                raw = _call_llamacpp(system, user, choice.model_id, choice.base_url)
-            else:
-                return {
-                    "thought": "",
-                    "tool": None,
-                    "args": {},
-                    "finish": False,
-                    "summary": "",
-                    "raw": "",
-                    "parse_ok": False,
-                    "error": "no_model_provider",
-                }
+            raw = _invoke_choice(choice, system, user)
+            provider = choice.provider
         except Exception as exc:
             last_error = f"{type(exc).__name__}:{exc}"
             logger.warning(
                 "agent_brain attempt %s/%s provider=%s failed: %s",
                 attempt,
                 max_attempts,
-                provider,
+                choice.provider,
                 exc,
             )
-            # transient? retry
+            alt = _failover_choice(choice, task="build")
+            if alt is not None and attempt < max_attempts:
+                logger.info(
+                    "failover %s → %s/%s",
+                    choice.provider,
+                    alt.provider,
+                    alt.model_id,
+                )
+                choice = alt
+                provider = alt.provider
+                # brief backoff on rate limits
+                if any(tok in last_error.lower() for tok in ("429", "503", "502", "timeout")):
+                    time.sleep(min(4.0, 1.5 * attempt))
+                continue
             if attempt < max_attempts and any(
                 tok in last_error.lower()
                 for tok in ("timeout", "429", "503", "502", "connection", "temporar")
             ):
-                delay = 2.0 * attempt
-                if "429" in last_error:
-                    delay = max(delay, 3.0 * attempt)
-                time.sleep(delay)
+                time.sleep(min(6.0, 2.0 * attempt))
                 continue
             if attempt < max_attempts:
                 continue
@@ -1090,17 +1070,21 @@ def decide(
                 "thought": "",
                 "tool": None,
                 "args": {},
+                "params": {},
                 "finish": False,
                 "summary": "",
+                "reply": "",
                 "raw": "",
                 "parse_ok": False,
                 "error": last_error,
+                "provider": choice.provider,
+                "model_id": choice.model_id,
                 "attempts": attempt,
             }
 
         obj = _extract_json_object(raw)
         decision = _normalize_decision(obj, raw)
-        decision["provider"] = provider
+        decision["provider"] = choice.provider
         decision["model_id"] = choice.model_id
         decision["attempts"] = attempt
         try:
@@ -1111,57 +1095,44 @@ def decide(
             if cache_on:
                 try:
                     from .model_router import cache_set
-                    cache_set("decide", cache_payload, {k: decision[k] for k in decision if k != "usage"})
+                    cache_set(
+                        "decide",
+                        cache_payload,
+                        {k: decision[k] for k in decision if k != "usage"},
+                    )
                 except Exception:
                     pass
             return decision
-        # parse failed — nudge and retry with stronger instruction injected once.
-        # Cross-provider failover: if gemini returned unparseable JSON, switch to
-        # groq for the next attempt (groq returns cleaner JSON and has higher limits).
-        logger.info("agent_brain parse fail attempt %s provider=%s — retry", attempt, provider)
-        if provider == "gemini" and attempt < max_attempts:
-            try:
-                from lumen.engine.services.llm.key_pool import groq_keys
-                if groq_keys():
-                    logger.info("parse fail on gemini — switching to groq for next attempt")
-                    provider = "groq"
-                    from lumen.engine.services.llm.model_catalog import get_model
-                    gm = get_model("groq-fast")
-                    choice = ModelChoice(
-                        "groq",
-                        (gm.model_id if gm else None) or (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip(),
-                        "GROQ_API_KEY",
-                        base_url="https://api.groq.com/openai/v1",
-                    )
-            except Exception:
-                pass
-        elif provider == "groq" and attempt < max_attempts:
-            try:
-                from lumen.engine.services.llm.key_pool import gemini_available
-                if gemini_available():
-                    logger.info("parse fail on groq — switching to gemini for next attempt")
-                    provider = "gemini"
-                    from lumen.engine.services.llm.model_catalog import get_model
-                    gm = get_model("gemini-2.5-flash-lite")
-                    choice = ModelChoice(
-                        "gemini",
-                        (gm.model_id if gm else None)
-                        or (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
-                        "GOOGLE_API_KEY",
-                    )
-            except Exception:
-                pass
-        user = user + "\n\nIMPORTANT: Previous reply was invalid JSON. Output ONLY one JSON object."
+
+        # Invalid JSON — retry; on last attempts switch provider via catalog
+        logger.info(
+            "agent_brain parse fail attempt %s provider=%s — retry",
+            attempt,
+            choice.provider,
+        )
         last_error = "parse_fail"
+        if attempt < max_attempts:
+            alt = _failover_choice(choice, task="build")
+            if alt is not None:
+                logger.info(
+                    "parse-fail failover %s → %s/%s",
+                    choice.provider,
+                    alt.provider,
+                    alt.model_id,
+                )
+                choice = alt
+            user = user + "\n\nIMPORTANT: Previous reply was invalid JSON. Output ONLY one JSON object."
 
     decision = _normalize_decision(_extract_json_object(raw), raw)
-    decision["provider"] = provider
+    decision["provider"] = choice.provider
     decision["model_id"] = choice.model_id
     decision["attempts"] = max_attempts
-    # parse failures are soft — agent_loop will nudge and continue
     if not decision.get("parse_ok") and not decision.get("tool"):
         decision["error"] = None
         decision["soft_parse_fail"] = True
+    return decision
+
+
     return decision
 
 
