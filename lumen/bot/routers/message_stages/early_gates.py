@@ -57,28 +57,8 @@ async def gate_auth_and_rate(
     # Referral: real message = bot use → qualify invitee + notify referrer
     try:
         if user:
-            from lumen.application.commands.qualify_referral import QualifyReferralCommand
-            from lumen.application.handlers.referral_handlers import handle_qualify_referral
-
-            qres = await asyncio.to_thread(
-                handle_qualify_referral,
-                QualifyReferralCommand(
-                    referred_telegram_id=int(user.id),
-                    event="message",
-                ),
-            )
-            if (
-                qres
-                and getattr(qres, "notify_referrer_id", 0)
-                and getattr(qres, "notify_text", "")
-            ):
-                try:
-                    await context.bot.send_message(
-                        chat_id=int(qres.notify_referrer_id),
-                        text=str(qres.notify_text)[:3500],
-                    )
-                except Exception:
-                    logger.debug("referral notify soft-fail", exc_info=True)
+            from lumen.bot.referral_hooks import qualify_bot_use
+            await qualify_bot_use(context, int(user.id), "message")
     except Exception:
         logger.debug("referral qualify soft-fail", exc_info=True)
 
