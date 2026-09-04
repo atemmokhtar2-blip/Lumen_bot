@@ -929,12 +929,6 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
             base = base + "/v1"
         return _call_openai_compat(system, user, model_id, base_url=base, api_key=key)
 
-    if provider == "foundry":
-        endpoint = (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/")
-        if not endpoint:
-            raise RuntimeError("AZURE_FOUNDRY_ENDPOINT missing")
-        base = endpoint if endpoint.endswith("/v1") else endpoint + "/v1"
-        return _call_openai_compat(system, user, model_id or "model-router", base_url=base, api_key=key)
 
     raise RuntimeError(f"unsupported_catalog_provider:{provider}")
 
@@ -945,12 +939,25 @@ def _invoke_choice(choice: ModelChoice, system: str, user: str, *, task: str = "
     provider = (choice.provider or "").strip()
     if provider == "foundry":
         from lumen.engine.services.llm.foundry_router import chat_completions
+        anti = (
+            "CRITICAL: Do NOT call provider built-in tools. "
+            "Return ONE JSON object for our custom tools only."
+        )
+        sys_f = anti + "\n\n" + (system or "")
+        user_f = f"{user}\n\n{_JSON_SCHEMA_HINT}"
         out = chat_completions(
-            system=system,
-            user=user,
+            system=sys_f,
+            user=user_f,
             task=task,
             deployment=choice.model_id or None,
         )
+        try:
+            from lumen.engine.services.llm.foundry_router import get_last_result
+            fr = get_last_result()
+            # stash for decide metadata
+            _invoke_choice.last_foundry = fr  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return str(out.get("content") or "")
     if provider in {"openai", "openrouter", "deepseek", "anthropic"}:
         return _dispatch_catalog_provider(provider, system, user, choice)
@@ -997,12 +1004,13 @@ def decide(
     choice: ModelChoice | None = None,
     history_keep: int | None = None,
     prompt_max_chars: int | None = None,
+    task: str = "build",
 ) -> dict[str, Any]:
     """One reasoning step with smart retries (parse fail / transient HTTP).
 
     history_keep / prompt_max_chars: optional Loop Governor caps (first-class).
     """
-    choice = choice or select_model(task="build")
+    choice = choice or select_model(task=task)
     system, user = _system_and_user(
         messages, history_keep=history_keep, prompt_max_chars=prompt_max_chars
     )
@@ -1042,7 +1050,7 @@ def decide(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            raw = _invoke_choice(choice, system, user, task="build")
+            raw = _invoke_choice(choice, system, user, task=task)
             provider = choice.provider
         except Exception as exc:
             last_error = f"{type(exc).__name__}:{exc}"
@@ -1053,7 +1061,7 @@ def decide(
                 choice.provider,
                 exc,
             )
-            alt = _failover_choice(choice, task="build")
+            alt = _failover_choice(choice, task=task)
             if alt is not None and attempt < max_attempts:
                 logger.info(
                     "failover %s → %s/%s",
@@ -1096,10 +1104,21 @@ def decide(
         decision["provider"] = choice.provider
         decision["model_id"] = choice.model_id
         decision["attempts"] = attempt
+        decision["task"] = task
         try:
             decision["usage"] = get_last_call_usage()
         except Exception:
             decision["usage"] = {}
+        try:
+            fr = getattr(_invoke_choice, "last_foundry", None)
+            if isinstance(fr, dict) and choice.provider == "foundry":
+                decision["underlying_model"] = fr.get("model")
+                decision["foundry_mode"] = fr.get("mode")
+                decision["foundry_deployment"] = fr.get("deployment")
+                if fr.get("usage"):
+                    decision["usage"] = fr.get("usage")
+        except Exception:
+            pass
         if decision.get("parse_ok") or decision.get("tool"):
             if cache_on:
                 try:
@@ -1121,7 +1140,7 @@ def decide(
         )
         last_error = "parse_fail"
         if attempt < max_attempts:
-            alt = _failover_choice(choice, task="build")
+            alt = _failover_choice(choice, task=task)
             if alt is not None:
                 logger.info(
                     "parse-fail failover %s → %s/%s",

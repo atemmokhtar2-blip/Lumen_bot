@@ -131,6 +131,7 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
                 {"role": "user", "content": user},
             ],
             choice=choice,
+            task="plan",
         )
         provider = str(decision.get("provider") or provider)
         raw = str(decision.get("raw") or "")

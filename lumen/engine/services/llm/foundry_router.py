@@ -1,36 +1,29 @@
-"""Microsoft Foundry Model Router — production primary when Azure is configured.
+"""Microsoft Foundry Model Router — production primary LLM path.
 
-Calls the real Foundry / Azure OpenAI chat-completions deployment named
-``model-router`` (or env override). Routing mode is selected by mapping the
-agent task to a deployment profile:
+Official Azure/Foundry Chat Completions against a ``model-router`` deployment.
+Routing mode (Balanced / Cost / Quality) is chosen per agent task by selecting
+the matching deployment name (mode is configured on the Azure deployment).
 
-  plan / critique / reason  → Quality  (AZURE_FOUNDRY_DEPLOYMENT_QUALITY)
-  build / fast              → Cost     (AZURE_FOUNDRY_DEPLOYMENT_COST)
-  default                   → Balanced (AZURE_FOUNDRY_DEPLOYMENT)
-
-Docs: https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/model-router
+Reference:
+https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/model-router
 """
 from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 RoutingMode = Literal["balanced", "cost", "quality"]
 
+_LAST_LOCK = threading.Lock()
+_LAST: dict[str, Any] = {}
+
 
 def foundry_configured() -> bool:
-    key = (
-        (os.getenv("AZURE_FOUNDRY_KEY") or "").strip()
-        or (os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
-    )
-    endpoint = (
-        (os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").strip()
-        or (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip()
-    )
-    return bool(key and endpoint)
+    return bool(resolve_key() and resolve_endpoint())
 
 
 def resolve_key() -> str:
@@ -48,46 +41,58 @@ def resolve_endpoint() -> str:
 
 
 def mode_for_task(task: str) -> RoutingMode:
+    forced = (os.getenv("AZURE_FOUNDRY_ROUTING_MODE") or "").strip().lower()
+    if forced in {"balanced", "cost", "quality"}:
+        return forced  # type: ignore[return-value]
     task_l = (task or "build").strip().lower()
     if task_l in {"plan", "planner", "architect", "critique", "critic", "review", "qa", "reason"}:
         return "quality"
     if task_l in {"build", "worker", "fast", "repair", "fix"}:
-        # Agent coding steps: prefer cost unless explicitly overridden
-        forced = (os.getenv("AZURE_FOUNDRY_ROUTING_MODE") or "").strip().lower()
-        if forced in {"balanced", "cost", "quality"}:
-            return forced  # type: ignore[return-value]
         return "cost"
     return "balanced"
 
 
 def deployment_for_mode(mode: RoutingMode) -> str:
-    """Map routing mode → Foundry deployment name.
-
-    Mode is primarily configured on the Azure deployment itself; we select
-    among optional per-mode deployment names when the operator created
-    separate routers (router-quality / router-cost / router-balanced).
-    """
-    if mode == "quality":
-        return (
-            (os.getenv("AZURE_FOUNDRY_DEPLOYMENT_QUALITY") or "").strip()
-            or (os.getenv("AZURE_FOUNDRY_DEPLOYMENT") or "").strip()
-            or "model-router"
-        )
-    if mode == "cost":
-        return (
-            (os.getenv("AZURE_FOUNDRY_DEPLOYMENT_COST") or "").strip()
-            or (os.getenv("AZURE_FOUNDRY_DEPLOYMENT") or "").strip()
-            or "model-router"
-        )
+    """Mode → deployment name (operator may create three routers with different modes)."""
+    env_map = {
+        "quality": "AZURE_FOUNDRY_DEPLOYMENT_QUALITY",
+        "cost": "AZURE_FOUNDRY_DEPLOYMENT_COST",
+        "balanced": "AZURE_FOUNDRY_DEPLOYMENT_BALANCED",
+    }
+    specific = (os.getenv(env_map[mode]) or "").strip()
+    if specific:
+        return specific
     return (
-        (os.getenv("AZURE_FOUNDRY_DEPLOYMENT_BALANCED") or "").strip()
-        or (os.getenv("AZURE_FOUNDRY_DEPLOYMENT") or "").strip()
+        (os.getenv("AZURE_FOUNDRY_DEPLOYMENT") or "").strip()
+        or (os.getenv("AZURE_OPENAI_DEPLOYMENT") or "").strip()
         or "model-router"
     )
 
 
 def api_version() -> str:
-    return (os.getenv("AZURE_FOUNDRY_API_VERSION") or os.getenv("AZURE_OPENAI_API_VERSION") or "2024-12-01-preview").strip()
+    return (
+        os.getenv("AZURE_FOUNDRY_API_VERSION")
+        or os.getenv("AZURE_OPENAI_API_VERSION")
+        or "2024-12-01-preview"
+    ).strip()
+
+
+def get_last_result() -> dict[str, Any]:
+    with _LAST_LOCK:
+        return dict(_LAST)
+
+
+def _set_last(data: dict[str, Any]) -> None:
+    with _LAST_LOCK:
+        _LAST.clear()
+        _LAST.update(data)
+
+
+def _headers(key: str) -> dict[str, str]:
+    auth = (os.getenv("AZURE_FOUNDRY_AUTH") or "").strip().lower()
+    if auth == "bearer" or key.startswith("eyJ"):
+        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    return {"api-key": key, "Content-Type": "application/json"}
 
 
 def chat_completions(
@@ -99,10 +104,9 @@ def chat_completions(
     temperature: float = 0.2,
     timeout: float | None = None,
 ) -> dict[str, Any]:
-    """Call Foundry Model Router via Azure chat completions.
+    """Call Foundry model-router deployment; return content + underlying model.
 
-    Returns dict: content, model (underlying model selected by router),
-    deployment, mode, usage.
+    Tries Azure deployment URL first, then OpenAI-compatible Foundry path.
     """
     import requests
 
@@ -112,79 +116,72 @@ def chat_completions(
     key = resolve_key()
     endpoint = resolve_endpoint()
     mode = mode_for_task(task)
-    deployment = (deployment or "").strip() or deployment_for_mode(mode)
+    dep = (deployment or "").strip() or deployment_for_mode(mode)
     ver = api_version()
     to = float(timeout if timeout is not None else (os.getenv("CLINE_LLM_TIMEOUT") or "90"))
-
-    # Azure OpenAI deployment path (canonical for Foundry model-router)
-    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={ver}"
-    headers = {
-        "api-key": key,
-        "Content-Type": "application/json",
-    }
-    # Some Foundry endpoints also accept Bearer
-    if key.startswith("eyJ") or (os.getenv("AZURE_FOUNDRY_AUTH") or "").strip().lower() == "bearer":
-        headers = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
+    headers = _headers(key)
 
     payload: dict[str, Any] = {
+        "model": dep,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         "temperature": temperature,
     }
-    # model field: deployment name for router
-    payload["model"] = deployment
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=to)
-    if resp.status_code >= 400:
-        # Fallback: OpenAI-compatible base path used by some Foundry endpoints
-        alt = f"{endpoint}/openai/v1/chat/completions"
-        headers2 = {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
-        if not key.startswith("eyJ"):
-            headers2 = {"api-key": key, "Content-Type": "application/json"}
-        resp2 = requests.post(alt, headers=headers2, json=payload, timeout=to)
-        if resp2.status_code >= 400:
-            raise RuntimeError(
-                f"foundry_http_{resp.status_code}:{(resp.text or '')[:300]} | "
-                f"compat_{resp2.status_code}:{(resp2.text or '')[:200]}"
-            )
-        body = resp2.json()
-    else:
-        body = resp.json()
+    urls = [
+        f"{endpoint}/openai/deployments/{dep}/chat/completions?api-version={ver}",
+        f"{endpoint}/openai/v1/chat/completions",
+        f"{endpoint}/v1/chat/completions",
+    ]
+    last_err = ""
+    body: dict[str, Any] | None = None
+    used_url = ""
+    for url in urls:
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=to)
+            if resp.status_code >= 400:
+                last_err = f"{resp.status_code}:{(resp.text or '')[:280]}"
+                logger.debug("foundry url fail %s → %s", url, last_err)
+                continue
+            body = resp.json()
+            used_url = url
+            break
+        except Exception as exc:
+            last_err = f"{type(exc).__name__}:{exc}"
+            logger.debug("foundry url error %s → %s", url, last_err)
+            continue
+
+    if body is None:
+        raise RuntimeError(f"foundry_http_failed:{last_err}")
 
     choices = body.get("choices") or []
     if not choices:
         raise RuntimeError("foundry_empty_choices")
     msg = choices[0].get("message") or {}
-    content = str(msg.get("content") or "").strip()
-    if not content:
-        content = str(msg.get("reasoning_content") or "").strip()
+    content = str(msg.get("content") or msg.get("reasoning_content") or "").strip()
     if not content:
         raise RuntimeError("foundry_empty_content")
 
-    underlying = str(body.get("model") or deployment)
+    underlying = str(body.get("model") or dep)
     usage = body.get("usage") or {}
-    logger.info(
-        "foundry model-router mode=%s deployment=%s underlying=%s",
-        mode,
-        deployment,
-        underlying,
-    )
-    return {
+    result = {
         "content": content,
         "model": underlying,
-        "deployment": deployment,
+        "deployment": dep,
         "mode": mode,
         "usage": usage,
-        "raw_body": body,
+        "url": used_url,
     }
+    _set_last(result)
+    logger.info(
+        "foundry router mode=%s deployment=%s underlying=%s",
+        mode,
+        dep,
+        underlying,
+    )
+    return result
 
 
 __all__ = [
@@ -192,6 +189,7 @@ __all__ = [
     "mode_for_task",
     "deployment_for_mode",
     "chat_completions",
+    "get_last_result",
     "resolve_key",
     "resolve_endpoint",
 ]

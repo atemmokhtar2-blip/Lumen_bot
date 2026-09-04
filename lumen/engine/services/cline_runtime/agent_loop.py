@@ -793,6 +793,7 @@ def run_agent(
             choice=choice,
             history_keep=_keep,
             prompt_max_chars=_pchars,
+            task=task,
         )
         _emit_progress({
             "phase": "decided",
@@ -1192,7 +1193,7 @@ def run_agent(
                     )
                     _rec_decision = decide(
                         _rec_msgs,
-                        choice=choice,
+                        choice=choice, task=task,
                         history_keep=2,
                         prompt_max_chars=4000,
                     )

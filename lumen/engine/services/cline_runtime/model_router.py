@@ -349,13 +349,34 @@ def select_model_for_goal(
 
 def describe_runtime() -> dict[str, Any]:
     choice = select_model(task="build")
+    foundry: dict[str, Any] = {"configured": False}
+    try:
+        from lumen.engine.services.llm.foundry_router import (
+            foundry_configured,
+            mode_for_task,
+            deployment_for_mode,
+            resolve_endpoint,
+        )
+        if foundry_configured():
+            foundry = {
+                "configured": True,
+                "endpoint": resolve_endpoint(),
+                "mode_build": mode_for_task("build"),
+                "mode_plan": mode_for_task("plan"),
+                "deployment_build": deployment_for_mode(mode_for_task("build")),
+                "deployment_plan": deployment_for_mode(mode_for_task("plan")),
+                "primary": choice.provider == "foundry",
+            }
+    except Exception as exc:
+        foundry = {"configured": False, "error": type(exc).__name__}
     return {
         "provider": choice.provider,
         "model_id": choice.model_id,
         "key_present": choice.key_present() if choice.provider != "none" else False,
         "base_url": choice.base_url,
         "forced": _forced_provider() or "auto",
-        "task_orders": "model_catalog role ranking",
+        "task_orders": "foundry_primary_then_catalog",
+        "foundry": foundry,
         "catalog": __import__("lumen.engine.services.llm.model_catalog", fromlist=["catalog_snapshot"]).catalog_snapshot(),
         "cache": cache_stats(),
         "difficulty_sample": estimate_task_difficulty(task="build", goal="sample"),
