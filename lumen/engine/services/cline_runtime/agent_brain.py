@@ -940,10 +940,19 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
 
 
 
-def _invoke_choice(choice: ModelChoice, system: str, user: str) -> str:
+def _invoke_choice(choice: ModelChoice, system: str, user: str, *, task: str = "build") -> str:
     """Single dispatch: every provider ModelChoice can run goes through here."""
     provider = (choice.provider or "").strip()
-    if provider in {"openai", "openrouter", "deepseek", "foundry", "anthropic"}:
+    if provider == "foundry":
+        from lumen.engine.services.llm.foundry_router import chat_completions
+        out = chat_completions(
+            system=system,
+            user=user,
+            task=task,
+            deployment=choice.model_id or None,
+        )
+        return str(out.get("content") or "")
+    if provider in {"openai", "openrouter", "deepseek", "anthropic"}:
         return _dispatch_catalog_provider(provider, system, user, choice)
     if provider == "gemini":
         return _call_gemini(system, user, choice.model_id)
@@ -1033,7 +1042,7 @@ def decide(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            raw = _invoke_choice(choice, system, user)
+            raw = _invoke_choice(choice, system, user, task="build")
             provider = choice.provider
         except Exception as exc:
             last_error = f"{type(exc).__name__}:{exc}"

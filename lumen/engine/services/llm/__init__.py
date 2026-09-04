@@ -19,3 +19,4 @@ __all__ = [
     "available_models",
     "catalog_snapshot",
 ]
+from . import foundry_router  # noqa: F401

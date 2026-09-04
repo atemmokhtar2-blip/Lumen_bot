@@ -201,15 +201,37 @@ def _choice_from_catalog_model(m) -> ModelChoice:
 
 
 def select_model(*, task: str = "build") -> ModelChoice:
-    """Pick a model from model_catalog (keys present only).
+    """Production order:
 
-    Forced provider via CLINE_LLM_PROVIDER still works; otherwise role-based
-    ranking from the unified catalog (not a hard-coded provider chain).
+    1. Forced provider (CLINE_LLM_PROVIDER) when set
+    2. Microsoft Foundry Model Router when Azure endpoint+key present
+    3. Catalog role ranking among remaining providers
     """
     from lumen.engine.services.llm.model_catalog import CATALOG, available_models
 
     forced = _forced_provider()
     role = _task_to_role(task)
+
+    # Production primary: Foundry Model Router (real Azure deployment)
+    if not forced or forced in {"auto", "foundry", "azure", "model-router"}:
+        try:
+            from lumen.engine.services.llm.foundry_router import (
+                foundry_configured,
+                mode_for_task,
+                deployment_for_mode,
+                resolve_endpoint,
+            )
+            if foundry_configured():
+                mode = mode_for_task(task)
+                deployment = deployment_for_mode(mode)
+                return ModelChoice(
+                    "foundry",
+                    deployment,
+                    "AZURE_FOUNDRY_KEY",
+                    base_url=resolve_endpoint(),
+                )
+        except Exception:
+            pass
 
     if forced and forced not in {"auto", "none"}:
         # Prefer catalog entries for this provider
