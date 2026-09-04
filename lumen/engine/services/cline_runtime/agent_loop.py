@@ -888,6 +888,44 @@ def run_agent(
                 state.metadata["usage"] = accu
         except Exception:
             u = {}
+        # Live LLM credit charge — stop immediately when wallet cannot cover this step
+        if u and not decision.get("cache_hit"):
+            try:
+                from lumen.platform.credits.llm_live import (
+                    InsufficientCreditsError,
+                    charge_from_agent_state,
+                )
+                charge_from_agent_state(
+                    state,
+                    u if isinstance(u, dict) else {},
+                    step=i,
+                    call_index=int((state.metadata.get("usage") or {}).get("calls") or 0),
+                    provider=str(decision.get("provider") or ""),
+                    model_id=str(decision.get("model_id") or ""),
+                )
+            except InsufficientCreditsError as _ice:
+                state.ok = False
+                state.stop_reason = "insufficient_credits"
+                state.errors.append(
+                    f"insufficient_credits:needed={_ice.needed}:available={_ice.available}:step={_ice.step}"
+                )
+                state.metadata["insufficient_credits"] = {
+                    "tenant_id": _ice.tenant_id,
+                    "needed": _ice.needed,
+                    "available": _ice.available,
+                    "reason": _ice.reason,
+                    "step": _ice.step,
+                }
+                _emit_progress({
+                    "phase": "stopped",
+                    "step": i,
+                    "limit": limit,
+                    "detail": "توقف: رصيد غير كافٍ لتكلفة خطوة الذكاء الاصطناعي",
+                    "stop_reason": "insufficient_credits",
+                })
+                break
+            except Exception:
+                logger.debug("live llm charge soft-fail", exc_info=True)
         try:
             gov.note_decide(
                 tool=decision.get("tool"),

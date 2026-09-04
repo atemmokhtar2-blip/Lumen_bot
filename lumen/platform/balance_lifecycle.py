@@ -239,7 +239,6 @@ def _notify(tenant_id: str, level: str, message: str, extra: Optional[dict] = No
     chat = (os.getenv("TBE_BALANCE_ALERT_CHAT_ID") or "").strip()
     if token and chat:
         try:
-            import json
             import urllib.request
             text = f"[Lumen] {level}: {message} (tenant={tenant_id})"
             # POST body — avoids putting message text in URL/query logs

@@ -148,6 +148,8 @@ class PostgresCreditsStore:
             for rt, cost, desc in [
                 ("docker_ram_mb_per_hour", 1, "RAM MB × hour"),
                 ("llm_output_token", 1, "token unit"),
+                ("llm_prompt_1k", 1, "per 1k prompt tokens"),
+                ("llm_completion_1k", 3, "per 1k completion tokens"),
                 ("telegram_message", 1, "message"),
                 ("generation_cost", 50, "generation"),
                 ("hourly_hosting", 10, "host hour"),
