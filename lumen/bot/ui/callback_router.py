@@ -556,7 +556,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     # Root lag: waiting up to 8s on every click for wallet/plan. Keep a short
     # budget for menu actions; only dashboard needs hosts + cache bust.
     include_hosts = result.state.phase == EngineUiPhase.DASHBOARD
-    light_actions = {"open_help", "home", "open_generate", "nav_back", "open_billing"}
+    light_actions = {"open_help", "home", "open_generate", "nav_back", "open_billing", "open_settings", "open_referral"}
     if action_id == "open_dashboard":
         try:
             from .facts import invalidate_facts_cache
@@ -583,6 +583,45 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             facts = UiFacts(user_id=int(uid or 0))
     if result.state.phase == EngineUiPhase.HELP:
         facts.generate_hint = _help_body()
+
+    # Referral screen: inject personal link (bot username + user id)
+    if result.state.phase == EngineUiPhase.REFERRAL and uid:
+        try:
+            from lumen.platform.referrals import (
+                REFERRAL_QUALIFIED_TARGET,
+                bot_username_link,
+                get_referral_repository,
+            )
+            import asyncio as _aio
+
+            me = await context.bot.get_me()
+            uname = (me.username or "").strip()
+            if uname:
+                link = bot_username_link(uname, int(uid))
+            else:
+                from lumen.platform.referrals.config import referral_deep_link_payload
+                link = referral_deep_link_payload(int(uid))
+
+            def _st():
+                r = get_referral_repository()
+                s = r.stats_for(int(uid))
+                s.qualified_count = int(r.count_qualified(int(uid)))
+                try:
+                    s.total_invited = max(
+                        int(s.total_invited), int(r.count_for_referrer(int(uid)))
+                    )
+                except Exception:
+                    pass
+                return s
+
+            st = await _aio.to_thread(_st)
+            result.state.slots["referral_link"] = str(link)
+            result.state.slots["referral_stats_line"] = (
+                f"نشط {st.qualified_count}/{REFERRAL_QUALIFIED_TARGET} | "
+                f"مدعوون {st.total_invited} | بانتظار {st.pending_count}"
+            )
+        except Exception:
+            logger.debug("referral ui enrich soft-fail", exc_info=True)
 
     text = render_ui_message(result.state, facts)
     if not result.ok:
