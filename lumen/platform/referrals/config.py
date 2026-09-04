@@ -75,3 +75,25 @@ def bot_username_link(bot_username: str, telegram_user_id: int) -> str:
     if not user:
         raise ValueError("bot_username_required")
     return f"https://t.me/{user}?start={referral_deep_link_payload(telegram_user_id)}"
+
+
+def is_referral_dev_environment() -> bool:
+    """True only for explicit local/test — never treat unset ENVIRONMENT as dev.
+
+    Platform markers (K8s, Railway, Render, Fly, Heroku) force non-dev even if
+    someone sets ENVIRONMENT=dev by mistake.
+    """
+    import os
+    for marker in (
+        "KUBERNETES_SERVICE_HOST",
+        "RAILWAY_ENVIRONMENT",
+        "RAILWAY_SERVICE_NAME",
+        "RENDER",
+        "RENDER_SERVICE_ID",
+        "FLY_APP_NAME",
+        "DYNO",
+    ):
+        if (os.getenv(marker) or "").strip():
+            return False
+    env = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
+    return env in {"dev", "development", "local", "test"}
