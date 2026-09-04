@@ -63,6 +63,7 @@ from lumen.bot import (
     logger,
     start_cmd,
     referral_cmd,
+    referral_stats_cmd,
     help_cmd,
     status_cmd,
     lang_cmd,
@@ -387,6 +388,25 @@ def main() -> None:
     def _wire(application: Application) -> None:
         application.add_handler(CommandHandler("start", start_cmd))
         application.add_handler(CommandHandler("referral", referral_cmd))
+        application.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+        # Register public bot commands (best-effort)
+        _prev_post_init = getattr(application, "post_init", None)
+        async def _lumen_commands_post_init(app):
+            if callable(_prev_post_init):
+                await _prev_post_init(app)
+            try:
+                from telegram import BotCommand
+                await app.bot.set_my_commands(
+                    [
+                        BotCommand("start", "Start"),
+                        BotCommand("referral", "Referral link"),
+                        BotCommand("help", "Help"),
+                        BotCommand("status", "Status"),
+                    ]
+                )
+            except Exception:
+                logger.debug("set_my_commands soft-fail", exc_info=True)
+        application.post_init = _lumen_commands_post_init
         application.add_handler(CommandHandler("help", help_cmd))
         application.add_handler(CommandHandler("status", status_cmd))
         application.add_handler(CommandHandler("lang", lang_cmd))
