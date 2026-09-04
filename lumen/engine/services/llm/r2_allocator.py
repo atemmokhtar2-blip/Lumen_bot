@@ -119,7 +119,6 @@ def difficulty_signal(
 _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "plan": (
         "gemini-2.5-pro",
-        "deepseek-v4-pro",
         "deepseek-v3",
         "openrouter-auto",
         "openai-gpt-4o-mini",
@@ -129,13 +128,11 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "critique": (
         "claude-3-haiku",
         "gemini-2.5-pro",
-        "deepseek-v4-pro",
         "deepseek-v3",
         "openrouter-auto",
         "openai-gpt-4o-mini",
     ),
     "repair": (
-        "deepseek-v4-pro",
         "deepseek-v3",
         "gemini-2.5-pro",
         "deepseek-v4-flash",

@@ -120,3 +120,30 @@ def test_all_plan_providers_have_invoke_path():
     for m in CATALOG:
         if m.provider in {"foundry", "openai", "openrouter", "deepseek", "anthropic", "gemini", "groq"}:
             assert m.provider in src or "_dispatch_catalog_provider" in src
+
+
+def test_plan_with_only_deepseek_picks_v3_not_pro():
+    _clear()
+    os.environ["DEEPSEEK_API_KEY"] = "sk-ds"
+    os.environ["CLINE_ROUTER"] = "local"
+    from lumen.engine.services.llm.r2_allocator import allocate
+    from lumen.engine.services.cline_runtime.model_router import select_model
+    r = allocate(task="plan", goal="architect full store bot")
+    assert r is not None
+    assert r.catalog_id == "deepseek-v3", r
+    assert r.model_id == "deepseek-chat", r
+    c = select_model(task="plan")
+    assert c.catalog_id == "deepseek-v3" or c.model_id == "deepseek-chat"
+    assert "v4-pro" not in (c.model_id or "")
+
+
+def test_v4_pro_not_in_role_pool():
+    _clear()
+    os.environ["DEEPSEEK_API_KEY"] = "sk-ds"
+    from lumen.engine.services.llm.model_catalog import available_models, get_model
+    pro = get_model("deepseek-v4-pro")
+    assert pro is not None
+    assert pro.roles == () or "plan" not in pro.roles
+    ids = {m.id for m in available_models(role="plan")}
+    assert "deepseek-v4-pro" not in ids
+    assert "deepseek-v3" in ids

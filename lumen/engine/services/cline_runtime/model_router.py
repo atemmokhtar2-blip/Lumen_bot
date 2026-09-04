@@ -311,12 +311,23 @@ def select_model(*, task: str = "build") -> ModelChoice:
     if not pool:
         return ModelChoice("none", "", "")
 
-    # plan/critique/reason → strength first; build/fast → cost then strength
-    if role in {"plan", "critique", "reason"}:
-        pool = sorted(pool, key=lambda m: (-int(m.strength), int(m.cost_tier)))
-    else:
-        pool = sorted(pool, key=lambda m: (int(m.cost_tier), -int(m.strength)))
+    # Prefer product order from R2 kind list when available, then strength/cost
+    prefer_index: dict[str, int] = {}
+    try:
+        from lumen.engine.services.llm.r2_allocator import _KIND_PREFER, decompose_step
+        kind = decompose_step(task=task)
+        for i, cid in enumerate(_KIND_PREFER.get(kind, ())):
+            prefer_index[cid] = i
+    except Exception:
+        pass
 
+    def _rank(m):
+        pref = prefer_index.get(m.id, 10_000)
+        if role in {"plan", "critique", "reason"}:
+            return (pref, -int(m.strength), int(m.cost_tier))
+        return (pref, int(m.cost_tier), -int(m.strength))
+
+    pool = sorted(pool, key=_rank)
     choice = _choice_from_catalog_model(pool[0])
     return _apply_task_model_override(choice, task)
 

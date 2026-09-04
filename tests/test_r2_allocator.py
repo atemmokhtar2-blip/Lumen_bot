@@ -46,7 +46,7 @@ def test_allocate_plan_prefers_stronger():
     assert r is not None
     assert r.step_kind == "plan"
     # deepseek-v3 preferred for plan over flash
-    assert "pro" in r.model_id or "v4-pro" in r.model_id or r.model_id == "deepseek-v4-pro"
+    assert r.catalog_id == "deepseek-v3" or r.model_id in {"deepseek-chat", "deepseek-v3"} or "chat" in r.model_id
 
 
 def test_select_model_for_goal_foundry_first():

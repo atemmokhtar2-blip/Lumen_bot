@@ -187,7 +187,7 @@ CATALOG: tuple[CatalogModel, ...] = (
         roles=("plan", "build", "reason"),
         cost_tier=2,
         strength=4,
-        notes="Official V3 line id: deepseek-chat. Only DEEPSEEK_V3_MODEL overrides (not DEEPSEEK_MODEL).",
+        notes="Product default DeepSeek for plan/reason. Official API id: deepseek-chat. Override: DEEPSEEK_V3_MODEL only.",
     ),
     CatalogModel(
         id="deepseek-v4-pro",
@@ -197,10 +197,12 @@ CATALOG: tuple[CatalogModel, ...] = (
         api_style="openai_compat",
         base_url=(os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").strip(),
         api_key_env="DEEPSEEK_API_KEY",
-        roles=("plan", "reason", "critique"),
+        # Not in product Phase-1 table as default DeepSeek — opt-in via CLINE_MODEL_* only.
+        # roles empty → excluded from available_models(role=...) auto pool.
+        roles=(),
         cost_tier=3,
         strength=5,
-        notes="Hard plan/reason; preferred over V3 when available",
+        notes="Opt-in only (CLINE_MODEL_PLAN=deepseek-v4-pro). Product default DeepSeek is V3/deepseek-chat.",
     ),
     CatalogModel(
         id="claude-3-haiku",
