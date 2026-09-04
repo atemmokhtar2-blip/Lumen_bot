@@ -108,6 +108,9 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
             return QualifyReferralResult(ok=True, error="no_referral")
 
         stats = repo.stats_for(ref.referrer_telegram_id)
+        # Authoritative count (stats counter can lag under races)
+        live_qualified = int(repo.count_qualified(ref.referrer_telegram_id))
+        stats.qualified_count = live_qualified
         notify_text = ""
         reward_granted = False
 
@@ -119,7 +122,7 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
                 + "(يُحتسب من يستخدم البوت فقط)."
             )
 
-        if is_reward_due(stats, target=REFERRAL_QUALIFIED_TARGET):
+        if live_qualified >= int(REFERRAL_QUALIFIED_TARGET) and not bool(stats.reward_paid):
             batch = "referral-reward-%s-%s" % (
                 ref.referrer_telegram_id,
                 REFERRAL_QUALIFIED_TARGET,
