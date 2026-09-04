@@ -38,6 +38,20 @@ class CatalogModel:
         return extras.get(self.api_key_env, (self.api_key_env,))
 
     def key_present(self) -> bool:
+        if self.provider == "gemini":
+            try:
+                from lumen.engine.services.llm.key_pool import gemini_keys
+                if gemini_keys():
+                    return True
+            except Exception:
+                pass
+        if self.provider == "groq":
+            try:
+                from lumen.engine.services.llm.key_pool import groq_keys
+                if groq_keys():
+                    return True
+            except Exception:
+                pass
         if self.provider == "foundry":
             return bool(
                 any((os.getenv(e) or "").strip() for e in self.key_env_candidates())
@@ -46,6 +60,22 @@ class CatalogModel:
         return any((os.getenv(e) or "").strip() for e in self.key_env_candidates())
 
     def resolve_api_key(self) -> str:
+        if self.provider == "gemini":
+            try:
+                from lumen.engine.services.llm.key_pool import gemini_available
+                ready = gemini_available()
+                if ready:
+                    return ready[0][1]
+            except Exception:
+                pass
+        if self.provider == "groq":
+            try:
+                from lumen.engine.services.llm.key_pool import groq_available
+                ready = groq_available()
+                if ready:
+                    return ready[0][1]
+            except Exception:
+                pass
         for e in self.key_env_candidates():
             v = (os.getenv(e) or "").strip()
             if v:

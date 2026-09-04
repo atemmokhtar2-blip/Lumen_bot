@@ -85,7 +85,7 @@ def _llm_available() -> bool:
 
 
 def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
-    """One agent brain step via model_router (GROQ_API_KEYS / GEMINI / …).
+    """One agent brain step via model_catalog → select_model → agent_brain.decide.
 
     Returns dict: tool, params, reply, provider, error.
     Never invents a static capabilities menu.
@@ -123,24 +123,50 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
     )
     user = (text or "")[:4000]
     provider = choice.provider
-    raw = ""
     try:
-        if provider == "groq":
-            raw = agent_brain._call_groq(system, user, choice.model_id)
-        elif provider == "gemini":
-            raw = agent_brain._call_gemini(system, user, choice.model_id)
-        elif provider == "qwen":
-            raw = agent_brain._call_qwen(system, user, choice.model_id, choice.base_url)
-        elif provider == "xai":
-            raw = agent_brain._call_xai(system, user, choice.model_id)
-        else:
-            # Prefer groq when auto leftover
-            try:
-                raw = agent_brain._call_groq(system, user, choice.model_id)
-                provider = "groq"
-            except Exception:
-                raw = agent_brain._call_gemini(system, user, choice.model_id)
-                provider = "gemini"
+        # Single path for ALL catalog providers (openai/deepseek/anthropic/… + legacy)
+        decision = agent_brain.decide(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            choice=choice,
+        )
+        provider = str(decision.get("provider") or provider)
+        raw = str(decision.get("raw") or "")
+        if decision.get("tool") or decision.get("reply") or decision.get("thought") or decision.get("parse_ok"):
+            tool = str(decision.get("tool") or "").strip()
+            params = decision.get("params") or decision.get("args") or {}
+            if not isinstance(params, dict):
+                params = {}
+            reply = str(
+                decision.get("reply") or decision.get("thought") or decision.get("summary") or ""
+            ).strip()
+            known = set(list_tool_names()) | {"generate_bot", "refine_bot"}
+            if tool and tool not in known:
+                reply = (reply + f"\n(unknown tool: {tool})").strip() if reply else f"أداة غير معروفة: {tool}"
+                tool = ""
+            return {
+                "tool": tool,
+                "params": params,
+                "reply": reply,
+                "provider": provider,
+                "model_id": decision.get("model_id") or choice.model_id,
+                "error": decision.get("error") or "",
+            }
+        # Fall through to parse raw if decide returned soft parse fail
+        if not raw and decision.get("raw"):
+            raw = str(decision.get("raw") or "")
+        if not raw:
+            # decide may put content only in normalized fields
+            return {
+                "tool": str(decision.get("tool") or "").strip(),
+                "params": decision.get("params") if isinstance(decision.get("params"), dict) else {},
+                "reply": str(decision.get("reply") or decision.get("thought") or "").strip(),
+                "provider": provider,
+                "model_id": decision.get("model_id") or choice.model_id,
+                "error": str(decision.get("error") or ""),
+            }
     except Exception as exc:
         logger.exception("agent llm call failed provider=%s", provider)
         return {
@@ -151,6 +177,7 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
             "provider": provider,
         }
 
+    obj = agent_brain._extract_json_object(raw) or {}
     obj = agent_brain._extract_json_object(raw) or {}
     tool = str(obj.get("tool") or obj.get("tool_name") or obj.get("action") or "").strip()
     params = obj.get("params") or obj.get("args") or {}

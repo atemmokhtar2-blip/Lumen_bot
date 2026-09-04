@@ -842,71 +842,98 @@ def _call_anthropic(system: str, user: str, model_id: str, api_key: str) -> str:
     return text
 
 
+
 def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: ModelChoice) -> str:
-    """Run catalog providers: openai_compat family + anthropic."""
+    """Execute a catalog provider end-to-end (key → HTTP → text)."""
     from lumen.engine.services.llm.model_catalog import CATALOG
 
-    # Resolve key/base from matching catalog row when possible
     cat = next((m for m in CATALOG if m.provider == provider and m.model_id == choice.model_id), None)
     if cat is None:
         cat = next((m for m in CATALOG if m.provider == provider), None)
-    key = (cat.resolve_api_key() if cat else "") or (os.getenv(choice.api_key_env) or "").strip()
+
+    key = ""
+    if cat is not None:
+        key = cat.resolve_api_key()
+    if not key:
+        key = (os.getenv(choice.api_key_env) or "").strip()
+    if not key:
+        for env in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY",
+                    "AZURE_FOUNDRY_KEY", "AZURE_OPENAI_API_KEY", "GROQ_API_KEY"):
+            key = (os.getenv(env) or "").strip()
+            if key:
+                break
+    if not key:
+        raise RuntimeError(f"{provider}_api_key_missing")
+
+    model_id = (choice.model_id or (cat.model_id if cat else "") or "").strip()
+    if not model_id:
+        raise RuntimeError(f"{provider}_model_id_missing")
 
     if provider == "anthropic":
-        if key and not key.startswith("sk-or-"):
-            return _call_anthropic(system, user, choice.model_id, key)
-        # OpenRouter fallback
-        or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-        if not or_key:
-            raise RuntimeError("ANTHROPIC_API_KEY missing")
-        mid = choice.model_id if "/" in choice.model_id else f"anthropic/{choice.model_id}"
+        # Native Anthropic key (not OpenRouter)
+        if not key.startswith("sk-or-") and "openrouter" not in key.lower():
+            try:
+                return _call_anthropic(system, user, model_id, key)
+            except Exception:
+                or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+                if not or_key:
+                    raise
+                key = or_key
+                model_id = model_id if "/" in model_id else f"anthropic/{model_id}"
+                return _call_openai_compat(
+                    system, user, model_id,
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=key,
+                    extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
+                )
+        model_id = model_id if "/" in model_id else f"anthropic/{model_id}"
         return _call_openai_compat(
-            system, user, mid,
+            system, user, model_id,
             base_url="https://openrouter.ai/api/v1",
-            api_key=or_key,
+            api_key=key,
             extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
         )
 
-    endpoints = {
-        "openai": ("https://api.openai.com/v1", None),
-        "openrouter": (
-            "https://openrouter.ai/api/v1",
-            {"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
-        ),
-        "deepseek": ("https://api.deepseek.com/v1", None),
-        "foundry": (
-            (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/")
-            + ("" if (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/").endswith("/v1") else "/v1"),
-            None,
-        ),
-    }
-    if provider not in endpoints:
-        raise RuntimeError(f"unsupported_catalog_provider:{provider}")
-    base, extra = endpoints[provider]
+    if provider == "openai":
+        return _call_openai_compat(
+            system, user, model_id,
+            base_url=(choice.base_url or "https://api.openai.com/v1"),
+            api_key=key,
+        )
+
+    if provider == "openrouter":
+        return _call_openai_compat(
+            system, user, model_id,
+            base_url=(choice.base_url or "https://openrouter.ai/api/v1"),
+            api_key=key,
+            extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
+        )
+
     if provider == "deepseek":
-        base = (choice.base_url or "https://api.deepseek.com").rstrip("/")
-        if not base.endswith("/v1"):
-            base = base + "/v1"
-        # OpenRouter key only
-        if not (os.getenv("DEEPSEEK_API_KEY") or "").strip() and (os.getenv("OPENROUTER_API_KEY") or "").strip():
-            key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-            mid = choice.model_id if "/" in choice.model_id else f"deepseek/{choice.model_id}"
+        # Official: https://api.deepseek.com + /v1/chat/completions
+        # If only OpenRouter key, route through OpenRouter model id
+        has_native = bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
+        if not has_native and (os.getenv("OPENROUTER_API_KEY") or "").strip():
+            mid = model_id if "/" in model_id else f"deepseek/{model_id}"
             return _call_openai_compat(
                 system, user, mid,
                 base_url="https://openrouter.ai/api/v1",
-                api_key=key,
+                api_key=(os.getenv("OPENROUTER_API_KEY") or "").strip(),
                 extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
             )
-    if provider == "foundry" and not base.strip("/"):
-        raise RuntimeError("AZURE_FOUNDRY_ENDPOINT missing")
-    if not key:
-        raise RuntimeError(f"{provider}_api_key_missing")
-    return _call_openai_compat(
-        system, user, choice.model_id,
-        base_url=base,
-        api_key=key,
-        extra_headers=extra,
-    )
+        base = (choice.base_url or "https://api.deepseek.com").rstrip("/")
+        if not base.endswith("/v1"):
+            base = base + "/v1"
+        return _call_openai_compat(system, user, model_id, base_url=base, api_key=key)
+
+    if provider == "foundry":
+        endpoint = (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/")
+        if not endpoint:
+            raise RuntimeError("AZURE_FOUNDRY_ENDPOINT missing")
+        base = endpoint if endpoint.endswith("/v1") else endpoint + "/v1"
+        return _call_openai_compat(system, user, model_id or "model-router", base_url=base, api_key=key)
+
+    raise RuntimeError(f"unsupported_catalog_provider:{provider}")
 
 
 
@@ -1098,9 +1125,11 @@ def decide(
                 if groq_keys():
                     logger.info("parse fail on gemini — switching to groq for next attempt")
                     provider = "groq"
+                    from lumen.engine.services.llm.model_catalog import get_model
+                    gm = get_model("groq-fast")
                     choice = ModelChoice(
                         "groq",
-                        (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
+                        (gm.model_id if gm else None) or (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip(),
                         "GROQ_API_KEY",
                         base_url="https://api.groq.com/openai/v1",
                     )
@@ -1112,9 +1141,12 @@ def decide(
                 if gemini_available():
                     logger.info("parse fail on groq — switching to gemini for next attempt")
                     provider = "gemini"
+                    from lumen.engine.services.llm.model_catalog import get_model
+                    gm = get_model("gemini-2.5-flash-lite")
                     choice = ModelChoice(
                         "gemini",
-                        (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
+                        (gm.model_id if gm else None)
+                        or (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
                         "GOOGLE_API_KEY",
                     )
             except Exception:
