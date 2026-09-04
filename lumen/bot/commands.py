@@ -286,19 +286,9 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             from lumen.platform.referrals.config import referral_deep_link_payload
             link = referral_deep_link_payload(int(user.id))
-        def _live_stats(uid: int):
-            repo = get_referral_repository()
-            st = repo.stats_for(uid)
-            st.qualified_count = int(repo.count_qualified(uid))
-            try:
-                st.total_invited = max(
-                    int(st.total_invited), int(repo.count_for_referrer(uid))
-                )
-            except Exception:
-                pass
-            return st
-
-        stats = await asyncio.to_thread(_live_stats, int(user.id))
+        stats = await asyncio.to_thread(
+            get_referral_repository().stats_for, int(user.id)
+        )
         remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
         nl = chr(10)
         text = nl.join(
@@ -342,3 +332,44 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text(text, reply_markup=share_kb)
     except Exception:
         await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
+
+
+async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin-only program-wide referral counters."""
+    user = update.effective_user
+    message = update.effective_message
+    if not message or not user:
+        return
+    try:
+        from lumen.platform.referrals.config import is_referral_admin
+        if not is_referral_admin(int(user.id)):
+            await message.reply_text("هذا الأمر للمشرفين فقط.")
+            return
+    except Exception:
+        await message.reply_text("هذا الأمر للمشرفين فقط.")
+        return
+    try:
+        from lumen.platform.referrals import (
+            REFERRAL_QUALIFIED_TARGET,
+            REFERRAL_REWARD_USD,
+            get_referral_repository,
+        )
+
+        st = await asyncio.to_thread(get_referral_repository().system_stats)
+        nl = chr(10)
+        text = nl.join(
+            [
+                "إحصائيات برنامج الإحالة (أدمن)",
+                "",
+                f"• إجمالي الإحالات: {st.get('total_referrals', 0)}",
+                f"• مؤهّلون (استخدموا البوت): {st.get('qualified', 0)}",
+                f"• بانتظار الاستخدام: {st.get('pending', 0)}",
+                f"• مرفوضون: {st.get('rejected', 0)}",
+                f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
+                "",
+                f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} → ${REFERRAL_REWARD_USD}",
+            ]
+        )
+        await message.reply_text(text)
+    except Exception:
+        await message.reply_text("تعذر جلب الإحصائيات.")
