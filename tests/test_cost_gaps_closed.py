@@ -87,3 +87,41 @@ def test_daily_cap_blocks(credits, monkeypatch):
                 call_index=1,
                 credit_service=credits,
             )
+
+
+def test_assert_generation_blocked_on_zero_balance(credits, monkeypatch):
+    from lumen.platform.credits.guards import GenerationBlockedError, assert_generation_allowed
+    from lumen.platform.balance_lifecycle import BalanceLifecycle, MemoryLifecycleStore
+
+    # Wire lifecycle to same credit service
+    lc = BalanceLifecycle(MemoryLifecycleStore(), credits)
+    monkeypatch.setattr(
+        "lumen.platform.balance_lifecycle.get_balance_lifecycle",
+        lambda: lc,
+    )
+    # empty wallet
+    with pytest.raises(GenerationBlockedError):
+        assert_generation_allowed(user_id=999)
+
+
+def test_run_agent_blocks_without_balance(credits, monkeypatch, tmp_path):
+    from lumen.engine.services.cline_runtime import agent_loop
+    from lumen.platform.balance_lifecycle import BalanceLifecycle, MemoryLifecycleStore
+
+    lc = BalanceLifecycle(MemoryLifecycleStore(), credits)
+    monkeypatch.setattr(
+        "lumen.platform.balance_lifecycle.get_balance_lifecycle",
+        lambda: lc,
+    )
+    monkeypatch.setattr(
+        "lumen.engine.services.cline_runtime.agent_loop.select_model_for_goal",
+        lambda **kw: (type("C", (), {"provider": "openai", "model_id": "x"})(), {}),
+    )
+    state = agent_loop.run_agent(
+        work_dir=str(tmp_path),
+        goal="x",
+        ir_dict={"user_id": 888},
+        max_steps=2,
+    )
+    assert state.ok is False
+    assert state.stop_reason in {"insufficient_credits", "billing_gate_error"}

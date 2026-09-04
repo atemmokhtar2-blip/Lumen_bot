@@ -503,7 +503,26 @@ def meter_http_response(
     if not tid and user_id:
         tid = tenant_id_from_user(user_id)
     if not tid:
-        # No tenant → cannot bill; log for ops (do not silently ignore in metrics)
+        # Fail closed when tenant required — never give free cloud LLM
+        try:
+            from lumen.platform.credits.guards import require_tenant_for_llm
+            need = require_tenant_for_llm()
+        except Exception:
+            need = True
+        has_tokens = bool(
+            int(usage.get("prompt_tokens") or 0)
+            + int(usage.get("completion_tokens") or 0)
+            + int(usage.get("total_tokens") or 0)
+            + int(usage.get("prompt_tokens_est") or 0)
+        )
+        if need and has_tokens:
+            logger.error("meter_http_response refuse unmetered LLM provider=%s", provider)
+            raise InsufficientCreditsError(
+                tenant_id="",
+                needed=1,
+                available=0,
+                reason="no_tenant",
+            )
         logger.warning("meter_http_response skipped: no tenant provider=%s model=%s", provider, model_id)
         return {"charged": False, "skipped": True, "reason": "no_tenant", "usage": usage}
     return charge_llm_step(

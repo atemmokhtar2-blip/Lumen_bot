@@ -249,6 +249,18 @@ class HostingService:
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
+        # Cost guard: no hosting when balance lifecycle suspends the tenant
+        try:
+            from lumen.platform.credits.guards import GenerationBlockedError, assert_hosting_allowed
+            assert_hosting_allowed(user_id=int(user_id or 0))
+        except Exception as _hg:
+            if type(_hg).__name__ == "GenerationBlockedError" or "generation_blocked" in str(_hg) or "hosting" in str(_hg).lower():
+                return HostResult(
+                    ok=False,
+                    message="رصيدك غير كافٍ أو الحساب موقوف للاستضافة. اشحن رصيدك ثم أعد المحاولة.",
+                )
+            raise
+
         # Containment: must live under THIS user's sandbox (IDOR root fix).
         # API layer already checks tenant sandbox; HostService enforces the same
         # invariant so internal callers cannot host another tenant's tree.

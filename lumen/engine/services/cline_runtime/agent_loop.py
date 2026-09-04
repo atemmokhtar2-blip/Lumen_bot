@@ -516,6 +516,36 @@ def run_agent(
         state.errors.append(f"guardrails_error:{type(_gexc).__name__}")
         return state
     state = AgentState(work_dir=str(work.resolve()), goal=goal or "")
+    # --- Cost guard: refuse to start LLM loop without spend allowance ---
+    try:
+        from lumen.platform.credits.guards import (
+            GenerationBlockedError,
+            assert_llm_spend_allowed,
+        )
+        _uid = 0
+        if isinstance(ir_dict, dict):
+            try:
+                _uid = int(ir_dict.get("user_id") or (ir_dict.get("metadata") or {}).get("user_id") or 0)
+            except (TypeError, ValueError):
+                _uid = 0
+        _tid = assert_llm_spend_allowed(user_id=_uid)
+        state.metadata["billing_tenant_id"] = _tid
+    except Exception as _bg:
+        from lumen.platform.credits.guards import GenerationBlockedError as _GBE
+        if isinstance(_bg, _GBE) or type(_bg).__name__ == "GenerationBlockedError":
+            state.ok = False
+            state.stop_reason = "insufficient_credits"
+            state.errors.append(f"insufficient_credits:{getattr(_bg, 'reason', _bg)}")
+            state.metadata["insufficient_credits"] = {
+                "reason": getattr(_bg, "reason", str(_bg)),
+                "tenant_id": getattr(_bg, "tenant_id", ""),
+            }
+            return state
+        # unknown gate errors: fail closed
+        state.ok = False
+        state.stop_reason = "billing_gate_error"
+        state.errors.append(f"billing_gate_error:{type(_bg).__name__}")
+        return state
     state.metadata["model"] = describe_runtime()
     task = "repair" if (
         "MODE=INCREMENTAL_REPAIR" in (goal or "")

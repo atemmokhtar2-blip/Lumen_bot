@@ -443,10 +443,12 @@ def _run_clone_review_repair(
                     work_dir=str(root),
                     goal=goal,
                     ir_dict={
+                        "user_id": int(os.getenv("GITHUB_PR_USER_ID") or "0"),
                         "metadata": {
                             "mode": "incremental_repair",
                             "pre_read_files": focus_files[:16],
                             "findings": [{"message": e} for e in errors[:10]],
+                            "user_id": int(os.getenv("GITHUB_PR_USER_ID") or "0"),
                         },
                         "project_context": {"file_list": focus_files[:16]},
                     },

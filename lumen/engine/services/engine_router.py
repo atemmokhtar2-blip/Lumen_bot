@@ -148,6 +148,22 @@ def execute_ir(
     )
     from lumen.engine.core.result import GenerationResult
 
+    # Cost guard before any Cline work
+    try:
+        from lumen.platform.credits.guards import GenerationBlockedError, assert_llm_spend_allowed
+        assert_llm_spend_allowed(user_id=uid)
+    except Exception as _ge:
+        if type(_ge).__name__ == "GenerationBlockedError" or "generation_blocked" in str(_ge):
+            return GenerationResult(
+                success=False,
+                project_path=None,
+                stages=[],
+                validation_reports=[],
+                errors=[f"insufficient_credits:{getattr(_ge, 'reason', _ge)}"],
+                metadata={"insufficient_credits": True, "user_id": uid},
+            )
+        raise
+
     v = validate_and_normalize_ir(ir)
     ir = v.ir
     if not v.ok:

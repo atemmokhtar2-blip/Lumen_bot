@@ -1,6 +1,12 @@
 from .service import CreditService, get_credit_service, reset_credit_service_for_tests
 from .types import CreditResult, LedgerEntry, LedgerLeg, PricingRule, ReconcileReport, Wallet
 from .usage_report import tenant_usage_report
+from .guards import (
+    GenerationBlockedError,
+    assert_generation_allowed,
+    assert_hosting_allowed,
+    assert_llm_spend_allowed,
+)
 from .llm_live import (
     InsufficientCreditsError,
     bind_charge_context,
@@ -39,6 +45,10 @@ __all__ = [
     "charge_from_agent_state",
     "charge_llm_step",
     "tenant_usage_report",
+    "GenerationBlockedError",
+    "assert_generation_allowed",
+    "assert_hosting_allowed",
+    "assert_llm_spend_allowed",
     "meter_http_response",
     "flush_pending_llm_charges",
     "credits_for_llm_usage",
