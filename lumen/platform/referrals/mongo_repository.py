@@ -54,7 +54,7 @@ class MongoReferralRepository:
         if uri or db_name:
             # Explicit override path (tests)
             from pymongo import MongoClient
-            self.uri = (uri or os.getenv("MONGODB_URI") or "").strip()
+            self.uri = (uri or __import__("lumen.platform.mongo_users", fromlist=["resolve_mongodb_uri"]).resolve_mongodb_uri() or "").strip()
             if not self.uri:
                 raise ValueError("MONGODB_URI is required for MongoReferralRepository")
             self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
@@ -619,24 +619,35 @@ _repo: MongoReferralRepository | MemoryReferralRepository | None = None
 
 
 def get_referral_repository():
-    """Mongo when MONGODB_URI set; memory only in explicit local/test.
-
-    Deployed environments without MONGODB_URI must not silently use process-local
-    memory (data loss / multi-worker divergence = fake referral program).
-    """
+    """Mongo when a Mongo URI is available; memory only in explicit local/test."""
     global _repo
     if _repo is not None:
         return _repo
-    if (os.getenv("MONGODB_URI") or "").strip():
-        _repo = MongoReferralRepository()
-        return _repo
+    try:
+        from lumen.platform.mongo_users import resolve_mongodb_uri
+        uri = resolve_mongodb_uri()
+    except Exception:
+        uri = (os.getenv("MONGODB_URI") or "").strip()
+    if uri:
+        try:
+            _repo = MongoReferralRepository()
+            return _repo
+        except Exception as exc:
+            logger.error(
+                "MongoReferralRepository init failed: %s: %s",
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+            raise RuntimeError(
+                "referral_mongo_init_failed:%s" % type(exc).__name__
+            ) from exc
     from lumen.platform.referrals.config import is_referral_dev_environment
     if is_referral_dev_environment():
         _repo = MemoryReferralRepository()
         return _repo
     raise RuntimeError(
-        "MONGODB_URI is required for the referral program outside dev/test "
-        "(refusing in-memory referrals on a deployed host)"
+        "Mongo URI missing (set MONGODB_URI or MONGO_URL) — "
+        "refusing in-memory referrals on a deployed host"
     )
 
 
