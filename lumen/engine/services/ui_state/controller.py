@@ -40,6 +40,9 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
         ),
         (
             UiButton("الرصيد", "open_billing", style="primary"),
+            UiButton("الإعدادات", "open_settings", style="primary"),
+        ),
+        (
             UiButton("المساعدة", "open_help"),
         ),
     )
