@@ -1,42 +1,73 @@
 # المعمارية
 
-## الطبقات
+## الهدف
+
+فصل **واجهة تيليجرام** عن **محرك التوليد** عن **الاستضافة**، مع مصدر حقيقة واحد للنماذج (`model_catalog`) ومصدر حقيقة للجلسات (Redis) وللاشتراك المدفوع (Mongo ثم Redis ككاش).
+
+## الطبقات الفعلية في المستودع
 
 ```
-Telegram (PTB handlers)
-    → lumen/bot/routers, ui, session_store
-        → lumen/bot/generation_flow / multi_agent_bridge
-            → lumen/engine (cline_runtime, multi_agent, llm)
-                → tools (agent_fs, shell, browser, …)
-                → hosting / object storage
+┌─────────────────────────────────────────────────────────┐
+│  Telegram (python-telegram-bot)                         │
+│  lumen/bot/routers/message_router.py → handlers/UI      │
+└───────────────────────┬─────────────────────────────────┘
+                        │ hydrate/persist session_store
+                        │ progress_tracker / generation_flow
+┌───────────────────────▼─────────────────────────────────┐
+│  Application wiring                                     │
+│  lumen/bootstrap.py (tenant, job, billing repos)        │
+│  lumen/bot/ui + lumen/engine/services/ui_state          │
+└───────────────────────┬─────────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────────┐
+│  Engine                                                 │
+│  cline_runtime (brain, loop, tools, model_router)       │
+│  llm (catalog, foundry, r2, key_pool)                   │
+│  multi_agent (orchestrator, roles, HITL, temporal_*)    │
+│  capability_detection / engine_groq_bridge (rules only) │
+└───────────────────────┬─────────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────────┐
+│  Hosting + Platform                                     │
+│  lumen/hosting/* , sandbox_runtime, live_deployment     │
+│  rate limits, mongo users, object storage               │
+└─────────────────────────────────────────────────────────┘
 ```
 
-- **Presentation:** `lumen/bot/` — لا منطق اختيار نموذج هنا؛ يمرّر الطلب للمحرك.
-- **Application wiring:** `lumen/bootstrap.py` — مستودعات tenant/job/billing.
-- **Domain:** `lumen/domain/` — عقود بدون تفاصيل بنية تحتية.
-- **Infrastructure:** `lumen/infrastructure/persistence/` — Mongo/Redis adapters.
-- **Engine:** `lumen/engine/services/` — التوليد، الوكيل، LLM، الاستضافة، الذاكرة.
+## تدفق طلب توليد (من الكود)
 
-## تدفق رسالة توليد (مختصر)
+1. **`handle_message`** (`message_router.py`):
+   - `gate_auth_and_rate` ثم `gate_groups`
+   - **`get_session_store().hydrate(user_id, user_data)`** قبل أي منطق UI
+   - busy guard: إن كان التوليد جاريًا يرفض رسائل جديدة ما عدا إلغاء
+   - جسم الرسالة في `_handle_message_body`
+   - في `finally`: `persist_ui_session` لكتابة المفاتيح الدائمة
 
-1. `message_router` / handlers: allowlist، rate limit، استعادة جلسة Redis.
-2. اكتشاف نية توليد أو أوامر UI.
-3. `analyze_and_prepare` (`engine_groq_bridge`) — **قواعد وcapabilities فقط**، بدون LLM translate.
-4. بناء IR / استدعاء multi-agent أو Cline agent loop.
-5. اختيار نموذج: `select_model_for_goal` → Foundry إن وُجد وإلا R2 + `model_catalog`.
-6. `agent_brain.decide` → `_invoke_choice` → مزوّد HTTP.
-7. تنفيذ أدوات على ملفات المشروع.
-8. بوابة قبول + smoke test قبل ZIP (`generation_steps`).
-9. تحديث تقدم عبر `progress_bus` → تعديل رسالة تيليجرام.
+2. **Engine UI** (`ui_state`): إن كانت المرحلة `GEN_SLOTS`، النص يملأ الـ slot الحالي ثم يعيد رسم الرسالة بالأزرار.
 
-## مبدأ LLM واحد
+3. **نية التوليد** (`message_intent` / generation routers): أفعال صريحة، تأكيد، أو مواصفات بوت.
 
-- المصدر: `lumen/engine/services/llm/model_catalog.py`
-- التوجيه: `model_router.select_model` / `select_model_for_goal` + `r2_allocator` + `foundry_router`
-- التنفيذ: `cline_runtime/agent_brain.py`
-- **ممنوع:** مسارات `translate_request` / `chat_request` / `llm/facade` / `llm_budget_gate` (محذوفة)
+4. **تحضير المواصفات** بدون LLM ترجمة:
+   - `engine_groq_bridge.analyze_and_prepare` + قواعد `translator_client._rule_features_from_text`
+   - `BridgeSpecBackend` في multi_agent يستدعي نفس الجسر
 
-## الاستمرارية
+5. **التنفيذ**:
+   - multi-agent إن `MULTI_AGENT_ORCHESTRATOR` مفعّل (الافتراضي on)
+   - وإلا مسار Cline/`provider_agent` + `agent_loop`
 
-- جلسات المستخدم: Redis (`session_store`) — انظر `03-session-context.md`
-- اشتراك Pro: Redis + Mongo (`subscription_store`) — انظر `09-pro-subscription.md`
+6. **النموذج**: `select_model_for_goal` → Foundry أو R2 → `agent_brain.decide`
+
+7. **التسليم**: قبول + smoke test في `generation_steps` ثم ZIP
+
+## حدود المسؤولية
+
+| الطبقة | تفعل | لا تفعل |
+|--------|------|---------|
+| bot/ | UX، جلسات، دفع، عرض تقدم | اختيار model_id يدوي عشوائي |
+| model_catalog | SoT للنماذج | استدعاء HTTP |
+| agent_brain | HTTP + JSON tools | تخزين جلسات تيليجرام |
+| hosting | تشغيل الحاويات/VM | توليد الكود |
+
+## مبدأ «مسار LLM واحد»
+
+أي مسار توليد يمر على الكتالوج والراوتر والدماغ. لا يوجد مسار موازٍ لـ translate/chat facade.

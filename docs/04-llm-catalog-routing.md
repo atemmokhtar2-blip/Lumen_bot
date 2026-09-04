@@ -4,54 +4,80 @@
 
 `lumen/engine/services/llm/model_catalog.py`
 
-كل نموذج: `id`, `label`, `provider`, `model_id`, `api_style`, `base_url`, `api_key_env`, `roles`, `cost_tier`, `strength`.
+### `CatalogModel`
 
-- بدون مفتاح → يُستبعد من `available_models()` (لا crash).
-- `resolve_dispatch()`: إن كان المفتاح OpenRouter فقط، يُحوَّل المسار إلى OpenRouter مع `model_id` مناسب.
+- `id` — معرّف منتج ثابت (مثل `deepseek-v3`)
+- `provider`, `model_id`, `api_style` (`openai_compat` | `gemini` | `anthropic`)
+- `base_url`, `api_key_env`, `roles`, `cost_tier`, `strength`
+- `key_present()` — يدمج `key_pool` لـ Gemini/Groq وendpoint لـ Foundry
+- `resolve_dispatch()` — إن المفتاح OpenRouter فقط: يحوّل provider/base_url/model_id للبوابة
 
-## نماذج المنتج (الحالية في الكود)
+بدون مفتاح صالح → النموذج خارج `available_models()`.
 
-| catalog id | provider | model_id الافتراضي | مفتاح |
-|------------|----------|-------------------|--------|
-| `deepseek-v4-flash` | deepseek | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
-| `gemini-2.5-flash-lite` | gemini | `gemini-2.5-flash-lite` | `GOOGLE_API_KEY` |
-| `openai-gpt-4o-mini` | openai | `gpt-4o-mini` | `OPENAI_API_KEY` |
-| `deepseek-v3` | deepseek | **`deepseek-chat`** | `DEEPSEEK_API_KEY` |
-| `claude-3-haiku` | anthropic | `claude-3-haiku-20240307` | `ANTHROPIC_API_KEY` |
-| `gemini-2.5-pro` | gemini | `gemini-2.5-pro` | `GOOGLE_API_KEY` |
-| `openrouter-auto` | openrouter | `openrouter/auto` | `OPENROUTER_API_KEY` |
-| `groq-fast` | groq | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
-| `foundry-model-router` | foundry | `model-router` | Azure Foundry |
+## صفوف المنتج
 
-### ملاحظات مهمة
+| id | provider | model_id الافتراضي | أدوار | ملاحظات |
+|----|----------|-------------------|-------|---------|
+| `deepseek-v4-flash` | deepseek | `deepseek-v4-flash` | build, fast, reason | API رسمي DeepSeek |
+| `gemini-2.5-flash-lite` | gemini | `gemini-2.5-flash-lite` | build, fast | |
+| `openai-gpt-4o-mini` | openai | `gpt-4o-mini` | build, fast, plan, critique | fallback عام |
+| `deepseek-v3` | deepseek | **`deepseek-chat`** | plan, build, reason | **الافتراضي لـ DeepSeek في plan** |
+| `claude-3-haiku` | anthropic | `claude-3-haiku-20240307` | critique, fast, build | |
+| `gemini-2.5-pro` | gemini | `gemini-2.5-pro` | plan, critique, reason | |
+| `openrouter-deepseek-v4-flash` | openrouter | `deepseek/deepseek-v4-flash` | build, fast, reason | مرآة |
+| `openrouter-auto` | openrouter | `openrouter/auto` | الكل | بوابة |
+| `groq-fast` | groq | `llama-3.3-70b-versatile` | build, fast | Groq لا يستضيف V4 Flash |
+| `foundry-model-router` | foundry | `model-router` | الكل | يحتاج endpoint+key |
+| `deepseek-v4-pro` | deepseek | `deepseek-v4-pro` | **roles=()** | اختياري فقط عبر `CLINE_MODEL_*` |
 
-- **DeepSeek V3** = `deepseek-chat` فقط. لا يُستبدل افتراضيًا بـ `deepseek-v4-pro`.
-- **`deepseek-v4-pro`:** موجود في الكتالوج لكن `roles=()` — اختياري عبر `CLINE_MODEL_PLAN=deepseek-v4-pro` وليس اختيارًا تلقائيًا.
-- **Groq:** لا يستضيف DeepSeek V4 Flash رسميًا؛ مسار السرعة = Llama على GroqCloud.
-- OpenRouter يمكنه عكس `deepseek/deepseek-v4-flash` عند غياب مفتاح DeepSeek.
+تجاوز V3: `DEEPSEEK_V3_MODEL` فقط — **`DEEPSEEK_MODEL` لا يلوّث صف V3**.
 
-## ترتيب التوجيه
+## `ModelChoice` (`model_router.py`)
 
-`select_model` / `select_model_for_goal` في `cline_runtime/model_router.py`:
+`provider`, `model_id`, `api_key_env`, `base_url`, **`catalog_id`**
 
-1. مزوّد إجباري `CLINE_LLM_PROVIDER` / `ENGINE_LLM_PROVIDER` (مع مطابقة role من الكتالوج)
-2. **Microsoft Foundry Model Router** إذا `CLINE_ROUTER` ∈ {auto, foundry} والمفاتيح موجودة → deployment مثل `model-router`
-3. وإلا **R2 allocator** المحلي (`r2_allocator.py`): تفكيك الخطوة plan|code|repair|critique ثم تقييم من الكتالوج
-4. ترتيب تفضيلي للمنتج ثم cost/strength
-5. `CLINE_MODEL_PLAN` / `CLINE_MODEL_BUILD` / `CLINE_MODEL_CRITIQUE` تقبل **catalog id** أو model_id
+يُبنى عبر `_choice_from_catalog_model` → دائمًا `resolve_dispatch()`.
 
-`ModelChoice` يحمل `catalog_id` للربط الرجعي مع صف الكتالوج.
+## ترتيب الاختيار
 
-## التنفيذ HTTP
+### `select_model(task=...)`
 
-`agent_brain._invoke_choice` →:
+1. Foundry إن `CLINE_ROUTER` ∈ {auto, foundry} و`foundry_configured()`
+2. مزوّد إجباري `CLINE_LLM_PROVIDER` مع تفضيل صفوف نفس الـ role
+3. `available_models(role)` مرتّبة بـ **قائمة تفضيل R2** ثم strength/cost
+4. `_apply_task_model_override` — `CLINE_MODEL_PLAN|BUILD|CRITIQUE` تقبل catalog id
 
-- foundry → `foundry_router.chat_completions`
-- openai / openrouter / deepseek / anthropic → `_dispatch_catalog_provider`
-- gemini / groq → دوال المزوّد مع `model_id` من الاختيار
-- نفس تلميح JSON للأدوات المخصّصة للوكيل (منع tools المدمجة للمزوّد)
+### `select_model_for_goal(...)`
 
-## ما أُزيل
+1. Foundry (مع meta عن الوضع)
+2. `r2_allocator.allocate(...)` إن `CLINE_ROUTER` ∈ {auto, local, catalog, r2}
+3. وإلا نفس مسار `select_model`
 
-- `translate_request` / `chat_request` وكل stubs الترجمة/الشات من مسار التوليد
-- `llm/facade.py` و`llm_budget_gate.py`
+### Foundry (`foundry_router.py`)
+
+- أوضاع: `quality` | `cost` | `balanced` من نوع المهمة أو `AZURE_FOUNDRY_ROUTING_MODE`
+- deployment من env الخاص بالوضع أو `model-router`
+- يُسجَّل `response.model` الفعلي في آخر نتيجة
+
+### R2 (`r2_allocator.py`)
+
+1. `decompose_step` → `plan` | `code` | `repair` | `critique`
+2. تقييم كل نموذج في `available_models()` (مفتاح موجود)
+3. تفضيل حسب `_KIND_PREFER` (V3 وليس v4-pro في plan)
+4. `AllocateResult` مع `catalog_id` + حقول بعد `resolve_dispatch`
+
+## التنفيذ (`agent_brain.py`)
+
+`_invoke_choice`:
+
+| provider | المسار |
+|----------|--------|
+| foundry | `foundry_router.chat_completions` + حقن anti-tool/JSON |
+| openai, openrouter, deepseek, anthropic | `_dispatch_catalog_provider` |
+| gemini | `_call_gemini` بـ model_id من الاختيار فقط |
+| groq | `_call_groq`؛ الافتراضي من catalog `groq-fast` |
+| qwen/xai/ollama/llamacpp | مسارات legacy عند الإجبار |
+
+`_dispatch_catalog_provider` يطابق **catalog_id أولًا**، يحفظ catalog_id عند إعادة البناء، DeepSeek يضيف `/v1` على base، OpenRouter headers قياسية.
+
+Failover: `_failover_choice` يختار التالي من الكتالوج باستثناء المزوّد الفاشل.

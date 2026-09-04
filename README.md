@@ -1,38 +1,46 @@
 # Lumen Bot
 
-منصة توليد وتشغيل بوتات تيليجرام عبر وكيل برمجة (agent) — واجهة تيليجرام، محرك توليد، استضافة، واشتراك Pro.
+منصة **توليد وتشغيل بوتات تيليجرام** عبر وكيل برمجة (agent) متعدد الأدوات، مع جلسات Redis، كتالوج نماذج موحّد، استضافة معزولة، واشتراك **Lumen Pro** عبر Telegram Stars.
 
-## ما هذا المشروع؟
+## ماذا يفعل النظام؟
 
-المستخدم يصف بوتًا بالعربية أو الإنجليزية داخل تيليجرام. النظام يحوّل الطلب إلى مشروع كود قابل للتشغيل، يختبره، يسلّمه كـ ZIP عند النجاح، ويمكن استضافته ضمن حدود الخطة.
+1. المستخدم يصف البوت داخل تيليجرام (عربي/إنجليزي).
+2. البوت يجمع الاحتياجات عبر **Engine UI** (slots) أو مسار توليد مباشر.
+3. المحرك يشغّل **وكيلًا** (أو multi-agent: Planner → Worker → Critic → Repair) على مجلد مشروع معزول.
+4. اختيار النموذج من **`model_catalog`** عبر Foundry Model Router أو R2 allocator محلي.
+5. تقدم حي عبر `progress_bus` على رسالة الحالة في تيليجرام.
+6. قبول + smoke test ثم تسليم ZIP عند النجاح.
+7. مع Pro: استضافة دائمة ضمن حدود الموارد المعرّفة في الكود.
 
-**مسار الـ LLM الوحيد للتوليد:** كتالوج النماذج → راوتر (Foundry أو R2 محلي) → `agent_brain` → حلقة الأدوات.
+## مسار LLM الوحيد للتوليد
 
-**ليس** مسار توليد: `translate_request` / `chat_request` / واجهة facade قديمة / بوابة budget يومية عامة — أُزيلت.
+```
+select_model_for_goal / select_model
+  → Foundry (إن وُجدت المفاتيح) أو r2_allocator + model_catalog
+  → ModelChoice(catalog_id, provider, model_id, base_url)
+  → agent_brain.decide → _invoke_choice → HTTP للمزوّد
+  → JSON tool واحد → agent_loop ينفّذ على الملفات
+```
 
-## هيكل المستودع (مختصر)
+**محذوف نهائيًا من مسار التوليد:** `translate_request`، `chat_request`، `llm/facade`، `llm_budget_gate`.
+
+## هيكل المستودع
 
 | مسار | الدور |
 |------|--------|
-| `lumen/bot/` | طبقة تيليجرام (PTB): رسائل، UI، جلسات، توليد |
-| `lumen/engine/` | محرك التوليد، الوكيل، LLM، multi-agent، استضافة |
-| `lumen/domain/` | كيانات ومنافذ النطاق (tenant، billing، jobs) |
-| `lumen/infrastructure/` | تنفيذ المنافذ (Mongo، Redis، …) |
-| `lumen/hosting/` | عمليات الاستضافة والنسخ الاحتياطي |
-| `lumen/platform/` | حدود معدّل، أدوات منصة |
-| `lumen/api/` | واجهات HTTP إن وُجدت |
-| `docs/` | التوثيق الحالي المطابق للكود |
+| `lumen/bot/` | تيليجرام: routers، UI، session_store، تسليم التوليد |
+| `lumen/engine/services/cline_runtime/` | الدماغ، الحلقة، الأدوات، الراوتر |
+| `lumen/engine/services/llm/` | كتالوج، Foundry، R2، key_pool |
+| `lumen/engine/services/multi_agent/` | أوركسترا متعددة الأدوار + HITL + Temporal اختياري |
+| `lumen/engine/services/ui_state/` | آلة حالات Engine UI + تعريف Pro |
+| `lumen/hosting/` | تشغيل/إيقاف المستضاف، عزل، فوترة استخدام |
+| `lumen/domain/` + `infrastructure/` | مستودعات tenant/jobs/billing |
+| `docs/` | التوثيق الرسمي الوحيد المطابق للكود |
 
 ## التوثيق
 
-اقرأ الملفات تحت `docs/` بالترتيب المقترح في `docs/00-index.md`.
+ابدأ من [`docs/00-index.md`](docs/00-index.md). كل نظام له ملف منفصل.
 
-## تشغيل سريع (تطوير)
+## فرع التطوير
 
-1. Python 3.11+ و`pip install -r requirements.txt`
-2. متغيرات إلزامية: `TELEGRAM_BOT_TOKEN`، `REDIS_URL` (إنتاج)، مفاتيح النماذج حسب الكتالوج
-3. نقطة الدخول تعتمد على نشرك (Railway / عملية bot worker) — انظر `docs/10-deployment.md`
-
-## الفرع
-
-التطوير النشط: فرع `Lumen`.
+`Lumen`

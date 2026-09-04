@@ -1,51 +1,68 @@
 # طبقة تيليجرام
 
-## المكوّنات
+## نقطة الدخول
 
-| مسار | وظيفة |
-|------|--------|
-| `lumen/bot/routers/` | توجيه الرسائل، التوليد، التوكن، git، hosting |
-| `lumen/bot/ui/` | لوحات، دفع Stars، Pro، callbacks |
-| `lumen/bot/session_store.py` | جلسات دائمة |
-| `lumen/bot/sanitize.py` | تنقية أسرار من النصوص |
-| `lumen/bot/telegram_text.py` / `rich_messages.py` | تنسيق وإرسال |
-| `lumen/bot/progress_tracker.py` | ربط تقدم التوليد برسائل البوت |
-| `lumen/bot/ptb_redis_persistence.py` | persistence لـ python-telegram-bot عبر Redis |
+`lumen/bot/routers/message_router.py` → `handle_message`.
 
-## تدفق الرسالة (من الكود)
+### البوابات المبكرة (`message_stages/early_gates.py`)
 
-ترتيب عام في مسار الرسائل:
+- **auth + rate:** allowlist / `ALLOW_ALL_USERS`، حد معدّل الطلبات
+- **groups:** في المجموعات يُطلب منشن أو رد على البوت
+- **cancel / token:** مسارات مبكرة للإلغاء ولصق توكن بوت
 
-1. Allowlist (`ALLOW_ALL_USERS` / قوائم)
-2. مستخدم Mongo + الخطة
-3. Rate limit
-4. المجموعات: منشن أو رد على البوت
-5. حد طول النص
-6. HITL multi-agent إن وُجد
-7. أوامر `/plan` وcapability ops
-8. **hydrate** من `session_store` (Redis)
-9. لصق توكن بوت
-10. مؤشر «جاري العمل» / thinking
-11. مسار توليد أو أدوات repo/hosting
+### بعد البوابات
 
-## Markdown
+1. **hydrate** من Redis (`session_store`)
+2. **busy guard** عبر `progress_tracker.is_generation_busy`:
+   - أثناء التوليد: رسالة تشرح التحديثات الحية
+   - `/cancel` أو «إلغاء» → `generation_cancel.request_cancel(user_id)`
+3. `_handle_message_body`: Engine UI slots، أوامر، routers فرعية، توليد
+4. **persist** في `finally` عبر `persist_ui_session`
 
-- تنظيف قبل الإرسال لتقليل أخطاء Telegram parse.
-- نصوص طويلة تُقسَّم حسب حدود تيليجرام (4096).
-- الأسرار تُمرَّر عبر `sanitize` قبل عرض الأخطاء.
+## الموجّهات الفرعية
 
-## التنقّل والـ UI
+| ملف | مسؤولية |
+|-----|---------|
+| `message_generation.py` | تشغيل التوليد، HITL plan approve |
+| `message_intent.py` | هل الرسالة طلب توليد / تأكيد |
+| `git_router.py` | استنساخ/دفع git |
+| `hosting_router.py` | لوحات الاستضافة |
+| `repo_dev_router.py` | تطوير على مستودع مربوط |
 
-- لوحات في `ui/keyboards.py` و`callback_router.py`.
-- خطط Pro: `view_pro_plan` / `buy_pro_plan` → `payment_handlers.py`.
-- بعد الدفع: تفعيل entitlement وفتح حدود الاستضافة — `pro_plan_entitlement.py`.
+## UI
 
-## إلغاء التوليد
+| ملف | مسؤولية |
+|-----|---------|
+| `ui/callback_router.py` | أزرار inline موقّعة |
+| `ui/keyboards.py` | بناء لوحات المفاتيح |
+| `ui/payment_handlers.py` | pre-checkout + successful_payment لـ Pro |
+| `ui/pro_plan_entitlement.py` | هل المستخدم Pro فعّال؟ |
+| `ui/subscription_store.py` | قراءة/كتابة الاشتراك Mongo+Redis |
+| `ui/input_prompt.py` | مطالبات إدخال (placeholders / ForceReply حيث يُستخدم) |
+| `ui/state_store.py` | تحميل/حفظ `engine_ui` في user_data + persist |
 
-- طلب إلغاء يُكتب كـ marker؛ الحلقة تتحقق `is_cancelled` عبر العمليات.
-- لا تُمسح علامة الإلغاء عند بداية الحلقة بشكل يتجاهل طلب المستخدم.
+## Markdown Hell — الحل في الكود
 
-## التقدّم الحي (Dead Wait)
+`lumen/bot/telegram_text.py`:
 
-- `progress_bus` يستقبل أحداثًا من العامل (provider/model، أدوات، خطوات).
-- الواجهة تعدّل رسالة الحالة دوريًا حتى لا يبقى المستخدم أمام انتظار ميت.
+1. نص الوكيل الاعتباطي يُرسل **plain text** (بدون `parse_mode`) عند الشك
+2. تنسيق الواجهة: **MarkdownV2** أو HTML مع `escape_markdown_v2` / `escape_html`
+3. **لا** يُستخدم `ParseMode.MARKDOWN` القديم (ينكسر على `_` `*` `[`)
+4. الرسائل أطول من **4096** تُقسَّم على حدود فقرات/أسطر
+
+`sanitize.py` ينقّي الأسرار قبل عرض الأخطاء أو التخزين.
+
+## التقدم الحي (Dead Wait)
+
+- المحرك يدفع أحداثًا إلى `progress_bus`
+- `progress_tracker` يربطها برسالة حالة تُحدَّث (تعديل نص) ليعرض الأداة/المزوّد/الخطوة
+- المستخدم يرى شغلًا حقيقيًا بدل «جاري الكتابة» الصامت
+
+## الإلغاء
+
+- `generation_cancel.request_cancel(user_id)` يضع علامة
+- الحلقة والعامل يقرآن `is_cancelled` ولا يمسحان طلب المستخدم عند بدء الحلقة بشكل خاطئ
+
+## التنقّل
+
+أزرار الحالة تُبنى من `ui_state.controller.buttons_for_state` + `keyboards.build_inline_keyboard`. مسارات عميقة (GEN_SLOTS → GEN_CONFIRM → توليد) تعتمد على `EngineUiPhase` المحفوظ في الجلسة الدائمة حتى لا يضيع المستخدم بعد restart.

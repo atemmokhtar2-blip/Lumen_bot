@@ -1,34 +1,41 @@
 # اشتراك Lumen Pro
 
-مصدر الأرقام: `lumen/engine/services/ui_state/pro_plan.py`
+## التعريف في الكود
 
-| البند | القيمة في الكود |
-|-------|----------------|
-| المعرّف | `lumen_pro` |
-| السعر | **10 USD / شهر** |
-| Stars | **800** (`PRO_PLAN_PRICE_STARS`) |
-| المدة | شهر واحد |
-| عدد البوتات | حتى **10** |
-| التخزين | **3072 MB (3 GB)** |
-| RAM | **2048 MB (2 GB) مشتركة** |
-| CPU | **0.25** نواة لكل بوت مستضاف |
-| الاستضافة | دائمة مجانية طوال الاشتراك النشط |
+`lumen/engine/services/ui_state/pro_plan.py` — **مصدر الأرقام**:
 
-## الدفع
+| الثابت | القيمة |
+|--------|--------|
+| `PRO_PLAN_ID` | `lumen_pro` |
+| `PRO_PLAN_PRICE_USD` | **10** |
+| `PRO_PLAN_PRICE_STARS` | **800** (XTR) |
+| `PRO_PLAN_DURATION_MONTHS` | 1 |
+| `PRO_PLAN_BOT_LIMIT` | **10** |
+| `PRO_PLAN_DISK_MB` | **3072** (3 GB) |
+| `PRO_PLAN_MEMORY_MB` | **2048** (2 GB مشتركة) |
+| `PRO_PLAN_CPU` | **0.25** |
+| `PRO_PLAN_INVOICE_PAYLOAD` | `lumen_pro_monthly_v2` |
 
-- داخل تيليجرام فقط (Telegram Stars / XTR)
-- `payment_handlers.py` يتحقق من المبلغ والـ payload
-- لا Stripe/موقع خارجي في هذا المسار
+يشمل: استضافة دائمة مجانية طوال الاشتراك، عزل، مراقبة، رصيد credits حسب السياسة المعروضة في الواجهة.
 
-## التحقق من الاستحقاق
+## مسار الدفع (`payment_handlers.py`)
 
-`lumen/bot/ui/pro_plan_entitlement.py`:
+1. `handle_pre_checkout` — رفض مبكر إن لزم
+2. `handle_successful_payment`:
+   - يتحقق: `payload == PRO_PLAN_INVOICE_PAYLOAD` و`currency == XTR` و`amount == 800`
+   - يبني سجل: `plan_id`, `started_at`, `expires_at` (+30 يوم), `stars_paid`, `charge_id`
+   - يكتب `user_data["pro_plan"]`
+   - **`write_subscription`** → Mongo دائم + Redis كاش
 
-- يقرأ من `subscription_store` (Redis ثم Mongo)
-- يتحقق من `expires_at` و`stars_paid >= 800`
-- fail-closed لزيادة الحدود إذا تعذّر القراءة
-- لا يُعتمد على `user_data` المزور من العميل كمصدر وحيد
+أي عدم تطابق في المبلغ/العملة/الـ payload → لا تفعيل (log warning).
 
-## التفعيل
+## الاستحقاق (`pro_plan_entitlement.py`)
 
-بعد دفع ناجح يُكتب سجل Pro ويُفتح حد الاستضافة تلقائيًا طالما الاشتراك ساريًا.
+- يقرأ عبر `read_subscription` (Redis ثم Mongo)
+- يرفض إن انتهت `expires_at` أو `stars_paid < 800`
+- fail-closed لزيادة الحدود إن تعذّر المصدر
+- لا يثق بـ user_data وحدها كمصدر وحيد للحدود
+
+## الجلسة
+
+`pro_plan` ضمن `_DURABLE_KEYS`؛ TTL Redis للجلسة يمتد لـ 45 يومًا عند وجود اشتراك لتقليل سقوط الكاش قبل انتهاء الشهر + هامش.

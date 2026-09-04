@@ -1,22 +1,27 @@
 # التوليد والتسليم
 
-## المسار
+## من الرسالة إلى المشروع
 
-1. اكتشاف طلب توليد من الرسالة/الـ UI
-2. استخراج ميزات مبدئي (`engine_groq_bridge` + capability catalog)
-3. تشغيل الوكيل / multi-agent على مجلد مشروع معزول
-4. أحداث تقدم → تيليجرام
-5. **Smoke test** قصير للمشروع (`generation_steps/helpers.py`)
-6. عند النجاح: تعبئة ZIP وتسليم المستخدم
-7. تحديث كاش التوليد + persist الجلسة
+1. نية توليد (`message_intent`) أو تأكيد بعد `last_bot_request` / Engine UI `GEN_CONFIRM`
+2. استخراج ميزات: قواعد عربية/إنجليزية + catalog القدرات (`capability_detection`)
+3. بناء مواصفات / IR
+4. تشغيل:
+   - **Orchestrator** multi-agent إن مفعّل
+   - أو **provider_agent / agent_loop** مباشرة
+5. تحديثات حية على رسالة الحالة
+6. **Acceptance** على ملفات المشروع
+7. **Smoke test** (`generation_steps/helpers._smoke_test_project`) — تشغيل قصير (افتراضي ~10s)
+8. عند النجاح: تعبئة ZIP وتسليم عبر `generation_steps/delivery.py`
+9. فشل QA → repair أو رسالة خطأ منقّاة من الأسرار
 
-## الجسور
+## ملفات البوت ذات الصلة
 
-- `lumen/bot/generation_flow.py` — تنسيق التسليم من جهة البوت
-- `lumen/bot/generation_steps/` — خطوات التسليم والتحقق
-- `lumen/bot/multi_agent_bridge.py` — ربط HITL/نتائج الوكيل بالدردشة
+- `generation_flow.py` — واجهة تدفق التسليم
+- `generation_steps/` — delivery، helpers، مراحل
+- `generation_cache.py` — كاش نتائج عند التفعيل
+- `multi_agent_bridge.py` — ربط نتائج/HITL بالدردشة
 
-## الإلغاء والطوابير
+## ما لا يحدث
 
-- إلغاء المستخدم يحترم marker عبر العمليات
-- ضغط الطوابير / حدود الموارد عبر `resource_limits` وخدمات platform عند التفعيل
+- لا استدعاء `translate_request`/`chat_request` لتوليد الملفات
+- لا تسليم ZIP إن فشل smoke/acceptance حسب سياسة المسار
