@@ -67,16 +67,16 @@ def _max_steps() -> int:
 def _time_budget() -> float:
     """Hard wall-clock budget (seconds) for the entire agent loop.
 
-    This is the INNER guarantee (weakness #2): even if the outer
-    run_with_engine_timeout is not active, the loop itself stops once the
-    total elapsed time exceeds this budget. Default 150s — slightly under
-    GENERATION_TIMEOUT_SEC (180s) so the loop finishes gracefully before the
-    outer hard kill. Tunable via CLINE_AGENT_TIME_BUDGET_SEC. Capped [10, 600].
+    INNER guarantee: loop stops when elapsed exceeds budget. Default 150s
+    (under GENERATION_TIMEOUT_SEC 180s). Tunable via CLINE_AGENT_TIME_BUDGET_SEC.
     """
     try:
         v = float(os.getenv("CLINE_AGENT_TIME_BUDGET_SEC") or "150")
     except ValueError:
-        v = 150
+        v = 150.0
+    return max(10.0, min(600.0, v))
+
+
 @dataclass
 class LoopGovernor:
     """Explicit controller for the agent loop (Phase-1).
@@ -560,6 +560,9 @@ def run_agent(
         "limit": limit,
         "detail": f"بدء حلقة الوكيل (governor band={gov.band} steps={limit})",
         "governor_band": gov.band,
+        "provider": choice.provider,
+        "model": choice.model_id,
+        "router": (diff or {}).get("router") if isinstance(diff, dict) else None,
     })
     user_id = 0
     if isinstance(ir_dict, dict):

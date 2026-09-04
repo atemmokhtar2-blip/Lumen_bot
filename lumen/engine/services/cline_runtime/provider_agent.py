@@ -53,7 +53,29 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
     goal = _goal_from_ir(ir_dict if isinstance(ir_dict, dict) else {})
 
     logger.info("cline agent provider start work_dir=%s", work)
+    try:
+        from lumen.engine.services.progress_bus import report_progress
+        report_progress({
+            "phase": "coding_agent",
+            "tool": "coding_agent",
+            "detail": "بدء الوكيل الحر",
+            "step": 0,
+        })
+    except Exception:
+        pass
     state = run_agent(work_dir=work, goal=goal, ir_dict=ir_dict)
+    try:
+        from lumen.engine.services.progress_bus import report_progress
+        report_progress({
+            "phase": "finish" if state.ok else "coding_agent",
+            "tool": "finish" if state.ok else "coding_agent",
+            "detail": "اكتمل الوكيل" if state.ok else (state.stop_reason or "توقف"),
+            "provider": (state.metadata.get("router") or {}).get("provider"),
+            "model": (state.metadata.get("router") or {}).get("model_id"),
+            "files_written": len(state.files_written or []),
+        })
+    except Exception:
+        pass
 
     project_path = str(work.resolve()) if state.ok or state.files_written else None
 

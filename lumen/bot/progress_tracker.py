@@ -91,6 +91,10 @@ def _text(ev: dict[str, Any] | None, elapsed: int, log: list[str]) -> str:
         lines.append(f"ℹ️ {detail}")
     if thought:
         lines.append(f"💭 {thought}")
+    provider = str((ev or {}).get("provider") or "")[:20]
+    model = str((ev or {}).get("model") or (ev or {}).get("underlying_model") or "")[:40]
+    if provider or model:
+        lines.append(f"🧠 {provider}" + (f"/{model}" if model else ""))
     if log:
         lines.append("—")
         lines.extend(f"• {x}" for x in log[-5:])

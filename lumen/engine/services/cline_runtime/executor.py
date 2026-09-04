@@ -157,6 +157,16 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
             from lumen.engine.services.cline_runtime.provider_agent import (
                 build as agent_build,
             )
+            try:
+                from lumen.engine.services.progress_bus import report_progress
+                report_progress({
+                    "phase": "coding_agent",
+                    "tool": "coding_agent",
+                    "detail": "مسار Cline agent",
+                    "step": 0,
+                })
+            except Exception:
+                pass
 
             raw = agent_build(ir_dict, str(work))
             return ClineExecutionResult(
