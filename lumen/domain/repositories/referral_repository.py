@@ -1,7 +1,7 @@
 """Referral persistence port."""
 from __future__ import annotations
 
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 from lumen.domain.entities.referral import Referral, ReferralStats
 
@@ -19,11 +19,13 @@ class ReferralRepository(Protocol):
 
     def count_qualified(self, referrer_telegram_id: int) -> int: ...
 
-    def count_for_referrer(self, referrer_telegram_id: int) -> int:
-        """Total invites (pending+qualified+rejected) for abuse caps."""
-        ...
+    def count_for_referrer(self, referrer_telegram_id: int) -> int: ...
 
     def stats_for(self, referrer_telegram_id: int) -> ReferralStats: ...
+
+    def system_stats(self) -> dict[str, int]: ...
+
+    def top_referrers(self, *, limit: int = 10) -> list[dict[str, Any]]: ...
 
     def claim_reward_slot(
         self,
