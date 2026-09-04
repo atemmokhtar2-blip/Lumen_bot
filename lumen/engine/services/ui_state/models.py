@@ -27,6 +27,8 @@ class EngineUiPhase(str, Enum):
     BILLING = "billing"
     PRO_PLAN = "pro_plan"  # Lumen Pro subscription details (Stars payment)
     HELP = "help"
+    SETTINGS = "settings"
+    REFERRAL = "referral"
     CONTEXT = "context"  # Batch 6 contextual event surface
 
 
