@@ -330,26 +330,35 @@ class MongoReferralRepository:
 
 
 
-    def system_stats(self) -> dict[str, int]:
-        """Aggregate program-wide counters for admin /referral_stats."""
-        total = int(self.col.count_documents({}))
-        qualified = int(
-            self.col.count_documents({"status": ReferralStatus.QUALIFIED.value})
-        )
-        pending = int(
-            self.col.count_documents({"status": ReferralStatus.PENDING.value})
-        )
-        rejected = int(
-            self.col.count_documents({"status": ReferralStatus.REJECTED.value})
-        )
-        rewards_paid = int(self.stats.count_documents({"reward_paid": True}))
-        return {
-            "total_referrals": total,
-            "qualified": qualified,
-            "pending": pending,
-            "rejected": rejected,
-            "rewards_paid": rewards_paid,
-        }
+    def top_referrers(self, *, limit: int = 10) -> list[dict]:
+        """Top referrers by qualified count (admin leaderboard)."""
+        lim = max(1, min(50, int(limit or 10)))
+        try:
+            cur = self.stats.find(
+                {"qualified_count": {"$gt": 0}},
+                projection={
+                    "referrer_telegram_id": 1,
+                    "qualified_count": 1,
+                    "total_invited": 1,
+                    "pending_count": 1,
+                    "reward_paid": 1,
+                },
+            ).sort("qualified_count", -1).limit(lim)
+            out = []
+            for d in cur:
+                out.append(
+                    {
+                        "referrer_telegram_id": int(d.get("referrer_telegram_id") or 0),
+                        "qualified_count": int(d.get("qualified_count") or 0),
+                        "total_invited": int(d.get("total_invited") or 0),
+                        "pending_count": int(d.get("pending_count") or 0),
+                        "reward_paid": bool(d.get("reward_paid")),
+                    }
+                )
+            return out
+        except Exception:
+            logger.warning("top_referrers failed", exc_info=True)
+            return []
 
 class MemoryReferralRepository:
     """In-process store for unit tests (same behavioural surface)."""
@@ -445,16 +454,33 @@ class MemoryReferralRepository:
         self._reward_paid[int(referrer_telegram_id)] = (True, str(batch_id))
         return self.stats_for(referrer_telegram_id)
 
-    def system_stats(self) -> dict[str, int]:
-        rows = list(self._by_referred.values())
-        rewards = sum(1 for paid, _ in self._reward_paid.values() if paid)
-        return {
-            "total_referrals": len(rows),
-            "qualified": sum(1 for r in rows if r.is_countable()),
-            "pending": sum(1 for r in rows if r.status is ReferralStatus.PENDING),
-            "rejected": sum(1 for r in rows if r.status is ReferralStatus.REJECTED),
-            "rewards_paid": int(rewards),
-        }
+
+    def top_referrers(self, *, limit: int = 10) -> list[dict]:
+        lim = max(1, min(50, int(limit or 10)))
+        by: dict[int, dict] = {}
+        for r in self._by_referred.values():
+            d = by.setdefault(
+                r.referrer_telegram_id,
+                {
+                    "referrer_telegram_id": r.referrer_telegram_id,
+                    "qualified_count": 0,
+                    "total_invited": 0,
+                    "pending_count": 0,
+                    "reward_paid": False,
+                },
+            )
+            d["total_invited"] += 1
+            if r.is_countable():
+                d["qualified_count"] += 1
+            elif r.status is ReferralStatus.PENDING:
+                d["pending_count"] += 1
+        for rid, (paid, _) in self._reward_paid.items():
+            if rid in by:
+                by[rid]["reward_paid"] = bool(paid)
+        rows = sorted(
+            by.values(), key=lambda x: int(x["qualified_count"]), reverse=True
+        )
+        return rows[:lim]
 
 
 _repo: MongoReferralRepository | MemoryReferralRepository | None = None
