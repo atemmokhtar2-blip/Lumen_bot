@@ -43,6 +43,7 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
             UiButton("الإعدادات", "open_settings", style="primary"),
         ),
         (
+            UiButton("الإحالة — $5", "open_referral", style="success"),
             UiButton("المساعدة", "open_help"),
         ),
     )
