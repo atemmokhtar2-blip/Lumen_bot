@@ -27,8 +27,8 @@ SCHEMA_VERSION = 1
 
 @dataclass
 class ResourceSpec:
-    cpu: float = 0.5
-    memory_mb: int = 256
+    cpu: float = 0.25
+    memory_mb: int = 128
     disk_mb: int = 512
 
 
@@ -74,18 +74,23 @@ def default_resources_from_env() -> ResourceSpec:
     import os
 
     try:
-        cpu = float(os.environ.get("TBE_BOT_CPU") or "0.5")
+        cpu = float(os.environ.get("TBE_BOT_CPU") or "0.25")
     except Exception:
-        cpu = 0.5
+        cpu = 0.25
     try:
-        mem = int(os.environ.get("TBE_BOT_MEMORY_MB") or os.environ.get("TBE_DOCKER_MEMORY") or "256")
+        mem = int(os.environ.get("TBE_BOT_MEMORY_MB") or os.environ.get("TBE_DOCKER_MEMORY") or "128")
     except Exception:
-        mem = 256
+        mem = 128
     try:
-        disk = int(os.environ.get("TBE_BOT_DISK_MB") or "512")
+        disk = int(os.environ.get("TBE_BOT_DISK_MB") or "128")
     except Exception:
         disk = 512
-    return ResourceSpec(cpu=max(0.1, cpu), memory_mb=max(64, mem), disk_mb=max(64, disk))
+    try:
+        from lumen.engine.services.sandbox_runtime.policy import clamp_bot_resources
+        mem, cpu = clamp_bot_resources(memory_mb=mem, cpus=cpu)
+    except Exception:
+        mem, cpu = max(64, min(int(mem), 256)), max(0.1, min(float(cpu), 0.5))
+    return ResourceSpec(cpu=cpu, memory_mb=mem, disk_mb=max(64, disk))
 
 
 def default_resources_for_user(user_id: int) -> ResourceSpec:

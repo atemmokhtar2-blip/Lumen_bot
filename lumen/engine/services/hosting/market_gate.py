@@ -53,6 +53,9 @@ class GateResult:
 
 
 def market_gate_enabled() -> bool:
+    # Production/staging: always enforced (ignore TBE_MARKET_GATE=0)
+    if _env() in {"prod", "production", "staging"}:
+        return True
     if "TBE_MARKET_GATE" in os.environ:
         return _on("TBE_MARKET_GATE", "1")
     return _env() not in {"dev", "development", "local", "test"}

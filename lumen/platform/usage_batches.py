@@ -217,9 +217,11 @@ def _rate_limit_ok(tenant_id: str) -> bool:
         from lumen.platform.rate_limit import get_rate_limiter
         return get_rate_limiter().allow(f"usage_batch:{tenant_id}", limit=INGEST_RPM, window_sec=60.0)
     except Exception:
-        # fail-open only in explicit dev
+        # fail-closed outside explicit dev/test
         env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-        return env in {"dev", "development", "local", "test"}
+        if env in {"dev", "development", "local", "test"}:
+            return True
+        return False
 
 
 class MemoryUsageBatchStore:

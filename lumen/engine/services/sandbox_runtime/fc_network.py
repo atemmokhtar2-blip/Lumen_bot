@@ -316,6 +316,9 @@ def resolve_start_network(vm_id: str, guest_mac: str) -> Tuple[str, str, Optiona
         return static_tap, ns_path, None
 
     if _flag("TBE_FC_ALLOW_NO_NET", "0"):
+        env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+        if env in {"prod", "production", "staging"}:
+            raise RuntimeError("TBE_FC_ALLOW_NO_NET forbidden in production")
         return "", "", None
 
     raise RuntimeError(

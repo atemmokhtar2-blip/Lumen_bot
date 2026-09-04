@@ -42,6 +42,19 @@ class DockerSandboxBackend(SandboxBackend):
         return SandboxProbe(self.name, True, "docker_hardened_ok", self.strength)
 
     def start(self, spec: SandboxSpec) -> SandboxHandle:
+        try:
+            from .strict import is_production
+            if is_production() and (os.environ.get("TBE_ALLOW_WEAK_SANDBOX") or "0").strip().lower() not in {
+                "1", "true", "yes", "on",
+            }:
+                return SandboxHandle(
+                    backend=self.name,
+                    deployment_id="",
+                    status="failed",
+                    message="docker_forbidden_in_production: use Firecracker",
+                )
+        except Exception:
+            pass
         probe = self.probe()
         if not probe.available:
             return SandboxHandle(

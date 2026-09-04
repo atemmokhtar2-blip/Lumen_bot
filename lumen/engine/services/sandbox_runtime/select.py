@@ -191,16 +191,19 @@ def start_permanent_host_bot(
     # Pro users get 512 MB RAM, 0.5 CPU.  Non-Pro get env defaults.
     # On resolution failure, fall back to env defaults (fail-open for resources
     # is acceptable — the user gets LESS than promised, never more).
-    mem_mib = 0
-    vcpus = 0
+    mem_mib = 128
+    vcpus = 1
     try:
         from lumen.hosting.project_manifest import default_resources_for_user
+        from lumen.engine.services.sandbox_runtime.policy import clamp_bot_resources
         _res = default_resources_for_user(int(user_id or 0))
-        mem_mib = int(_res.memory_mb)
-        # 0.5 CPU → 1 vcpu with 50% throttle; for simplicity map cpu*2 rounded up
-        vcpus = max(1, int(_res.cpu * 2 + 0.999))
-    except Exception:
-        pass
+        mem_mib, cpu_f = clamp_bot_resources(memory_mb=_res.memory_mb, cpus=_res.cpu)
+        # Map fractional CPU to vCPU count (ceil), still capped by clamp
+        vcpus = max(1, int(cpu_f + 0.999))
+    except Exception as _rexc:
+        # Fail closed on resource resolution: use hardened defaults, never unbounded
+        mem_mib, cpu_f = 128, 0.25
+        vcpus = 1
 
     spec_kwargs: dict = dict(
         project_path=str(project_path),

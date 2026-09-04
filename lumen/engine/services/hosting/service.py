@@ -249,6 +249,20 @@ class HostingService:
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
+        # Production: refuse lab-only escapes (no net, no seccomp, docker backend, etc.)
+        try:
+            from lumen.engine.services.sandbox_runtime.strict import (
+                assert_no_unsafe_sandbox_flags,
+                assert_firecracker_only_for_hosting,
+            )
+            assert_no_unsafe_sandbox_flags()
+            assert_firecracker_only_for_hosting()
+        except Exception as _st:
+            return HostResult(
+                ok=False,
+                message=f"سياسة العزل الصارمة: {type(_st).__name__}: {_st}",
+            )
+
         # Cost guard: no hosting when balance lifecycle suspends the tenant
         try:
             from lumen.platform.credits.guards import GenerationBlockedError, assert_hosting_allowed
