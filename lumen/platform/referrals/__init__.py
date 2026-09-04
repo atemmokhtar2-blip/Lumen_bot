@@ -2,7 +2,9 @@
 from lumen.platform.referrals.config import (
     REFERRAL_COLLECTION,
     REFERRAL_CREDIT_REASON,
+    REFERRAL_MAX_PER_REFERRER,
     REFERRAL_QUALIFIED_TARGET,
+    REFERRAL_REGISTER_RATE_PER_MIN,
     REFERRAL_REWARD_CREDITS,
     REFERRAL_REWARD_USD,
     REFERRAL_START_PREFIX,
@@ -26,6 +28,8 @@ __all__ = [
     "REFERRAL_REWARD_USD",
     "REFERRAL_REWARD_CREDITS",
     "REFERRAL_CREDIT_REASON",
+    "REFERRAL_MAX_PER_REFERRER",
+    "REFERRAL_REGISTER_RATE_PER_MIN",
     "referral_deep_link_payload",
     "parse_referrer_from_start_payload",
     "bot_username_link",
