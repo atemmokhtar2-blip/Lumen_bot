@@ -84,7 +84,7 @@ def _llm_available() -> bool:
         return False
 
 
-def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
+def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0) -> dict[str, Any]:
     """One agent brain step via model_catalog → select_model → agent_brain.decide.
 
     Returns dict: tool, params, reply, provider, error.
@@ -123,8 +123,31 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
     )
     user = (text or "")[:4000]
     provider = choice.provider
+    _charge_token = None
     try:
-        # Single path for ALL catalog providers (openai/deepseek/anthropic/… + legacy)
+        from lumen.platform.credits.llm_live import (
+            InsufficientCreditsError,
+            bind_charge_context,
+            clear_charge_context,
+            tenant_id_from_user,
+        )
+    except Exception:
+        InsufficientCreditsError = type("InsufficientCreditsError", (Exception,), {})  # type: ignore
+        def bind_charge_context(**kwargs):
+            return None
+        def clear_charge_context(*a, **k):
+            return None
+        def tenant_id_from_user(uid):
+            return f"tg:{int(uid)}" if int(uid or 0) else ""
+    try:
+        _charge_token = bind_charge_context(
+            tenant_id=tenant_id_from_user(user_id),
+            user_id=int(user_id or 0),
+            state_id=f"engine_turn:{int(user_id or 0)}",
+            step=0,
+            call_index=0,
+        )
+        # Metered path: charge context bound → _record_usage deducts
         decision = agent_brain.decide(
             [
                 {"role": "system", "content": system},
@@ -168,7 +191,25 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
                 "model_id": decision.get("model_id") or choice.model_id,
                 "error": str(decision.get("error") or ""),
             }
+    except InsufficientCreditsError as ice:
+        return {
+            "tool": "",
+            "params": {},
+            "reply": "رصيدك غير كافٍ لتغطية تكلفة الذكاء الاصطناعي. اشحن رصيدك ثم أعد المحاولة.",
+            "error": "insufficient_credits",
+            "provider": provider,
+            "needed": getattr(ice, "needed", 0),
+            "available": getattr(ice, "available", 0),
+        }
     except Exception as exc:
+        if type(exc).__name__ == "InsufficientCreditsError":
+            return {
+                "tool": "",
+                "params": {},
+                "reply": "رصيدك غير كافٍ لتغطية تكلفة الذكاء الاصطناعي. اشحن رصيدك ثم أعد المحاولة.",
+                "error": "insufficient_credits",
+                "provider": provider,
+            }
         logger.exception("agent llm call failed provider=%s", provider)
         return {
             "tool": "",
@@ -177,6 +218,11 @@ def _agent_llm_decide(text: str, *, repo_path: str = "") -> dict[str, Any]:
             "error": f"llm:{type(exc).__name__}",
             "provider": provider,
         }
+    finally:
+        try:
+            clear_charge_context(_charge_token)
+        except Exception:
+            pass
 
     obj = agent_brain._extract_json_object(raw) or {}
     obj = agent_brain._extract_json_object(raw) or {}
@@ -291,8 +337,16 @@ def handle_user_turn(
                     "JSON: tool=\"\", reply=الأسئلة فقط."
                 ),
                 repo_path=repo_path,
+                user_id=int(user_id or 0),
             )
             reply = (decision.get("reply") or "").strip()
+            if decision.get("error") == "insufficient_credits":
+                reply = str(
+                    decision.get("reply")
+                    or "رصيدك غير كافٍ لتغطية تكلفة الذكاء الاصطناعي. اشحن رصيدك ثم أعد المحاولة."
+                )
+                state.final_message = reply
+                return EngineTurnResult(ok=False, reply=reply[:4000], action="", state=state, tool="", capability_id="generate_bot")
             if decision.get("error") == "no_llm_key":
                 reply = (
                     "المواصفة ناقصة للتوليد.\n"
@@ -346,7 +400,14 @@ def handle_user_turn(
 
     # 4) Soft intent → agent LLM (GROQ_API_KEYS / GEMINI via model_router) then execute
     if tool in {"chat_or_other", ""}:
-        decision = _agent_llm_decide(text, repo_path=repo_path)
+        decision = _agent_llm_decide(text, repo_path=repo_path, user_id=int(user_id or 0))
+        if decision.get("error") == "insufficient_credits":
+            msg = str(
+                decision.get("reply")
+                or "رصيدك غير كافٍ لتغطية تكلفة الذكاء الاصطناعي. اشحن رصيدك ثم أعد المحاولة."
+            )
+            state.final_message = msg
+            return EngineTurnResult(ok=False, reply=msg[:4000], action="", state=state, tool="", capability_id=cap)
         if decision.get("error") == "no_llm_key":
             msg = (
                 "المحرك لا يجد مفتاح LLM على السيرفر.\n"

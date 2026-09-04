@@ -319,3 +319,45 @@ def test_provider_agent_does_not_override_insufficient(credits_simple, monkeypat
     assert raw["ok"] is False
     assert raw["metadata"].get("stop_reason") == "insufficient_credits"
     assert any("insufficient_credits" in str(e) for e in raw["errors"])
+
+
+def test_engine_turn_binds_charge_context(credits_simple, monkeypatch):
+    """engine_turn LLM path must bind charge context (no free LLM)."""
+    from lumen.engine.services.multi_agent import engine_turn
+    from lumen.platform.credits.llm_live import get_charge_context
+
+    seen = {"bound": False}
+
+    def fake_decide(messages, **kwargs):
+        ctx = get_charge_context()
+        seen["bound"] = bool(ctx and ctx.get("tenant_id") == "tg:42")
+        return {
+            "parse_ok": True,
+            "tool": "",
+            "reply": "مرحبا",
+            "thought": "",
+            "provider": "openai",
+            "model_id": "gpt-4o-mini",
+            "raw": '{"tool":"","reply":"مرحبا"}',
+            "usage": {},
+        }
+
+    monkeypatch.setattr(
+        "lumen.engine.services.cline_runtime.model_router.select_model",
+        lambda task="plan": type(
+            "C",
+            (),
+            {
+                "provider": "openai",
+                "model_id": "gpt-4o-mini",
+                "key_present": lambda self=None: True,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "lumen.engine.services.cline_runtime.agent_brain.decide",
+        fake_decide,
+    )
+    out = engine_turn._agent_llm_decide("hello", user_id=42)
+    assert seen["bound"] is True
+    assert out.get("error") in ("", None) or out.get("reply")
