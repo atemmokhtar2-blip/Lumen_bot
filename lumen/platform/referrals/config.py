@@ -23,6 +23,9 @@ REFERRAL_START_PREFIX = "ref_"
 REFERRAL_QUALIFIED_TARGET = _int_env("REFERRAL_QUALIFIED_TARGET", 50)
 REFERRAL_REWARD_USD = _int_env("REFERRAL_REWARD_USD", 5)
 REFERRAL_REWARD_CREDITS = _int_env("REFERRAL_REWARD_CREDITS", 500)
+REFERRAL_MILESTONE_STEP = _int_env("REFERRAL_MILESTONE_STEP", 10)
+REFERRAL_MILESTONE_CREDITS = _int_env("REFERRAL_MILESTONE_CREDITS", 100)
+REFERRAL_NOTIFY_EVERY = _int_env("REFERRAL_NOTIFY_EVERY", 5)
 REFERRAL_CREDIT_REASON = "referral_bonus"
 REFERRAL_COLLECTION = "referrals"
 REFERRAL_STATS_COLLECTION = "referral_stats"
@@ -97,3 +100,9 @@ def is_referral_dev_environment() -> bool:
             return False
     env = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
     return env in {"dev", "development", "local", "test"}
+
+
+def referral_milestones() -> list[int]:
+    step = max(1, int(REFERRAL_MILESTONE_STEP))
+    target = max(step, int(REFERRAL_QUALIFIED_TARGET))
+    return list(range(step, target + 1, step))
