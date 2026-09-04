@@ -337,11 +337,23 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     if not keys:
         raise RuntimeError("no_gemini_key")
 
-    # Phase-2: catalog/choice model_id is authoritative; env only as soft fallback
-    models = [
-        (model_id or "").strip(),
+    # Catalog model first, then env, then known-working Gemini model ids.
+    # gemini-2.5-pro often 404s on v1beta for many keys → fall through the chain.
+    _FALLBACK_MODELS = [
         (os.getenv("GEMINI_MODEL") or "").strip(),
+        (os.getenv("GEMINI_PRO_MODEL") or "").strip(),
+        (os.getenv("GEMINI_FLASH_MODEL") or "").strip(),
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-preview-05-20",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-latest",
+        "gemini-pro",
     ]
+    models = [(model_id or "").strip()] + _FALLBACK_MODELS
     models = [m for m in models if m]
     seen: set[str] = set()
     models = [m for m in models if not (m in seen or seen.add(m))]
@@ -400,7 +412,8 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
                 continue  # next model (per-model quota bucket)
             if resp.status_code == 404:
                 last_err = RuntimeError(f"gemini_model_404:{model}")
-                continue  # next model
+                logger.warning("gemini model 404, trying next model: %s", model)
+                continue  # next model in fallback chain
             if resp.status_code >= 400:
                 last_err = RuntimeError(
                     f"gemini_http_{resp.status_code}:{(resp.text or '')[:300]}"

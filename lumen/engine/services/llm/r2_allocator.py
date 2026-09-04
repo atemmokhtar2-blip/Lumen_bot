@@ -118,6 +118,8 @@ def difficulty_signal(
 # Preference lists match product model lineup (catalog ids)
 _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "plan": (
+        "groq-fast",
+        "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
         "deepseek-v3",
         "openrouter-auto",
