@@ -54,6 +54,22 @@ async def gate_auth_and_rate(
     except Exception:
         logger.exception("ensure_mongo_user failed")
 
+    # Referral: a real message counts as bot use → may qualify invitee
+    try:
+        if user:
+            from lumen.application.commands.qualify_referral import QualifyReferralCommand
+            from lumen.application.handlers.referral_handlers import handle_qualify_referral
+
+            await asyncio.to_thread(
+                handle_qualify_referral,
+                QualifyReferralCommand(
+                    referred_telegram_id=int(user.id),
+                    event="message",
+                ),
+            )
+    except Exception:
+        logger.debug("referral qualify soft-fail", exc_info=True)
+
     try:
         allowed = await asyncio.to_thread(_rate_limit_ok, int(user.id) if user else 0)
     except Exception:
