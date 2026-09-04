@@ -19,6 +19,37 @@ _mongo_client = None
 _mongo_db = None
 
 
+
+def resolve_mongodb_uri() -> str:
+    """Accept common env names; strip quotes/whitespace.
+
+    Deploy panels often use MONGO_URL / MONGODB_URL instead of MONGODB_URI.
+    """
+    keys = (
+        "MONGODB_URI",
+        "MONGO_URI",
+        "MONGODB_URL",
+        "MONGO_URL",
+        "MONGODB_CONNECTION_STRING",
+    )
+    for key in keys:
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        v = str(raw).strip().strip('"').strip("'")
+        if v:
+            return v
+    # Some hosts put mongodb:// in DATABASE_URL
+    for key in ("DATABASE_URL", "DB_URL"):
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        v = str(raw).strip().strip('"').strip("'")
+        if v.startswith("mongodb"):
+            return v
+    return ""
+
+
 def get_mongo_db():
     """Shared Mongo database handle (same MONGODB_URI / MONGODB_DB as users).
 
@@ -31,9 +62,9 @@ def get_mongo_db():
         from pymongo import MongoClient
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("pymongo is required for MONGODB_URI") from exc
-    uri = (os.getenv("MONGODB_URI") or "").strip()
+    uri = resolve_mongodb_uri()
     if not uri:
-        raise ValueError("MONGODB_URI is required")
+        raise ValueError("MONGODB_URI (or MONGO_URL / MONGODB_URL) is required")
     db_name = (os.getenv("MONGODB_DB") or "lumen").strip()
     timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
     _mongo_client = MongoClient(
@@ -86,7 +117,7 @@ class MongoUserStore:
                 "pymongo is required for MONGODB_URI. pip install pymongo"
             ) from exc
 
-        self.uri = (uri or os.getenv("MONGODB_URI") or "").strip()
+        self.uri = (uri or resolve_mongodb_uri() or "").strip()
         if not self.uri:
             raise ValueError("MONGODB_URI is required for MongoUserStore")
         self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
