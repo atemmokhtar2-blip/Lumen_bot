@@ -14,6 +14,8 @@ Config pricing (credits):
 """
 from __future__ import annotations
 
+import math
+
 import logging
 import os
 import time
@@ -106,32 +108,69 @@ def compute_credits(usage: dict[str, Any]) -> float:
 
 
 def settle_instance(inst: Any, *, tenant_id: str | None = None) -> dict[str, Any]:
-    """Record metering + optional credit debit when instance stops."""
+    """Record metering + credit debit when instance stops.
+
+    ROOT FIX: always resolve tenant (tg:{user_id}), convert fractional host
+    credits to integer credits, deduct via CreditService.deduct_credits with
+    idempotency on instance_id (never call non-existent debit/consume).
+    """
     usage = compute_session_usage(inst)
-    credits = compute_credits(usage)
-    usage["credits"] = credits
+    credits_f = float(compute_credits(usage) or 0.0)
+    amount = int(math.ceil(credits_f)) if credits_f > 0 else 0
+    usage["credits"] = credits_f
+    usage["credits_charged"] = amount
+
+    uid = int(getattr(inst, "user_id", 0) or 0)
+    tid = str(tenant_id or "").strip()
+    if not tid and uid:
+        tid = f"tg:{uid}"
+    usage["tenant_id"] = tid
+
     try:
         from lumen.platform.metering import get_metering
 
         get_metering().record(
-            str(tenant_id or getattr(inst, "user_id", "") or "unknown"),
+            str(tid or uid or "unknown"),
             host_minutes=float(usage["host_minutes"]),
             event="host_session_settle",
         )
     except Exception as exc:
         logger.warning("metering record failed: %s", type(exc).__name__)
-    if credits > 0 and tenant_id:
+
+    if amount > 0 and tid:
         try:
             from lumen.platform.credits import get_credit_service
 
-            # Best-effort debit; services differ by implementation
             svc = get_credit_service()
-            if hasattr(svc, "debit"):
-                svc.debit(tenant_id, credits, reason="host_usage", reference=usage["instance_id"])
-            elif hasattr(svc, "consume"):
-                svc.consume(tenant_id, credits, reason="host_usage")
+            iid = str(usage.get("instance_id") or "host")
+            result = svc.deduct_credits(
+                tid,
+                amount,
+                reason="host_usage",
+                reference_id=iid,
+                idempotency_key=f"host_settle:{tid}:{iid}",
+                metadata={
+                    "host_minutes": usage.get("host_minutes"),
+                    "cpu_core_hours": usage.get("cpu_core_hours"),
+                    "ram_mb_hours": usage.get("ram_mb_hours"),
+                    "credits_float": credits_f,
+                },
+            )
+            usage["credit_result"] = {
+                "ok": bool(getattr(result, "ok", False)),
+                "reason": str(getattr(result, "reason", "") or ""),
+                "balance": int(getattr(getattr(result, "wallet", None), "current_balance", 0) or 0),
+            }
+            # Stop future hosting if balance exhausted
+            if not getattr(result, "ok", False):
+                try:
+                    from lumen.platform.balance_lifecycle import get_balance_lifecycle
+                    get_balance_lifecycle().on_balance_changed(tid)
+                except Exception:
+                    pass
         except Exception as exc:
-            logger.warning("credit debit failed: %s", type(exc).__name__)
+            logger.warning("credit deduct host_usage failed: %s", type(exc).__name__)
+            usage["credit_result"] = {"ok": False, "reason": type(exc).__name__}
     return usage
 
 

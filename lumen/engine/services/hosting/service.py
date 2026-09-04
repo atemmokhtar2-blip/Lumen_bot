@@ -729,7 +729,8 @@ class HostingService:
         inst.pid = None
         try:
             from lumen.engine.services.hosting.usage_billing import settle_instance
-            settle_instance(inst)
+            uid = int(getattr(inst, "user_id", 0) or 0)
+            settle_instance(inst, tenant_id=f"tg:{uid}" if uid else None)
         except Exception:
             pass
         try:

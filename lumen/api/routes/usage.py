@@ -103,3 +103,14 @@ async def list_ratings(request: web.Request) -> web.Response:
     from lumen.platform.rating_engine import get_rating_engine
     rows = get_rating_engine().list_ratings(tenant.tenant_id, limit=limit)
     return web.json_response({"ok": True, "ratings": rows})
+
+
+async def cost_report(request: web.Request) -> web.Response:
+    """GET /v1/usage/cost — developer cost report (LLM + hosting from ledger)."""
+    tenant = require_tenant(request)
+    try:
+        from lumen.platform.credits.usage_report import tenant_usage_report
+        report = tenant_usage_report(tenant.tenant_id, limit=200)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": type(exc).__name__}, status=500)
+    return web.json_response(report)

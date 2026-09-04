@@ -507,6 +507,7 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/projects/{id}/redeploy", projects_host.project_redeploy)
     app.router.add_delete("/projects/{id}", projects_host.project_delete)
     app.router.add_get("/v1/usage", billing.usage)
+    app.router.add_get("/v1/usage/cost", usage.cost_report)
     app.router.add_get("/v1/billing/balance", billing.balance_status)
     app.router.add_get("/v1/invoices", billing.invoices)
     app.router.add_post("/v1/invoices", billing.create_invoice)

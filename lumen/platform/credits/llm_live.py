@@ -272,6 +272,27 @@ def charge_llm_step(
         receipt["reason"] = "zero_usage"
         return receipt
 
+    # Hard daily spend cap (env LUMEN_DAILY_CREDIT_CAP, 0 = unlimited)
+    try:
+        daily_cap = int(os.getenv("LUMEN_DAILY_CREDIT_CAP") or "0")
+    except ValueError:
+        daily_cap = 0
+    if daily_cap > 0:
+        try:
+            spent_today = _tenant_llm_spent_today(tid, credit_service)
+            if spent_today + amount > daily_cap:
+                raise InsufficientCreditsError(
+                    tenant_id=tid,
+                    needed=amount,
+                    available=max(0, daily_cap - spent_today),
+                    step=int(step or 0),
+                    reason="daily_credit_cap",
+                )
+        except InsufficientCreditsError:
+            raise
+        except Exception:
+            logger.debug("daily cap check soft-fail", exc_info=True)
+
     if credit_service is None:
         from lumen.platform.credits import get_credit_service
 
