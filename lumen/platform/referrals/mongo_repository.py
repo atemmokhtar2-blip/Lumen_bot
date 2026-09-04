@@ -45,27 +45,39 @@ def _doc_to_referral(doc: dict[str, Any] | None) -> Optional[Referral]:
 class MongoReferralRepository:
     def __init__(self, uri: str | None = None, *, db_name: str | None = None) -> None:
         try:
-            from pymongo import ASCENDING, MongoClient
             from pymongo.errors import DuplicateKeyError
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("pymongo is required for referrals") from exc
 
         self._DuplicateKeyError = DuplicateKeyError
-        self.uri = (uri or os.getenv("MONGODB_URI") or "").strip()
-        if not self.uri:
-            raise ValueError("MONGODB_URI is required for MongoReferralRepository")
-        self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
-        timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
-        self._client = MongoClient(
-            self.uri,
-            serverSelectionTimeoutMS=timeout,
-            connectTimeoutMS=timeout,
-            retryWrites=True,
-        )
-        self._db = self._client[self.db_name]
+        # Same cluster/db as users/plans (mongo_users.get_mongo_db)
+        if uri or db_name:
+            # Explicit override path (tests)
+            from pymongo import MongoClient
+            self.uri = (uri or os.getenv("MONGODB_URI") or "").strip()
+            if not self.uri:
+                raise ValueError("MONGODB_URI is required for MongoReferralRepository")
+            self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
+            timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
+            self._client = MongoClient(
+                self.uri,
+                serverSelectionTimeoutMS=timeout,
+                connectTimeoutMS=timeout,
+                retryWrites=True,
+            )
+            self._db = self._client[self.db_name]
+        else:
+            from lumen.platform.mongo_users import get_mongo_db
+            self._db = get_mongo_db()
+            self.db_name = str(getattr(self._db, "name", "") or os.getenv("MONGODB_DB") or "lumen")
+            self.uri = (os.getenv("MONGODB_URI") or "").strip()
+            self._client = getattr(self._db, "client", None)
         self.col = self._db[REFERRAL_COLLECTION]
         self.stats = self._db[REFERRAL_STATS_COLLECTION]
-        self.ensure_indexes()
+        try:
+            self.ensure_indexes()
+        except Exception:
+            logger.warning("referral index setup deferred", exc_info=True)
 
     def ensure_indexes(self) -> None:
         from pymongo import ASCENDING
@@ -183,20 +195,17 @@ class MongoReferralRepository:
         )
 
     def stats_for(self, referrer_telegram_id: int) -> ReferralStats:
+        """Always derive counters from referrals collection (source of truth)."""
         rid = int(referrer_telegram_id)
-        doc = self.stats.find_one({"referrer_telegram_id": rid})
-        if doc:
-            return ReferralStats(
-                referrer_telegram_id=rid,
-                total_invited=int(doc.get("total_invited") or 0),
-                qualified_count=int(doc.get("qualified_count") or 0),
-                pending_count=int(doc.get("pending_count") or 0),
-                rejected_count=int(doc.get("rejected_count") or 0),
-                reward_paid=bool(doc.get("reward_paid")),
-                reward_batch_id=doc.get("reward_batch_id"),
-            )
-        # rebuild from referrals if stats missing
-        return self._rebuild_stats(rid)
+        live = self._rebuild_stats(rid)
+        # preserve reward flags from stats doc if present
+        try:
+            doc = self.stats.find_one({"referrer_telegram_id": rid}) or {}
+            live.reward_paid = bool(doc.get("reward_paid"))
+            live.reward_batch_id = doc.get("reward_batch_id")
+        except Exception:
+            pass
+        return live
 
 
     def claim_reward_slot(
