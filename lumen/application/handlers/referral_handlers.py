@@ -84,6 +84,7 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
             return RegisterReferralResult(ok=False, error="register_rate_limited")
 
         ref = repo.create_pending(referrer, referred)
+        logger.info("referral registered referrer_tg=%s referred_tg=%s", referrer, referred)
         return RegisterReferralResult(ok=True, referral=ref)
     except ReferralError as exc:
         return RegisterReferralResult(ok=False, error=str(exc) or type(exc).__name__)
