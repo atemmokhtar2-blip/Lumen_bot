@@ -73,13 +73,28 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     try:
                         if result.ok and not result.already_registered:
                             await message.reply_text(
-                                "مرحباً بك في Lumen — تم تسجيل دعوتك. "
-                                "أرسل أي رسالة للبوت حتى تُحتسب الإحالة للمحيل."
+                                "مرحباً بك في Lumen! تم ربط دعوتك. "
+                                "أرسل أي رسالة أو ابدأ استخدام البوت حتى تُحتسب الإحالة. "
+                                "ملاحظة: فتح الرابط وحده لا يكفي."
                             )
-                        elif not result.ok and result.error == "self_referral_forbidden":
+                        elif result.ok and result.already_registered:
                             await message.reply_text(
-                                "لا يمكنك استخدام رابط الإحالة الخاص بك."
+                                "حسابك مرتبط بدعوة مسبقاً. أكمل استخدام البوت إن لم تُحتسب بعد."
                             )
+                        elif not result.ok:
+                            err = result.error or ""
+                            if err == "self_referral_forbidden":
+                                await message.reply_text(
+                                    "لا يمكنك استخدام رابط الإحالة الخاص بك. استخدم /referral لرابطك."
+                                )
+                            elif err == "register_rate_limited":
+                                await message.reply_text(
+                                    "محاولات كثيرة حالياً — أعد المحاولة بعد دقيقة."
+                                )
+                            elif err == "referrer_invite_cap_reached":
+                                await message.reply_text(
+                                    "هذا المحيل وصل للحد الأقصى من الدعوات."
+                                )
                     except Exception:
                         pass
             except Exception:
@@ -290,10 +305,16 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             get_referral_repository().stats_for, int(user.id)
         )
         remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
+        done = min(int(stats.qualified_count), int(REFERRAL_QUALIFIED_TARGET))
+        target = max(1, int(REFERRAL_QUALIFIED_TARGET))
+        filled = int(round(10 * done / target))
+        bar = ("#" * filled) + ("-" * (10 - filled))
+
         nl = chr(10)
         text = nl.join(
             [
                 "⭐ برنامج إحالة Lumen",
+                "التقدم: [%s] %s/%s" % (bar, done, target),
                 "",
                 "رابط الدعوة الخاص بك:",
                 str(link),
@@ -334,8 +355,9 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
 
 
+
 async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin-only program-wide referral counters."""
+    """Admin-only: program totals + top referrers by qualified bot-users."""
     user = update.effective_user
     message = update.effective_message
     if not message or not user:
@@ -355,21 +377,36 @@ async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             get_referral_repository,
         )
 
-        st = await asyncio.to_thread(get_referral_repository().system_stats)
+        def _load():
+            repo = get_referral_repository()
+            return repo.system_stats(), repo.top_referrers(limit=10)
+
+        st, top = await asyncio.to_thread(_load)
         nl = chr(10)
-        text = nl.join(
-            [
-                "إحصائيات برنامج الإحالة (أدمن)",
-                "",
-                f"• إجمالي الإحالات: {st.get('total_referrals', 0)}",
-                f"• مؤهّلون (استخدموا البوت): {st.get('qualified', 0)}",
-                f"• بانتظار الاستخدام: {st.get('pending', 0)}",
-                f"• مرفوضون: {st.get('rejected', 0)}",
-                f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
-                "",
-                f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} → ${REFERRAL_REWARD_USD}",
-            ]
-        )
-        await message.reply_text(text)
+        lines = [
+            "📊 إحصائيات برنامج الإحالة (أدمن)",
+            "",
+            f"• إجمالي الإحالات: {st.get('total_referrals', 0)}",
+            f"• مؤهّلون (استخدموا البوت): {st.get('qualified', 0)}",
+            f"• بانتظار الاستخدام: {st.get('pending', 0)}",
+            f"• مرفوضون: {st.get('rejected', 0)}",
+            f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
+            "",
+            f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} مستخدم نشط → ${REFERRAL_REWARD_USD}",
+            "",
+            "🏆 أعلى المحيلين (حسب من استخدم البوت):",
+        ]
+        if not top:
+            lines.append("— لا بيانات بعد —")
+        else:
+            for i, row in enumerate(top, 1):
+                paid = "✓" if row.get("reward_paid") else "—"
+                lines.append(
+                    f"{i}. tg:{row.get('referrer_telegram_id')} | "
+                    f"نشط {row.get('qualified_count', 0)} | "
+                    f"دعوة {row.get('total_invited', 0)} | "
+                    f"مكافأة {paid}"
+                )
+        await message.reply_text(nl.join(lines))
     except Exception:
         await message.reply_text("تعذر جلب الإحصائيات.")
