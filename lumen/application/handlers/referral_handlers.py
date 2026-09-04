@@ -18,6 +18,7 @@ from lumen.platform.referrals.config import (
 )
 
 logger = logging.getLogger(__name__)
+_register_hits: dict[int, list[float]] = {}
 _REFERRAL_PROMO_TTL_SEC = 365 * 24 * 3600
 
 
@@ -49,6 +50,22 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         return RegisterReferralResult(ok=False, error="invalid_telegram_id")
     if referrer == referred:
         return RegisterReferralResult(ok=False, error="self_referral_forbidden")
+
+
+    # Soft rate-limit: max N successful register attempts per referrer per minute
+    try:
+        from lumen.platform.referrals.config import REFERRAL_REGISTER_RATE_PER_MIN
+        import time as _time
+        now = _time.time()
+        window = 60.0
+        hits = [t for t in _register_hits.get(referrer, []) if now - t < window]
+        if len(hits) >= int(REFERRAL_REGISTER_RATE_PER_MIN):
+            return RegisterReferralResult(ok=False, error="register_rate_limited")
+        hits.append(now)
+        _register_hits[referrer] = hits
+    except Exception:
+        pass
+
 
     try:
         repo = get_referral_repository()
