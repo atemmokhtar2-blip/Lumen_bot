@@ -447,7 +447,7 @@ class HostingService:
                         ok=False,
                         message=(
                             f"وصلت إلى الحد الأقصى ({_limits.max_bots}) بوت مستضاف لحسابك."
-                            + (" — اشترك في Lumen Pro لاستضافة حتى 3 بوتات." if not _limits.is_pro else "")
+                            + (" — اشترك في Lumen Pro لاستضافة حتى 10 بوتات مجاناً." if not _limits.is_pro else "")
                         ),
                     )
             except Exception:

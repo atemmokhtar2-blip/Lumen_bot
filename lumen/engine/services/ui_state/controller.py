@@ -12,6 +12,7 @@ from .engine_needs import (
     EngineNeed,
 )
 from .models import EngineUiPhase, EngineUiState, UiButton
+from .pro_plan import PRO_PLAN_PRICE_STARS
 from .nav import with_nav as _with_nav
 from .presets import BOT_TYPE_PRESETS, preset_description, preset_label
 from .ui_events import UiEventKind, apply_event, buttons_for_event
@@ -197,7 +198,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     if phase == EngineUiPhase.PRO_PLAN:
         return _with_nav(
             (
-                (UiButton("اشترك — 2000 ⭐", "buy_pro_plan", style="success"),),
+                (UiButton(f"اشترك — {PRO_PLAN_PRICE_STARS} ⭐", "buy_pro_plan", style="success"),),
                 (UiButton("رجوع للرصيد", "open_billing", style="primary"),),
             ),
             phase,

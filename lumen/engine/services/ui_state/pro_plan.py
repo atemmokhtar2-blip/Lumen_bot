@@ -24,19 +24,19 @@ class ProPlanInclude:
 # ── Plan identity ──────────────────────────────────────────────
 PRO_PLAN_ID = "lumen_pro"
 PRO_PLAN_TITLE = "🚀 Lumen Pro"
-PRO_PLAN_PRICE_USD = 25  # $25/month
-PRO_PLAN_PRICE_STARS = 2000  # Telegram Stars (XTR) — user approved 2000
+PRO_PLAN_PRICE_USD = 10  # $10/month
+PRO_PLAN_PRICE_STARS = 800  # Telegram Stars (XTR) — $10 × 80 stars/$ (same ratio as prior 25→2000)
 PRO_PLAN_DURATION_MONTHS = 1  # 1 month subscription
 PRO_PLAN_DURATION_LABEL = "شهر"  # Arabic: "1 month"
-PRO_PLAN_BOT_LIMIT = 3  # up to 3 bots
+PRO_PLAN_BOT_LIMIT = 10  # up to 10 bots while Pro is active
 
 # Telegram invoice payload (must be unique-ish; we embed plan id)
-PRO_PLAN_INVOICE_PAYLOAD = "lumen_pro_monthly_v1"
+PRO_PLAN_INVOICE_PAYLOAD = "lumen_pro_monthly_v2"
 
 # ── Resources (shown in Rich Messages native table) ───────────
 PRO_PLAN_RESOURCES: tuple[ProPlanResource, ...] = (
-    ProPlanResource("💾", "المساحة التخزينية", "2 GB"),
-    ProPlanResource("🧠", "الذاكرة (RAM)", "512 MB"),
+    ProPlanResource("💾", "المساحة التخزينية", "3 GB"),
+    ProPlanResource("🧠", "الذاكرة (RAM)", "2 GB مشتركة"),
     ProPlanResource("⚡", "المعالج (CPU)", "0.5 نواة"),
     ProPlanResource("🤖", "عدد البوتات", f"حتى {PRO_PLAN_BOT_LIMIT} بوتات"),
     ProPlanResource("⏱️", "مدة الاستضافة", PRO_PLAN_DURATION_LABEL),
@@ -45,7 +45,7 @@ PRO_PLAN_RESOURCES: tuple[ProPlanResource, ...] = (
 
 # ── What the subscription includes ─────────────────────────────
 PRO_PLAN_INCLUDES: tuple[ProPlanInclude, ...] = (
-    ProPlanInclude("🏠", "استضافة دائمة للبوتات"),
+    ProPlanInclude("🏠", "استضافة دائمة مجانية للبوتات طوال الاشتراك"),
     ProPlanInclude("🔒", "بيئة معزولة لكل بوت"),
     ProPlanInclude("📊", "مراقبة وحالة لحظية"),
     ProPlanInclude("💰", "رصيد كريديتات شهري"),
@@ -75,8 +75,8 @@ def pro_plan_invoice_description() -> str:
     """
     return (
         f"اشتراك Lumen Pro شهري — "
-        f"2GB تخزين، 512MB RAM، 0.5 CPU، "
-        f"حتى {PRO_PLAN_BOT_LIMIT} بوتات، مدة {PRO_PLAN_DURATION_LABEL}. "
+        f"3GB تخزين، 2GB RAM مشتركة، 0.5 CPU، "
+        f"حتى {PRO_PLAN_BOT_LIMIT} بوتات، استضافة مجانية، مدة {PRO_PLAN_DURATION_LABEL}. "
         f"💾 اشتراكك محفوظ في قاعدة البيانات — يبقى حتى لو مسحت البوت ورجعت."
     )
 

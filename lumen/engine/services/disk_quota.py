@@ -1,6 +1,6 @@
 """Per-user disk usage limits under OUTPUT_DIR/users (disk DoS mitigation).
 
-Pro plan users get 2 GB (2048 MB); non-Pro users get TBE_USER_DISK_MB (default 512 MB).
+Pro plan users get 3 GB (3072 MB); non-Pro users get TBE_USER_DISK_MB (default 512 MB).
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 
 def max_user_bytes(user_id: int = 0) -> int:
-    """Disk quota for a user.  Pro → 2 GB; otherwise TBE_USER_DISK_MB (default 512 MB)."""
-    # Pro plan entitlement (2 GB) takes priority over env default
+    """Disk quota for a user.  Pro → 3 GB; otherwise TBE_USER_DISK_MB (default 512 MB)."""
+    # Pro plan entitlement (3 GB) takes priority over env default
     if user_id:
         try:
             from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
@@ -55,7 +55,7 @@ def enforce_user_quota(user_root: Path, *, extra_bytes: int = 0, user_id: int = 
     """Raise RuntimeError if user sandbox exceeds quota (or would after extra_bytes).
 
     If ``user_id`` is provided, the quota is resolved from the Pro entitlement
-    (2 GB for Pro, else TBE_USER_DISK_MB).
+    (3 GB for Pro, else TBE_USER_DISK_MB).
     """
     used = dir_size_bytes(user_root)
     limit = max_user_bytes(user_id) if user_id else max_user_bytes()
