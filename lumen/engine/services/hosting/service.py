@@ -54,8 +54,8 @@ class HostInstance:
     webhook_public_url: str = ""  # https://…/v1/hooks/telegram/{instance_id}
     internal_port: int = 0  # logical service port for reverse-proxy (not random host map)
     platform: str = "telegram"  # telegram | discord | whatsapp
-    cpu_quota: float = 0.5
-    memory_mb: int = 256
+    cpu_quota: float = 0.25
+    memory_mb: int = 128
     version_ref: str = ""  # git commit sha of project snapshot at deploy
     last_health_at: float = 0.0  # unix time of last successful health probe
 
@@ -310,17 +310,45 @@ class HostingService:
                             "أو اضبط TBE_REQUIRE_DATABASE_URL=0 للتطوير فقط."
                         ),
                     )
-                # Egress network required for container backends; Firecracker uses TAP/netns instead
+                # Egress network required for container backends; Firecracker uses TAP/netns + iptables
                 backend_pref = (os.environ.get("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
                 if backend_pref not in {"firecracker"} and not (
                     os.environ.get("TBE_DOCKER_NETWORK") or ""
                 ).strip():
-                    # auto may still pick firecracker — only hard-require docker net if FC not preferred
                     if backend_pref in {"docker", "dind", "gvisor"}:
                         return HostResult(
                             ok=False,
                             message="TBE_DOCKER_NETWORK مطلوب في الإنتاج (شبكة محدودة الخروج).",
                         )
+                # ROOT FIX: apply host firewall allowlist (Telegram-only by default)
+                # so bots cannot open arbitrary internet even if docker network exists.
+                if backend_pref in {"docker", "dind", "gvisor", "auto"}:
+                    try:
+                        from lumen.engine.services.sandbox_runtime.egress import harden_network
+                        net_report = harden_network(
+                            (os.environ.get("TBE_DOCKER_NETWORK") or "").strip()
+                        )
+                        if not net_report.get("ok"):
+                            strict = (os.environ.get("TBE_EGRESS_STRICT") or "1").strip().lower() in {
+                                "1", "true", "yes", "on",
+                            }
+                            if strict and backend_pref in {"docker", "dind", "gvisor"}:
+                                return HostResult(
+                                    ok=False,
+                                    message=(
+                                        "فشل تفعيل عزل الشبكة (egress allowlist). "
+                                        "الاستضافة مرفوضة حتى تُضبط قواعد iptables."
+                                    ),
+                                )
+                    except Exception as net_exc:
+                        strict = (os.environ.get("TBE_EGRESS_STRICT") or "1").strip().lower() in {
+                            "1", "true", "yes", "on",
+                        }
+                        if strict and backend_pref in {"docker", "dind", "gvisor"}:
+                            return HostResult(
+                                ok=False,
+                                message=f"فشل عزل الشبكة: {type(net_exc).__name__}",
+                            )
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة الاستضافة: {gate_exc}")
 
@@ -625,11 +653,17 @@ class HostingService:
         try:
             from lumen.hosting.project_manifest import default_resources_for_user
             _res = default_resources_for_user(int(user_id or 0))
-            inst.cpu_quota = float(_res.cpu)
-            inst.memory_mb = int(_res.memory_mb)
+            try:
+                from lumen.engine.services.sandbox_runtime.policy import clamp_bot_resources
+                _mm, _cc = clamp_bot_resources(memory_mb=_res.memory_mb, cpus=_res.cpu)
+                inst.cpu_quota = float(_cc)
+                inst.memory_mb = int(_mm)
+            except Exception:
+                inst.cpu_quota = float(_res.cpu)
+                inst.memory_mb = int(_res.memory_mb)
         except Exception:
-            inst.cpu_quota = 0.5
-            inst.memory_mb = 256
+            inst.cpu_quota = 0.25
+            inst.memory_mb = 128
         inst.platform = "telegram"
 
         # Normalize status using known constants

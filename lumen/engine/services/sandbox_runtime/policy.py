@@ -34,9 +34,9 @@ class HardSandboxPolicy:
     require_egress_allowlist: bool = True
     prefer_gvisor: bool = True
     prefer_firecracker: bool = True
-    max_memory: str = "192m"
-    max_cpus: str = "0.4"
-    max_pids: int = 48
+    max_memory: str = "128m"
+    max_cpus: str = "0.25"
+    max_pids: int = 32
     max_lifetime_sec: int = 0
     egress_hosts: FrozenSet[str] = field(default_factory=lambda: frozenset(_DEFAULT_EGRESS_HOSTS))
 
@@ -57,9 +57,9 @@ def load_policy() -> HardSandboxPolicy:
         require_egress_allowlist=_flag("TBE_EGRESS_ALLOWLIST", "1"),
         prefer_gvisor=_flag("TBE_PREFER_GVISOR", "0"),
         prefer_firecracker=_flag("TBE_PREFER_FIRECRACKER", "1"),
-        max_memory=(os.environ.get("TBE_DOCKER_MEMORY") or "192m").strip() or "192m",
-        max_cpus=(os.environ.get("TBE_DOCKER_CPUS") or "0.4").strip() or "0.4",
-        max_pids=int((os.environ.get("TBE_DOCKER_PIDS") or "48").strip() or "48"),
+        max_memory=(os.environ.get("TBE_DOCKER_MEMORY") or "128m").strip() or "128m",
+        max_cpus=(os.environ.get("TBE_DOCKER_CPUS") or "0.25").strip() or "0.25",
+        max_pids=int((os.environ.get("TBE_DOCKER_PIDS") or "32").strip() or "32"),
         max_lifetime_sec=int((os.environ.get("TBE_BOT_MAX_LIFETIME_SEC") or "0").strip() or "0"),
         egress_hosts=frozenset(hosts),
     )
@@ -77,3 +77,46 @@ def assert_network_not_default_bridge(network: str) -> None:
         raise RuntimeError(
             f"policy_violation: network={network!r} forbidden — use dedicated egress network"
         )
+
+
+def clamp_bot_resources(*, memory_mb: int | float = 0, cpus: float = 0.0) -> tuple[int, float]:
+    """Hard ceiling so Pro/entitlements cannot exceed DoS-safe limits.
+
+    Env overrides:
+      TBE_BOT_MAX_MEMORY_MB (default 256)
+      TBE_BOT_MAX_CPUS (default 0.5)
+    Floor:
+      memory >= 64, cpus >= 0.1
+    """
+    try:
+        max_mem = int((os.environ.get("TBE_BOT_MAX_MEMORY_MB") or "256").strip() or "256")
+    except ValueError:
+        max_mem = 256
+    try:
+        max_cpu = float((os.environ.get("TBE_BOT_MAX_CPUS") or "0.5").strip() or "0.5")
+    except ValueError:
+        max_cpu = 0.5
+    try:
+        mem = int(float(memory_mb or 0))
+    except (TypeError, ValueError):
+        mem = 128
+    try:
+        cpu = float(cpus or 0)
+    except (TypeError, ValueError):
+        cpu = 0.25
+    if mem <= 0:
+        mem = 128
+    if cpu <= 0:
+        cpu = 0.25
+    mem = max(64, min(mem, max_mem))
+    cpu = max(0.1, min(cpu, max_cpu))
+    return mem, round(cpu, 3)
+
+
+__all__ = [
+    "HardSandboxPolicy",
+    "load_policy",
+    "assert_no_docker_sock_mount",
+    "assert_network_not_default_bridge",
+    "clamp_bot_resources",
+]

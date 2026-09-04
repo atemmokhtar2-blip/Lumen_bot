@@ -29,6 +29,14 @@ class DockerSandboxBackend(SandboxBackend):
         try:
             net = ensure_egress_network(create_if_missing=True)
             assert_network_not_default_bridge(net)
+            try:
+                from .egress import harden_network
+                harden_network(net)
+            except Exception as _eg:
+                strict = (os.environ.get('TBE_EGRESS_STRICT') or '1').strip().lower() in {'1','true','yes','on'}
+                if strict:
+                    raise RuntimeError(f'egress_harden_failed:{type(_eg).__name__}') from _eg
+
         except Exception as exc:
             return SandboxProbe(self.name, False, str(exc)[:200], self.strength)
         return SandboxProbe(self.name, True, "docker_hardened_ok", self.strength)
@@ -45,6 +53,31 @@ class DockerSandboxBackend(SandboxBackend):
         policy = load_policy()
         net = ensure_egress_network(create_if_missing=True)
         assert_network_not_default_bridge(net)
+        try:
+            from .egress import harden_network
+            report = harden_network(net)
+            if not report.get("ok"):
+                strict = (os.environ.get("TBE_EGRESS_STRICT") or "1").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }
+                if strict:
+                    return SandboxHandle(
+                        backend=self.name,
+                        deployment_id="",
+                        status="failed",
+                        message="egress_harden_failed:" + ",".join(str(x) for x in (report.get("errors") or [])[:4]),
+                    )
+        except Exception as _eg:
+            strict = (os.environ.get("TBE_EGRESS_STRICT") or "1").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if strict:
+                return SandboxHandle(
+                    backend=self.name,
+                    deployment_id="",
+                    status="failed",
+                    message=f"egress_harden_failed:{type(_eg).__name__}",
+                )
         os.environ["TBE_DOCKER_NETWORK"] = net
         sec = seccomp_profile_path()
         if sec and not (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip():
