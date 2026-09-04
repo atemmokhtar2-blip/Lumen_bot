@@ -90,6 +90,9 @@ _ACTION_SHORT: dict[str, str] = {
     "show_more_plans": "smp",
     "view_pro_plan": "vpp",
     "buy_pro_plan": "bpp",
+    "open_settings": "os",
+    "open_referral": "orf",
+    "nav_back": "nb",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
 
