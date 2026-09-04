@@ -18,32 +18,8 @@ from .session_store import get_session_store
 async def _qualify_bot_use(
     context: ContextTypes.DEFAULT_TYPE, user_id: int, event: str
 ) -> None:
-    """Mark invitee as bot-user when they actually use the bot (not bare /start ref_)."""
-    try:
-        from lumen.application.commands.qualify_referral import QualifyReferralCommand
-        from lumen.application.handlers.referral_handlers import handle_qualify_referral
-
-        qres = await asyncio.to_thread(
-            handle_qualify_referral,
-            QualifyReferralCommand(
-                referred_telegram_id=int(user_id),
-                event=str(event or "message"),
-            ),
-        )
-        if (
-            qres
-            and getattr(qres, "notify_referrer_id", 0)
-            and getattr(qres, "notify_text", "")
-        ):
-            try:
-                await context.bot.send_message(
-                    chat_id=int(qres.notify_referrer_id),
-                    text=str(qres.notify_text)[:3500],
-                )
-            except Exception:
-                pass
-    except Exception:
-        pass
+    from lumen.bot.referral_hooks import qualify_bot_use
+    await qualify_bot_use(context, user_id, event)
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
