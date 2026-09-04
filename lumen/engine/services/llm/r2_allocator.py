@@ -1,12 +1,11 @@
-"""R2-Reasoner-style local allocator (decompose + allocate).
+"""R2-Reasoner-style local allocator — decompose step + score catalog models.
 
-Not a research-code import — a production-thin version of the idea:
-  1) Decompose the current agent step into a kind: plan | code | repair | critique
-  2) Score catalog models for that kind (keys present only)
-  3) Pick the best score
+Production path when Microsoft Foundry Model Router is not configured:
+  1. Decompose (task, goal, findings, files) → plan | code | repair | critique
+  2. Score only models with live keys from model_catalog
+  3. Pick max score (preference + strength + cost + role + difficulty signal)
 
-Foundry Model Router remains production primary when configured; this module
-runs when Foundry is unavailable or CLINE_ROUTER=local|catalog.
+Foundry remains first when CLINE_ROUTER=auto|foundry and Azure is configured.
 """
 from __future__ import annotations
 
@@ -34,6 +33,11 @@ class AllocateResult:
     difficulty_signal: dict[str, Any]
 
 
+def router_mode() -> str:
+    """CLINE_ROUTER: auto | foundry | local | catalog | r2."""
+    return (os.getenv("CLINE_ROUTER") or "auto").strip().lower()
+
+
 def decompose_step(
     *,
     task: str = "build",
@@ -41,9 +45,14 @@ def decompose_step(
     features: list | None = None,
     findings_count: int = 0,
     file_count: int = 0,
+    last_tool: str = "",
+    soft_parse_fail: bool = False,
 ) -> StepKind:
-    """Light decomposer: task + goal + size → step kind."""
+    """Map context → step kind for this agent turn."""
     task_l = (task or "build").strip().lower()
+    tool_l = (last_tool or "").strip().lower()
+    g = (goal or "").lower()
+
     if task_l in {"plan", "planner", "architect"}:
         return "plan"
     if task_l in {"critique", "critic", "review", "qa"}:
@@ -51,20 +60,25 @@ def decompose_step(
     if task_l in {"repair", "fix"}:
         return "repair"
 
-    g = (goal or "").lower()
-    # Explicit cues in the goal text
-    if re.search(r"\b(critique|review|qa|audit|افحص|راجع)\b", g):
-        return "critique"
-    if re.search(r"\b(repair|fix|bug|error|كسر|أصلح|صلح)\b", g) or findings_count >= 3:
+    if tool_l in {"read_file", "list_files", "search_files"} and file_count == 0:
+        return "plan"
+    if tool_l in {"run_command", "apply_patch"} and findings_count > 0:
         return "repair"
-    if re.search(r"\b(architect|design|plan|خط[ةه]|صم[مم])\b", g) and file_count == 0:
+    if soft_parse_fail:
+        return "repair"
+
+    if re.search(r"\b(critique|review|qa|audit|افحص|راجع|تقييم)\b", g):
+        return "critique"
+    if findings_count >= 2 or re.search(r"\b(repair|fix|bug|error|كسر|أصلح|صلح|فشل)\b", g):
+        return "repair"
+    if file_count == 0 and re.search(r"\b(architect|design|plan|خط[ةه]|صم[مم]|مواصفات)\b", g):
         return "plan"
     if findings_count >= 1:
         return "repair"
     return "code"
 
 
-def _difficulty_signal(
+def difficulty_signal(
     *,
     step_kind: StepKind,
     goal: str,
@@ -72,7 +86,7 @@ def _difficulty_signal(
     findings_count: int,
     file_count: int,
 ) -> dict[str, Any]:
-    """Optional signal only — never the final model decision by itself."""
+    """Optional signal for scoring + LoopGovernor — never sole routing decision."""
     score = 0
     reasons: list[str] = []
     n_feat = len(features or [])
@@ -97,16 +111,11 @@ def _difficulty_signal(
     if len(goal or "") > 1200:
         score += 1
         reasons.append("long_goal")
-    if score >= 5:
-        band = "hard"
-    elif score >= 2:
-        band = "medium"
-    else:
-        band = "easy"
+    band = "hard" if score >= 5 else "medium" if score >= 2 else "easy"
     return {"score": score, "band": band, "reasons": reasons, "step_kind": step_kind}
 
 
-# Preferred catalog ids per step kind (order = preference within score ties)
+# Preference lists match product model lineup (catalog ids)
 _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "plan": (
         "gemini-2.5-pro",
@@ -114,6 +123,7 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
         "openrouter-auto",
         "openai-gpt-4o-mini",
         "deepseek-v4-flash",
+        "claude-3-haiku",
     ),
     "critique": (
         "claude-3-haiku",
@@ -128,6 +138,7 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
         "deepseek-v4-flash",
         "openai-gpt-4o-mini",
         "groq-fast",
+        "openrouter-auto",
     ),
     "code": (
         "deepseek-v4-flash",
@@ -136,45 +147,39 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
         "openai-gpt-4o-mini",
         "deepseek-v3",
         "openrouter-auto",
+        "claude-3-haiku",
     ),
 }
 
 
 def _score_model(m, step_kind: StepKind, signal: dict[str, Any]) -> tuple[float, list[str]]:
-    """Higher is better. Mix preference rank, strength, cost, difficulty band."""
     reasons: list[str] = []
     prefer = _KIND_PREFER.get(step_kind) or ()
     if m.id in prefer:
         rank = prefer.index(m.id)
-        # first prefer → +50, then -3 per step
         pref_score = 50.0 - 3.0 * rank
         reasons.append(f"prefer_rank={rank}")
     else:
-        # not in prefer list — still usable via roles
-        pref_score = 5.0
+        pref_score = 4.0
         reasons.append("not_in_prefer")
 
-    # strength 1-5 → 0-20
     strength_s = float(m.strength) * 4.0
     reasons.append(f"strength={m.strength}")
 
-    # cost: lower cost_tier better for code/easy; for plan/hard prefer quality
     band = str(signal.get("band") or "easy")
     if step_kind in {"plan", "critique"} or band == "hard":
-        cost_s = float(6 - int(m.cost_tier)) * 2.0  # prefer stronger even if costlier
+        cost_s = float(6 - int(m.cost_tier)) * 2.0
     else:
-        cost_s = float(6 - int(m.cost_tier)) * 4.0  # prefer cheap for fast code
+        cost_s = float(6 - int(m.cost_tier)) * 4.0
     reasons.append(f"cost_tier={m.cost_tier}")
 
-    # role match
     role_map = {"plan": "plan", "critique": "critique", "repair": "reason", "code": "build"}
     need = role_map.get(step_kind, "build")
-    role_s = 10.0 if need in (m.roles or ()) else 0.0
+    role_s = 12.0 if need in (m.roles or ()) else (6.0 if "fast" in (m.roles or ()) and step_kind == "code" else 0.0)
     if role_s:
-        reasons.append(f"role={need}")
+        reasons.append(f"role_match={need}")
 
-    total = pref_score + strength_s + cost_s + role_s
-    return total, reasons
+    return pref_score + strength_s + cost_s + role_s, reasons
 
 
 def allocate(
@@ -184,9 +189,10 @@ def allocate(
     features: list | None = None,
     findings_count: int = 0,
     file_count: int = 0,
+    last_tool: str = "",
+    soft_parse_fail: bool = False,
 ) -> AllocateResult | None:
-    """Pick best available catalog model for this step."""
-    from lumen.engine.services.llm.model_catalog import available_models, CATALOG
+    from lumen.engine.services.llm.model_catalog import available_models
 
     step_kind = decompose_step(
         task=task,
@@ -194,18 +200,18 @@ def allocate(
         features=features,
         findings_count=findings_count,
         file_count=file_count,
+        last_tool=last_tool,
+        soft_parse_fail=soft_parse_fail,
     )
-    signal = _difficulty_signal(
+    signal = difficulty_signal(
         step_kind=step_kind,
         goal=goal,
         features=features,
         findings_count=findings_count,
         file_count=file_count,
     )
-
     pool = [m for m in available_models() if m.key_present()]
     if not pool:
-        # nothing with keys
         return None
 
     ranked: list[tuple[float, Any, tuple[str, ...]]] = []
@@ -215,12 +221,13 @@ def allocate(
     ranked.sort(key=lambda x: -x[0])
     best_score, best, best_reasons = ranked[0]
     logger.info(
-        "r2_allocator kind=%s band=%s pick=%s/%s score=%.1f",
+        "r2_allocator kind=%s band=%s pick=%s/%s score=%.1f keys=%d",
         step_kind,
         signal.get("band"),
         best.provider,
         best.model_id,
         best_score,
+        len(pool),
     )
     return AllocateResult(
         catalog_id=best.id,
@@ -235,15 +242,11 @@ def allocate(
     )
 
 
-def router_mode() -> str:
-    """CLINE_ROUTER: foundry | local | auto (default auto)."""
-    return (os.getenv("CLINE_ROUTER") or "auto").strip().lower()
-
-
 __all__ = [
     "StepKind",
     "AllocateResult",
     "decompose_step",
+    "difficulty_signal",
     "allocate",
     "router_mode",
 ]

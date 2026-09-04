@@ -341,6 +341,8 @@ def select_model_for_goal(
     features: list | None = None,
     findings_count: int = 0,
     file_count: int = 0,
+    last_tool: str = "",
+    soft_parse_fail: bool = False,
 ) -> tuple[ModelChoice, dict[str, Any]]:
     """Foundry first (if configured), else R2-style local allocator over catalog.
 
@@ -408,6 +410,8 @@ def select_model_for_goal(
                 features=features,
                 findings_count=findings_count,
                 file_count=file_count,
+                last_tool=last_tool,
+                soft_parse_fail=soft_parse_fail,
             )
             if result is not None:
                 choice = ModelChoice(

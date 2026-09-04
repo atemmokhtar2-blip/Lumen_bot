@@ -526,12 +526,23 @@ def run_agent(
     if isinstance(ir_dict, dict):
         findings_n = len(ir_dict.get("findings") or (ir_dict.get("metadata") or {}).get("findings") or [])
         feats = list(ir_dict.get("preferred_keys") or ir_dict.get("features_requested") or [])
+    # Workspace size feeds R2 allocator difficulty signal
+    try:
+        file_count = sum(1 for _ in work.rglob("*") if _.is_file()) if work.is_dir() else 0
+    except Exception:
+        file_count = 0
     choice, diff = select_model_for_goal(
         task=task,
         goal=goal or "",
         features=feats,
         findings_count=findings_n,
+        file_count=file_count,
     )
+    state.metadata["router"] = {
+        "provider": choice.provider,
+        "model_id": choice.model_id,
+        "meta": diff,
+    }
     state.metadata["task_difficulty"] = diff
     if choice.provider == "none":
         state.stop_reason = "no_model"
@@ -795,6 +806,50 @@ def run_agent(
             prompt_max_chars=_pchars,
             task=task,
         )
+        # Per-step R2 reallocation (local router only) — Foundry routes each prompt itself
+        try:
+            if (diff or {}).get("router") == "r2_allocator" or (
+                (os.getenv("CLINE_ROUTER") or "auto").strip().lower() in {"local", "r2", "catalog"}
+            ):
+                last_tool = str(decision.get("tool") or "")
+                soft = bool(decision.get("soft_parse_fail"))
+                new_choice, new_meta = select_model_for_goal(
+                    task=task,
+                    goal=goal or "",
+                    features=feats,
+                    findings_count=findings_n,
+                    file_count=file_count,
+                    last_tool=last_tool,
+                    soft_parse_fail=soft,
+                )
+                if new_choice.provider != "none" and (
+                    new_choice.provider != choice.provider or new_choice.model_id != choice.model_id
+                ):
+                    logger.info(
+                        "r2 reallocate %s/%s → %s/%s kind=%s",
+                        choice.provider,
+                        choice.model_id,
+                        new_choice.provider,
+                        new_choice.model_id,
+                        (new_meta or {}).get("step_kind"),
+                    )
+                    choice = new_choice
+                    diff = new_meta
+                    state.metadata["router"] = {
+                        "provider": choice.provider,
+                        "model_id": choice.model_id,
+                        "meta": diff,
+                        "reallocated_at_step": i,
+                    }
+        except Exception:
+            logger.debug("r2 reallocate skipped", exc_info=True)
+        if decision.get("underlying_model") or decision.get("foundry_mode"):
+            state.metadata["last_foundry"] = {
+                "underlying_model": decision.get("underlying_model"),
+                "mode": decision.get("foundry_mode"),
+                "deployment": decision.get("foundry_deployment"),
+                "step": i,
+            }
         _emit_progress({
             "phase": "decided",
             "step": i,
@@ -803,6 +858,8 @@ def run_agent(
             "thought": str(decision.get("thought") or "")[:160],
             "detail": "اتخذ قرار الخطوة",
             "files_written": len(state.files_written or []),
+            "model": decision.get("underlying_model") or decision.get("model_id") or choice.model_id,
+            "provider": decision.get("provider") or choice.provider,
         })
         # Phase A cost + Governor decide note
         try:
