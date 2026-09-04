@@ -329,6 +329,28 @@ class MongoReferralRepository:
         return stats
 
 
+
+    def system_stats(self) -> dict[str, int]:
+        """Aggregate program-wide counters for admin /referral_stats."""
+        total = int(self.col.count_documents({}))
+        qualified = int(
+            self.col.count_documents({"status": ReferralStatus.QUALIFIED.value})
+        )
+        pending = int(
+            self.col.count_documents({"status": ReferralStatus.PENDING.value})
+        )
+        rejected = int(
+            self.col.count_documents({"status": ReferralStatus.REJECTED.value})
+        )
+        rewards_paid = int(self.stats.count_documents({"reward_paid": True}))
+        return {
+            "total_referrals": total,
+            "qualified": qualified,
+            "pending": pending,
+            "rejected": rejected,
+            "rewards_paid": rewards_paid,
+        }
+
 class MemoryReferralRepository:
     """In-process store for unit tests (same behavioural surface)."""
 
@@ -422,6 +444,17 @@ class MemoryReferralRepository:
     ) -> ReferralStats:
         self._reward_paid[int(referrer_telegram_id)] = (True, str(batch_id))
         return self.stats_for(referrer_telegram_id)
+
+    def system_stats(self) -> dict[str, int]:
+        rows = list(self._by_referred.values())
+        rewards = sum(1 for paid, _ in self._reward_paid.values() if paid)
+        return {
+            "total_referrals": len(rows),
+            "qualified": sum(1 for r in rows if r.is_countable()),
+            "pending": sum(1 for r in rows if r.status is ReferralStatus.PENDING),
+            "rejected": sum(1 for r in rows if r.status is ReferralStatus.REJECTED),
+            "rewards_paid": int(rewards),
+        }
 
 
 _repo: MongoReferralRepository | MemoryReferralRepository | None = None
