@@ -90,6 +90,9 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         return RegisterReferralResult(ok=False, error=str(exc) or type(exc).__name__)
     except RuntimeError as exc:
         logger.error("register_referral backend: %s", exc)
+        msg = str(exc) or ""
+        if "mongo_init_failed" in msg or "Mongo URI missing" in msg or "MONGODB" in msg:
+            return RegisterReferralResult(ok=False, error="referral_backend_unavailable")
         return RegisterReferralResult(ok=False, error="referral_backend_unavailable")
     except Exception as exc:
         logger.warning("register_referral failed: %s", type(exc).__name__)
