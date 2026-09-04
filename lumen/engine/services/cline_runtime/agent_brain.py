@@ -73,7 +73,7 @@ def _record_usage(provider: str, model_id: str, body: dict | None = None, *, pro
                 usage["credit_charge"] = receipt
                 _LAST_CALL_USAGE = usage
     except Exception as exc:
-        # Re-raise billing stop only; never hide InsufficientCreditsError
+        # Never hide InsufficientCreditsError
         try:
             from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
             if isinstance(exc, _ICE):
@@ -82,6 +82,16 @@ def _record_usage(provider: str, model_id: str, body: dict | None = None, *, pro
             pass
         if type(exc).__name__ == "InsufficientCreditsError":
             raise
+        # Fail-closed when a charge context is bound: cannot safely give free LLM
+        try:
+            from lumen.platform.credits.llm_live import get_charge_context
+            if get_charge_context():
+                logger.error("llm billing unavailable under bound context: %s", type(exc).__name__)
+                raise RuntimeError(f"llm_billing_unavailable:{type(exc).__name__}") from exc
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
         logger.debug("live charge after record_usage non-fatal: %s", type(exc).__name__)
 
 

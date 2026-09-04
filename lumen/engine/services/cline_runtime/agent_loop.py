@@ -864,6 +864,24 @@ def run_agent(
             except Exception:
                 pass
             break
+        except RuntimeError as _re:
+            if "llm_billing_unavailable" not in str(_re):
+                raise
+            state.ok = False
+            state.stop_reason = "llm_billing_unavailable"
+            state.errors.append(f"llm_billing_unavailable:{_re}")
+            _emit_progress({
+                "phase": "stopped",
+                "step": i,
+                "limit": limit,
+                "detail": "توقف: نظام الفوترة غير متاح",
+                "stop_reason": "llm_billing_unavailable",
+            })
+            try:
+                clear_charge_context(_charge_token)
+            except Exception:
+                pass
+            break
         finally:
             try:
                 clear_charge_context(_charge_token)

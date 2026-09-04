@@ -258,7 +258,14 @@ def charge_llm_step(
         receipt["reason"] = "no_tenant"
         return receipt
 
-    amount = credits_for_llm_usage(usage, credit_service=credit_service)
+    # Ensure model identity is on the usage dict for model-aware USD pricing
+    usage_m = dict(usage or {})
+    if provider and not usage_m.get("provider"):
+        usage_m["provider"] = provider
+    if model_id and not usage_m.get("model_id"):
+        usage_m["model_id"] = model_id
+
+    amount = credits_for_llm_usage(usage_m, credit_service=credit_service)
     receipt["credits"] = amount
     if amount <= 0:
         receipt["skipped"] = True
@@ -277,12 +284,12 @@ def charge_llm_step(
         idem = idem[:180]
 
     meta = {
-        "provider": str(provider or ""),
-        "model_id": str(model_id or ""),
+        "provider": str(provider or usage_m.get("provider") or ""),
+        "model_id": str(model_id or usage_m.get("model_id") or ""),
         "step": int(step or 0),
         "call_index": int(call_index or 0),
         "usage": {
-            k: usage.get(k)
+            k: usage_m.get(k)
             for k in (
                 "prompt_tokens",
                 "completion_tokens",
@@ -292,9 +299,15 @@ def charge_llm_step(
                 "provider",
                 "model_id",
             )
-            if isinstance(usage, dict) and usage.get(k) is not None
+            if usage_m.get(k) is not None
         },
+        "usd_estimate": None,
     }
+    try:
+        from lumen.engine.services.evaluation.cost_model import estimate_cost_usd
+        meta["usd_estimate"] = float(estimate_cost_usd(usage_m) or 0.0)
+    except Exception:
+        pass
 
     result = credit_service.deduct_credits(
         tid,

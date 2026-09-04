@@ -293,3 +293,29 @@ def test_agent_loop_stops_when_balance_runs_out(credits_simple, monkeypatch):
     assert state.stop_reason == "insufficient_credits"
     assert state.ok is False
     assert call_count["n"] <= 3
+
+
+def test_provider_agent_does_not_override_insufficient(credits_simple, monkeypatch, tmp_path):
+    """Acceptance must NOT promote insufficient_credits to ok=True."""
+    from lumen.engine.services.cline_runtime.agent_state import AgentState
+    from lumen.engine.services.cline_runtime import provider_agent
+
+    def fake_run_agent(**kwargs):
+        st = AgentState(work_dir=str(tmp_path), goal="x")
+        st.ok = False
+        st.stop_reason = "insufficient_credits"
+        st.errors = ["insufficient_credits:needed=10:available=0:step=2"]
+        st.files_written = ["main.py"]  # files exist — old bug promoted this to ok
+        (tmp_path / "main.py").write_text("print(1)\n", encoding="utf-8")
+        return st
+
+    monkeypatch.setattr(provider_agent, "run_agent", fake_run_agent)
+    monkeypatch.setattr(
+        "lumen.engine.services.cline_runtime.agent_acceptance.check_agent_project",
+        lambda *a, **k: {"ok": True, "missing": []},
+    )
+
+    raw = provider_agent.build({"user_id": 1, "request": "bot"}, str(tmp_path))
+    assert raw["ok"] is False
+    assert raw["metadata"].get("stop_reason") == "insufficient_credits"
+    assert any("insufficient_credits" in str(e) for e in raw["errors"])

@@ -215,10 +215,16 @@ class BuilderAgent(Agent):
             return state
 
         success = bool(getattr(result, "success", False))
-        state.build_success = success
         path = getattr(result, "project_path", None) or getattr(result, "output_dir", None) or ""
         state.generated_path = str(path or "")
         errs = list(getattr(result, "errors", None) or [])
+        meta = dict(getattr(result, "metadata", None) or {})
+        stop_r = str(meta.get("stop_reason") or "")
+        if stop_r == "insufficient_credits" or any("insufficient_credits" in str(e) for e in errs):
+            success = False
+            if not any("insufficient_credits" in str(e) for e in errs):
+                errs = ["insufficient_credits"] + list(errs)
+        state.build_success = success
         state.build_errors = [str(e)[:200] for e in errs[:20]]
         meta = dict(getattr(result, "metadata", None) or {})
         state.extensions["worker_engine"] = meta.get("engine") or "cline"

@@ -72,14 +72,27 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
         if not isinstance(acc, dict):
             acc = check_agent_project(work, goal=goal)
         state.metadata["acceptance"] = acc
-        if state.ok and not acc.get("ok"):
+        _hard_stops = {
+            "insufficient_credits",
+            "cancelled_by_user",
+            "blocked_by_guardrails",
+            "llm_billing_unavailable",
+        }
+        if str(state.stop_reason or "") in _hard_stops:
+            # Never promote billing/cancel/guard failures to success
+            state.ok = False
+            if state.stop_reason == "insufficient_credits" and not any(
+                "insufficient_credits" in str(e) for e in (state.errors or [])
+            ):
+                state.errors.insert(0, "insufficient_credits")
+        elif state.ok and not acc.get("ok"):
             state.ok = False
             state.stop_reason = state.stop_reason or "acceptance_failed"
             state.errors.append(
                 "acceptance_failed:" + ",".join(str(x) for x in (acc.get("missing") or [])[:8])
             )
         elif not state.ok and acc.get("ok") and (state.files_written or list(work.rglob("*.py"))):
-            # Built enough to accept even if loop stop_reason was soft
+            # Soft stops only (max_steps, time budget, etc.)
             state.ok = True
             state.stop_reason = state.stop_reason or "completed_by_acceptance"
     except Exception as acc_exc:
