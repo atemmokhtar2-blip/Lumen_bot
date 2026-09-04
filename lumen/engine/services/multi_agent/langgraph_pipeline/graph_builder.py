@@ -377,6 +377,7 @@ def _make_builder(registry: Any, board: Any):
             "spec_request": base_goal,
             "preferred_keys": list(state.preferred_keys or []),
             "user_request": state.user_text,
+            "user_id": int(getattr(state, "user_id", 0) or 0),
             "metadata": dict(state.strict_spec or {}),
         }
 
@@ -431,6 +432,7 @@ def _make_builder(registry: Any, board: Any):
                 ir_hint=ir_hint,
                 repair=bool((state.extensions or {}).get("repair_mode")),
                 constraints=_constraints,
+                user_id=int(getattr(state, "user_id", 0) or 0),
             )
             # Merge isolation → work for declared task files (worktree or copy)
             if use_iso and _wt_session is not None:
@@ -617,6 +619,8 @@ def _make_builder(registry: Any, board: Any):
                 goal=state.user_text or state.spec_request or "",
                 task_brief=brief,
                 repair=True,
+                user_id=int(getattr(state, "user_id", 0) or 0),
+                ir_hint={"user_id": int(getattr(state, "user_id", 0) or 0)},
             )
             state.extensions["last_repair_session"] = {
                 "ok": result.get("ok"),

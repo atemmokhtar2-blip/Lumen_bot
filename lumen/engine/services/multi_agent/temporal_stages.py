@@ -139,7 +139,9 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
             ir_hint={
                 "spec_request": agent.spec_request,
                 "preferred_keys": agent.preferred_keys,
+                "user_id": int(getattr(agent, "user_id", 0) or 0),
             },
+            user_id=int(getattr(agent, "user_id", 0) or 0),
         )
         agent.generated_path = str(work)
         agent.build_success = bool(result.get("ok"))
@@ -200,11 +202,13 @@ def stage_work(state: dict[str, Any]) -> dict[str, Any]:
                 ir_hint={
                     "spec_request": agent.spec_request,
                     "preferred_keys": agent.preferred_keys,
+                    "user_id": int(getattr(agent, "user_id", 0) or 0),
                 },
                 constraints=list(
                     ((agent.extensions or {}).get("execution_plan") or {}).get("constraints")
                     or []
                 )[:12],
+                user_id=int(getattr(agent, "user_id", 0) or 0),
             )
             if session.isolated:
                 merge_task_workspace(session, owned_files=files, strict=True)

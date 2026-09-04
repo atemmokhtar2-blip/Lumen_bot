@@ -149,6 +149,17 @@ async def run_guided_generation(
     try:
         from lumen.bot.generation_flow import deliver_generation_result
 
+        try:
+            _m = dict(getattr(result, "metadata", None) or {})
+            _prov = str(_m.get("provider") or (_m.get("router") or {}).get("provider") or "")
+            _mid = str(_m.get("model_id") or (_m.get("router") or {}).get("model_id") or "")
+            if _prov or _mid:
+                await safe_edit_text(
+                    status_msg,
+                    f"✅ تم التوليد\n🧠 {'/'.join(x for x in (_prov, _mid) if x)}\nجاري التحضير…",
+                )
+        except Exception:
+            pass
         await deliver_generation_result(
             message=message,
             status_msg=status_msg,

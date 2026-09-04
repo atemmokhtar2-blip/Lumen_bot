@@ -178,6 +178,7 @@ def run_coding_session(
     acceptance: list[str] | None = None,
     target_files: list[str] | None = None,
     constraints: list[str] | None = None,
+    user_id: int = 0,
 ) -> dict[str, Any]:
     """Run official ``cline_runtime.agent_loop.run_agent`` with full context stack."""
     work = Path(work_dir)
@@ -218,6 +219,13 @@ def run_coding_session(
     os.environ["CLINE_AGENT_MAX_STEPS"] = str(steps)
 
     hint = dict(ir_hint or {})
+    # E2E cancel: agent_loop polls is_cancelled(user_id)
+    try:
+        uid = int(user_id or hint.get("user_id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid:
+        hint["user_id"] = uid
     meta = dict(hint.get("metadata") or {})
     meta["pre_read_files"] = list(dict.fromkeys(
         list(meta.get("pre_read_files") or []) + list(wctx.get("pre_read_files") or [])
@@ -276,6 +284,7 @@ def run_coding_session(
             acc_rep = {"ok": False, "error": type(_acc_exc).__name__}
             ok = False
 
+        router = (getattr(state, "metadata", None) or {}).get("router") or {}
         return {
             "ok": ok,
             "path": str(work),
@@ -288,6 +297,11 @@ def run_coding_session(
             "acceptance_report": acc_rep,
             "context_errors": list(wctx.get("errors") or []),
             "engine": "cline_agent_loop+layered_context+acceptance",
+            "router": router,
+            "provider": (router or {}).get("provider"),
+            "model_id": (router or {}).get("model_id"),
+            "user_id": int(hint.get("user_id") or 0),
+            "agent_metadata": dict(getattr(state, "metadata", None) or {}),
         }
     except Exception as exc:
         logger.exception("run_coding_session failed")
