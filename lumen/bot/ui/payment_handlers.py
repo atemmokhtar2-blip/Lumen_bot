@@ -98,9 +98,27 @@ async def handle_successful_payment(update, context) -> None:
     if pro_record:
         try:
             from lumen.bot.ui.subscription_store import write_subscription
-            write_subscription(uid, pro_record)
+            ok_write = write_subscription(uid, pro_record)
+            if not ok_write:
+                logger.error("subscription_store write returned False uid=%s", uid)
+                try:
+                    await msg.reply_text(
+                        "تم استلام الدفع، لكن تعذر حفظ الاشتراك الآن. "
+                        "تواصل مع الدعم مع رقم العملية وسنفعّله فورًا."
+                    )
+                except Exception:
+                    pass
+                return
         except Exception:
             logger.error("subscription_store write FAILED uid=%s", uid, exc_info=True)
+            try:
+                await msg.reply_text(
+                    "تم استلام الدفع، لكن تعذر حفظ الاشتراك الآن. "
+                    "تواصل مع الدعم مع رقم العملية وسنفعّله فورًا."
+                )
+            except Exception:
+                pass
+            return
 
     # Also persist the full session to Redis (secondary, best-effort)
     try:
@@ -116,7 +134,7 @@ async def handle_successful_payment(update, context) -> None:
             "\U0001F680 \u0627\u0633\u062a\u0645\u062a\u0639 \u0628\u0640:\n"
             "\u2022 3 GB \u062a\u062e\u0632\u064a\u0646\n"
             "\u2022 2 GB RAM \u0645\u0634\u062a\u0631\u0643\u0629\n"
-            "\u2022 0.5 CPU\n"
+            "\u2022 0.25 CPU\n"
             "\u2022 \u062d\u062a\u0649 10 \u0628\u0648\u062a\u0627\u062a + \u0627\u0633\u062a\u0636\u0627\u0641\u0629 \u0645\u062c\u0627\u0646\u064a\u0629\n"
             "\u2022 \u0645\u062f\u0629: \u0634\u0647\u0631\n\n"
             "\U0001F4BE \u0627\u0634\u062a\u0631\u0627\u0643\u0643 \u0645\u062d\u0641\u0648\u0638 \u0641\u064a \u0642\u0627\u0639\u062f\u0629 \u0627\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u0628\u0634\u0643\u0644 \u062f\u0627\u0626\u0645.\n"

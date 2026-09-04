@@ -102,6 +102,7 @@ def write_subscription(user_id: int, record: dict[str, Any]) -> bool:
     col = _get_mongo_collection()
     if col is not None:
         try:
+            # upsert=True: payment must activate even if user doc is missing
             col.update_one(
                 {"owner_telegram_id": uid},
                 {
@@ -110,9 +111,10 @@ def write_subscription(user_id: int, record: dict[str, Any]) -> bool:
                         f"metadata.{_MONGO_META_FIELD}_updated_at": time.time(),
                         "plan_id": "growth",  # Pro maps to growth tier
                         "updated_at": time.time(),
+                        "owner_telegram_id": uid,
                     },
                 },
-                upsert=False,  # user must already exist (created on /start)
+                upsert=True,
             )
             mongo_ok = True
             logger.info(
@@ -128,17 +130,21 @@ def write_subscription(user_id: int, record: dict[str, Any]) -> bool:
         )
 
     # ── 2. Redis (fast-read cache) ──
+    redis_ok = False
     try:
         store = _get_session_store()
-        # Load existing session, merge pro_plan, save back
         existing = store.load(uid)
+        if not isinstance(existing, dict):
+            existing = {}
         existing["pro_plan"] = dict(record)
         store.save(uid, existing)
+        redis_ok = True
         logger.debug("subscription cached to Redis uid=%s", uid)
     except Exception:
         logger.warning("Redis subscription cache write failed uid=%s", uid, exc_info=True)
 
-    return mongo_ok
+    # Activated if durable Mongo write OR at least Redis cache (session still live)
+    return bool(mongo_ok or redis_ok)
 
 
 def read_subscription(user_id: int) -> dict[str, Any] | None:

@@ -29,6 +29,9 @@ PRO_PLAN_PRICE_STARS = 800  # Telegram Stars (XTR) — $10 × 80 stars/$ (same r
 PRO_PLAN_DURATION_MONTHS = 1  # 1 month subscription
 PRO_PLAN_DURATION_LABEL = "شهر"  # Arabic: "1 month"
 PRO_PLAN_BOT_LIMIT = 10  # up to 10 bots while Pro is active
+PRO_PLAN_DISK_MB = 3072  # 3 GB account storage
+PRO_PLAN_MEMORY_MB = 2048  # 2 GB shared across user's hosted bots
+PRO_PLAN_CPU = 0.25  # 0.25 core per hosted bot
 
 # Telegram invoice payload (must be unique-ish; we embed plan id)
 PRO_PLAN_INVOICE_PAYLOAD = "lumen_pro_monthly_v2"
@@ -37,7 +40,7 @@ PRO_PLAN_INVOICE_PAYLOAD = "lumen_pro_monthly_v2"
 PRO_PLAN_RESOURCES: tuple[ProPlanResource, ...] = (
     ProPlanResource("💾", "المساحة التخزينية", "3 GB"),
     ProPlanResource("🧠", "الذاكرة (RAM)", "2 GB مشتركة"),
-    ProPlanResource("⚡", "المعالج (CPU)", "0.5 نواة"),
+    ProPlanResource("⚡", "المعالج (CPU)", "0.25 نواة"),
     ProPlanResource("🤖", "عدد البوتات", f"حتى {PRO_PLAN_BOT_LIMIT} بوتات"),
     ProPlanResource("⏱️", "مدة الاستضافة", PRO_PLAN_DURATION_LABEL),
     ProPlanResource("💳", "نظام الرصيد", "Credits لكل استخدام"),
@@ -75,7 +78,7 @@ def pro_plan_invoice_description() -> str:
     """
     return (
         f"اشتراك Lumen Pro شهري — "
-        f"3GB تخزين، 2GB RAM مشتركة، 0.5 CPU، "
+        f"3GB تخزين، 2GB RAM مشتركة، 0.25 CPU، "
         f"حتى {PRO_PLAN_BOT_LIMIT} بوتات، استضافة مجانية، مدة {PRO_PLAN_DURATION_LABEL}. "
         f"💾 اشتراكك محفوظ في قاعدة البيانات — يبقى حتى لو مسحت البوت ورجعت."
     )
@@ -89,6 +92,9 @@ __all__ = [
     "PRO_PLAN_DURATION_MONTHS",
     "PRO_PLAN_DURATION_LABEL",
     "PRO_PLAN_BOT_LIMIT",
+    "PRO_PLAN_DISK_MB",
+    "PRO_PLAN_MEMORY_MB",
+    "PRO_PLAN_CPU",
     "PRO_PLAN_INVOICE_PAYLOAD",
     "PRO_PLAN_RESOURCES",
     "PRO_PLAN_INCLUDES",

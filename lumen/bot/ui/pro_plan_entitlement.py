@@ -148,10 +148,10 @@ def resolve_plan_limits(user_id: int) -> PlanLimits:
     ent = resolve_pro_entitlement(user_id)
     if ent is not None:
         return PlanLimits(
-            max_bots=PRO_PLAN_BOT_LIMIT,  # 10
-            disk_mb=3072,  # 3 GB
-            memory_mb=2048,  # 2 GB shared pool
-            cpu=0.5,  # 0.5 core
+            max_bots=int(PRO_PLAN_BOT_LIMIT),
+            disk_mb=int(PRO_PLAN_DISK_MB),
+            memory_mb=int(PRO_PLAN_MEMORY_MB),  # shared pool total
+            cpu=float(PRO_PLAN_CPU),  # per bot
             is_pro=True,
             days_remaining=ent.days_remaining,
         )

@@ -91,17 +91,26 @@ def default_resources_from_env() -> ResourceSpec:
 def default_resources_for_user(user_id: int) -> ResourceSpec:
     """Resolve resources for a user via Pro entitlement, falling back to env.
 
-    Pro users get 512 MB RAM, 0.5 CPU, 2048 MB (2 GB) disk.
-    Non-Pro users get the env defaults (TBE_BOT_CPU / TBE_BOT_MEMORY_MB / TBE_USER_DISK_MB).
+    Pro: limits come from pro_plan constants (what the user bought).
+    Shared RAM is split fairly across max_bots so the pool is not exceeded.
     """
     try:
         from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
 
         limits = resolve_plan_limits(int(user_id or 0))
+        if limits.is_pro:
+            # Shared memory pool ÷ bot limit = per-bot cap (floor 64 MB)
+            bots = max(1, int(limits.max_bots))
+            per_bot_mem = max(64, int(limits.memory_mb) // bots)
+            return ResourceSpec(
+                cpu=max(0.1, float(limits.cpu)),
+                memory_mb=per_bot_mem,
+                disk_mb=max(64, int(limits.disk_mb)),
+            )
         return ResourceSpec(
-            cpu=max(0.1, limits.cpu),
-            memory_mb=max(64, limits.memory_mb),
-            disk_mb=max(64, limits.disk_mb),
+            cpu=max(0.1, float(limits.cpu)),
+            memory_mb=max(64, int(limits.memory_mb)),
+            disk_mb=max(64, int(limits.disk_mb)),
         )
     except Exception:
         logger.debug("pro resource resolution failed uid=%s — env fallback", user_id, exc_info=True)
