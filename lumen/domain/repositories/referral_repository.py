@@ -19,6 +19,10 @@ class ReferralRepository(Protocol):
 
     def count_qualified(self, referrer_telegram_id: int) -> int: ...
 
+    def count_for_referrer(self, referrer_telegram_id: int) -> int:
+        """Total invites (pending+qualified+rejected) for abuse caps."""
+        ...
+
     def stats_for(self, referrer_telegram_id: int) -> ReferralStats: ...
 
     def claim_reward_slot(
@@ -27,16 +31,9 @@ class ReferralRepository(Protocol):
         *,
         batch_id: str,
         min_qualified: int,
-    ) -> bool:
-        """Atomically claim unpaid reward when qualified_count >= min_qualified.
+    ) -> bool: ...
 
-        Returns True only for the first successful claim (race-safe).
-        """
-        ...
-
-    def release_reward_slot(self, referrer_telegram_id: int) -> None:
-        """Rollback claim if credit grant failed."""
-        ...
+    def release_reward_slot(self, referrer_telegram_id: int) -> None: ...
 
     def mark_reward_paid(
         self, referrer_telegram_id: int, *, batch_id: str
