@@ -1,8 +1,8 @@
 """LLM provider bodies + stable public API for translate/chat.
 
 Provider *implementations* live here (Groq translate, Gemini chat helpers).
-Provider *selection* lives in ``lumen.engine.services.llm.facade``.
-Callers should use ``translate_request`` / ``chat_request`` (or llm.facade)
+Translate/chat entry points are retired (always None).
+Agent LLM selection lives in ``lumen.engine.services.llm.model_catalog``.
 and must not hard-code a vendor in business logic.
 
 Default wiring (step 1 — behavior unchanged):
@@ -603,7 +603,7 @@ def translate_via_groq(text: str, context: dict[str, Any] | None = None) -> dict
 
 
 def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Gemini chat implementation (provider body — call via llm.facade)."""
+    """Gemini chat implementation (retired chat body)."""
     if not _gemini_enabled():
         logger.warning(
             "Gemini chat skipped; key_present=%s GEMINI_ENABLED=%s",
@@ -634,53 +634,12 @@ def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None
 
 
 
+
 def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    ctx = dict(context or {})
-    env_on = (os.getenv("TBE_INFINITE_SPEC") or "").strip().lower() in {"1", "true", "yes", "on"}
-    # Primary product path: infinite atomic engine (default ON)
-    primary = (os.getenv("TBE_INFINITE_PRIMARY") or "1").strip().lower() not in {"0", "false", "off", "no"}
-    env_auto = (os.getenv("TBE_INFINITE_AUTO") or "1").strip().lower() not in {"0", "false", "off", "no"}
-    looks_custom = bool(ctx.get("looks_custom") or ctx.get("needs_ai_codegen") or ctx.get("infinite"))
-    # Use infinite for nearly all generation translates when primary
-    use_infinite = (
-        bool(ctx.get("infinite"))
-        or env_on
-        or primary
-        or (env_auto and looks_custom)
-    )
-    if use_infinite:
-        inf = translate_infinite_via_gemini(text, context=ctx)
-        # Successful DynamicBotSpec or structured failure — prefer over catalog translate
-        if inf is not None and (inf.get("ok") or inf.get("dynamic_spec") or inf.get("engine") == "infinite_v1"):
-            return inf
-        if inf is not None and inf.get("ok") is False and not primary:
-            pass  # fall through to catalog translate
-        elif inf is not None and inf.get("ok") is True:
-            return inf
-
-    """Stable public API — provider chosen by llm.facade (default translate: Gemini)."""
-    try:
-        from lumen.engine.services.prompt_fence import sanitize_user_text
-        text = sanitize_user_text(text or "", max_len=8000)
-    except Exception:
-        text = (text or "")[:8000]
-    try:
-        from lumen.engine.services.llm_budget_gate import gate_llm_call
-        ok, reason = gate_llm_call(text or "", context, response_reserve=1024)
-        if not ok:
-            logger.warning("translate_request blocked by llm budget: %s", reason)
-            return None
-    except Exception as exc:
-        import os as _os
-        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
-            logger.exception("translate_request budget gate fail-closed: %s", exc)
-            return None
-    from .llm.facade import translate_request as _facade_translate
-    return _facade_translate(text, context)
-
+    """Retired — agent path owns LLM. Always None."""
+    return None
 
 
 def chat_request(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Stable public API — provider chosen by llm.facade (default chat: Groq)."""
-    from .llm.facade import chat_request as _facade_chat
-    return _facade_chat(message, context)
+    """Retired — agent path owns LLM. Always None."""
+    return None

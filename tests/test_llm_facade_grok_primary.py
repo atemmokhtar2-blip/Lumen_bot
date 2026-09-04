@@ -1,40 +1,34 @@
-"""Chat prefers Groq (api.groq.com, NOT xAI); engine prefers Gemini; strict roles off."""
+"""Model catalog replaces retired llm.facade."""
+from __future__ import annotations
 
 
-def test_strict_roles_default_off(monkeypatch):
-    monkeypatch.delenv("TBE_STRICT_LLM_ROLES", raising=False)
-    from lumen.engine.services.llm.facade import _strict_llm_roles
+def test_catalog_has_requested_models():
+    from lumen.engine.services.llm.model_catalog import CATALOG
 
-    assert _strict_llm_roles() is False
-
-
-def test_chat_prefers_groq_not_xai(monkeypatch):
-    monkeypatch.delenv("TBE_STRICT_LLM_ROLES", raising=False)
-    monkeypatch.setenv("XAI_API_KEY", "xai-test")
-    monkeypatch.delenv("CHAT_PROVIDER", raising=False)
-    from lumen.engine.services.llm.facade import get_chat_provider_name, _chat_chain
-
-    assert get_chat_provider_name() == "groq"
-    names = [p.name for p in _chat_chain()]
-    assert names[0] == "groq"
-    # xai may appear later as optional fallback only
-    if "xai" in names:
-        assert names.index("xai") > names.index("groq")
+    ids = {m.id for m in CATALOG}
+    assert "groq-deepseek-v4-flash" in ids
+    assert "gemini-2.5-flash-lite" in ids
+    assert "gemini-2.5-pro" in ids
+    assert "openai-gpt-4o-mini" in ids
+    assert "deepseek-v3" in ids
+    assert "claude-3-haiku" in ids
+    assert "openrouter-auto" in ids
+    assert "foundry-model-router" in ids
 
 
-def test_translate_not_forced_gemini(monkeypatch):
-    monkeypatch.delenv("TBE_STRICT_LLM_ROLES", raising=False)
-    monkeypatch.delenv("TRANSLATE_PROVIDER", raising=False)
-    from lumen.engine.services.llm.facade import get_translate_provider_name
+def test_catalog_snapshot_safe():
+    from lumen.engine.services.llm.model_catalog import catalog_snapshot
 
-    assert get_translate_provider_name() == "groq"
+    rows = catalog_snapshot()
+    assert isinstance(rows, list) and rows
+    assert "key_present" in rows[0]
+    assert "api_key" not in str(rows).lower() or "api_key_env" not in str(rows)
 
 
-def test_engine_build_order_gemini_before_groq():
-    """Cline engine: Gemini leads for speed when both available."""
-    import inspect
-    from lumen.engine.services.cline_runtime import model_router as mr
+def test_no_facade_module():
+    import importlib.util
+    from pathlib import Path
 
-    src = inspect.getsource(mr.select_model)
-    # build branch order tuple must start with gemini
-    assert 'order = ("gemini", "groq"' in src or "('gemini', 'groq'" in src
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "lumen/engine/services/llm/facade.py").exists()
+    assert not (root / "lumen/engine/services/llm_budget_gate.py").exists()

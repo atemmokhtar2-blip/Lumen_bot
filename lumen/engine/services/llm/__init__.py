@@ -1,30 +1,21 @@
-"""Provider-agnostic LLM layer (translate + chat).
+"""LLM package — agent model catalog + key pool.
 
-Public API:
-  translate_request, chat_request, status_snapshot
-  get_translate_provider, get_chat_provider
-
-Ports: TranslateProvider, ChatProvider
+Translate/chat facade and daily budget gate were removed (agent path owns LLM).
 """
-from .facade import (
-    chat_request,
-    get_chat_provider,
-    get_chat_provider_name,
-    get_translate_provider,
-    get_translate_provider_name,
-    status_snapshot,
-    translate_request,
+from .model_catalog import (
+    CATALOG,
+    CatalogModel,
+    available_models,
+    catalog_snapshot,
+    get_model,
+    models_for_role,
 )
-from .ports import ChatProvider, TranslateProvider
 
 __all__ = [
-    "TranslateProvider",
-    "ChatProvider",
-    "translate_request",
-    "chat_request",
-    "status_snapshot",
-    "get_translate_provider",
-    "get_chat_provider",
-    "get_translate_provider_name",
-    "get_chat_provider_name",
+    "CatalogModel",
+    "CATALOG",
+    "get_model",
+    "models_for_role",
+    "available_models",
+    "catalog_snapshot",
 ]

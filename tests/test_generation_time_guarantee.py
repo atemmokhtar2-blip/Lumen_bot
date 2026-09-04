@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 """Weakness #2 — generation time guarantee tests.
 
 Verifies that:
@@ -115,7 +116,7 @@ def test_orchestrate_generate_wrapped_with_timeout(monkeypatch, tmp_path):
                     mock_guard.return_value = type("G", (), {"ok": True, "sanitized": None, "reasons": [], "backend": "test"})()
                     with patch("lumen.platform.queue_backpressure.acquire_slot", return_value=(True, "")):
                         with patch("lumen.platform.queue_backpressure.release_slot", return_value=None):
-                            with patch("lumen.engine.services.llm_budget_gate.gate_llm_call", return_value=(True, "")):
+                            with nullcontext():
                                 result = helpers.run_generation(
                                     "build a bot",
                                     Path(tmp_path),

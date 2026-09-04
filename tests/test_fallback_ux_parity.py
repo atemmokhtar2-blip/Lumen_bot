@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 """Tests for fallback UX parity (weakness #3 root fix).
 
 When the multi-agent orchestrator fails and the Cline fallback fires, the
@@ -47,7 +48,7 @@ class TestFallbackUxParity:
 
         import lumen.bot.helpers as helpers
 
-        with patch("lumen.engine.services.llm_budget_gate.gate_llm_call", side_effect=_mock_budget_ok), \
+        with nullcontext(), \
              patch("lumen.engine.services.multi_agent.orchestrate_generate", return_value=_failed_result), \
              patch("lumen.engine.services.multi_agent.orchestrator_enabled", return_value=True), \
              patch.object(helpers, "run_generation_with_bridge", return_value=_cline_result):
@@ -75,7 +76,7 @@ class TestFallbackUxParity:
 
         import lumen.bot.helpers as helpers
 
-        with patch("lumen.engine.services.llm_budget_gate.gate_llm_call", side_effect=_mock_budget_ok), \
+        with nullcontext(), \
              patch("lumen.engine.services.multi_agent.orchestrate_generate", return_value=_success_result), \
              patch("lumen.engine.services.multi_agent.orchestrator_enabled", return_value=True):
 
@@ -106,7 +107,7 @@ class TestFallbackUxParity:
         def _raise(*a, **kw):
             raise RuntimeError("langgraph crashed")
 
-        with patch("lumen.engine.services.llm_budget_gate.gate_llm_call", side_effect=_mock_budget_ok), \
+        with nullcontext(), \
              patch("lumen.engine.services.multi_agent.orchestrate_generate", side_effect=_raise), \
              patch("lumen.engine.services.multi_agent.orchestrator_enabled", return_value=True), \
              patch.object(helpers, "run_generation_with_bridge", return_value=_cline_result):
@@ -135,7 +136,7 @@ class TestFallbackUxParity:
         monkeypatch.setenv("MULTI_AGENT_ORCHESTRATOR", "0")
         import lumen.bot.helpers as helpers
 
-        with patch("lumen.engine.services.llm_budget_gate.gate_llm_call", side_effect=_mock_budget_ok), \
+        with nullcontext(), \
              patch("lumen.engine.services.multi_agent.orchestrator_enabled", return_value=False), \
              patch.object(helpers, "run_generation_with_bridge", return_value=_cline_result):
 

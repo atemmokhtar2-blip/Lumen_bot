@@ -188,32 +188,6 @@ def run_generation(request: str, work_dir: Path, user_id: int = 0, preferred_key
 
     try:
 
-        # Hard LLM budget before any model/orchestrator spend
-        try:
-            from lumen.engine.services.llm_budget_gate import gate_llm_call
-            ok, reason = gate_llm_call(
-                request or "",
-                {"user_id": int(user_id or 0)},
-                response_reserve=4096,
-            )
-            if not ok:
-                from lumen.engine.core.result import GenerationResult
-                return GenerationResult(
-                    success=False,
-                    errors=[f"llm_budget_blocked:{reason}"],
-                    metadata={"budget_blocked": True, "reason": reason},
-                )
-        except Exception as _bg_exc:
-            import os as _os
-            if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
-                logger.exception("generation llm budget gate fail-closed")
-                from lumen.engine.core.result import GenerationResult
-                return GenerationResult(
-                    success=False,
-                    errors=[f"llm_budget_gate_error:{type(_bg_exc).__name__}"],
-                    metadata={"budget_blocked": True},
-                )
-            logger.exception("generation llm budget gate failed (dev)")
         # Track whether the Cline fallback path was used (weakness #3: fallback UX parity).
         _fallback_fired = False
         try:

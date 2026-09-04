@@ -570,17 +570,6 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
         text = sanitize_user_text(text or "", max_len=12000)
     except Exception:
         text = (text or "")[:12000]
-    try:
-        from lumen.engine.services.llm_budget_gate import gate_llm_call
-        ok, reason = gate_llm_call(text or "", context, response_reserve=2048)
-        if not ok:
-            raise RuntimeError(f"llm_budget_blocked:{reason}")
-    except RuntimeError:
-        raise
-    except Exception as _bg_exc:
-        import os as _os
-        if (_os.getenv("ENVIRONMENT") or "").strip().lower() not in {"dev", "development", "local", "test"}:
-            raise RuntimeError(f"llm_budget_gate_error:{type(_bg_exc).__name__}") from _bg_exc
     keys = _available_api_keys()
     if not keys:
         raise RuntimeError("GEMINI_API_KEY is not configured")

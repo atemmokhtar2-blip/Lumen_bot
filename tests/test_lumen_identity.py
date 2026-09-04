@@ -23,7 +23,7 @@ def test_product_name_is_lumen():
 
 
 def test_system_prompts_use_foundation():
-    groq = (ROOT / "lumen/engine/services/llm/groq_chat.py").read_text(encoding="utf-8")
+    groq = (ROOT / "lumen/engine/services/llm/model_catalog.py").read_text(encoding="utf-8")
     assert "system_identity_line" in groq
     assert "from lumen.identity import" in groq
     gem = (ROOT / "lumen/engine/services/gemini_client.py").read_text(encoding="utf-8")
