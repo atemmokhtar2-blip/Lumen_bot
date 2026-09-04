@@ -30,3 +30,10 @@ async def ready(request: web.Request) -> web.Response:
         body["multi_agent"] = {"ok": False, "error": type(exc).__name__}
         # multi-agent optional for core API readiness
     return web.json_response(body)
+
+
+async def cost_stack(request: web.Request) -> web.Response:
+    """GET /v1/health/cost-stack — connectivity of billing/credits/rating."""
+    from lumen.platform.credits.health import cost_stack_health
+    report = cost_stack_health()
+    return web.json_response(report, status=200 if report.get("ok") else 503)

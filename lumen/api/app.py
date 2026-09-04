@@ -356,6 +356,7 @@ def create_app() -> web.Application:
         client_max_size=max(4096, max_size),
     )
     app.router.add_get("/health", health.health)
+    app.router.add_get("/health/cost-stack", health.cost_stack)
 
     # OpenAPI + interactive docs (Swagger UI + Redoc) for B2B developers
     async def _openapi_yaml(request):

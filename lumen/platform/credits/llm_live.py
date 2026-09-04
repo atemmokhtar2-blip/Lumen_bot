@@ -50,6 +50,11 @@ class InsufficientCreditsError(Exception):
 
 
 def live_charge_enabled() -> bool:
+    """Live per-step LLM charge. Forced ON in production environments."""
+    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or os.getenv("LUMEN_ENV") or "").strip().lower()
+    if env in {"prod", "production", "staging"}:
+        # Cannot disable live charge in prod/staging
+        return True
     return (os.getenv("LUMEN_LIVE_LLM_CHARGE") or "1").strip().lower() not in {
         "0", "false", "no", "off",
     }

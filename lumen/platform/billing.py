@@ -78,26 +78,56 @@ class BillingService:
             return None
 
     def enforce_generation(self, tenant_id: str, *, reserve: bool = True) -> tuple[bool, str]:
-        """Plans removed — no monthly generation quota.
+        """Hard gate: tenant active + credits lifecycle allows generation.
 
-        Usage is gated by credits elsewhere. Optional metering still records
-        counts with unlimited limit (0).
+        ROOT FIX: previously a no-op (plans removed) so API /v1/generate
+        accepted jobs with zero balance. Now wired to BalanceLifecycle +
+        optional daily cap via assert_llm_spend_allowed.
         """
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
+        try:
+            from lumen.platform.credits.guards import (
+                GenerationBlockedError,
+                assert_llm_spend_allowed,
+            )
+            assert_llm_spend_allowed(tenant_id=str(tenant_id))
+        except GenerationBlockedError as e:
+            return False, e.reason or "insufficient_credits"
+        except Exception as exc:
+            if type(exc).__name__ == "GenerationBlockedError":
+                return False, getattr(exc, "reason", None) or "insufficient_credits"
+            # Fail closed
+            return False, f"generation_gate_error:{type(exc).__name__}"
         if reserve:
-            ok, reason, _ = get_metering().try_reserve_generation(tenant_id, 0)
-            return ok, reason
+            try:
+                ok, reason, _ = get_metering().try_reserve_generation(tenant_id, 0)
+                if not ok:
+                    return ok, reason
+            except Exception:
+                pass
         return True, "ok"
 
     def enforce_hosting(self, tenant_id: str, current_hosted: int) -> tuple[bool, str]:
-        """Plans removed — hosting not limited by plan tier."""
+        """Hard gate: tenant active + hosting allowed by balance lifecycle."""
         store = get_tenant_store()
         t = store.get(tenant_id)
         if not t or not t.active:
             return False, "tenant_inactive"
+        try:
+            from lumen.platform.credits.guards import (
+                GenerationBlockedError,
+                assert_hosting_allowed,
+            )
+            assert_hosting_allowed(tenant_id=str(tenant_id))
+        except GenerationBlockedError as e:
+            return False, e.reason or "hosting_blocked"
+        except Exception as exc:
+            if type(exc).__name__ == "GenerationBlockedError":
+                return False, getattr(exc, "reason", None) or "hosting_blocked"
+            return False, f"hosting_gate_error:{type(exc).__name__}"
         return True, "ok"
 
     def enforce_feature(self, tenant_id: str, feature: str) -> tuple[bool, str]:

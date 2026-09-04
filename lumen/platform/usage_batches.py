@@ -1,4 +1,4 @@
-"""Phase 2 usage batches — hardened telemetry (no credit deduction).
+"""Phase 2 usage batches — telemetry + sync credit rating (default ON).
 
 Security / integrity:
 - tenant_id only from auth layer (API) or trusted supervisor registry
@@ -464,7 +464,27 @@ class UsageBatchService:
                 return IngestResult(ok=False, reason="bot_not_registered_for_tenant")
         if not skip_rate_limit and not _rate_limit_ok(str(tenant_id)):
             return IngestResult(ok=False, reason="rate_limited")
-        return self._store.ingest(str(tenant_id), fields, source=source)
+        result = self._store.ingest(str(tenant_id), fields, source=source)
+        # ROOT FIX: connect telemetry → credits immediately (not only hourly scheduler)
+        if result.ok and result.batch and not result.replay:
+            sync = (os.getenv("TBE_USAGE_RATE_SYNC") or "1").strip().lower() not in {
+                "0", "false", "no", "off",
+            }
+            if sync:
+                try:
+                    from lumen.platform.rating_engine import get_rating_engine
+                    rated = get_rating_engine().rate_batch(result.batch)
+                    if not rated.ok and "insufficient" in str(rated.reason or "").lower():
+                        # Signal caller — batch accepted but unpaid
+                        result.reason = f"accepted_unpaid:{rated.reason}"
+                        try:
+                            from lumen.platform.balance_lifecycle import get_balance_lifecycle
+                            get_balance_lifecycle().on_balance_changed(str(tenant_id))
+                        except Exception:
+                            pass
+                except Exception:
+                    logger.debug("sync rate_batch after ingest failed", exc_info=True)
+        return result
 
     def list_batches(self, tenant_id: str, *, limit: int = 50, status: str = "") -> list[UsageBatch]:
         return self._store.list_for_tenant(str(tenant_id), limit=limit, status=status)

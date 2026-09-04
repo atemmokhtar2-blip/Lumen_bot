@@ -125,3 +125,52 @@ def test_run_agent_blocks_without_balance(credits, monkeypatch, tmp_path):
     )
     assert state.ok is False
     assert state.stop_reason in {"insufficient_credits", "billing_gate_error"}
+
+
+def test_enforce_generation_blocks_zero_balance(credits, monkeypatch):
+    from lumen.platform.balance_lifecycle import BalanceLifecycle, MemoryLifecycleStore
+    from lumen.platform.billing import BillingService
+
+    lc = BalanceLifecycle(MemoryLifecycleStore(), credits)
+    monkeypatch.setattr(
+        "lumen.platform.balance_lifecycle.get_balance_lifecycle",
+        lambda: lc,
+    )
+
+    class FakeTenant:
+        active = True
+
+    class FakeStore:
+        def get(self, tid):
+            return FakeTenant()
+
+    monkeypatch.setattr("lumen.platform.billing.get_tenant_store", lambda: FakeStore())
+    monkeypatch.setattr("lumen.platform.billing.get_metering", lambda: type("M", (), {"try_reserve_generation": lambda *a, **k: (True, "ok", None)})())
+
+    b = BillingService()
+    ok, reason = b.enforce_generation("tg:empty")
+    assert ok is False
+    assert reason
+
+
+def test_batch_token_pricing_not_per_raw_token(credits):
+    from types import SimpleNamespace
+    from lumen.platform.rating_engine import compute_batch_cost
+
+    batch = SimpleNamespace(
+        messages_processed=0,
+        llm_tokens_used=5000,
+        uptime_seconds=0,
+        ram_mb=0,
+    )
+    bd = compute_batch_cost(batch, credits)
+    # 5k tokens must NOT cost 5000 credits (old bug)
+    assert bd.token_credits < 5000
+    assert bd.token_credits >= 1
+
+
+def test_cost_stack_health():
+    from lumen.platform.credits.health import cost_stack_health
+    report = cost_stack_health()
+    assert "checks" in report
+    assert report["checks"].get("credit_service", {}).get("ok") is True

@@ -64,8 +64,26 @@ def compute_batch_cost(batch: Any, credit_service: Any) -> CostBreakdown:
     bd.ram_mb_hours = (ram_mb * uptime_s) / 3600.0 if ram_mb and uptime_s else 0.0
 
     bd.message_credits = int(credit_service.cost_for("telegram_message", bd.messages))
-    # token pricing is per unit; large counts stay int
-    bd.token_credits = int(credit_service.cost_for("llm_output_token", bd.llm_tokens))
+    # ROOT FIX: was 1 credit per raw token (bankrupting). Use 1k-units + model-aware floor.
+    tok_units = (int(bd.llm_tokens) + 999) // 1000 if bd.llm_tokens else 0
+    bd.token_credits = int(credit_service.cost_for("llm_prompt_1k", tok_units)) if tok_units else 0
+    if bd.llm_tokens > 0 and bd.token_credits <= 0:
+        # fallback seed missing → model-aware estimate
+        try:
+            from lumen.platform.credits.llm_live import credits_for_llm_usage
+            bd.token_credits = int(
+                credits_for_llm_usage(
+                    {
+                        "prompt_tokens": int(bd.llm_tokens * 0.7),
+                        "completion_tokens": int(bd.llm_tokens * 0.3),
+                        "provider": "openai",
+                        "model_id": "gpt-4o-mini",
+                    },
+                    credit_service=credit_service,
+                )
+            )
+        except Exception:
+            bd.token_credits = max(1, tok_units)
     # host hour: ceil to at least 1 unit if any uptime in window with host activity
     host_units = 0
     if uptime_s > 0:
