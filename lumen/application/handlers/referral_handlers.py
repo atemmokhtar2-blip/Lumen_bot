@@ -1,4 +1,4 @@
-"""Referral use-cases — register link-open; qualify on bot use; one-time reward."""
+"""Referral use-cases — register, qualify on bot use, atomic one-time reward."""
 from __future__ import annotations
 
 import logging
@@ -18,8 +18,6 @@ from lumen.platform.referrals.config import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Promotional referral credits must expire (CreditService fail-closed rule)
 _REFERRAL_PROMO_TTL_SEC = 365 * 24 * 3600
 
 
@@ -38,6 +36,8 @@ class QualifyReferralResult:
     stats: Optional[ReferralStats] = None
     reward_granted: bool = False
     error: str = ""
+    notify_referrer_id: int = 0
+    notify_text: str = ""
 
 
 def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralResult:
@@ -60,17 +60,13 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         ref = repo.create_pending(referrer, referred)
         return RegisterReferralResult(ok=True, referral=ref)
     except ReferralError as exc:
-        msg = str(exc) or type(exc).__name__
-        if "already" in msg:
-            return RegisterReferralResult(ok=False, error="referred_already_registered")
-        return RegisterReferralResult(ok=False, error=msg)
+        return RegisterReferralResult(ok=False, error=str(exc) or type(exc).__name__)
     except Exception as exc:
         logger.warning("register_referral failed: %s", type(exc).__name__)
         return RegisterReferralResult(ok=False, error=type(exc).__name__)
 
 
 def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResult:
-    """Qualify only when event proves bot use; grant promotional credits at target."""
     from lumen.platform.referrals import get_referral_repository
 
     if not should_count_as_bot_use(cmd.event):
@@ -82,38 +78,61 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
 
     try:
         repo = get_referral_repository()
-        # Fast path: not an invitee — avoid mark_qualified work
         existing = repo.get_by_referred(referred)
         if existing is None:
             return QualifyReferralResult(ok=True, error="no_referral")
-        if existing.status.value == "qualified":
-            stats = repo.stats_for(existing.referrer_telegram_id)
-            return QualifyReferralResult(ok=True, referral=existing, stats=stats)
 
-        ref = repo.mark_qualified(referred)
+        newly_qualified = existing.status.value != "qualified"
+        ref = repo.mark_qualified(referred) if newly_qualified else existing
         if ref is None:
             return QualifyReferralResult(ok=True, error="no_referral")
 
         stats = repo.stats_for(ref.referrer_telegram_id)
+        notify_text = ""
         reward_granted = False
+
+        if newly_qualified:
+            notify_text = (
+                "صديقك بدأ يستخدم Lumen."
+                + chr(10)
+                + "التقدم: %s/%s " % (stats.qualified_count, REFERRAL_QUALIFIED_TARGET)
+                + "(يُحتسب من يستخدم البوت فقط)."
+            )
+
         if is_reward_due(stats, target=REFERRAL_QUALIFIED_TARGET):
-            reward_granted = _grant_referral_reward(ref.referrer_telegram_id)
-            if reward_granted:
-                batch = (
-                    f"referral-reward-{ref.referrer_telegram_id}-"
-                    f"{REFERRAL_QUALIFIED_TARGET}"
-                )
-                stats = repo.mark_reward_paid(
-                    ref.referrer_telegram_id, batch_id=batch
-                )
-            else:
-                logger.error(
-                    "referral reward credit FAILED referrer_tg=%s qualified=%s",
-                    ref.referrer_telegram_id,
-                    stats.qualified_count,
-                )
+            batch = "referral-reward-%s-%s" % (
+                ref.referrer_telegram_id,
+                REFERRAL_QUALIFIED_TARGET,
+            )
+            claimed = repo.claim_reward_slot(
+                ref.referrer_telegram_id,
+                batch_id=batch,
+                min_qualified=int(REFERRAL_QUALIFIED_TARGET),
+            )
+            if claimed:
+                reward_granted = _grant_referral_reward(ref.referrer_telegram_id)
+                if reward_granted:
+                    stats = repo.stats_for(ref.referrer_telegram_id)
+                    notify_text = (
+                        "مبروك! وصلت لـ %s مستخدم استخدموا البوت." % REFERRAL_QUALIFIED_TARGET
+                        + chr(10)
+                        + "تم إضافة مكافأة $%s (%s رصيد) لحسابك."
+                        % (REFERRAL_REWARD_USD, _reward_credit_amount())
+                    )
+                else:
+                    repo.release_reward_slot(ref.referrer_telegram_id)
+                    logger.error(
+                        "referral reward credit failed after claim referrer_tg=%s",
+                        ref.referrer_telegram_id,
+                    )
+
         return QualifyReferralResult(
-            ok=True, referral=ref, stats=stats, reward_granted=reward_granted
+            ok=True,
+            referral=ref,
+            stats=stats,
+            reward_granted=reward_granted,
+            notify_referrer_id=int(ref.referrer_telegram_id) if notify_text else 0,
+            notify_text=notify_text,
         )
     except ReferralError as exc:
         return QualifyReferralResult(ok=False, error=str(exc) or type(exc).__name__)
@@ -123,7 +142,6 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
 
 
 def _reward_credit_amount() -> int:
-    """Credits to grant. Prefer REFERRAL_REWARD_CREDITS; else USD * 100."""
     configured = int(REFERRAL_REWARD_CREDITS or 0)
     if configured > 0:
         return configured
@@ -131,10 +149,12 @@ def _reward_credit_amount() -> int:
 
 
 def _grant_referral_reward(referrer_telegram_id: int) -> bool:
-    """Credit referrer once. Must satisfy CreditService promo rules."""
     amount = _reward_credit_amount()
-    tid = f"tg:{int(referrer_telegram_id)}"
-    key = f"referral-reward-{int(referrer_telegram_id)}-{REFERRAL_QUALIFIED_TARGET}"
+    tid = "tg:%s" % int(referrer_telegram_id)
+    key = "referral-reward-%s-%s" % (
+        int(referrer_telegram_id),
+        REFERRAL_QUALIFIED_TARGET,
+    )
     expires = time.time() + _REFERRAL_PROMO_TTL_SEC
     try:
         from lumen.platform.credits import get_credit_service
@@ -156,7 +176,7 @@ def _grant_referral_reward(referrer_telegram_id: int) -> bool:
         ok = bool(getattr(result, "ok", False))
         if ok:
             logger.info(
-                "referral reward granted referrer_tg=%s amount=%s expires_in_days=365",
+                "referral reward granted referrer_tg=%s amount=%s",
                 referrer_telegram_id,
                 amount,
             )
