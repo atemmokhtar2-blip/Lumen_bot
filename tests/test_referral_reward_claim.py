@@ -6,6 +6,7 @@ import os
 import pytest
 
 os.environ.pop("MONGODB_URI", None)
+os.environ.setdefault("ENVIRONMENT", "test")
 
 from lumen.application.commands.qualify_referral import QualifyReferralCommand
 from lumen.application.commands.register_referral import RegisterReferralCommand
