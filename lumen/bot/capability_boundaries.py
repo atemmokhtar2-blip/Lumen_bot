@@ -4,6 +4,7 @@ from __future__ import annotations
 from lumen.bot.telegram_text import html_bullets, html_card
 
 CAN_DO_AR = [
+    "برنامج إحالة: /referral — ادعُ أصدقاءك واحصل على رصيد عند استخدامهم للبوت.",
     "بناء فوري: وصف بسيط = بوت جاهز للتشغيل (مع منطق SQLite، سلة، نقاط، اشتراكات).",
     "استضافة Docker: بوتك يعمل في بيئة معزولة وآمنة.",
     "استيراد ذكي: استنساخ مشاريع عامة (أو خاصة بتوكن) وتحليلها.",
