@@ -295,69 +295,92 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     if user:
         await _qualify_bot_use(context, int(user.id), "command_non_start")
+
+    # Link never depends on Mongo / credits backend
     try:
         from lumen.platform.referrals import (
             REFERRAL_QUALIFIED_TARGET,
             REFERRAL_REWARD_USD,
             bot_username_link,
-            get_referral_repository,
         )
+        from lumen.platform.referrals.config import referral_deep_link_payload
 
         me = await context.bot.get_me()
         username = (me.username or "").strip()
         if username:
             link = bot_username_link(username, int(user.id))
         else:
-            from lumen.platform.referrals.config import referral_deep_link_payload
             link = referral_deep_link_payload(int(user.id))
-        stats = await asyncio.to_thread(
-            get_referral_repository().stats_for, int(user.id)
-        )
+    except Exception:
+        await message.reply_text("تعذر إنشاء رابط الإحالة.")
+        return
+
+    stats_lines = []
+    try:
+        from lumen.platform.referrals import get_referral_repository
+
+        def _live():
+            repo = get_referral_repository()
+            st = repo.stats_for(int(user.id))
+            st.qualified_count = int(repo.count_qualified(int(user.id)))
+            try:
+                st.total_invited = max(
+                    int(st.total_invited), int(repo.count_for_referrer(int(user.id)))
+                )
+            except Exception:
+                pass
+            return st
+
+        stats = await asyncio.to_thread(_live)
         remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
-        nl = chr(10)
-        text = nl.join(
+        stats_lines = [
+            f"• إجمالي المدعوين: {stats.total_invited}",
+            f"• استخدموا البوت (يُحتسب): {stats.qualified_count}",
+            f"• بانتظار الاستخدام: {stats.pending_count}",
+            f"• المتبقي للمكافأة: {remaining}",
+            f"• المكافأة: ${int(REFERRAL_REWARD_USD)} عند {int(REFERRAL_QUALIFIED_TARGET)} مستخدم نشط",
+            f"• حالة الصرف: {'تم ✓' if stats.reward_paid else 'لم تُصرف بعد'}",
+        ]
+    except Exception:
+        stats_lines = [
+            "• الإحصائيات غير متاحة حالياً (قاعدة الإحالات)",
+            f"• المكافأة: ${int(REFERRAL_REWARD_USD)} عند {int(REFERRAL_QUALIFIED_TARGET)} مستخدم نشط",
+        ]
+
+    nl = chr(10)
+    text = nl.join(
+        [
+            "⭐ برنامج إحالة Lumen — $5",
+            "",
+            "رابط الدعوة الخاص بك:",
+            str(link),
+            "",
+            *stats_lines,
+            "",
+            "ملاحظة: فتح الرابط وحده لا يُحتسب — يجب أن يستخدم المدعو البوت.",
+        ]
+    )
+    share_kb = None
+    try:
+        from urllib.parse import quote
+        share_kb = InlineKeyboardMarkup(
             [
-                "⭐ برنامج إحالة Lumen",
-                "",
-                "رابط الدعوة الخاص بك:",
-                str(link),
-                "",
-                f"• إجمالي المدعوين: {stats.total_invited}",
-                f"• استخدموا البوت (يُحتسب): {stats.qualified_count}",
-                f"• بانتظار الاستخدام: {stats.pending_count}",
-                f"• المتبقي للمكافأة: {remaining}",
-                f"• المكافأة: ${int(REFERRAL_REWARD_USD)} عند {int(REFERRAL_QUALIFIED_TARGET)} مستخدم نشط",
-                f"• حالة الصرف: {'تم ✓' if stats.reward_paid else 'لم تُصرف بعد'}",
-                "",
-                "ملاحظة: فتح الرابط وحده لا يُحتسب — يجب أن يستخدم المدعو البوت.",
+                [
+                    InlineKeyboardButton(
+                        "مشاركة الرابط",
+                        url=(
+                            "https://t.me/share/url?url="
+                            + quote(str(link), safe="")
+                            + "&text="
+                            + quote("جرب Lumen", safe="")
+                        ),
+                    )
+                ]
             ]
         )
-        # Share button (opens Telegram share sheet with the invite link)
-        share_kb = None
-        try:
-            from urllib.parse import quote
-            share_kb = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "مشاركة الرابط",
-                            url=(
-                                "https://t.me/share/url?url="
-                                + quote(str(link), safe="")
-                                + "&text="
-                                + quote("جرب Lumen", safe="")
-                            ),
-                        )
-                    ]
-                ]
-            )
-        except Exception:
-            share_kb = None
-        await message.reply_text(text, reply_markup=share_kb)
-    except RuntimeError:
-        await message.reply_text("نظام الإحالة غير متاح حالياً (إعدادات الخادم).")
     except Exception:
-        await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
+        share_kb = None
+    await message.reply_text(text, reply_markup=share_kb)
 
 
 async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
