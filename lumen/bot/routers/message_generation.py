@@ -379,24 +379,8 @@ async def execute_bot_generation(
         # Referral: successful generation proves bot use
         try:
             if user:
-                from lumen.application.commands.qualify_referral import QualifyReferralCommand
-                from lumen.application.handlers.referral_handlers import handle_qualify_referral
-                import asyncio as _aio
-                qres = await _aio.to_thread(
-                    handle_qualify_referral,
-                    QualifyReferralCommand(
-                        referred_telegram_id=int(user.id),
-                        event="generation_success",
-                    ),
-                )
-                if qres and getattr(qres, "notify_referrer_id", 0) and getattr(qres, "notify_text", ""):
-                    try:
-                        await context.bot.send_message(
-                            chat_id=int(qres.notify_referrer_id),
-                            text=str(qres.notify_text)[:3500],
-                        )
-                    except Exception:
-                        pass
+                from lumen.bot.referral_hooks import qualify_bot_use
+                await qualify_bot_use(context, int(user.id), "generation_success")
         except Exception:
             logger.debug("referral generation qualify soft-fail", exc_info=True)
         return result
