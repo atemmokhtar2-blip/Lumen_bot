@@ -21,6 +21,8 @@ _NAV = frozenset(
         EngineUiPhase.BILLING,
         EngineUiPhase.PRO_PLAN,
         EngineUiPhase.HELP,
+        EngineUiPhase.SETTINGS,
+        EngineUiPhase.REFERRAL,
         EngineUiPhase.GEN_TYPE,
         EngineUiPhase.GEN_SLOTS,
         EngineUiPhase.GEN_CONFIRM,
@@ -128,6 +130,37 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "open_help": UiActionSpec(
         "open_help", "Help",
         _NAV | frozenset({EngineUiPhase.CONTEXT}),
+    ),
+    "open_settings": UiActionSpec(
+        "open_settings",
+        "Settings",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+                EngineUiPhase.SETTINGS,
+                EngineUiPhase.REFERRAL,
+                EngineUiPhase.CONTEXT,
+            }
+        ),
+    ),
+    "open_referral": UiActionSpec(
+        "open_referral",
+        "Referral program",
+        frozenset(
+            {
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+                EngineUiPhase.SETTINGS,
+                EngineUiPhase.REFERRAL,
+                EngineUiPhase.BILLING,
+                EngineUiPhase.HELP,
+                EngineUiPhase.CONTEXT,
+            }
+        ),
     ),
     "post_trial": UiActionSpec(
         "post_trial",
