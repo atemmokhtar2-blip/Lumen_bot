@@ -1,56 +1,38 @@
-# Lumen
+# Lumen Bot
 
-منصة توليد واستضافة بوتات تيليجرام + B2B API.
+منصة توليد وتشغيل بوتات تيليجرام عبر وكيل برمجة (agent) — واجهة تيليجرام، محرك توليد، استضافة، واشتراك Pro.
 
-التوثيق مبني على الكود الحالي فقط (ليس على وثائق قديمة).
+## ما هذا المشروع؟
 
-## تشغيل سريع
+المستخدم يصف بوتًا بالعربية أو الإنجليزية داخل تيليجرام. النظام يحوّل الطلب إلى مشروع كود قابل للتشغيل، يختبره، يسلّمه كـ ZIP عند النجاح، ويمكن استضافته ضمن حدود الخطة.
 
-```bash
-pip install -r requirements.txt
-cp .env.example .env   # TELEGRAM_BOT_TOKEN=...
-python main.py         # بوت التيليجرام (افتراضي: API مغلق)
-# أو API فقط:
-python api_main.py
-```
+**مسار الـ LLM الوحيد للتوليد:** كتالوج النماذج → راوتر (Foundry أو R2 محلي) → `agent_brain` → حلقة الأدوات.
 
-تفعيل API مع البوت: `ENABLE_API=1`.
+**ليس** مسار توليد: `translate_request` / `chat_request` / واجهة facade قديمة / بوابة budget يومية عامة — أُزيلت.
 
-## ما ينفّذ التوليد فعليًا؟
+## هيكل المستودع (مختصر)
 
-| الطبقة | الدور في الكود |
-|--------|----------------|
-| `message_router` | توجيه رسالة تيليجرام، بوابات، force-generate |
-| Chat (Gemini / translator) | فهم نية وترجمة مواصفات — **لا يكتب كود مشروع** |
-| `BuildIR` + `engine_router` | عقد التوليد؛ يفرض مسار **Cline فقط** |
-| `cline_runtime` (agent) | محرك التوليد الوحيد: حلقة plan → tool → observe |
-| `tool_runtime` | تنفيذ أدوات: clone / host / repo_* / … |
-| ~~`spec_core`~~ | **محذوف نهائيًا** — لا يوجد مسار توليد حتمي/قوالب |
-
-## أسطح المنتج
-
-- **Consumer Bot** — `python main.py`
-- **B2B API** — `ENABLE_API=1` أو `python api_main.py`
-- **Web control plane** — مجلد `web/` (Next.js UX للـ jobs)
+| مسار | الدور |
+|------|--------|
+| `lumen/bot/` | طبقة تيليجرام (PTB): رسائل، UI، جلسات، توليد |
+| `lumen/engine/` | محرك التوليد، الوكيل، LLM، multi-agent، استضافة |
+| `lumen/domain/` | كيانات ومنافذ النطاق (tenant، billing، jobs) |
+| `lumen/infrastructure/` | تنفيذ المنافذ (Mongo، Redis، …) |
+| `lumen/hosting/` | عمليات الاستضافة والنسخ الاحتياطي |
+| `lumen/platform/` | حدود معدّل، أدوات منصة |
+| `lumen/api/` | واجهات HTTP إن وُجدت |
+| `docs/` | التوثيق الحالي المطابق للكود |
 
 ## التوثيق
 
-| الملف | المحتوى |
-|-------|---------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | الحزم والتدفقات من الكود |
-| [docs/MESSAGE_FLOW.md](docs/MESSAGE_FLOW.md) | مسار رسالة تيليجرام |
-| [docs/GENERATION.md](docs/GENERATION.md) | IR → Cline agent |
-| [docs/API.md](docs/API.md) | مسارات B2B |
-| [docs/CONFIG.md](docs/CONFIG.md) | متغيرات بيئة أساسية |
-| [SECURITY.md](SECURITY.md) | سياسة الإبلاغ عن الثغرات |
+اقرأ الملفات تحت `docs/` بالترتيب المقترح في `docs/00-index.md`.
 
-## هيكل الحزم
+## تشغيل سريع (تطوير)
 
-```
-main.py / api_main.py
-lumen/
-  bot/          # واجهة تيليجرام فقط
-  engine/       # IR، Cline، tools، خدمات
-  api/          # aiohttp B2B
-  platform/     # خطط، credits، jobs، rate limit
-```
+1. Python 3.11+ و`pip install -r requirements.txt`
+2. متغيرات إلزامية: `TELEGRAM_BOT_TOKEN`، `REDIS_URL` (إنتاج)، مفاتيح النماذج حسب الكتالوج
+3. نقطة الدخول تعتمد على نشرك (Railway / عملية bot worker) — انظر `docs/10-deployment.md`
+
+## الفرع
+
+التطوير النشط: فرع `Lumen`.
