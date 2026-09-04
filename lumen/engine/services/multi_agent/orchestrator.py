@@ -327,16 +327,26 @@ def orchestrate_generate(
     try:
         from lumen.platform.balance_lifecycle import get_balance_lifecycle
         _tid = f"tg:{int(user_id or 0)}" if int(user_id or 0) else ""
-        if _tid:
-            ok_gen, reason_gen = get_balance_lifecycle().is_generation_allowed(_tid)
-            if not ok_gen:
-                return GenerationResult(
-                    success=False,
-                    errors=[f"insufficient_credits:{reason_gen}"],
-                    metadata={"insufficient_credits": True, "reason": reason_gen, "tenant_id": _tid},
-                )
-    except Exception:
-        logger.debug("generation balance gate skipped", exc_info=True)
+        if not _tid:
+            return GenerationResult(
+                success=False,
+                errors=["insufficient_credits:no_tenant"],
+                metadata={"insufficient_credits": True, "reason": "no_tenant"},
+            )
+        ok_gen, reason_gen = get_balance_lifecycle().is_generation_allowed(_tid)
+        if not ok_gen:
+            return GenerationResult(
+                success=False,
+                errors=[f"insufficient_credits:{reason_gen}"],
+                metadata={"insufficient_credits": True, "reason": reason_gen, "tenant_id": _tid},
+            )
+    except Exception as _gate_exc:
+        logger.error("generation balance gate failed closed: %s", type(_gate_exc).__name__)
+        return GenerationResult(
+            success=False,
+            errors=[f"insufficient_credits:gate_unavailable:{type(_gate_exc).__name__}"],
+            metadata={"insufficient_credits": True, "reason": "gate_unavailable"},
+        )
 
     inside = (os.environ.get("LUMEN_INSIDE_TEMPORAL_ACTIVITY") or "").strip().lower() in {"1", "true", "yes"}
     try:

@@ -523,13 +523,22 @@ def run_agent(
             assert_llm_spend_allowed,
         )
         _uid = 0
+        _tid_hint = ""
         if isinstance(ir_dict, dict):
             try:
                 _uid = int(ir_dict.get("user_id") or (ir_dict.get("metadata") or {}).get("user_id") or 0)
             except (TypeError, ValueError):
                 _uid = 0
-        _tid = assert_llm_spend_allowed(user_id=_uid)
+            _tid_hint = str(
+                ir_dict.get("tenant_id")
+                or (ir_dict.get("metadata") or {}).get("tenant_id")
+                or ""
+            ).strip()
+        _tid = assert_llm_spend_allowed(tenant_id=_tid_hint, user_id=_uid)
         state.metadata["billing_tenant_id"] = _tid
+        state.metadata["tenant_id"] = _tid
+        if _uid:
+            state.metadata["user_id"] = _uid
     except Exception as _bg:
         from lumen.platform.credits.guards import GenerationBlockedError as _GBE
         if isinstance(_bg, _GBE) or type(_bg).__name__ == "GenerationBlockedError":
@@ -850,7 +859,11 @@ def run_agent(
                 clear_charge_context,
             )
             _charge_token = bind_charge_context(
-                tenant_id=str(state.metadata.get("tenant_id") or ""),
+                tenant_id=str(
+                    state.metadata.get("billing_tenant_id")
+                    or state.metadata.get("tenant_id")
+                    or ""
+                ),
                 user_id=int(state.metadata.get("user_id") or 0),
                 state_id=str(state.metadata.get("state_id") or state.work_dir or ""),
                 step=i,

@@ -504,11 +504,17 @@ class BalanceLifecycle:
         return LifecycleAction(True, "unsuspended", state=state)
 
     def is_hosting_allowed(self, tenant_id: str) -> tuple[bool, str]:
-        state = self._store.get(str(tenant_id))
+        tid = str(tenant_id or "").strip()
+        if not tid:
+            return False, "no_tenant"
+        state = self._store.get(tid)
         if state.suspended or state.phase == "suspended":
             return False, "suspended_due_to_balance"
-        w = self._credits.get_wallet(str(tenant_id))
-        if int(w.available) <= 0:
+        try:
+            w = self._credits.get_wallet(tid)
+        except Exception:
+            return False, "wallet_unavailable"
+        if int(getattr(w, "available", 0) or 0) <= 0:
             if state.grace_until > time.time():
                 return True, "in_grace"
             return False, "insufficient_balance"
@@ -520,9 +526,10 @@ class BalanceLifecycle:
         Unlike hosting (which may continue during grace), new generations
         require available credits > 0 and must not be suspended.
         """
-        tid = str(tenant_id or "")
+        tid = str(tenant_id or "").strip()
         if not tid:
-            return True, "no_tenant"
+            # ROOT FIX: empty tenant must NEVER allow generation (was return True)
+            return False, "no_tenant"
         state = self._store.get(tid)
         if state.suspended or state.phase == "suspended":
             return False, "suspended_due_to_balance"

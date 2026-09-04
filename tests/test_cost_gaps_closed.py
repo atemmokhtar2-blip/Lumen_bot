@@ -174,3 +174,19 @@ def test_cost_stack_health():
     report = cost_stack_health()
     assert "checks" in report
     assert report["checks"].get("credit_service", {}).get("ok") is True
+
+
+def test_is_generation_allowed_rejects_empty_tenant(credits):
+    from lumen.platform.balance_lifecycle import BalanceLifecycle, MemoryLifecycleStore
+    lc = BalanceLifecycle(MemoryLifecycleStore(), credits)
+    ok, reason = lc.is_generation_allowed("")
+    assert ok is False
+    assert reason == "no_tenant"
+
+
+def test_is_hosting_allowed_rejects_empty_tenant(credits):
+    from lumen.platform.balance_lifecycle import BalanceLifecycle, MemoryLifecycleStore
+    lc = BalanceLifecycle(MemoryLifecycleStore(), credits)
+    ok, reason = lc.is_hosting_allowed("")
+    assert ok is False
+    assert reason == "no_tenant"
