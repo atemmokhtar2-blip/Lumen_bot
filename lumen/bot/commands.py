@@ -27,6 +27,69 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
         return
+
+    # Referral deep-link MUST run even if invitee is not yet in ALLOWED_USER_IDS.
+    # Otherwise stats never move when a new account opens the link.
+    try:
+        payload = ""
+        if context.args:
+            payload = " ".join(str(a) for a in context.args).strip()
+        if user and payload:
+            from lumen.platform.referrals.config import parse_referrer_from_start_payload
+            from lumen.application.commands.register_referral import RegisterReferralCommand
+            from lumen.application.handlers.referral_handlers import handle_register_referral
+
+            referrer_id = parse_referrer_from_start_payload(payload)
+            if referrer_id is not None:
+                try:
+                    result = await asyncio.to_thread(
+                        handle_register_referral,
+                        RegisterReferralCommand(
+                            referrer_telegram_id=int(referrer_id),
+                            referred_telegram_id=int(user.id),
+                        ),
+                    )
+                except RuntimeError:
+                    result = None
+                    await message.reply_text(
+                        "تم استلام الدعوة، لكن حفظ الإحالة غير متاح حالياً على الخادم."
+                    )
+                except Exception:
+                    result = None
+                try:
+                    if result is not None and result.ok and not result.already_registered:
+                        await message.reply_text(
+                            "مرحباً بك في Lumen — تم تسجيل دعوتك. "
+                            "أرسل أي رسالة أو استخدم البوت حتى تُحتسب الإحالة "
+                            "(فتح الرابط وحده لا يكفي)."
+                        )
+                    elif result is not None and result.ok and result.already_registered:
+                        await message.reply_text(
+                            "حسابك مرتبط بدعوة مسبقاً. أكمل استخدام البوت إن لم تُحتسب بعد."
+                        )
+                    elif result is not None and not result.ok:
+                        err = result.error or ""
+                        if err == "self_referral_forbidden":
+                            await message.reply_text(
+                                "لا يمكنك استخدام رابط الإحالة الخاص بك."
+                            )
+                        elif err == "register_rate_limited":
+                            await message.reply_text(
+                                "محاولات كثيرة حالياً — أعد المحاولة بعد دقيقة."
+                            )
+                        elif err == "referrer_invite_cap_reached":
+                            await message.reply_text(
+                                "هذا المحيل وصل للحد الأقصى من الدعوات."
+                            )
+                        elif err == "referral_backend_unavailable":
+                            await message.reply_text(
+                                "نظام الإحالة غير متاح حالياً (إعدادات الخادم)."
+                            )
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     if not is_allowed(user.id if user else None):
         lang = get_lang(user, context)
         await message.reply_text(t("not_authorized", lang))
@@ -57,56 +120,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    # Deep link: /start conversation_<id> OR /start ref_<telegram_id>
-    try:
-        payload = ""
-        if context.args:
-            payload = " ".join(str(a) for a in context.args).strip()
-        if user and payload:
-            # Referral deep-link (pending until invitee *uses* the bot)
-            try:
-                from lumen.platform.referrals.config import parse_referrer_from_start_payload
-                from lumen.application.commands.register_referral import RegisterReferralCommand
-                from lumen.application.handlers.referral_handlers import handle_register_referral
-
-                referrer_id = parse_referrer_from_start_payload(payload)
-                if referrer_id is not None:
-                    try:
-                        result = await asyncio.to_thread(
-                            handle_register_referral,
-                            RegisterReferralCommand(
-                                referrer_telegram_id=int(referrer_id),
-                                referred_telegram_id=int(user.id),
-                            ),
-                        )
-                    except RuntimeError:
-                        await message.reply_text(
-                            "نظام الإحالة غير متاح حالياً (إعدادات الخادم)."
-                        )
-                        result = None
-                    try:
-                        if result is not None and result.ok and not result.already_registered:
-                            await message.reply_text(
-                                "مرحباً بك في Lumen — تم تسجيل دعوتك. "
-                                "أرسل أي رسالة للبوت حتى تُحتسب الإحالة للمحيل."
-                            )
-                        elif not result.ok and result.error == "self_referral_forbidden":
-                            await message.reply_text(
-                                "لا يمكنك استخدام رابط الإحالة الخاص بك."
-                            )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            from lumen.bot.conversation_ui import apply_start_deep_link
-            note = apply_start_deep_link(context, int(user.id), payload)
-            if note:
-                try:
-                    await message.reply_text(note)
-                except Exception:
-                    pass
-    except Exception:
-        pass
 
     # Engine UI state → HOME + live facts + real keyboard
     from lumen.engine.services.ui_state.controller import buttons_for_phase
