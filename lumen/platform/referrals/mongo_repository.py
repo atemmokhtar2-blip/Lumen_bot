@@ -535,15 +535,25 @@ _repo: MongoReferralRepository | MemoryReferralRepository | None = None
 
 
 def get_referral_repository():
-    """Mongo when MONGODB_URI set; memory otherwise (local tests)."""
+    """Mongo when MONGODB_URI set; memory only in explicit local/test.
+
+    Deployed environments without MONGODB_URI must not silently use process-local
+    memory (data loss / multi-worker divergence = fake referral program).
+    """
     global _repo
     if _repo is not None:
         return _repo
     if (os.getenv("MONGODB_URI") or "").strip():
         _repo = MongoReferralRepository()
-    else:
+        return _repo
+    from lumen.platform.referrals.config import is_referral_dev_environment
+    if is_referral_dev_environment():
         _repo = MemoryReferralRepository()
-    return _repo
+        return _repo
+    raise RuntimeError(
+        "MONGODB_URI is required for the referral program outside dev/test "
+        "(refusing in-memory referrals on a deployed host)"
+    )
 
 
 def reset_referral_repository_for_tests() -> None:
