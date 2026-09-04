@@ -321,11 +321,33 @@ def select_model(*, task: str = "build") -> ModelChoice:
     except Exception:
         pass
 
+    # Hard prefer providers with live key pools (Groq / Gemini bulk env)
+    has_groq = False
+    has_gemini = False
+    try:
+        from lumen.engine.services.llm.key_pool import groq_keys, gemini_keys
+        has_groq = bool(groq_keys())
+        has_gemini = bool(gemini_keys())
+    except Exception:
+        has_groq = bool((os.getenv("GROQ_API_KEY") or os.getenv("GROQ_API_KEYS") or "").strip())
+        has_gemini = bool(
+            (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS") or "").strip()
+        )
+
     def _rank(m):
+        # 0 = preferred live pool, 1 = other
+        pool_rank = 1
+        if m.provider == "groq" and has_groq:
+            pool_rank = 0
+        elif m.provider == "gemini" and has_gemini and not has_groq:
+            pool_rank = 0
+        elif m.provider == "gemini" and has_gemini and has_groq:
+            # Groq first when both present (avoid gemini-2.5-pro 404 path on chat)
+            pool_rank = 2
         pref = prefer_index.get(m.id, 10_000)
         if role in {"plan", "critique", "reason"}:
-            return (pref, -int(m.strength), int(m.cost_tier))
-        return (pref, int(m.cost_tier), -int(m.strength))
+            return (pool_rank, pref, -int(m.strength), int(m.cost_tier))
+        return (pool_rank, pref, int(m.cost_tier), -int(m.strength))
 
     pool = sorted(pool, key=_rank)
     choice = _choice_from_catalog_model(pool[0])

@@ -84,6 +84,51 @@ def _llm_available() -> bool:
         return False
 
 
+def _plan_model_candidates() -> list:
+    """Ordered ModelChoice list for chat/plan with live keys only."""
+    out = []
+    seen = set()
+    try:
+        from lumen.engine.services.cline_runtime.model_router import select_model, ModelChoice
+        from lumen.engine.services.llm.model_catalog import available_models
+        from lumen.engine.services.cline_runtime.model_router import _choice_from_catalog_model
+        primary = select_model(task="plan")
+        if primary and primary.provider != "none" and primary.key_present():
+            out.append(primary)
+            seen.add((primary.provider, primary.model_id))
+        for m in available_models(role="plan") or available_models() or []:
+            if not m.key_present():
+                continue
+            c = _choice_from_catalog_model(m)
+            key = (c.provider, c.model_id)
+            if key in seen:
+                continue
+            if not c.key_present():
+                continue
+            seen.add(key)
+            out.append(c)
+        # Explicit Groq fallback if keys exist but catalog miss
+        if not any(x.provider == "groq" for x in out):
+            try:
+                from lumen.engine.services.llm.key_pool import groq_keys
+                if groq_keys():
+                    import os
+                    out.append(
+                        ModelChoice(
+                            "groq",
+                            (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip(),
+                            "GROQ_API_KEY",
+                            base_url="https://api.groq.com/openai/v1",
+                            catalog_id="groq-fast",
+                        )
+                    )
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("plan model candidates failed")
+    return out
+
+
 def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0, conversation_id: str = "") -> dict[str, Any]:
     """One agent brain step via model_catalog → select_model → agent_brain.decide.
 
@@ -156,16 +201,53 @@ def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0, conve
                 _conv_id = _conv.id
             except Exception:
                 _conv_id = ""
-        decision = agent_brain.decide(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            choice=choice,
-            task="plan",
-            user_id=int(user_id or 0),
-            conversation_id=_conv_id,
-        )
+        decision = {}
+        errors = []
+        candidates = _plan_model_candidates()
+        if not candidates and choice and choice.key_present():
+            candidates = [choice]
+        if not candidates:
+            return {
+                "tool": "",
+                "params": {},
+                "reply": "",
+                "error": "no_llm_key",
+                "provider": getattr(choice, "provider", "") or "none",
+            }
+        for cand in candidates:
+            try:
+                decision = agent_brain.decide(
+                    [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    choice=cand,
+                    task="plan",
+                    user_id=int(user_id or 0),
+                    conversation_id=_conv_id,
+                )
+            except Exception as exc:
+                if type(exc).__name__ == "InsufficientCreditsError":
+                    raise
+                errors.append(f"{cand.provider}:{type(exc).__name__}:{exc}")
+                decision = {"error": f"{type(exc).__name__}:{exc}", "provider": cand.provider}
+                continue
+            provider = str(decision.get("provider") or cand.provider)
+            err = str(decision.get("error") or "")
+            if err and not (decision.get("tool") or decision.get("reply") or decision.get("parse_ok")):
+                errors.append(f"{cand.provider}:{err}")
+                # try next provider/model
+                continue
+            # success or soft parse with content
+            break
+        else:
+            decision = {
+                "tool": "",
+                "params": {},
+                "reply": "",
+                "error": "; ".join(errors)[:500] or "all_providers_failed",
+                "provider": errors[0].split(":")[0] if errors else provider,
+            }
         provider = str(decision.get("provider") or provider)
         raw = str(decision.get("raw") or "")
         if decision.get("tool") or decision.get("reply") or decision.get("thought") or decision.get("parse_ok"):
@@ -426,12 +508,16 @@ def handle_user_turn(
         if decision.get("error") == "no_llm_key":
             msg = (
                 "المحرك لا يجد مفتاح LLM على السيرفر.\n"
-                "أضف GROQ_API_KEYS (أو GROQ_API_KEY) في متغيرات الاستضافة ثم أعد تشغيل الخدمة."
+                "أضف GROQ_API_KEYS=gsk_... و/أو GEMINI_API_KEYS=... في متغيرات الاستضافة ثم أعد تشغيل الخدمة."
             )
             state.final_message = msg
             return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
         if decision.get("error"):
-            msg = f"فشل عقل الوكيل ({decision.get('provider') or '?'}): {decision['error']}"
+            err = str(decision.get("error") or "unknown")
+            msg = (
+                f"فشل عقل الوكيل ({decision.get('provider') or '?'}): {err}\n"
+                "تأكد أن GROQ_API_KEYS أو GEMINI_API_KEYS مضبوطة على السيرفر بعد آخر تحديث."
+            )
             state.final_message = msg
             return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
 
