@@ -31,6 +31,25 @@ REFERRAL_STATS_COLLECTION = "referral_stats"
 REFERRAL_MAX_PER_REFERRER = _int_env("REFERRAL_MAX_PER_REFERRER", 100)
 REFERRAL_REGISTER_RATE_PER_MIN = _int_env("REFERRAL_REGISTER_RATE_PER_MIN", 20)
 
+def referral_admin_ids() -> set[int]:
+    """Telegram user ids allowed to run /referral_stats."""
+    raw = (os.getenv("REFERRAL_ADMIN_IDS") or os.getenv("ALLOWED_USER_IDS") or "").strip()
+    out: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.add(int(part))
+    return out
+
+def is_referral_admin(telegram_user_id: int) -> bool:
+    admins = referral_admin_ids()
+    if not admins:
+        return False
+    try:
+        return int(telegram_user_id) in admins
+    except (TypeError, ValueError):
+        return False
+
 
 def referral_deep_link_payload(telegram_user_id: int) -> str:
     uid = int(telegram_user_id)
