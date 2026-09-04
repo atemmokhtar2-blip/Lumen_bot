@@ -9,10 +9,11 @@ from typing import Optional
 from lumen.application.commands.qualify_referral import QualifyReferralCommand
 from lumen.application.commands.register_referral import RegisterReferralCommand
 from lumen.domain.entities.referral import Referral, ReferralError, ReferralStats
-from lumen.domain.services.referral_policy import is_reward_due, should_count_as_bot_use
+from lumen.domain.services.referral_policy import should_count_as_bot_use
 from lumen.platform.referrals.config import (
     REFERRAL_CREDIT_REASON,
     REFERRAL_QUALIFIED_TARGET,
+    REFERRAL_REGISTER_RATE_PER_MIN,
     REFERRAL_REWARD_CREDITS,
     REFERRAL_REWARD_USD,
 )
@@ -40,6 +41,17 @@ class QualifyReferralResult:
     notify_text: str = ""
 
 
+def _rate_allow(key: str, *, limit: int) -> bool:
+    if limit <= 0:
+        return True
+    try:
+        from lumen.platform.rate_limit import get_rate_limiter
+        return bool(get_rate_limiter().allow(key, limit=limit, window_sec=60.0))
+    except Exception:
+        logger.debug("referral rate-limit backend unavailable", exc_info=True)
+        return True
+
+
 def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralResult:
     from lumen.platform.referrals import get_referral_repository
 
@@ -50,33 +62,24 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
     if referrer == referred:
         return RegisterReferralResult(ok=False, error="self_referral_forbidden")
 
-
-    # Multi-worker rate limit via platform RateLimiter (Redis when configured)
-    try:
-        from lumen.platform.referrals.config import REFERRAL_REGISTER_RATE_PER_MIN
-        from lumen.platform.rate_limit import get_rate_limiter
-
-        lim = int(REFERRAL_REGISTER_RATE_PER_MIN)
-        if lim > 0:
-            rl = get_rate_limiter()
-            allowed = rl.allow(
-                f"referral_register:{referrer}",
-                limit=lim,
-                window_sec=60.0,
-            )
-            if not allowed:
-                return RegisterReferralResult(ok=False, error="register_rate_limited")
-    except Exception:
-        logger.debug("referral register rate-limit soft-fail", exc_info=True)
-
-
     try:
         repo = get_referral_repository()
+        # Idempotent FIRST — never burn rate limit on repeat /start
         existing = repo.get_by_referred(referred)
         if existing is not None:
             return RegisterReferralResult(
                 ok=True, referral=existing, already_registered=True
             )
+
+        lim = int(REFERRAL_REGISTER_RATE_PER_MIN)
+        if not _rate_allow("referral_register:referrer:%s" % referrer, limit=lim):
+            return RegisterReferralResult(ok=False, error="register_rate_limited")
+        if not _rate_allow(
+            "referral_register:referred:%s" % referred,
+            limit=max(3, lim // 4),
+        ):
+            return RegisterReferralResult(ok=False, error="register_rate_limited")
+
         ref = repo.create_pending(referrer, referred)
         return RegisterReferralResult(ok=True, referral=ref)
     except ReferralError as exc:
@@ -108,7 +111,6 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
             return QualifyReferralResult(ok=True, error="no_referral")
 
         stats = repo.stats_for(ref.referrer_telegram_id)
-        # Authoritative count (stats counter can lag under races)
         live_qualified = int(repo.count_qualified(ref.referrer_telegram_id))
         stats.qualified_count = live_qualified
         notify_text = ""
@@ -118,7 +120,7 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
             notify_text = (
                 "صديقك بدأ يستخدم Lumen."
                 + chr(10)
-                + "التقدم: %s/%s " % (stats.qualified_count, REFERRAL_QUALIFIED_TARGET)
+                + "التقدم: %s/%s " % (live_qualified, REFERRAL_QUALIFIED_TARGET)
                 + "(يُحتسب من يستخدم البوت فقط)."
             )
 
@@ -136,8 +138,10 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
                 reward_granted = _grant_referral_reward(ref.referrer_telegram_id)
                 if reward_granted:
                     stats = repo.stats_for(ref.referrer_telegram_id)
+                    stats.qualified_count = live_qualified
                     notify_text = (
-                        "مبروك! وصلت لـ %s مستخدم استخدموا البوت." % REFERRAL_QUALIFIED_TARGET
+                        "مبروك! وصلت لـ %s مستخدم استخدموا البوت."
+                        % REFERRAL_QUALIFIED_TARGET
                         + chr(10)
                         + "تم إضافة مكافأة $%s (%s رصيد) لحسابك."
                         % (REFERRAL_REWARD_USD, _reward_credit_amount())
