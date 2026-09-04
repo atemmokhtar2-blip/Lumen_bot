@@ -14,6 +14,38 @@ from .i18n import get_lang, set_lang, t, SUPPORTED
 from .session_store import get_session_store
 
 
+
+async def _qualify_bot_use(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int, event: str
+) -> None:
+    """Mark invitee as bot-user when they actually use the bot (not bare /start ref_)."""
+    try:
+        from lumen.application.commands.qualify_referral import QualifyReferralCommand
+        from lumen.application.handlers.referral_handlers import handle_qualify_referral
+
+        qres = await asyncio.to_thread(
+            handle_qualify_referral,
+            QualifyReferralCommand(
+                referred_telegram_id=int(user_id),
+                event=str(event or "message"),
+            ),
+        )
+        if (
+            qres
+            and getattr(qres, "notify_referrer_id", 0)
+            and getattr(qres, "notify_text", "")
+        ):
+            try:
+                await context.bot.send_message(
+                    chat_id=int(qres.notify_referrer_id),
+                    text=str(qres.notify_text)[:3500],
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     message = update.effective_message
@@ -186,6 +218,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(user.id if user else None):
         await message.reply_text("⛔ غير مصرح.")
         return
+    if user:
+        await _qualify_bot_use(context, int(user.id), "command_non_start")
     text = get_help_text()
     try:
         await safe_reply_text(message, text)
@@ -201,6 +235,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not is_allowed(user.id if user else None):
         await message.reply_text("⛔ غير مصرح.")
         return
+    if user:
+        await _qualify_bot_use(context, int(user.id), "command_non_start")
     pending = {}
     if context.user_data:
         for k in ("pending_run", "pending_deploy", "pending_live_run", "active_repo"):
@@ -227,6 +263,8 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
         return
+    if user and is_allowed(user.id if user else None):
+        await _qualify_bot_use(context, int(user.id), "command_non_start")
     args = (context.args or []) if context else []
     if args and args[0].lower() in SUPPORTED:
         set_lang(context, args[0].lower())
@@ -244,6 +282,8 @@ async def unknown_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not is_allowed(user.id if user else None):
         await message.reply_text("⛔ غير مصرح لك باستخدام هذا البوت.")
         return
+    if user:
+        await _qualify_bot_use(context, int(user.id), "command_non_start")
     await message.reply_text(
         "الأمر غير معروف. استخدم /help لعرض الأوامر المتاحة."
     )
@@ -271,6 +311,8 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lang = get_lang(user, context)
         await message.reply_text(t("not_authorized", lang))
         return
+    if user:
+        await _qualify_bot_use(context, int(user.id), "command_non_start")
     try:
         from lumen.platform.referrals import (
             REFERRAL_QUALIFIED_TARGET,
@@ -286,29 +328,14 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             from lumen.platform.referrals.config import referral_deep_link_payload
             link = referral_deep_link_payload(int(user.id))
-        def _live_stats(uid: int):
-            repo = get_referral_repository()
-            st = repo.stats_for(uid)
-            st.qualified_count = int(repo.count_qualified(uid))
-            try:
-                st.total_invited = max(
-                    int(st.total_invited), int(repo.count_for_referrer(uid))
-                )
-            except Exception:
-                pass
-            return st
-
-        stats = await asyncio.to_thread(_live_stats, int(user.id))
+        stats = await asyncio.to_thread(
+            get_referral_repository().stats_for, int(user.id)
+        )
         remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
-        done = min(int(stats.qualified_count), int(REFERRAL_QUALIFIED_TARGET))
-        target = max(1, int(REFERRAL_QUALIFIED_TARGET))
-        filled = int(round(10 * done / target))
-        bar = ("#" * filled) + ("-" * (10 - filled))
         nl = chr(10)
         text = nl.join(
             [
                 "⭐ برنامج إحالة Lumen",
-                "التقدم: [%s] %s/%s" % (bar, done, target),
                 "",
                 "رابط الدعوة الخاص بك:",
                 str(link),
@@ -349,9 +376,8 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
 
 
-
 async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin-only: program totals + top referrers by qualified bot-users."""
+    """Admin-only program-wide referral counters."""
     user = update.effective_user
     message = update.effective_message
     if not message or not user:
@@ -371,36 +397,21 @@ async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             get_referral_repository,
         )
 
-        def _load():
-            repo = get_referral_repository()
-            return repo.system_stats(), repo.top_referrers(limit=10)
-
-        st, top = await asyncio.to_thread(_load)
+        st = await asyncio.to_thread(get_referral_repository().system_stats)
         nl = chr(10)
-        lines = [
-            "إحصائيات برنامج الإحالة (أدمن)",
-            "",
-            f"• إجمالي الإحالات: {st.get('total_referrals', 0)}",
-            f"• مؤهّلون (استخدموا البوت): {st.get('qualified', 0)}",
-            f"• بانتظار الاستخدام: {st.get('pending', 0)}",
-            f"• مرفوضون: {st.get('rejected', 0)}",
-            f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
-            "",
-            f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} مستخدم نشط → ${REFERRAL_REWARD_USD}",
-            "",
-            "أعلى المحيلين (حسب من استخدم البوت):",
-        ]
-        if not top:
-            lines.append("— لا بيانات بعد —")
-        else:
-            for i, row in enumerate(top, 1):
-                paid = "yes" if row.get("reward_paid") else "no"
-                lines.append(
-                    f"{i}. tg:{row.get('referrer_telegram_id')} | "
-                    f"active={row.get('qualified_count', 0)} | "
-                    f"invited={row.get('total_invited', 0)} | "
-                    f"reward={paid}"
-                )
-        await message.reply_text(nl.join(lines))
+        text = nl.join(
+            [
+                "إحصائيات برنامج الإحالة (أدمن)",
+                "",
+                f"• إجمالي الإحالات: {st.get('total_referrals', 0)}",
+                f"• مؤهّلون (استخدموا البوت): {st.get('qualified', 0)}",
+                f"• بانتظار الاستخدام: {st.get('pending', 0)}",
+                f"• مرفوضون: {st.get('rejected', 0)}",
+                f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
+                "",
+                f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} → ${REFERRAL_REWARD_USD}",
+            ]
+        )
+        await message.reply_text(text)
     except Exception:
         await message.reply_text("تعذر جلب الإحصائيات.")
