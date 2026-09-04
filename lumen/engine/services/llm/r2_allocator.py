@@ -119,8 +119,8 @@ def difficulty_signal(
 _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "plan": (
         "groq-fast",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
+        "gemini-3.6-flash",
+        "gemini-3.6-flash",
         "deepseek-v3",
         "openrouter-auto",
         "openai-gpt-4o-mini",
@@ -129,14 +129,14 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     ),
     "critique": (
         "claude-3-haiku",
-        "gemini-2.5-pro",
+        "gemini-3.6-flash",
         "deepseek-v3",
         "openrouter-auto",
         "openai-gpt-4o-mini",
     ),
     "repair": (
         "deepseek-v3",
-        "gemini-2.5-pro",
+        "gemini-3.6-flash",
         "deepseek-v4-flash",
         "openai-gpt-4o-mini",
         "groq-fast",
@@ -145,7 +145,7 @@ _KIND_PREFER: dict[StepKind, tuple[str, ...]] = {
     "code": (
         "deepseek-v4-flash",
         "openrouter-deepseek-v4-flash",
-        "gemini-2.5-flash-lite",
+        "gemini-3.6-flash",
         "groq-fast",
         "openai-gpt-4o-mini",
         "deepseek-v3",

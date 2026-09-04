@@ -337,21 +337,24 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     if not keys:
         raise RuntimeError("no_gemini_key")
 
-    # Catalog model first, then env, then known-working Gemini model ids.
-    # gemini-2.5-pro often 404s on v1beta for many keys → fall through the chain.
+    # Catalog model first, then env, then CURRENT Google model ids (2026).
+    # Old ids (gemini-2.5-pro, gemini-2.0-flash, gemini-1.5-*) 404 for new API keys.
     _FALLBACK_MODELS = [
         (os.getenv("GEMINI_MODEL") or "").strip(),
         (os.getenv("GEMINI_PRO_MODEL") or "").strip(),
         (os.getenv("GEMINI_FLASH_MODEL") or "").strip(),
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-001",
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-pro-latest",
         "gemini-2.5-flash",
-        "gemini-2.5-flash-preview-05-20",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro",
-        "gemini-1.5-pro-latest",
-        "gemini-pro",
+        "gemini-2.5-pro",
     ]
     models = [(model_id or "").strip()] + _FALLBACK_MODELS
     models = [m for m in models if m]
@@ -366,7 +369,7 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
         "generationConfig": {
             "temperature": 0.15,
             "responseMimeType": "application/json",
-            "maxOutputTokens": 2048,
+            "maxOutputTokens": 4096,
         },
     }
     last_err: Exception | None = None

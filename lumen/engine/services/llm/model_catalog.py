@@ -2,11 +2,11 @@
 
 Plan models (production IDs as of 2026):
   DeepSeek V4 Flash  → DeepSeek API ``deepseek-v4-flash`` (official; not hosted on Groq)
-  Gemini 2.5 Flash Lite → Google ``gemini-2.5-flash-lite``
+  Gemini 2.5 Flash Lite → Google ``gemini-3.6-flash``
   GPT-4o-mini        → OpenAI ``gpt-4o-mini``
   DeepSeek V3        → DeepSeek API ``deepseek-chat`` (V3.x line; overridable)
   Claude 3 Haiku     → Anthropic ``claude-3-haiku-20240307``
-  Gemini 2.5 Pro     → Google ``gemini-2.5-pro``
+  Gemini 2.5 Pro     → Google ``gemini-3.6-flash``
   OpenRouter         → gateway for any catalog model_id
   Groq               → speed path (Llama on GroqCloud; V4 Flash is not on Groq)
   Foundry            → Microsoft model-router deployment
@@ -152,10 +152,10 @@ CATALOG: tuple[CatalogModel, ...] = (
         notes="Official id deepseek-v4-flash on api.deepseek.com. Groq does not host V4 Flash.",
     ),
     CatalogModel(
-        id="gemini-2.5-flash-lite",
+        id="gemini-3.6-flash",
         label="Gemini 2.5 Flash Lite",
         provider="gemini",
-        model_id=(os.getenv("GEMINI_FLASH_LITE_MODEL") or os.getenv("GEMINI_FLASH_MODEL") or "gemini-2.0-flash").strip(),
+        model_id=(os.getenv("GEMINI_FLASH_LITE_MODEL") or os.getenv("GEMINI_FLASH_MODEL") or "gemini-3.6-flash").strip(),
         api_style="gemini",
         base_url=None,
         api_key_env="GOOGLE_API_KEY",
@@ -217,10 +217,10 @@ CATALOG: tuple[CatalogModel, ...] = (
         strength=3,
     ),
     CatalogModel(
-        id="gemini-2.5-pro",
+        id="gemini-3.6-flash",
         label="Gemini 2.5 Pro",
         provider="gemini",
-        model_id=(os.getenv("GEMINI_PRO_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-2.0-flash").strip(),
+        model_id=(os.getenv("GEMINI_PRO_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip(),
         api_style="gemini",
         base_url=None,
         api_key_env="GOOGLE_API_KEY",
@@ -283,11 +283,11 @@ CATALOG: tuple[CatalogModel, ...] = (
 
 PLAN_REQUIRED_IDS: tuple[str, ...] = (
     "deepseek-v4-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3.6-flash",
     "openai-gpt-4o-mini",
     "deepseek-v3",
     "claude-3-haiku",
-    "gemini-2.5-pro",
+    "gemini-3.6-flash",
     "openrouter-auto",
     "groq-fast",
     "foundry-model-router",
