@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from .capability_boundaries import get_help_text
@@ -308,6 +308,27 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "ملاحظة: فتح الرابط وحده لا يُحتسب — يجب أن يستخدم المدعو البوت.",
             ]
         )
-        await message.reply_text(text)
+        # Share button (opens Telegram share sheet with the invite link)
+        share_kb = None
+        try:
+            from urllib.parse import quote
+            share_kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "مشاركة الرابط",
+                            url=(
+                                "https://t.me/share/url?url="
+                                + quote(str(link), safe="")
+                                + "&text="
+                                + quote("جرب Lumen", safe="")
+                            ),
+                        )
+                    ]
+                ]
+            )
+        except Exception:
+            share_kb = None
+        await message.reply_text(text, reply_markup=share_kb)
     except Exception:
         await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
