@@ -59,6 +59,11 @@ def _loop(get_service: Callable) -> None:
                     get_rating_engine().rate_pending(limit=50)
                 except Exception:
                     logger.debug("rate_pending skipped", exc_info=True)
+                try:
+                    from lumen.platform.credits.llm_live import flush_pending_llm_charges
+                    flush_pending_llm_charges(limit=50)
+                except Exception:
+                    logger.debug("flush_pending_llm skipped", exc_info=True)
         except Exception:
             logger.exception("ops scheduler iteration failed")
         _stop.wait(_log_interval())

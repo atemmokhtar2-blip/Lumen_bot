@@ -49,6 +49,7 @@ def explain_repo_with_llm(
     *,
     user_question: str = "",
     url: str = "",
+    user_id: int = 0,
 ) -> tuple[str | None, dict[str, Any]]:
     root = Path(root).resolve()
     tool_results = run_core_toolkit(root, user_question=user_question or "")
@@ -88,7 +89,7 @@ def explain_repo_with_llm(
         tools_block,
     ])
 
-    text = _freeform_completion(prompt)
+    text = _freeform_completion(prompt, user_id=int(user_id or 0))
     if text:
         meta["explainer"] = "groq_freeform"
         return text.strip(), meta
@@ -163,7 +164,7 @@ def _format_facts_ar(
     return "\n".join(lines)
 
 
-def _freeform_completion(prompt: str) -> str | None:
+def _freeform_completion(prompt: str, *, user_id: int = 0) -> str | None:
     try:
         import requests
         from lumen.engine.services.llm.key_pool import groq_keys, mark_groq_cooldown
@@ -234,6 +235,23 @@ def _freeform_completion(prompt: str) -> str | None:
                 ).strip()
                 if content:
                     logger.info("repo explain ok source=%s model=%s", source, model)
+                    try:
+                        from lumen.platform.credits.llm_live import (
+                            InsufficientCreditsError,
+                            meter_http_response,
+                        )
+                        meter_http_response(
+                            body,
+                            provider="groq",
+                            model_id=str(model or ""),
+                            prompt_chars=len(system) + len(prompt[:prompt_cap]),
+                            user_id=int(user_id or 0),
+                            state_id="repo_explain",
+                        )
+                    except InsufficientCreditsError:
+                        raise
+                    except Exception:
+                        logger.debug("repo explain meter failed", exc_info=True)
                     return content
             except Exception as exc:
                 logger.warning("repo explain fail %s %s: %s", source, model, type(exc).__name__)

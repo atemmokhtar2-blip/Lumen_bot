@@ -8,9 +8,12 @@ from .llm_live import (
     charge_llm_step,
     clear_charge_context,
     credits_for_llm_usage,
+    flush_pending_llm_charges,
     get_charge_context,
     live_charge_enabled,
+    meter_http_response,
     tenant_id_from_user,
+    usage_from_provider_body,
 )
 from .onboarding import (
     INITIAL_CREDITS_COMPUTED,
@@ -34,6 +37,8 @@ __all__ = [
     "InsufficientCreditsError",
     "charge_from_agent_state",
     "charge_llm_step",
+    "meter_http_response",
+    "flush_pending_llm_charges",
     "credits_for_llm_usage",
     "live_charge_enabled",
     "tenant_id_from_user",

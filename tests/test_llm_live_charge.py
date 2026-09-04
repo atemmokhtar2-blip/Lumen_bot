@@ -361,3 +361,46 @@ def test_engine_turn_binds_charge_context(credits_simple, monkeypatch):
     out = engine_turn._agent_llm_decide("hello", user_id=42)
     assert seen["bound"] is True
     assert out.get("error") in ("", None) or out.get("reply")
+
+
+def test_meter_http_response_model_aware(credits_simple):
+    credits_simple.credit_credits("tg:77", 100, idempotency_key="fund-tg77-001")
+    from lumen.platform.credits.llm_live import meter_http_response
+
+    r = meter_http_response(
+        {"usage": {"prompt_tokens": 10_000, "completion_tokens": 0, "total_tokens": 10_000}},
+        provider="openai",
+        model_id="gpt-4o-mini",
+        tenant_id="tg:77",
+        state_id="direct-test",
+        credit_service=credits_simple,
+    )
+    assert r and r.get("charged") is True
+    assert credits_simple.get_wallet("tg:77").current_balance < 100
+
+
+def test_flush_pending_llm_charges(credits_simple, tmp_path, monkeypatch):
+    monkeypatch.setenv("LUMEN_PENDING_LLM_DIR", str(tmp_path))
+    credits_simple.credit_credits("tg:78", 50, idempotency_key="fund-tg78-001")
+    from lumen.platform.credits.llm_live import enqueue_pending_llm_charge, flush_pending_llm_charges
+
+    enqueue_pending_llm_charge(
+        {
+            "idempotency_key": "llm:tg:78:pending:1:1",
+            "tenant_id": "tg:78",
+            "state_id": "pending",
+            "step": 1,
+            "call_index": 1,
+            "provider": "openai",
+            "model_id": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 5000,
+                "completion_tokens": 0,
+                "provider": "openai",
+                "model_id": "gpt-4o-mini",
+            },
+        }
+    )
+    stats = flush_pending_llm_charges(limit=10, credit_service=credits_simple)
+    assert stats["seen"] >= 1
+    assert stats["charged"] >= 1

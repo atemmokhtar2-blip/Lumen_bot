@@ -102,6 +102,17 @@ def _llm_json(system: str, user: str, *, timeout: float = 30.0) -> dict[str, Any
                             continue
                         body = r.json()
                         content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
+                        try:
+                            from lumen.platform.credits.llm_live import meter_http_response
+                            meter_http_response(
+                                body,
+                                provider="groq",
+                                model_id=str(model or ""),
+                                prompt_chars=len(system) + len(user[:6000]),
+                                state_id="semantic_extract",
+                            )
+                        except Exception:
+                            pass
                         return _parse_json(content)
                     except Exception:
                         continue
@@ -125,6 +136,17 @@ def _llm_json(system: str, user: str, *, timeout: float = 30.0) -> dict[str, Any
             body = r.json()
             parts = body.get("candidates", [{}])[0].get("content", {}).get("parts", [])
             content = "".join(p.get("text", "") for p in parts)
+            try:
+                from lumen.platform.credits.llm_live import meter_http_response
+                meter_http_response(
+                    body,
+                    provider="gemini",
+                    model_id=str(model or ""),
+                    prompt_chars=len(system) + len(user[:6000]),
+                    state_id="semantic_extract",
+                )
+            except Exception:
+                pass
             return _parse_json(content)
         except Exception:
             logger.debug("gemini extraction call failed", exc_info=True)

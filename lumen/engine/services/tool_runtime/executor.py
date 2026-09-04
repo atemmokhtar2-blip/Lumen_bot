@@ -294,7 +294,7 @@ def execute_tool(
         if name == "repo_inspect":
             return _tool_repo_inspect(params, user_data=user_data or {})
         if name == "repo_understand":
-            return _tool_repo_understand(params, user_data=user_data or {})
+            return _tool_repo_understand(params, user_data=user_data or {}, user_id=int(user_id or 0))
         if name == "repo_modify":
             return _tool_repo_modify(params, user_data=user_data or {})
         if name in {"host_start", "host_stop", "host_status", "host_diagnose"}:
@@ -504,6 +504,7 @@ def _tool_repo_understand(
     params: dict[str, Any],
     *,
     user_data: dict[str, Any],
+    user_id: int = 0,
 ) -> ToolResult:
     """Engine pulls/gathers files; Grok (LLM) understands and explains to the user."""
     path = str(params.get("path") or "").strip()
@@ -574,10 +575,12 @@ def _tool_repo_understand(
             explain_repo_with_llm,
         )
 
+        uid = int(user_id or user_data.get("user_id") or 0)
         explanation, meta = explain_repo_with_llm(
             root,
             user_question=user_q or "understand this repository",
             url=url or "",
+            user_id=uid,
         )
         active = user_data.get("active_repo")
         if not isinstance(active, dict):
@@ -608,6 +611,13 @@ def _tool_repo_understand(
             },
         )
     except Exception as exc:
+        if type(exc).__name__ == "InsufficientCreditsError":
+            return ToolResult(
+                ok=False,
+                tool="repo_understand",
+                message="رصيدك غير كافٍ لتغطية تكلفة فهم المستودع. اشحن رصيدك ثم أعد المحاولة.",
+                data={"path": str(root), "insufficient_credits": True},
+            )
         logger.exception("repo_understand/llm failed")
         return ToolResult(
             ok=False,

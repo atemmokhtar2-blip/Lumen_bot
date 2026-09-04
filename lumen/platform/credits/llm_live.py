@@ -420,12 +420,169 @@ def charge_from_agent_state(
     return receipt
 
 
+
+
+def usage_from_provider_body(
+    body: dict | None,
+    *,
+    provider: str = "",
+    model_id: str = "",
+    prompt_chars: int = 0,
+) -> dict[str, Any]:
+    """Normalize provider JSON → usage dict for model-aware metering."""
+    body = body or {}
+    usage: dict[str, Any] = {"provider": provider or "", "model_id": model_id or ""}
+    um = body.get("usageMetadata") or body.get("usage_metadata") or {}
+    if um:
+        usage["prompt_tokens"] = int(um.get("promptTokenCount") or um.get("prompt_tokens") or 0)
+        usage["completion_tokens"] = int(um.get("candidatesTokenCount") or um.get("completion_tokens") or 0)
+        usage["total_tokens"] = int(um.get("totalTokenCount") or um.get("total_tokens") or 0)
+    ou = body.get("usage") or {}
+    if ou and not usage.get("total_tokens"):
+        usage["prompt_tokens"] = int(ou.get("prompt_tokens") or ou.get("input_tokens") or 0)
+        usage["completion_tokens"] = int(ou.get("completion_tokens") or ou.get("output_tokens") or 0)
+        usage["total_tokens"] = int(ou.get("total_tokens") or 0)
+        if not usage["total_tokens"]:
+            usage["total_tokens"] = int(usage["prompt_tokens"]) + int(usage["completion_tokens"])
+    if not usage.get("total_tokens") and prompt_chars:
+        usage["prompt_tokens_est"] = max(1, int(prompt_chars) // 4)
+        usage["estimated"] = True
+    return usage
+
+
+def meter_http_response(
+    body: dict | None,
+    *,
+    provider: str,
+    model_id: str = "",
+    prompt_chars: int = 0,
+    tenant_id: str = "",
+    user_id: int = 0,
+    state_id: str = "",
+    step: int = 0,
+    credit_service: Any = None,
+) -> dict[str, Any] | None:
+    """Meter any direct HTTP LLM call (repo explain, extraction, etc.).
+
+    Prefer bound charge context; else tenant_id / user_id.
+    Raises InsufficientCreditsError on insufficient balance.
+    """
+    usage = usage_from_provider_body(
+        body, provider=provider, model_id=model_id, prompt_chars=prompt_chars
+    )
+    ctx = get_charge_context()
+    if ctx:
+        return charge_bound_usage(
+            usage,
+            provider=provider,
+            model_id=model_id,
+            credit_service=credit_service,
+        )
+    tid = str(tenant_id or "").strip()
+    if not tid and user_id:
+        tid = tenant_id_from_user(user_id)
+    if not tid:
+        # No tenant → cannot bill; log for ops (do not silently ignore in metrics)
+        logger.warning("meter_http_response skipped: no tenant provider=%s model=%s", provider, model_id)
+        return {"charged": False, "skipped": True, "reason": "no_tenant", "usage": usage}
+    return charge_llm_step(
+        tid,
+        usage,
+        state_id=state_id or f"direct:{provider}",
+        step=int(step or 0),
+        call_index=1,
+        provider=provider,
+        model_id=model_id,
+        credit_service=credit_service,
+    )
+
+
+def enqueue_pending_llm_charge(payload: dict[str, Any]) -> None:
+    """Idempotent residual queue for charges that could not complete (ops scheduler)."""
+    try:
+        from pathlib import Path
+        import json
+        import time
+
+        root = Path(os.getenv("LUMEN_PENDING_LLM_DIR") or "/tmp/lumen_pending_llm")
+        root.mkdir(parents=True, exist_ok=True)
+        key = str(payload.get("idempotency_key") or "").strip()
+        if not key or len(key) < 8:
+            key = f"pending:{int(time.time()*1000)}"
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in key)[:120]
+        path = root / f"{safe}.json"
+        if path.exists():
+            return
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.debug("enqueue_pending_llm_charge failed", exc_info=True)
+
+
+def flush_pending_llm_charges(*, limit: int = 50, credit_service: Any = None) -> dict[str, int]:
+    """Process residual LLM charge files (idempotent). Called from ops scheduler."""
+    stats = {"seen": 0, "charged": 0, "failed": 0, "skipped": 0}
+    try:
+        from pathlib import Path
+        import json
+
+        root = Path(os.getenv("LUMEN_PENDING_LLM_DIR") or "/tmp/lumen_pending_llm")
+        if not root.is_dir():
+            return stats
+        files = sorted(root.glob("*.json"))[: max(1, int(limit))]
+        for path in files:
+            stats["seen"] += 1
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                stats["failed"] += 1
+                continue
+            tid = str(payload.get("tenant_id") or "")
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            if not tid or not usage:
+                stats["skipped"] += 1
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                continue
+            try:
+                receipt = charge_llm_step(
+                    tid,
+                    usage,
+                    state_id=str(payload.get("state_id") or "pending"),
+                    step=int(payload.get("step") or 0),
+                    call_index=int(payload.get("call_index") or 1),
+                    provider=str(payload.get("provider") or usage.get("provider") or ""),
+                    model_id=str(payload.get("model_id") or usage.get("model_id") or ""),
+                    credit_service=credit_service,
+                )
+                if receipt.get("charged") or receipt.get("skipped"):
+                    stats["charged"] += 1
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            except InsufficientCreditsError:
+                stats["failed"] += 1
+                # keep file for retry after top-up
+            except Exception:
+                stats["failed"] += 1
+                logger.debug("flush pending llm failed", exc_info=True)
+    except Exception:
+        logger.debug("flush_pending_llm_charges error", exc_info=True)
+    return stats
+
+
 __all__ = [
     "InsufficientCreditsError",
     "live_charge_enabled",
     "tenant_id_from_user",
     "credits_for_llm_usage",
     "charge_llm_step",
+    "meter_http_response",
+    "usage_from_provider_body",
+    "flush_pending_llm_charges",
+    "enqueue_pending_llm_charge",
     "charge_from_agent_state",
     "bind_charge_context",
     "clear_charge_context",
