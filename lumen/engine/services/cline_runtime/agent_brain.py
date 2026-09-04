@@ -279,19 +279,16 @@ def _call_gemini(system: str, user: str, model_id: str) -> str:
     if not keys:
         raise RuntimeError("no_gemini_key")
 
+    # Phase-2: catalog/choice model_id is authoritative; env only as soft fallback
     models = [
         (model_id or "").strip(),
         (os.getenv("GEMINI_MODEL") or "").strip(),
-        "gemini-3.1-flash-lite",
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
-        "gemini-flash-latest",
     ]
     models = [m for m in models if m]
-    # dedupe
     seen: set[str] = set()
     models = [m for m in models if not (m in seen or seen.add(m))]
+    if not models:
+        raise RuntimeError("gemini_model_id_missing")
 
     prompt = f"{system}\n\n---\n\n{user}\n\n{_JSON_SCHEMA_HINT}"
     payload = {
@@ -819,6 +816,10 @@ def _call_openai_compat(
     content = str(msg.get("content") or msg.get("reasoning_content") or "").strip()
     if not content:
         raise RuntimeError("openai_compat_empty_content")
+    try:
+        _record_usage("openai_compat", model_id, body, prompt_chars=len(system) + len(user))
+    except Exception:
+        pass
     return content
 
 
@@ -855,13 +856,22 @@ def _call_anthropic(system: str, user: str, model_id: str, api_key: str) -> str:
 
 def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: ModelChoice) -> str:
     """Execute a catalog provider end-to-end (key → HTTP → text)."""
-    from lumen.engine.services.llm.model_catalog import CATALOG
+    from lumen.engine.services.llm.model_catalog import CATALOG, get_model
 
-    cat = next((m for m in CATALOG if m.provider == provider and m.model_id == choice.model_id), None)
+    # Phase-2 SoT: prefer catalog_id, then exact model_id, then provider
+    cat = None
+    cid = (getattr(choice, "catalog_id", None) or "").strip()
+    if cid:
+        cat = get_model(cid)
+    if cat is None:
+        cat = next((m for m in CATALOG if m.provider == provider and m.model_id == choice.model_id), None)
+    if cat is None:
+        # model_id may already be openrouter-prefixed
+        mid = (choice.model_id or "").strip()
+        cat = next((m for m in CATALOG if m.model_id == mid or mid.endswith("/" + m.model_id)), None)
     if cat is None:
         cat = next((m for m in CATALOG if m.provider == provider), None)
 
-    # Phase-1: OpenRouter key against deepseek/anthropic → rewrite endpoint via resolve_dispatch
     if cat is not None:
         try:
             disp = cat.resolve_dispatch()
@@ -869,13 +879,14 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
                 provider = disp["provider"] or provider
                 model_id = disp["model_id"] or choice.model_id
                 key = disp["api_key"]
-                if disp.get("base_url"):
-                    choice = type(choice)(
-                        provider,
-                        model_id,
-                        choice.api_key_env,
-                        base_url=disp["base_url"] or choice.base_url,
-                    )
+                base = disp.get("base_url") or choice.base_url
+                choice = ModelChoice(
+                    provider,
+                    model_id,
+                    choice.api_key_env,
+                    base_url=base,
+                    catalog_id=cid or cat.id,
+                )
             else:
                 key = ""
                 model_id = (choice.model_id or cat.model_id or "").strip()
