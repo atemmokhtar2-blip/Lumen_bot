@@ -195,6 +195,15 @@ async def _handle_hitl_callback(update, context, q, action_id: str) -> bool:
 
 
 async def handle_ui_callback(update, context) -> None:
+    # Referral: tapping UI counts as bot use for invitees
+    try:
+        u = getattr(update, "effective_user", None)
+        if u is not None:
+            from lumen.bot.referral_hooks import qualify_bot_use
+            await qualify_bot_use(context, int(u.id), "command_non_start")
+    except Exception:
+        logger.debug("referral qualify on ui callback soft-fail", exc_info=True)
+
     """Top-level UI callback — answer first, never hang on Redis/DB."""
     q = update.callback_query
     if q is None:
