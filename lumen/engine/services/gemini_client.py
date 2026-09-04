@@ -731,6 +731,39 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
                         model,
                         use_schema,
                     )
+                # Live metering — model-aware; stop if insufficient credits
+                try:
+                    from lumen.platform.credits.llm_live import (
+                        InsufficientCreditsError,
+                        meter_http_response,
+                    )
+                    uid = 0
+                    tid = ""
+                    if isinstance(context, dict):
+                        try:
+                            uid = int(context.get("user_id") or 0)
+                        except (TypeError, ValueError):
+                            uid = 0
+                        tid = str(context.get("tenant_id") or "")
+                    meter_http_response(
+                        body_json if isinstance(body_json, dict) else {},
+                        provider="gemini",
+                        model_id=str(model or ""),
+                        prompt_chars=len(system_text or "") + len(user_only or ""),
+                        user_id=uid,
+                        tenant_id=tid,
+                        state_id=f"gemini:{mode}",
+                    )
+                except Exception as _meter_exc:
+                    try:
+                        from lumen.platform.credits.llm_live import InsufficientCreditsError as _ICE
+                        if isinstance(_meter_exc, _ICE):
+                            raise
+                    except ImportError:
+                        pass
+                    if type(_meter_exc).__name__ == "InsufficientCreditsError":
+                        raise
+                    logger.debug("gemini meter non-fatal: %s", type(_meter_exc).__name__)
                 return result
             if rotate_key:
                 break

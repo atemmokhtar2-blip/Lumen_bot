@@ -404,3 +404,66 @@ def test_flush_pending_llm_charges(credits_simple, tmp_path, monkeypatch):
     stats = flush_pending_llm_charges(limit=10, credit_service=credits_simple)
     assert stats["seen"] >= 1
     assert stats["charged"] >= 1
+
+
+def test_gemini_client_meters_on_success(credits_simple, monkeypatch):
+    """gemini_client.generate must call meter after successful HTTP."""
+    from lumen.engine.services import gemini_client
+
+    credits_simple.credit_credits("tg:33", 50, idempotency_key="fund-tg33-001")
+    called = {"n": 0}
+
+    def fake_meter(body, **kwargs):
+        called["n"] += 1
+        assert kwargs.get("provider") == "gemini"
+        assert kwargs.get("user_id") == 33
+        return {"charged": True, "credits": 1}
+
+    monkeypatch.setattr("lumen.platform.credits.llm_live.meter_http_response", fake_meter)
+    monkeypatch.setattr(gemini_client, "_available_api_keys", lambda: [("t", "fake-key")])
+    monkeypatch.setattr(gemini_client, "model_name", lambda: "gemini-2.0-flash")
+    monkeypatch.setattr(gemini_client, "_MODEL_FALLBACKS", [])
+    monkeypatch.setattr(gemini_client, "_experiment_delay", lambda: None)
+    monkeypatch.setattr(gemini_client, "_timeout", lambda: 5.0)
+
+    class FakeResp:
+        status_code = 200
+        text = "{}"
+        def json(self):
+            return {
+                "candidates": [{"content": {"parts": [{"text": '{"purpose":"x","features_requested":["a"]}'}]}}],
+                "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 150},
+            }
+
+    class FakeSession:
+        def post(self, *a, **k):
+            return FakeResp()
+
+    import requests
+    monkeypatch.setattr(requests, "post", FakeSession().post)
+
+    # normalize may need ok structure - call generate in chat/translate mode carefully
+    # Use architect path through generate mode="architect"
+    try:
+        result = gemini_client.generate(
+            "architect",
+            "بوت ترحيب",
+            context={"user_id": 33, "tenant_id": "tg:33"},
+        )
+    except Exception as e:
+        # parse may fail; metering happens before return after parse success
+        # if parse fails, meter not called — force success via monkeypatch extract
+        pass
+
+    # If normalize worked, meter called
+    if called["n"] == 0:
+        # Force path by patching extract/normalize
+        monkeypatch.setattr(gemini_client, "_extract_json", lambda body: {"purpose": "x", "features_requested": ["a"]})
+        monkeypatch.setattr(gemini_client, "_apply_function_calls", lambda a, b: a)
+        monkeypatch.setattr(gemini_client, "_normalize_architect", lambda r: {"ok": True, "translation": r})
+        result = gemini_client.generate(
+            "architect",
+            "بوت ترحيب",
+            context={"user_id": 33, "tenant_id": "tg:33"},
+        )
+    assert called["n"] >= 1

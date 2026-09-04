@@ -24,6 +24,8 @@ def architect_view(state: AgentState) -> dict[str, Any]:
     traj = list((state.extensions or {}).get("trajectory") or [])[-12:]
     return {
         "user_text": (state.user_text or "")[:8000],
+        "user_id": int(getattr(state, "user_id", 0) or 0),
+        "tenant_id": f"tg:{int(getattr(state, 'user_id', 0) or 0)}" if int(getattr(state, "user_id", 0) or 0) else "",
         "user_intent": state.user_intent,
         "capability_id": state.capability_id,
         "route_params": dict(state.route_params or {}),

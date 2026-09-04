@@ -47,6 +47,8 @@ class GeminiSpecBackend(SpecBackend):
                 "qa_summary": view.get("qa_summary"),
                 "repair_directive": view.get("repair_directive"),
                 "previous_strict_spec": view.get("previous_strict_spec"),
+                "user_id": int(view.get("user_id") or 0),
+                "tenant_id": str(view.get("tenant_id") or ""),
             }
             try:
                 from lumen.engine.services.capability_detection.catalog import CAPABILITIES
