@@ -17,7 +17,10 @@ Tablet / llama.cpp server:
 """
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from typing import Any
 import hashlib
@@ -212,8 +215,16 @@ def select_model(*, task: str = "build") -> ModelChoice:
     forced = _forced_provider()
     role = _task_to_role(task)
 
-    # Production primary: Foundry Model Router (real Azure deployment)
-    if not forced or forced in {"auto", "foundry", "azure", "model-router"}:
+    # Production primary: Foundry when CLINE_ROUTER allows it
+    try:
+        from lumen.engine.services.llm.r2_allocator import router_mode
+        rmode = router_mode()
+    except Exception:
+        rmode = (os.getenv("CLINE_ROUTER") or "auto").strip().lower()
+    use_foundry = rmode in {"auto", "foundry"} and (
+        not forced or forced in {"auto", "foundry", "azure", "model-router"}
+    )
+    if use_foundry:
         try:
             from lumen.engine.services.llm.foundry_router import (
                 foundry_configured,
@@ -331,20 +342,110 @@ def select_model_for_goal(
     findings_count: int = 0,
     file_count: int = 0,
 ) -> tuple[ModelChoice, dict[str, Any]]:
-    """Select model using task difficulty band (hard → stronger providers first)."""
-    diff = estimate_task_difficulty(
-        task=task,
-        goal=goal,
-        features=features,
-        findings_count=findings_count,
-        file_count=file_count,
-    )
-    # For hard repair/critique, force plan-like order by mapping task
-    task_eff = task
-    if diff["band"] == "hard" and (task or "").lower() in {"build", "worker"}:
-        task_eff = "plan"  # stronger order
-    choice = select_model(task=task_eff)
-    return choice, diff
+    """Foundry first (if configured), else R2-style local allocator over catalog.
+
+    ``estimate_task_difficulty`` is only a signal inside the allocator — never
+    the sole decision.
+    """
+    meta: dict[str, Any] = {
+        "router": "none",
+        "task": task,
+    }
+
+    # 1) Foundry primary (production)
+    try:
+        from lumen.engine.services.llm.r2_allocator import router_mode
+        rmode = router_mode()
+    except Exception:
+        rmode = (os.getenv("CLINE_ROUTER") or "auto").strip().lower()
+    meta["cline_router"] = rmode
+
+    forced = _forced_provider()
+    if rmode in {"auto", "foundry"} and (not forced or forced in {"auto", "foundry", "azure", "model-router"}):
+        try:
+            from lumen.engine.services.llm.foundry_router import (
+                foundry_configured,
+                mode_for_task,
+                deployment_for_mode,
+                resolve_endpoint,
+            )
+            if foundry_configured():
+                mode = mode_for_task(task)
+                deployment = deployment_for_mode(mode)
+                choice = ModelChoice(
+                    "foundry",
+                    deployment,
+                    "AZURE_FOUNDRY_KEY",
+                    base_url=resolve_endpoint(),
+                )
+                meta.update({
+                    "router": "foundry",
+                    "foundry_mode": mode,
+                    "foundry_deployment": deployment,
+                })
+                # difficulty remains optional signal for logging / governor
+                try:
+                    sig = estimate_task_difficulty(
+                        task=task, goal=goal, features=features,
+                        findings_count=findings_count, file_count=file_count,
+                    )
+                    meta["difficulty_signal"] = sig
+                    meta["band"] = sig.get("band") or "medium"
+                    meta["score"] = sig.get("score")
+                except Exception:
+                    meta["band"] = "medium"
+                return choice, meta
+        except Exception as exc:
+            meta["foundry_error"] = type(exc).__name__
+
+    # 2) Local R2-style allocator (decompose + score catalog)
+    if rmode in {"auto", "local", "catalog", "r2"}:
+        try:
+            from lumen.engine.services.llm.r2_allocator import allocate
+            result = allocate(
+                task=task,
+                goal=goal,
+                features=features,
+                findings_count=findings_count,
+                file_count=file_count,
+            )
+            if result is not None:
+                choice = ModelChoice(
+                    result.provider,
+                    result.model_id,
+                    result.api_key_env,
+                    base_url=result.base_url,
+                )
+                choice = _apply_task_model_override(choice, task)
+                sig = result.difficulty_signal or {}
+                meta.update({
+                    "router": "r2_allocator",
+                    "step_kind": result.step_kind,
+                    "allocator_score": result.score,
+                    "reasons": list(result.reasons),
+                    "catalog_id": result.catalog_id,
+                    "difficulty_signal": sig,
+                    # LoopGovernor reads band + score
+                    "band": sig.get("band") or "medium",
+                    "score": sig.get("score"),
+                })
+                return choice, meta
+        except Exception as exc:
+            meta["allocator_error"] = type(exc).__name__
+            logger.warning("r2_allocator failed: %s", exc)
+
+    # 3) Legacy fallback — catalog role ranking via select_model
+    choice = select_model(task=task)
+    try:
+        meta["difficulty_signal"] = estimate_task_difficulty(
+            task=task, goal=goal, features=features,
+            findings_count=findings_count, file_count=file_count,
+        )
+        meta["band"] = meta["difficulty_signal"].get("band")
+    except Exception:
+        pass
+    meta["router"] = "catalog_fallback"
+    return choice, meta
 
 
 def describe_runtime() -> dict[str, Any]:

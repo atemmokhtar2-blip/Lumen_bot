@@ -14,7 +14,8 @@ def _clear_llm_keys():
         "AZURE_FOUNDRY_KEY", "AZURE_FOUNDRY_ENDPOINT",
         "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT",
         "AZURE_FOUNDRY_DEPLOYMENT", "AZURE_FOUNDRY_DEPLOYMENT_QUALITY",
-        "AZURE_FOUNDRY_DEPLOYMENT_COST", "AZURE_FOUNDRY_ROUTING_MODE",
+        "AZURE_FOUNDRY_DEPLOYMENT_COST", "AZURE_FOUNDRY_DEPLOYMENT_BALANCED",
+        "AZURE_OPENAI_DEPLOYMENT", "AZURE_FOUNDRY_ROUTING_MODE", "CLINE_ROUTER",
     ):
         os.environ.pop(k, None)
 
@@ -46,6 +47,8 @@ def test_mode_and_deployment_mapping():
 
 def test_select_model_uses_mode_deployments():
     _clear_llm_keys()
+    os.environ.pop("AZURE_FOUNDRY_DEPLOYMENT", None)
+    os.environ.pop("AZURE_OPENAI_DEPLOYMENT", None)
     os.environ["AZURE_FOUNDRY_ENDPOINT"] = "https://example.openai.azure.com"
     os.environ["AZURE_FOUNDRY_KEY"] = "azure-key-test"
     os.environ["AZURE_FOUNDRY_DEPLOYMENT_QUALITY"] = "router-quality"

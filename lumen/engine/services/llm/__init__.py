@@ -20,3 +20,4 @@ __all__ = [
     "catalog_snapshot",
 ]
 from . import foundry_router  # noqa: F401
+from . import r2_allocator  # noqa: F401
