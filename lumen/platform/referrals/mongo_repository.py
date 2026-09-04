@@ -145,7 +145,14 @@ class MongoReferralRepository:
                 "$set": {
                     "status": ReferralStatus.QUALIFIED.value,
                     "qualified_at": now,
-                }
+                },
+                "$push": {
+                    "history": {
+                        "status": ReferralStatus.QUALIFIED.value,
+                        "at": now,
+                        "event": "bot_use",
+                    }
+                },
             },
             return_document=ReturnDocument.AFTER,
         )
@@ -235,6 +242,59 @@ class MongoReferralRepository:
             return False
         # If another worker already set a different batch, we lost
         return str(doc.get("reward_batch_id") or "") == bid and bool(doc.get("reward_paid"))
+
+
+    def claim_milestone_slot(
+        self, referrer_telegram_id: int, *, milestone: int, batch_id: str
+    ) -> bool:
+        """CAS: claim one milestone reward (e.g. 10, 20, … 50)."""
+        from pymongo import ReturnDocument
+        from lumen.platform.referrals.config import REFERRAL_QUALIFIED_TARGET
+
+        rid = int(referrer_telegram_id)
+        ms = int(milestone)
+        bid = str(batch_id or "").strip()
+        if not bid or ms <= 0:
+            return False
+        live = self.count_qualified(rid)
+        if live < ms:
+            return False
+        res = self.stats.find_one_and_update(
+            {
+                "referrer_telegram_id": rid,
+                "milestones_paid": {"$nin": [ms]},
+            },
+            {
+                "$addToSet": {"milestones_paid": ms},
+                "$set": {
+                    "qualified_count": live,
+                    "updated_at": time.time(),
+                    "last_milestone_batch": bid,
+                },
+                "$setOnInsert": {
+                    "total_invited": live,
+                    "pending_count": 0,
+                    "rejected_count": 0,
+                    "reward_paid": False,
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if not res:
+            return False
+        paid2 = []
+        for x in res.get("milestones_paid") or []:
+            try:
+                paid2.append(int(x))
+            except Exception:
+                continue
+        if int(REFERRAL_QUALIFIED_TARGET) in paid2:
+            self.stats.update_one(
+                {"referrer_telegram_id": rid},
+                {"$set": {"reward_paid": True, "reward_batch_id": bid}},
+            )
+        return ms in paid2
 
     def release_reward_slot(self, referrer_telegram_id: int) -> None:
         rid = int(referrer_telegram_id)
@@ -414,6 +474,7 @@ class MemoryReferralRepository:
     def __init__(self) -> None:
         self._by_referred: dict[int, Referral] = {}
         self._reward_paid: dict[int, tuple[bool, str | None]] = {}
+        self._milestones: dict[int, set[int]] = {}
 
     def ensure_indexes(self) -> None:
         return None
@@ -491,6 +552,20 @@ class MemoryReferralRepository:
         if paid:
             return False
         self._reward_paid[rid] = (True, str(batch_id))
+        return True
+
+
+    def claim_milestone_slot(
+        self, referrer_telegram_id: int, *, milestone: int, batch_id: str
+    ) -> bool:
+        rid = int(referrer_telegram_id)
+        ms = int(milestone)
+        if self.count_qualified(rid) < ms:
+            return False
+        paid = self._milestones.setdefault(rid, set())
+        if ms in paid:
+            return False
+        paid.add(ms)
         return True
 
     def release_reward_slot(self, referrer_telegram_id: int) -> None:
