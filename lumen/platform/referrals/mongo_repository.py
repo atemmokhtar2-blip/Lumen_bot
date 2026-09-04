@@ -91,7 +91,11 @@ class MongoReferralRepository:
     def create_pending(
         self, referrer_telegram_id: int, referred_telegram_id: int
     ) -> Referral:
+        from lumen.platform.referrals.config import REFERRAL_MAX_PER_REFERRER
+
         ref = Referral.create_pending(referrer_telegram_id, referred_telegram_id)
+        if self.count_for_referrer(ref.referrer_telegram_id) >= int(REFERRAL_MAX_PER_REFERRER):
+            raise ReferralError("referrer_invite_cap_reached")
         doc = {
             "referrer_telegram_id": ref.referrer_telegram_id,
             "referred_telegram_id": ref.referred_telegram_id,
@@ -154,6 +158,13 @@ class MongoReferralRepository:
                     "referrer_telegram_id": int(referrer_telegram_id),
                     "status": ReferralStatus.QUALIFIED.value,
                 }
+            )
+        )
+
+    def count_for_referrer(self, referrer_telegram_id: int) -> int:
+        return int(
+            self.col.count_documents(
+                {"referrer_telegram_id": int(referrer_telegram_id)}
             )
         )
 
@@ -324,9 +335,13 @@ class MemoryReferralRepository:
     def create_pending(
         self, referrer_telegram_id: int, referred_telegram_id: int
     ) -> Referral:
+        from lumen.platform.referrals.config import REFERRAL_MAX_PER_REFERRER
+
         ref = Referral.create_pending(referrer_telegram_id, referred_telegram_id)
         if ref.referred_telegram_id in self._by_referred:
             raise ReferralError("referred_already_registered")
+        if self.count_for_referrer(ref.referrer_telegram_id) >= int(REFERRAL_MAX_PER_REFERRER):
+            raise ReferralError("referrer_invite_cap_reached")
         self._by_referred[ref.referred_telegram_id] = ref
         return ref
 
@@ -346,6 +361,12 @@ class MemoryReferralRepository:
             1
             for r in self._by_referred.values()
             if r.referrer_telegram_id == rid and r.is_countable()
+        )
+
+    def count_for_referrer(self, referrer_telegram_id: int) -> int:
+        rid = int(referrer_telegram_id)
+        return sum(
+            1 for r in self._by_referred.values() if r.referrer_telegram_id == rid
         )
 
     def stats_for(self, referrer_telegram_id: int) -> ReferralStats:
