@@ -49,12 +49,37 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    # Deep link: /start conversation_<id>
+    # Deep link: /start conversation_<id> OR /start ref_<telegram_id>
     try:
         payload = ""
         if context.args:
             payload = " ".join(str(a) for a in context.args).strip()
         if user and payload:
+            # Referral deep-link (pending until invitee *uses* the bot)
+            try:
+                from lumen.platform.referrals.config import parse_referrer_from_start_payload
+                from lumen.application.commands.register_referral import RegisterReferralCommand
+                from lumen.application.handlers.referral_handlers import handle_register_referral
+
+                referrer_id = parse_referrer_from_start_payload(payload)
+                if referrer_id is not None:
+                    result = await asyncio.to_thread(
+                        handle_register_referral,
+                        RegisterReferralCommand(
+                            referrer_telegram_id=int(referrer_id),
+                            referred_telegram_id=int(user.id),
+                        ),
+                    )
+                    if result.ok and not result.already_registered:
+                        try:
+                            await message.reply_text(
+                                "مرحباً بك في Lumen — تم تسجيل دعوتك. "
+                                "استخدم البوت حتى تُحتسب الإحالة للمحيل."
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             from lumen.bot.conversation_ui import apply_start_deep_link
             note = apply_start_deep_link(context, int(user.id), payload)
             if note:
@@ -229,3 +254,45 @@ async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "حالياً أستقبل النص فقط.\n"
         "اكتب وصف البوت أو استخدم /help — الصور والصوت غير مدعومين بعد."
     )
+
+
+async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show personal referral link + qualified progress toward $5 reward."""
+    user = update.effective_user
+    message = update.effective_message
+    if not message or not user:
+        return
+    if not is_allowed(user.id):
+        lang = get_lang(user, context)
+        await message.reply_text(t("not_authorized", lang))
+        return
+    try:
+        from lumen.platform.referrals import (
+            REFERRAL_QUALIFIED_TARGET,
+            REFERRAL_REWARD_USD,
+            bot_username_link,
+            get_referral_repository,
+        )
+
+        me = await context.bot.get_me()
+        username = (me.username or "").strip()
+        link = (
+            bot_username_link(username, int(user.id))
+            if username
+            else f"ref_{int(user.id)}"
+        )
+        stats = await asyncio.to_thread(
+            get_referral_repository().stats_for, int(user.id)
+        )
+        text = (
+            "⭐ برنامج إحالة Lumen\n\n"
+            f"رابطك:\n{link}\n\n"
+            f"المدعوون: {stats.total_invited}\n"
+            f"استخدموا البوت (يُحتسب): {stats.qualified_count}\n"
+            f"بانتظار الاستخدام: {stats.pending_count}\n"
+            f"الهدف: {REFERRAL_QUALIFIED_TARGET} مستخدم نشط → ${REFERRAL_REWARD_USD}\n"
+            f"المكافأة: {'تم الصرف' if stats.reward_paid else 'لم تُصرف بعد'}"
+        )
+        await message.reply_text(text)
+    except Exception:
+        await message.reply_text("تعذر جلب إحصائيات الإحالة حالياً.")
