@@ -584,23 +584,28 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     if result.state.phase == EngineUiPhase.HELP:
         facts.generate_hint = _help_body()
 
-    # Referral screen: inject personal link (bot username + user id)
+    # Referral screen: link never depends on Mongo — stats are best-effort
     if result.state.phase == EngineUiPhase.REFERRAL and uid:
         try:
-            from lumen.platform.referrals import (
-                REFERRAL_QUALIFIED_TARGET,
+            from lumen.platform.referrals.config import (
                 bot_username_link,
-                get_referral_repository,
+                referral_deep_link_payload,
             )
-            import asyncio as _aio
-
             me = await context.bot.get_me()
             uname = (me.username or "").strip()
             if uname:
                 link = bot_username_link(uname, int(uid))
             else:
-                from lumen.platform.referrals.config import referral_deep_link_payload
                 link = referral_deep_link_payload(int(uid))
+            result.state.slots["referral_link"] = str(link)
+        except Exception:
+            logger.debug("referral link build soft-fail", exc_info=True)
+        try:
+            from lumen.platform.referrals import (
+                REFERRAL_QUALIFIED_TARGET,
+                get_referral_repository,
+            )
+            import asyncio as _aio
 
             def _st():
                 r = get_referral_repository()
@@ -615,13 +620,17 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 return s
 
             st = await _aio.to_thread(_st)
-            result.state.slots["referral_link"] = str(link)
             result.state.slots["referral_stats_line"] = (
                 f"نشط {st.qualified_count}/{REFERRAL_QUALIFIED_TARGET} | "
                 f"مدعوون {st.total_invited} | بانتظار {st.pending_count}"
             )
         except Exception:
-            logger.debug("referral ui enrich soft-fail", exc_info=True)
+            result.state.slots.setdefault(
+                "referral_stats_line",
+                "الإحصائيات غير متاحة حالياً — الرابط يعمل",
+            )
+            logger.debug("referral stats soft-fail", exc_info=True)
+
 
     text = render_ui_message(result.state, facts)
     if not result.ok:
