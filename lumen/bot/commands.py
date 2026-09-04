@@ -256,8 +256,9 @@ async def handle_non_text(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+
 async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show personal referral link + qualified progress toward $5 reward."""
+    """Show personal referral link + qualified progress toward reward."""
     user = update.effective_user
     message = update.effective_message
     if not message or not user:
@@ -276,22 +277,32 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         me = await context.bot.get_me()
         username = (me.username or "").strip()
-        link = (
-            bot_username_link(username, int(user.id))
-            if username
-            else f"ref_{int(user.id)}"
-        )
+        if username:
+            link = bot_username_link(username, int(user.id))
+        else:
+            from lumen.platform.referrals.config import referral_deep_link_payload
+            link = referral_deep_link_payload(int(user.id))
         stats = await asyncio.to_thread(
             get_referral_repository().stats_for, int(user.id)
         )
-        text = (
-            "⭐ برنامج إحالة Lumen\n\n"
-            f"رابطك:\n{link}\n\n"
-            f"المدعوون: {stats.total_invited}\n"
-            f"استخدموا البوت (يُحتسب): {stats.qualified_count}\n"
-            f"بانتظار الاستخدام: {stats.pending_count}\n"
-            f"الهدف: {REFERRAL_QUALIFIED_TARGET} مستخدم نشط → ${REFERRAL_REWARD_USD}\n"
-            f"المكافأة: {'تم الصرف' if stats.reward_paid else 'لم تُصرف بعد'}"
+        remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
+        nl = chr(10)
+        text = nl.join(
+            [
+                "⭐ برنامج إحالة Lumen",
+                "",
+                "رابط الدعوة الخاص بك:",
+                str(link),
+                "",
+                f"• إجمالي المدعوين: {stats.total_invited}",
+                f"• استخدموا البوت (يُحتسب): {stats.qualified_count}",
+                f"• بانتظار الاستخدام: {stats.pending_count}",
+                f"• المتبقي للمكافأة: {remaining}",
+                f"• المكافأة: ${int(REFERRAL_REWARD_USD)} عند {int(REFERRAL_QUALIFIED_TARGET)} مستخدم نشط",
+                f"• حالة الصرف: {'تم ✓' if stats.reward_paid else 'لم تُصرف بعد'}",
+                "",
+                "ملاحظة: فتح الرابط وحده لا يُحتسب — يجب أن يستخدم المدعو البوت.",
+            ]
         )
         await message.reply_text(text)
     except Exception:
