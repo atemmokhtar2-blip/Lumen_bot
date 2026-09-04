@@ -37,7 +37,6 @@ class ModelChoice:
         if self.provider in {"ollama", "llamacpp", "openai_compat"}:
             if self.provider == "ollama":
                 return bool((os.getenv("OLLAMA_HOST") or "").strip())
-            # llama.cpp / OpenAI-compatible HTTP (tablet tunnel, local server)
             return bool(
                 (self.base_url or os.getenv("LLAMACPP_BASE_URL") or os.getenv("OPENAI_COMPAT_BASE_URL") or "").strip()
             )
@@ -63,6 +62,25 @@ class ModelChoice:
                 return bool(
                     (os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip()
                 )
+        if self.provider == "openai":
+            return bool((os.getenv("OPENAI_API_KEY") or "").strip())
+        if self.provider == "openrouter":
+            return bool((os.getenv("OPENROUTER_API_KEY") or "").strip())
+        if self.provider == "deepseek":
+            return bool(
+                (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENROUTER_API_KEY") or "").strip()
+            )
+        if self.provider == "anthropic":
+            return bool(
+                (os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENROUTER_API_KEY") or "").strip()
+            )
+        if self.provider == "foundry":
+            return bool(
+                (os.getenv("AZURE_FOUNDRY_KEY") or os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
+                and (self.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").strip()
+            )
+        if self.provider == "xai":
+            return bool((os.getenv("XAI_API_KEY") or "").strip())
         return bool((os.getenv(self.api_key_env) or "").strip())
 
 
@@ -162,109 +180,95 @@ def cache_stats() -> dict[str, Any]:
         }
 
 
-def select_model(*, task: str = "build") -> ModelChoice:
-
-    forced = _forced_provider()
-    table = {
-        "gemini": ModelChoice(
-            "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
-            "GOOGLE_API_KEY",
-        ),
-        "google": ModelChoice(
-            "gemini",
-            (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
-            "GOOGLE_API_KEY",
-        ),
-        "xai": ModelChoice(
-            "xai",
-            (os.getenv("XAI_MODEL") or "grok-2-latest").strip(),
-            "XAI_API_KEY",
-        ),
-        "grok": ModelChoice(
-            "xai",
-            (os.getenv("XAI_MODEL") or "grok-2-latest").strip(),
-            "XAI_API_KEY",
-        ),
-        "groq": ModelChoice(
-            "groq",
-            (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip(),
-            "GROQ_API_KEY",
-            base_url="https://api.groq.com/openai/v1",
-        ),
-        "ollama": ModelChoice(
-            "ollama",
-            (os.getenv("OLLAMA_MODEL") or "llama3.2").strip(),
-            "OLLAMA_HOST",
-            base_url=(os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").strip(),
-        ),
-        "qwen": ModelChoice(
-            "qwen",
-            (os.getenv("QWEN_MODEL") or os.getenv("DASHSCOPE_MODEL") or "qwen-plus").strip(),
-            "QWEN_API_KEY",
-            base_url=(
-                os.getenv("QWEN_BASE_URL")
-                or os.getenv("DASHSCOPE_BASE_URL")
-                or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-            ).strip(),
-        ),
-        "dashscope": ModelChoice(
-            "qwen",
-            (os.getenv("QWEN_MODEL") or "qwen-plus").strip(),
-            "QWEN_API_KEY",
-            base_url=(
-                os.getenv("QWEN_BASE_URL")
-                or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-            ).strip(),
-        ),
-        # Tablet / llama-server (OpenAI-compatible /v1/chat/completions)
-        "llamacpp": ModelChoice(
-            "llamacpp",
-            (os.getenv("LLAMACPP_MODEL") or os.getenv("OPENAI_COMPAT_MODEL") or "qwen").strip(),
-            "LLAMACPP_BASE_URL",
-            base_url=(
-                os.getenv("LLAMACPP_BASE_URL")
-                or os.getenv("OPENAI_COMPAT_BASE_URL")
-                or ""
-            ).strip().rstrip("/"),
-        ),
-        "openai_compat": ModelChoice(
-            "llamacpp",
-            (os.getenv("LLAMACPP_MODEL") or os.getenv("OPENAI_COMPAT_MODEL") or "qwen").strip(),
-            "LLAMACPP_BASE_URL",
-            base_url=(
-                os.getenv("LLAMACPP_BASE_URL")
-                or os.getenv("OPENAI_COMPAT_BASE_URL")
-                or ""
-            ).strip().rstrip("/"),
-        ),
-        "tablet": ModelChoice(
-            "llamacpp",
-            (os.getenv("LLAMACPP_MODEL") or "qwen").strip(),
-            "LLAMACPP_BASE_URL",
-            base_url=(os.getenv("LLAMACPP_BASE_URL") or "").strip().rstrip("/"),
-        ),
-    }
-    if forced in table:
-        choice = table[forced]
-        return _apply_task_model_override(choice, task)
-
-    # Phase A: task-aware preference order
-    # plan/critique → stronger models first; build → cheaper/faster first
+def _task_to_role(task: str) -> str:
     task_l = (task or "build").strip().lower()
     if task_l in {"plan", "planner", "architect"}:
-        order = ("gemini", "groq", "qwen", "xai", "llamacpp", "ollama")
-    elif task_l in {"critique", "critic", "review", "qa"}:
-        order = ("gemini", "groq", "qwen", "xai", "llamacpp", "ollama")
-    else:
-        # build / worker — Gemini first (fast, baked into engine), then Groq
-        order = ("gemini", "groq", "qwen", "xai", "llamacpp", "ollama")
+        return "plan"
+    if task_l in {"critique", "critic", "review", "qa"}:
+        return "critique"
+    if task_l in {"repair", "fix", "reason"}:
+        return "reason"
+    return "build"
 
-    for name in order:
-        choice = table.get(name)
-        if choice is not None and choice.key_present():
-            return _apply_task_model_override(choice, task_l)
-    return ModelChoice("none", "", "")
+
+def _choice_from_catalog_model(m) -> ModelChoice:
+    return ModelChoice(
+        m.provider,
+        m.model_id,
+        m.api_key_env,
+        base_url=m.base_url,
+    )
+
+
+def select_model(*, task: str = "build") -> ModelChoice:
+    """Pick a model from model_catalog (keys present only).
+
+    Forced provider via CLINE_LLM_PROVIDER still works; otherwise role-based
+    ranking from the unified catalog (not a hard-coded provider chain).
+    """
+    from lumen.engine.services.llm.model_catalog import CATALOG, available_models
+
+    forced = _forced_provider()
+    role = _task_to_role(task)
+
+    if forced and forced not in {"auto", "none"}:
+        # Prefer catalog entries for this provider
+        for m in CATALOG:
+            if m.provider == forced or (forced in {"google"} and m.provider == "gemini") or (
+                forced in {"grok"} and m.provider == "xai"
+            ):
+                choice = _choice_from_catalog_model(m)
+                if choice.key_present():
+                    return _apply_task_model_override(choice, task)
+        # Legacy forced providers not in catalog (qwen/ollama/llamacpp)
+        legacy = {
+            "qwen": ModelChoice(
+                "qwen",
+                (os.getenv("QWEN_MODEL") or "qwen-plus").strip(),
+                "QWEN_API_KEY",
+                base_url=(
+                    os.getenv("QWEN_BASE_URL")
+                    or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+                ).strip(),
+            ),
+            "ollama": ModelChoice(
+                "ollama",
+                (os.getenv("OLLAMA_MODEL") or "llama3.2").strip(),
+                "OLLAMA_HOST",
+                base_url=(os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").strip(),
+            ),
+            "llamacpp": ModelChoice(
+                "llamacpp",
+                (os.getenv("LLAMACPP_MODEL") or "qwen").strip(),
+                "LLAMACPP_BASE_URL",
+                base_url=(os.getenv("LLAMACPP_BASE_URL") or "").strip().rstrip("/"),
+            ),
+            "xai": ModelChoice(
+                "xai",
+                (os.getenv("XAI_MODEL") or "grok-2-latest").strip(),
+                "XAI_API_KEY",
+            ),
+        }
+        if forced in legacy:
+            c = legacy[forced]
+            if c.key_present():
+                return _apply_task_model_override(c, task)
+
+    pool = available_models(role=role)  # type: ignore[arg-type]
+    if not pool:
+        pool = available_models()
+    if not pool:
+        return ModelChoice("none", "", "")
+
+    # plan/critique/reason → strength first; build/fast → cost then strength
+    if role in {"plan", "critique", "reason"}:
+        pool = sorted(pool, key=lambda m: (-int(m.strength), int(m.cost_tier)))
+    else:
+        pool = sorted(pool, key=lambda m: (int(m.cost_tier), -int(m.strength)))
+
+    choice = _choice_from_catalog_model(pool[0])
+    return _apply_task_model_override(choice, task)
+
 
 
 def _apply_task_model_override(choice: ModelChoice, task: str) -> ModelChoice:
@@ -329,11 +333,8 @@ def describe_runtime() -> dict[str, Any]:
         "key_present": choice.key_present() if choice.provider != "none" else False,
         "base_url": choice.base_url,
         "forced": _forced_provider() or "auto",
-        "task_orders": {
-            "plan": "gemini>xai>qwen>groq>llamacpp>ollama",
-            "build": "llamacpp>qwen>groq>gemini>xai>ollama",
-            "critique": "gemini>xai>qwen>groq>llamacpp>ollama",
-        },
+        "task_orders": "model_catalog role ranking",
+        "catalog": __import__("lumen.engine.services.llm.model_catalog", fromlist=["catalog_snapshot"]).catalog_snapshot(),
         "cache": cache_stats(),
         "difficulty_sample": estimate_task_difficulty(task="build", goal="sample"),
     }
