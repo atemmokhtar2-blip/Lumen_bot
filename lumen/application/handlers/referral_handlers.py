@@ -84,6 +84,9 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         return RegisterReferralResult(ok=True, referral=ref)
     except ReferralError as exc:
         return RegisterReferralResult(ok=False, error=str(exc) or type(exc).__name__)
+    except RuntimeError as exc:
+        logger.error("register_referral backend: %s", exc)
+        return RegisterReferralResult(ok=False, error="referral_backend_unavailable")
     except Exception as exc:
         logger.warning("register_referral failed: %s", type(exc).__name__)
         return RegisterReferralResult(ok=False, error=type(exc).__name__)
@@ -163,6 +166,9 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
         )
     except ReferralError as exc:
         return QualifyReferralResult(ok=False, error=str(exc) or type(exc).__name__)
+    except RuntimeError as exc:
+        logger.error("qualify_referral backend: %s", exc)
+        return QualifyReferralResult(ok=False, error="referral_backend_unavailable")
     except Exception as exc:
         logger.warning("qualify_referral failed: %s", type(exc).__name__)
         return QualifyReferralResult(ok=False, error=type(exc).__name__)
