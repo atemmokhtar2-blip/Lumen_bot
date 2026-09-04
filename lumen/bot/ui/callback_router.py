@@ -288,6 +288,19 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     try:
         from lumen.bot.progress_tracker import is_generation_busy
         uid_busy = int(update.effective_user.id) if update.effective_user else 0
+        # Cooperative cancel from inline button
+        if action_id == "cancel_generate" and uid_busy:
+            try:
+                from lumen.engine.services.generation_cancel import request_cancel
+                request_cancel(uid_busy)
+            except Exception:
+                logger.exception("callback request_cancel failed")
+            try:
+                from lumen.bot.progress_tracker import clear_generation_busy
+                clear_generation_busy(uid_busy)
+            except Exception:
+                pass
+
         if uid_busy and is_generation_busy(uid_busy) and action_id not in {
             "cancel_generate", "home", "nav_back", "hitl_reject",
         }:

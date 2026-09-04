@@ -64,15 +64,42 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
     except Exception:
         pass
     state = run_agent(work_dir=work, goal=goal, ir_dict=ir_dict)
+
+    # Phase 5: hard acceptance gate — project must pass check_agent_project
+    try:
+        from .agent_acceptance import check_agent_project
+        acc = state.metadata.get("acceptance") or check_agent_project(work, goal=goal)
+        if not isinstance(acc, dict):
+            acc = check_agent_project(work, goal=goal)
+        state.metadata["acceptance"] = acc
+        if state.ok and not acc.get("ok"):
+            state.ok = False
+            state.stop_reason = state.stop_reason or "acceptance_failed"
+            state.errors.append(
+                "acceptance_failed:" + ",".join(str(x) for x in (acc.get("missing") or [])[:8])
+            )
+        elif not state.ok and acc.get("ok") and (state.files_written or list(work.rglob("*.py"))):
+            # Built enough to accept even if loop stop_reason was soft
+            state.ok = True
+            state.stop_reason = state.stop_reason or "completed_by_acceptance"
+    except Exception as acc_exc:
+        state.warnings.append(f"acceptance_gate:{type(acc_exc).__name__}")
+
     try:
         from lumen.engine.services.progress_bus import report_progress
+        acc = state.metadata.get("acceptance") or {}
         report_progress({
             "phase": "finish" if state.ok else "coding_agent",
             "tool": "finish" if state.ok else "coding_agent",
-            "detail": "اكتمل الوكيل" if state.ok else (state.stop_reason or "توقف"),
+            "detail": (
+                "اكتمل الوكيل ✓ قبول"
+                if state.ok
+                else (state.stop_reason or "توقف")
+            ),
             "provider": (state.metadata.get("router") or {}).get("provider"),
             "model": (state.metadata.get("router") or {}).get("model_id"),
             "files_written": len(state.files_written or []),
+            "acceptance_ok": bool(acc.get("ok")),
         })
     except Exception:
         pass

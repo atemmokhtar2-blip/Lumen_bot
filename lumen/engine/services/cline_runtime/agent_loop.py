@@ -801,6 +801,8 @@ def run_agent(
             "tool": "thinking",
             "detail": f"الوكيل يفكر في الخطوة {i}/{limit}…",
             "files_written": len(state.files_written or []),
+            "provider": choice.provider,
+            "model": choice.model_id,
         })
         decision = decide(
             msgs,

@@ -200,6 +200,12 @@ async def run_with_heartbeat(
     def worker() -> Any:
         tok = set_progress_handler(on_event)
         try:
+            if uid:
+                try:
+                    from lumen.engine.services.generation_cancel import clear_cancel
+                    clear_cancel(uid)
+                except Exception:
+                    pass
             bus_report({"phase": "starting", "tool": "starting", "step": 0})
             return fn(*args, **kwargs)
         finally:

@@ -182,6 +182,7 @@ def execute_ir(
         "foundry_mode": last_foundry.get("mode"),
         "stop_reason": cline_meta.get("stop_reason"),
         "files_written": cline_meta.get("files_written"),
+        "acceptance": cline_meta.get("acceptance"),
     }
     if cline_res.ok and cline_res.project_path:
         result = GenerationResult(

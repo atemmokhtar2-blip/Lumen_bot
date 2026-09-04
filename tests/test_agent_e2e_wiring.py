@@ -192,3 +192,40 @@ def test_execute_ir_flattens_router_metadata(tmp_path):
     assert isinstance(res.metadata, dict)
     # router recorded by agent_loop when keys present
     assert res.metadata.get("router") is not None or res.ok is not None
+
+
+def test_request_cancel_stops_flag():
+    from lumen.engine.services.generation_cancel import (
+        request_cancel, clear_cancel, is_cancelled,
+    )
+    clear_cancel(4242)
+    assert not is_cancelled(4242)
+    request_cancel(4242)
+    assert is_cancelled(4242)
+    clear_cancel(4242)
+    assert not is_cancelled(4242)
+
+
+def test_provider_acceptance_gate_rejects_empty(tmp_path):
+    """Phase 5: empty project cannot be ok even if loop claims finish."""
+    _clear_keys()
+    from unittest.mock import patch
+    from lumen.engine.services.cline_runtime import agent_brain
+    from lumen.engine.services.cline_runtime.provider_agent import build
+    from lumen.engine.services.cline_runtime.agent_state import AgentState
+
+    fake = AgentState(work_dir=str(tmp_path), goal="x")
+    fake.ok = True
+    fake.stop_reason = "completed"
+    fake.files_written = []
+    fake.metadata = {"router": {"provider": "openai", "model_id": "gpt-4o-mini"}}
+
+    with patch(
+        "lumen.engine.services.cline_runtime.provider_agent.run_agent",
+        return_value=fake,
+    ):
+        raw = build({"raw_request": "echo bot"}, str(tmp_path))
+    assert raw["ok"] is False
+    assert any("acceptance" in str(e) for e in (raw.get("errors") or [])) or (
+        (raw.get("metadata") or {}).get("acceptance") or {}
+    ).get("ok") is False

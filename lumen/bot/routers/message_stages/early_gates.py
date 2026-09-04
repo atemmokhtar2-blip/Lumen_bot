@@ -191,7 +191,26 @@ async def try_cancel(*, message, context, request: str) -> bool:
         if context.user_data is not None:
             context.user_data["cancel_generation"] = True
             context.user_data.pop("force_generate_once", None)
-        await message.reply_text("تم إلغاء العملية الحالية.")
+        uid = 0
+        try:
+            fu = getattr(message, "from_user", None)
+            if fu is not None and getattr(fu, "id", None):
+                uid = int(fu.id)
+        except Exception:
+            uid = 0
+        # Cooperative cancel — agent_loop polls is_cancelled each step
+        if uid:
+            try:
+                from lumen.engine.services.generation_cancel import request_cancel
+                request_cancel(uid)
+            except Exception:
+                logger.exception("request_cancel failed")
+            try:
+                from lumen.bot.progress_tracker import clear_generation_busy
+                clear_generation_busy(uid)
+            except Exception:
+                pass
+        await message.reply_text("تم إلغاء العملية الحالية. الوكيل هيتوقف عند أقرب خطوة.")
     except Exception:
         logger.exception("cancel failed")
     return True
