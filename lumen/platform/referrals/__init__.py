@@ -10,7 +10,9 @@ from lumen.platform.referrals.config import (
     REFERRAL_START_PREFIX,
     REFERRAL_STATS_COLLECTION,
     bot_username_link,
+    is_referral_admin,
     parse_referrer_from_start_payload,
+    referral_admin_ids,
     referral_deep_link_payload,
 )
 from lumen.platform.referrals.mongo_repository import (
@@ -33,6 +35,8 @@ __all__ = [
     "referral_deep_link_payload",
     "parse_referrer_from_start_payload",
     "bot_username_link",
+    "referral_admin_ids",
+    "is_referral_admin",
     "MongoReferralRepository",
     "MemoryReferralRepository",
     "get_referral_repository",
