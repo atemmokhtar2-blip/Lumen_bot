@@ -778,14 +778,11 @@ def _call_openai_compat(
     api_key: str,
     extra_headers: dict | None = None,
 ) -> str:
-    """Shared OpenAI-compatible chat/completions for openai / openrouter / deepseek / foundry."""
+    """OpenAI-compatible /chat/completions (openai, openrouter, deepseek, foundry, groq-style)."""
     import requests
 
     url = (base_url or "").rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
     anti = (
@@ -809,97 +806,56 @@ def _call_openai_compat(
     if not choices:
         raise RuntimeError("openai_compat_empty_choices")
     msg = choices[0].get("message") or {}
-    content = str(msg.get("content") or "").strip()
-    if not content:
-        content = str(msg.get("reasoning_content") or "").strip()
+    content = str(msg.get("content") or msg.get("reasoning_content") or "").strip()
     if not content:
         raise RuntimeError("openai_compat_empty_content")
     return content
 
 
+def _call_anthropic(system: str, user: str, model_id: str, api_key: str) -> str:
+    import requests
+
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model_id,
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [{"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"}],
+        },
+        timeout=float(os.getenv("CLINE_LLM_TIMEOUT") or "90"),
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"anthropic_http_{resp.status_code}:{(resp.text or '')[:400]}")
+    text = ""
+    for part in (resp.json().get("content") or []):
+        if isinstance(part, dict) and part.get("type") == "text":
+            text += str(part.get("text") or "")
+    text = text.strip()
+    if not text:
+        raise RuntimeError("anthropic_empty_content")
+    return text
+
+
 def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: ModelChoice) -> str:
-    """Execute catalog providers that share OpenAI-compatible HTTP."""
-    if provider == "openai":
-        key = (os.getenv("OPENAI_API_KEY") or "").strip()
-        if not key:
-            raise RuntimeError("OPENAI_API_KEY missing")
-        return _call_openai_compat(
-            system, user, choice.model_id,
-            base_url=choice.base_url or "https://api.openai.com/v1",
-            api_key=key,
-        )
-    if provider == "openrouter":
-        key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-        if not key:
-            raise RuntimeError("OPENROUTER_API_KEY missing")
-        return _call_openai_compat(
-            system, user, choice.model_id,
-            base_url=choice.base_url or "https://openrouter.ai/api/v1",
-            api_key=key,
-            extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
-        )
-    if provider == "deepseek":
-        key = (os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENROUTER_API_KEY") or "").strip()
-        if not key:
-            raise RuntimeError("DEEPSEEK_API_KEY missing")
-        base = choice.base_url or "https://api.deepseek.com"
-        if "openrouter" in key or (os.getenv("OPENROUTER_API_KEY") or "") == key:
-            # via openrouter if only that key present
-            if not (os.getenv("DEEPSEEK_API_KEY") or "").strip():
-                return _call_openai_compat(
-                    system, user,
-                    choice.model_id if "/" in choice.model_id else f"deepseek/{choice.model_id}",
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=key,
-                    extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
-                )
-        return _call_openai_compat(
-            system, user, choice.model_id,
-            base_url=base if base.endswith("/v1") else base.rstrip("/") + "/v1",
-            api_key=key,
-        )
-    if provider == "foundry":
-        key = (os.getenv("AZURE_FOUNDRY_KEY") or os.getenv("AZURE_OPENAI_API_KEY") or "").strip()
-        endpoint = (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").strip().rstrip("/")
-        if not key or not endpoint:
-            raise RuntimeError("AZURE_FOUNDRY_ENDPOINT/KEY missing")
-        # Azure OpenAI-style path
-        url_base = endpoint if endpoint.endswith("/v1") else endpoint + "/v1"
-        return _call_openai_compat(
-            system, user, choice.model_id or "model-router",
-            base_url=url_base,
-            api_key=key,
-        )
+    """Run catalog providers: openai_compat family + anthropic."""
+    from lumen.engine.services.llm.model_catalog import CATALOG
+
+    # Resolve key/base from matching catalog row when possible
+    cat = next((m for m in CATALOG if m.provider == provider and m.model_id == choice.model_id), None)
+    if cat is None:
+        cat = next((m for m in CATALOG if m.provider == provider), None)
+    key = (cat.resolve_api_key() if cat else "") or (os.getenv(choice.api_key_env) or "").strip()
+
     if provider == "anthropic":
-        # Prefer native key; else OpenRouter Claude id
-        ant = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-        if ant:
-            import requests
-            url = "https://api.anthropic.com/v1/messages"
-            headers = {
-                "x-api-key": ant,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
-            payload = {
-                "model": choice.model_id,
-                "max_tokens": 4096,
-                "system": system,
-                "messages": [{"role": "user", "content": f"{user}\n\n{_JSON_SCHEMA_HINT}"}],
-            }
-            resp = requests.post(url, headers=headers, json=payload, timeout=float(os.getenv("CLINE_LLM_TIMEOUT") or "90"))
-            if resp.status_code >= 400:
-                raise RuntimeError(f"anthropic_http_{resp.status_code}:{(resp.text or '')[:400]}")
-            body = resp.json()
-            parts = body.get("content") or []
-            text = ""
-            for part in parts:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text += str(part.get("text") or "")
-            text = text.strip()
-            if not text:
-                raise RuntimeError("anthropic_empty_content")
-            return text
+        if key and not key.startswith("sk-or-"):
+            return _call_anthropic(system, user, choice.model_id, key)
+        # OpenRouter fallback
         or_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
         if not or_key:
             raise RuntimeError("ANTHROPIC_API_KEY missing")
@@ -910,7 +866,47 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
             api_key=or_key,
             extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
         )
-    raise RuntimeError(f"unsupported_catalog_provider:{provider}")
+
+    endpoints = {
+        "openai": ("https://api.openai.com/v1", None),
+        "openrouter": (
+            "https://openrouter.ai/api/v1",
+            {"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
+        ),
+        "deepseek": ("https://api.deepseek.com/v1", None),
+        "foundry": (
+            (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/")
+            + ("" if (choice.base_url or os.getenv("AZURE_FOUNDRY_ENDPOINT") or "").rstrip("/").endswith("/v1") else "/v1"),
+            None,
+        ),
+    }
+    if provider not in endpoints:
+        raise RuntimeError(f"unsupported_catalog_provider:{provider}")
+    base, extra = endpoints[provider]
+    if provider == "deepseek":
+        base = (choice.base_url or "https://api.deepseek.com").rstrip("/")
+        if not base.endswith("/v1"):
+            base = base + "/v1"
+        # OpenRouter key only
+        if not (os.getenv("DEEPSEEK_API_KEY") or "").strip() and (os.getenv("OPENROUTER_API_KEY") or "").strip():
+            key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+            mid = choice.model_id if "/" in choice.model_id else f"deepseek/{choice.model_id}"
+            return _call_openai_compat(
+                system, user, mid,
+                base_url="https://openrouter.ai/api/v1",
+                api_key=key,
+                extra_headers={"HTTP-Referer": "https://lumen.bot", "X-Title": "Lumen"},
+            )
+    if provider == "foundry" and not base.strip("/"):
+        raise RuntimeError("AZURE_FOUNDRY_ENDPOINT missing")
+    if not key:
+        raise RuntimeError(f"{provider}_api_key_missing")
+    return _call_openai_compat(
+        system, user, choice.model_id,
+        base_url=base,
+        api_key=key,
+        extra_headers=extra,
+    )
 
 
 
@@ -986,7 +982,7 @@ def decide(
                             raw = _call_gemini(
                                 system,
                                 user,
-                                (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
+                                (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
                             )
                             provider = "gemini"
                         else:
@@ -1118,7 +1114,7 @@ def decide(
                     provider = "gemini"
                     choice = ModelChoice(
                         "gemini",
-                        (os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite").strip(),
+                        (os.getenv("GEMINI_MODEL") or os.getenv("GEMINI_FLASH_LITE_MODEL") or "gemini-2.5-flash-lite").strip(),
                         "GOOGLE_API_KEY",
                     )
             except Exception:

@@ -6,7 +6,7 @@ def test_catalog_has_requested_models():
     from lumen.engine.services.llm.model_catalog import CATALOG
 
     ids = {m.id for m in CATALOG}
-    assert "groq-deepseek-v4-flash" in ids
+    assert "deepseek-v4-flash" in ids
     assert "gemini-2.5-flash-lite" in ids
     assert "gemini-2.5-pro" in ids
     assert "openai-gpt-4o-mini" in ids
@@ -14,6 +14,7 @@ def test_catalog_has_requested_models():
     assert "claude-3-haiku" in ids
     assert "openrouter-auto" in ids
     assert "foundry-model-router" in ids
+    assert "groq-fast" in ids or "deepseek-v4-flash" in ids
 
 
 def test_catalog_snapshot_safe():
