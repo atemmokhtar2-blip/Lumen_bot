@@ -184,9 +184,24 @@ def _grant_referral_reward(referrer_telegram_id: int) -> bool:
     )
     expires = time.time() + _REFERRAL_PROMO_TTL_SEC
     try:
+        import os
         from lumen.platform.credits import get_credit_service
 
-        result = get_credit_service().credit_credits(
+        svc = get_credit_service()
+        store_name = type(getattr(svc, "_store", None)).__name__
+        env = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
+        devish = env in {"dev", "development", "local", "test", ""}
+        # Fail closed: never mint durable referral rewards into process-local memory
+        # in a deployed environment (would vanish on restart / multi-worker).
+        if store_name == "MemoryCreditsStore" and not devish:
+            logger.error(
+                "referral reward refused: MemoryCreditsStore in ENVIRONMENT=%s "
+                "(set DATABASE_URL/POSTGRES_URL for durable credits)",
+                env or "(unset)",
+            )
+            return False
+
+        result = svc.credit_credits(
             tid,
             amount,
             reason=REFERRAL_CREDIT_REASON,
