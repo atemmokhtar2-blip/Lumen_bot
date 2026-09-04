@@ -70,14 +70,18 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             referred_telegram_id=int(user.id),
                         ),
                     )
-                    if result.ok and not result.already_registered:
-                        try:
+                    try:
+                        if result.ok and not result.already_registered:
                             await message.reply_text(
                                 "مرحباً بك في Lumen — تم تسجيل دعوتك. "
-                                "استخدم البوت حتى تُحتسب الإحالة للمحيل."
+                                "أرسل أي رسالة للبوت حتى تُحتسب الإحالة للمحيل."
                             )
-                        except Exception:
-                            pass
+                        elif not result.ok and result.error == "self_referral_forbidden":
+                            await message.reply_text(
+                                "لا يمكنك استخدام رابط الإحالة الخاص بك."
+                            )
+                    except Exception:
+                        pass
             except Exception:
                 pass
             from lumen.bot.conversation_ui import apply_start_deep_link
