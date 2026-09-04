@@ -14,6 +14,39 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+_mongo_client = None
+_mongo_db = None
+
+
+def get_mongo_db():
+    """Shared Mongo database handle (same MONGODB_URI / MONGODB_DB as users).
+
+    Used by referrals and any feature that must hit the same cluster/db.
+    """
+    global _mongo_client, _mongo_db
+    if _mongo_db is not None:
+        return _mongo_db
+    try:
+        from pymongo import MongoClient
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("pymongo is required for MONGODB_URI") from exc
+    uri = (os.getenv("MONGODB_URI") or "").strip()
+    if not uri:
+        raise ValueError("MONGODB_URI is required")
+    db_name = (os.getenv("MONGODB_DB") or "lumen").strip()
+    timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
+    _mongo_client = MongoClient(
+        uri,
+        serverSelectionTimeoutMS=timeout,
+        connectTimeoutMS=timeout,
+        retryWrites=True,
+    )
+    _mongo_db = _mongo_client[db_name]
+    logger.info("shared MongoDB ready db=%s", db_name)
+    return _mongo_db
+
+
 # Canonical plan ids — explorer | starter | growth
 CANONICAL_PLANS = frozenset({"free", "starter", "growth"})
 
