@@ -331,7 +331,7 @@ class MongoReferralRepository:
 
 
     def top_referrers(self, *, limit: int = 10) -> list[dict]:
-        """Top referrers by qualified count (admin leaderboard)."""
+        """Top referrers by qualified bot-users (stats first, else aggregate referrals)."""
         lim = max(1, min(50, int(limit or 10)))
         try:
             cur = self.stats.find(
@@ -353,6 +353,55 @@ class MongoReferralRepository:
                         "total_invited": int(d.get("total_invited") or 0),
                         "pending_count": int(d.get("pending_count") or 0),
                         "reward_paid": bool(d.get("reward_paid")),
+                    }
+                )
+            if out:
+                return out
+            # Fallback: aggregate from referrals collection (stats may lag)
+            pipeline = [
+                {
+                    "$group": {
+                        "_id": "$referrer_telegram_id",
+                        "total_invited": {"$sum": 1},
+                        "qualified_count": {
+                            "$sum": {
+                                "$cond": [
+                                    {"$eq": ["$status", ReferralStatus.QUALIFIED.value]},
+                                    1,
+                                    0,
+                                ]
+                            }
+                        },
+                        "pending_count": {
+                            "$sum": {
+                                "$cond": [
+                                    {"$eq": ["$status", ReferralStatus.PENDING.value]},
+                                    1,
+                                    0,
+                                ]
+                            }
+                        },
+                    }
+                },
+                {"$sort": {"qualified_count": -1}},
+                {"$limit": lim},
+            ]
+            out = []
+            for d in self.col.aggregate(pipeline):
+                rid = int(d.get("_id") or 0)
+                paid = False
+                try:
+                    sdoc = self.stats.find_one({"referrer_telegram_id": rid}) or {}
+                    paid = bool(sdoc.get("reward_paid"))
+                except Exception:
+                    paid = False
+                out.append(
+                    {
+                        "referrer_telegram_id": rid,
+                        "qualified_count": int(d.get("qualified_count") or 0),
+                        "total_invited": int(d.get("total_invited") or 0),
+                        "pending_count": int(d.get("pending_count") or 0),
+                        "reward_paid": paid,
                     }
                 )
             return out
