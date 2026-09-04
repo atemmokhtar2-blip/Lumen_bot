@@ -137,6 +137,35 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             ],
         )
 
+
+    if phase == EngineUiPhase.SETTINGS:
+        return html_card(
+            "الإعدادات",
+            [
+                (
+                    "الخيارات",
+                    "• الإحالة — ادعُ أصدقاءك واحصل على $5 عند 50 مستخدماً نشطاً.",
+                ),
+            ],
+            subtitle="إعدادات الحساب",
+        )
+
+    if phase == EngineUiPhase.REFERRAL:
+        link = (state.slots or {}).get("referral_link") or ""
+        stats_line = (state.slots or {}).get("referral_stats_line") or "—"
+        return html_card(
+            "برنامج الإحالة — $5",
+            [
+                ("رابطك", link or "اضغط تحديث لجلب الرابط"),
+                ("التقدم", stats_line),
+                (
+                    "الشروط",
+                    "المكافأة لمن يستخدم البوت فقط. كل 10 نشطين ≈ $1 حتى $5 عند 50.",
+                ),
+            ],
+            subtitle="مشاركة الرابط",
+        )
+
     if phase == EngineUiPhase.DASHBOARD:
         host_lines: list[str] = []
         shown = 0
