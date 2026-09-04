@@ -104,6 +104,14 @@ async def cmd_history(update, context) -> None:
 
 
 async def handle_conversation_callback(update, context) -> bool:
+    try:
+        u = getattr(update, "effective_user", None)
+        if u is not None:
+            from lumen.bot.referral_hooks import qualify_bot_use
+            await qualify_bot_use(context, int(u.id), "command_non_start")
+    except Exception:
+        pass
+
     """Handle conv:select:ID and conv:new. Returns True if handled."""
     q = update.callback_query
     if not q or not q.data:
