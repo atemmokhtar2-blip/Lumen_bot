@@ -434,6 +434,15 @@ def _make_builder(registry: Any, board: Any):
                 constraints=_constraints,
                 user_id=int(getattr(state, "user_id", 0) or 0),
             )
+            state.extensions = dict(state.extensions or {})
+            state.extensions["last_coding_session"] = {
+                "ok": result.get("ok"),
+                "provider": result.get("provider"),
+                "model_id": result.get("model_id"),
+                "router": result.get("router"),
+                "stop_reason": result.get("stop_reason"),
+                "steps": result.get("steps"),
+            }
             # Merge isolation → work for declared task files (worktree or copy)
             if use_iso and _wt_session is not None:
                 from ..worktree_isolation import merge_task_workspace, release_task_workspace
@@ -626,7 +635,11 @@ def _make_builder(registry: Any, board: Any):
                 "ok": result.get("ok"),
                 "steps": result.get("steps"),
                 "errors": result.get("errors"),
+                "provider": result.get("provider"),
+                "model_id": result.get("model_id"),
+                "router": result.get("router"),
             }
+            state.extensions["last_coding_session"] = state.extensions["last_repair_session"]
             # Require real acceptance — files_written alone is not success
             try:
                 from ..acceptance_check import evaluate_task

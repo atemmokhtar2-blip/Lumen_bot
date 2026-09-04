@@ -571,12 +571,9 @@ def run_agent(
         except (TypeError, ValueError):
             user_id = 0
     state.metadata["user_id"] = user_id
-    try:
-        from lumen.engine.services.generation_cancel import clear_cancel
-
-        clear_cancel(user_id)
-    except Exception:
-        pass
+    # Do NOT clear_cancel here — generation start already cleared in
+    # run_with_heartbeat. Clearing again would wipe a cancel issued while
+    # multi-agent was planning before the first agent_loop step.
     # Large-repo quality: pack hybrid retrieval context into the system prompt
     repo_ctx = None
     try:
@@ -790,6 +787,15 @@ def run_agent(
                 state.ok = False
                 state.warnings.append("generation_cancelled")
                 state.metadata["cancelled"] = True
+                _emit_progress({
+                    "phase": "finish",
+                    "tool": "finish",
+                    "detail": "تم الإلغاء بواسطة المستخدم",
+                    "step": i,
+                    "limit": limit,
+                    "provider": choice.provider,
+                    "model": choice.model_id,
+                })
                 break
         except Exception:
             pass

@@ -422,6 +422,11 @@ def orchestrate_generate(
             "presentation": (out.extensions or {}).get("presentation"),
             "stages": (out.extensions or {}).get("stages"),
             "build_success": bool(getattr(out, "build_success", False)),
+            # Phase-4 E2E: surface agent router to Telegram delivery
+            "router": ((out.extensions or {}).get("last_coding_session") or {}).get("router"),
+            "provider": ((out.extensions or {}).get("last_coding_session") or {}).get("provider"),
+            "model_id": ((out.extensions or {}).get("last_coding_session") or {}).get("model_id"),
+            "stop_reason": ((out.extensions or {}).get("last_coding_session") or {}).get("stop_reason"),
         },
     )
 
