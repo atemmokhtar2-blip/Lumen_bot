@@ -149,6 +149,20 @@ async def _handle_message_body(
     _show_thinking,
     _clear_thinking,
 ) -> None:
+    # ROOT: every non-command user text joins the active conversation thread first
+    if user and request and not str(request).startswith("/"):
+        try:
+            from lumen.bot.conversation_ui import record_user_and_assistant, resolve_active_conversation_id
+            _uid0 = int(user.id)
+            resolve_active_conversation_id(_uid0, context.user_data if isinstance(context.user_data, dict) else {})
+            record_user_and_assistant(
+                _uid0,
+                context.user_data if isinstance(context.user_data, dict) else {},
+                user_text=request,
+            )
+        except Exception:
+            logger.exception("conversation early record failed")
+
     # Engine UI: answer current need slot with free text when in GEN_SLOTS
     if context.user_data and not (request or "").startswith("/"):
         try:
@@ -385,12 +399,7 @@ async def _handle_message_body(
             _uid = int(user.id) if user else 0
             if _uid:
                 get_chat_memory().append(_uid, "user", request, provider="engine")
-                # Multi-conversation durable thread
-                try:
-                    from lumen.bot.conversation_ui import record_user_and_assistant
-                    record_user_and_assistant(_uid, context.user_data or {}, user_text=request)
-                except Exception:
-                    logger.debug('conversation record soft-fail', exc_info=True)
+                # conversation user turn already recorded at start of _handle_message_body
         except Exception:
             logger.exception("chat_memory user append failed")
 

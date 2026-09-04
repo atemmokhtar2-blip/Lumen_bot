@@ -84,7 +84,7 @@ def _llm_available() -> bool:
         return False
 
 
-def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0) -> dict[str, Any]:
+def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0, conversation_id: str = "") -> dict[str, Any]:
     """One agent brain step via model_catalog → select_model → agent_brain.decide.
 
     Returns dict: tool, params, reply, provider, error.
@@ -148,14 +148,14 @@ def _agent_llm_decide(text: str, *, repo_path: str = "", user_id: int = 0) -> di
             call_index=0,
         )
         # Metered path: charge context bound → _record_usage deducts
-        # Resolve active conversation for this Telegram user
-        _conv_id = ""
-        try:
-            from lumen.platform.conversations import get_conversation_service
-            _conv = get_conversation_service().ensure_active(int(user_id or 0))
-            _conv_id = _conv.id
-        except Exception:
-            _conv_id = ""
+        _conv_id = str(conversation_id or "").strip()
+        if not _conv_id and int(user_id or 0):
+            try:
+                from lumen.platform.conversations import get_conversation_service
+                _conv = get_conversation_service().ensure_active(int(user_id or 0))
+                _conv_id = _conv.id
+            except Exception:
+                _conv_id = ""
         decision = agent_brain.decide(
             [
                 {"role": "system", "content": system},
@@ -410,7 +410,12 @@ def handle_user_turn(
 
     # 4) Soft intent → agent LLM (GROQ_API_KEYS / GEMINI via model_router) then execute
     if tool in {"chat_or_other", ""}:
-        decision = _agent_llm_decide(text, repo_path=repo_path, user_id=int(user_id or 0))
+        decision = _agent_llm_decide(
+            text,
+            repo_path=repo_path,
+            user_id=int(user_id or 0),
+            conversation_id=str(ud.get("current_conversation_id") or ""),
+        )
         if decision.get("error") == "insufficient_credits":
             msg = str(
                 decision.get("reply")

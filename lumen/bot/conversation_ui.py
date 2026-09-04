@@ -176,7 +176,26 @@ def apply_start_deep_link(context, user_id: int, payload: str) -> str | None:
         return None
 
 
+def resolve_active_conversation_id(user_id: int, user_data: dict | None) -> str:
+    """Prefer session current_conversation_id; else last active; else create."""
+    from lumen.platform.conversations import get_conversation_service
+    from lumen.bot.session_store import get_session_store
+
+    uid = int(user_id)
+    ud = user_data if isinstance(user_data, dict) else {}
+    cid = str(ud.get("current_conversation_id") or "").strip()
+    svc = get_conversation_service()
+    conv = svc.ensure_active(uid, conversation_id=cid or None)
+    ud["current_conversation_id"] = conv.id
+    try:
+        get_session_store().save(uid, dict(ud))
+    except Exception:
+        logger.debug("session save conversation_id soft-fail", exc_info=True)
+    return conv.id
+
+
 def record_user_and_assistant(
+
     user_id: int,
     user_data: dict,
     *,
@@ -189,8 +208,10 @@ def record_user_and_assistant(
 
     uid = int(user_id)
     svc = get_conversation_service()
-    cid = str(user_data.get("current_conversation_id") or "")
-    conv = svc.ensure_active(uid, conversation_id=cid or None)
+    if not isinstance(user_data, dict):
+        user_data = {}
+    cid = resolve_active_conversation_id(uid, user_data)
+    conv = svc.ensure_active(uid, conversation_id=cid)
     user_data["current_conversation_id"] = conv.id
     if user_text:
         svc.append(uid, conv.id, role="user", content=user_text)
@@ -209,8 +230,10 @@ def llm_context_block(user_id: int, user_data: dict) -> str:
 
     uid = int(user_id)
     svc = get_conversation_service()
-    cid = str(user_data.get("current_conversation_id") or "")
-    conv = svc.ensure_active(uid, conversation_id=cid or None)
+    if not isinstance(user_data, dict):
+        user_data = {}
+    cid = resolve_active_conversation_id(uid, user_data)
+    conv = svc.ensure_active(uid, conversation_id=cid)
     user_data["current_conversation_id"] = conv.id
     ctx = svc.context_for_llm(uid, conv.id)
     lines = [f"[CONVERSATION id={conv.id} title={conv.title}]"]
