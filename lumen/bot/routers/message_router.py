@@ -432,12 +432,6 @@ async def _handle_message_body(
 
     if request.startswith("/"):
         return
-    # Very short non-spec confirmations
-    if len(request) < 3 and request.lower() not in {"ok", "yes", "لا", "نعم"}:
-        await message.reply_text(
-            "الرسالة قصيرة جداً. اكتب ماذا يفعل البوت (مثال: بوت فيه /start و /help)."
-        )
-        return
 
     uid = int(user.id) if user else 0
 

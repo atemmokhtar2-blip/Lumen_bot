@@ -93,6 +93,14 @@ def _forced_provider() -> str:
         v = (os.getenv(name) or "").strip().lower()
         if v:
             return v
+    # DEFAULT prefer groq when keys present — avoids gemini-2.5-pro 404 on chat
+    try:
+        from lumen.engine.services.llm.key_pool import groq_keys
+        if groq_keys():
+            return "groq"
+    except Exception:
+        if (os.getenv("GROQ_API_KEY") or os.getenv("GROQ_API_KEYS") or "").strip():
+            return "groq"
     return ""
 
 

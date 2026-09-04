@@ -75,6 +75,38 @@ def _active_repo_path(user_data: dict[str, Any] | None) -> str:
     return ""
 
 
+
+_GREETINGS = frozenset({
+    "hi", "hello", "hey", "yo", "hola",
+    "اهلا", "أهلا", "اهلاً", "أهلاً", "مرحبا", "مرحباً", "مرحبًا",
+    "السلام عليكم", "سلام", "هاي", "هلو", "صباح الخير", "مساء الخير",
+    "ازيك", "إزيك", "عامل ايه", "كيفك", "؟", "?",
+})
+
+
+def _is_greeting(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if t in _GREETINGS:
+        return True
+    # single short token greeting-ish
+    if len(t) <= 12 and any(g in t for g in ("اهلا", "أهلا", "مرحبا", "hello", "hi", "سلام")):
+        return True
+    return False
+
+
+def _greeting_reply() -> str:
+    return (
+        "أهلاً! 👋\n"
+        "أنا Lumen — أقدر أبني لك بوت تيليجرام من وصفك.\n\n"
+        "اكتب مثلاً:\n"
+        "• عايز بوت جروب يرحب بالأعضاء ويحظر السبام\n"
+        "• بوت متجر فيه /start و /help وسلة شراء\n\n"
+        "أو استخدم الأزرار: إنشاء بوت / الرصيد / المساعدة"
+    )
+
+
 def _llm_available() -> bool:
     try:
         from lumen.engine.services.cline_runtime.model_router import select_model
@@ -387,6 +419,16 @@ def handle_user_turn(
             action="",
         )
 
+    # Greetings must never hit LLM / generation gates (fixes "اهلا" → short/error)
+    if _is_greeting(text):
+        return EngineTurnResult(
+            ok=True,
+            reply=_greeting_reply(),
+            action="",
+            tool="",
+            capability_id="chat_greeting",
+        )
+
     state = AgentState(
         user_id=int(user_id or 0),
         user_text=text[:8000],
@@ -514,10 +556,18 @@ def handle_user_turn(
             return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
         if decision.get("error"):
             err = str(decision.get("error") or "unknown")
-            msg = (
-                f"فشل عقل الوكيل ({decision.get('provider') or '?'}): {err}\n"
-                "تأكد أن GROQ_API_KEYS أو GEMINI_API_KEYS مضبوطة على السيرفر بعد آخر تحديث."
-            )
+            # Never dump raw RuntimeError to the user for casual chat — give recovery path
+            if "404" in err or "gemini" in err.lower() or "no_llm" in err.lower():
+                msg = (
+                    "تعذر الاتصال بنموذج الذكاء حالياً.\n"
+                    "جرّب تكتب وصف البوت مباشرة (مثال: بوت جروب يرحب ويحظر السبام)،\n"
+                    "أو تأكد أن GROQ_API_KEYS مضبوطة على السيرفر."
+                )
+            else:
+                msg = (
+                    f"تعذر إكمال الرد الآن ({decision.get('provider') or '?'}).\n"
+                    "أعد المحاولة أو اكتب وصف البوت المطلوب بوضوح."
+                )
             state.final_message = msg
             return EngineTurnResult(ok=False, reply=msg, action="", state=state, tool="", capability_id=cap)
 
