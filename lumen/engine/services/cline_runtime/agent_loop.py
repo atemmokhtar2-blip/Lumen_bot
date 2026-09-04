@@ -1139,6 +1139,8 @@ def run_agent(
             "detail": _detail_hint,
             "thought": (step.thought or "")[:160],
             "files_written": len(state.files_written or []),
+            "provider": choice.provider,
+            "model": choice.model_id,
         })
         _t0 = _time.monotonic()
         result = run_tool(state.work_dir, str(tool), args)

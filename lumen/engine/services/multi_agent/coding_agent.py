@@ -268,8 +268,17 @@ def run_coding_session(
             ][:80]
         except Exception:
             pass
-        # Layer: post-session acceptance (AST) — session claims are not enough
+        # Phase 5: dual acceptance — free-path project gate + task criteria
         acc_rep = {"ok": True, "skipped": True}
+        agent_acc = {}
+        try:
+            from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
+            agent_acc = check_agent_project(work, goal=goal)
+            if not agent_acc.get("ok"):
+                ok = False
+        except Exception as _aa:
+            agent_acc = {"ok": False, "error": type(_aa).__name__}
+            ok = False
         try:
             from .acceptance_check import evaluate_task
             acc_rep = evaluate_task(
@@ -295,6 +304,7 @@ def run_coding_session(
             "errors": list(getattr(state, "errors", None) or [])[:20],
             "acceptance": list(acceptance or []),
             "acceptance_report": acc_rep,
+            "agent_acceptance": agent_acc,
             "context_errors": list(wctx.get("errors") or []),
             "engine": "cline_agent_loop+layered_context+acceptance",
             "router": router,

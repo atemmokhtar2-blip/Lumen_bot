@@ -191,7 +191,19 @@ def execute_ir(
         "files_written": cline_meta.get("files_written"),
         "acceptance": cline_meta.get("acceptance"),
     }
-    if cline_res.ok and cline_res.project_path:
+    acc = flat.get("acceptance") if isinstance(flat.get("acceptance"), dict) else {}
+    # Phase 5: do not claim success without project acceptance
+    success = bool(cline_res.ok and cline_res.project_path)
+    if success and acc and acc.get("ok") is False:
+        success = False
+        errs = list(cline_res.errors or [])
+        errs.append(
+            "acceptance_failed:" + ",".join(str(x) for x in (acc.get("missing") or [])[:8])
+        )
+        cline_res.errors = errs  # type: ignore
+        flat["acceptance_blocked"] = True
+
+    if success and cline_res.project_path:
         result = GenerationResult(
             success=True,
             project_path=cline_res.project_path,

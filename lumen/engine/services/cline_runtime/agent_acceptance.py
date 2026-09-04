@@ -58,6 +58,15 @@ def check_agent_project(work_dir: str | Path, *, goal: str = "") -> dict[str, An
     else:
         found.append(f"py_count:{len(py_files)}")
 
+    # Phase 5: entry must compile (syntax gate)
+    if entry:
+        try:
+            import py_compile
+            py_compile.compile(str(root / entry), doraise=True)
+            found.append("entry_compiles")
+        except Exception as exc:
+            missing.append(f"entry_syntax:{type(exc).__name__}")
+
     # Token hygiene: no obvious hardcoded bot tokens in entry
     if entry:
         try:
@@ -85,7 +94,16 @@ def check_agent_project(work_dir: str | Path, *, goal: str = "") -> dict[str, An
     if py_files:
         got += 1
     score = got / must
-    ok = got >= 2 and bool(entry or py_files)
+    # Hard fail on critical missing (entry, deps, syntax, no py)
+    critical = {
+        m for m in missing
+        if m.startswith("entry_point")
+        or m.startswith("requirements")
+        or m.startswith("any_python")
+        or m.startswith("entry_syntax")
+        or m == "work_dir"
+    }
+    ok = got >= 2 and bool(entry) and not critical
 
     return {
         "ok": ok,
