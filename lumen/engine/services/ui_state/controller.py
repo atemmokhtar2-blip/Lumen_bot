@@ -43,10 +43,10 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
             UiButton("الإعدادات", "open_settings", style="primary"),
         ),
         (
-            UiButton("الإحالة — $5", "open_referral", style="success"),
             UiButton("المساعدة", "open_help"),
         ),
     )
+
 
 
 def _copy_state(state: EngineUiState) -> EngineUiState:
@@ -228,11 +228,7 @@ def _settings_buttons() -> tuple[tuple[UiButton, ...], ...]:
 
 def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
-        (
-            UiButton("تحديث", "open_referral", style="primary"),
-            UiButton("الإعدادات", "open_settings"),
-        ),
-        (UiButton("الرئيسية", "home", style="primary"),),
+        (UiButton("تحديث", "open_referral", style="primary"),),
     )
 
 
