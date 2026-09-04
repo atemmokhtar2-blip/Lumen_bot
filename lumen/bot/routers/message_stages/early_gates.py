@@ -54,7 +54,7 @@ async def gate_auth_and_rate(
     except Exception:
         logger.exception("ensure_mongo_user failed")
 
-    # Referral: a real message counts as bot use → may qualify invitee
+    # Referral: real message = bot use → qualify invitee (pending only)
     try:
         if user:
             from lumen.application.commands.qualify_referral import QualifyReferralCommand
