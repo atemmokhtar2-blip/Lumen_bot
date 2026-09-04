@@ -469,6 +469,17 @@ def main() -> None:
                     logger.info("bot commands registered")
                 except Exception:
                     logger.debug("set_my_commands soft-fail", exc_info=True)
+                try:
+                    from lumen.platform.referrals import get_referral_repository
+                    repo = get_referral_repository()
+                    if hasattr(repo, "ensure_indexes"):
+                        repo.ensure_indexes()
+                    logger.info("referral repository ready backend=%s", type(repo).__name__)
+                except Exception as exc:
+                    logger.warning(
+                        "referral repository not ready: %s",
+                        type(exc).__name__,
+                    )
 
             try:
                 from telegram.request import HTTPXRequest
