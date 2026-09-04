@@ -385,6 +385,12 @@ async def _handle_message_body(
             _uid = int(user.id) if user else 0
             if _uid:
                 get_chat_memory().append(_uid, "user", request, provider="engine")
+                # Multi-conversation durable thread
+                try:
+                    from lumen.bot.conversation_ui import record_user_and_assistant
+                    record_user_and_assistant(_uid, context.user_data or {}, user_text=request)
+                except Exception:
+                    logger.debug('conversation record soft-fail', exc_info=True)
         except Exception:
             logger.exception("chat_memory user append failed")
 

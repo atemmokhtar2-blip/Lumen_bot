@@ -49,6 +49,22 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
+    # Deep link: /start conversation_<id>
+    try:
+        payload = ""
+        if context.args:
+            payload = " ".join(str(a) for a in context.args).strip()
+        if user and payload:
+            from lumen.bot.conversation_ui import apply_start_deep_link
+            note = apply_start_deep_link(context, int(user.id), payload)
+            if note:
+                try:
+                    await message.reply_text(note)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # Engine UI state → HOME + live facts + real keyboard
     from lumen.engine.services.ui_state.controller import buttons_for_phase
     from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState

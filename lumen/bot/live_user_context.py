@@ -35,7 +35,7 @@ def build_live_user_context(telegram_user_id: int) -> dict[str, Any]:
     plan = get_plan(getattr(tenant, "plan_id", "free"))
     usage = get_metering().snapshot(str(tenant.tenant_id))
     plan_payload = public_plan_dict(plan)
-    return {
+    payload: dict[str, Any] = {
         "identity_known": True,
         "data_available": True,
         "tenant_id": str(tenant.tenant_id),
@@ -61,3 +61,20 @@ def build_live_user_context(telegram_user_id: int) -> dict[str, Any]:
         },
         "source": "server_live_plan_and_metering",
     }
+    # Active multi-conversation thread (WhatsApp-style sliding window)
+    try:
+        from lumen.platform.conversations import get_conversation_service
+
+        svc = get_conversation_service()
+        rows = svc.list_for_user(uid, limit=1)
+        if rows:
+            ctx = svc.context_for_llm(uid, rows[0].id)
+            payload["conversation"] = {
+                "id": ctx.get("conversation_id"),
+                "title": ctx.get("title"),
+                "summary": (ctx.get("summary") or "")[:500],
+                "recent": (ctx.get("messages") or [])[-10:],
+            }
+    except Exception:
+        pass
+    return payload

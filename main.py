@@ -389,6 +389,19 @@ def main() -> None:
         application.add_handler(CommandHandler("status", status_cmd))
         application.add_handler(CommandHandler("lang", lang_cmd))
         application.add_handler(CommandHandler("language", lang_cmd))
+        # Multi-conversation threads
+        from lumen.bot.conversation_ui import (
+            cmd_new_conversation,
+            cmd_conversations,
+            cmd_history,
+            handle_conversation_callback,
+        )
+        application.add_handler(CommandHandler("new", cmd_new_conversation))
+        application.add_handler(CommandHandler("conversations", cmd_conversations))
+        application.add_handler(CommandHandler("history", cmd_history))
+        application.add_handler(
+            CallbackQueryHandler(handle_conversation_callback, pattern=r"^conv:")
+        )
         # Engine UI callbacks (Batch 0 foundation — lumen:ui:*)
         from lumen.bot.ui.callback_router import handle_ui_callback
         # L2. = HMAC-signed callbacks; lumen:ui: = legacy (ignored by decoder)

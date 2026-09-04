@@ -44,6 +44,9 @@ _DURABLE_KEYS = frozenset({
     "repo_sections",
     # Conversation continuity
     "chat_history",
+    "current_conversation_id",
+    "pending_conversation_action",
+
     "last_bot_request",
     "translated_preferred_keys",
     "translated_source",
