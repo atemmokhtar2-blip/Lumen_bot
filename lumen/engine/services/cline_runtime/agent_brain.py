@@ -854,9 +854,31 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
     if cat is None:
         cat = next((m for m in CATALOG if m.provider == provider), None)
 
-    key = ""
+    # Phase-1: OpenRouter key against deepseek/anthropic → rewrite endpoint via resolve_dispatch
     if cat is not None:
-        key = cat.resolve_api_key()
+        try:
+            disp = cat.resolve_dispatch()
+            if disp.get("api_key"):
+                provider = disp["provider"] or provider
+                model_id = disp["model_id"] or choice.model_id
+                key = disp["api_key"]
+                if disp.get("base_url"):
+                    choice = type(choice)(
+                        provider,
+                        model_id,
+                        choice.api_key_env,
+                        base_url=disp["base_url"] or choice.base_url,
+                    )
+            else:
+                key = ""
+                model_id = (choice.model_id or cat.model_id or "").strip()
+        except Exception:
+            key = cat.resolve_api_key()
+            model_id = (choice.model_id or cat.model_id or "").strip()
+    else:
+        key = ""
+        model_id = (choice.model_id or "").strip()
+
     if not key:
         key = (os.getenv(choice.api_key_env) or "").strip()
     if not key:
@@ -868,7 +890,7 @@ def _dispatch_catalog_provider(provider: str, system: str, user: str, choice: Mo
     if not key:
         raise RuntimeError(f"{provider}_api_key_missing")
 
-    model_id = (choice.model_id or (cat.model_id if cat else "") or "").strip()
+    model_id = (model_id or choice.model_id or "").strip()
     if not model_id:
         raise RuntimeError(f"{provider}_model_id_missing")
 

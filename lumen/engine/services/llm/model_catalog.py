@@ -1,4 +1,16 @@
-"""Unified model catalog — single source of truth for agent LLM selection."""
+"""Unified model catalog — single source of truth for agent LLM selection (Phase 1).
+
+Plan models (production IDs as of 2026):
+  DeepSeek V4 Flash  → DeepSeek API ``deepseek-v4-flash`` (official; not hosted on Groq)
+  Gemini 2.5 Flash Lite → Google ``gemini-2.5-flash-lite``
+  GPT-4o-mini        → OpenAI ``gpt-4o-mini``
+  DeepSeek V3        → DeepSeek API ``deepseek-chat`` (V3.x line; overridable)
+  Claude 3 Haiku     → Anthropic ``claude-3-haiku-20240307``
+  Gemini 2.5 Pro     → Google ``gemini-2.5-pro``
+  OpenRouter         → gateway for any catalog model_id
+  Groq               → speed path (Llama on GroqCloud; V4 Flash is not on Groq)
+  Foundry            → Microsoft model-router deployment
+"""
 from __future__ import annotations
 
 import os
@@ -19,8 +31,8 @@ class CatalogModel:
     base_url: str | None
     api_key_env: str
     roles: tuple[Role, ...]
-    cost_tier: int
-    strength: int
+    cost_tier: int  # 1=cheapest .. 5=premium
+    strength: int  # 1=weak .. 5=strongest reason/code
     notes: str = ""
 
     def key_env_candidates(self) -> tuple[str, ...]:
@@ -82,6 +94,48 @@ class CatalogModel:
                 return v
         return ""
 
+    def uses_openrouter_key(self) -> bool:
+        key = self.resolve_api_key()
+        if not key:
+            return False
+        if self.provider == "openrouter":
+            return True
+        if key.startswith("sk-or-"):
+            return True
+        primary = (os.getenv(self.api_key_env) or "").strip()
+        if not primary and (os.getenv("OPENROUTER_API_KEY") or "").strip() == key:
+            return True
+        return False
+
+    def resolve_dispatch(self) -> dict[str, str]:
+        """Effective provider/model/base_url for agent_brain dispatch."""
+        key = self.resolve_api_key()
+        provider = self.provider
+        model_id = self.model_id
+        base_url = (self.base_url or "").strip()
+        api_style = self.api_style
+
+        if self.uses_openrouter_key() and provider != "openrouter":
+            provider = "openrouter"
+            base_url = "https://openrouter.ai/api/v1"
+            api_style = "openai_compat"
+            if "/" not in model_id:
+                if self.provider == "deepseek":
+                    model_id = f"deepseek/{model_id}"
+                elif self.provider == "anthropic":
+                    model_id = f"anthropic/{model_id}"
+                elif self.provider == "openai":
+                    model_id = f"openai/{model_id}"
+                elif self.provider in {"google", "gemini"}:
+                    model_id = f"google/{model_id}"
+        return {
+            "provider": provider,
+            "model_id": model_id,
+            "base_url": base_url,
+            "api_key": key,
+            "api_style": api_style,
+        }
+
 
 CATALOG: tuple[CatalogModel, ...] = (
     CatalogModel(
@@ -95,7 +149,7 @@ CATALOG: tuple[CatalogModel, ...] = (
         roles=("build", "fast", "reason"),
         cost_tier=1,
         strength=4,
-        notes="Official DeepSeek API model id deepseek-v4-flash",
+        notes="Official id deepseek-v4-flash on api.deepseek.com. Groq does not host V4 Flash.",
     ),
     CatalogModel(
         id="gemini-2.5-flash-lite",
@@ -117,22 +171,36 @@ CATALOG: tuple[CatalogModel, ...] = (
         api_style="openai_compat",
         base_url="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
-        roles=("build", "fast", "plan"),
+        roles=("build", "fast", "plan", "critique"),
         cost_tier=2,
         strength=3,
+        notes="Fallback generalist in R2 allocator",
     ),
     CatalogModel(
         id="deepseek-v3",
-        label="DeepSeek V3 / V4 Pro",
+        label="DeepSeek V3",
         provider="deepseek",
-        model_id=(os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-pro").strip(),
+        model_id=(os.getenv("DEEPSEEK_V3_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat").strip(),
         api_style="openai_compat",
         base_url=(os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").strip(),
         api_key_env="DEEPSEEK_API_KEY",
         roles=("plan", "build", "reason"),
         cost_tier=2,
+        strength=4,
+        notes="Plan id deepseek-chat (V3 line). Override DEEPSEEK_V3_MODEL if needed.",
+    ),
+    CatalogModel(
+        id="deepseek-v4-pro",
+        label="DeepSeek V4 Pro",
+        provider="deepseek",
+        model_id=(os.getenv("DEEPSEEK_PRO_MODEL") or "deepseek-v4-pro").strip(),
+        api_style="openai_compat",
+        base_url=(os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").strip(),
+        api_key_env="DEEPSEEK_API_KEY",
+        roles=("plan", "reason", "critique"),
+        cost_tier=3,
         strength=5,
-        notes="Default deepseek-v4-pro; set DEEPSEEK_MODEL=deepseek-chat if needed",
+        notes="Hard plan/reason; preferred over V3 when available",
     ),
     CatalogModel(
         id="claude-3-haiku",
@@ -159,6 +227,18 @@ CATALOG: tuple[CatalogModel, ...] = (
         strength=5,
     ),
     CatalogModel(
+        id="openrouter-deepseek-v4-flash",
+        label="DeepSeek V4 Flash (OpenRouter)",
+        provider="openrouter",
+        model_id=(os.getenv("OPENROUTER_DEEPSEEK_FLASH_MODEL") or "deepseek/deepseek-v4-flash").strip(),
+        api_style="openai_compat",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        roles=("build", "fast", "reason"),
+        cost_tier=1,
+        strength=4,
+    ),
+    CatalogModel(
         id="openrouter-auto",
         label="OpenRouter",
         provider="openrouter",
@@ -169,10 +249,11 @@ CATALOG: tuple[CatalogModel, ...] = (
         roles=("plan", "build", "critique", "reason", "fast"),
         cost_tier=3,
         strength=4,
+        notes="Generic gateway / fallback",
     ),
     CatalogModel(
         id="groq-fast",
-        label="Groq Fast",
+        label="Groq Fast (Llama 3.3 70B)",
         provider="groq",
         model_id=(os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip(),
         api_style="openai_compat",
@@ -181,7 +262,7 @@ CATALOG: tuple[CatalogModel, ...] = (
         roles=("build", "fast"),
         cost_tier=1,
         strength=3,
-        notes="Groq-hosted speed path; DeepSeek V4 Flash is on DeepSeek API",
+        notes="Groq speed path. DeepSeek V4 Flash is NOT on Groq; use deepseek-v4-flash instead.",
     ),
     CatalogModel(
         id="foundry-model-router",
@@ -195,6 +276,19 @@ CATALOG: tuple[CatalogModel, ...] = (
         cost_tier=3,
         strength=5,
     ),
+)
+
+
+PLAN_REQUIRED_IDS: tuple[str, ...] = (
+    "deepseek-v4-flash",
+    "gemini-2.5-flash-lite",
+    "openai-gpt-4o-mini",
+    "deepseek-v3",
+    "claude-3-haiku",
+    "gemini-2.5-pro",
+    "openrouter-auto",
+    "groq-fast",
+    "foundry-model-router",
 )
 
 
@@ -222,20 +316,30 @@ def catalog_snapshot() -> list[dict]:
             "label": m.label,
             "provider": m.provider,
             "model_id": m.model_id,
+            "api_style": m.api_style,
+            "base_url": m.base_url,
             "roles": list(m.roles),
             "cost_tier": m.cost_tier,
             "strength": m.strength,
             "key_present": m.key_present(),
+            "notes": m.notes,
         }
         for m in CATALOG
     ]
 
 
+def assert_plan_catalog_complete() -> list[str]:
+    present = {m.id for m in CATALOG}
+    return [i for i in PLAN_REQUIRED_IDS if i not in present]
+
+
 __all__ = [
     "CatalogModel",
     "CATALOG",
+    "PLAN_REQUIRED_IDS",
     "get_model",
     "models_for_role",
     "available_models",
     "catalog_snapshot",
+    "assert_plan_catalog_complete",
 ]

@@ -9,8 +9,10 @@ def test_select_model_openai_when_key():
     os.environ["OPENAI_API_KEY"] = "sk-test-openai"
     for k in ("DEEPSEEK_API_KEY", "GROQ_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
               "AZURE_FOUNDRY_KEY", "AZURE_FOUNDRY_ENDPOINT", "AZURE_OPENAI_API_KEY",
-              "AZURE_OPENAI_ENDPOINT", "CLINE_LLM_PROVIDER"):
+              "AZURE_OPENAI_ENDPOINT", "CLINE_LLM_PROVIDER", "OPENROUTER_API_KEY",
+              "CLINE_ROUTER"):
         os.environ.pop(k, None)
+    os.environ["CLINE_ROUTER"] = "local"
     from lumen.engine.services.cline_runtime.model_router import select_model
     c = select_model(task="build")
     assert c.provider == "openai"
@@ -22,8 +24,9 @@ def test_select_model_deepseek_flash_for_build():
     os.environ["DEEPSEEK_API_KEY"] = "sk-test-ds"
     for k in ("OPENAI_API_KEY", "GROQ_API_KEY", "GOOGLE_API_KEY",
               "AZURE_FOUNDRY_KEY", "AZURE_FOUNDRY_ENDPOINT", "AZURE_OPENAI_API_KEY",
-              "AZURE_OPENAI_ENDPOINT", "CLINE_LLM_PROVIDER"):
+              "AZURE_OPENAI_ENDPOINT", "CLINE_LLM_PROVIDER", "OPENROUTER_API_KEY"):
         os.environ.pop(k, None)
+    os.environ["CLINE_ROUTER"] = "local"
     from lumen.engine.services.cline_runtime.model_router import select_model
     c = select_model(task="build")
     assert c.provider == "deepseek"
