@@ -18,7 +18,6 @@ from lumen.platform.referrals.config import (
 )
 
 logger = logging.getLogger(__name__)
-_register_hits: dict[int, list[float]] = {}
 _REFERRAL_PROMO_TTL_SEC = 365 * 24 * 3600
 
 
@@ -52,19 +51,23 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         return RegisterReferralResult(ok=False, error="self_referral_forbidden")
 
 
-    # Soft rate-limit: max N successful register attempts per referrer per minute
+    # Multi-worker rate limit via platform RateLimiter (Redis when configured)
     try:
         from lumen.platform.referrals.config import REFERRAL_REGISTER_RATE_PER_MIN
-        import time as _time
-        now = _time.time()
-        window = 60.0
-        hits = [t for t in _register_hits.get(referrer, []) if now - t < window]
-        if len(hits) >= int(REFERRAL_REGISTER_RATE_PER_MIN):
-            return RegisterReferralResult(ok=False, error="register_rate_limited")
-        hits.append(now)
-        _register_hits[referrer] = hits
+        from lumen.platform.rate_limit import get_rate_limiter
+
+        lim = int(REFERRAL_REGISTER_RATE_PER_MIN)
+        if lim > 0:
+            rl = get_rate_limiter()
+            allowed = rl.allow(
+                f"referral_register:{referrer}",
+                limit=lim,
+                window_sec=60.0,
+            )
+            if not allowed:
+                return RegisterReferralResult(ok=False, error="register_rate_limited")
     except Exception:
-        pass
+        logger.debug("referral register rate-limit soft-fail", exc_info=True)
 
 
     try:
