@@ -253,6 +253,18 @@ async def execute_bot_generation(
             except Exception:
                 logger.exception("pre-delivery presentation table failed")
 
+            # Surface which model built the project (phase-4 E2E transparency)
+            try:
+                _m = dict(getattr(result, "metadata", None) or {})
+                _prov = str(_m.get("provider") or (_m.get("router") or {}).get("provider") or "")
+                _mid = str(_m.get("model_id") or (_m.get("router") or {}).get("model_id") or "")
+                _und = str(_m.get("foundry_underlying") or "")
+                if _prov or _mid or _und:
+                    _line = "🧠 " + "/".join(x for x in (_prov, _mid or _und) if x)
+                    await safe_edit_text(status_msg, f"✅ تم التوليد\n{_line}\nجاري التحضير…")
+            except Exception:
+                pass
+
             from ..generation_flow import deliver_generation_result
 
             await deliver_generation_result(

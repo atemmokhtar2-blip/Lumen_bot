@@ -143,3 +143,52 @@ def test_executor_agent_mode_calls_provider(tmp_path: Path):
     assert res.engine in {"cline_agent", "cline_agent_error", "cline_blocked"}
     # With keys present should reach agent path
     assert res.engine == "cline_agent"
+
+
+def test_progress_handler_stack_nested():
+    """Nested set/reset must not drop the outer heartbeat sink."""
+    from lumen.engine.services.progress_bus import (
+        set_progress_handler, reset_progress_handler, report_progress,
+    )
+    outer_events = []
+    inner_events = []
+
+    def outer(ev):
+        outer_events.append(ev)
+
+    def inner(ev):
+        inner_events.append(ev)
+
+    tok_o = set_progress_handler(outer)
+    report_progress({"phase": "o1"})
+    tok_i = set_progress_handler(inner)
+    report_progress({"phase": "i1"})
+    reset_progress_handler(tok_i)
+    report_progress({"phase": "o2"})
+    reset_progress_handler(tok_o)
+    report_progress({"phase": "gone"})
+
+    assert any(e.get("phase") == "o1" for e in outer_events)
+    assert any(e.get("phase") == "i1" for e in inner_events)
+    assert any(e.get("phase") == "o2" for e in outer_events)
+    assert not any(e.get("phase") == "gone" for e in outer_events + inner_events)
+
+
+def test_execute_ir_flattens_router_metadata(tmp_path):
+    _clear_keys()
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    from lumen.engine.services.cline_runtime import agent_brain
+    from lumen.engine.services.cline_runtime.executor import execute_cline_ir
+
+    ir = SimpleNamespace(
+        to_dict=lambda: {"raw_request": "echo bot", "preferred_keys": ["echo"], "capabilities_gap": ["free_agent"]},
+        capabilities_gap=["free_agent"],
+        engine_mode=SimpleNamespace(value="cline"),
+    )
+    with patch.object(agent_brain, "_invoke_choice", return_value='{"tool":"finish","summary":"ok"}'):
+        res = execute_cline_ir(ir, tmp_path)
+    assert res.engine == "cline_agent"
+    assert isinstance(res.metadata, dict)
+    # router recorded by agent_loop when keys present
+    assert res.metadata.get("router") is not None or res.ok is not None

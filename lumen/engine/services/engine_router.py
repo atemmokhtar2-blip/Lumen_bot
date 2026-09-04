@@ -168,6 +168,21 @@ def execute_ir(
     from lumen.engine.services.cline_runtime import execute_cline_ir
 
     cline_res = execute_cline_ir(ir, work_dir)
+    cline_meta = dict(cline_res.metadata or {})
+    router = cline_meta.get("router") if isinstance(cline_meta.get("router"), dict) else {}
+    last_foundry = cline_meta.get("last_foundry") if isinstance(cline_meta.get("last_foundry"), dict) else {}
+    flat = {
+        "engine": cline_res.engine,
+        "ir": ir.to_dict(),
+        "cline": cline_res.to_dict(),
+        "router": router,
+        "provider": router.get("provider") or (cline_meta.get("model") or {}).get("provider"),
+        "model_id": router.get("model_id") or (cline_meta.get("model") or {}).get("model_id"),
+        "foundry_underlying": last_foundry.get("underlying_model"),
+        "foundry_mode": last_foundry.get("mode"),
+        "stop_reason": cline_meta.get("stop_reason"),
+        "files_written": cline_meta.get("files_written"),
+    }
     if cline_res.ok and cline_res.project_path:
         result = GenerationResult(
             success=True,
@@ -175,11 +190,7 @@ def execute_ir(
             stages=[],
             validation_reports=[],
             errors=list(cline_res.errors),
-            metadata={
-                "engine": cline_res.engine,
-                "ir": ir.to_dict(),
-                "cline": cline_res.to_dict(),
-            },
+            metadata=flat,
         )
         return _finalize(result, ir)
 
@@ -190,11 +201,7 @@ def execute_ir(
         stages=[],
         validation_reports=[],
         errors=list(cline_res.errors) or ["cline_failed"],
-        metadata={
-            "engine": cline_res.engine,
-            "ir": ir.to_dict(),
-            "cline": cline_res.to_dict(),
-        },
+        metadata=flat,
     )
 
 
