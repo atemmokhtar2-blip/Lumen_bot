@@ -252,6 +252,21 @@ def run_coding_session(
         except Exception:
             pass
 
+        # Bind active conversation thread into IR for agent_loop / agent_brain
+        try:
+            from lumen.platform.conversations import get_conversation_service
+            _uid = int(user_id or hint.get("user_id") or 0)
+            if _uid:
+                _c = get_conversation_service().ensure_active(_uid)
+                hint["user_id"] = _uid
+                hint["conversation_id"] = _c.id
+                meta = hint.get("metadata") if isinstance(hint.get("metadata"), dict) else {}
+                meta = dict(meta)
+                meta["conversation_id"] = _c.id
+                meta["user_id"] = _uid
+                hint["metadata"] = meta
+        except Exception:
+            pass
         state = run_agent(
             work_dir=str(work),
             goal=full_goal[:20000],

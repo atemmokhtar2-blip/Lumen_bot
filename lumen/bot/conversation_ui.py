@@ -135,6 +135,10 @@ async def handle_conversation_callback(update, context) -> bool:
                 await q.answer("محادثة غير موجودة", show_alert=True)
                 return True
             context.user_data["current_conversation_id"] = conv.id
+            try:
+                svc._store.touch_conversation(conv.id)
+            except Exception:
+                pass
             get_session_store().save(uid, dict(context.user_data or {}))
             await q.answer("تم التحديد")
             await q.edit_message_text(f"▶️ المحادثة النشطة: {conv.title}")

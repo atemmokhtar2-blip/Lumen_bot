@@ -1131,12 +1131,26 @@ def decide(
     history_keep: int | None = None,
     prompt_max_chars: int | None = None,
     task: str = "build",
+    user_id: int = 0,
+    conversation_id: str = "",
 ) -> dict[str, Any]:
     """One reasoning step with smart retries (parse fail / transient HTTP).
 
     history_keep / prompt_max_chars: optional Loop Governor caps (first-class).
+    user_id / conversation_id: inject WhatsApp-style conversation history from DB.
     """
     choice = choice or select_model(task=task)
+    # ROOT: pull durable conversation turns into the prompt (sliding window)
+    try:
+        if int(user_id or 0) > 0:
+            from lumen.platform.conversations.inject import merge_history_into_messages
+            messages = merge_history_into_messages(
+                list(messages or []),
+                user_id=int(user_id),
+                conversation_id=str(conversation_id or ""),
+            )
+    except Exception:
+        pass
     system, user = _system_and_user(
         messages, history_keep=history_keep, prompt_max_chars=prompt_max_chars
     )

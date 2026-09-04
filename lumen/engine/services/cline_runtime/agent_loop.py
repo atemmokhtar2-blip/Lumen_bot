@@ -915,6 +915,8 @@ def run_agent(
                 history_keep=_keep,
                 prompt_max_chars=_pchars,
                 task=task,
+                user_id=int(state.metadata.get("user_id") or 0),
+                conversation_id=str(state.metadata.get("conversation_id") or ""),
             )
         except InsufficientCreditsError as _ice:
             state.ok = False
@@ -1446,6 +1448,8 @@ def run_agent(
                             choice=choice, task=task,
                             history_keep=2,
                             prompt_max_chars=4000,
+                            user_id=int(state.metadata.get("user_id") or 0),
+                            conversation_id=str(state.metadata.get("conversation_id") or ""),
                         )
                     except _ICE_Rec as _ice:
                         state.ok = False
