@@ -189,15 +189,12 @@ def _grant_referral_reward(referrer_telegram_id: int) -> bool:
 
         svc = get_credit_service()
         store_name = type(getattr(svc, "_store", None)).__name__
-        env = (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "").strip().lower()
-        devish = env in {"dev", "development", "local", "test", ""}
-        # Fail closed: never mint durable referral rewards into process-local memory
-        # in a deployed environment (would vanish on restart / multi-worker).
-        if store_name == "MemoryCreditsStore" and not devish:
+        from lumen.platform.referrals.config import is_referral_dev_environment
+        # Fail closed: memory credits are not real in deployed environments
+        if store_name == "MemoryCreditsStore" and not is_referral_dev_environment():
             logger.error(
-                "referral reward refused: MemoryCreditsStore in ENVIRONMENT=%s "
-                "(set DATABASE_URL/POSTGRES_URL for durable credits)",
-                env or "(unset)",
+                "referral reward refused: MemoryCreditsStore without durable DB "
+                "(set DATABASE_URL/POSTGRES_URL; unset platform env markers for local dev)"
             )
             return False
 
