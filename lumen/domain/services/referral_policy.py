@@ -24,3 +24,12 @@ def should_count_as_bot_use(event: str) -> bool:
 def is_reward_due(stats: ReferralStats, *, target: int) -> bool:
     """One-time reward when qualified_count reaches target and not yet paid."""
     return stats.reward_unlocked(target)
+
+
+def is_existing_user_ineligible_for_referral(*, already_known: bool) -> bool:
+    """Strict product rule: only first-time users count for the referrer.
+
+    already_known=True means the telegram id was seen in the platform before
+    this referral deep-link (users table / tenant store / prior activity).
+    """
+    return bool(already_known)
