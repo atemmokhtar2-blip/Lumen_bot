@@ -205,10 +205,31 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         )
     if phase == EngineUiPhase.HELP:
         return _with_nav((), phase)
+    if phase == EngineUiPhase.SETTINGS:
+        return _with_nav(_settings_buttons(), phase)
+    if phase == EngineUiPhase.REFERRAL:
+        return _with_nav(_referral_buttons(), phase)
     if phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
         return _with_nav(buttons_for_event(kind), phase)
     return _with_nav((), phase)
+
+
+def _settings_buttons() -> tuple[tuple[UiButton, ...], ...]:
+    return (
+        (UiButton("الإحالة — $5", "open_referral", style="success"),),
+        (UiButton("رجوع", "home", style="primary"),),
+    )
+
+
+def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
+    return (
+        (
+            UiButton("تحديث", "open_referral", style="primary"),
+            UiButton("الإعدادات", "open_settings"),
+        ),
+        (UiButton("الرئيسية", "home", style="primary"),),
+    )
 
 
 def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
@@ -456,6 +477,14 @@ def apply_action(
         new.phase = EngineUiPhase.HELP
         new.missing = []
         msg = "المساعدة."
+    elif action_id == "open_settings":
+        new.phase = EngineUiPhase.SETTINGS
+        new.missing = []
+        msg = "الإعدادات."
+    elif action_id == "open_referral":
+        new.phase = EngineUiPhase.REFERRAL
+        new.missing = []
+        msg = "برنامج الإحالة — $5."
     elif action_id == "retry_generate":
         req = composed_request(new)
         if not req:
