@@ -448,6 +448,28 @@ def main() -> None:
             _force_exclusive_polling(TELEGRAM_BOT_TOKEN)
             # Always build a fresh Application — avoids "start_polling never awaited"
             # after a previous cycle stopped mid-flight.
+
+            async def _lumen_bot_post_init(application):
+                try:
+                    from lumen.bot.ui.menu_button import configure_menu_button
+                    ok = await configure_menu_button(application.bot, chat_id=None)
+                    logger.info("default MenuButtonWebApp configured=%s", ok)
+                except Exception:
+                    logger.exception("post_init menu button failed")
+                try:
+                    from telegram import BotCommand
+                    await application.bot.set_my_commands(
+                        [
+                            BotCommand("start", "Start / البدء"),
+                            BotCommand("referral", "Referral / الإحالة"),
+                            BotCommand("help", "Help / المساعدة"),
+                            BotCommand("status", "Status / الحالة"),
+                        ]
+                    )
+                    logger.info("bot commands registered")
+                except Exception:
+                    logger.debug("set_my_commands soft-fail", exc_info=True)
+
             try:
                 from telegram.request import HTTPXRequest
                 _tg_request = HTTPXRequest(
@@ -456,26 +478,6 @@ def main() -> None:
                     write_timeout=40.0,
                     pool_timeout=15.0,
                 )
-                async def _post_init(application):
-                    try:
-                        from lumen.bot.ui.menu_button import configure_menu_button
-                        ok = await configure_menu_button(application.bot, chat_id=None)
-                        logger.info("default MenuButtonWebApp configured=%s", ok)
-                    except Exception:
-                        logger.exception("post_init menu button failed")
-                    try:
-                        from telegram import BotCommand
-                        await application.bot.set_my_commands(
-                            [
-                                BotCommand("start", "Start / البدء"),
-                                BotCommand("referral", "Referral / الإحالة"),
-                                BotCommand("help", "Help / المساعدة"),
-                                BotCommand("status", "Status / الحالة"),
-                            ]
-                        )
-                        logger.info("bot commands registered")
-                    except Exception:
-                        logger.debug("set_my_commands soft-fail", exc_info=True)
 
                 # Official PTB persistence → Redis (restart + multi-worker safe user_data)
                 # Fail closed: without Redis, context loss is guaranteed on restart.
@@ -491,7 +493,7 @@ def main() -> None:
                     .token(TELEGRAM_BOT_TOKEN)
                     .request(_tg_request)
                     .concurrent_updates(True)
-                    .post_init(_post_init)
+                    .post_init(_lumen_bot_post_init)
                     .persistence(_persistence)
                     .build()
                 )
@@ -504,6 +506,7 @@ def main() -> None:
                         Application.builder()
                         .token(TELEGRAM_BOT_TOKEN)
                         .persistence(_persistence)
+                        .post_init(_lumen_bot_post_init)
                         .build()
                     )
                     logger.warning("Application built via fallback path WITH RedisPersistence")
