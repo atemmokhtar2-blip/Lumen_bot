@@ -42,7 +42,7 @@ def __getattr__(name: str):
     if name in {"handle_live_run_token", "handle_live_deploy_token"}:
         from . import live as lv
         return getattr(lv, name)
-    if name in {"start_cmd", "help_cmd", "status_cmd", "lang_cmd", "referral_cmd"}:
+    if name in {"start_cmd", "help_cmd", "status_cmd", "lang_cmd", "referral_cmd", "referral_stats_cmd"}:
         from . import commands as c
         return getattr(c, name)
     if name == "handle_message":
