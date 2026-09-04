@@ -151,23 +151,18 @@ def execute_cline_ir(ir: Any, work_dir: str | Path) -> ClineExecutionResult:
             )
 
     ir_dict = ir.to_dict() if hasattr(ir, "to_dict") else dict(ir)
+    # Cancel path needs user_id inside agent_loop
+    try:
+        if not int(ir_dict.get("user_id") or 0):
+            ir_dict["user_id"] = int(getattr(ir, "user_id", 0) or 0)
+    except Exception:
+        pass
 
     if mode == "agent":
         try:
             from lumen.engine.services.cline_runtime.provider_agent import (
                 build as agent_build,
             )
-            try:
-                from lumen.engine.services.progress_bus import report_progress
-                report_progress({
-                    "phase": "coding_agent",
-                    "tool": "coding_agent",
-                    "detail": "مسار Cline agent",
-                    "step": 0,
-                })
-            except Exception:
-                pass
-
             raw = agent_build(ir_dict, str(work))
             return ClineExecutionResult(
                 ok=bool(raw.get("ok")),

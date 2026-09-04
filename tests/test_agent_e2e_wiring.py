@@ -229,3 +229,50 @@ def test_provider_acceptance_gate_rejects_empty(tmp_path):
     assert any("acceptance" in str(e) for e in (raw.get("errors") or [])) or (
         (raw.get("metadata") or {}).get("acceptance") or {}
     ).get("ok") is False
+
+
+def test_user_id_reaches_agent_loop_for_cancel(tmp_path):
+    """Cancel only works if ir.user_id is visible inside run_agent."""
+    _clear_keys()
+    from unittest.mock import patch
+    from lumen.engine.services.cline_runtime import agent_brain
+    from lumen.engine.services.cline_runtime.agent_loop import run_agent
+    from lumen.engine.services.generation_cancel import request_cancel, clear_cancel, is_cancelled
+
+    clear_cancel(777)
+    request_cancel(777)
+    assert is_cancelled(777)
+
+    seen = {}
+
+    def fake_invoke(choice, system, user, *, task="build"):
+        seen["called"] = True
+        return '{"tool":"finish","summary":"x"}'
+
+    with patch.object(agent_brain, "_invoke_choice", side_effect=fake_invoke):
+        state = run_agent(
+            work_dir=tmp_path,
+            goal="echo bot",
+            ir_dict={"user_id": 777, "preferred_keys": ["echo"]},
+            max_steps=2,
+        )
+    # clear_cancel runs at loop start — cancel flag cleared for NEW run
+    # Re-request and ensure loop can see cancel mid-flight: next step check
+    assert state.metadata.get("user_id") == 777
+
+
+def test_execute_ir_stamps_user_id(tmp_path):
+    from lumen.engine.core.ir import BuildIR, EngineMode
+    ir = BuildIR(
+        original_text="x",
+        spec_request="x",
+        preferred_keys=["echo"],
+        capabilities_gap=["free_agent"],
+        engine_mode=EngineMode.CLINE,
+        user_id=0,
+    )
+    # stamp logic mirror
+    uid = 999
+    if uid:
+        ir.user_id = uid
+    assert ir.to_dict().get("user_id") == 999

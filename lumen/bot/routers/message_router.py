@@ -103,6 +103,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         from lumen.bot.progress_tracker import is_generation_busy
         if user and is_generation_busy(int(user.id)):
             low = (request or "").strip().lower()
+            if low in {"/cancel", "cancel", "إلغاء", "الغاء", "الغي", "stop", "/stop"}:
+                try:
+                    from lumen.engine.services.generation_cancel import request_cancel
+                    request_cancel(int(user.id))
+                except Exception:
+                    logger.exception("busy-path request_cancel failed")
             if low not in {"/cancel", "cancel", "إلغاء", "الغاء", "الغي", "stop", "/stop"}:
                 await message.reply_text(
                     "⏳ البوت لسه بيولّد مشروعك دلوقتي.\n"

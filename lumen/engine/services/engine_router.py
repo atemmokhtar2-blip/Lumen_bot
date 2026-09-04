@@ -134,6 +134,13 @@ def execute_ir(
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     uid = int(user_id or ir.user_id or 0)
+    if uid and not int(getattr(ir, "user_id", 0) or 0):
+        try:
+            ir.user_id = uid
+        except Exception:
+            pass
+    elif uid:
+        ir.user_id = uid
 
     from lumen.engine.core.ir_validate import (
         check_project_against_ir,

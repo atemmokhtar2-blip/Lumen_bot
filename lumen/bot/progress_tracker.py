@@ -188,11 +188,17 @@ async def run_with_heartbeat(
     context=None,
     **kwargs,
 ) -> Any:
+    """Run ``fn`` in a worker thread while editing status_msg from progress_bus.
+
+    Handler is installed only inside the worker (where the agent runs) so
+    nested set/reset cannot desync the Telegram heartbeat.
+    """
     bot = getattr(context, "bot", None) if context is not None else None
     chat_id = getattr(status_msg, "chat_id", None) or getattr(
         getattr(status_msg, "chat", None), "id", None
     )
     hb = ProgressHeartbeat(status_msg, bot=bot, chat_id=chat_id)
+    uid = int(user_id or 0)
 
     def on_event(event: dict[str, Any]) -> None:
         hb.push(event)
@@ -206,15 +212,13 @@ async def run_with_heartbeat(
                     clear_cancel(uid)
                 except Exception:
                     pass
-            bus_report({"phase": "starting", "tool": "starting", "step": 0})
+            bus_report({"phase": "starting", "tool": "starting", "step": 0, "detail": "بدء المحرك"})
             return fn(*args, **kwargs)
         finally:
             reset_progress_handler(tok)
 
-    uid = int(user_id or 0)
     if uid:
         mark_generation_busy(uid)
-    tok = set_progress_handler(on_event)
     hb.push({"tool": "starting", "detail": "بدء المحرك"})
     hb.start()
     try:
@@ -225,7 +229,6 @@ async def run_with_heartbeat(
         timeout = max(30.0, min(600.0, inner) + 30.0)
         return await asyncio.wait_for(asyncio.to_thread(worker), timeout=timeout)
     finally:
-        reset_progress_handler(tok)
         await hb.stop()
         if uid:
             clear_generation_busy(uid)
