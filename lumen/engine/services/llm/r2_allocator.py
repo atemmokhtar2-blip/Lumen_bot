@@ -233,12 +233,16 @@ def allocate(
         best_score,
         len(pool),
     )
+    try:
+        disp = best.resolve_dispatch()
+    except Exception:
+        disp = {}
     return AllocateResult(
         catalog_id=best.id,
-        provider=best.provider,
-        model_id=best.model_id,
+        provider=str(disp.get("provider") or best.provider),
+        model_id=str(disp.get("model_id") or best.model_id),
         api_key_env=best.api_key_env,
-        base_url=best.base_url,
+        base_url=(disp.get("base_url") or best.base_url or None),
         step_kind=step_kind,
         score=best_score,
         reasons=best_reasons,

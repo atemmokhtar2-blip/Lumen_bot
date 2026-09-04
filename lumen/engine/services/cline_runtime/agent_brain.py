@@ -414,7 +414,14 @@ def _call_groq(system: str, user: str, model_id: str) -> str:
         pool_status,
     )
 
-    model = model_id or (os.getenv("GROQ_MODEL") or "openai/gpt-oss-20b").strip()
+    if not model_id:
+        try:
+            from lumen.engine.services.llm.model_catalog import get_model
+            gm = get_model("groq-fast")
+            model_id = (gm.model_id if gm else "") or ""
+        except Exception:
+            model_id = ""
+    model = model_id or (os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile").strip()
     url = "https://api.groq.com/openai/v1/chat/completions"
     anti = (
         "CRITICAL: Do NOT call provider built-in tools (container.exec, browser, etc.). "

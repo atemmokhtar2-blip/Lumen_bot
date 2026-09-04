@@ -35,6 +35,7 @@ class ModelChoice:
     model_id: str
     api_key_env: str
     base_url: str | None = None
+    catalog_id: str = ""  # Phase-1 SoT link back to model_catalog
 
     def key_present(self) -> bool:
         if self.provider in {"ollama", "llamacpp", "openai_compat"}:
@@ -195,11 +196,21 @@ def _task_to_role(task: str) -> str:
 
 
 def _choice_from_catalog_model(m) -> ModelChoice:
+    """Build ModelChoice from catalog row — always via resolve_dispatch (OpenRouter rewrite)."""
+    try:
+        disp = m.resolve_dispatch()
+    except Exception:
+        disp = {
+            "provider": m.provider,
+            "model_id": m.model_id,
+            "base_url": m.base_url or "",
+        }
     return ModelChoice(
-        m.provider,
-        m.model_id,
+        disp.get("provider") or m.provider,
+        disp.get("model_id") or m.model_id,
         m.api_key_env,
-        base_url=m.base_url,
+        base_url=(disp.get("base_url") or m.base_url or None) or None,
+        catalog_id=getattr(m, "id", "") or "",
     )
 
 
@@ -245,14 +256,21 @@ def select_model(*, task: str = "build") -> ModelChoice:
             pass
 
     if forced and forced not in {"auto", "none"}:
-        # Prefer catalog entries for this provider
-        for m in CATALOG:
-            if m.provider == forced or (forced in {"google"} and m.provider == "gemini") or (
-                forced in {"grok"} and m.provider == "xai"
-            ):
-                choice = _choice_from_catalog_model(m)
-                if choice.key_present():
-                    return _apply_task_model_override(choice, task)
+        # Prefer catalog entries for this provider, role-matched first (Phase-1 SoT)
+        matches = [
+            m for m in CATALOG
+            if m.provider == forced
+            or (forced in {"google"} and m.provider == "gemini")
+            or (forced in {"grok"} and m.provider == "xai")
+        ]
+        role_hits = [m for m in matches if role in (m.roles or ())]
+        ordered = role_hits + [m for m in matches if m not in role_hits]
+        for m in ordered:
+            if not m.key_present():
+                continue
+            choice = _choice_from_catalog_model(m)
+            if choice.key_present():
+                return _apply_task_model_override(choice, task)
         # Legacy forced providers not in catalog (qwen/ollama/llamacpp)
         legacy = {
             "qwen": ModelChoice(
@@ -305,7 +323,7 @@ def select_model(*, task: str = "build") -> ModelChoice:
 
 
 def _apply_task_model_override(choice: ModelChoice, task: str) -> ModelChoice:
-    """Optional per-task model id via env (Planner strong / Worker cheap)."""
+    """Optional per-task override via env — catalog id preferred over raw model_id."""
     task_l = (task or "build").strip().lower()
     env_map = {
         "plan": "CLINE_MODEL_PLAN",
@@ -324,11 +342,25 @@ def _apply_task_model_override(choice: ModelChoice, task: str) -> ModelChoice:
     override = (os.getenv(env_name) or "").strip()
     if not override:
         return choice
+    # Prefer catalog id (e.g. CLINE_MODEL_PLAN=gemini-2.5-pro)
+    try:
+        from lumen.engine.services.llm.model_catalog import get_model
+        m = get_model(override)
+        if m is not None and m.key_present():
+            return _choice_from_catalog_model(m)
+        # match by model_id string inside catalog
+        from lumen.engine.services.llm.model_catalog import CATALOG
+        for row in CATALOG:
+            if row.model_id == override and row.key_present():
+                return _choice_from_catalog_model(row)
+    except Exception:
+        pass
     return ModelChoice(
         choice.provider,
         override,
         choice.api_key_env,
         base_url=choice.base_url,
+        catalog_id=choice.catalog_id,
     )
 
 
@@ -414,12 +446,21 @@ def select_model_for_goal(
                 soft_parse_fail=soft_parse_fail,
             )
             if result is not None:
-                choice = ModelChoice(
-                    result.provider,
-                    result.model_id,
-                    result.api_key_env,
-                    base_url=result.base_url,
-                )
+                try:
+                    from lumen.engine.services.llm.model_catalog import get_model
+                    row = get_model(result.catalog_id) if result.catalog_id else None
+                except Exception:
+                    row = None
+                if row is not None:
+                    choice = _choice_from_catalog_model(row)
+                else:
+                    choice = ModelChoice(
+                        result.provider,
+                        result.model_id,
+                        result.api_key_env,
+                        base_url=result.base_url,
+                        catalog_id=result.catalog_id or "",
+                    )
                 choice = _apply_task_model_override(choice, task)
                 sig = result.difficulty_signal or {}
                 meta.update({
