@@ -52,7 +52,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 except RuntimeError:
                     result = None
                     await message.reply_text(
-                        "تم استلام الدعوة، لكن حفظ الإحالة غير متاح حالياً على الخادم."
+                        "تم استلام الدعوة، لكن الخادم لا يصل لقاعدة Mongo "
+                        "(تحقق من MONGODB_URI أو MONGO_URL بعد إعادة التشغيل)."
                     )
                 except Exception:
                     result = None
@@ -83,7 +84,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                             )
                         elif err == "referral_backend_unavailable":
                             await message.reply_text(
-                                "نظام الإحالة غير متاح حالياً (إعدادات الخادم)."
+                                "نظام الإحالة غير متاح: الخادم لا يرى رابط Mongo. "
+                                "ضع MONGODB_URI أو MONGO_URL في بيئة التشغيل وأعد تشغيل البوت."
                             )
                 except Exception:
                     pass
