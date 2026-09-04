@@ -12,10 +12,13 @@ from lumen.domain.entities.referral import Referral, ReferralError, ReferralStat
 from lumen.domain.services.referral_policy import should_count_as_bot_use
 from lumen.platform.referrals.config import (
     REFERRAL_CREDIT_REASON,
+    REFERRAL_MILESTONE_CREDITS,
+    REFERRAL_NOTIFY_EVERY,
     REFERRAL_QUALIFIED_TARGET,
     REFERRAL_REGISTER_RATE_PER_MIN,
     REFERRAL_REWARD_CREDITS,
     REFERRAL_REWARD_USD,
+    referral_milestones,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,34 +130,58 @@ def handle_qualify_referral(cmd: QualifyReferralCommand) -> QualifyReferralResul
                 + "(يُحتسب من يستخدم البوت فقط)."
             )
 
-        if live_qualified >= int(REFERRAL_QUALIFIED_TARGET) and not bool(stats.reward_paid):
-            batch = "referral-reward-%s-%s" % (
-                ref.referrer_telegram_id,
-                REFERRAL_QUALIFIED_TARGET,
+        # Progressive milestones every N qualified (default 10 → $1 each up to target)
+        for ms in referral_milestones():
+            if live_qualified < int(ms):
+                break
+            batch = "referral-ms-%s-%s" % (ref.referrer_telegram_id, ms)
+            try:
+                claimed = repo.claim_milestone_slot(
+                    ref.referrer_telegram_id, milestone=int(ms), batch_id=batch
+                )
+            except Exception:
+                claimed = False
+            if not claimed:
+                continue
+            amount = int(REFERRAL_MILESTONE_CREDITS or 0) or max(
+                1, int(REFERRAL_REWARD_CREDITS or 500) // max(1, len(referral_milestones()))
             )
-            claimed = repo.claim_reward_slot(
-                ref.referrer_telegram_id,
-                batch_id=batch,
-                min_qualified=int(REFERRAL_QUALIFIED_TARGET),
+            ok = _grant_referral_reward_amount(
+                ref.referrer_telegram_id, amount=amount, batch_key=batch
             )
-            if claimed:
-                reward_granted = _grant_referral_reward(ref.referrer_telegram_id)
-                if reward_granted:
-                    stats = repo.stats_for(ref.referrer_telegram_id)
-                    stats.qualified_count = live_qualified
+            if ok:
+                reward_granted = True
+                notify_text = (
+                    "مبروك! وصلت لـ %s مستخدم استخدموا البوت." % ms
+                    + chr(10)
+                    + "تم إضافة %s رصيد (حافز إحالة)." % amount
+                )
+            else:
+                logger.error(
+                    "milestone reward failed referrer_tg=%s ms=%s",
+                    ref.referrer_telegram_id,
+                    ms,
+                )
+
+        # Nudge every REFERRAL_NOTIFY_EVERY newly counted (no payout)
+        if newly_qualified and not reward_granted and int(REFERRAL_NOTIFY_EVERY) > 0:
+            if live_qualified > 0 and live_qualified % int(REFERRAL_NOTIFY_EVERY) == 0:
+                nxt = None
+                for ms in referral_milestones():
+                    if live_qualified < int(ms):
+                        nxt = int(ms)
+                        break
+                if nxt is not None:
                     notify_text = (
-                        "مبروك! وصلت لـ %s مستخدم استخدموا البوت."
-                        % REFERRAL_QUALIFIED_TARGET
+                        "تقدم الإحالات: %s/%s نشط." % (live_qualified, REFERRAL_QUALIFIED_TARGET)
                         + chr(10)
-                        + "تم إضافة مكافأة $%s (%s رصيد) لحسابك."
-                        % (REFERRAL_REWARD_USD, _reward_credit_amount())
+                        + "باقي %s للمكافأة التالية." % max(0, nxt - live_qualified)
                     )
                 else:
-                    repo.release_reward_slot(ref.referrer_telegram_id)
-                    logger.error(
-                        "referral reward credit failed after claim referrer_tg=%s",
-                        ref.referrer_telegram_id,
+                    notify_text = (
+                        "تقدم الإحالات: %s/%s نشط." % (live_qualified, REFERRAL_QUALIFIED_TARGET)
                     )
+
 
         return QualifyReferralResult(
             ok=True,
@@ -181,7 +208,65 @@ def _reward_credit_amount() -> int:
     return max(1, int(REFERRAL_REWARD_USD) * 100)
 
 
+def _grant_referral_reward_amount(
+    referrer_telegram_id: int, *, amount: int, batch_key: str
+) -> bool:
+    amount = int(amount)
+    if amount <= 0:
+        return False
+    tid = "tg:%s" % int(referrer_telegram_id)
+    key = str(batch_key)
+    expires = time.time() + _REFERRAL_PROMO_TTL_SEC
+    try:
+        import os
+        from lumen.platform.credits import get_credit_service
+        from lumen.platform.referrals.config import is_referral_dev_environment
+
+        svc = get_credit_service()
+        store_name = type(getattr(svc, "_store", None)).__name__
+        if store_name == "MemoryCreditsStore" and not is_referral_dev_environment():
+            logger.error("referral reward refused: MemoryCreditsStore in non-dev")
+            return False
+        result = svc.credit_credits(
+            tid,
+            amount,
+            reason=REFERRAL_CREDIT_REASON,
+            reference_id=key,
+            idempotency_key=key,
+            promotional=True,
+            promo_expires_at=expires,
+            metadata={
+                "usd_hint": round(amount / 100.0, 2),
+                "batch": key,
+                "kind": "referral_milestone",
+            },
+        )
+        ok = bool(getattr(result, "ok", False))
+        if ok:
+            logger.info(
+                "referral milestone granted referrer_tg=%s amount=%s key=%s",
+                referrer_telegram_id,
+                amount,
+                key,
+            )
+        else:
+            logger.warning(
+                "referral milestone denied referrer_tg=%s reason=%s",
+                referrer_telegram_id,
+                getattr(result, "reason", ""),
+            )
+        return ok
+    except Exception as exc:
+        logger.warning(
+            "referral milestone exception referrer_tg=%s: %s",
+            referrer_telegram_id,
+            type(exc).__name__,
+        )
+        return False
+
+
 def _grant_referral_reward(referrer_telegram_id: int) -> bool:
+
     amount = _reward_credit_amount()
     tid = "tg:%s" % int(referrer_telegram_id)
     key = "referral-reward-%s-%s" % (
