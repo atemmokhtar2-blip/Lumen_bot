@@ -150,12 +150,18 @@ def charge_bound_usage(
 
 
 def credits_for_llm_usage(usage: dict[str, Any] | None, *, credit_service: Any = None) -> int:
-    """Convert provider usage dict → integer credits (never fractional).
+    """Convert provider usage → integer credits based on **actual model cost**.
 
-    Order of preference:
-      1) llm_prompt_1k + llm_completion_1k pricing rules (ceil per 1k tokens)
-      2) estimate_cost_usd × LUMEN_CREDITS_PER_USD (default 100)
-      3) 0 when usage is empty
+    NOT a fixed generation fee. Formula:
+
+      USD = estimate_cost_usd(usage)   # model-aware $/1M rates for provider+model
+      credits = ceil(USD * LUMEN_CREDITS_PER_USD)   # default 1000 credits per $1
+
+    Optional: if LUMEN_LLM_FLAT_1K_PRICING=1, fall back to llm_prompt_1k /
+    llm_completion_1k rules (legacy flat path).
+
+    Floor: any real token traffic → at least 1 credit (except pure-local $0 models
+    when LUMEN_LOCAL_LLM_FREE=1).
     """
     u = dict(usage or {})
     prompt = int(u.get("prompt_tokens") or u.get("prompt_tokens_est") or 0)
@@ -164,53 +170,57 @@ def credits_for_llm_usage(usage: dict[str, Any] | None, *, credit_service: Any =
         total = int(u.get("total_tokens") or 0)
         if total <= 0:
             return 0
-        # Unknown split — same 70/30 used by cost_model
         prompt = int(total * 0.7)
         completion = max(0, total - prompt)
 
-    if credit_service is None:
+    flat = (os.getenv("LUMEN_LLM_FLAT_1K_PRICING") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if flat and credit_service is None:
         try:
             from lumen.platform.credits import get_credit_service
 
             credit_service = get_credit_service()
         except Exception:
             credit_service = None
-
-    credits = 0
-    used_rules = False
-    if credit_service is not None:
+    if flat and credit_service is not None:
         try:
             p_units = (prompt + 999) // 1000 if prompt > 0 else 0
             c_units = (completion + 999) // 1000 if completion > 0 else 0
             p_cost = int(credit_service.cost_for("llm_prompt_1k", p_units)) if p_units else 0
             c_cost = int(credit_service.cost_for("llm_completion_1k", c_units)) if c_units else 0
-            # cost_for returns 0 when rule missing — treat as "rules present" only if >0 total
-            # or rule exists
             rules = {r.resource_type for r in (credit_service.list_pricing() or [])}
             if "llm_prompt_1k" in rules or "llm_completion_1k" in rules:
                 credits = p_cost + c_cost
-                used_rules = True
+                if credits <= 0 and (prompt > 0 or completion > 0):
+                    credits = 1
+                return max(0, int(credits))
         except Exception:
-            logger.debug("pricing rules path failed", exc_info=True)
-            used_rules = False
+            logger.debug("flat 1k pricing path failed", exc_info=True)
 
-    if not used_rules:
-        try:
-            from lumen.engine.services.evaluation.cost_model import estimate_cost_usd
+    # Primary path: model-aware USD → credits
+    try:
+        from lumen.engine.services.evaluation.cost_model import estimate_cost_usd
 
-            usd = float(estimate_cost_usd(u) or 0.0)
-        except Exception:
-            usd = 0.0
-        try:
-            rate = float(os.getenv("LUMEN_CREDITS_PER_USD") or "100")
-        except ValueError:
-            rate = 100.0
-        rate = max(0.0, rate)
-        credits = int(math.ceil(usd * rate)) if usd > 0 and rate > 0 else 0
+        usd = float(estimate_cost_usd(u) or 0.0)
+    except Exception:
+        usd = 0.0
+    try:
+        # 1000 credits per $1 → $0.001 = 1 credit (fine-grained metering)
+        rate = float(os.getenv("LUMEN_CREDITS_PER_USD") or "1000")
+    except ValueError:
+        rate = 1000.0
+    rate = max(0.0, rate)
+    credits = int(math.ceil(usd * rate)) if usd > 0 and rate > 0 else 0
 
+    local_free = (os.getenv("LUMEN_LOCAL_LLM_FREE") or "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    prov = str(u.get("provider") or "").lower()
     if credits <= 0 and (prompt > 0 or completion > 0):
-        # Floor: any real token traffic costs at least 1 credit
-        credits = 1
+        if local_free and prov in {"ollama", "llamacpp"}:
+            return 0
+        credits = 1  # floor for any cloud traffic
     return max(0, int(credits))
 
 
