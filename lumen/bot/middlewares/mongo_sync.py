@@ -14,7 +14,12 @@ def ensure_mongo_user(user) -> None:
     """
     if not user:
         return
-    if not (os.getenv("MONGODB_URI") or "").strip():
+    try:
+        from lumen.platform.mongo_users import resolve_mongodb_uri as _rmu
+        _mongo_ok = bool(_rmu())
+    except Exception:
+        _mongo_ok = bool((os.getenv("MONGODB_URI") or "").strip())
+    if not _mongo_ok:
         logger.error(
             "MONGODB_URI missing — cannot persist user tg=%s (SQLite fallback removed)",
             getattr(user, "id", None),
@@ -60,8 +65,13 @@ def ensure_mongo_user(user) -> None:
 
 
 def mongo_plan_for_user(user_id: int) -> str | None:
-    if not (os.getenv("MONGODB_URI") or "").strip():
-        return None
+    try:
+        from lumen.platform.mongo_users import resolve_mongodb_uri as _rmu2
+        if not _rmu2():
+            return None
+    except Exception:
+        if not (os.getenv("MONGODB_URI") or "").strip():
+            return None
     try:
         from lumen.platform.tenants import get_tenant_store
 
