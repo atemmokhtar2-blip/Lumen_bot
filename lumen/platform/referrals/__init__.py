@@ -1,4 +1,4 @@
-"""Referral program — config, schema, domain-facing helpers."""
+"""Referral program."""
 from lumen.platform.referrals.config import (
     REFERRAL_COLLECTION,
     REFERRAL_CREDIT_REASON,
@@ -10,6 +10,12 @@ from lumen.platform.referrals.config import (
     bot_username_link,
     parse_referrer_from_start_payload,
     referral_deep_link_payload,
+)
+from lumen.platform.referrals.mongo_repository import (
+    MemoryReferralRepository,
+    MongoReferralRepository,
+    get_referral_repository,
+    reset_referral_repository_for_tests,
 )
 
 __all__ = [
@@ -23,4 +29,8 @@ __all__ = [
     "referral_deep_link_payload",
     "parse_referrer_from_start_payload",
     "bot_username_link",
+    "MongoReferralRepository",
+    "MemoryReferralRepository",
+    "get_referral_repository",
+    "reset_referral_repository_for_tests",
 ]
