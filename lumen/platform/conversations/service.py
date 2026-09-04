@@ -50,6 +50,16 @@ class ConversationService:
         tokens: int = 0,
         metadata: dict | None = None,
     ) -> Message:
+        # Defense: never persist Telegram bot tokens in conversation history
+        try:
+            from lumen.bot.helpers import looks_like_bot_token
+            if looks_like_bot_token(content or ""):
+                content = "[redacted_bot_token]"
+        except Exception:
+            if content and ":" in content and len(content) > 40 and content.split(":", 1)[0].isdigit():
+                content = "[redacted_bot_token]"
+        if not tokens and content:
+            tokens = max(1, len(content) // 4)
         msg = self._store.append_message(
             str(conversation_id),
             user_id=int(user_id),

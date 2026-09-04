@@ -150,18 +150,25 @@ async def _handle_message_body(
     _clear_thinking,
 ) -> None:
     # ROOT: every non-command user text joins the active conversation thread first
+    # Never persist bot tokens / secrets into conversation history.
     if user and request and not str(request).startswith("/"):
         try:
-            from lumen.bot.conversation_ui import record_user_and_assistant, resolve_active_conversation_id
-            _uid0 = int(user.id)
-            resolve_active_conversation_id(_uid0, context.user_data if isinstance(context.user_data, dict) else {})
-            record_user_and_assistant(
-                _uid0,
-                context.user_data if isinstance(context.user_data, dict) else {},
-                user_text=request,
-            )
+            from lumen.bot.helpers import looks_like_bot_token
+            _skip_hist = looks_like_bot_token(request)
         except Exception:
-            logger.exception("conversation early record failed")
+            _skip_hist = False
+        if not _skip_hist:
+            try:
+                from lumen.bot.conversation_ui import record_user_and_assistant, resolve_active_conversation_id
+                _uid0 = int(user.id)
+                resolve_active_conversation_id(_uid0, context.user_data if isinstance(context.user_data, dict) else {})
+                record_user_and_assistant(
+                    _uid0,
+                    context.user_data if isinstance(context.user_data, dict) else {},
+                    user_text=request,
+                )
+            except Exception:
+                logger.exception("conversation early record failed")
 
     # Engine UI: answer current need slot with free text when in GEN_SLOTS
     if context.user_data and not (request or "").startswith("/"):
