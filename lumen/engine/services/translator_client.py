@@ -1,6 +1,7 @@
-"""Capability helpers for bot-intent → feature keys.
+"""Intent → feature-key helpers (no LLM).
 
-Translate/chat LLM paths are permanently removed. Agent LLM uses model_catalog + agent_brain.
+Agent LLM path is model_catalog + agent_brain only.
+This module never calls external translate/chat APIs.
 """
 from __future__ import annotations
 
@@ -121,35 +122,7 @@ def _rule_features_from_text(text: str, allowed: set[str]) -> list[str]:
     return found[:12]
 
 
-def translate_request(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Removed — agent owns LLM."""
-    return None
-
-
-def chat_request(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Removed — agent owns LLM."""
-    return None
-
-
-def translate_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    return None
-
-
-def chat_via_gemini(message: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    return None
-
-
-def translate_infinite_via_gemini(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    return None
-
-
-def translate_infinite_via_groq(text: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    return None
-
-
 __all__ = [
     "_spec_core_capabilities",
     "_rule_features_from_text",
-    "translate_request",
-    "chat_request",
 ]

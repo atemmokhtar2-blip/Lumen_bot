@@ -17,34 +17,24 @@ Source: `lumen/bot/routers/message_router.py` → `handle_message`.
 11. Bot token paste → `token_handler` (before thinking bubble)
 12. Thinking indicator for normal paths
 
-## Force-generate fast path
+## Force-generate path
 
-Triggers when:
-
-- Explicit generation verbs + bot (`_looks_like_generation_request`)
-- Free-agent / bot-spec heuristics (`_looks_like_bot_spec`)
-- Confirm phrases after a prior bot request (`_is_confirm_phrase`)
-- Pending chat action confirm for generate/refine
+Triggers when generation heuristics match (explicit verbs, bot-spec, confirm phrases).
 
 Then:
 
 1. Instant ack + status message
-2. Optional `translate_request` + `analyze_and_prepare`
-3. `build_ir_from_package` → `execute_ir` (heartbeat)
+2. Rule/capability feature extraction (`engine_groq_bridge.analyze_and_prepare` — **no** LLM translate/chat)
+3. `build_ir_from_package` → `execute_ir` (agent loop + model_catalog)
 4. Fallback: `run_generation` → multi-agent or Cline bridge
 5. `deliver_generation_result` (smoke test required before ZIP)
 6. Generation cache + session persist
 
-## Chat understanding path
+## LLM ownership
 
-When not already force-generate:
-
-1. Gemini `chat_request` (intent + optional action/translation)
-2. On generate/refine action: Qwen `translate_request` → validated spec fields
-3. Gemini failure + explicit build → Qwen rescue translation
-4. Sets `force_generate_once` and continues into generation
-
-Chat does not write project files.
+- **Single path:** `select_model_for_goal` → `agent_brain.decide` → provider adapters
+- **Catalog:** `lumen/engine/services/llm/model_catalog.py`
+- **Removed permanently:** `translate_request`, `chat_request`, `llm/facade`, `llm_budget_gate`
 
 ## Delegated routers (before final generate)
 
@@ -52,14 +42,5 @@ Chat does not write project files.
 2. `try_handle_git`
 3. `try_handle_hosting`
 4. `try_handle_repo_dev`
-5. Engine-only tools via `execute_tool` (`repo_understand`, `repo_inspect`, …)
+5. Engine-only tools via `execute_tool`
 6. If `active_repo` bound and message is free-form Q → force `repo_understand`
-7. Non-bot / non-hard → short deterministic help (no LLM partner routing)
-
-## `run_generation` order (`helpers.py`)
-
-1. Queue backpressure slot
-2. LLM budget gate
-3. Optional forced Groq codegen (`GROQ_CODEGEN_ENABLED`)
-4. Multi-agent orchestrator if enabled → verified template fallback on failure
-5. `run_generation_with_bridge` → IR → `execute_ir` (Cline)
