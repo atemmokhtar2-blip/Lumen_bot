@@ -27,6 +27,10 @@ REFERRAL_CREDIT_REASON = "referral_bonus"
 REFERRAL_COLLECTION = "referrals"
 REFERRAL_STATS_COLLECTION = "referral_stats"
 
+# Anti-abuse (phase 3)
+REFERRAL_MAX_PER_REFERRER = _int_env("REFERRAL_MAX_PER_REFERRER", 100)
+REFERRAL_REGISTER_RATE_PER_MIN = _int_env("REFERRAL_REGISTER_RATE_PER_MIN", 20)
+
 
 def referral_deep_link_payload(telegram_user_id: int) -> str:
     uid = int(telegram_user_id)
