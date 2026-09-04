@@ -286,9 +286,19 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             from lumen.platform.referrals.config import referral_deep_link_payload
             link = referral_deep_link_payload(int(user.id))
-        stats = await asyncio.to_thread(
-            get_referral_repository().stats_for, int(user.id)
-        )
+        def _live_stats(uid: int):
+            repo = get_referral_repository()
+            st = repo.stats_for(uid)
+            st.qualified_count = int(repo.count_qualified(uid))
+            try:
+                st.total_invited = max(
+                    int(st.total_invited), int(repo.count_for_referrer(uid))
+                )
+            except Exception:
+                pass
+            return st
+
+        stats = await asyncio.to_thread(_live_stats, int(user.id))
         remaining = max(0, int(REFERRAL_QUALIFIED_TARGET) - int(stats.qualified_count))
         nl = chr(10)
         text = nl.join(
