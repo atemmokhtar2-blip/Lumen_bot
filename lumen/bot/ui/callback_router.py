@@ -355,6 +355,8 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         if uid_h and context.user_data is not None:
             from lumen.bot.session_store import get_session_store
             get_session_store().hydrate(uid_h, context.user_data)
+            from lumen.bot.session_store import ensure_account_links
+            ensure_account_links(uid_h, context.user_data)
     except Exception:
         logger.exception("session hydrate failed on callback")
 

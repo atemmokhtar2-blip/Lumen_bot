@@ -165,18 +165,29 @@ class RedisPersistence(BasePersistence[UD, CD, BD]):
             logger.exception("drop_user_data clear failed uid=%s", uid)
             return
 
-        # Re-hydrate pro_plan from MongoDB so the paid subscription survives
+        # Re-hydrate paid Pro subscription from MongoDB
         try:
             from lumen.bot.ui.subscription_store import read_subscription
             rec = read_subscription(uid)
             if rec and isinstance(rec, dict):
-                # read_subscription already self-heals Redis, but be explicit
                 logger.info(
                     "drop_user_data: preserved pro_subscription uid=%s from MongoDB",
                     uid,
                 )
         except Exception:
             logger.debug("drop_user_data pro_plan re-hydrate failed uid=%s", uid, exc_info=True)
+
+        # Re-hydrate GitHub connection (PAT + profile) from MongoDB — never force re-link
+        try:
+            from lumen.bot.ui.github_connection_store import recover_after_session_drop
+
+            recover_after_session_drop(uid)
+        except Exception:
+            logger.debug(
+                "drop_user_data github_connection re-hydrate failed uid=%s",
+                uid,
+                exc_info=True,
+            )
 
     async def drop_chat_data(self, chat_id: int) -> None:
         self._chat.pop(int(chat_id), None)

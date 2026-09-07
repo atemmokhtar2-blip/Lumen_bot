@@ -124,6 +124,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         if user and context.user_data is not None:
             get_session_store().hydrate(int(user.id), context.user_data)
+            from lumen.bot.session_store import ensure_account_links
+            ensure_account_links(int(user.id), context.user_data)
     except Exception:
         pass
 

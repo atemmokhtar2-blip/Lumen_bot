@@ -103,7 +103,11 @@ def bind_github_repo(
             message_ar="تعذر معرفة رابط المستودع — حدّث قائمة GitHub وأعد الاختيار.",
         )
 
-    token = token_store.load_github_token(uid)
+    try:
+        from lumen.bot.ui.github_connection_store import read_github_token
+        token = read_github_token(uid)
+    except Exception:
+        token = token_store.load_github_token(uid)
     if not token:
         return BindRepoResult(
             ok=False,

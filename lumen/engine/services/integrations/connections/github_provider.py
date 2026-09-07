@@ -13,7 +13,13 @@ LABEL_AR = "GitHub"
 
 
 def _token_for_user(user_id: int) -> str | None:
-    return token_store.load_github_token(int(user_id))
+    # MongoDB source of truth + Redis cache (survives deploy / Redis flush)
+    try:
+        from lumen.bot.ui.github_connection_store import read_github_token
+
+        return read_github_token(int(user_id))
+    except Exception:
+        return token_store.load_github_token(int(user_id))
 
 
 class GitHubConnectionProvider:
@@ -140,9 +146,17 @@ class GitHubConnectionProvider:
 
 
 def store_github_connection_token(user_id: int, token: str, *, login: str = "") -> bool:
-    """Persist PAT after successful official API verification."""
-    return token_store.save_github_token(
-        int(user_id),
-        token,
-        meta={"login": (login or "")[:80], "provider": "github"},
-    )
+    """Persist PAT after successful official API verification.
+
+    MongoDB is the durable source of truth (deploy-safe); Redis is the cache.
+    """
+    try:
+        from lumen.bot.ui.github_connection_store import write_github_connection
+
+        return write_github_connection(int(user_id), token, login=login or "")
+    except Exception:
+        return token_store.save_github_token(
+            int(user_id),
+            token,
+            meta={"login": (login or "")[:80], "provider": "github"},
+        )

@@ -358,6 +358,24 @@ _store: SessionStore | None = None
 _store_lock = threading.Lock()
 
 
+def ensure_account_links(user_id: int, user_data: dict) -> None:
+    """Self-heal durable account links (GitHub) from MongoDB after restart/deploy."""
+    if user_data is None:
+        return
+    try:
+        gc = user_data.get("github_connection")
+        if isinstance(gc, dict) and gc.get("connected"):
+            return
+        from lumen.bot.ui.github_connection_store import read_github_profile, read_github_token
+
+        # Touch token to self-heal Redis; profile for session flag
+        _ = read_github_token(int(user_id))
+        prof = read_github_profile(int(user_id))
+        if isinstance(prof, dict) and prof.get("connected"):
+            user_data["github_connection"] = dict(prof)
+    except Exception:
+        pass
+
 def get_session_store() -> SessionStore:
     global _store
     if _store is not None:
