@@ -318,7 +318,12 @@ async def handle_ui_callback(update, context) -> None:
         logger.debug("referral qualify schedule soft-fail", exc_info=True)
 
     # HITL resume can run the full LangGraph build — allow long wall time.
-    _timeout = 200.0 if action_id in {"hitl_confirm", "hitl_reject"} else 25.0
+    if action_id in {"hitl_confirm", "hitl_reject"}:
+        _timeout = 200.0
+    elif action_id == "conn_gh_select":
+        _timeout = 120.0  # clone + understand can exceed default UI budget
+    else:
+        _timeout = 25.0
     try:
         await asyncio.wait_for(
             _handle_ui_callback_body(update, context, q, action_id, arg),
@@ -750,14 +755,20 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             )
 
 
-    # Resolve selected repo from official list cache
+    # Phase 2: select repo → official clone with stored PAT → active_repo
     if result.ok and action_id == "conn_gh_select" and uid:
         rid = (result.state.slots.get("gh_selected_id") or "").strip()
         if rid:
+            status_msg = None
             try:
                 from lumen.engine.services.integrations.connections.token_store import (
                     resolve_cached_repo,
                 )
+                from lumen.engine.services.integrations.connections.bind_repo import (
+                    bind_github_repo,
+                )
+                import asyncio as _aio
+
                 item = resolve_cached_repo(int(uid), rid)
                 if item:
                     result.state.slots["gh_selected_full"] = str(item.get("full_name") or "")[:120]
@@ -765,16 +776,60 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     result.state.slots["gh_selected_branch"] = str(
                         item.get("default_branch") or "main"
                     )[:40]
+
+                label = result.state.slots.get("gh_selected_full") or rid
+                result.state.slots["gh_status_line"] = f"جاري سحب {label}…"
+                try:
+                    _em = update.effective_message
+                    if _em is not None:
+                        status_msg = await _em.reply_text(f"⏳ جاري سحب المستودع `{label}`…")
+                except Exception:
+                    status_msg = None
+
+                bind = await _aio.to_thread(
+                    bind_github_repo,
+                    int(uid),
+                    rid,
+                    slots=dict(result.state.slots),
+                    run_understand=True,
+                )
+                if bind.ok:
+                    if context.user_data is not None:
+                        context.user_data["active_repo"] = dict(bind.active_repo)
+                        context.user_data["last_project_path"] = bind.path
+                        try:
+                            from lumen.bot.session_store import get_session_store
+                            get_session_store().save(int(uid), dict(context.user_data))
+                        except Exception:
+                            logger.exception("persist active_repo after bind failed")
+                    result.state.slots["gh_bound_path"] = bind.path[:200]
+                    result.state.slots["gh_bound_url"] = bind.url[:200]
+                    result.state.project_ref = bind.path[:200]
+                    summary = bind.contract_summary or "جاهز"
                     result.state.slots["gh_status_line"] = (
-                        f"مختار: {result.state.slots['gh_selected_full']} "
-                        "(الخطوة التالية: فهم المشروع + المتغيرات)"
+                        f"✅ مربوط: {bind.full_name or label}\n"
+                        f"{summary}\n"
+                        f"`{bind.path}`"
                     )
+                    try:
+                        if status_msg is not None:
+                            await status_msg.edit_text(
+                                f"✅ تم سحب وربط `{bind.full_name or label}`\n{summary}"
+                            )
+                    except Exception:
+                        pass
                 else:
-                    result.state.slots["gh_status_line"] = (
-                        f"تم اختيار المستودع #{rid} — حدّث القائمة إن لزم."
-                    )
+                    result.state.slots["gh_status_line"] = f"❌ {bind.message_ar}"
+                    if bind.needs_auth:
+                        result.state.slots["gh_connected"] = "0"
+                    try:
+                        if status_msg is not None:
+                            await status_msg.edit_text(f"❌ {bind.message_ar[:500]}")
+                    except Exception:
+                        pass
             except Exception:
-                logger.exception("conn_gh_select resolve failed")
+                logger.exception("conn_gh_select bind failed")
+                result.state.slots["gh_status_line"] = "❌ فشل ربط المستودع."
 
     # Connections hub: show live GitHub link status
     if result.state.phase == EngineUiPhase.CONNECTIONS and uid:

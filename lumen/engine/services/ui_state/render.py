@@ -169,21 +169,28 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     if phase == EngineUiPhase.CONN_GITHUB:
         login = (state.slots or {}).get("gh_login") or ""
         status = (state.slots or {}).get("gh_status_line") or ""
+        bound = (state.slots or {}).get("gh_bound_path") or ""
+        selected = (state.slots or {}).get("gh_selected_full") or ""
         if (state.slots or {}).get("gh_connected") == "1":
             body = status or (
                 f"متصل{(' كـ @' + login) if login else ''}. اختر مستودعاً من الأزرار."
             )
         else:
             body = status or "غير متصل. اضغط «ربط GitHub» وأرسل PAT بصلاحية repo."
+        sections = [("الحالة", body)]
+        if selected:
+            sections.append(("المختار", selected))
+        if bound:
+            sections.append(("المسار", bound))
+        sections.append(
+            (
+                "ملاحظة",
+                "القائمة من api.github.com. بعد الاختيار يتم السحب والربط تلقائياً.",
+            )
+        )
         return html_card(
             "GitHub",
-            [
-                ("الحالة", body),
-                (
-                    "ملاحظة",
-                    "القائمة من api.github.com الرسمية. اختيار المستودع للفهم/الاستضافة في الخطوة التالية.",
-                ),
-            ],
+            sections,
             subtitle="اتصال رسمي",
         )
 
