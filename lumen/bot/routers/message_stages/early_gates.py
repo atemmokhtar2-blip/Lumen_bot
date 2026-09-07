@@ -66,7 +66,10 @@ async def gate_auth_and_rate(
         allowed = await asyncio.to_thread(_rate_limit_ok, int(user.id) if user else 0)
     except Exception:
         logger.exception("rate_limit_ok failed")
-        allowed = True
+        import os
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        # Production: fail closed (DoS protection). Dev: allow so local work continues.
+        allowed = env not in {"production", "prod", "staging"}
     if not allowed:
         try:
             wait = await asyncio.to_thread(

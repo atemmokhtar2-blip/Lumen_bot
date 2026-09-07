@@ -9,6 +9,7 @@ def rate_limit_ui_ok(user_id: int) -> bool:
 
     Menu navigation must stay fast. LLM daily budget is enforced on text /
     generation paths via ``rate_limit_ok``, not on every keyboard press.
+    Fail-closed in production if the limiter is unavailable.
     """
     try:
         from lumen.platform.rate_limit import get_rate_limiter
@@ -20,11 +21,18 @@ def rate_limit_ui_ok(user_id: int) -> bool:
             )
         )
     except Exception:
+        import os
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"production", "prod", "staging"}:
+            return False
         return True
 
 
 def rate_limit_ok(user_id: int) -> bool:
-    """Full gate for text/generation paths: rate window + LLM budget."""
+    """Full gate for text/generation paths: rate window + LLM budget.
+
+    Fail-closed in production if Redis/limiter is down — never open the floodgate.
+    """
     try:
         from lumen.platform.rate_limit import get_rate_limiter, check_tenant_llm_budget
         ok = get_rate_limiter().allow(
@@ -38,6 +46,10 @@ def rate_limit_ok(user_id: int) -> bool:
         budget_ok, _reason = check_tenant_llm_budget(f"tg:{int(user_id)}", add_tokens=0, add_usd=0.0)
         return bool(budget_ok)
     except Exception:
+        import os
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"production", "prod", "staging"}:
+            return False
         return True
 
 

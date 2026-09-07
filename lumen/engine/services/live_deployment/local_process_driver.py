@@ -128,7 +128,29 @@ class LocalProcessDriver(DeploymentProvider):
         env_vars: Optional[Dict[str, str]] = None,
         service_name: str = "generated-bot",
     ) -> DeploymentStatus:
-        """Host-process fallback with RLIMIT sandbox when Docker is unavailable."""
+        """Host-process fallback — REFUSED under multi-tenant/production isolation."""
+        # Hard tenant isolation: never run user bots on the host in multi-tenant/prod.
+        try:
+            from lumen.engine.services.isolation_policy import decide_isolation
+
+            _iso = decide_isolation()
+            if _iso.require_strong_isolation or not _iso.allow_local:
+                return DeploymentStatus(
+                    provider=self.name,
+                    deployment_id="",
+                    status=DEPLOY_FAILED,
+                    message=(
+                        "local_process_forbidden: "
+                        f"{_iso.reason} — use Firecracker sandbox only"
+                    ),
+                )
+        except Exception as _iso_exc:
+            return DeploymentStatus(
+                provider=self.name,
+                deployment_id="",
+                status=DEPLOY_FAILED,
+                message=f"local_process_isolation_check_failed:{type(_iso_exc).__name__}",
+            )
         if not _local_process_allowed():
             return DeploymentStatus(
                 provider=self.name,
