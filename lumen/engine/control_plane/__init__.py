@@ -1,6 +1,6 @@
 """Control Plane — projects, plans, permissions (NOT runtime execution).
 
-Runtime Plane = workers / tools / cline / catalog generate.
+Runtime Plane = workers / tools / cline generate.
 Control Plane = who may run what, which plan is approved, project records.
 """
 from __future__ import annotations

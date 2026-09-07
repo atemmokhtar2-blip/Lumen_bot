@@ -50,7 +50,7 @@ class ProjectStore:
             project_id=pid,
             user_id=int(user_id or 0),
             title=(title or "bot")[:120],
-            engine_mode=str(engine_mode or "catalog"),
+            engine_mode=str(engine_mode or "cline"),
             path=path,
             ir_snapshot=dict(ir_snapshot or {}),
             metadata=dict(metadata or {}),

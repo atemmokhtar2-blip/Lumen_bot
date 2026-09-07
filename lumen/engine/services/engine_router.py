@@ -32,25 +32,6 @@ def _env_force_mode() -> EngineMode | None:
     return mode
 
 
-def _deterministic_paused() -> bool:
-    """Always True. Kept as a named API for call sites that still import it."""
-    return True
-
-
-def _cline_only() -> bool:
-    """Cline SDK is the sole generation engine for user requests."""
-    return True
-
-
-def _infinite_primary() -> bool:
-    """Always False."""
-    return False
-
-
-def _infinite_preferred() -> bool:
-    return False
-
-
 def decide_engine_mode(
     *,
     preferred_keys: list[str],
@@ -130,7 +111,7 @@ def execute_ir(
     *,
     user_id: int = 0,
 ) -> Any:
-    """Validate → route → optional hybrid scaffolds → IR acceptance report."""
+    """Validate → route → IR acceptance report."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     uid = int(user_id or ir.user_id or 0)
@@ -242,7 +223,7 @@ def execute_ir(
 
 
 
-def _finalize(result: Any, ir: BuildIR, *, hybrid: bool = False):  # hybrid ignored — path deleted -> Any:
+def _finalize(result: Any, ir: BuildIR) -> Any:
     meta = dict(getattr(result, "metadata", None) or {})
     meta["ir"] = ir.to_dict()
     meta["engine_router_mode"] = ir.engine_mode.value

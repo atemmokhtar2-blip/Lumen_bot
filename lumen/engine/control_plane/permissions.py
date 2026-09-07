@@ -16,7 +16,7 @@ class PermissionDecision:
 def check_generate_permission(
     user_id: int,
     *,
-    engine_mode: str = "catalog",
+    engine_mode: str = "cline",
 ) -> PermissionDecision:
     """Default public product: allow all. Ops can lock via env."""
     lock = (os.getenv("LOCK_BOT_TO_ALLOWLIST") or "0").strip().lower() in {
@@ -42,7 +42,7 @@ def check_generate_permission(
             "yes",
             "on",
         }:
-            # Still allowed — runtime falls back to catalog
+            # Cline path
             return PermissionDecision(
                 True,
                 "cline_disabled_no_fallback",

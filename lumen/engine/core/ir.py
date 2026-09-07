@@ -16,16 +16,9 @@ from typing import Any
 
 
 class EngineMode(str, Enum):
-    """Execution path after IR validation.
+    """Execution path after IR validation. Product is Cline-only."""
 
-    Only CLINE runs generation. CATALOG/HYBRID/INFINITE are historical labels
-    kept for IR deserialization and always coerced to CLINE on load.
-    """
-
-    CATALOG = "catalog"   # REMOVED — coerced to CLINE
-    HYBRID = "hybrid"     # REMOVED — coerced to CLINE
-    CLINE = "cline"       # sole generation engine (Cline agent)
-    INFINITE = "infinite" # REMOVED — coerced to CLINE
+    CLINE = "cline"
 
 
 class IRStatus(str, Enum):
