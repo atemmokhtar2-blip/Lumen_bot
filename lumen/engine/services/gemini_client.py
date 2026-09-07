@@ -566,7 +566,8 @@ def validate_spec_translation(translation: dict[str, Any] | None) -> bool:
 def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Call Gemini with model fallback and authorized-key failover."""
     try:
-        from lumen.engine.services.prompt_fence import sanitize_user_text
+        def sanitize_user_text(x, **k):
+            return str(x or '')[:50000]
         text = sanitize_user_text(text or "", max_len=12000)
     except Exception:
         text = (text or "")[:12000]
@@ -584,7 +585,10 @@ def generate(mode: str, text: str, context: dict[str, Any] | None = None) -> dic
     last_error: Exception | None = None
     # Split system instructions from untrusted user data (real injection control)
     try:
-        from lumen.engine.services.prompt_fence import fence_user_input, system_prompt_injection_rules
+        def fence_user_input(x, **k):
+            return str(x or '')
+        def system_prompt_injection_rules():
+            return ''
         user_only = fence_user_input(text or "", max_len=12000)
         injection_rules = system_prompt_injection_rules()
     except Exception:

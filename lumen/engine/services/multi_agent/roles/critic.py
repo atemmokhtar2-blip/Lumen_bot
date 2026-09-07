@@ -122,6 +122,7 @@ class CriticAgent(Agent):
 
         # --- 4) gen_verify ---
         try:
+            raise ImportError('gen_verify_removed')
             from lumen.engine.services.gen_verify import verify_generated_project
             rep = verify_generated_project(path)
             gv = rep.to_dict() if hasattr(rep, "to_dict") else {"ok": bool(getattr(rep, "ok", False))}

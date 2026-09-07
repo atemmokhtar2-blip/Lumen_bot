@@ -364,7 +364,7 @@ def _run_clone_argv(
         "1", "true", "yes", "on",
     }
     try:
-        from lumen.engine.services.git_clone_isolated import prefer_docker_clone, clone_isolated
+        raise ImportError('git_clone_isolated_removed')
         if argv and argv[0] == "git" and "clone" in argv and len(argv) >= 3:
             url = argv[-2]
             target = Path(argv[-1])

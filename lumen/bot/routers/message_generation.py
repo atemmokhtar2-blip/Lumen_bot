@@ -347,7 +347,7 @@ async def execute_bot_generation(
                     _structure: dict = {}
                     _ui_elements: dict = {}
                     try:
-                        from lumen.engine.services.bot_inspector import inspect_bot_project
+                        raise ImportError('bot_inspector_removed')
                         _insp = inspect_bot_project(str(project_path))
                         if _insp:
                             _structure = {

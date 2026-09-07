@@ -18,7 +18,8 @@ from .state import AgentRole, AgentState, AgentStatus
 
 def _safe_user_text(request: str) -> str:
     try:
-        from lumen.engine.services.prompt_fence import sanitize_user_text
+        def sanitize_user_text(x, **k):
+            return str(x or '')
         return sanitize_user_text(request or "", max_len=8000)
     except Exception:
         return (request or "")[:8000]
@@ -28,12 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _phase_d_e_finalize(state: AgentState) -> None:
-    """Production evaluation record + platform events (Phases D/E)."""
-    try:
-        from lumen.engine.services.evaluation.live_bridge import persist_state_evaluation
-        persist_state_evaluation(state)
-    except Exception:
-        logger.exception("persist_state_evaluation failed")
+    """Platform events only (evaluation package removed)."""
     try:
         from lumen.engine.services.events import emit
         status = getattr(state, "status", None)

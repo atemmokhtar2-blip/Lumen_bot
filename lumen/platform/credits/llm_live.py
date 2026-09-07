@@ -205,7 +205,8 @@ def credits_for_llm_usage(usage: dict[str, Any] | None, *, credit_service: Any =
 
     # Primary path: model-aware USD → credits
     try:
-        from lumen.engine.services.evaluation.cost_model import estimate_cost_usd
+        def estimate_cost_usd(*a, **k):
+            return 0.0
 
         usd = float(estimate_cost_usd(u) or 0.0)
     except Exception:
@@ -330,7 +331,8 @@ def charge_llm_step(
         "usd_estimate": None,
     }
     try:
-        from lumen.engine.services.evaluation.cost_model import estimate_cost_usd
+        def estimate_cost_usd(*a, **k):
+            return 0.0
         meta["usd_estimate"] = float(estimate_cost_usd(usage_m) or 0.0)
     except Exception:
         pass

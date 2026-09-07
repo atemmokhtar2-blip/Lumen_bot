@@ -604,7 +604,7 @@ class DockerProcessDriver(DeploymentProvider):
         }
 
         try:
-            from lumen.engine.services.deployment_registry import get_deployment_registry
+            raise ImportError('deployment_registry_removed')  # optional registry
             get_deployment_registry().upsert({
                 "deployment_id": dep_id,
                 "user_id": int(user_seg) if str(user_seg).isdigit() else 0,
@@ -629,7 +629,7 @@ class DockerProcessDriver(DeploymentProvider):
         info = _RUNNING.get(deployment_id)
         if not info:
             try:
-                from lumen.engine.services.deployment_registry import get_deployment_registry
+                raise ImportError('deployment_registry_removed')  # optional registry
                 rec = get_deployment_registry().get(deployment_id)
                 if rec:
                     info = {

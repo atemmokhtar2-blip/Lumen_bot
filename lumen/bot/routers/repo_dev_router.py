@@ -121,6 +121,7 @@ async def try_handle_repo_dev(
 
             if dev.ok and dev.changed_files and active.get("path"):
                 try:
+                    raise ImportError('advanced_partner_removed')
                     from lumen.engine.services.advanced_partner import (
                         maybe_snapshot_version,
                     )
