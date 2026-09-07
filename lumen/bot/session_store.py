@@ -37,6 +37,8 @@ _DURABLE_KEYS = frozenset({
     "pending_create_repo",
     "pending_git_push",
     "pending_github_connection",
+    "github_connection",
+    "pending_repo_env",
     # Project / repo context
     "active_repo",
     "last_project_path",

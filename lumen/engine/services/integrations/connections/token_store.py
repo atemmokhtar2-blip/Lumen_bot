@@ -1,8 +1,12 @@
-"""Durable encrypted GitHub PAT store — Redis primary (multi-worker safe).
+"""Durable encrypted GitHub PAT + connection profile + repo list cache.
 
-secret_inbox alone is a local file under OUTPUT_DIR; on Railway multi-replica
-that does not share tokens across workers. Connection tokens must live in Redis
-(same as session_store) with AES-GCM encryption at rest.
+Redis primary (multi-worker). secret_inbox is mirror only.
+
+Responsibility split
+--------------------
+* token_store  — credentials + profile + repo list cache (connection layer)
+* bind_repo    — clone/workspace (active_repo plane)
+* hosting      — runtime only when workspace is ready
 """
 from __future__ import annotations
 
@@ -17,8 +21,10 @@ from typing import Any
 logger = logging.getLogger("lumen.connections.token_store")
 
 _KEY_PREFIX = "lumen:conn:gh:"
+_PROFILE_PREFIX = "lumen:conn:gh:profile:"
 _REPO_CACHE_PREFIX = "lumen:conn:gh:repos:"
-_DEFAULT_TTL = 30 * 24 * 3600  # 30 days
+_DEFAULT_TTL = 30 * 24 * 3600  # 30 days — connection survives long absences
+_REPO_CACHE_TTL = 6 * 3600  # 6h list cache; auto-refresh on open when stale
 
 
 def _redis():
@@ -88,12 +94,9 @@ def save_github_token(user_id: int, token: str, *, meta: dict[str, Any] | None =
     except Exception:
         logger.exception("encrypt github token failed uid=%s", uid)
         return False
+    meta = dict(meta or {})
     payload = json.dumps(
-        {
-            "ciphertext": cipher,
-            "meta": dict(meta or {}),
-            "saved_at": time.time(),
-        },
+        {"ciphertext": cipher, "meta": meta, "saved_at": time.time()},
         ensure_ascii=False,
     )
     r = _redis()
@@ -103,7 +106,16 @@ def save_github_token(user_id: int, token: str, *, meta: dict[str, Any] | None =
         except Exception:
             logger.exception("redis save github token failed uid=%s", uid)
             r = None
-    # Mirror to secret_inbox (best-effort, single-node / dev)
+    # Non-secret profile (login) — independent of ciphertext
+    save_connection_profile(
+        uid,
+        {
+            "login": str(meta.get("login") or "")[:80],
+            "provider": "github",
+            "connected": True,
+            "connected_at": time.time(),
+        },
+    )
     try:
         from lumen.platform.secret_inbox import put_secret
 
@@ -113,7 +125,7 @@ def save_github_token(user_id: int, token: str, *, meta: dict[str, Any] | None =
             plaintext=tok,
             purpose="connection",
             ttl_sec=_DEFAULT_TTL,
-            meta={"provider": "github", **dict(meta or {})},
+            meta={"provider": "github", **meta},
         )
     except Exception:
         logger.debug("secret_inbox mirror failed uid=%s", uid, exc_info=True)
@@ -150,13 +162,60 @@ def clear_github_token(user_id: int) -> None:
     r = _redis()
     if r is not None:
         try:
-            r.delete(f"{_KEY_PREFIX}{uid}", f"{_REPO_CACHE_PREFIX}{uid}")
+            r.delete(
+                f"{_KEY_PREFIX}{uid}",
+                f"{_PROFILE_PREFIX}{uid}",
+                f"{_REPO_CACHE_PREFIX}{uid}",
+            )
         except Exception:
             pass
 
 
-def cache_repo_page(user_id: int, page: int, resources: list[dict[str, Any]]) -> None:
-    """Cache last listed repos so select can resolve full_name/url without re-fetch."""
+def save_connection_profile(user_id: int, profile: dict[str, Any]) -> None:
+    """Non-secret durable profile (login, connected flags). Survives UI navigation."""
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return
+    data = {
+        "login": str(profile.get("login") or "")[:80],
+        "provider": "github",
+        "connected": bool(profile.get("connected", True)),
+        "connected_at": float(profile.get("connected_at") or time.time()),
+        "updated_at": time.time(),
+    }
+    r = _redis()
+    if r is not None:
+        try:
+            r.set(f"{_PROFILE_PREFIX}{uid}", json.dumps(data, ensure_ascii=False), ex=_DEFAULT_TTL)
+        except Exception:
+            logger.debug("save_connection_profile redis failed", exc_info=True)
+
+
+def load_connection_profile(user_id: int) -> dict[str, Any] | None:
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return None
+    r = _redis()
+    if r is not None:
+        try:
+            raw = r.get(f"{_PROFILE_PREFIX}{uid}")
+            if raw:
+                return dict(json.loads(raw))
+        except Exception:
+            logger.debug("load_connection_profile failed", exc_info=True)
+    # Infer from token presence
+    if load_github_token(uid):
+        return {"login": "", "provider": "github", "connected": True, "connected_at": 0}
+    return None
+
+
+def cache_repo_page(
+    user_id: int,
+    page: int,
+    resources: list[dict[str, Any]],
+    *,
+    fingerprint: str = "",
+) -> None:
     uid = int(user_id or 0)
     if uid <= 0:
         return
@@ -164,16 +223,26 @@ def cache_repo_page(user_id: int, page: int, resources: list[dict[str, Any]]) ->
     if r is None:
         return
     try:
-        payload = json.dumps({"page": int(page), "items": resources}, ensure_ascii=False)
-        r.set(f"{_REPO_CACHE_PREFIX}{uid}", payload, ex=3600)
+        payload = json.dumps(
+            {
+                "page": int(page),
+                "items": resources,
+                "cached_at": time.time(),
+                "fingerprint": fingerprint
+                or hashlib.sha1(
+                    ",".join(str(x.get("resource_id") or "") for x in resources).encode()
+                ).hexdigest()[:16],
+            },
+            ensure_ascii=False,
+        )
+        r.set(f"{_REPO_CACHE_PREFIX}{uid}", payload, ex=_REPO_CACHE_TTL)
     except Exception:
         logger.debug("repo page cache write failed", exc_info=True)
 
 
-def resolve_cached_repo(user_id: int, resource_id: str) -> dict[str, Any] | None:
+def load_repo_cache(user_id: int) -> dict[str, Any] | None:
     uid = int(user_id or 0)
-    rid = str(resource_id or "").strip()
-    if uid <= 0 or not rid:
+    if uid <= 0:
         return None
     r = _redis()
     if r is None:
@@ -182,8 +251,30 @@ def resolve_cached_repo(user_id: int, resource_id: str) -> dict[str, Any] | None
         raw = r.get(f"{_REPO_CACHE_PREFIX}{uid}")
         if not raw:
             return None
-        data = json.loads(raw)
-        for item in data.get("items") or []:
+        return dict(json.loads(raw))
+    except Exception:
+        logger.debug("repo cache load failed", exc_info=True)
+        return None
+
+
+def repo_cache_is_stale(user_id: int, *, max_age_sec: float = 300.0) -> bool:
+    cache = load_repo_cache(user_id)
+    if not cache:
+        return True
+    age = time.time() - float(cache.get("cached_at") or 0)
+    return age > float(max_age_sec)
+
+
+def resolve_cached_repo(user_id: int, resource_id: str) -> dict[str, Any] | None:
+    uid = int(user_id or 0)
+    rid = str(resource_id or "").strip()
+    if uid <= 0 or not rid:
+        return None
+    cache = load_repo_cache(uid)
+    if not cache:
+        return None
+    try:
+        for item in cache.get("items") or []:
             if str(item.get("resource_id") or item.get("id") or "") == rid:
                 return dict(item)
     except Exception:

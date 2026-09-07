@@ -711,11 +711,23 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             except ValueError:
                 page = 1
 
-            def _gh_load():
+                        def _gh_load():
+                from lumen.engine.services.integrations.connections import get_provider
+                from lumen.engine.services.integrations.connections import token_store as _ts
+                prov = get_provider("github")
                 st = prov.status(int(uid)) if prov else None
-                resources = (
-                    prov.list_resources(int(uid), page=page, per_page=8) if prov and st and st.connected else []
-                )
+                # Cache-first so back-navigation does not feel like a full restart
+                use_cache = not _ts.repo_cache_is_stale(int(uid), max_age_sec=300.0)
+                resources = []
+                if prov and st and st.connected:
+                    resources = prov.list_resources(
+                        int(uid), page=page, per_page=8, prefer_cache=use_cache
+                    )
+                    # Auto-refresh when stale or empty
+                    if not resources or not use_cache:
+                        resources = prov.list_resources(
+                            int(uid), page=page, per_page=8, prefer_cache=False
+                        )
                 return st, resources
 
             st, resources = await _aio.to_thread(_gh_load)
@@ -802,6 +814,28 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                         bind,
                         user=update.effective_user,
                     )
+                    # Phase 3: readiness gate — missing env before trial/host
+                    try:
+                        from lumen.engine.services.integrations.connections.readiness import (
+                            evaluate_readiness,
+                        )
+                        rr = evaluate_readiness(
+                            active_repo=context.user_data.get("active_repo") or {}
+                        )
+                        if rr.missing_env:
+                            context.user_data["pending_repo_env"] = {
+                                "queue": list(rr.missing_env),
+                                "path": bind.path,
+                                "full_name": bind.full_name,
+                            }
+                            result.state.slots["gh_missing_env"] = ",".join(rr.missing_env[:12])
+                            result.state.slots["gh_ready"] = "0"
+                        else:
+                            context.user_data.pop("pending_repo_env", None)
+                            result.state.slots["gh_ready"] = "1"
+                            result.state.slots.pop("gh_missing_env", None)
+                    except Exception:
+                        logger.exception("readiness evaluate soft-fail")
                     try:
                         from lumen.bot.session_store import get_session_store
 
@@ -821,15 +855,32 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                         from lumen.bot.ui.repo_sections import section_keyboard
 
                         header = bind.header_ar or f"✅ تم سحب `{bind.full_name or label}`"
-                        if bind.is_runnable:
+                        pending_env = (context.user_data or {}).get("pending_repo_env") or {}
+                        queue = list(pending_env.get("queue") or [])
+                        if queue:
+                            header += (
+                                "\n\n⚙️ قبل التجربة/الاستضافة أرسل قيمة:\n"
+                                f"`{queue[0]}`\n"
+                                f"(متبقي {len(queue)} متغير)"
+                            )
+                            markup = section_keyboard(
+                                user_id=int(uid),
+                                show_run=False,
+                            )
+                        elif bind.is_runnable:
                             header += (
                                 "\n\n🚀 للتشغيل الحقيقي: أرسل توكن البوت من @BotFather "
                                 "أو استخدم أزرار الأقسام."
                             )
-                        markup = section_keyboard(
-                            user_id=int(uid),
-                            show_run=bool(bind.is_runnable),
-                        )
+                            markup = section_keyboard(
+                                user_id=int(uid),
+                                show_run=True,
+                            )
+                        else:
+                            markup = section_keyboard(
+                                user_id=int(uid),
+                                show_run=False,
+                            )
                         if status_msg is not None:
                             await status_msg.edit_text(header[:4000], reply_markup=markup)
                         else:

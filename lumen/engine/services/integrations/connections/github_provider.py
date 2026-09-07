@@ -25,13 +25,18 @@ class GitHubConnectionProvider:
         if uid <= 0:
             return ConnectionStatus(PROVIDER_ID, False, detail="invalid_user")
         token = _token_for_user(uid)
+        profile = token_store.load_connection_profile(uid) or {}
         if not token:
+            # Profile alone is not enough without token — force reconnect
             return ConnectionStatus(PROVIDER_ID, False, detail="not_connected")
         try:
             from lumen.engine.services.integrations.github.client import GitHubClient
 
             user = GitHubClient(token=token).get_user()
-            login = str(user.get("login") or "").strip()
+            login = str(user.get("login") or profile.get("login") or "").strip()
+            token_store.save_connection_profile(
+                uid, {"login": login, "connected": True, "provider": "github"}
+            )
             return ConnectionStatus(
                 PROVIDER_ID,
                 True,
@@ -39,17 +44,48 @@ class GitHubConnectionProvider:
                 detail="ok",
             )
         except Exception as exc:
+            # Transient API failure: stay connected using durable profile + token presence
             logger.info("github status check failed uid=%s err=%s", uid, type(exc).__name__)
+            login = str(profile.get("login") or "").strip()
             return ConnectionStatus(
                 PROVIDER_ID,
-                False,
-                detail=f"auth_failed:{type(exc).__name__}",
+                True,
+                display_name=login or "GitHub",
+                detail=f"cached:{type(exc).__name__}",
             )
 
     def list_resources(
-        self, user_id: int, *, page: int = 1, per_page: int = 10
+        self, user_id: int, *, page: int = 1, per_page: int = 10, prefer_cache: bool = False
     ) -> list[ConnectionResource]:
         uid = int(user_id or 0)
+        if prefer_cache:
+            cache = token_store.load_repo_cache(uid)
+            if cache and int(cache.get("page") or 1) == max(1, int(page)):
+                out: list[ConnectionResource] = []
+                for item in (cache.get("items") or [])[:per_page]:
+                    rid = str(item.get("resource_id") or "")
+                    if not rid:
+                        continue
+                    full = str(item.get("full_name") or rid)
+                    priv = bool(item.get("private"))
+                    lock = "🔒 " if priv else ""
+                    out.append(
+                        ConnectionResource(
+                            resource_id=rid,
+                            title=f"{lock}{full}"[:60],
+                            url=str(item.get("html_url") or ""),
+                            private=priv,
+                            meta={
+                                "full_name": full,
+                                "default_branch": item.get("default_branch") or "main",
+                                "html_url": item.get("html_url") or "",
+                                "private": priv,
+                                "from_cache": True,
+                            },
+                        )
+                    )
+                if out:
+                    return out
         token = _token_for_user(uid)
         if not token:
             return []

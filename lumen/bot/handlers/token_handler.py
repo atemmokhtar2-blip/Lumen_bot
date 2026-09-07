@@ -64,6 +64,55 @@ async def try_handle_token(
     except Exception:
         logger.exception("secret_inbox consume failed")
 
+    # Phase 3: collect missing workspace env vars after GitHub bind
+    pending_env = (context.user_data or {}).get("pending_repo_env")
+    if isinstance(pending_env, dict) and pending_env.get("queue"):
+        queue = list(pending_env.get("queue") or [])
+        name = str(queue[0] or "").strip()
+        value = (request or "").strip()
+        # Do not swallow GitHub PATs / bot tokens meant for other flows
+        if name and value and not value.startswith(("ghp_", "github_pat_", "glpat-")):
+            if looks_like_bot_token(value) and name not in {"TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN"}:
+                pass  # fall through to bot-token handlers
+            else:
+                try:
+                    from lumen.engine.services.integrations.connections.readiness import (
+                        apply_collected_env,
+                        evaluate_readiness,
+                    )
+                    active = dict((context.user_data or {}).get("active_repo") or {})
+                    active = apply_collected_env(active, name, value)
+                    context.user_data["active_repo"] = active
+                    queue = queue[1:]
+                    if queue:
+                        context.user_data["pending_repo_env"] = {
+                            **pending_env,
+                            "queue": queue,
+                        }
+                        await safe_reply_text(
+                            message,
+                            f"✅ تم حفظ `{name}`.\nأرسل الآن: `{queue[0]}`",
+                        )
+                    else:
+                        context.user_data.pop("pending_repo_env", None)
+                        rr = evaluate_readiness(active_repo=active)
+                        if rr.ready:
+                            await safe_reply_text(
+                                message,
+                                "✅ اكتملت متغيرات مساحة العمل.\n"
+                                "يمكنك الآن استخدام أزرار التجربة/التشغيل من فهم المستودع.",
+                            )
+                        else:
+                            await safe_reply_text(message, f"✅ تم حفظ `{name}`.")
+                    try:
+                        from lumen.bot.session_store import get_session_store
+                        get_session_store().save(int(user.id), dict(context.user_data))
+                    except Exception:
+                        logger.exception("persist pending_repo_env failed")
+                    return True
+                except Exception:
+                    logger.exception("pending_repo_env collect failed")
+
     # Settings → Connections → GitHub: store PAT for official repo listing
     if (context.user_data or {}).get("pending_github_connection"):
         try:
@@ -115,6 +164,11 @@ async def try_handle_token(
                         },
                     )
                     context.user_data["engine_ui"] = st.to_dict()
+                    context.user_data["github_connection"] = {
+                        "provider": "github",
+                        "login": login,
+                        "connected": True,
+                    }
                     get_session_store().save(int(user.id), dict(context.user_data))
                 except Exception:
                     logger.exception("persist github connection session failed")
