@@ -99,3 +99,52 @@ def test_list_user_repos_parses_official_payload():
 def test_secret_inbox_get_secret_source_exists():
     src = (ROOT / "lumen/platform/secret_inbox.py").read_text(encoding="utf-8")
     assert "def get_secret" in src
+
+
+def test_conn_gh_select_in_catalog_and_signed():
+    import os
+    os.environ.setdefault("ENVIRONMENT", "development")
+    os.environ.setdefault("CALLBACK_HMAC_SECRET", "test-secret-connections-phase1")
+    from lumen.engine.services.ui_state.catalog import is_known_action
+    from lumen.bot.ui.signed_callback import encode_signed, decode_signed
+
+    assert is_known_action("conn_gh_select")
+    wire = encode_signed("conn_gh_select", "12345", user_id=3)
+    assert len(wire.encode("utf-8")) <= 64
+    assert decode_signed(wire, user_id=3) == ("conn_gh_select", "12345")
+
+
+def test_token_store_roundtrip_memory_fallback(tmp_path, monkeypatch):
+    """Without Redis, save/load falls back to secret_inbox on disk."""
+    import os
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("TBE_TOKEN_SECRET", "unit-test-secret-key-32b!!")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("JOB_REDIS_URL", raising=False)
+    from lumen.engine.services.integrations.connections.token_store import (
+        save_github_token,
+        load_github_token,
+    )
+
+    assert save_github_token(99, "ghp_unitTestTokenValue1234567890")
+    got = load_github_token(99)
+    assert got == "ghp_unitTestTokenValue1234567890"
+
+
+def test_list_user_repos_uses_page_param():
+    from unittest.mock import patch
+    from lumen.engine.services.integrations.github.client import GitHubClient
+
+    client = GitHubClient.__new__(GitHubClient)
+    client.token = "x"
+    seen = {}
+
+    def fake_request(method, path, **kwargs):
+        seen["params"] = kwargs.get("params")
+        return []
+
+    with patch.object(client, "request", side_effect=fake_request):
+        client.list_user_repos(page=3, per_page=10, max_pages=1)
+    assert seen["params"]["page"] == 3
+    assert seen["params"]["per_page"] == 10

@@ -97,16 +97,34 @@ async def try_handle_token(
                         " تأكد من صلاحية `repo` وأعد المحاولة.",
                     )
                     return True
-                if not store_github_connection_token(int(user.id), git_tok):
+                if not store_github_connection_token(int(user.id), git_tok, login=login):
                     await safe_reply_text(message, "❌ تعذر حفظ الاتصال بشكل آمن. أعد المحاولة.")
                     return True
                 context.user_data.pop("pending_github_connection", None)
+                try:
+                    from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
+                    from lumen.bot.session_store import get_session_store
+
+                    st = EngineUiState(
+                        phase=EngineUiPhase.CONN_GITHUB,
+                        slots={
+                            "gh_connected": "1",
+                            "gh_login": login,
+                            "gh_page": "1",
+                            "gh_status_line": f"متصل كـ @{login}" if login else "متصل",
+                        },
+                    )
+                    context.user_data["engine_ui"] = st.to_dict()
+                    get_session_store().save(int(user.id), dict(context.user_data))
+                except Exception:
+                    logger.exception("persist github connection session failed")
                 await safe_reply_text(
                     message,
-                    f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''}.\n"
-                    "افتح: الإعدادات → الاتصالات → GitHub لعرض مستودعاتك.",
+                    f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''} عبر api.github.com.\n"
+                    "اضغط: الإعدادات → الاتصالات → GitHub لعرض مستودعاتك الرسمية.",
                 )
                 return True
+
         except Exception:
             logger.exception("pending_github_connection handle failed")
 

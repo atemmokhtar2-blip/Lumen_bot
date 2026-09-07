@@ -212,6 +212,11 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "Paginate GitHub repos",
         frozenset({EngineUiPhase.CONN_GITHUB}),
     ),
+    "conn_gh_select": UiActionSpec(
+        "conn_gh_select",
+        "Select a GitHub repository",
+        frozenset({EngineUiPhase.CONN_GITHUB}),
+    ),
     "post_trial": UiActionSpec(
         "post_trial",
         "Trial chat plane",

@@ -727,6 +727,10 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 for i, res in enumerate(resources[:12]):
                     result.state.slots[f"gh_r{i}_id"] = res.resource_id
                     result.state.slots[f"gh_r{i}_title"] = res.title
+                    result.state.slots[f"gh_r{i}_full"] = str(
+                        (res.meta or {}).get("full_name") or res.title
+                    )[:120]
+                    result.state.slots[f"gh_r{i}_url"] = str(res.url or "")[:200]
                 result.state.slots["gh_has_more"] = "1" if len(resources) >= 8 else "0"
                 result.state.slots["gh_page"] = str(page)
             else:
@@ -744,6 +748,54 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 "gh_status_line",
                 "تعذر تحميل GitHub حالياً.",
             )
+
+
+    # Resolve selected repo from official list cache
+    if result.ok and action_id == "conn_gh_select" and uid:
+        rid = (result.state.slots.get("gh_selected_id") or "").strip()
+        if rid:
+            try:
+                from lumen.engine.services.integrations.connections.token_store import (
+                    resolve_cached_repo,
+                )
+                item = resolve_cached_repo(int(uid), rid)
+                if item:
+                    result.state.slots["gh_selected_full"] = str(item.get("full_name") or "")[:120]
+                    result.state.slots["gh_selected_url"] = str(item.get("html_url") or "")[:200]
+                    result.state.slots["gh_selected_branch"] = str(
+                        item.get("default_branch") or "main"
+                    )[:40]
+                    result.state.slots["gh_status_line"] = (
+                        f"مختار: {result.state.slots['gh_selected_full']} "
+                        "(الخطوة التالية: فهم المشروع + المتغيرات)"
+                    )
+                else:
+                    result.state.slots["gh_status_line"] = (
+                        f"تم اختيار المستودع #{rid} — حدّث القائمة إن لزم."
+                    )
+            except Exception:
+                logger.exception("conn_gh_select resolve failed")
+
+    # Connections hub: show live GitHub link status
+    if result.state.phase == EngineUiPhase.CONNECTIONS and uid:
+        try:
+            import asyncio as _aio
+            from lumen.engine.services.integrations.connections import get_provider
+
+            prov = get_provider("github")
+
+            def _st():
+                return prov.status(int(uid)) if prov else None
+
+            st = await _aio.to_thread(_st)
+            if st and st.connected:
+                result.state.slots["conn_github_line"] = (
+                    f"GitHub: متصل (@{st.display_name})" if st.display_name else "GitHub: متصل"
+                )
+            else:
+                result.state.slots["conn_github_line"] = "GitHub: غير متصل"
+        except Exception:
+            result.state.slots.setdefault("conn_github_line", "GitHub: —")
 
     # Prompt for GitHub PAT when user starts connect
     if result.ok and action_id == "conn_gh_connect" and uid:
@@ -768,6 +820,11 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             # Mark pending so token_handler / next message can store connection token
             if context.user_data is not None:
                 context.user_data["pending_github_connection"] = True
+                try:
+                    from lumen.bot.session_store import get_session_store
+                    get_session_store().save(int(uid), dict(context.user_data))
+                except Exception:
+                    logger.debug("persist pending_github_connection soft-fail", exc_info=True)
         except Exception:
             logger.exception("conn_gh_connect prompt failed")
 

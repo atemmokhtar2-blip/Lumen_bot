@@ -152,12 +152,14 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         )
 
     if phase == EngineUiPhase.CONNECTIONS:
+        gh_line = (state.slots or {}).get("conn_github_line") or "GitHub: —"
         return html_card(
             "الاتصالات",
             [
+                ("الحالة", gh_line),
                 (
                     "المزوّدون",
-                    "• GitHub — اتصال رسمي عبر PAT لعرض مستودعاتك واختيار مشروع للعمل عليه.\n"
+                    "• GitHub — اتصال رسمي (api.github.com) لعرض مستودعاتك.\n"
                     "مزوّدون إضافيون لاحقاً من نفس القائمة.",
                 ),
             ],

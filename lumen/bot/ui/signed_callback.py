@@ -97,6 +97,7 @@ _ACTION_SHORT: dict[str, str] = {
     "conn_gh_connect": "cgc",
     "conn_gh_refresh": "cgr",
     "conn_gh_page": "cgp",
+    "conn_gh_select": "cgs",
     "nav_back": "nb",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}

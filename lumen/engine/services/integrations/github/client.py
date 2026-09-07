@@ -102,27 +102,29 @@ class GitHubClient:
     def list_user_repos(
         self,
         *,
+        page: int = 1,
         per_page: int = 30,
-        max_pages: int = 5,
+        max_pages: int = 1,
         sort: str = "updated",
         affiliation: str = "owner,collaborator,organization_member",
     ) -> list[dict]:
         """GET /user/repos — official list of repos visible to the token.
 
-        Paginates up to max_pages. Each item keeps GitHub fields needed for UI:
-        full_name, private, html_url, description, default_branch, id.
+        ``page`` is the GitHub API page (1-based). ``max_pages`` is how many
+        consecutive API pages to fetch starting from ``page`` (UI usually uses 1).
         """
         out: list[dict] = []
-        page = 1
+        start = max(1, int(page))
         per_page = max(1, min(100, int(per_page)))
         max_pages = max(1, min(20, int(max_pages)))
-        while page <= max_pages:
+        for offset in range(max_pages):
+            pg = start + offset
             data = self.request(
                 "GET",
                 "/user/repos",
                 params={
                     "per_page": per_page,
-                    "page": page,
+                    "page": pg,
                     "sort": sort,
                     "affiliation": affiliation,
                 },
@@ -146,7 +148,6 @@ class GitHubClient:
                 )
             if len(batch) < per_page:
                 break
-            page += 1
         return out
 
     def create_pull_review(

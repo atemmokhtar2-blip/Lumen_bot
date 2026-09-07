@@ -252,7 +252,7 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         title = (state.slots or {}).get(f"gh_r{i}_title") or ""
         if not rid or not title:
             break
-        rows.append((UiButton(title[:60], "conn_gh_page", f"sel:{rid}", style="primary"),))
+        rows.append((UiButton(title[:60], "conn_gh_select", rid, style="primary"),))
     connected = (state.slots or {}).get("gh_connected") == "1"
     if not connected:
         rows.append((UiButton("ربط GitHub (PAT)", "conn_gh_connect", style="success"),))
@@ -565,18 +565,19 @@ def apply_action(
         msg = "تحديث مستودعات GitHub…"
     elif action_id == "conn_gh_page":
         new.phase = EngineUiPhase.CONN_GITHUB
-        # arg: p:N for page, or sel:REPO_ID for select (select handled in later phase)
         if arg.startswith("p:"):
             try:
                 new.slots["gh_page"] = str(max(1, int(arg[2:])))
             except ValueError:
                 new.slots["gh_page"] = "1"
-            msg = "صفحة المستودعات."
-        elif arg.startswith("sel:"):
-            new.slots["gh_selected_id"] = arg[4:][:40]
-            msg = "تم اختيار المستودع — الربط الكامل في المرحلة التالية."
-        else:
-            msg = "GitHub."
+        msg = "صفحة المستودعات."
+        new.missing = []
+    elif action_id == "conn_gh_select":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        rid = (arg or "").strip()[:40]
+        new.slots["gh_selected_id"] = rid
+        # full_name/url filled by router from repo cache after select
+        msg = "تم اختيار المستودع."
         new.missing = []
     elif action_id == "retry_generate":
         req = composed_request(new)
