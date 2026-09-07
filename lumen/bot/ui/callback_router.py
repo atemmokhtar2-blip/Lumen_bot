@@ -949,6 +949,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         try:
             from lumen.bot.ui.input_prompt import ask_text_input
             from lumen.bot.ui.secret_prompt import build_secret_prompt_markup
+            from lumen.bot.ui.chat_hygiene import remember_message
 
             prompt = (
                 "🔑 أرسل الآن توكن GitHub (PAT) بصلاحية `repo`.\n"
@@ -956,8 +957,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 "بعد الإرسال سيتم التحقق عبر api.github.com وعرض مستودعاتك."
             )
             _msg = update.effective_message
+            prompt_sent = None
             if _msg is not None:
-                await _msg.reply_text(
+                prompt_sent = await _msg.reply_text(
                     prompt,
                     reply_markup=build_secret_prompt_markup(kind="github", user_id=uid),
                     parse_mode="Markdown",
@@ -967,6 +969,12 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             # Mark pending so token_handler / next message can store connection token
             if context.user_data is not None:
                 context.user_data["pending_github_connection"] = True
+                # Track prompt so success path can delete it (clean single-surface UX)
+                if prompt_sent is not None:
+                    mid = getattr(prompt_sent, "message_id", None)
+                    if mid:
+                        context.user_data["pending_github_prompt_mid"] = int(mid)
+                        remember_message(context.user_data, int(mid))
                 try:
                     from lumen.bot.session_store import get_session_store
                     get_session_store().save(int(uid), dict(context.user_data))

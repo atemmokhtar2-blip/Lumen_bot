@@ -464,6 +464,8 @@ async def _handle_message_body(
     # Bot token paste remains a specialized early handler
     from ..handlers.token_handler import try_handle_token
     if await try_handle_token(update, context, request, user, message):
+        # Clear ephemeral "Lumen يفكر…" so success surfaces stay clean
+        await _clear_thinking()
         return
 
     # ══════════════════════════════════════════════════════════════════

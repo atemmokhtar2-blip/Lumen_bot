@@ -128,9 +128,13 @@ async def try_handle_token(
                 else ""
             )
             if git_tok:
+                # Delete the secret-bearing message; no intermediate confirm toast —
+                # success path renders the full repo list surface immediately.
                 try:
                     from lumen.bot.ui.token_hygiene import scrub_and_confirm
-                    await scrub_and_confirm(update_message=message, bot=context.bot)
+                    await scrub_and_confirm(
+                        update_message=message, bot=context.bot, confirm=False
+                    )
                 except Exception:
                     logger.exception("PAT scrub before github connection failed")
                 # Verify against official API before persisting
@@ -150,19 +154,61 @@ async def try_handle_token(
                     await safe_reply_text(message, "❌ تعذر حفظ الاتصال بشكل آمن. أعد المحاولة.")
                     return True
                 context.user_data.pop("pending_github_connection", None)
+                # Best-effort delete the PAT prompt message left from conn_gh_connect
+                try:
+                    prompt_mid = context.user_data.pop("pending_github_prompt_mid", None)
+                    if prompt_mid and context.bot:
+                        chat_id = getattr(getattr(message, "chat", None), "id", None)
+                        if chat_id:
+                            await context.bot.delete_message(
+                                chat_id=int(chat_id), message_id=int(prompt_mid)
+                            )
+                except Exception:
+                    logger.debug("delete github PAT prompt soft-fail", exc_info=True)
+
+                # Load official repo list and render CONN_GITHUB surface immediately
+                # so the user never has to navigate Settings → Connections → GitHub.
                 try:
                     from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
-                    from lumen.bot.session_store import get_session_store
-
-                    st = EngineUiState(
-                        phase=EngineUiPhase.CONN_GITHUB,
-                        slots={
-                            "gh_connected": "1",
-                            "gh_login": login,
-                            "gh_page": "1",
-                            "gh_status_line": f"متصل كـ @{login}" if login else "متصل",
-                        },
+                    from lumen.engine.services.ui_state.controller import buttons_for_state
+                    from lumen.engine.services.ui_state.render import (
+                        render_message as render_ui_message,
                     )
+                    from lumen.bot.session_store import get_session_store
+                    from lumen.bot.ui.keyboards import build_inline_keyboard
+                    from lumen.bot.ui.chat_hygiene import send_or_edit_ui
+                    from lumen.engine.services.integrations.connections import get_provider
+
+                    page = 1
+                    slots: dict = {
+                        "gh_connected": "1",
+                        "gh_login": login,
+                        "gh_page": str(page),
+                        "gh_status_line": (
+                            f"متصل كـ @{login}" if login else "متصل"
+                        ),
+                        "gh_has_more": "0",
+                    }
+
+                    def _load_repos():
+                        prov = get_provider("github")
+                        if not prov:
+                            return []
+                        return prov.list_resources(
+                            int(user.id), page=page, per_page=8, prefer_cache=False
+                        )
+
+                    resources = await asyncio.to_thread(_load_repos)
+                    for i, res in enumerate((resources or [])[:12]):
+                        slots[f"gh_r{i}_id"] = res.resource_id
+                        slots[f"gh_r{i}_title"] = res.title
+                        slots[f"gh_r{i}_full"] = str(
+                            (res.meta or {}).get("full_name") or res.title
+                        )[:120]
+                        slots[f"gh_r{i}_url"] = str(res.url or "")[:200]
+                    slots["gh_has_more"] = "1" if len(resources or []) >= 8 else "0"
+
+                    st = EngineUiState(phase=EngineUiPhase.CONN_GITHUB, slots=slots)
                     context.user_data["engine_ui"] = st.to_dict()
                     context.user_data["github_connection"] = {
                         "provider": "github",
@@ -170,13 +216,33 @@ async def try_handle_token(
                         "connected": True,
                     }
                     get_session_store().save(int(user.id), dict(context.user_data))
+
+                    text = render_ui_message(st)
+                    buttons = buttons_for_state(st)
+                    markup = build_inline_keyboard(buttons, user_id=int(user.id))
+                    chat_id = getattr(getattr(message, "chat", None), "id", None)
+                    if chat_id and context.bot:
+                        await send_or_edit_ui(
+                            bot=context.bot,
+                            chat_id=int(chat_id),
+                            user_data=context.user_data,
+                            text=text,
+                            markup=markup,
+                            preferred_message=None,
+                        )
+                    else:
+                        # Fallback if chat/bot unavailable
+                        await safe_reply_text(
+                            message,
+                            f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''}.",
+                        )
                 except Exception:
-                    logger.exception("persist github connection session failed")
-                await safe_reply_text(
-                    message,
-                    f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''} عبر api.github.com.\n"
-                    "اضغط: الإعدادات → الاتصالات → GitHub لعرض مستودعاتك الرسمية.",
-                )
+                    logger.exception("render github repos after connect failed")
+                    await safe_reply_text(
+                        message,
+                        f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''} عبر api.github.com.\n"
+                        "افتح: الإعدادات → الاتصالات → GitHub لعرض المستودعات.",
+                    )
                 return True
 
         except Exception:

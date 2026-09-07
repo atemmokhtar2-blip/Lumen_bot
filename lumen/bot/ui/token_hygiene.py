@@ -75,12 +75,16 @@ async def scrub_and_confirm(
     *,
     update_message: Any,
     bot: Any | None = None,
+    confirm: bool = True,
 ) -> bool:
-    """Delete the user message that carried a token/PAT and confirm.
+    """Delete the user message that carried a token/PAT and optionally confirm.
 
     Call this *after* the secret has been handed to the engine (hosting /
     clone / create) so a failed engine call still leaves no secret in chat
     when possible.
+
+    Set ``confirm=False`` when the caller will immediately render a richer
+    surface (e.g. GitHub repo list) and does not want an intermediate toast.
     """
     if update_message is None:
         return False
@@ -103,5 +107,6 @@ async def scrub_and_confirm(
         message_id=int(mid) if mid else None,
         is_private=is_private,
     )
-    await confirm_secret_received(reply_target=update_message, deleted=deleted)
+    if confirm:
+        await confirm_secret_received(reply_target=update_message, deleted=deleted)
     return deleted
