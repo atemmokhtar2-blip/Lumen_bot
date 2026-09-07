@@ -24,7 +24,9 @@ from .select import (
     is_production_sandbox_path,
     probe_all,
     select_sandbox_backend,
+    select_trial_sandbox_backend,
     start_sandboxed_bot,
+    start_trial_sandboxed_bot,
     start_permanent_host_bot,
 )
 from .types import SandboxHandle, SandboxProbe, SandboxSpec
@@ -35,7 +37,9 @@ __all__ = [
     "SandboxHandle",
     "SandboxProbe",
     "select_sandbox_backend",
+    "select_trial_sandbox_backend",
     "start_sandboxed_bot",
+    "start_trial_sandboxed_bot",
     "start_permanent_host_bot",
     "probe_all",
     "is_production_sandbox_path",

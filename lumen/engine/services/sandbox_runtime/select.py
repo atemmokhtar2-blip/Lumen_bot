@@ -241,3 +241,65 @@ def start_permanent_host_bot(
     handle.meta["permanent_host"] = True
     return backend, handle
 
+
+def select_trial_sandbox_backend(*, require_available: bool = True) -> Tuple[SandboxBackend, SandboxProbe]:
+    """Ephemeral trial only — strong isolation, never host LocalProcess.
+
+    Order: Firecracker → gVisor → DinD → Docker (first available).
+    Permanent hosting must still use ``select_sandbox_backend`` (Firecracker in prod).
+    """
+    # Prefer strongest available for short-lived trial; do not open host process.
+    for b in _all_backends():
+        p = b.probe()
+        if p.available:
+            logger.info(
+                "trial sandbox selected backend=%s reason=%s",
+                b.name,
+                p.reason,
+            )
+            return b, p
+    reasons = "; ".join(f"{x.name}:{x.probe().reason}" for x in _all_backends())
+    if require_available:
+        raise RuntimeError(
+            "trial_sandbox_unavailable: "
+            f"{reasons}. "
+            "Temporary trial needs Firecracker or Docker isolation on the worker; "
+            "host LocalProcess is forbidden."
+        )
+    b = _primary_backend()
+    return b, b.probe()
+
+
+def start_trial_sandboxed_bot(
+    *,
+    project_path: str,
+    bot_token: str,
+    user_id: int = 0,
+    service_name: str = "trial-chat",
+    env_vars: Optional[dict] = None,
+):
+    """Start ephemeral trial under any available strong backend (not permanent host path)."""
+    from .types import SandboxSpec
+
+    backend, probe = select_trial_sandbox_backend(require_available=True)
+    if backend.name != "firecracker":
+        try:
+            from .egress import harden_network
+            harden_network(os.environ.get("TBE_DOCKER_NETWORK") or "")
+        except Exception:
+            logger.debug("trial sandbox network soft-fail", exc_info=True)
+
+    spec = SandboxSpec(
+        project_path=str(project_path),
+        bot_token=bot_token,
+        user_id=int(user_id or 0),
+        service_name=service_name or "trial-chat",
+        env_vars=dict(env_vars or {}),
+    )
+    handle = backend.start(spec)
+    handle.meta = dict(handle.meta or {})
+    handle.meta["probe"] = probe.reason
+    handle.meta["backend"] = backend.name
+    handle.meta["trial"] = True
+    return backend, handle
+

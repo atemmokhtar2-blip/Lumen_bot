@@ -143,6 +143,18 @@ async def execute_post_side_effect(
 
     if effect == "post_host":
         assert root is not None
+        # Permanent host is a Pro entitlement — free users get trial only
+        try:
+            from lumen.bot.ui.pro_plan_entitlement import resolve_pro_entitlement
+
+            if uid and resolve_pro_entitlement(int(uid)) is None:
+                return (
+                    "🔒 الاستضافة الدائمة متاحة لمشتركي Lumen Pro فقط.\n"
+                    "يمكنك استخدام «تجربة في الشات» مؤقتاً، "
+                    "أو اشترك في Pro ثم أعد «استضافة دائمة»."
+                )
+        except Exception:
+            logger.exception("pro entitlement check for post_host failed")
         entry = resolve_entry_point(root)
         backend = _host_backend_hint()
         from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar

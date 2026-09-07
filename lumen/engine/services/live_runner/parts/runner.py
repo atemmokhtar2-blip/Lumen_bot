@@ -115,9 +115,9 @@ class LiveRunnerService:
         deployment_id = ""
         backend_name = ""
         try:
-            from lumen.engine.services.sandbox_runtime import start_sandboxed_bot, select_sandbox_backend
+            from lumen.engine.services.sandbox_runtime import start_trial_sandboxed_bot
 
-            backend, handle = start_sandboxed_bot(
+            backend, handle = start_trial_sandboxed_bot(
                 project_path=str(root),
                 bot_token=bot_token,
                 user_id=0,
@@ -175,15 +175,22 @@ class LiveRunnerService:
                 duration_ms=(time.perf_counter() - t0) * 1000,
             )
         except Exception as exc:
+            err = str(exc)[:280]
             return LiveRunReport(
                 ok=False,
                 phase="trial_error",
                 message=(
-                    f"فشل {plane_label_ar(plane)}: {type(exc).__name__}: {exc}\n"
-                    "الاستضافة الدائمة مسار منفصل (Firecracker)."
+                    "❌ فشلت التجربة المؤقتة (ليست استضافة دائمة).\n"
+                    "العزل القوي غير متاح على خادم التشغيل حالياً.\n"
+                    f"التفاصيل: `{type(exc).__name__}: {err}`\n\n"
+                    "• التجربة تحتاج Firecracker أو Docker على worker العزل.\n"
+                    "• التشغيل على المضيف ممنوع لحماية المنصة.\n"
+                    "• للاستضافة الدائمة: اشترك في Lumen Pro ثم «استضافة دائمة»."
                 ),
                 errors=[f"trial:{type(exc).__name__}"],
+                warnings=["trial_sandbox_unavailable"],
                 duration_ms=(time.perf_counter() - t0) * 1000,
+                entry_point=entry_hint or "",
             )
 
 
@@ -762,193 +769,14 @@ def run_bot_project(
     entry_hint: str | None = None,
     run_seconds: float = float(__import__('os').environ.get('LIVE_RUN_SECONDS', 900)),
 ) -> LiveRunReport:
-    """Run a generated bot under isolation (Docker-first, fail-closed).
+    """TRIAL_CHAT entry — delegates to LiveRunnerService (isolated, ephemeral).
 
-    Production / multi-tenant: Docker only. Local host process is refused unless
-    isolation_policy explicitly allows it (dev + TBE_ALLOW_LOCAL_PROCESS=1).
+    Permanent hosting uses HostService + start_permanent_host_bot (Firecracker).
+    This function never opens host LocalProcess in production.
     """
-    import re as _re
-    _raw_path = str(project_path or "")
-    if _re.search(r"[;|&$`<>\\\n\r\0]", _raw_path):
-        return LiveRunReport(
-            ok=False,
-            phase="security",
-            message="invalid_path_characters",
-            install_log="",
-            run_log="",
-            warnings=["path_rejected"],
-            entry_point=entry_hint or "",
-            duration_ms=0.0,
-            details={"error": "invalid_path_characters"},
-        )
-
-    import os as _os
-    # Single source of truth: isolation_policy (fail-closed multi-tenant/prod).
-    # Host LocalProcess is NEVER a silent fallback when Docker fails — only the
-    # explicit dual gate (ALLOW+FORCE) sets allow_local without strong isolation.
-    try:
-        from lumen.engine.services.isolation_policy import decide_isolation
-        _d = decide_isolation()
-        require_docker = bool(_d.require_docker) or bool(_d.require_strong_isolation)
-        allow_local = bool(_d.allow_local) and not bool(_d.require_strong_isolation)
-    except Exception:
-        require_docker, allow_local = True, False
-    prefer = (_os.environ.get("TBE_PREFER_DOCKER") or "1").strip().lower() not in {
-        "0", "false", "no", "off",
-    }
-    if require_docker:
-        prefer = True
-
-    docker_err = ""
-    if prefer or require_docker:
-        try:
-            from lumen.engine.services.live_deployment.docker_process_driver import (
-                DockerProcessDriver,
-                docker_available,
-            )
-            if not docker_available():
-                docker_err = "docker_daemon_unavailable"
-            else:
-                driver = DockerProcessDriver()
-                st = driver.deploy(
-                    str(project_path),
-                    env_vars={"BOT_TOKEN": bot_token, "TELEGRAM_BOT_TOKEN": bot_token},
-                    service_name="live-run",
-                )
-                if getattr(st, "status", "") == "running":
-                    dep_id = st.deployment_id
-                    lifetime = max(30.0, float(run_seconds))
-
-                    def _auto_stop():
-                        try:
-                            time.sleep(lifetime)
-                            driver.stop(dep_id)
-                        except Exception:
-                            pass
-
-                    threading.Thread(target=_auto_stop, daemon=True).start()
-                    mins = max(1, int(round(lifetime / 60.0)))
-                    logs = driver.logs(dep_id, limit=20)
-                    return LiveRunReport(
-                        ok=True,
-                        phase="run",
-                        message=(
-                            f"✅ البوت شغال داخل حاوية Docker معزولة (~{mins} دقيقة)"
-                        ),
-                        install_log="(docker image + pip inside container)",
-                        run_log="\n".join(logs[-15:]) if logs else "(container started)",
-                        warnings=["docker_isolated", f"lifetime_seconds:{int(lifetime)}"],
-                        entry_point=entry_hint or "",
-                        duration_ms=0.0,
-                        details={
-                            "provider": "docker",
-                            "deployment_id": dep_id,
-                            "service_id": getattr(st, "service_id", ""),
-                        },
-                    )
-                docker_err = getattr(st, "message", "") or "docker_deploy_failed"
-                __import__("logging").getLogger("live_runner").warning(
-                    "Docker deploy failed: %s", str(docker_err)[:200]
-                )
-        except Exception as docker_exc:
-            docker_err = str(docker_exc)
-            __import__("logging").getLogger("live_runner").warning(
-                "Docker path error: %s", docker_exc
-            )
-
-    if require_docker and not allow_local:
-        return LiveRunReport(
-            ok=False,
-            phase="security",
-            message=(
-                "عزل قوي (Docker/Firecracker/gVisor) مطلوب وغير متاح أو فشل. "
-                "التشغيل على المضيف مرفوض (fail-closed). "
-                f"({docker_err or 'sandbox_required'}). "
-                "ثبّت sandbox backend أو استخدم البوابة المزدوجة "
-                "TBE_ALLOW_LOCAL_PROCESS=1 + TBE_FORCE_LOCAL_PROCESS=1 للتطوير فقط."
-            ),
-            install_log="",
-            run_log="",
-            warnings=["docker_required", "local_fallback_blocked"],
-            entry_point=entry_hint or "",
-            duration_ms=0.0,
-            details={"provider": "none", "error": docker_err or "docker_required"},
-        )
-
-    # Local process fallback (resource-limited) when policy allows
-    if allow_local:
-        try:
-            from lumen.engine.services.live_deployment.local_process_driver import (
-                LocalProcessDriver,
-            )
-            driver = LocalProcessDriver()
-            st = driver.deploy(
-                str(project_path),
-                env_vars={
-                    "BOT_TOKEN": bot_token,
-                    "TELEGRAM_BOT_TOKEN": bot_token,
-                },
-                service_name="generated-bot",
-            )
-            dep_id = getattr(st, "deployment_id", "") or ""
-            status = str(getattr(st, "status", "") or "").lower()
-            try:
-                from lumen.engine.services.live_deployment.report_data import DEPLOY_RUNNING
-                running_vals = {str(DEPLOY_RUNNING).lower(), "running", "ok", "deployed"}
-            except Exception:
-                running_vals = {"running", "ok", "deployed"}
-            if status in running_vals or getattr(st, "ok", False):
-                return LiveRunReport(
-                    ok=True,
-                    phase="run",
-                    message="✅ البوت شغال محلياً (fallback بدون Docker — حدود موارد مفعّلة)",
-                    install_log="(local process)",
-                    run_log=str(getattr(st, "message", "") or "")[:1500],
-                    warnings=["local_process", f"docker_err:{docker_err[:80]}" if docker_err else "no_docker"],
-                    entry_point=entry_hint or "",
-                    duration_ms=0.0,
-                    details={
-                        "provider": "local_process",
-                        "deployment_id": dep_id,
-                        "docker_error": docker_err or "",
-                    },
-                )
-            return LiveRunReport(
-                ok=False,
-                phase="run",
-                message=f"فشل التشغيل المحلي: {getattr(st, 'message', status)}",
-                install_log="",
-                run_log=str(getattr(st, "message", "") or "")[:1500],
-                warnings=["local_process_failed"],
-                entry_point=entry_hint or "",
-                duration_ms=0.0,
-                details={"provider": "local_process", "error": getattr(st, "message", status)},
-            )
-        except Exception as local_exc:
-            return LiveRunReport(
-                ok=False,
-                phase="run",
-                message=f"فشل التشغيل المحلي: {type(local_exc).__name__}: {local_exc}",
-                install_log="",
-                run_log="",
-                warnings=["local_process_error"],
-                entry_point=entry_hint or "",
-                duration_ms=0.0,
-                details={"provider": "local_process", "error": str(local_exc)},
-            )
-
-    return LiveRunReport(
-        ok=False,
-        phase="security",
-        message=(
-            "لا Docker ولا مسار محلي مسموح. "
-            f"({docker_err or 'docker_required'})"
-        ),
-        install_log="",
-        run_log="",
-        warnings=["no_runtime"],
-        entry_point=entry_hint or "",
-        duration_ms=0.0,
-        details={"provider": "none", "error": docker_err or "docker_required"},
+    return LiveRunnerService().run(
+        project_path=project_path,
+        bot_token=bot_token,
+        entry_hint=entry_hint,
+        run_seconds=run_seconds,
     )
-
