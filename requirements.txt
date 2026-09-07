@@ -2,7 +2,7 @@
 # Bump only after: pip-audit + pip-compile
 # 22.7+ required for InlineKeyboardButton.style (Bot API 9.4 colored buttons)
 python-telegram-bot==22.7
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 pydantic==2.10.6
 pydantic-settings==2.7.1
 requests==2.33.0
@@ -14,7 +14,7 @@ rapidfuzz==3.12.1
 pymongo==4.11.1
 
 # Security / hosting foundation
-cryptography==50.0.0
+cryptography==50.0.1
 # Optional object storage (S3/R2/MinIO)
 # boto3==1.36.16
 # Optional Postgres host state
@@ -30,7 +30,7 @@ opentelemetry-exporter-otlp-proto-http==1.33.1
 prometheus-client==0.21.1
 
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
-SQLAlchemy==2.0.40
+SQLAlchemy==2.0.52
 alembic==1.15.2
 
 # Phase B — durable workflows (official SDK)
