@@ -711,7 +711,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             except ValueError:
                 page = 1
 
-                        def _gh_load():
+            def _gh_load():
                 from lumen.engine.services.integrations.connections import get_provider
                 from lumen.engine.services.integrations.connections import token_store as _ts
                 prov = get_provider("github")
