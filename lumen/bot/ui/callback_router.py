@@ -944,12 +944,14 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         except Exception:
             result.state.slots.setdefault("conn_github_line", "GitHub: —")
 
-    # Prompt for GitHub PAT when user starts connect
+    # Prompt for GitHub PAT when user starts connect.
+    # CRITICAL: keep the prompt visible until the user sends the token.
+    # Do NOT fall through to _safe_render_ui (that would prune the prompt).
+    # Do NOT register the prompt in chat_hygiene until success cleanup.
     if result.ok and action_id == "conn_gh_connect" and uid:
         try:
             from lumen.bot.ui.input_prompt import ask_text_input
             from lumen.bot.ui.secret_prompt import build_secret_prompt_markup
-            from lumen.bot.ui.chat_hygiene import remember_message
 
             prompt = (
                 "🔑 أرسل الآن توكن GitHub (PAT) بصلاحية `repo`.\n"
@@ -969,17 +971,18 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             # Mark pending so token_handler / next message can store connection token
             if context.user_data is not None:
                 context.user_data["pending_github_connection"] = True
-                # Track prompt so success path can delete it (clean single-surface UX)
+                # Store prompt mid only for post-success cleanup (not in hygiene list)
                 if prompt_sent is not None:
                     mid = getattr(prompt_sent, "message_id", None)
                     if mid:
                         context.user_data["pending_github_prompt_mid"] = int(mid)
-                        remember_message(context.user_data, int(mid))
                 try:
                     from lumen.bot.session_store import get_session_store
                     get_session_store().save(int(uid), dict(context.user_data))
                 except Exception:
                     logger.debug("persist pending_github_connection soft-fail", exc_info=True)
+            # Stay on the prompt — user must see what to send
+            return
         except Exception:
             logger.exception("conn_gh_connect prompt failed")
 
