@@ -220,12 +220,12 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     "post_trial": UiActionSpec(
         "post_trial",
         "Trial chat plane",
-        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME}),
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONN_GITHUB}),
     ),
     "post_host": UiActionSpec(
         "post_host",
         "Permanent host plane",
-        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME}),
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONN_GITHUB}),
     ),
     "post_zip": UiActionSpec(
         "post_zip",

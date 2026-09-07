@@ -271,6 +271,16 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         nav_row.append(UiButton("التالي ▶", "conn_gh_page", f"p:{page + 1}", style="primary"))
     if nav_row:
         rows.append(tuple(nav_row))
+    # Phase 3: trial/host only when workspace ready (after deep understand + env)
+    if (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "1":
+        rows.append(
+            (
+                UiButton("تجربة في الشات", "post_trial", style="success"),
+                UiButton("استضافة دائمة", "post_host", style="success"),
+            )
+        )
+    elif (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "0":
+        rows.append((UiButton("أكمِل المتغيرات", "conn_gh_refresh", style="primary"),))
     rows.append((UiButton("رجوع للاتصالات", "open_connections", style="primary"),))
     return tuple(rows)
 

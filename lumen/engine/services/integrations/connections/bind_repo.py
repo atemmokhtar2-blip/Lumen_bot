@@ -30,6 +30,7 @@ class BindRepoResult:
     sections: dict[str, Any] = field(default_factory=dict)
     header_ar: str = ""
     contract_summary: str = ""
+    agent_brief: str = ""
 
 
 def _resolve_url(user_id: int, resource_id: str, slots: dict[str, str] | None) -> tuple[str, str, str]:
@@ -197,8 +198,11 @@ def bind_github_repo(
     entry = ""
     sections: dict[str, Any] = {}
     header = f"✅ تم سحب `{full_name or path}`"
+    agent_brief = ""
 
     if run_understand and path:
+        # --- Structural contract (scanner + intelligence) ---
+        contract = None
         try:
             from lumen.engine.services.repo_understanding import understand_repo
             from lumen.engine.schemas.repo_contract import safe_contract_dict
@@ -220,7 +224,7 @@ def bind_github_repo(
             frameworks = list(getattr(contract, "frameworks", None) or [])[:4]
             if frameworks:
                 parts.append(", ".join(str(f) for f in frameworks))
-            summary = " · ".join(parts) if parts else "تم فحص المستودع"
+            summary = " · ".join(parts) if parts else "فحص هيكلي"
             try:
                 from lumen.bot.ui.repo_sections import build_sections_from_contract
 
@@ -232,12 +236,65 @@ def bind_github_repo(
                 logger.exception("build_sections_from_contract soft-fail")
         except Exception:
             logger.exception("understand_repo after bind soft-fail uid=%s", uid)
-            summary = "تم السحب — الفحص التفصيلي لاحقاً"
+            summary = "تم السحب — الفحص الهيكلي لاحقاً"
             header = f"✅ تم سحب المستودع\n• {final_url}\n• {path}"
+
+        # --- Agent-grade understanding (same plane as tool repo_understand) ---
+        try:
+            from lumen.engine.services.repo_understanding.llm_explain import (
+                explain_repo_with_llm,
+            )
+
+            question = (
+                "افهم المستودع بدقة عالية: الغرض، البنية، نقطة الدخول، "
+                "الأطر، متغيرات البيئة المطلوبة، وكيف يُشغَّل. "
+                "اذكر المخاطر والفجوات إن وُجدت."
+            )
+            explanation, meta = explain_repo_with_llm(
+                Path(path),
+                user_question=question,
+                url=final_url or "",
+                user_id=uid,
+            )
+            agent_brief = (explanation or "").strip()[:6000]
+            dos = (meta or {}).get("dossier") or {}
+            if dos:
+                active["dossier"] = {
+                    "root": dos.get("root") or active.get("dossier", {}).get("root"),
+                    "tree": dos.get("tree") or active.get("dossier", {}).get("tree"),
+                    "facts": dos.get("facts") or active.get("facts") or {},
+                    "key_file_names": list(
+                        (dos.get("key_files") or dos.get("key_file_names") or {}).keys()
+                        if isinstance(dos.get("key_files"), dict)
+                        else (dos.get("key_file_names") or [])
+                    ),
+                    "tools_run": dos.get("tools_run") or (meta or {}).get("tools_run"),
+                }
+                active["facts"] = dos.get("facts") or active.get("facts") or {}
+            if agent_brief:
+                active["agent_brief"] = agent_brief
+                active["understanding_level"] = "agent"
+                active["understood_at"] = __import__("time").time()
+                active["bound_for_grok"] = True
+                # Prefer agent summary in header when available
+                if not sections:
+                    header = f"✅ فهم الوكيل للمستودع `{full_name or path}`\n\n{agent_brief[:1500]}"
+                else:
+                    # Attach brief under structural header for UI
+                    header = (sections.get("header") or header) + "\n\n🧠 " + agent_brief[:1200]
+                    sections = dict(sections)
+                    sections["agent_brief"] = agent_brief[:3500]
+            else:
+                active["understanding_level"] = "structural"
+                active.setdefault("bound_for_grok", True)
+        except Exception:
+            logger.exception("explain_repo_with_llm after bind failed uid=%s", uid)
+            active["understanding_level"] = active.get("understanding_level") or "structural"
+            active.setdefault("bound_for_grok", True)
 
     return BindRepoResult(
         ok=True,
-        message_ar="تم سحب المستودع وربطه بمنصة Lumen.",
+        message_ar="تم سحب المستودع وربطه وفهمه عبر محرك الوكيل.",
         path=path,
         url=final_url,
         full_name=full_name,
@@ -247,6 +304,7 @@ def bind_github_repo(
         sections=sections if isinstance(sections, dict) else {},
         header_ar=header,
         contract_summary=summary,
+        agent_brief=agent_brief,
     )
 
 

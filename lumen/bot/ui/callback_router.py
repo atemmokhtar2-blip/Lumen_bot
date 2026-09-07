@@ -321,7 +321,7 @@ async def handle_ui_callback(update, context) -> None:
     if action_id in {"hitl_confirm", "hitl_reject"}:
         _timeout = 200.0
     elif action_id == "conn_gh_select":
-        _timeout = 120.0  # clone + understand can exceed default UI budget
+        _timeout = 180.0  # clone + structural + agent explain_repo_with_llm
     else:
         _timeout = 25.0
     try:
@@ -847,9 +847,20 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     result.state.slots["gh_bound_ok"] = "1"
                     result.state.project_ref = (bind.path or "")[:200]
                     summary = bind.contract_summary or "جاهز"
-                    result.state.slots["gh_status_line"] = (
-                        f"✅ مربوط: {bind.full_name or label}\n{summary}"
-                    )
+                    level = str((bind.active_repo or {}).get("understanding_level") or "")
+                    brief = (bind.agent_brief or "")[:400]
+                    status_bits = [f"✅ مربوط: {bind.full_name or label}", summary]
+                    if level:
+                        status_bits.append(f"فهم: {level}")
+                    if brief:
+                        status_bits.append(brief)
+                    result.state.slots["gh_status_line"] = "\n".join(status_bits)[:1500]
+                    try:
+                        from dataclasses import replace as _dc_replace
+                        from lumen.engine.services.ui_state.controller import buttons_for_state
+                        result = _dc_replace(result, buttons=buttons_for_state(result.state))
+                    except Exception:
+                        logger.exception("rebuild buttons after bind soft-fail")
                     # Same success UI plane as git_router clone
                     try:
                         from lumen.bot.ui.repo_sections import section_keyboard

@@ -106,6 +106,13 @@ def test_bind_success_platform_shape(monkeypatch, tmp_path):
         lambda *a, **k: {"root": str(tmp_path), "tree": "", "facts": {"files": 1}, "key_files": {}},
         raising=False,
     )
+    monkeypatch.setattr(
+        "lumen.engine.services.repo_understanding.llm_explain.explain_repo_with_llm",
+        lambda *a, **k: (
+            "هذا بوت تيليجرام للتجارة. المدخل bot.py. يحتاج OPENAI_API_KEY.",
+            {"dossier": {"facts": {"files": 1}, "tools_run": ["stats", "tree"]}, "explainer": "test"},
+        ),
+    )
 
     r = bind_github_repo(42, "1001", slots={}, run_understand=True)
     assert r.ok is True
@@ -115,6 +122,9 @@ def test_bind_success_platform_shape(monkeypatch, tmp_path):
     assert r.active_repo.get("bound_for_grok") is True
     assert r.active_repo.get("contract")
     assert r.is_runnable is True
+    assert r.active_repo.get("understanding_level") == "agent"
+    assert r.agent_brief
+    assert "agent_brief" in r.active_repo
 
     ud: dict = {}
     apply_bind_to_user_data(ud, r, user=None)
@@ -130,4 +140,4 @@ def test_conn_gh_select_wired_to_platform_ui():
     assert "apply_bind_to_user_data" in src
     assert "section_keyboard" in src
     assert "pending_run" in (ROOT / "lumen/engine/services/integrations/connections/bind_repo.py").read_text()
-    assert "120.0" in src
+    assert "180.0" in src

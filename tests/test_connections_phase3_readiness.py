@@ -72,3 +72,19 @@ def test_router_cache_first_and_readiness_wired():
     th = Path("lumen/bot/handlers/token_handler.py").read_text(encoding="utf-8")
     assert "github_connection" in th
     assert "pending_repo_env" in th
+
+
+def test_post_actions_allowed_from_conn_github():
+    from lumen.engine.services.ui_state.catalog import get_action
+    from lumen.engine.services.ui_state.models import EngineUiPhase
+    pt = get_action("post_trial")
+    ph = get_action("post_host")
+    assert pt is not None and EngineUiPhase.CONN_GITHUB in pt.allowed_phases
+    assert ph is not None and EngineUiPhase.CONN_GITHUB in ph.allowed_phases
+
+
+def test_bind_repo_calls_agent_explain_in_source():
+    src = Path("lumen/engine/services/integrations/connections/bind_repo.py").read_text(encoding="utf-8")
+    assert "explain_repo_with_llm" in src
+    assert "understanding_level" in src
+    assert "agent_brief" in src
