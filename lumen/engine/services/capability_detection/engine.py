@@ -206,7 +206,7 @@ def _classify(
             DetectionStatus.IMPOSSIBLE,
             float(feas.confidence),
             feas.reason or "الطلب خارج النطاق",
-            "Request outside deterministic engine scope",
+            "Request outside Lumen agent scope",
             feas.suggested_scope or "اطلب بوت أوامر/متجر/تذاكر داخل تيليجرام",
         )
 

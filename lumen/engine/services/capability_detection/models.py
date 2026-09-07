@@ -103,7 +103,7 @@ class DetectionReport:
             DetectionStatus.EXISTS: "✅ كل الميزات المطلوبة موجودة في القوالب",
             DetectionStatus.COMPOSABLE: "🔧 يمكن تركيب البوت من أدوات موجودة",
             DetectionStatus.GAP: "⚠️ جزء من الطلب غير مغطى بالكامل في القوالب الحالية",
-            DetectionStatus.IMPOSSIBLE: "🚫 الطلب خارج قدرات المحرك الحتمي",
+            DetectionStatus.IMPOSSIBLE: "🚫 الطلب خارج قدرات وكيل Lumen",
         }
         lines.append(status_label.get(self.status, self.status.value))
         lines.append("")

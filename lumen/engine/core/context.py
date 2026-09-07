@@ -19,7 +19,6 @@ from .state import RunState, RunStatus
 
 if TYPE_CHECKING:
     from ..configuration.config import Configuration
-    from ..blueprint.blueprint import Blueprint
 
 
 @dataclass
@@ -28,7 +27,7 @@ class GenerationContext:
     config: "Configuration"
     work_dir: Path
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    blueprint: Optional["Blueprint"] = None
+    blueprint: Optional[Any] = None  # legacy field; unused (deterministic path removed)
     artefacts: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_files: List[str] = field(default_factory=list)

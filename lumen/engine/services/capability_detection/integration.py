@@ -105,7 +105,7 @@ def telegram_preflight(request: str) -> dict[str, Any]:
         from lumen.bot.capability_boundaries import rejection_message
 
         msg = rejection_message(
-            report.reason_ar or "الطلب خارج قدرات المحرك الحتمي",
+            report.reason_ar or "الطلب خارج قدرات وكيل Lumen",
             report.suggested_scope_ar or "",
         )
         # Append concise detection snapshot

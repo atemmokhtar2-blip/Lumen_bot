@@ -277,7 +277,7 @@ def build_default_schema() -> ConfigSchema:
                 default=False,
                 description=(
                     "When True the engine also physically creates the "
-                    "directories on disk using the DirectoryBuilder. "
+                    "directories on disk using the filesystem writers. "
                     "When False (default), only the structure map is "
                     "produced; physical creation is deferred to a "
                     "later phase."

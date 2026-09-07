@@ -112,7 +112,7 @@ def test_orchestrate_generate_wrapped_with_timeout(monkeypatch, tmp_path):
         with patch.object(ma_mod, "orchestrate_generate", side_effect=slow_orchestrate):
             with patch.object(ma_mod, "orchestrator_enabled", return_value=True):
                 # Also need guardrails + backpressure + budget gate to pass
-                with patch("lumen.engine.pipeline.prompt_guard.scan_user_input") as mock_guard:
+                with patch("lumen.engine.security.prompt_guard.scan_user_input") as mock_guard:
                     mock_guard.return_value = type("G", (), {"ok": True, "sanitized": None, "reasons": [], "backend": "test"})()
                     with patch("lumen.platform.queue_backpressure.acquire_slot", return_value=(True, "")):
                         with patch("lumen.platform.queue_backpressure.release_slot", return_value=None):

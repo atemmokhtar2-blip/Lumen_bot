@@ -485,7 +485,7 @@ def run_agent(
     # not the full task packet that includes repo context / agent-generated code
     # (which can legitimately contain os.getenv('TELEGRAM_BOT_TOKEN') + print patterns).
     try:
-        from lumen.engine.pipeline.prompt_guard import scan_user_request_only, scan_user_input
+        from lumen.engine.security.prompt_guard import scan_user_request_only, scan_user_input
         # Primary scan: only the user's original request portion
         _gr = scan_user_request_only(goal or "")
         # Secondary scan: full goal for DANGEROUS code-exec patterns only

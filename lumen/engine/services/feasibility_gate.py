@@ -145,7 +145,7 @@ def check_feasibility(request: str) -> FeasibilityResult:
             can_generate=False,
             confidence=0.95,
             level=ComplexityLevel.IMPOSSIBLE,
-            reason="الطلب خارج قدرات المحرك الحتمي: " + "؛ ".join(blocked),
+            reason="الطلب خارج قدرات وكيل Lumen: " + "؛ ".join(blocked),
             suggested_scope="اطلب بوت أوامر/متجر/تذاكر/نقاط داخل تيليجرام بدون APIs خارجية أو ML.",
             blocked_features=blocked,
         )

@@ -8,34 +8,25 @@ Active path (Cline SDK only):
     → Cline runtime
     → project files on disk (inside per-user sandbox)
 
-Deterministic / zero-AI / catalog / hybrid generation paths have been
-permanently removed. Do not reintroduce them.
+The deterministic / zero-AI / catalog / hybrid / PipelineOrchestrator path
+has been permanently removed from the repository.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:  # explicit for mypy/pylint/IDEs — no runtime cycle
-    from .pipeline import PipelineOrchestrator as PipelineOrchestrator
-    from .registry import EngineRegistry as EngineRegistry
+if TYPE_CHECKING:
     from .core import bootstrap as bootstrap, build_configuration as build_configuration
 
 
 __all__ = [
-    "bootstrap",
-    "build_configuration",
     "generate_bot",
-    "PipelineOrchestrator",
-    "EngineRegistry",
 ]
 
 
 def generate_bot(request: str, work_dir=None, user_id: int = 0, preferred_keys=None):
-    """Legacy entry — redirects to Cline SDK.
-
-    Do not use for new call sites; prefer engine_router.execute_ir / cline_runtime.
-    """
+    """Legacy name — redirects to Cline-only execute_ir."""
     import logging
     from pathlib import Path as _Path
 
@@ -63,23 +54,3 @@ def generate_bot(request: str, work_dir=None, user_id: int = 0, preferred_keys=N
             errors=[f"cline_redirect_failed:{type(exc).__name__}"],
             metadata={"engine": "cline"},
         )
-
-
-def bootstrap(*args, **kwargs):
-    from .core import bootstrap as _bootstrap
-    return _bootstrap(*args, **kwargs)
-
-
-def build_configuration(*args, **kwargs):
-    from .core import build_configuration as _bc
-    return _bc(*args, **kwargs)
-
-
-def PipelineOrchestrator(*args, **kwargs):
-    from .pipeline import PipelineOrchestrator as _PO
-    return _PO(*args, **kwargs)
-
-
-def EngineRegistry(*args, **kwargs):
-    from .registry import EngineRegistry as _ER
-    return _ER(*args, **kwargs)
