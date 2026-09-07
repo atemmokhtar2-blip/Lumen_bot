@@ -258,18 +258,29 @@ def tree(work_dir: str, path: str = ".", max_depth: int = 4) -> dict[str, Any]:
 def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str, Any]:
     """Run a command inside work_dir only when CLINE_ALLOW_SHELL=1.
 
-    Hardened path (default):
-      - never uses shell=True (no injection via metacharacters)
-      - argv via shlex.split
-      - allowlist of base binaries only
-      - stripped child env (no API tokens / Telegram secrets)
+    Hardened path:
+      - forced OFF in production / multi-tenant (host RCE surface)
+      - never shell=True
+      - argv via shlex.split; no absolute binary paths
+      - python/node script args must stay under work_dir; python -c blocked
+      - allowlist binaries only; stripped child env
     """
     import shlex
     import shutil
 
+    # Production / multi-tenant: never allow host-side agent shell (RCE).
+    try:
+        from lumen.engine.services.isolation_policy import is_dev_environment, is_multi_tenant
+        if is_multi_tenant() or not is_dev_environment():
+            return {"ok": False, "error": "shell_disabled_production_use_sandbox"}
+    except Exception:
+        # Fail closed if policy cannot be evaluated.
+        return {"ok": False, "error": "shell_disabled_policy_unavailable"}
+
     flag = (os.getenv("CLINE_ALLOW_SHELL") or "0").strip().lower()
     if flag not in {"1", "true", "yes", "on"}:
         return {"ok": False, "error": "shell_disabled_set_CLINE_ALLOW_SHELL=1"}
+
     cmd = (command or "").strip()
     if not cmd:
         return {"ok": False, "error": "empty_command"}
@@ -280,72 +291,126 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
         "rm -rf /", "mkfs", ":(){", "shutdown", "reboot", "dd if=",
         "curl ", "wget ", "nc ", "ncat ", "ssh ", "scp ",
         "/etc/passwd", "/etc/shadow", "chmod 777",
-        ">(", "<(", "`", "$(",  # process/command substitution
+        ">(", "<(", "`", "$(",
+        "os.system", "subprocess", "__import__", "eval(", "exec(",
+        "pty.", "socket.", "ctypes.",
     )
     low = cmd.lower()
     if any(b in low for b in banned_substrings):
         return {"ok": False, "error": "command_blocked_policy"}
 
-    # Reject shell metacharacters — we never invoke a shell.
     if any(ch in cmd for ch in (";", "|", "&", "\n", "\r", ">", "<")):
         return {"ok": False, "error": "shell_metacharacters_forbidden"}
 
     try:
         argv = shlex.split(cmd)
     except ValueError as exc:
-        return {"ok": False, "error": f"command_parse:{exc}"}
+        return {"ok": False, "error": f"command_parse:{type(exc).__name__}"}
     if not argv:
         return {"ok": False, "error": "empty_argv"}
+
+    # Absolute / relative path to binary forbidden — only PATH lookup of basename.
+    if "/" in argv[0] or "\\" in argv[0] or argv[0].startswith("~"):
+        return {"ok": False, "error": "absolute_binary_path_forbidden"}
 
     allowed = {
         "python", "python3", "pip", "pip3", "pytest", "ls", "cat", "head",
         "tail", "wc", "echo", "true", "false", "pwd", "which", "test",
-        "mkdir", "cp", "mv", "rm", "touch", "find", "grep", "sed", "awk",
+        "mkdir", "cp", "mv", "rm", "touch", "find", "grep", "sed",
         "git", "node", "npm", "npx",
     }
-    # Allow env override of extra binaries (comma-separated)
+    # awk removed: too easy to call system(); extra bins only via explicit env.
     extra = (os.getenv("CLINE_SHELL_ALLOW_BINARIES") or "").strip()
-    if extra:
+    if extra and (os.getenv("ENVIRONMENT") or "").strip().lower() in {
+        "dev", "development", "local", "test"
+    }:
         allowed |= {x.strip() for x in extra.split(",") if x.strip()}
 
     binary = Path(argv[0]).name
     if binary not in allowed:
         return {"ok": False, "error": f"binary_not_allowlisted:{binary}"}
 
-    resolved = shutil.which(argv[0]) if "/" not in argv[0] else (
-        argv[0] if Path(argv[0]).is_file() else None
-    )
+    resolved = shutil.which(binary)
     if not resolved:
-        return {"ok": False, "error": f"binary_not_found:{argv[0]}"}
+        return {"ok": False, "error": f"binary_not_found:{binary}"}
     argv[0] = resolved
 
-    # rm: only allow relative paths under work_dir (no leading /)
+    root = _root(work_dir)
+
+    def _under_root(arg: str) -> bool:
+        if not arg or arg.startswith("-"):
+            return True
+        if arg.startswith("/") or arg.startswith("~") or ".." in Path(arg).parts:
+            return False
+        try:
+            from lumen.engine.services.safe_fs import safe_resolve_under
+            safe_resolve_under(root, arg)
+            return True
+        except Exception:
+            return False
+
+    # python/node: block -c (arbitrary code) and require script paths under work_dir
+    if binary in {"python", "python3", "node"}:
+        if "-c" in argv[1:] or "--command" in argv[1:]:
+            return {"ok": False, "error": "inline_code_flag_forbidden"}
+        for a in argv[1:]:
+            if a.startswith("-"):
+                continue
+            if not _under_root(a):
+                return {"ok": False, "error": "script_path_outside_workspace"}
+            break  # first non-flag arg is the script
+
     if binary == "rm":
         for a in argv[1:]:
             if a.startswith("-"):
                 continue
-            if a.startswith("/") or a.startswith("~") or ".." in a.split("/"):
+            if not _under_root(a):
                 return {"ok": False, "error": "rm_path_outside_workspace"}
 
-    root = _root(work_dir)
-    # Minimal env — drop secrets
-    _secret_keys = (
+    if binary in {"cp", "mv"}:
+        for a in argv[1:]:
+            if a.startswith("-"):
+                continue
+            if not _under_root(a):
+                return {"ok": False, "error": f"{binary}_path_outside_workspace"}
+
+    if binary == "find":
+        # Block -exec / -delete escapes
+        joined = " ".join(argv[1:]).lower()
+        if "-exec" in joined or "-delete" in joined or "-fls" in joined:
+            return {"ok": False, "error": "find_dangerous_flag_forbidden"}
+
+    # Minimal env — drop secrets (prefix-based + explicit)
+    _secret_exact = {
         "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "GEMINI_API_KEYS", "GROQ_API_KEY",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY", "MONGODB_URI",
         "REDIS_URL", "STRIPE_SECRET_KEY", "API_KEY_PEPPER", "TBE_TOKEN_SECRET",
         "PLATFORM_ADMIN_TOKEN", "CALLBACK_HMAC_SECRET", "METRICS_TOKEN",
         "SECRET_INBOX_KEY", "SECRET_KEY", "DATABASE_URL", "POSTGRES_URL",
-        "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "GITHUB_TOKEN",
-        "CLINE_API_KEY", "BOT_TOKEN",
-    )
-    child_env = {
-        k: v for k, v in os.environ.items()
-        if k not in _secret_keys and not k.startswith("GEMINI_API_KEY_")
-        and not k.startswith("GROQ_API_KEY_")
+        "TBE_DATABASE_URL", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
+        "GITHUB_TOKEN", "GITHUB_PAT", "CLINE_API_KEY", "BOT_TOKEN",
+        "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "AZURE_FOUNDRY_API_KEY",
+        "AZURE_FOUNDRY_ENDPOINT", "AZURE_OPENAI_API_KEY", "HF_TOKEN",
+        "TOKEN", "TG_TOKEN", "API_TOKEN",
     }
+    _secret_prefixes = (
+        "GEMINI_API_KEY_", "GROQ_API_KEY_", "OPENAI_", "ANTHROPIC_",
+        "AWS_", "STRIPE_", "AZURE_", "GITHUB_", "CLINE_", "TBE_TOKEN",
+        "SECRET_", "MONGO", "REDIS", "POSTGRES", "DATABASE",
+    )
+    child_env = {}
+    for k, v in os.environ.items():
+        if k in _secret_exact:
+            continue
+        if any(k.startswith(pref) or k.upper().startswith(pref) for pref in _secret_prefixes):
+            continue
+        if "SECRET" in k.upper() or "PASSWORD" in k.upper() or "TOKEN" in k.upper() or "API_KEY" in k.upper():
+            continue
+        child_env[k] = v
     child_env["PWD"] = str(root)
     child_env["HOME"] = str(root)
-    child_env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+    child_env["PATH"] = "/usr/bin:/bin"
+    child_env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     try:
         proc = subprocess.run(
@@ -354,7 +419,7 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
             cwd=str(root),
             capture_output=True,
             text=True,
-            timeout=max(5.0, min(120.0, float(timeout))),
+            timeout=max(5.0, min(60.0, float(timeout))),
             env=child_env,
         )
         out = (proc.stdout or "")[-8000:]
@@ -369,7 +434,7 @@ def run_shell(work_dir: str, command: str, *, timeout: float = 30.0) -> dict[str
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "timeout"}
     except Exception as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}:{exc}"}
+        return {"ok": False, "error": f"{type(exc).__name__}:{type(exc).__name__}"}
 
 def _coerce_rel_path(work_dir: str, path: str) -> str:
     """Coerce absolute/escaped paths into workspace-relative paths."""
