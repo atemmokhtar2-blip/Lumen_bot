@@ -51,8 +51,7 @@ class GeminiSpecBackend(SpecBackend):
                 "tenant_id": str(view.get("tenant_id") or ""),
             }
             try:
-                from lumen.engine.services.capability_detection.catalog import CAPABILITIES
-                ctx["spec_core_capabilities"] = sorted(list(CAPABILITIES.keys()))[:200]
+                                ctx["spec_core_capabilities"] = sorted(list(CAPABILITIES.keys()))[:200]
             except Exception:
                 ctx["spec_core_capabilities"] = []
 
@@ -82,36 +81,7 @@ class GeminiSpecBackend(SpecBackend):
             return None
 
 
-class BridgeSpecBackend(SpecBackend):
-    name = "bridge"
-    priority = 20
-
-    def produce(self, view: dict[str, Any]) -> Optional[StrictSpec]:
-        text = str(view.get("user_text") or "").strip()
-        if not text:
-            return None
-        try:
-            from lumen.engine.services.engine_groq_bridge import analyze_and_prepare
-            package = analyze_and_prepare(text, None)
-            features = package.get("preferred_keys") or []
-            if isinstance(features, dict):
-                features = features.get("preferred_keys") or []
-            spec = StrictSpec(
-                purpose=str(package.get("preset_hint") or package.get("domain_hint") or "")[:500],
-                domain=str(package.get("domain_hint") or "")[:120],
-                features=list(features)[:80] if isinstance(features, (list, tuple)) else [],
-                spec_request=str(package.get("spec_request") or text)[:20000],
-                confidence=0.55,
-                source="bridge",
-                raw={"needs_ai_codegen": bool(package.get("needs_ai_codegen"))},
-            )
-            return spec
-        except Exception as exc:
-            logger.warning("BridgeSpecBackend failed: %s", type(exc).__name__)
-            return None
-
-
-class DeterministicSpecBackend(SpecBackend):
+class HeuristicSpecBackend(SpecBackend):
     """Last-resort — always returns something buildable from raw text."""
 
     name = "deterministic"
@@ -131,13 +101,13 @@ class DeterministicSpecBackend(SpecBackend):
             features=keys[:40],
             spec_request=req[:20000],
             confidence=0.35,
-            source="deterministic",
+            source="heuristic",
             language="ar",
         )
 
 
 def default_backends() -> list[SpecBackend]:
-    return [GeminiSpecBackend(), BridgeSpecBackend(), DeterministicSpecBackend()]
+    return [GeminiSpecBackend(), HeuristicSpecBackend()]
 
 
 def produce_strict_spec(view: dict[str, Any], backends: list[SpecBackend] | None = None) -> StrictSpec:

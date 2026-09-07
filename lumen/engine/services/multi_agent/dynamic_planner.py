@@ -460,7 +460,7 @@ def assemble_plan(
     constraints_l.append(f"intent:{intent.kind}")
     if intent.platform:
         constraints_l.append(f"platform:{intent.platform}")
-        constraints_l.append(f"scaffold_engine:platform_generators/{intent.platform}")
+        constraints_l.append(f"platform:{intent.platform}")
     if refine:
         constraints_l.append("mode:incremental_repair")
 

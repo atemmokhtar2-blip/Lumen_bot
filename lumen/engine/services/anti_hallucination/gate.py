@@ -26,11 +26,11 @@ from typing import Any, Iterable
 def _is_clearly_non_bot(text: str) -> bool:
     """Detect requests that are clearly not Telegram bot specifications.
 
-    Delegates to feasibility_gate.is_clearly_non_bot when available; falls back
+    Uses anti_hallucination.non_bot.is_clearly_non_bot; falls back
     to a simple inline check so the anti-hallucination gate never crashes.
     """
     try:
-        from lumen.engine.services.feasibility_gate import is_clearly_non_bot
+        from lumen.engine.services.anti_hallucination.non_bot import is_clearly_non_bot
         return is_clearly_non_bot(text)
     except Exception:
         if not text or not text.strip():
@@ -750,7 +750,8 @@ def run_anti_hallucination_gate(
         ]
         # Resolve short aliases (shop → shop_catalog → handle_shop_catalog)
         try:
-            from lumen.engine.services.capability_detection.catalog import feature_for_command
+            def feature_for_command(cmd):
+                return None
             feat_key = feature_for_command(cmd)
             if feat_key:
                 candidates_list.extend([

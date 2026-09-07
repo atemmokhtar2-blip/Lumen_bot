@@ -343,16 +343,6 @@ async def _handle_message_body(
         )
         return
 
-    # Phase 13: capability ops commands (health/trace/learn/promote)
-    try:
-        from lumen.engine.services.capability_detection.ops import handle_ops_command
-        _ops = handle_ops_command(request, user_id=getattr(update.effective_user, "id", None))
-        if _ops:
-            await _clear_thinking()
-            await message.reply_text(_ops)
-            return
-    except Exception:
-        pass
 
     # Bot token FIRST
     if await try_bot_token(message=message, context=context, user=user, request=request):

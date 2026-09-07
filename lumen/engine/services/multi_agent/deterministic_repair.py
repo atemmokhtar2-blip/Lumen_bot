@@ -87,8 +87,7 @@ def apply_deterministic_repairs(
     skip_telegram_layout = False
     # Multi-platform scaffold (Telegram / Discord / WhatsApp / web)
     try:
-        from lumen.engine.services.platform_generators import apply_platform_scaffold
-        user_text = ""
+                user_text = ""
         if isinstance(extensions, dict):
             user_text = str(
                 extensions.get("user_text")
@@ -96,7 +95,7 @@ def apply_deterministic_repairs(
                 or extensions.get("request")
                 or ""
             )
-        plat = apply_platform_scaffold(root, user_text=user_text)
+        plat = None and (root, user_text=user_text)
         if plat.get("written"):
             report["actions"].append("platform_scaffold:" + str(plat.get("platform")))
             report["platform"] = plat.get("platform")

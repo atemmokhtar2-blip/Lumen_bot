@@ -273,37 +273,12 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
     def handle_generate(job: Job) -> dict[str, Any]:
         from lumen.engine import generate_bot
         from lumen.engine.services.user_sandbox import get_user_sandbox
-        from lumen.engine.services.capability_detection import (
-            feature_keys,
-            telegram_preflight,
-        )
         from lumen.platform.metering import get_metering
 
         description = str(job.input.get("description") or "").strip()
-        # Phase 2: detection gate (same honesty as Telegram consumer)
-        pre = telegram_preflight(description)
-        report = pre.get("report")
-        if pre.get("should_block"):
-            return {
-                "ok": False,
-                "tenant_id": job.tenant_id,
-                "project_path": None,
-                "ready_for_token": False,
-                "verified_commands": [],
-                "anti_hallucination": {},
-                "errors": [pre.get("user_message") or "capability_blocked"],
-                "metadata": {
-                    "engine": "cline",
-                    "zero_ai": True,
-                    "blocked_by": "capability_detection",
-                    "capability_detection": {
-                        "status": getattr(getattr(report, "status", None), "value", None),
-                        "reason_ar": getattr(report, "reason_ar", None) if report else None,
-                    },
-                },
-            }
-
-        preferred = feature_keys(report, include_core=True) if report else None
+        # capability_detection package removed — Cline path handles scope
+        pre: dict = {}
+        preferred = None
         # Plan engine tier filter (Explorer=basic only — no payments/db)
         try:
             from lumen.platform.plan_gate import filter_preferred_keys
@@ -366,9 +341,7 @@ def _register_builtin_handlers(runner: JobRunner) -> None:
                 "preset": meta.get("preset"),
                 "zero_ai": True,
                 "elapsed_ms": meta.get("elapsed_ms"),
-                "capability_detection": layers.get("capability_detection")
-                or (meta.get("capability_detection")),
-                "soft_note": pre.get("soft_note") or "",
+                "soft_note": "",
             },
         }
 

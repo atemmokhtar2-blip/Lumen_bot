@@ -1,35 +1,19 @@
-"""Core package — contracts, context, state, artifacts."""
+"""Core package — IR, results, errors (Cline path only)."""
 
-from .context import GenerationContext
 from .result import GenerationResult, StageResult, Severity, ValidationReport
 from .contracts import Component
 from .errors import (
     EngineError, EngineExecutionError, BuilderError,
     ValidationError, PipelineError, ConfigurationError,
 )
-from .artifact_store import ArtifactStore, ArtifactKey, ArtifactStoreError
-from .metadata import RunMetadata
-from .state import (
-    ProjectState, RunState, DeploymentState, JobState,
-    RunStatus, DeploymentStatus, JobStatus,
-)
-from .engine_role import EngineRole, PLANNING_OWNED_KEYS
+from .ir import BuildIR, EngineMode, IRStatus, AcceptanceCriterion
+from .ir_validate import validate_and_normalize_ir, check_project_against_ir
 
 __all__ = [
-    "GenerationContext", "GenerationResult", "StageResult", "Severity",
-    "ValidationReport", "Component", "EngineError", "EngineExecutionError", "BuilderError",
+    "GenerationResult", "StageResult", "Severity", "ValidationReport",
+    "Component",
+    "EngineError", "EngineExecutionError", "BuilderError",
     "ValidationError", "PipelineError", "ConfigurationError",
-    "ArtifactStore", "ArtifactKey", "ArtifactStoreError", "RunMetadata",
-    "ProjectState", "RunState", "DeploymentState", "JobState",
-    "RunStatus", "DeploymentStatus", "JobStatus", "EngineRole",
-    "PLANNING_OWNED_KEYS", "bootstrap", "build_configuration",
+    "BuildIR", "EngineMode", "IRStatus", "AcceptanceCriterion",
+    "validate_and_normalize_ir", "check_project_against_ir",
 ]
-
-
-def __getattr__(name: str):
-    if name in ("bootstrap", "build_configuration"):
-        from .bootstrap import bootstrap, build_configuration
-        return bootstrap if name == "bootstrap" else build_configuration
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-from .ir import BuildIR, EngineMode, IRStatus, AcceptanceCriterion  # noqa: F401

@@ -628,36 +628,27 @@ class RepoDevService:
             )
 
         if action == "apply_dev":
-            from ..active_dev import apply_development_request
-            report = apply_development_request(root, text, contract_dict=contract.model_dump(mode="json"))
             return RepoDevResult(
-                ok=report.ok,
+                ok=False,
                 action="apply_dev",
-                message=report.to_user_text(),
-                changed_files=list(report.changed_files),
-                contract=report.contract or contract,
-                data=report.data,
+                message="active_dev removed — use Cline agent path for development",
+                contract=contract,
             )
 
         if action == "dev_plan":
-            from ..repo_dev_intelligence import build_dev_plan
-            plan = build_dev_plan(contract, text)
             return RepoDevResult(
-                ok=True,
+                ok=False,
                 action="dev_plan",
-                message=plan.to_user_text(),
+                message="repo_dev_intelligence removed — use Cline agent for planning",
                 contract=contract,
-                data={"steps": [s.id for s in plan.steps], "targets": plan.targets},
             )
 
         if action == "dev_brief":
-            from ..repo_dev_intelligence import build_dev_plan
-            plan = build_dev_plan(contract, "تطوير تكراري للمستودع النشط")
             lines = [
                 "🚀 *وضع تطوير المستودع النشط*",
                 contract.to_user_summary(),
                 "",
-                plan.to_user_text(),
+                "التخطيط التفصيلي عبر وكيل Cline (المحرك القديم أُزيل).",
             ]
             return RepoDevResult(
                 ok=True,
@@ -667,40 +658,26 @@ class RepoDevService:
             )
 
         if action == "edit_targets":
-            from ..repo_dev_intelligence import suggest_edit_targets
-            targets = suggest_edit_targets(contract)
-            body = chr(10).join(f"• `{t}`" for t in targets) if targets else "• لا أهداف واضحة"
-            msg = "🎯 *أهداف التعديل المقترحة:*" + chr(10) + body
             return RepoDevResult(
-                ok=True,
+                ok=False,
                 action="edit_targets",
-                message=msg,
+                message="repo_dev_intelligence removed",
                 contract=contract,
-                data={"targets": targets},
             )
 
         if action == "apply_deps":
-            from ..repo_dev_intelligence import apply_dependency_gaps
-            added, msg = apply_dependency_gaps(root, contract)
-            new_contract = contract
-            if added:
-                new_contract = understand_repo(root, remote_url=contract.remote_url or "")
             return RepoDevResult(
-                ok=True,
+                ok=False,
                 action="apply_deps",
-                message=msg,
-                changed_files=["requirements.txt"] if added else [],
-                contract=new_contract,
-                data={"added": added},
+                message="repo_dev_intelligence removed",
+                contract=contract,
             )
 
         if action == "unsupported_edit":
-            from ..repo_dev_intelligence import build_dev_plan
-            plan = build_dev_plan(contract, text)
             return RepoDevResult(
-                ok=True,
-                action="dev_plan",
-                message=plan.to_user_text(),
+                ok=False,
+                action="unsupported_edit",
+                message="repo_dev_intelligence removed — use Cline agent",
                 contract=contract,
             )
 

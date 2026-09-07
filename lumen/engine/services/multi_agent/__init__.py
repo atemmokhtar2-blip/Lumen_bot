@@ -32,8 +32,7 @@ from .context_views import router_view, architect_view, builder_view, critic_vie
 from .architect_backends import (
     SpecBackend,
     GeminiSpecBackend,
-    BridgeSpecBackend,
-    DeterministicSpecBackend,
+    HeuristicSpecBackend,
     produce_strict_spec,
 )
 from .gates import architect_gate, filter_features_to_catalog, apply_catalog_filter_to_state
@@ -121,8 +120,7 @@ __all__ = [
     "deliver_view",
     "SpecBackend",
     "GeminiSpecBackend",
-    "BridgeSpecBackend",
-    "DeterministicSpecBackend",
+    "HeuristicSpecBackend",
     "produce_strict_spec",
     "architect_gate",
     "filter_features_to_catalog",

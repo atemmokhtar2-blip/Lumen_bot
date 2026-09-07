@@ -218,7 +218,8 @@ def run_hard_generation_scenario(
     spec: str,
     scenario_id: str = "",
 ) -> dict[str, Any]:
-    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    def apply_platform_scaffold(*a, **k):
+        return {'ok': False}
     from lumen.engine.services.multi_agent.deterministic_repair import apply_deterministic_repairs
 
     t0 = time.time()

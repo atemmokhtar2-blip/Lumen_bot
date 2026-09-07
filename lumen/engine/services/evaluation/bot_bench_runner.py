@@ -1,3 +1,6 @@
+def apply_platform_scaffold(*a, **k):
+    return {'ok': False, 'reason': 'platform_generators_removed'}
+
 """Fixed bot-bench scenarios across platforms — no mock LLM production path.
 
 Scenarios exercise real modules:
@@ -15,7 +18,7 @@ from .run_record import EvalRunRecord, finalize_record
 
 
 def _scenario_platform_scaffold(tmp: Path, platform: str) -> dict[str, Any]:
-    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    # platform_generators removed
 
     t0 = time.time()
     out = apply_platform_scaffold(tmp, platform=platform)
@@ -49,7 +52,7 @@ def _scenario_det_repair_discord(tmp: Path) -> dict[str, Any]:
 
 
 def _scenario_code_intel_preflight(tmp: Path) -> dict[str, Any]:
-    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    # platform_generators removed
     from lumen.engine.services.code_intelligence.preflight import analyze_edit_preflight
 
     apply_platform_scaffold(tmp, platform="telegram")
@@ -87,7 +90,7 @@ def _scenario_plan_and_findings() -> dict[str, Any]:
 
 
 def _scenario_hybrid_search(tmp: Path) -> dict[str, Any]:
-    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    # platform_generators removed
     from lumen.engine.services.code_intelligence import hybrid_search
 
     apply_platform_scaffold(tmp, platform="telegram")
@@ -105,7 +108,7 @@ def _scenario_hybrid_search(tmp: Path) -> dict[str, Any]:
 
 
 def _scenario_edit_pre_post(tmp: Path) -> dict[str, Any]:
-    from lumen.engine.services.platform_generators import apply_platform_scaffold
+    # platform_generators removed
     from lumen.engine.services.cline_runtime.agent_fs import edit_file
 
     apply_platform_scaffold(tmp, platform="telegram")
