@@ -22,8 +22,7 @@ select_model_for_goal / select_model
   → JSON tool واحد → agent_loop ينفّذ على الملفات
 ```
 
-**محذوف نهائيًا من مسار التوليد:** `translate_request`، `chat_request`، `llm/facade`، `llm_budget_gate`.
-
+**
 ## هيكل المستودع
 
 | مسار | الدور |
