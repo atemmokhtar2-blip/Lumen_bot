@@ -276,25 +276,29 @@ async def handle_ui_callback(update, context) -> None:
             pass
         return
 
-    # 3) Acknowledge immediately (stops spinner). cache_time is official Bot API.
-    cache_time = 20 if action_id in _UI_CACHEABLE_ACTIONS else 0
-    try:
-        await q.answer(cache_time=cache_time)
-    except Exception:
-        pass
-
-    # 4) UI rate limit only — never LLM budget on menu clicks (that was a major lag source)
+    # 3) UI rate limit BEFORE answer — one Redis ZSET only (no LLM budget).
+    # Must run before answer so a reject toast can still reach the client
+    # (Telegram accepts a single answerCallbackQuery per query id).
+    rate_blocked = False
     try:
         from lumen.bot.middlewares.auth import rate_limit_ui_ok
         ok = await asyncio.wait_for(asyncio.to_thread(rate_limit_ui_ok, uid), timeout=0.8)
         if not ok:
-            try:
-                await q.answer("انتظر قليلاً", show_alert=False)
-            except Exception:
-                pass
-            return
+            rate_blocked = True
     except Exception:
         logger.debug("callback rate limit skipped", exc_info=True)
+
+    # 4) Acknowledge (stops spinner). cache_time is official Bot API.
+    # Rejected clicks get a short toast; safe nav may be cached client-side.
+    try:
+        if rate_blocked:
+            await q.answer("انتظر قليلاً", show_alert=False, cache_time=0)
+            return
+        cache_time = 20 if action_id in _UI_CACHEABLE_ACTIONS else 0
+        await q.answer(cache_time=cache_time)
+    except Exception:
+        if rate_blocked:
+            return
 
     # 5) Referral qualify off the critical path (must not delay render)
     try:
