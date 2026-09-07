@@ -194,17 +194,36 @@ async def _handle_hitl_callback(update, context, q, action_id: str) -> bool:
         return True
 
 
-async def handle_ui_callback(update, context) -> None:
-    # Referral: tapping UI counts as bot use for invitees
-    try:
-        u = getattr(update, "effective_user", None)
-        if u is not None:
-            from lumen.bot.referral_hooks import qualify_bot_use
-            await qualify_bot_use(context, int(u.id), "command_non_start")
-    except Exception:
-        logger.debug("referral qualify on ui callback soft-fail", exc_info=True)
+# Navigation / read-only screens — Telegram may cache answer client-side.
+# Write / pay / host / HITL actions always use cache_time=0.
+_UI_CACHEABLE_ACTIONS = frozenset({
+    "home",
+    "open_help",
+    "open_generate",
+    "open_dashboard",
+    "open_billing",
+    "open_settings",
+    "open_referral",
+    "nav_back",
+    "view_pro_plan",
+    "post_trial",
+    "post_preview",
+    "post_zip",
+    "dash_status",
+    "dash_logs",
+})
 
-    """Top-level UI callback — answer first, never hang on Redis/DB."""
+
+async def handle_ui_callback(update, context) -> None:
+    """Top-level UI callback — security first, spinner off fast, no LLM budget.
+
+    Order (hot path):
+      1. Local allowlist
+      2. HMAC-signed callback + closed catalog (fail closed, no DB)
+      3. answerCallbackQuery (+ cache_time for safe nav) — official Telegram API
+      4. UI rate window only (no LLM budget Redis read)
+      5. Body (hydrate + engine + render)
+    """
     q = update.callback_query
     if q is None:
         return
@@ -214,40 +233,60 @@ async def handle_ui_callback(update, context) -> None:
     user = update.effective_user
     uid = int(user.id) if user else 0
 
-    # 0) Acknowledge IMMEDIATELY — stops Telegram loading spinner (best practice)
-    try:
-        await q.answer()
-    except Exception:
-        pass
-
-    # 1) Identity
+    # 1) Identity — pure local, no I/O
     try:
         from lumen.bot.helpers import is_allowed
         if not uid or not is_allowed(uid):
+            try:
+                await q.answer()
+            except Exception:
+                pass
             return
     except Exception:
         logger.exception("auth check failed on callback")
+        try:
+            await q.answer()
+        except Exception:
+            pass
         return
 
-    # 2) Signed parse + closed catalog
+    # 2) Signed parse + closed catalog — HMAC local; rejects forgery without DB
     parsed = decode_callback(q.data or "", user_id=uid)
     if parsed is None:
-        # Stale / unsigned / foreign button — silent fail-closed
+        try:
+            await q.answer()
+        except Exception:
+            pass
         return
     action_id, arg = parsed
     try:
         from lumen.engine.services.ui_state.catalog import is_known_action
         if not is_known_action(action_id):
             logger.warning("unknown ui action rejected uid=%s action=%s", uid, action_id)
+            try:
+                await q.answer()
+            except Exception:
+                pass
             return
     except Exception:
         logger.exception("catalog check failed")
+        try:
+            await q.answer()
+        except Exception:
+            pass
         return
 
-    # 3) Rate limit with hard timeout (never block UI on Redis stall)
+    # 3) Acknowledge immediately (stops spinner). cache_time is official Bot API.
+    cache_time = 20 if action_id in _UI_CACHEABLE_ACTIONS else 0
     try:
-        from lumen.bot.middlewares.auth import rate_limit_ok
-        ok = await asyncio.wait_for(asyncio.to_thread(rate_limit_ok, uid), timeout=1.5)
+        await q.answer(cache_time=cache_time)
+    except Exception:
+        pass
+
+    # 4) UI rate limit only — never LLM budget on menu clicks (that was a major lag source)
+    try:
+        from lumen.bot.middlewares.auth import rate_limit_ui_ok
+        ok = await asyncio.wait_for(asyncio.to_thread(rate_limit_ui_ok, uid), timeout=0.8)
         if not ok:
             try:
                 await q.answer("انتظر قليلاً", show_alert=False)
@@ -256,6 +295,22 @@ async def handle_ui_callback(update, context) -> None:
             return
     except Exception:
         logger.debug("callback rate limit skipped", exc_info=True)
+
+    # 5) Referral qualify off the critical path (must not delay render)
+    try:
+        u = getattr(update, "effective_user", None)
+        if u is not None:
+            from lumen.bot.referral_hooks import qualify_bot_use
+
+            async def _qualify() -> None:
+                try:
+                    await qualify_bot_use(context, int(u.id), "command_non_start")
+                except Exception:
+                    logger.debug("referral qualify on ui callback soft-fail", exc_info=True)
+
+            asyncio.create_task(_qualify())
+    except Exception:
+        logger.debug("referral qualify schedule soft-fail", exc_info=True)
 
     # HITL resume can run the full LangGraph build — allow long wall time.
     _timeout = 200.0 if action_id in {"hitl_confirm", "hitl_reject"} else 25.0
@@ -556,14 +611,15 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
     # Root lag: waiting up to 8s on every click for wallet/plan. Keep a short
     # budget for menu actions; only dashboard needs hosts + cache bust.
     include_hosts = result.state.phase == EngineUiPhase.DASHBOARD
-    light_actions = {"open_help", "home", "open_generate", "nav_back", "open_billing", "open_settings", "open_referral"}
+    light_actions = _UI_CACHEABLE_ACTIONS
     if action_id == "open_dashboard":
         try:
             from .facts import invalidate_facts_cache
             invalidate_facts_cache(uid)
         except Exception:
             pass
-    facts_timeout = 2.0 if action_id in light_actions else (6.0 if include_hosts else 3.0)
+    # Tight budget for nav — cache in facts.py usually hits within TTL.
+    facts_timeout = 1.5 if action_id in light_actions else (6.0 if include_hosts else 3.0)
     try:
         import asyncio
         from functools import partial

@@ -143,6 +143,13 @@ def write_subscription(user_id: int, record: dict[str, Any]) -> bool:
     except Exception:
         logger.warning("Redis subscription cache write failed uid=%s", uid, exc_info=True)
 
+    # Bust in-process UI facts so the next menu render sees Pro immediately.
+    try:
+        from lumen.bot.ui.facts import invalidate_facts_cache
+        invalidate_facts_cache(uid)
+    except Exception:
+        logger.debug("facts cache invalidate after subscription soft-fail", exc_info=True)
+
     # Activated if durable Mongo write OR at least Redis cache (session still live)
     return bool(mongo_ok or redis_ok)
 
@@ -241,6 +248,12 @@ def delete_subscription(user_id: int) -> bool:
                 store.save(uid, remaining)
     except Exception:
         logger.warning("Redis subscription delete failed uid=%s", uid, exc_info=True)
+
+    try:
+        from lumen.bot.ui.facts import invalidate_facts_cache
+        invalidate_facts_cache(uid)
+    except Exception:
+        pass
 
     return mongo_ok
 

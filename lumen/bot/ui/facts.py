@@ -19,7 +19,8 @@ logger = logging.getLogger("lumen_bot.ui")
 _WALLET_CACHE: dict[str, tuple[float, int, int, int]] = {}
 _PLAN_CACHE: dict[int, tuple[float, str, str]] = {}
 _WELCOME_DONE: set[str] = set()
-_CACHE_TTL = 45.0
+# Menu clicks reuse this window; busted on payment / open_dashboard.
+_CACHE_TTL = 90.0
 
 
 def gather_ui_facts(

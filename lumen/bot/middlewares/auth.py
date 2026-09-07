@@ -4,7 +4,27 @@ from __future__ import annotations
 from ..config import RATE_LIMIT_PER_MINUTE, RATE_LIMIT_WINDOW_SECONDS
 
 
+def rate_limit_ui_ok(user_id: int) -> bool:
+    """Inline-button limiter only — sliding window, NO LLM budget I/O.
+
+    Menu navigation must stay fast. LLM daily budget is enforced on text /
+    generation paths via ``rate_limit_ok``, not on every keyboard press.
+    """
+    try:
+        from lumen.platform.rate_limit import get_rate_limiter
+        return bool(
+            get_rate_limiter().allow(
+                f"tg:{int(user_id)}",
+                limit=RATE_LIMIT_PER_MINUTE,
+                window_sec=RATE_LIMIT_WINDOW_SECONDS,
+            )
+        )
+    except Exception:
+        return True
+
+
 def rate_limit_ok(user_id: int) -> bool:
+    """Full gate for text/generation paths: rate window + LLM budget."""
     try:
         from lumen.platform.rate_limit import get_rate_limiter, check_tenant_llm_budget
         ok = get_rate_limiter().allow(
