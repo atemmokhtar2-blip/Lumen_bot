@@ -123,8 +123,8 @@ def bind_github_repo(
             label=(full_name or "repo").replace("/", "_")[:40]
         )
         sc = get_smart_clone()
-        # Prefer branch only when non-default; empty lets remote HEAD win
-        br = branch if branch and branch not in {"main", "master"} else None
+        # Pass GitHub default_branch when known so zip/https hit the right ref
+        br = (branch or "").strip() or None
         result = sc.smart_clone(
             full_name or url,
             dest,
@@ -144,7 +144,22 @@ def bind_github_repo(
 
     if not getattr(result, "ok", False):
         needs = bool(getattr(result, "needs_auth", False))
-        msg = str(getattr(result, "message", "") or "فشل سحب المستودع")[:300]
+        msg = str(getattr(result, "message", "") or "فشل سحب المستودع")[:400]
+        stderr = str(getattr(result, "stderr", "") or "")[:200]
+        if stderr and stderr not in msg:
+            msg = f"{msg} | {stderr}"[:400]
+        # Arabic wrapper for opaque strategy tokens
+        if msg.startswith("zip_archive_failed") or "zip_archive_failed" in msg:
+            msg = (
+                "فشل سحب أرشيف المستودع من GitHub. "
+                "تأكد من صلاحية التوكن (Contents: Read) وأن المستودع موجود. "
+                f"التفاصيل: {msg}"
+            )[:400]
+        elif "https_shallow_failed" in msg:
+            msg = (
+                "فشل git clone عبر HTTPS ثم فشل الأرشيف البديل. "
+                f"التفاصيل: {msg}"
+            )[:400]
         return BindRepoResult(
             ok=False,
             needs_auth=needs,

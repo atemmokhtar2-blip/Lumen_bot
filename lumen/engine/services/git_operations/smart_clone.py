@@ -657,10 +657,23 @@ def smart_clone(
                 elapsed_sec=time.monotonic() - t0,
                 meta=dict(eng.metadata or {}),
             )
+        # Prefer a human-readable reason: message + redacted detail (not bare strategy token)
+        detail = (eng.redacted_error or "").strip()
+        base = (eng.message or "clone_failed").strip()
+        if detail and detail not in base:
+            msg = f"{base}: {detail}"
+        else:
+            msg = base or "clone_failed"
+        # Attach short attempts summary when multi-strategy exhausted
+        log = (eng.metadata or {}).get("attempts_log") or []
+        if log and not eng.ok:
+            failed = [str(a.get("strategy") or "") for a in log if not a.get("ok")]
+            if failed:
+                msg = f"{msg} (strategies: {', '.join(failed[-4:])})"
         return CloneResult(
             ok=False,
             url=url,
-            message=eng.message or eng.redacted_error or "clone_failed",
+            message=msg[:400],
             stderr=(eng.redacted_error or "")[:500],
             needs_auth=bool(eng.needs_auth),
             strategy=eng.strategy_used or "",

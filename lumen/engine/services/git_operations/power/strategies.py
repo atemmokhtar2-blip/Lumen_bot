@@ -120,7 +120,7 @@ def strategy_https_shallow(
         return GitEngineResult.fail(
             "clone",
             message="https_shallow_failed",
-            redacted_error=err[:300],
+            redacted_error=(err or "")[:400],
             needs_auth=_is_auth(err, code),
             strategy_used="https_shallow",
             url=url,
@@ -174,8 +174,14 @@ def strategy_ssh_shallow(
 
 
 def strategy_zip_archive(url: str, dest: Path, *, token: Optional[str], branch: Optional[str]) -> GitEngineResult:
-    """Last-resort: download GitHub/GitLab zipball and extract (no full git history)."""
+    """Last-resort: download GitHub/GitLab zipball and extract (no full git history).
+
+    Tries the requested branch, then API default_branch, then main/master.
+    Surfaces real HTTP errors instead of a bare zip_archive_failed token.
+    """
+    from urllib.error import HTTPError, URLError
     from ..smart_clone import normalize_and_validate_url
+
     clean, err = normalize_and_validate_url(url)
     if not clean:
         return GitEngineResult.fail("clone", message=err or "bad_url", strategy_used="zip_archive")
@@ -183,57 +189,133 @@ def strategy_zip_archive(url: str, dest: Path, *, token: Optional[str], branch: 
     host = (parsed.hostname or "").lower()
     parts = [p for p in parsed.path.split("/") if p]
     if len(parts) < 2:
-        return GitEngineResult.fail("clone", message="cannot_derive_archive", strategy_used="zip_archive", url=url)
+        return GitEngineResult.fail(
+            "clone", message="cannot_derive_archive", strategy_used="zip_archive", url=url
+        )
     owner, repo = parts[0], parts[1].removesuffix(".git")
-    ref = branch or "main"
-    if "github.com" in host:
-        arch = f"https://api.github.com/repos/{owner}/{repo}/zipball/{ref}"
-    elif "gitlab.com" in host:
-        arch = f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}/repository/archive.zip?sha={ref}"
-    else:
-        return GitEngineResult.fail("clone", message="archive_host_unsupported", strategy_used="zip_archive", url=url)
+
+    def _github_default_branch() -> str:
+        if "github.com" not in host or not token:
+            return ""
+        try:
+            from lumen.engine.services.integrations.github.client import GitHubClient
+
+            data = GitHubClient(token=token).request("GET", f"/repos/{owner}/{repo}")
+            return str((data or {}).get("default_branch") or "").strip()
+        except Exception:
+            return ""
+
+    refs: list[str] = []
+    if branch and str(branch).strip():
+        refs.append(str(branch).strip())
+    default = _github_default_branch()
+    if default:
+        refs.append(default)
+    for cand in ("main", "master"):
+        if cand not in refs:
+            refs.append(cand)
+    # de-dupe preserve order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for r in refs:
+        if r and r not in seen:
+            seen.add(r)
+            ordered.append(r)
 
     headers = {"User-Agent": "lumen-power-git"}
     if token and "github.com" in host:
         headers["Authorization"] = f"Bearer {token}"
         headers["Accept"] = "application/vnd.github+json"
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True, exist_ok=True)
-    tmp_zip = dest.parent / f"{dest.name}.zip"
-    try:
-        req = Request(arch, headers=headers)
-        with urlopen(req, timeout=120) as resp, open(tmp_zip, "wb") as f:
-            shutil.copyfileobj(resp, f)
-        extracted = dest.parent / f"{dest.name}_extract"
-        if extracted.exists():
-            shutil.rmtree(extracted, ignore_errors=True)
-        extracted.mkdir(parents=True, exist_ok=True)
-        from lumen.engine.services.safe_zip import safe_extract_zip
-        safe_extract_zip(tmp_zip, extracted)
-        subs = [p for p in extracted.iterdir() if p.is_dir()]
-        src = subs[0] if len(subs) == 1 else extracted
+    elif token and "gitlab.com" in host:
+        headers["PRIVATE-TOKEN"] = token
+
+    last_err = ""
+    last_needs = False
+    for ref in ordered:
+        if "github.com" in host:
+            arch = f"https://api.github.com/repos/{owner}/{repo}/zipball/{ref}"
+        elif "gitlab.com" in host:
+            arch = (
+                f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}"
+                f"/repository/archive.zip?sha={ref}"
+            )
+        else:
+            return GitEngineResult.fail(
+                "clone",
+                message="archive_host_unsupported",
+                strategy_used="zip_archive",
+                url=url,
+            )
+
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
-        shutil.move(str(src), str(dest))
-        shutil.rmtree(extracted, ignore_errors=True)
-    except Exception as exc:
-        needs = "401" in str(exc) or "403" in str(exc)
-        return GitEngineResult.fail(
-            "clone",
-            message="zip_archive_failed",
-            redacted_error=type(exc).__name__,
-            needs_auth=needs,
-            strategy_used="zip_archive",
-            url=url,
-        )
-    finally:
-        if tmp_zip.exists():
-            tmp_zip.unlink(missing_ok=True)
-    # init git so downstream tools still see a repo
-    _run_git(["git", "-C", str(dest), "init"])
-    _run_git(["git", "-C", str(dest), "remote", "add", "origin", clean])
-    return _finalize(dest, op="clone", strategy="zip_archive", url=url, attempts=1)
+        dest.mkdir(parents=True, exist_ok=True)
+        tmp_zip = dest.parent / f"{dest.name}.zip"
+        extracted = dest.parent / f"{dest.name}_extract"
+        try:
+            req = Request(arch, headers=headers)
+            with urlopen(req, timeout=120) as resp, open(tmp_zip, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            if extracted.exists():
+                shutil.rmtree(extracted, ignore_errors=True)
+            extracted.mkdir(parents=True, exist_ok=True)
+            from lumen.engine.services.safe_zip import safe_extract_zip
+
+            safe_extract_zip(tmp_zip, extracted)
+            subs = [p for p in extracted.iterdir() if p.is_dir()]
+            src = subs[0] if len(subs) == 1 else extracted
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            shutil.move(str(src), str(dest))
+            shutil.rmtree(extracted, ignore_errors=True)
+            # init git so downstream tools still see a repo
+            _run_git(["git", "-C", str(dest), "init"])
+            _run_git(["git", "-C", str(dest), "remote", "add", "origin", clean])
+            return _finalize(
+                dest, op="clone", strategy="zip_archive", url=url, attempts=1
+            )
+        except HTTPError as exc:
+            body = ""
+            try:
+                body = (exc.read() or b"")[:200].decode("utf-8", "replace")
+            except Exception:
+                pass
+            last_err = f"HTTP {exc.code} ref={ref} {body}".strip()
+            last_needs = exc.code in {401, 403}
+            if exc.code == 404:
+                # try next ref
+                continue
+            if last_needs:
+                break
+        except URLError as exc:
+            last_err = f"URLError ref={ref} {type(exc.reason).__name__ if exc.reason else 'net'}"
+            break
+        except Exception as exc:
+            last_err = f"{type(exc).__name__} ref={ref}: {str(exc)[:160]}"
+            last_needs = "401" in str(exc) or "403" in str(exc)
+            if last_needs:
+                break
+        finally:
+            try:
+                if tmp_zip.exists():
+                    tmp_zip.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                if extracted.exists():
+                    shutil.rmtree(extracted, ignore_errors=True)
+            except Exception:
+                pass
+
+    return GitEngineResult.fail(
+        "clone",
+        message="zip_archive_failed",
+        redacted_error=(last_err or "all_refs_failed")[:300],
+        needs_auth=last_needs,
+        strategy_used="zip_archive",
+        url=url,
+    )
+
 
 
 def clone_multi_strategy(
