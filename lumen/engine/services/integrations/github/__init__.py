@@ -1,6 +1,8 @@
 """GitHub REST API integration (Issues, PRs, comments)."""
 from .client import (
     GitHubClient,
+    get_authenticated_user,
+    list_user_repos,
     add_issue_comment,
     create_issue,
     get_pull,
@@ -12,6 +14,8 @@ from .client import (
 
 __all__ = [
     "GitHubClient",
+    "get_authenticated_user",
+    "list_user_repos",
     "add_issue_comment",
     "create_issue",
     "get_pull",

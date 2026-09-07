@@ -144,10 +144,45 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             [
                 (
                     "الخيارات",
+                    "• الاتصالات — ربط GitHub وعرض مستودعاتك الرسمية.\n"
                     "• الإحالة — ادعُ أصدقاءك واحصل على $5 عند 50 مستخدماً نشطاً.",
                 ),
             ],
             subtitle="إعدادات الحساب",
+        )
+
+    if phase == EngineUiPhase.CONNECTIONS:
+        return html_card(
+            "الاتصالات",
+            [
+                (
+                    "المزوّدون",
+                    "• GitHub — اتصال رسمي عبر PAT لعرض مستودعاتك واختيار مشروع للعمل عليه.\n"
+                    "مزوّدون إضافيون لاحقاً من نفس القائمة.",
+                ),
+            ],
+            subtitle="ربط الحسابات",
+        )
+
+    if phase == EngineUiPhase.CONN_GITHUB:
+        login = (state.slots or {}).get("gh_login") or ""
+        status = (state.slots or {}).get("gh_status_line") or ""
+        if (state.slots or {}).get("gh_connected") == "1":
+            body = status or (
+                f"متصل{(' كـ @' + login) if login else ''}. اختر مستودعاً من الأزرار."
+            )
+        else:
+            body = status or "غير متصل. اضغط «ربط GitHub» وأرسل PAT بصلاحية repo."
+        return html_card(
+            "GitHub",
+            [
+                ("الحالة", body),
+                (
+                    "ملاحظة",
+                    "القائمة من api.github.com الرسمية. اختيار المستودع للفهم/الاستضافة في الخطوة التالية.",
+                ),
+            ],
+            subtitle="اتصال رسمي",
         )
 
     if phase == EngineUiPhase.REFERRAL:

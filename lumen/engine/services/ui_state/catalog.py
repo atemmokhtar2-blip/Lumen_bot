@@ -23,6 +23,8 @@ _NAV = frozenset(
         EngineUiPhase.HELP,
         EngineUiPhase.SETTINGS,
         EngineUiPhase.REFERRAL,
+        EngineUiPhase.CONNECTIONS,
+        EngineUiPhase.CONN_GITHUB,
         EngineUiPhase.GEN_TYPE,
         EngineUiPhase.GEN_SLOTS,
         EngineUiPhase.GEN_CONFIRM,
@@ -143,6 +145,8 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.HELP,
                 EngineUiPhase.SETTINGS,
                 EngineUiPhase.REFERRAL,
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
                 EngineUiPhase.CONTEXT,
             }
         ),
@@ -158,9 +162,55 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
                 EngineUiPhase.REFERRAL,
                 EngineUiPhase.BILLING,
                 EngineUiPhase.HELP,
+                EngineUiPhase.CONNECTIONS,
                 EngineUiPhase.CONTEXT,
             }
         ),
+    ),
+    "open_connections": UiActionSpec(
+        "open_connections",
+        "Connections hub",
+        frozenset(
+            {
+                EngineUiPhase.SETTINGS,
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.HOME,
+                EngineUiPhase.IDLE,
+            }
+        ),
+    ),
+    "conn_github": UiActionSpec(
+        "conn_github",
+        "Open GitHub connection / repos",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "conn_gh_connect": UiActionSpec(
+        "conn_gh_connect",
+        "Start GitHub PAT connect",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "conn_gh_refresh": UiActionSpec(
+        "conn_gh_refresh",
+        "Refresh GitHub repo list",
+        frozenset({EngineUiPhase.CONN_GITHUB}),
+    ),
+    "conn_gh_page": UiActionSpec(
+        "conn_gh_page",
+        "Paginate GitHub repos",
+        frozenset({EngineUiPhase.CONN_GITHUB}),
     ),
     "post_trial": UiActionSpec(
         "post_trial",

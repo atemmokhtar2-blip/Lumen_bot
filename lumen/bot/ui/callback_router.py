@@ -204,6 +204,7 @@ _UI_CACHEABLE_ACTIONS = frozenset({
     "open_billing",
     "open_settings",
     "open_referral",
+    "open_connections",
     "nav_back",
     "view_pro_plan",
     "post_trial",
@@ -691,6 +692,84 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             )
             logger.debug("referral stats soft-fail", exc_info=True)
 
+    # GitHub connection (official API) — status + repo list into slots/buttons
+    if result.state.phase == EngineUiPhase.CONN_GITHUB and uid:
+        try:
+            import asyncio as _aio
+            from lumen.engine.services.integrations.connections import get_provider
+            from lumen.engine.services.ui_state.controller import buttons_for_state
+
+            prov = get_provider("github")
+            page = 1
+            try:
+                page = max(1, int((result.state.slots or {}).get("gh_page") or "1"))
+            except ValueError:
+                page = 1
+
+            def _gh_load():
+                st = prov.status(int(uid)) if prov else None
+                resources = (
+                    prov.list_resources(int(uid), page=page, per_page=8) if prov and st and st.connected else []
+                )
+                return st, resources
+
+            st, resources = await _aio.to_thread(_gh_load)
+            # Clear previous repo slots
+            for i in range(12):
+                result.state.slots.pop(f"gh_r{i}_id", None)
+                result.state.slots.pop(f"gh_r{i}_title", None)
+            if st and st.connected:
+                result.state.slots["gh_connected"] = "1"
+                result.state.slots["gh_login"] = st.display_name or ""
+                result.state.slots["gh_status_line"] = (
+                    f"متصل كـ @{st.display_name}" if st.display_name else "متصل"
+                )
+                for i, res in enumerate(resources[:12]):
+                    result.state.slots[f"gh_r{i}_id"] = res.resource_id
+                    result.state.slots[f"gh_r{i}_title"] = res.title
+                result.state.slots["gh_has_more"] = "1" if len(resources) >= 8 else "0"
+                result.state.slots["gh_page"] = str(page)
+            else:
+                result.state.slots["gh_connected"] = "0"
+                result.state.slots["gh_login"] = ""
+                result.state.slots["gh_status_line"] = (
+                    "غير متصل — اربط حساب GitHub لعرض المستودعات من API الرسمي."
+                )
+                result.state.slots["gh_has_more"] = "0"
+            from dataclasses import replace as _dc_replace
+            result = _dc_replace(result, buttons=buttons_for_state(result.state))
+        except Exception:
+            logger.exception("github connection UI load failed uid=%s", uid)
+            result.state.slots.setdefault(
+                "gh_status_line",
+                "تعذر تحميل GitHub حالياً.",
+            )
+
+    # Prompt for GitHub PAT when user starts connect
+    if result.ok and action_id == "conn_gh_connect" and uid:
+        try:
+            from lumen.bot.ui.input_prompt import ask_text_input
+            from lumen.bot.ui.secret_prompt import build_secret_prompt_markup
+
+            prompt = (
+                "🔑 أرسل الآن توكن GitHub (PAT) بصلاحية `repo`.\n"
+                "• Classic: `ghp_...`\n• Fine-grained: `github_pat_...`\n\n"
+                "بعد الإرسال سيتم التحقق عبر api.github.com وعرض مستودعاتك."
+            )
+            _msg = update.effective_message
+            if _msg is not None:
+                await _msg.reply_text(
+                    prompt,
+                    reply_markup=build_secret_prompt_markup(kind="github", user_id=uid),
+                    parse_mode="Markdown",
+                )
+            else:
+                await ask_text_input(update.effective_message, kind="github_pat")
+            # Mark pending so token_handler / next message can store connection token
+            if context.user_data is not None:
+                context.user_data["pending_github_connection"] = True
+        except Exception:
+            logger.exception("conn_gh_connect prompt failed")
 
     text = render_ui_message(result.state, facts)
     if not result.ok:

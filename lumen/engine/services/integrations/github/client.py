@@ -94,6 +94,61 @@ class GitHubClient:
             page += 1
         return out
 
+    def get_user(self) -> dict:
+        """GET /user — authenticated user (official GitHub REST)."""
+        data = self.request("GET", "/user")
+        return dict(data or {})
+
+    def list_user_repos(
+        self,
+        *,
+        per_page: int = 30,
+        max_pages: int = 5,
+        sort: str = "updated",
+        affiliation: str = "owner,collaborator,organization_member",
+    ) -> list[dict]:
+        """GET /user/repos — official list of repos visible to the token.
+
+        Paginates up to max_pages. Each item keeps GitHub fields needed for UI:
+        full_name, private, html_url, description, default_branch, id.
+        """
+        out: list[dict] = []
+        page = 1
+        per_page = max(1, min(100, int(per_page)))
+        max_pages = max(1, min(20, int(max_pages)))
+        while page <= max_pages:
+            data = self.request(
+                "GET",
+                "/user/repos",
+                params={
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": sort,
+                    "affiliation": affiliation,
+                },
+            )
+            batch = list(data or [])
+            for row in batch:
+                if not isinstance(row, dict):
+                    continue
+                out.append(
+                    {
+                        "id": row.get("id"),
+                        "full_name": row.get("full_name") or "",
+                        "name": row.get("name") or "",
+                        "private": bool(row.get("private")),
+                        "html_url": row.get("html_url") or "",
+                        "description": (row.get("description") or "")[:200],
+                        "default_branch": row.get("default_branch") or "main",
+                        "language": row.get("language") or "",
+                        "updated_at": row.get("updated_at") or "",
+                    }
+                )
+            if len(batch) < per_page:
+                break
+            page += 1
+        return out
+
     def create_pull_review(
         self,
         owner: str,
@@ -151,6 +206,16 @@ def list_pull_files(owner: str, repo: str, number: int, **kw: Any) -> list[dict]
     return _client(kw.get("token")).list_pull_files(owner, repo, number)
 
 
+
+
+def get_authenticated_user(**kw: Any) -> dict:
+    return _client(kw.get("token")).get_user()
+
+
+def list_user_repos(**kw: Any) -> list[dict]:
+    token = kw.pop("token", None)
+    return _client(token).list_user_repos(**kw)
+
 def create_pull_review(
     owner: str, repo: str, number: int, body: str, **kw: Any
 ) -> dict:
@@ -167,6 +232,8 @@ def create_pull_review(
 
 __all__ = [
     "GitHubClient",
+    "get_authenticated_user",
+    "list_user_repos",
     "list_repo_issues",
     "create_issue",
     "add_issue_comment",

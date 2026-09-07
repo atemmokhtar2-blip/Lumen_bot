@@ -213,6 +213,10 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav(_settings_buttons(), phase)
     if phase == EngineUiPhase.REFERRAL:
         return _with_nav(_referral_buttons(), phase)
+    if phase == EngineUiPhase.CONNECTIONS:
+        return _with_nav(_connections_buttons(), phase)
+    if phase == EngineUiPhase.CONN_GITHUB:
+        return _with_nav(_conn_github_buttons(state), phase)
     if phase == EngineUiPhase.CONTEXT:
         kind = (state.slots or {}).get("ui_event") or ""
         return _with_nav(buttons_for_event(kind), phase)
@@ -221,8 +225,8 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
 
 def _settings_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
+        (UiButton("الاتصالات", "open_connections", style="primary"),),
         (UiButton("الإحالة — $5", "open_referral", style="success"),),
-        (UiButton("رجوع", "home", style="primary"),),
     )
 
 
@@ -230,6 +234,45 @@ def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
         (UiButton("تحديث", "open_referral", style="primary"),),
     )
+
+
+def _connections_buttons() -> tuple[tuple[UiButton, ...], ...]:
+    return (
+        (UiButton("GitHub", "conn_github", style="success"),),
+        (UiButton("رجوع للإعدادات", "open_settings", style="primary"),),
+    )
+
+
+def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
+    """Static chrome; dynamic repo rows are injected by callback_router."""
+    rows: list[tuple[UiButton, ...]] = []
+    # Repo buttons encoded in slots: gh_r0_id / gh_r0_title … by router
+    for i in range(12):
+        rid = (state.slots or {}).get(f"gh_r{i}_id") or ""
+        title = (state.slots or {}).get(f"gh_r{i}_title") or ""
+        if not rid or not title:
+            break
+        rows.append((UiButton(title[:60], "conn_gh_page", f"sel:{rid}", style="primary"),))
+    connected = (state.slots or {}).get("gh_connected") == "1"
+    if not connected:
+        rows.append((UiButton("ربط GitHub (PAT)", "conn_gh_connect", style="success"),))
+    else:
+        rows.append(
+            (
+                UiButton("تحديث القائمة", "conn_gh_refresh", style="primary"),
+                UiButton("إعادة الربط", "conn_gh_connect", style="primary"),
+            )
+        )
+    page = int((state.slots or {}).get("gh_page") or "1")
+    nav_row: list[UiButton] = []
+    if page > 1:
+        nav_row.append(UiButton("◀ السابق", "conn_gh_page", f"p:{page - 1}", style="primary"))
+    if (state.slots or {}).get("gh_has_more") == "1":
+        nav_row.append(UiButton("التالي ▶", "conn_gh_page", f"p:{page + 1}", style="primary"))
+    if nav_row:
+        rows.append(tuple(nav_row))
+    rows.append((UiButton("رجوع للاتصالات", "open_connections", style="primary"),))
+    return tuple(rows)
 
 
 def buttons_for_phase(phase: EngineUiPhase) -> tuple[tuple[UiButton, ...], ...]:
@@ -303,6 +346,22 @@ def apply_action(
             new.slots["billing_expanded"] = "1"
             new.missing = []
             msg = "الرصيد."
+        elif new.phase == EngineUiPhase.CONN_GITHUB:
+            new.phase = EngineUiPhase.CONNECTIONS
+            new.missing = []
+            msg = "الاتصالات."
+        elif new.phase == EngineUiPhase.CONNECTIONS:
+            new.phase = EngineUiPhase.SETTINGS
+            new.missing = []
+            msg = "الإعدادات."
+        elif new.phase == EngineUiPhase.SETTINGS:
+            new.phase = EngineUiPhase.HOME
+            new.missing = []
+            msg = "القائمة الرئيسية."
+        elif new.phase == EngineUiPhase.REFERRAL:
+            new.phase = EngineUiPhase.SETTINGS
+            new.missing = []
+            msg = "الإعدادات."
         elif new.phase in {
             EngineUiPhase.DASHBOARD,
             EngineUiPhase.BILLING,
@@ -485,6 +544,40 @@ def apply_action(
         new.phase = EngineUiPhase.REFERRAL
         new.missing = []
         msg = "برنامج الإحالة — $5."
+    elif action_id == "open_connections":
+        new.phase = EngineUiPhase.CONNECTIONS
+        new.missing = []
+        msg = "الاتصالات."
+    elif action_id == "conn_github":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_page"] = "1"
+        new.missing = []
+        msg = "GitHub."
+    elif action_id == "conn_gh_connect":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_await_pat"] = "1"
+        new.missing = []
+        msg = "أرسل توكن GitHub (PAT) بصلاحية repo."
+    elif action_id == "conn_gh_refresh":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_page"] = new.slots.get("gh_page") or "1"
+        new.missing = []
+        msg = "تحديث مستودعات GitHub…"
+    elif action_id == "conn_gh_page":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        # arg: p:N for page, or sel:REPO_ID for select (select handled in later phase)
+        if arg.startswith("p:"):
+            try:
+                new.slots["gh_page"] = str(max(1, int(arg[2:])))
+            except ValueError:
+                new.slots["gh_page"] = "1"
+            msg = "صفحة المستودعات."
+        elif arg.startswith("sel:"):
+            new.slots["gh_selected_id"] = arg[4:][:40]
+            msg = "تم اختيار المستودع — الربط الكامل في المرحلة التالية."
+        else:
+            msg = "GitHub."
+        new.missing = []
     elif action_id == "retry_generate":
         req = composed_request(new)
         if not req:

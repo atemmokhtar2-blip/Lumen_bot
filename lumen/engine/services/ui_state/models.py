@@ -29,6 +29,8 @@ class EngineUiPhase(str, Enum):
     HELP = "help"
     SETTINGS = "settings"
     REFERRAL = "referral"
+    CONNECTIONS = "connections"  # Account connections hub (GitHub, …)
+    CONN_GITHUB = "conn_github"  # GitHub repos list / connect
     CONTEXT = "context"  # Batch 6 contextual event surface
 
 

@@ -294,3 +294,40 @@ def peek_meta(*, user_id: int, kind: str) -> dict[str, Any] | None:
                 "meta": r.get("meta") or {},
             }
     return None
+
+
+def get_secret(*, user_id: int, kind: str) -> str | None:
+    """Decrypt secret without removing it (for persistent connections).
+
+    Respects expires_at. Does not consume — use consume_secret for one-shot flows.
+    """
+    uid = int(user_id or 0)
+    k = (kind or "").strip().lower()
+    if k == "pat":
+        k = "github"
+    if uid <= 0:
+        return None
+    found: dict[str, Any] | None = None
+    for r in _load():
+        if int(r.get("user_id") or 0) == uid and str(r.get("kind")) == k:
+            found = r
+            break
+    if found is None:
+        return None
+    try:
+        exp = float(found.get("expires_at") or 0)
+        if exp and time.time() > exp:
+            return None
+    except Exception:
+        pass
+    try:
+        blob = str(found["ciphertext"])
+        aad = f"{uid}|{k}".encode("utf-8")
+        if blob.startswith("gcm1."):
+            return _decrypt_aesgcm(blob, aad=aad)
+        f = _fernet()
+        # Connection tokens may live up to 30d — do not apply short inbox TTL
+        return f.decrypt(blob.encode("ascii")).decode("utf-8")
+    except Exception:
+        logger.exception("get_secret decrypt failed")
+        return None

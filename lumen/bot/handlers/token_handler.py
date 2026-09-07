@@ -45,6 +45,7 @@ async def try_handle_token(
                     (context.user_data or {}).get("pending_clone_auth")
                     or (context.user_data or {}).get("pending_create_repo")
                     or (context.user_data or {}).get("pending_git_push")
+                    or (context.user_data or {}).get("pending_github_connection")
                 )
                 if kind == "bot" and not needs_bot:
                     continue
@@ -62,6 +63,52 @@ async def try_handle_token(
                     break
     except Exception:
         logger.exception("secret_inbox consume failed")
+
+    # Settings → Connections → GitHub: store PAT for official repo listing
+    if (context.user_data or {}).get("pending_github_connection"):
+        try:
+            from lumen.engine.services.git_safe_import import get_smart_clone
+            from lumen.engine.services.integrations.connections.github_provider import (
+                store_github_connection_token,
+            )
+            from lumen.engine.services.integrations.github.client import GitHubClient
+
+            git_tok = get_smart_clone().extract_token(request) or (
+                request.strip()
+                if request.strip().startswith(("ghp_", "github_pat_"))
+                else ""
+            )
+            if git_tok:
+                try:
+                    from lumen.bot.ui.token_hygiene import scrub_and_confirm
+                    await scrub_and_confirm(update_message=message, bot=context.bot)
+                except Exception:
+                    logger.exception("PAT scrub before github connection failed")
+                # Verify against official API before persisting
+                try:
+                    user_info = await asyncio.to_thread(
+                        lambda: GitHubClient(token=git_tok).get_user()
+                    )
+                    login = str((user_info or {}).get("login") or "")
+                except Exception as exc:
+                    await safe_reply_text(
+                        message,
+                        f"❌ توكن GitHub مرفوض من api.github.com ({type(exc).__name__})."
+                        " تأكد من صلاحية `repo` وأعد المحاولة.",
+                    )
+                    return True
+                if not store_github_connection_token(int(user.id), git_tok):
+                    await safe_reply_text(message, "❌ تعذر حفظ الاتصال بشكل آمن. أعد المحاولة.")
+                    return True
+                context.user_data.pop("pending_github_connection", None)
+                await safe_reply_text(
+                    message,
+                    f"✅ تم ربط GitHub{(' كـ @' + login) if login else ''}.\n"
+                    "افتح: الإعدادات → الاتصالات → GitHub لعرض مستودعاتك.",
+                )
+                return True
+        except Exception:
+            logger.exception("pending_github_connection handle failed")
 
     # Spec 065 — if user is sending a bot token after successful generation
     pending_host = (context.user_data or {}).get("pending_host")

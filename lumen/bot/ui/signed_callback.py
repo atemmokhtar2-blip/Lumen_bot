@@ -92,6 +92,11 @@ _ACTION_SHORT: dict[str, str] = {
     "buy_pro_plan": "bpp",
     "open_settings": "os",
     "open_referral": "orf",
+    "open_connections": "ocn",
+    "conn_github": "cgh",
+    "conn_gh_connect": "cgc",
+    "conn_gh_refresh": "cgr",
+    "conn_gh_page": "cgp",
     "nav_back": "nb",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
