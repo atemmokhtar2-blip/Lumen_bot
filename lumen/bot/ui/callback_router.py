@@ -755,7 +755,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             )
 
 
-    # Phase 2: select repo → official clone with stored PAT → active_repo
+    # Phase 2: select repo → official clone → platform active_repo (same plane as git_router)
     if result.ok and action_id == "conn_gh_select" and uid:
         rid = (result.state.slots.get("gh_selected_id") or "").strip()
         if rid:
@@ -765,6 +765,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     resolve_cached_repo,
                 )
                 from lumen.engine.services.integrations.connections.bind_repo import (
+                    apply_bind_to_user_data,
                     bind_github_repo,
                 )
                 import asyncio as _aio
@@ -782,7 +783,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 try:
                     _em = update.effective_message
                     if _em is not None:
-                        status_msg = await _em.reply_text(f"⏳ جاري سحب المستودع `{label}`…")
+                        status_msg = await _em.reply_text(
+                            f"⏳ جاري سحب وفهم المستودع `{label}` عبر اتصال GitHub…"
+                        )
                 except Exception:
                     status_msg = None
 
@@ -793,32 +796,57 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                     slots=dict(result.state.slots),
                     run_understand=True,
                 )
-                if bind.ok:
-                    if context.user_data is not None:
-                        context.user_data["active_repo"] = dict(bind.active_repo)
-                        context.user_data["last_project_path"] = bind.path
-                        try:
-                            from lumen.bot.session_store import get_session_store
-                            get_session_store().save(int(uid), dict(context.user_data))
-                        except Exception:
-                            logger.exception("persist active_repo after bind failed")
-                    result.state.slots["gh_bound_path"] = bind.path[:200]
-                    result.state.slots["gh_bound_url"] = bind.url[:200]
-                    result.state.project_ref = bind.path[:200]
-                    summary = bind.contract_summary or "جاهز"
-                    result.state.slots["gh_status_line"] = (
-                        f"✅ مربوط: {bind.full_name or label}\n"
-                        f"{summary}\n"
-                        f"`{bind.path}`"
+                if bind.ok and context.user_data is not None:
+                    apply_bind_to_user_data(
+                        context.user_data,
+                        bind,
+                        user=update.effective_user,
                     )
                     try:
-                        if status_msg is not None:
-                            await status_msg.edit_text(
-                                f"✅ تم سحب وربط `{bind.full_name or label}`\n{summary}"
-                            )
+                        from lumen.bot.session_store import get_session_store
+
+                        get_session_store().save(int(uid), dict(context.user_data))
                     except Exception:
-                        pass
+                        logger.exception("persist active_repo after bind failed")
+                    result.state.slots["gh_bound_path"] = (bind.path or "")[:200]
+                    result.state.slots["gh_bound_url"] = (bind.url or "")[:200]
+                    result.state.slots["gh_bound_ok"] = "1"
+                    result.state.project_ref = (bind.path or "")[:200]
+                    summary = bind.contract_summary or "جاهز"
+                    result.state.slots["gh_status_line"] = (
+                        f"✅ مربوط: {bind.full_name or label}\n{summary}"
+                    )
+                    # Same success UI plane as git_router clone
+                    try:
+                        from lumen.bot.ui.repo_sections import section_keyboard
+
+                        header = bind.header_ar or f"✅ تم سحب `{bind.full_name or label}`"
+                        if bind.is_runnable:
+                            header += (
+                                "\n\n🚀 للتشغيل الحقيقي: أرسل توكن البوت من @BotFather "
+                                "أو استخدم أزرار الأقسام."
+                            )
+                        markup = section_keyboard(
+                            user_id=int(uid),
+                            show_run=bool(bind.is_runnable),
+                        )
+                        if status_msg is not None:
+                            await status_msg.edit_text(header[:4000], reply_markup=markup)
+                        else:
+                            _em = update.effective_message
+                            if _em is not None:
+                                await _em.reply_text(header[:4000], reply_markup=markup)
+                    except Exception:
+                        logger.exception("post-bind UI soft-fail")
+                        try:
+                            if status_msg is not None:
+                                await status_msg.edit_text(
+                                    f"✅ تم سحب وربط `{bind.full_name or label}`\n{summary}"
+                                )
+                        except Exception:
+                            pass
                 else:
+                    result.state.slots["gh_bound_ok"] = "0"
                     result.state.slots["gh_status_line"] = f"❌ {bind.message_ar}"
                     if bind.needs_auth:
                         result.state.slots["gh_connected"] = "0"

@@ -1,7 +1,8 @@
-"""Phase 2: bind a selected GitHub repo — official clone → active_repo.
+"""Phase 2 — bind selected GitHub repo into Lumen's real active_repo plane.
 
-Uses existing Power/smart_clone + user_sandbox + optional understand_repo.
-No parallel clone stack.
+Integrates with existing platform paths (not a parallel stack):
+  smart_clone → register_clone → understand_repo → dossier → active_repo
+  → pending_run (if telegram bot) → repo_sections payload for UI
 """
 from __future__ import annotations
 
@@ -23,12 +24,15 @@ class BindRepoResult:
     url: str = ""
     full_name: str = ""
     needs_auth: bool = False
+    is_runnable: bool = False
+    entry_point: str = ""
     active_repo: dict[str, Any] = field(default_factory=dict)
+    sections: dict[str, Any] = field(default_factory=dict)
+    header_ar: str = ""
     contract_summary: str = ""
 
 
 def _resolve_url(user_id: int, resource_id: str, slots: dict[str, str] | None) -> tuple[str, str, str]:
-    """Return (url, full_name, branch) from cache or slots."""
     slots = slots or {}
     item = token_store.resolve_cached_repo(int(user_id), str(resource_id))
     if item:
@@ -43,7 +47,6 @@ def _resolve_url(user_id: int, resource_id: str, slots: dict[str, str] | None) -
     branch = str(slots.get("gh_selected_branch") or "main").strip() or "main"
     if not url and full:
         url = f"https://github.com/{full}"
-    # Fallback: scan numbered slots from last list render
     if not url:
         rid = str(resource_id)
         for i in range(12):
@@ -56,6 +59,28 @@ def _resolve_url(user_id: int, resource_id: str, slots: dict[str, str] | None) -
     return url, full, branch
 
 
+def _is_runnable_contract(contract: Any) -> bool:
+    try:
+        from lumen.engine.services.repo_understanding.contract import is_runnable_bot
+
+        return bool(is_runnable_bot(contract))
+    except Exception:
+        pass
+    try:
+        if getattr(contract, "is_telegram_bot", False):
+            return True
+        style = str(getattr(contract, "architecture_style", "") or "")
+        if style in {"telegram_bot", "generation_engine"}:
+            return True
+        fws = ("python-telegram-bot", "aiogram", "pyTelegramBotAPI", "pyrogram", "telebot")
+        frameworks = [str(f) for f in (getattr(contract, "frameworks", None) or [])]
+        if any(any(x in f for x in fws) for f in frameworks):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def bind_github_repo(
     user_id: int,
     resource_id: str,
@@ -64,7 +89,7 @@ def bind_github_repo(
     output_dir: str | Path | None = None,
     run_understand: bool = True,
 ) -> BindRepoResult:
-    """Clone selected GitHub repo with stored PAT and build active_repo dict."""
+    """Clone selected repo with stored PAT and produce platform-shaped active_repo."""
     uid = int(user_id or 0)
     rid = str(resource_id or "").strip()
     if uid <= 0 or not rid:
@@ -82,7 +107,7 @@ def bind_github_repo(
         return BindRepoResult(
             ok=False,
             needs_auth=True,
-            message_ar="اتصال GitHub غير متاح — أعد الربط بـ PAT.",
+            message_ar="اتصال GitHub غير متاح — أعد الربط بـ PAT (صلاحية Contents: Read).",
             full_name=full_name,
             url=url,
         )
@@ -97,12 +122,14 @@ def bind_github_repo(
             label=(full_name or "repo").replace("/", "_")[:40]
         )
         sc = get_smart_clone()
+        # Prefer branch only when non-default; empty lets remote HEAD win
+        br = branch if branch and branch not in {"main", "master"} else None
         result = sc.smart_clone(
             full_name or url,
             dest,
             token=token,
             url_override=url,
-            branch=branch if branch and branch != "main" else None,
+            branch=br,
             depth=1,
         )
     except Exception as exc:
@@ -127,6 +154,17 @@ def bind_github_repo(
 
     path = str(getattr(result, "path", "") or "")
     final_url = str(getattr(result, "url", "") or url)
+
+    try:
+        from lumen.bot.config import OUTPUT_DIR
+        from lumen.engine.services.user_sandbox import get_user_sandbox
+
+        get_user_sandbox(uid, output_dir or OUTPUT_DIR).register_clone(
+            path, url=final_url, label=Path(path).name if path else "repo"
+        )
+    except Exception:
+        logger.exception("register_clone after bind failed uid=%s", uid)
+
     active: dict[str, Any] = {
         "path": path,
         "url": final_url,
@@ -134,9 +172,32 @@ def bind_github_repo(
         "source": "github_connection",
         "github_id": rid,
         "default_branch": branch,
+        "bound_for_grok": True,
     }
 
+    # Dossier (same as git_router post-clone)
+    if path:
+        try:
+            from lumen.engine.services.repo_understanding.llm_explain import gather_repo_dossier
+
+            dos = gather_repo_dossier(Path(path))
+            active["dossier"] = {
+                "root": dos.get("root"),
+                "tree": dos.get("tree"),
+                "facts": dos.get("facts"),
+                "key_file_names": list((dos.get("key_files") or {}).keys()),
+            }
+            active["facts"] = dos.get("facts") or {}
+        except Exception:
+            logger.exception("dossier after bind soft-fail uid=%s", uid)
+
+    contract = None
     summary = ""
+    is_runnable = False
+    entry = ""
+    sections: dict[str, Any] = {}
+    header = f"✅ تم سحب `{full_name or path}`"
+
     if run_understand and path:
         try:
             from lumen.engine.services.repo_understanding import understand_repo
@@ -144,7 +205,13 @@ def bind_github_repo(
 
             contract = understand_repo(path, remote_url=final_url)
             active["contract"] = safe_contract_dict(contract)
-            parts = []
+            is_runnable = _is_runnable_contract(contract)
+            if getattr(contract, "entry_points", None):
+                try:
+                    entry = str(contract.entry_points[0].path or "")
+                except Exception:
+                    entry = ""
+            parts: list[str] = []
             if getattr(contract, "is_telegram_bot", False):
                 parts.append("بوت تيليجرام")
             style = str(getattr(contract, "architecture_style", "") or "")
@@ -154,26 +221,70 @@ def bind_github_repo(
             if frameworks:
                 parts.append(", ".join(str(f) for f in frameworks))
             summary = " · ".join(parts) if parts else "تم فحص المستودع"
+            try:
+                from lumen.bot.ui.repo_sections import build_sections_from_contract
+
+                sections = build_sections_from_contract(
+                    contract, path=path or "", url=final_url or ""
+                )
+                header = sections.get("header") or header
+            except Exception:
+                logger.exception("build_sections_from_contract soft-fail")
         except Exception:
             logger.exception("understand_repo after bind soft-fail uid=%s", uid)
             summary = "تم السحب — الفحص التفصيلي لاحقاً"
-
-    try:
-        from lumen.engine.services.user_sandbox import get_user_sandbox
-        from lumen.bot.config import OUTPUT_DIR
-
-        get_user_sandbox(uid, output_dir or OUTPUT_DIR).register_clone(
-            path, url=final_url, label=Path(path).name if path else "repo"
-        )
-    except Exception:
-        logger.exception("register_clone after bind failed uid=%s", uid)
+            header = f"✅ تم سحب المستودع\n• {final_url}\n• {path}"
 
     return BindRepoResult(
         ok=True,
-        message_ar="تم سحب المستودع وربطه.",
+        message_ar="تم سحب المستودع وربطه بمنصة Lumen.",
         path=path,
         url=final_url,
         full_name=full_name,
+        is_runnable=is_runnable,
+        entry_point=entry,
         active_repo=active,
+        sections=sections if isinstance(sections, dict) else {},
+        header_ar=header,
         contract_summary=summary,
     )
+
+
+def apply_bind_to_user_data(
+    user_data: dict[str, Any],
+    bind: BindRepoResult,
+    *,
+    user: Any = None,
+) -> None:
+    """Write bind result into session-shaped user_data (platform keys)."""
+    if not bind.ok or not bind.active_repo:
+        return
+    user_data["active_repo"] = dict(bind.active_repo)
+    user_data["last_project_path"] = bind.path
+    user_data["last_clone_url"] = bind.url
+    if bind.sections:
+        try:
+            from lumen.bot.ui.repo_sections import store_sections
+
+            store_sections(user_data, bind.sections)
+        except Exception:
+            logger.exception("store_sections after bind failed")
+    if bind.is_runnable and bind.path:
+        run_seconds = 1800
+        try:
+            from lumen.bot.helpers import plan_live_seconds
+
+            if user is not None:
+                run_seconds = int(plan_live_seconds(user))
+        except Exception:
+            try:
+                import os
+
+                run_seconds = int(os.environ.get("LIVE_RUN_SECONDS", "1800") or 1800)
+            except Exception:
+                run_seconds = 1800
+        user_data["pending_run"] = {
+            "project_path": bind.path,
+            "entry_point": bind.entry_point or "",
+            "run_seconds": run_seconds,
+        }
