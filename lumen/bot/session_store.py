@@ -45,6 +45,8 @@ _DURABLE_KEYS = frozenset({
     "active_bot_path",
     "last_clone_url",
     "repo_sections",
+    "repo_sections_rich",  # official Rich Message HTML per section
+    "pending_github_prompt_mid",
     # Conversation continuity
     "chat_history",
     "current_conversation_id",

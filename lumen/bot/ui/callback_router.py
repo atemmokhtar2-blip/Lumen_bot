@@ -430,12 +430,42 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
 
     # ── Direct engine-bound actions (not phase transitions) ──────────
     if action_id == "repo_sec":
-        from .repo_sections import get_section, section_keyboard
-        body = get_section(user_data, (arg or "header").strip())
+        from .repo_sections import get_section, get_section_rich, section_keyboard
+
+        sec_key = (arg or "header").strip()
         markup = section_keyboard(
             user_id=uid,
             show_run=bool((user_data or {}).get("pending_run")),
         )
+        # Prefer official Rich Messages (Bot API 10.1+: tables, details, headings)
+        rich_html = get_section_rich(user_data, sec_key)
+        if rich_html:
+            try:
+                from lumen.bot.rich_messages import send_or_edit_rich_ui
+
+                bot = getattr(context, "bot", None)
+                chat_id = None
+                preferred = None
+                if q is not None and getattr(q, "message", None) is not None:
+                    preferred = q.message
+                    chat_id = getattr(q.message.chat, "id", None)
+                elif msg is not None:
+                    preferred = msg
+                    chat_id = getattr(getattr(msg, "chat", None), "id", None)
+                if bot is not None and chat_id is not None:
+                    ok = await send_or_edit_rich_ui(
+                        bot=bot,
+                        chat_id=int(chat_id),
+                        html=rich_html,
+                        markup=markup,
+                        preferred_message=preferred,
+                        user_data=user_data,
+                    )
+                    if ok is not None:
+                        return
+            except Exception:
+                logger.exception("repo_sec rich render failed key=%s — plain fallback", sec_key)
+        body = get_section(user_data, sec_key)
         await _safe_render_ui(q, msg, body, markup, user_data=user_data, context=context)
         return
 
