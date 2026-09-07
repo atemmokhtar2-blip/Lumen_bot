@@ -110,3 +110,20 @@ def test_firewall_patterns():
     assert fw._TRAVERSAL.search("/v1/jobs/../../etc/passwd")
     assert fw._PROBE.search("/v1/x?q=<script>alert(1)</script>")
     assert fw._PROBE.search("/v1/x?q=union select password from users")
+
+
+def test_browser_disabled_production():
+    os.environ["ENVIRONMENT"] = "production"
+    os.environ["TBE_MULTI_TENANT"] = "1"
+    os.environ["BROWSER_USE_ENABLED"] = "1"
+    sys.path.insert(0, str(ROOT))
+    from lumen.engine.services.cline_runtime.agent_fs import _dispatch_browser_or_skill
+
+    r = _dispatch_browser_or_skill("browser_navigate", {"url": "https://example.com"})
+    assert r.get("ok") is False
+    assert "production" in r.get("error", "") or "browser_disabled" in r.get("error", "")
+
+
+def test_firewall_blocks_file_scheme_probe():
+    fw = _load("request_firewall_under_test2", "lumen/api/request_firewall.py")
+    assert fw._PROBE.search("file:///etc/passwd")

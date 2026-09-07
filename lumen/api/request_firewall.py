@@ -30,7 +30,7 @@ _PROBE = re.compile(
     r"<script|javascript:|vbscript:|data:text/html|"
     r"\bunion\s+select\b|\bdrop\s+table\b|\bsleep\s*\(|\bbenchmark\s*\(|"
     r"\$\{jndi:|%24%7bjndi|"
-    r"/etc/passwd|/proc/self|/windows/system32|"
+    r"/etc/passwd|/proc/self|/windows/system32|file://|gopher://|dict://|"
     r"\x00|%00"
     r")"
 )

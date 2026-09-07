@@ -1106,6 +1106,13 @@ def _dispatch_browser_or_skill(tool_name: str, args: dict) -> dict:
     args = dict(args or {})
     name = (tool_name or "").strip()
     if name.startswith("browser_"):
+        # Production / multi-tenant: never allow host-side browser (SSRF surface).
+        try:
+            from lumen.engine.services.isolation_policy import is_dev_environment, is_multi_tenant
+            if is_multi_tenant() or not is_dev_environment():
+                return {"ok": False, "error": "browser_disabled_production_use_sandbox"}
+        except Exception:
+            return {"ok": False, "error": "browser_disabled_policy_unavailable"}
         flag = (os.getenv("BROWSER_USE_ENABLED") or "0").strip().lower()
         if flag not in {"1", "true", "yes", "on"}:
             return {"ok": False, "error": "browser_use_disabled: set BROWSER_USE_ENABLED=1"}

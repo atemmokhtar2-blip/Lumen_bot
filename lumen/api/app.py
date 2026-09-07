@@ -360,17 +360,45 @@ def create_app() -> web.Application:
     app.router.add_get("/health", health.health)
     app.router.add_get("/health/cost-stack", health.cost_stack)
 
-    # OpenAPI + interactive docs (Swagger UI + Redoc) for B2B developers
+    # OpenAPI + interactive docs — locked in production unless API_DOCS_ENABLED=1
+    # and optional API_DOCS_TOKEN (Bearer) is presented.
+    def _docs_allowed(request: web.Request) -> bool:
+        import hmac as _hmac
+        enabled = (os.getenv("API_DOCS_ENABLED") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        try:
+            from lumen.platform.runtime_config import is_dev
+            if is_dev():
+                return True
+        except Exception:
+            pass
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"dev", "development", "local", "test"}:
+            return True
+        if not enabled:
+            return False
+        token = (os.getenv("API_DOCS_TOKEN") or "").strip()
+        if not token:
+            return True  # enabled without token = open docs when explicitly enabled
+        auth = (request.headers.get("Authorization") or "").strip()
+        got = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        return bool(got) and _hmac.compare_digest(got, token)
+
     async def _openapi_yaml(request):
+        if not _docs_allowed(request):
+            return web.json_response({"ok": False, "error": "docs_disabled"}, status=404)
         from pathlib import Path as _P
         path = _P(__file__).resolve().parent / "openapi.yaml"
         return web.Response(
             text=path.read_text(encoding="utf-8"),
             content_type="application/yaml",
-            headers={"Cache-Control": "public, max-age=60"},
+            headers={"Cache-Control": "no-store"},
         )
 
     async def _swagger_ui(request):
+        if not _docs_allowed(request):
+            return web.json_response({"ok": False, "error": "docs_disabled"}, status=404)
         # Pinned Swagger UI 5.x from unpkg (standard vendor distribution)
         html = """<!DOCTYPE html>
 <html lang="en">
@@ -400,6 +428,8 @@ window.ui = SwaggerUIBundle({
         return web.Response(text=html, content_type="text/html")
 
     async def _redoc_ui(request):
+        if not _docs_allowed(request):
+            return web.json_response({"ok": False, "error": "docs_disabled"}, status=404)
         html = """<!DOCTYPE html>
 <html lang="en">
 <head>
