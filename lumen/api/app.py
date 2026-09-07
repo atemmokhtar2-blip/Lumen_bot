@@ -8,6 +8,7 @@ import os
 from aiohttp import web
 
 from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, health, hosts, jobs, tenants, usage, runs_ux, secrets
+from lumen.api.request_firewall import request_firewall_middleware
 
 logger = logging.getLogger("lumen_api")
 
@@ -337,6 +338,7 @@ def create_app() -> web.Application:
     except Exception:
         pass
     _mws = [
+        request_firewall_middleware,  # reject traversal/probes before auth work
         error_middleware,
         body_size_guard_middleware,
         json_body_middleware,

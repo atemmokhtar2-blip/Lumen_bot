@@ -6,7 +6,7 @@ Traefik/Caddy route Host(`{instance_id}.{TBE_HOST_BASE_DOMAIN}`) → this path
 (or path-based: /v1/hooks/telegram/{instance_id} on the API host).
 
 Security:
-  - Optional X-Telegram-Bot-Api-Secret-Token must match TBE_HOST_WEBHOOK_SECRET
+  - Required in production: X-Telegram-Bot-Api-Secret-Token must match TBE_HOST_WEBHOOK_SECRET
     or per-instance secret stored in Redis meta.
   - Instance must exist in Redis/host registry and status=running.
 
@@ -17,6 +17,7 @@ Delivery:
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -26,11 +27,24 @@ from aiohttp import web
 logger = logging.getLogger("api.host_webhooks")
 
 
+def _const_eq(a: str, b: str) -> bool:
+    """Constant-time string compare (Telegram secret_token practice)."""
+    try:
+        return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    except Exception:
+        return False
+
+
 def _secret_ok(request: web.Request, instance_id: str) -> bool:
-    expected = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
+    """Verify X-Telegram-Bot-Api-Secret-Token (Bot API secret_token).
+
+    Production: secret REQUIRED (global or per-instance). Fail closed.
+    Dev: may open only when ENVIRONMENT is explicitly local/dev/test.
+    """
     header = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
+    expected = (os.environ.get("TBE_HOST_WEBHOOK_SECRET") or "").strip()
     if expected:
-        return bool(header) and header == expected
+        return bool(header) and _const_eq(header, expected)
     # Per-instance secret from Redis
     try:
         from lumen.engine.services.hosting.redis_state import get_instance
@@ -38,12 +52,16 @@ def _secret_ok(request: web.Request, instance_id: str) -> bool:
         inst = get_instance(instance_id) or {}
         inst_secret = str((inst.get("last_diagnosis") or {}).get("webhook_secret") or "")
         if inst_secret:
-            return bool(header) and header == inst_secret
+            return bool(header) and _const_eq(header, inst_secret)
     except Exception:
-        pass
-    # If no secret configured, only allow when explicit open mode (dev)
+        logger.exception("host webhook per-instance secret lookup failed")
+        return False
+    # No secret configured → refuse outside explicit dev environments
     env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").lower()
-    return env in {"dev", "development", "local", "test"}
+    if env in {"dev", "development", "local", "test"}:
+        return True
+    logger.error("host webhook refused: TBE_HOST_WEBHOOK_SECRET not set in %s", env or "unset")
+    return False
 
 
 async def telegram_host_webhook(request: web.Request) -> web.Response:
