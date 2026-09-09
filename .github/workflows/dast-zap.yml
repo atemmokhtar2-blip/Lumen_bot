@@ -40,9 +40,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: |
-          pip install -U pip pytest
+          python -m pip install -U pip
+          pip install pytest
           pip install -r requirements.txt
-      - run: |
+      - name: Platform IDOR + probe
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+          ENVIRONMENT: test
+          TBE_ENV: test
+        run: |
           pytest tests/test_security_idor_dast.py -q --tb=short
           python scripts/security/dast_api_probe.py
 
@@ -63,6 +70,9 @@ jobs:
       - name: Start live API
         env:
           OUTPUT_DIR: ${{ runner.temp }}/dast-api-out
+          PYTHONPATH: ${{ github.workspace }}
+          ENVIRONMENT: test
+          TBE_ENV: test
         run: |
           mkdir -p "$OUTPUT_DIR"
           nohup python scripts/security/start_api_dast.py >"$OUTPUT_DIR/api.log" 2>&1 &

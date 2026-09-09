@@ -114,9 +114,13 @@ jobs:
         run: pip install -U -r requirements-security.txt
       - name: Custom Lumen rules (fail on match)
         run: |
-          semgrep scan --config semgrep/ --error --metrics off \
-            --exclude tests \
-            || { echo "::error::custom semgrep rules failed"; exit 1; }
+          if [ -d semgrep ] && ls semgrep/* >/dev/null 2>&1; then
+            semgrep scan --config semgrep/ --error --metrics off \
+              --exclude tests \
+              || { echo "::error::custom semgrep rules failed"; exit 1; }
+          else
+            echo "No custom semgrep/ rules in repo — skip custom pack (OWASP pack still runs)."
+          fi
       - name: OWASP / security-audit (ERROR severity only)
         run: |
           semgrep scan \
@@ -230,10 +234,23 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: |
-          pip install -U pip pytest
-          pip install -r requirements.txt 2>/dev/null || true
+          python -m pip install -U pip
+          pip install pytest
+          pip install -r requirements.txt
       - name: Ledger + welcome + privilege gates
-        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py tests/test_security_baseline.py tests/test_security_attack_surface.py tests/test_security_idor_dast.py -q --tb=short
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+          ENVIRONMENT: test
+          TBE_ENV: test
+          TBE_TOKEN_SECRET: "unit-test-secret-key-32b-ci-only!!"
+        run: >
+          pytest -q --tb=short
+          tests/test_welcome_credits.py
+          tests/test_credits_ledger.py
+          tests/test_security_baseline.py
+          tests/test_security_attack_surface.py
+          tests/test_security_idor_dast.py
 
   # ── 9. Daily / on-demand credits health ─────────────────
   credits-health-monitor:
@@ -266,12 +283,22 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: |
-          pip install -U pip pytest
-          pip install -r requirements.txt 2>/dev/null || true
+          python -m pip install -U pip
+          pip install pytest
+          pip install -r requirements.txt
       - name: Static security baseline
-        run: |
-          python scripts/security/security_baseline_check.py --strict
-          python scripts/security/dast_api_probe.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENVIRONMENT: test
+          TBE_ENV: test
+        run: python scripts/security/security_baseline_check.py --strict
+      - name: DAST API probe
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENVIRONMENT: test
+          TBE_ENV: test
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+        run: python scripts/security/dast_api_probe.py
 
 
   phase1-gate:

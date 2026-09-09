@@ -1,0 +1,3 @@
+# ZAP baseline rules — minimal allowlist (official ZAP -c format)
+# 10021 IGNORE
+# 10016 IGNORE

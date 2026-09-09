@@ -245,6 +245,67 @@ def _is_dev_env() -> bool:
     return is_dev()
 
 
+
+class MemoryJobStore:
+    """In-memory job store for unit/security tests (no Redis required)."""
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, Job] = {}
+        self._tenant: dict[str, list[str]] = {}
+        self._queue: list[str] = []
+        self._lock = threading.Lock()
+
+    def create(self, job: Job) -> Job:
+        with self._lock:
+            self._jobs[job.job_id] = job
+            self._tenant.setdefault(job.tenant_id, []).insert(0, job.job_id)
+            self._tenant[job.tenant_id] = self._tenant[job.tenant_id][:100]
+        return job
+
+    def update(self, job_id: str, **fields: Any) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            for k, v in fields.items():
+                if hasattr(job, k):
+                    setattr(job, k, v)
+
+    def get(self, job_id: str) -> Job | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def enqueue_work(self, job_id: str) -> None:
+        with self._lock:
+            self._queue.append(job_id)
+
+    def claim_work(self, *, timeout_sec: int = 5) -> str | None:
+        with self._lock:
+            if not self._queue:
+                return None
+            return self._queue.pop(0)
+
+    def queue_depth(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+    def cleanup_old_jobs(self, days: int = 7) -> int:
+        return 0
+
+    def list_for_tenant(self, tenant_id: str, *, limit: int = 20) -> list[Job]:
+        with self._lock:
+            ids = (self._tenant.get(tenant_id) or [])[: max(0, limit)]
+            return [self._jobs[i] for i in ids if i in self._jobs]
+
+    def count_active(self, tenant_id: str | None = None) -> int:
+        with self._lock:
+            jobs = list(self._jobs.values())
+            if tenant_id:
+                jobs = [j for j in jobs if j.tenant_id == tenant_id]
+            return sum(1 for j in jobs if j.status not in TERMINAL)
+
+
+
 def get_job_store(db_path: str | Path | None = None):
     """Redis-only job store — no SQLite fallback in any environment.
 
@@ -261,12 +322,329 @@ def get_job_store(db_path: str | Path | None = None):
 
     url = redis_url()
     if not url:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        if env in {"test", "development", "dev", "local"} or _is_dev_env():
+            return MemoryJobStore()
         raise RuntimeError(
             "REDIS_URL (or JOB_REDIS_URL) is required for the job store. "
             "SQLite JobStore has been permanently removed — run Redis locally in dev "
             "(e.g. docker run -p 6379:6379 redis:7-alpine)."
         )
     return RedisJobStore(url)
+
+
+class JobRunner:
+    """Dedicated pool — never uses asyncio's default executor for heavy work.
+
+    Foundation limits (env-overridable):
+      JOB_MAX_WORKERS          global thread pool size (default 2)
+      JOB_MAX_QUEUED_GLOBAL    max non-terminal jobs system-wide (default 100)
+      JOB_MAX_QUEUED_PER_TENANT max non-terminal jobs per tenant (default 5)
+      JOB_MAX_INPUT_BYTES      max serialized input_json size (default 65536)
+    """
+
+    def __init__(self, store=None) -> None:
+        self.store = store if store is not None else get_job_store()
+        max_workers = int(os.getenv("JOB_MAX_WORKERS") or "2")
+        self._pool = ThreadPoolExecutor(
+            max_workers=max(1, max_workers),
+            thread_name_prefix="job-worker",
+        )
+        self._handlers: dict[str, Callable[[Job], dict[str, Any]]] = {}
+        self._lock = threading.Lock()
+        self._max_queued_global = int(os.getenv("JOB_MAX_QUEUED_GLOBAL") or "100")
+        self._max_queued_tenant = int(os.getenv("JOB_MAX_QUEUED_PER_TENANT") or "5")
+        self._max_input_bytes = int(os.getenv("JOB_MAX_INPUT_BYTES") or "65536")
+
+    def register(self, kind: str, handler: Callable[[Job], dict[str, Any]]) -> None:
+        self._handlers[kind] = handler
+
+    def cancel(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Mark job cancelled if not already terminal. Soft-cancel (worker may still finish)."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        self.store.update(
+            job_id,
+            status=STATUS_CANCELLED,
+            finished_at=time.time(),
+            message="cancelled_by_user",
+        )
+        return self.store.get(job_id)
+
+    def pause(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Cooperative pause — marks job paused (non-terminal). Workers should honor status."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        if job.status == STATUS_PAUSED:
+            return job
+        self.store.update(
+            job_id,
+            status=STATUS_PAUSED,
+            message="paused_by_user",
+        )
+        return self.store.get(job_id)
+
+    def resume(self, job_id: str, *, tenant_id: str | None = None) -> Job | None:
+        """Resume a paused job back to running (or queued if never started)."""
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status != STATUS_PAUSED:
+            return job
+        next_status = STATUS_RUNNING if job.started_at else STATUS_QUEUED
+        self.store.update(
+            job_id,
+            status=next_status,
+            message="resumed_by_user",
+        )
+        return self.store.get(job_id)
+
+    def steer(
+        self,
+        job_id: str,
+        message: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> Job | None:
+        """Append a steer instruction for a non-terminal job (Phase E intervention).
+
+        Workers may read ``result['steer_notes']`` / ``last_steer`` cooperatively.
+        Does not change status by itself.
+        """
+        text = (message or "").strip()
+        if not text:
+            return None
+        if len(text) > 2000:
+            text = text[:2000]
+        job = self.store.get(job_id)
+        if not job:
+            return None
+        if tenant_id and job.tenant_id != tenant_id:
+            return None
+        if job.status in TERMINAL:
+            return job
+        result = dict(job.result or {})
+        notes = list(result.get("steer_notes") or [])
+        notes.append({"ts": time.time(), "message": text})
+        result["steer_notes"] = notes[-20:]
+        self.store.update(
+            job_id,
+            result=result,
+            message=f"steer:{text[:120]}",
+        )
+        return self.store.get(job_id)
+
+    def _count_active(self, tenant_id: str | None = None) -> int:
+        """Count non-terminal jobs (queued + running)."""
+        try:
+            return self.store.count_active(tenant_id=tenant_id)
+        except Exception:
+            # Fallback: list and count if store helper missing mid-upgrade
+            if tenant_id:
+                jobs = self.store.list_for_tenant(tenant_id, limit=200)
+            else:
+                jobs = []
+            return sum(1 for j in jobs if j.status not in TERMINAL)
+
+    def enqueue(
+        self,
+        *,
+        tenant_id: str,
+        kind: str,
+        input_data: dict[str, Any],
+        message: str = "queued",
+    ) -> Job:
+        if kind not in self._handlers:
+            raise ValueError(f"unknown_job_kind:{kind}")
+        if not tenant_id or not str(tenant_id).strip():
+            raise ValueError("tenant_id_required")
+
+        # Bound input size before it hits SQLite / workers
+        import json as _json
+        raw_in = _json.dumps(input_data or {}, ensure_ascii=False, default=str)
+        if len(raw_in.encode("utf-8")) > self._max_input_bytes:
+            raise ValueError("job_input_too_large")
+
+        with self._lock:
+            if self._max_queued_global > 0 and self._count_active() >= self._max_queued_global:
+                raise RuntimeError("job_queue_full")
+            if (
+                self._max_queued_tenant > 0
+                and self._count_active(tenant_id) >= self._max_queued_tenant
+            ):
+                raise RuntimeError("job_queue_tenant_full")
+
+            job = Job(
+                job_id=f"job_{uuid.uuid4().hex[:16]}",
+                tenant_id=str(tenant_id).strip(),
+                kind=kind,
+                status=STATUS_QUEUED,
+                message=message,
+                input=input_data or {},
+            )
+            self.store.create(job)
+
+        # opportunistic GC of old terminal jobs (at most ~1/50 enqueues)
+        if int(job.created_at * 1000) % 50 == 0:
+            try:
+                self.store.cleanup_old_jobs(days=int(os.getenv("JOB_RETENTION_DAYS") or 7))
+            except Exception:
+                pass
+
+        from .runtime_config import redis_url as _redis_url, is_dev as _is_dev
+        rurl = _redis_url()
+        if rurl:
+            try:
+                from rq import Queue
+                from redis import Redis
+                qname = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
+                q = Queue(
+                    qname,
+                    connection=Redis.from_url(rurl),
+                    default_timeout=int(os.getenv("RQ_JOB_TIMEOUT") or "600"),
+                )
+                q.enqueue(
+                    "lumen.platform.task_queue.execute_stored_job",
+                    job.job_id,
+                    job_id=job.job_id,
+                    failure_ttl=int(os.getenv("RQ_FAILURE_TTL") or "86400"),
+                    result_ttl=int(os.getenv("RQ_RESULT_TTL") or "86400"),
+                )
+                return job
+            except Exception as exc:
+                if not _is_dev():
+                    raise RuntimeError(f"rq_enqueue_failed:{type(exc).__name__}:{exc}") from exc
+                logger.warning("RQ enqueue failed in dev (%s); thread pool fallback", exc)
+
+        if not _is_dev():
+            raise RuntimeError(
+                "Production jobs require REDIS_URL + RQ. "
+                "In-process ThreadPool and SQLite queues are disabled."
+            )
+        # DEV ONLY
+        self._pool.submit(self._run, job.job_id)
+        return job
+
+
+    def _ensure_redis_workers(self) -> None:
+        """Start in-process BRPOP workers once (or external-only when configured)."""
+        if getattr(self, "_redis_workers_started", False):
+            return
+        if (os.getenv("JOB_WORKER_EXTERNAL") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            self._redis_workers_started = True
+            return
+        n = max(1, int(os.getenv("JOB_MAX_WORKERS") or "2"))
+        for i in range(n):
+            self._pool.submit(self._redis_worker_loop, i)
+        self._redis_workers_started = True
+
+    def _redis_worker_loop(self, worker_id: int = 0) -> None:
+        import logging
+        log = logging.getLogger("b2b.jobs.worker")
+        log.info("redis job worker started id=%s", worker_id)
+        while True:
+            try:
+                if not hasattr(self.store, "claim_work"):
+                    return
+                job_id = self.store.claim_work(timeout_sec=5)
+                if not job_id:
+                    continue
+                self._run(job_id)
+            except Exception:
+                log.exception("redis worker id=%s error", worker_id)
+                time.sleep(1.0)
+
+    def run_worker_forever(self) -> None:
+        """Dedicated worker process entrypoint."""
+        self._redis_worker_loop(0)
+
+    def _run(self, job_id: str) -> None:
+        job = self.store.get(job_id)
+        if not job:
+            return
+        handler = self._handlers.get(job.kind)
+        if not handler:
+            self.store.update(
+                job_id,
+                status=STATUS_FAILED,
+                finished_at=time.time(),
+                error="no_handler",
+            )
+            return
+        self.store.update(
+            job_id,
+            status=STATUS_RUNNING,
+            started_at=time.time(),
+            progress=0.05,
+            message="running",
+        )
+        try:
+            result = handler(job) or {}
+            # Bound result payload stored in SQLite (prevents disk/memory abuse)
+            import json as _json
+            _max_res = int(os.getenv("JOB_MAX_RESULT_BYTES") or "262144")
+            try:
+                _raw = _json.dumps(result, ensure_ascii=False, default=str)
+                if len(_raw.encode("utf-8")) > _max_res:
+                    result = {
+                        "ok": bool(result.get("ok", False)),
+                        "errors": ["result_truncated"],
+                        "project_path": None,
+                    }
+            except Exception:
+                result = {"ok": False, "errors": ["result_not_serializable"]}
+            # Handler-reported failure must not be stored as SUCCEEDED
+            ok = result.get("ok", True)
+            if ok is False:
+                self.store.update(
+                    job_id,
+                    status=STATUS_FAILED,
+                    finished_at=time.time(),
+                    progress=1.0,
+                    message=str(result.get("message") or "handler_reported_failure")[:200],
+                    error=sanitize_for_storage(
+                        str((result.get("errors") or ["failed"])[0]), max_len=500
+                    ),
+                    result=result,
+                )
+            else:
+                self.store.update(
+                    job_id,
+                    status=STATUS_SUCCEEDED,
+                    finished_at=time.time(),
+                    progress=1.0,
+                    message="done",
+                    result=result,
+                )
+        except Exception as exc:
+            safe = sanitize_for_storage(str(exc), max_len=500)
+            logger.error("job %s failed: %s", job_id, safe)
+            self.store.update(
+                job_id,
+                status=STATUS_FAILED,
+                finished_at=time.time(),
+                progress=1.0,
+                message="failed",
+                error=safe,
+                result={"error_code": "job_failed"},
+            )
+
+
+_RUNNER: JobRunner | None = None
+_HANDLERS_READY = False
+
 
 
 def _register_builtin_handlers(runner: JobRunner) -> None:
