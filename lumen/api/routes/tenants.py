@@ -112,3 +112,8 @@ async def rotate_key(request: web.Request) -> web.Response:
             content_type="application/json",
         )
     return web.json_response({"ok": True, "api_key": raw})
+
+async def list_plans(request: web.Request) -> web.Response:
+    """Plans product surface removed — return empty catalog for API compatibility."""
+    return web.json_response({"ok": True, "plans": []})
+
