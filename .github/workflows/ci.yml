@@ -15,26 +15,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Strict install — do not swallow failures with || true
+      # Strict install — never swallow failures with || true
       - name: Install dependencies
         run: |
           python -m pip install -U pip
           pip install pytest
           pip install -r requirements.txt
 
-      # Only paths that exist in this repository
-      - name: Unit — security baseline
-        run: pytest tests/test_security_baseline.py -q --tb=short
-
-      - name: Unit — credits ledger + welcome/promo security
-        run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py -q --tb=short
-
-      - name: Unit — GitHub connection durability
-        run: pytest tests/test_github_connection_durable.py -q --tb=short
-
-      - name: Unit — live runner (no containers)
+      # Real existing unit suite only (no bot_bench / spec_core / sdks)
+      - name: Unit suite
+        env:
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+          ENVIRONMENT: development
+          TBE_TOKEN_SECRET: "unit-test-secret-key-32b-ci-only!!"
         run: >
-          pytest tests/test_live_runner_integration.py -q --tb=short
+          pytest -q --tb=short
+          tests/test_security_baseline.py
+          tests/test_welcome_credits.py
+          tests/test_credits_ledger.py
+          tests/test_github_connection_durable.py
+          tests/test_live_runner_integration.py
           -k "not postgres and not redis_testcontainer"
 
       - name: OpenAPI contract present
@@ -61,5 +61,8 @@ jobs:
       - name: Integration with testcontainers
         env:
           TBE_TESTCONTAINERS: "1"
-        # Soft-fail until containers are guaranteed on the runner
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+          ENVIRONMENT: development
+          TBE_TOKEN_SECRET: "unit-test-secret-key-32b-ci-only!!"
+        # Soft-fail only for container infra flakiness — install above is strict
         run: pytest tests/test_live_runner_integration.py -q --tb=short || true

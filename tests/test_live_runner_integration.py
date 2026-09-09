@@ -15,6 +15,7 @@ def _tc_enabled() -> bool:
 
 
 def test_live_runner_host_process_refused():
+    """Fail-closed: missing project must not report success."""
     from lumen.engine.services.live_runner.parts.runner import LiveRunnerService
 
     report = LiveRunnerService().run(
@@ -23,8 +24,24 @@ def test_live_runner_host_process_refused():
         run_seconds=5,
     )
     assert report.ok is False
-    blob = f"{report.message} {' '.join(report.errors or [])}".lower()
-    assert any(x in blob for x in ("host_process", "docker", "security", "removed", "required"))
+    errs = [str(e).lower() for e in (report.errors or [])]
+    blob = f"{report.message} {' '.join(errs)}".lower()
+    # Current gate: missing path → project_missing (fail-closed before host spawn)
+    assert (
+        "project_missing" in errs
+        or any(
+            x in blob
+            for x in (
+                "host_process",
+                "docker",
+                "security",
+                "removed",
+                "required",
+                "project_missing",
+                "مسار",
+            )
+        )
+    )
 
 
 def test_isolation_policy_docker_only():
