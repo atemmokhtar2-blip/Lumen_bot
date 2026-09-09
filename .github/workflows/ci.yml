@@ -4,41 +4,62 @@ on:
     branches: [Lumen, main, master]
   pull_request:
     branches: [Lumen, main, master]
+
 jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
+
+      # Strict install — do not swallow failures with || true
+      - name: Install dependencies
         run: |
-          pip install -U pip pytest
-          pip install -r requirements.txt 2>/dev/null || true
+          python -m pip install -U pip
+          pip install pytest
+          pip install -r requirements.txt
+
+      # Only paths that exist in this repository
       - name: Unit — security baseline
         run: pytest tests/test_security_baseline.py -q --tb=short
+
       - name: Unit — credits ledger + welcome/promo security
         run: pytest tests/test_welcome_credits.py tests/test_credits_ledger.py -q --tb=short
-      - name: Integration unit-style (no containers)
+
+      - name: Unit — GitHub connection durability
+        run: pytest tests/test_github_connection_durable.py -q --tb=short
+
+      - name: Unit — live runner (no containers)
         run: >
           pytest tests/test_live_runner_integration.py -q --tb=short
           -k "not postgres and not redis_testcontainer"
-      - name: OpenAPI present
-        run: test -f lumen/api/openapi.yaml && grep -q "/v1/generate" lumen/api/openapi.yaml
+
+      - name: OpenAPI contract present
+        run: |
+          test -f lumen/api/openapi.yaml
+          grep -q "/v1/generate" lumen/api/openapi.yaml
+
   integration:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install testcontainers
+
+      - name: Install dependencies + testcontainers
         run: |
-          pip install -U pip pytest testcontainers sqlalchemy psycopg2-binary redis
-          pip install -r requirements.txt 2>/dev/null || true
+          python -m pip install -U pip
+          pip install pytest testcontainers sqlalchemy psycopg2-binary redis
+          pip install -r requirements.txt
+
       - name: Integration with testcontainers
         env:
           TBE_TESTCONTAINERS: "1"
+        # Soft-fail until containers are guaranteed on the runner
         run: pytest tests/test_live_runner_integration.py -q --tb=short || true
