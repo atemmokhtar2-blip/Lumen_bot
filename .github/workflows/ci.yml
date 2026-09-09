@@ -43,6 +43,15 @@ jobs:
           test -f lumen/api/openapi.yaml
           grep -q "/v1/generate" lumen/api/openapi.yaml
 
+      # Phase D closure gate — same checks as scripts/ci/phase_d_verify.sh
+      - name: Phase D local-equivalent gate
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
+          ENVIRONMENT: development
+          TBE_TOKEN_SECRET: "unit-test-secret-key-32b-ci-only!!"
+        run: bash scripts/ci/phase_d_verify.sh
+
   integration:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
