@@ -22,9 +22,10 @@ jobs:
           pip install pytest
           pip install -r requirements.txt
 
-      # Real existing unit suite only (no bot_bench / spec_core / sdks)
+      # Existing unit paths only — package root on PYTHONPATH
       - name: Unit suite
         env:
+          PYTHONPATH: ${{ github.workspace }}
           TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
           ENVIRONMENT: development
           TBE_TOKEN_SECRET: "unit-test-secret-key-32b-ci-only!!"
@@ -60,6 +61,7 @@ jobs:
 
       - name: Integration with testcontainers
         env:
+          PYTHONPATH: ${{ github.workspace }}
           TBE_TESTCONTAINERS: "1"
           TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
           ENVIRONMENT: development

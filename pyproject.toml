@@ -12,3 +12,7 @@ skips = ["B101"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["."]
+markers = [
+  "integration: optional tests that may need containers or external services",
+]
