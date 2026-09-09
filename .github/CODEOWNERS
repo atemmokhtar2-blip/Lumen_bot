@@ -1,10 +1,11 @@
 # Critical security paths — require review
-/api/auth.py @atemmokhtar2-blip
-/api/security.py @atemmokhtar2-blip
-/api/app.py @atemmokhtar2-blip
-/lumen.platform/credits/ @atemmokhtar2-blip
-/lumen.platform/security_events.py @atemmokhtar2-blip
-/lumen.engine/security/ @atemmokhtar2-blip
+# Paths must match the real package layout under lumen/
+/lumen/api/auth.py @atemmokhtar2-blip
+/lumen/api/security.py @atemmokhtar2-blip
+/lumen/api/app.py @atemmokhtar2-blip
+/lumen/platform/credits/ @atemmokhtar2-blip
+/lumen/platform/security_events.py @atemmokhtar2-blip
+/lumen/engine/security/ @atemmokhtar2-blip
 /.github/workflows/ @atemmokhtar2-blip
 /semgrep/ @atemmokhtar2-blip
 /scripts/security/ @atemmokhtar2-blip

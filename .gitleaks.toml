@@ -14,5 +14,4 @@ paths = [
   '''tests/''',
   '''docs/''',
   '''\.env\.example$''',
-  '''sdks/''',
 ]

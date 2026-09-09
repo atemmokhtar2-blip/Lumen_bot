@@ -4,7 +4,7 @@ name: Policy as Code
 
 on:
   push:
-    branches: [main, master]
+    branches: [Lumen, main, master]
   pull_request:
   schedule:
     - cron: "15 5 * * *"

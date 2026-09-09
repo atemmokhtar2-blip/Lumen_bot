@@ -12,13 +12,14 @@ pip-audit -r requirements.txt --progress-spinner off --desc on || true
 
 echo "== bandit HIGH =="
 pip install -q bandit
-bandit -r lumen.platform api lumen.engine/security \
-  lumen.engine/services/tool_runtime lumen.engine/services/sandbox_runtime \
-  lumen.bot/middlewares -lll -s B101,B601
+# Real package paths (slash), not dotted module names
+bandit -r lumen/platform lumen/api lumen/engine/security \
+  lumen/engine/services/tool_runtime lumen/engine/services/sandbox_runtime \
+  lumen/bot/middlewares -lll -s B101,B601
 
 echo "== semgrep custom =="
 pip install -q semgrep
-semgrep scan --config semgrep/ --error --metrics off --exclude tests --exclude sdks || true
+semgrep scan --config semgrep/ --error --metrics off --exclude tests || true
 
 echo "== credits + baseline tests =="
 pip install -q pytest

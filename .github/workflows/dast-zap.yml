@@ -3,7 +3,7 @@ name: DAST ZAP
 
 on:
   push:
-    branches: [main, master]
+    branches: [Lumen, main, master]
   pull_request:
   schedule:
     - cron: "30 4 * * *"

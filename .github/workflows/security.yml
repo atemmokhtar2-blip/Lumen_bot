@@ -3,7 +3,7 @@ name: Security
 
 on:
   push:
-    branches: [main, master]
+    branches: [Lumen, main, master]
   pull_request:
   schedule:
     - cron: "0 3 * * *"      # daily credits + surface scan
@@ -115,7 +115,7 @@ jobs:
       - name: Custom Lumen rules (fail on match)
         run: |
           semgrep scan --config semgrep/ --error --metrics off \
-            --exclude tests --exclude sdks \
+            --exclude tests \
             || { echo "::error::custom semgrep rules failed"; exit 1; }
       - name: OWASP / security-audit (ERROR severity only)
         run: |
@@ -125,7 +125,7 @@ jobs:
             --severity ERROR \
             --error \
             --metrics off \
-            --exclude tests --exclude sdks \
+            --exclude tests \
             --sarif -o semgrep.sarif \
             || { echo "::error::semgrep ERROR findings"; exit 1; }
       - uses: actions/upload-artifact@v4

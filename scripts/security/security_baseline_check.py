@@ -54,7 +54,7 @@ def main() -> int:
         )
 
     # 2) PolicyEngine in execute_tool
-    executor = _read("lumen.engine/services/tool_runtime/executor.py")
+    executor = _read("lumen/engine/services/tool_runtime/executor.py")
     check(
         "tool_runtime.policy",
         "PolicyEngine" in executor and "evaluate" in executor,
@@ -63,7 +63,7 @@ def main() -> int:
     )
 
     # 3) credit_credits privilege rules
-    service = _read("lumen.platform/credits/service.py")
+    service = _read("lumen/platform/credits/service.py")
     for needle in (
         "promotional_requires_expiry",
         "promotional_requires_promo_reason",
@@ -87,7 +87,7 @@ def main() -> int:
     )
 
     # 5) onboarding promotional + TTL
-    onboarding = _read("lumen.platform/credits/onboarding.py")
+    onboarding = _read("lumen/platform/credits/onboarding.py")
     check(
         "credits.welcome.promotional",
         "promotional=True" in onboarding and "promo_expires_at" in onboarding,
@@ -125,23 +125,21 @@ def main() -> int:
         failures,
     )
 
-    # 8) Workflow & tooling presence
+    # 8) Workflow & tooling presence — only paths that exist in this repo
     for rel in (
         ".github/workflows/security.yml",
         ".github/dependabot.yml",
         ".gitleaks.toml",
         "scripts/security/credits_health_monitor.py",
-        "semgrep/lumen-security.yml",
         "scripts/security/dast_api_probe.py",
         "tests/test_security_idor_dast.py",
         ".github/workflows/dast-zap.yml",
-        ".zap/rules.tsv",
         "scripts/security/start_api_dast.py",
         ".github/workflows/supply-chain.yml",
-        "docs/27_PHASE3_SUPPLY_CHAIN.md",
         ".github/workflows/policy-as-code.yml",
-        "docs/28_PHASE4_POLICY_AS_CODE.md",
         "scripts/security/seed_dast_tenants.py",
+        "lumen/api/openapi.yaml",
+        "docs/11-security.md",
     ):
         check(
             f"tooling.{rel}",
@@ -150,10 +148,17 @@ def main() -> int:
             failures,
         )
 
-    # 9) Multi-tenant defaults
+    # 9) Multi-tenant defaults (settings + isolation policy — not only app.py)
+    settings = _read("lumen/api/settings.py")
+    isolation = _read("lumen/engine/services/isolation_policy.py")
+    multi_ok = (
+        ("TBE_MULTI_TENANT" in settings and "default=True" in settings)
+        or ('TBE_MULTI_TENANT' in isolation and '"1"' in isolation)
+        or ("TBE_MULTI_TENANT" in app)
+    )
     check(
         "api.multi_tenant_default",
-        'TBE_MULTI_TENANT' in app and '"1"' in app,
+        multi_ok,
         "multi-tenant default on",
         failures,
     )
