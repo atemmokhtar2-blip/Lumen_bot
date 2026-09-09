@@ -38,11 +38,12 @@ def test_isolation_policy_docker_only():
 def test_openapi_spec_exists_and_has_generate():
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[1] / "api" / "openapi.yaml"
+    # Spec lives under the package tree, not a top-level api/ folder.
+    path = Path(__file__).resolve().parents[1] / "lumen" / "api" / "openapi.yaml"
     assert path.is_file()
     text = path.read_text(encoding="utf-8")
     assert "openapi:" in text
-    assert "/generate" in text
+    assert "/v1/generate" in text
     assert "ApiKeyAuth" in text
 
 

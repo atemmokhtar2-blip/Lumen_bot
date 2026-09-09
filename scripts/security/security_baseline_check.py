@@ -105,7 +105,7 @@ def main() -> int:
     bad_verify = []
     for path in ROOT.rglob("*.py"):
         rel = str(path.relative_to(ROOT))
-        if rel.startswith(("tests/", "sdks/", ".git/", "scripts/security/")):
+        if rel.startswith(("tests/", ".git/", "scripts/security/")):
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if re.search(r"verify\s*=\s*False", text):
