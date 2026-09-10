@@ -193,7 +193,29 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
     ),
     "conn_gh_connect": UiActionSpec(
         "conn_gh_connect",
-        "Start GitHub PAT connect",
+        "Start GitHub App install (or PAT fallback)",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "conn_gh_pat": UiActionSpec(
+        "conn_gh_pat",
+        "Manual GitHub PAT connect (advanced)",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "conn_gh_disconnect": UiActionSpec(
+        "conn_gh_disconnect",
+        "Disconnect GitHub and delete stored credentials",
         frozenset(
             {
                 EngineUiPhase.CONNECTIONS,

@@ -255,7 +255,8 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         rows.append((UiButton(title[:60], "conn_gh_select", rid, style="primary"),))
     connected = (state.slots or {}).get("gh_connected") == "1"
     if not connected:
-        rows.append((UiButton("ربط GitHub (PAT)", "conn_gh_connect", style="success"),))
+        rows.append((UiButton("اتصل بـ GitHub", "conn_gh_connect", style="success"),))
+        rows.append((UiButton("ربط يدوي (PAT)", "conn_gh_pat", style="primary"),))
     else:
         rows.append(
             (
@@ -263,6 +264,7 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
                 UiButton("إعادة الربط", "conn_gh_connect", style="primary"),
             )
         )
+        rows.append((UiButton("فصل الاتصال", "conn_gh_disconnect", style="danger"),))
     page = int((state.slots or {}).get("gh_page") or "1")
     nav_row: list[UiButton] = []
     if page > 1:
@@ -565,9 +567,24 @@ def apply_action(
         msg = "GitHub."
     elif action_id == "conn_gh_connect":
         new.phase = EngineUiPhase.CONN_GITHUB
-        new.slots["gh_await_pat"] = "1"
+        new.slots.pop("gh_await_pat", None)
+        new.slots["gh_await_app"] = "1"
         new.missing = []
-        msg = "أرسل توكن GitHub (PAT) بصلاحية repo."
+        msg = "افتح GitHub لتثبيت التطبيق وربط حسابك."
+    elif action_id == "conn_gh_pat":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_await_pat"] = "1"
+        new.slots.pop("gh_await_app", None)
+        new.missing = []
+        msg = "ربط يدوي: أرسل توكن GitHub (PAT)."
+    elif action_id == "conn_gh_disconnect":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_connected"] = "0"
+        new.slots["gh_login"] = ""
+        new.slots.pop("gh_await_pat", None)
+        new.slots.pop("gh_await_app", None)
+        new.missing = []
+        msg = "تم طلب فصل اتصال GitHub."
     elif action_id == "conn_gh_refresh":
         new.phase = EngineUiPhase.CONN_GITHUB
         new.slots["gh_page"] = new.slots.get("gh_page") or "1"

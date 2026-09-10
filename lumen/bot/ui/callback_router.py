@@ -770,9 +770,31 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             if st and st.connected:
                 result.state.slots["gh_connected"] = "1"
                 result.state.slots["gh_login"] = st.display_name or ""
-                result.state.slots["gh_status_line"] = (
-                    f"متصل كـ @{st.display_name}" if st.display_name else "متصل"
-                )
+                kind = ""
+                try:
+                    from lumen.bot.ui.github_connection_store import read_github_profile
+
+                    prof = read_github_profile(int(uid)) or {}
+                    kind = str(prof.get("auth_kind") or "")
+                    if kind == "github_app":
+                        sel = str(prof.get("repo_selection") or "")
+                        extra = " · GitHub App"
+                        if sel:
+                            extra += f" ({sel})"
+                        result.state.slots["gh_status_line"] = (
+                            (f"متصل كـ @{st.display_name}" if st.display_name else "متصل")
+                            + extra
+                        )
+                    else:
+                        result.state.slots["gh_status_line"] = (
+                            f"متصل كـ @{st.display_name} · PAT"
+                            if st.display_name
+                            else "متصل · PAT"
+                        )
+                except Exception:
+                    result.state.slots["gh_status_line"] = (
+                        f"متصل كـ @{st.display_name}" if st.display_name else "متصل"
+                    )
                 for i, res in enumerate(resources[:12]):
                     result.state.slots[f"gh_r{i}_id"] = res.resource_id
                     result.state.slots[f"gh_r{i}_title"] = res.title
@@ -974,18 +996,57 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         except Exception:
             result.state.slots.setdefault("conn_github_line", "GitHub: —")
 
-    # Prompt for GitHub PAT when user starts connect.
-    # CRITICAL: keep the prompt visible until the user sends the token.
-    # Do NOT fall through to _safe_render_ui (that would prune the prompt).
-    # Do NOT register the prompt in chat_hygiene until success cleanup.
+    # GitHub App connect (preferred) — deep-link to install URL with signed state.
     if result.ok and action_id == "conn_gh_connect" and uid:
+        try:
+            from lumen.engine.services.integrations.github.app_auth import (
+                github_app_configured,
+            )
+            from lumen.engine.services.integrations.github.app_oauth_state import (
+                build_telegram_install_url,
+            )
+
+            _msg = update.effective_message
+            if github_app_configured():
+                url = build_telegram_install_url(int(uid))
+                text_prompt = (
+                    "🔗 **اتصل بـ GitHub**\n\n"
+                    "اضغط الزر لفتح GitHub واختيار الحساب أو المستودعات "
+                    "التي تسمح لـ Lumen بالوصول إليها.\n"
+                    "بعد التثبيت ستعود لصفحة نجاح — ثم افتح شاشة الاتصالات هنا."
+                )
+                try:
+                    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+                    kb = InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("فتح GitHub وتثبيت التطبيق", url=url)]]
+                    )
+                except Exception:
+                    kb = None
+                    text_prompt += f"\n\n{url}"
+                if _msg is not None:
+                    await _msg.reply_text(
+                        text_prompt, reply_markup=kb, parse_mode="Markdown"
+                    )
+                return
+            # App not configured → fall through to PAT prompt
+            logger.info("github_app not configured — PAT fallback uid=%s", uid)
+            action_id = "conn_gh_pat"
+        except Exception:
+            logger.exception("conn_gh_connect app link failed — PAT fallback")
+            action_id = "conn_gh_pat"
+
+    # Manual PAT connect (advanced / fallback).
+    # CRITICAL: keep the prompt visible until the user sends the token.
+    if result.ok and action_id == "conn_gh_pat" and uid:
         try:
             from lumen.bot.ui.input_prompt import ask_text_input
             from lumen.bot.ui.secret_prompt import build_secret_prompt_markup
 
             prompt = (
-                "🔑 أرسل الآن توكن GitHub (PAT) بصلاحية `repo`.\n"
-                "• Classic: `ghp_...`\n• Fine-grained: `github_pat_...`\n\n"
+                "🔑 ربط يدوي (متقدم): أرسل توكن GitHub (PAT).\n"
+                "• Classic: `ghp_...`\n• Fine-grained: `github_pat_...`\n"
+                "الأفضل: صلاحيات Contents/PR فقط — تجنّب صلاحيات واسعة.\n\n"
                 "بعد الإرسال سيتم التحقق عبر api.github.com وعرض مستودعاتك."
             )
             _msg = update.effective_message
@@ -998,23 +1059,49 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 )
             else:
                 await ask_text_input(update.effective_message, kind="github_pat")
-            # Mark pending so token_handler / next message can store connection token
             if context.user_data is not None:
                 context.user_data["pending_github_connection"] = True
-                # Store prompt mid only for post-success cleanup (not in hygiene list)
                 if prompt_sent is not None:
                     mid = getattr(prompt_sent, "message_id", None)
                     if mid:
                         context.user_data["pending_github_prompt_mid"] = int(mid)
                 try:
                     from lumen.bot.session_store import get_session_store
+
                     get_session_store().save(int(uid), dict(context.user_data))
                 except Exception:
                     logger.debug("persist pending_github_connection soft-fail", exc_info=True)
-            # Stay on the prompt — user must see what to send
             return
         except Exception:
-            logger.exception("conn_gh_connect prompt failed")
+            logger.exception("conn_gh_pat prompt failed")
+
+    # Disconnect GitHub — delete durable credentials + caches.
+    if result.ok and action_id == "conn_gh_disconnect" and uid:
+        try:
+            from lumen.bot.ui.github_connection_store import delete_github_connection
+
+            delete_github_connection(int(uid))
+            if context.user_data is not None:
+                context.user_data.pop("github_connection", None)
+                context.user_data.pop("pending_github_connection", None)
+            result.state.slots["gh_connected"] = "0"
+            result.state.slots["gh_login"] = ""
+            result.state.slots["gh_status_line"] = "تم فصل الاتصال وحذف بيانات GitHub."
+            for i in range(12):
+                result.state.slots.pop(f"gh_r{i}_id", None)
+                result.state.slots.pop(f"gh_r{i}_title", None)
+            try:
+                from lumen.engine.services.ui_state.controller import buttons_for_state
+                from dataclasses import replace as _dc_replace
+
+                result = _dc_replace(result, buttons=buttons_for_state(result.state))
+            except Exception:
+                pass
+            _msg = update.effective_message
+            if _msg is not None:
+                await _msg.reply_text("تم فصل GitHub وحذف الأسرار المحفوظة.")
+        except Exception:
+            logger.exception("conn_gh_disconnect failed uid=%s", uid)
 
     text = render_ui_message(result.state, facts)
     if not result.ok:

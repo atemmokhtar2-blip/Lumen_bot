@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, health, hosts, jobs, tenants, usage, runs_ux, secrets
+from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, github_app, health, hosts, jobs, tenants, usage, runs_ux, secrets
 from lumen.api.request_firewall import request_firewall_middleware
 
 logger = logging.getLogger("lumen_api")
@@ -485,6 +485,10 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/tenants", tenants.create_tenant)
     app.router.add_post("/v1/billing/webhook/stripe", billing.stripe_webhook)
     app.router.add_post("/v1/integrations/github/webhook", github_webhooks.github_webhook)
+    # GitHub App install setup (public redirect target — state is HMAC-signed)
+    app.router.add_get("/v1/integrations/github/app/setup", github_app.github_app_setup)
+    app.router.add_get("/v1/integrations/github/app/callback", github_app.github_app_setup)
+    app.router.add_get("/v1/integrations/github/app/status", github_app.github_app_status)
     # Real consumer for GitHub PR webhooks (not emit-only)
     try:
         from lumen.engine.services.integrations.github.pr_agent import register_event_handlers
