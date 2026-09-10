@@ -172,7 +172,7 @@ def clear_github_token(user_id: int) -> None:
 
 
 def save_connection_profile(user_id: int, profile: dict[str, Any]) -> None:
-    """Non-secret durable profile (login, connected flags). Survives UI navigation."""
+    """Non-secret durable profile (login, connected flags, App install). Survives UI navigation."""
     uid = int(user_id or 0)
     if uid <= 0:
         return
@@ -182,6 +182,11 @@ def save_connection_profile(user_id: int, profile: dict[str, Any]) -> None:
         "connected": bool(profile.get("connected", True)),
         "connected_at": float(profile.get("connected_at") or time.time()),
         "updated_at": time.time(),
+        "auth_kind": str(profile.get("auth_kind") or "pat")[:20],
+        "installation_id": str(profile.get("installation_id") or "")[:32],
+        "account_login": str(profile.get("account_login") or profile.get("login") or "")[:80],
+        "account_type": str(profile.get("account_type") or "")[:40],
+        "repo_selection": str(profile.get("repo_selection") or "")[:20],
     }
     r = _redis()
     if r is not None:

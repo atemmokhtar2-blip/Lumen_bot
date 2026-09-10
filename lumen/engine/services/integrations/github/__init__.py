@@ -1,4 +1,4 @@
-"""GitHub REST API integration (Issues, PRs, comments)."""
+"""GitHub REST API integration (Issues, PRs, comments) + App auth."""
 from .client import (
     GitHubClient,
     get_authenticated_user,
@@ -10,6 +10,16 @@ from .client import (
     list_pull_files,
     create_pull_review,
     list_repo_issues,
+)
+from .app_auth import (
+    github_app_configured,
+    get_installation_token,
+    build_app_jwt,
+    clear_installation_token_cache,
+    create_installation_access_token,
+    get_installation,
+    install_url,
+    list_installation_repos,
 )
 
 __all__ = [
@@ -23,4 +33,12 @@ __all__ = [
     "list_pull_files",
     "create_pull_review",
     "list_repo_issues",
+    "github_app_configured",
+    "get_installation_token",
+    "build_app_jwt",
+    "clear_installation_token_cache",
+    "create_installation_access_token",
+    "get_installation",
+    "install_url",
+    "list_installation_repos",
 ]

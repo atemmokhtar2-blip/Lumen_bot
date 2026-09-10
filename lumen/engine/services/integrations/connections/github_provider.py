@@ -30,8 +30,52 @@ class GitHubConnectionProvider:
         uid = int(user_id or 0)
         if uid <= 0:
             return ConnectionStatus(PROVIDER_ID, False, detail="invalid_user")
-        token = _token_for_user(uid)
         profile = token_store.load_connection_profile(uid) or {}
+        auth_kind = str(profile.get("auth_kind") or "").strip().lower()
+        installation_id = str(profile.get("installation_id") or "").strip()
+
+        # GitHub App install: durable profile is enough; mint token only when needed.
+        if auth_kind == "github_app" and installation_id:
+            login = str(
+                profile.get("account_login") or profile.get("login") or ""
+            ).strip()
+            if not login:
+                try:
+                    from lumen.engine.services.integrations.github.app_auth import (
+                        get_installation,
+                    )
+
+                    inst = get_installation(installation_id)
+                    account = inst.get("account") or {}
+                    login = str(account.get("login") or "").strip()
+                    if login:
+                        token_store.save_connection_profile(
+                            uid,
+                            {
+                                **profile,
+                                "login": login,
+                                "account_login": login,
+                                "account_type": str(account.get("type") or ""),
+                                "connected": True,
+                                "auth_kind": "github_app",
+                                "installation_id": installation_id,
+                                "repo_selection": str(inst.get("repository_selection") or ""),
+                            },
+                        )
+                except Exception as exc:
+                    logger.info(
+                        "github app status enrich failed uid=%s err=%s",
+                        uid,
+                        type(exc).__name__,
+                    )
+            return ConnectionStatus(
+                PROVIDER_ID,
+                True,
+                display_name=login or "GitHub App",
+                detail="github_app",
+            )
+
+        token = _token_for_user(uid)
         if not token:
             # Profile alone is not enough without token — force reconnect
             return ConnectionStatus(PROVIDER_ID, False, detail="not_connected")
@@ -41,7 +85,13 @@ class GitHubConnectionProvider:
             user = GitHubClient(token=token).get_user()
             login = str(user.get("login") or profile.get("login") or "").strip()
             token_store.save_connection_profile(
-                uid, {"login": login, "connected": True, "provider": "github"}
+                uid,
+                {
+                    "login": login,
+                    "connected": True,
+                    "provider": "github",
+                    "auth_kind": "pat",
+                },
             )
             return ConnectionStatus(
                 PROVIDER_ID,
@@ -92,17 +142,29 @@ class GitHubConnectionProvider:
                     )
                 if out:
                     return out
-        token = _token_for_user(uid)
-        if not token:
-            return []
         page = max(1, int(page))
         per_page = max(1, min(30, int(per_page)))
         try:
-            from lumen.engine.services.integrations.github.client import GitHubClient
+            profile = token_store.load_connection_profile(uid) or {}
+            auth_kind = str(profile.get("auth_kind") or "").strip().lower()
+            installation_id = str(profile.get("installation_id") or "").strip()
+            if auth_kind == "github_app" and installation_id:
+                from lumen.engine.services.integrations.github.app_auth import (
+                    list_installation_repos,
+                )
 
-            client = GitHubClient(token=token)
-            # Official page parameter from GitHub API
-            rows = client.list_user_repos(page=page, per_page=per_page, max_pages=1)
+                rows = list_installation_repos(
+                    installation_id, page=page, per_page=per_page
+                )
+            else:
+                token = _token_for_user(uid)
+                if not token:
+                    return []
+                from lumen.engine.services.integrations.github.client import GitHubClient
+
+                client = GitHubClient(token=token)
+                # Official page parameter from GitHub API
+                rows = client.list_user_repos(page=page, per_page=per_page, max_pages=1)
             out: list[ConnectionResource] = []
             cache_items: list[dict] = []
             for row in rows:
