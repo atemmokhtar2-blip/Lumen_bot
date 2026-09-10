@@ -235,7 +235,17 @@ def write_github_app_connection(
         "connected_at": now,
         "updated_at": now,
     }
-    return _persist_connection_record(uid, record)
+    ok = _persist_connection_record(uid, record)
+    if ok:
+        try:
+            from lumen.engine.services.integrations.github.app_oauth_state import (
+                bind_installation_to_user,
+            )
+
+            bind_installation_to_user(iid, uid)
+        except Exception:
+            logger.debug("bind installation index soft-fail", exc_info=True)
+    return ok
 
 
 def _load_raw_connection_record(user_id: int) -> dict[str, Any] | None:
@@ -338,6 +348,14 @@ def delete_github_connection(user_id: int) -> None:
     try:
         rec = _load_raw_connection_record(uid) or {}
         iid = str(rec.get("installation_id") or "")
+    except Exception:
+        pass
+    try:
+        from lumen.engine.services.integrations.github.app_oauth_state import (
+            clear_installation_index,
+        )
+
+        clear_installation_index(iid or None, user_id=uid)
     except Exception:
         pass
     col = _get_mongo_collection()

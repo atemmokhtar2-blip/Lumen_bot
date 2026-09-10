@@ -74,6 +74,14 @@ async def github_webhook(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("emit github event failed")
 
+    # GitHub App lifecycle — keep Lumen bindings in sync with installations.
+    install_sync = None
+    if event in {"installation", "installation_repositories"}:
+        try:
+            install_sync = _handle_installation_event(event, action, payload)
+        except Exception:
+            logger.exception("github installation sync failed event=%s action=%s", event, action)
+
     # Direct PR agent (not emit-only): analysis + optional clone/hybrid + comment
     agent_result = None
     if event == "pull_request" and action in {"opened", "synchronize", "reopened"}:
@@ -94,6 +102,8 @@ async def github_webhook(request: web.Request) -> web.Response:
             logger.exception("github pr_agent failed")
 
     out = {"ok": True, "event": event_name, "delivery": delivery}
+    if install_sync is not None:
+        out["installation_sync"] = install_sync
     if agent_result is not None:
         out["agent"] = {
             "ok": agent_result.get("ok"),
@@ -103,6 +113,84 @@ async def github_webhook(request: web.Request) -> web.Response:
             "code_intel_ok": (agent_result.get("code_intel") or {}).get("ok"),
         }
     return web.json_response(out)
+
+
+def _handle_installation_event(event: str, action: str, payload: dict) -> dict:
+    """Map GitHub App installation webhooks to local connection state."""
+    installation = payload.get("installation") or {}
+    iid = installation.get("id")
+    if not iid:
+        return {"ok": False, "error": "missing_installation_id"}
+
+    from lumen.engine.services.integrations.github.app_oauth_state import (
+        clear_installation_index,
+        lookup_user_for_installation,
+    )
+    from lumen.engine.services.integrations.github.app_auth import (
+        clear_installation_token_cache,
+    )
+
+    uid = lookup_user_for_installation(iid)
+    account = (installation.get("account") or {})
+    login = str(account.get("login") or "")
+
+    # Uninstall / suspend → drop local binding for that Telegram user
+    if event == "installation" and action in {"deleted", "suspend"}:
+        clear_installation_token_cache(iid)
+        if uid:
+            try:
+                from lumen.bot.ui.github_connection_store import delete_github_connection
+
+                delete_github_connection(int(uid))
+            except Exception:
+                logger.exception("delete connection on uninstall failed uid=%s", uid)
+        clear_installation_index(iid, user_id=uid)
+        logger.info(
+            "github installation %s install=%s uid=%s login=%s",
+            action,
+            iid,
+            uid,
+            login or "—",
+        )
+        return {"ok": True, "action": action, "installation_id": str(iid), "uid": uid}
+
+    # Repo selection changed under an existing install
+    if event == "installation_repositories" and uid:
+        try:
+            from lumen.bot.ui.github_connection_store import (
+                read_github_profile,
+                write_github_app_connection,
+            )
+
+            prof = read_github_profile(int(uid)) or {}
+            selection = str(
+                (payload.get("repository_selection") or installation.get("repository_selection") or
+                 prof.get("repo_selection") or "")
+            )
+            write_github_app_connection(
+                int(uid),
+                iid,
+                login=str(prof.get("login") or login),
+                account_login=str(prof.get("account_login") or login),
+                account_type=str(prof.get("account_type") or account.get("type") or ""),
+                repo_selection=selection,
+            )
+        except Exception:
+            logger.exception("refresh repo_selection failed uid=%s install=%s", uid, iid)
+            return {"ok": False, "error": "profile_refresh_failed", "uid": uid}
+        return {"ok": True, "action": action, "installation_id": str(iid), "uid": uid}
+
+    # New install without prior state (user installed from GitHub UI, not Telegram)
+    if event == "installation" and action in {"created", "unsuspend"}:
+        logger.info(
+            "github installation %s install=%s login=%s (no telegram bind yet)",
+            action,
+            iid,
+            login or "—",
+        )
+        return {"ok": True, "action": action, "installation_id": str(iid), "uid": uid}
+
+    return {"ok": True, "action": action, "installation_id": str(iid), "uid": uid}
 
 
 __all__ = ["github_webhook", "verify_signature"]

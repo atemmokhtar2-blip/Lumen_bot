@@ -1010,10 +1010,11 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             if github_app_configured():
                 url = build_telegram_install_url(int(uid))
                 text_prompt = (
-                    "🔗 **اتصل بـ GitHub**\n\n"
-                    "اضغط الزر لفتح GitHub واختيار الحساب أو المستودعات "
-                    "التي تسمح لـ Lumen بالوصول إليها.\n"
-                    "بعد التثبيت ستعود لصفحة نجاح — ثم افتح شاشة الاتصالات هنا."
+                    "🔗 *اتصل بـ GitHub*\n\n"
+                    "1) اضغط الزر وافتح GitHub\n"
+                    "2) اختر الحساب والمستودعات المسموح بها لـ Lumen\n"
+                    "3) بعد التثبيت ستظهر صفحة نجاح — ثم ارجع للبوت\n\n"
+                    "_لا نطلب لصق توكن. الصلاحيات تُدار من GitHub._"
                 )
                 try:
                     from telegram import InlineKeyboardButton, InlineKeyboardMarkup

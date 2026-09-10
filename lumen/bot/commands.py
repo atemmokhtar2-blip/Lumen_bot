@@ -102,6 +102,35 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text(t("not_authorized", lang))
         return
 
+    # GitHub App setup return: /start gh_connected
+    try:
+        start_payload = ""
+        if context.args:
+            start_payload = " ".join(str(a) for a in context.args).strip()
+        if user and start_payload.lower() in {"gh_connected", "gh_ok", "github_connected"}:
+            from lumen.engine.services.integrations.connections.credentials import (
+                is_github_connected,
+            )
+            from lumen.bot.ui.github_connection_store import read_github_profile
+
+            connected = is_github_connected(int(user.id))
+            prof = read_github_profile(int(user.id)) or {}
+            login = str(prof.get("account_login") or prof.get("login") or "")
+            if connected:
+                who = f"@{login}" if login else "GitHub"
+                kind = "GitHub App" if str(prof.get("auth_kind") or "") == "github_app" else "PAT"
+                await message.reply_text(
+                    f"✅ تم ربط {who} ({kind}).\n"
+                    "افتح «الاتصالات → GitHub» لعرض المستودعات."
+                )
+            else:
+                await message.reply_text(
+                    "لم يُكتشف اتصال GitHub بعد. "
+                    "إن أنهيت التثبيت للتو، افتح «اتصل بـ GitHub» أو «تحديث القائمة»."
+                )
+    except Exception:
+        pass
+
     lang = get_lang(user, context)
     if context.user_data is not None and "lang" not in context.user_data:
         set_lang(context, lang)

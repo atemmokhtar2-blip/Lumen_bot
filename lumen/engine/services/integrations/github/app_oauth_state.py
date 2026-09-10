@@ -2,6 +2,11 @@
 
 state = base64url(payload_json) + "." + base64url(hmac_sha256)
 payload = {uid, nonce, exp, v}
+
+Security:
+  - HMAC with TBE_TOKEN_SECRET
+  - TTL (default 15m)
+  - Single-use nonce consumed at verify (Redis preferred; in-process fallback)
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from typing import Any
 
@@ -19,6 +25,12 @@ logger = logging.getLogger("lumen.github.app_oauth_state")
 
 _STATE_TTL_SEC = int(os.getenv("GITHUB_APP_STATE_TTL_SEC") or str(15 * 60))
 _VERSION = 1
+_NONCE_PREFIX = "lumen:ghapp:state_nonce:"
+_INSTALL_USER_PREFIX = "lumen:ghapp:install_user:"
+_USER_INSTALL_PREFIX = "lumen:ghapp:user_install:"
+
+_lock = threading.Lock()
+_local_nonces: dict[str, float] = {}  # nonce -> exp
 
 
 def _b64url(data: bytes) -> str:
@@ -45,6 +57,70 @@ def _hmac_key() -> bytes:
     return hashlib.sha256(b"lumen-ghapp-state-v1|" + raw.encode("utf-8")).digest()
 
 
+def _redis():
+    try:
+        from lumen.platform.runtime_config import redis_url as _ru
+
+        url = (_ru() or "").strip()
+    except Exception:
+        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+    if not url:
+        return None
+    try:
+        import redis
+
+        r = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
+            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "3"),
+        )
+        r.ping()
+        return r
+    except Exception:
+        return None
+
+
+def _reserve_nonce(nonce: str, exp: int) -> None:
+    """Mark nonce as issued (not yet consumed)."""
+    ttl = max(30, int(exp - time.time()))
+    r = _redis()
+    if r is not None:
+        try:
+            # value=pending until consumed
+            r.set(f"{_NONCE_PREFIX}{nonce}", "pending", ex=ttl, nx=True)
+            return
+        except Exception:
+            logger.debug("nonce reserve redis failed", exc_info=True)
+    with _lock:
+        _local_nonces[nonce] = float(exp)
+
+
+def _consume_nonce(nonce: str) -> bool:
+    """Return True if nonce was valid and not previously used."""
+    if not nonce:
+        return False
+    r = _redis()
+    if r is not None:
+        try:
+            key = f"{_NONCE_PREFIX}{nonce}"
+            # GETDEL if available, else GET+DELETE
+            try:
+                val = r.getdel(key)
+            except Exception:
+                val = r.get(key)
+                if val is not None:
+                    r.delete(key)
+            return val is not None
+        except Exception:
+            logger.debug("nonce consume redis failed", exc_info=True)
+    with _lock:
+        exp = _local_nonces.pop(nonce, None)
+        if exp is None:
+            return False
+        return float(exp) >= time.time()
+
+
 def sign_install_state(telegram_user_id: int, *, ttl_sec: int | None = None) -> str:
     """Create state binding this Telegram user for the install redirect."""
     uid = int(telegram_user_id or 0)
@@ -52,19 +128,25 @@ def sign_install_state(telegram_user_id: int, *, ttl_sec: int | None = None) -> 
         raise ValueError("telegram_user_id_required")
     ttl = int(ttl_sec if ttl_sec is not None else _STATE_TTL_SEC)
     ttl = max(60, min(3600, ttl))
+    nonce = secrets.token_hex(16)
+    exp = int(time.time()) + ttl
     payload = {
         "v": _VERSION,
         "uid": uid,
-        "nonce": secrets.token_hex(12),
-        "exp": int(time.time()) + ttl,
+        "nonce": nonce,
+        "exp": exp,
     }
     body = _b64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     sig = _b64url(hmac.new(_hmac_key(), body.encode("ascii"), hashlib.sha256).digest())
+    _reserve_nonce(nonce, exp)
     return f"{body}.{sig}"
 
 
-def verify_install_state(state: str) -> dict[str, Any]:
-    """Verify and return payload; raises ValueError on any failure."""
+def verify_install_state(state: str, *, consume: bool = True) -> dict[str, Any]:
+    """Verify and return payload; raises ValueError on any failure.
+
+    When consume=True (default), nonce is single-use — replay fails.
+    """
     raw = (state or "").strip()
     if not raw or raw.count(".") != 1:
         raise ValueError("state_malformed")
@@ -91,7 +173,69 @@ def verify_install_state(state: str) -> dict[str, Any]:
         raise ValueError("state_bad_uid")
     if exp < int(time.time()):
         raise ValueError("state_expired")
-    return {"uid": uid, "nonce": str(payload.get("nonce") or ""), "exp": exp}
+    nonce = str(payload.get("nonce") or "")
+    if consume:
+        if not _consume_nonce(nonce):
+            raise ValueError("state_replay")
+    return {"uid": uid, "nonce": nonce, "exp": exp}
+
+
+def bind_installation_to_user(installation_id: int | str, telegram_user_id: int) -> None:
+    """Index installation_id → telegram uid (for webhooks uninstall)."""
+    try:
+        iid = str(int(installation_id))
+    except (TypeError, ValueError):
+        return
+    uid = int(telegram_user_id or 0)
+    if uid <= 0 or not iid:
+        return
+    r = _redis()
+    if r is None:
+        return
+    try:
+        # 90 days — connection may be long-lived
+        r.set(f"{_INSTALL_USER_PREFIX}{iid}", str(uid), ex=90 * 24 * 3600)
+        r.set(f"{_USER_INSTALL_PREFIX}{uid}", iid, ex=90 * 24 * 3600)
+    except Exception:
+        logger.debug("bind installation index failed", exc_info=True)
+
+
+def lookup_user_for_installation(installation_id: int | str) -> int | None:
+    try:
+        iid = str(int(installation_id))
+    except (TypeError, ValueError):
+        return None
+    r = _redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(f"{_INSTALL_USER_PREFIX}{iid}")
+        if raw:
+            return int(raw)
+    except Exception:
+        logger.debug("lookup installation user failed", exc_info=True)
+    return None
+
+
+def clear_installation_index(installation_id: int | str | None = None, *, user_id: int | None = None) -> None:
+    r = _redis()
+    if r is None:
+        return
+    try:
+        if installation_id is not None:
+            iid = str(int(installation_id))
+            uid_s = r.get(f"{_INSTALL_USER_PREFIX}{iid}")
+            r.delete(f"{_INSTALL_USER_PREFIX}{iid}")
+            if uid_s:
+                r.delete(f"{_USER_INSTALL_PREFIX}{uid_s}")
+        if user_id is not None:
+            uid = int(user_id)
+            iid = r.get(f"{_USER_INSTALL_PREFIX}{uid}")
+            r.delete(f"{_USER_INSTALL_PREFIX}{uid}")
+            if iid:
+                r.delete(f"{_INSTALL_USER_PREFIX}{iid}")
+    except Exception:
+        logger.debug("clear installation index failed", exc_info=True)
 
 
 def build_telegram_install_url(telegram_user_id: int) -> str:
@@ -102,8 +246,20 @@ def build_telegram_install_url(telegram_user_id: int) -> str:
     return install_url(state=state)
 
 
+def telegram_return_url(*, bot_username: str = "", start_payload: str = "gh_connected") -> str:
+    bot = (bot_username or os.getenv("TELEGRAM_BOT_USERNAME") or os.getenv("BOT_USERNAME") or "").strip().lstrip("@")
+    if not bot:
+        return ""
+    payload = (start_payload or "gh_connected").strip()[:64]
+    return f"https://t.me/{bot}?start={payload}"
+
+
 __all__ = [
     "sign_install_state",
     "verify_install_state",
     "build_telegram_install_url",
+    "bind_installation_to_user",
+    "lookup_user_for_installation",
+    "clear_installation_index",
+    "telegram_return_url",
 ]
