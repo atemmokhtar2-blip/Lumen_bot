@@ -50,15 +50,18 @@ jobs:
           pip install cyclonedx-bom
       - name: pip-audit (fail on known CVE)
         run: |
-          pip-audit -r requirements.txt \
+          # Prefer lockfile (exact prod pins); fall back to requirements.txt
+          AUDIT_REQ=requirements.txt
+          if [ -f requirements.lock ]; then AUDIT_REQ=requirements.lock; fi
+          pip-audit -r "$AUDIT_REQ" \
             --progress-spinner off \
             --desc on \
             --format json \
             -o pip-audit.json \
-            || { echo "::error::pip-audit: known vulnerabilities in requirements.txt"; cat pip-audit.json || true; exit 1; }
+            || { echo "::error::pip-audit: known vulnerabilities in $AUDIT_REQ"; cat pip-audit.json; exit 1; }
       - name: Generate CycloneDX SBOM
         run: |
-          pip install -r requirements.txt -q 2>/dev/null || true
+          if [ -f requirements.lock ]; then pip install -r requirements.lock -q; else pip install -r requirements.txt -q; fi
           cyclonedx-py environment -o sbom.cdx.json 2>/dev/null \
             || cyclonedx-py requirements requirements.txt -o sbom.cdx.json
       - uses: actions/upload-artifact@v4
@@ -86,12 +89,17 @@ jobs:
         run: pip install -U -r requirements-security.txt
       - name: Bandit scan (report medium+, fail on HIGH)
         run: |
-          TARGETS="lumen/platform lumen/api lumen/engine/security lumen/engine/services/tool_runtime lumen/engine/services/sandbox_runtime lumen/bot/middlewares"
+          set -euo pipefail
+          TARGETS="lumen/platform lumen/api lumen/engine/security lumen/engine/services/tool_runtime lumen/engine/services/sandbox_runtime lumen/engine/services/hosting lumen/engine/services/multi_agent lumen/bot/middlewares"
+          # Artifact reports (medium+): capture output even if findings exist
           bandit -r $TARGETS -c pyproject.toml -f txt -ll -s B101,B601 -o bandit-report.txt || true
-          tail -100 bandit-report.txt || true
           bandit -r $TARGETS -c pyproject.toml -f json -ll -s B101,B601 -o bandit.json || true
-          bandit -r $TARGETS -c pyproject.toml -lll -s B101,B601 \
-            || { echo "::error::bandit HIGH severity findings"; exit 1; }
+          tail -100 bandit-report.txt || true
+          # HARD GATE: HIGH/CRITICAL must be zero — no soft-pass
+          if ! bandit -r $TARGETS -c pyproject.toml -lll -s B101,B601; then
+            echo "::error::bandit HIGH/CRITICAL findings — failing gate"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -376,6 +376,34 @@ class HostingService:
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة السوق: {gate_exc}")
 
+        # Phase D — permanent host plane is Firecracker only (no Docker/gVisor path)
+        try:
+            from lumen.engine.services.sandbox_runtime.select import (
+                is_production_sandbox_path,
+                select_sandbox_backend,
+            )
+            from lumen.platform.prod_security_gate import assert_production_sandbox_backend
+
+            assert_production_sandbox_backend()
+            if is_production_sandbox_path():
+                backend, probe = select_sandbox_backend(require_available=True)
+                if backend.name != "firecracker":
+                    return HostResult(
+                        ok=False,
+                        message=(
+                            "الاستضافة الدائمة في الإنتاج على Firecracker فقط. "
+                            f"backend={backend.name} مرفوض."
+                        ),
+                        details={"backend": backend.name, "probe": getattr(probe, "reason", "")},
+                    )
+        except RuntimeError as fc_exc:
+            return HostResult(ok=False, message=str(fc_exc)[:400])
+        except Exception as fc_exc:
+            return HostResult(
+                ok=False,
+                message=f"فشل التحقق من مسار Firecracker: {type(fc_exc).__name__}",
+            )
+
         from lumen.engine.services.hosting.contract import token_fingerprint
 
         token_norm = (bot_token or "").strip()

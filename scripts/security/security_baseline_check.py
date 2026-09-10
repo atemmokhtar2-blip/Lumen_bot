@@ -163,11 +163,61 @@ def main() -> int:
         failures,
     )
 
+
+    # Phase D — permanent host / Firecracker production path
+    select_src = _read("lumen/engine/services/sandbox_runtime/select.py")
+    check(
+        "sandbox.production_firecracker_only",
+        "is_production_sandbox_path" in select_src and "firecracker" in select_src.lower(),
+        "select_sandbox_backend production path is Firecracker-only",
+        failures,
+    )
+    host_src = _read("lumen/engine/services/hosting/service.py")
+    check(
+        "hosting.permanent_firecracker_gate",
+        "Firecracker" in host_src and "select_sandbox_backend" in host_src,
+        "HostService enforces Firecracker for permanent host",
+        failures,
+    )
+    gate_src = _read("lumen/platform/prod_security_gate.py")
+    check(
+        "prod_gate.sandbox_backend",
+        "assert_production_sandbox_backend" in gate_src,
+        "boot gate refuses docker/gvisor sandbox in production",
+        failures,
+    )
+    waf = _read("lumen/api/edge_waf.py")
+    app_src = _read("lumen/api/app.py")
+    check(
+        "edge_waf.middleware_registered",
+        "edge_waf_middleware" in app_src and "CF-Ray" in waf,
+        "Edge WAF middleware registered on API app",
+        failures,
+    )
+    sec_yml = _read(".github/workflows/security.yml")
+    # HIGH gate must not soft-pass with || true on the -lll line
+    high_line = [ln for ln in sec_yml.splitlines() if "bandit" in ln and "-lll" in ln]
+    high_ok = bool(high_line) and all("|| true" not in ln for ln in high_line)
+    check(
+        "ci.bandit_no_soft_pass_high",
+        high_ok,
+        "Bandit HIGH (-lll) gate has no || true",
+        failures,
+    )
+    lock = (ROOT / "requirements.lock").exists() and (ROOT / "requirements.txt").exists()
+    check(
+        "supply.requirements_lock",
+        lock,
+        "requirements.lock present for pinned production installs",
+        failures,
+    )
+
     print("---")
     print(f"failures={len(failures)} {failures}")
     if args.strict and failures:
         return 1
     return 0
+
 
 
 if __name__ == "__main__":

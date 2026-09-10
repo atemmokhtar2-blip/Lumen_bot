@@ -175,6 +175,27 @@ def enforce_mongo_uri_or_raise(uri: str) -> str:
     return uri
 
 
+
+
+def assert_production_sandbox_backend() -> None:
+    """Production permanent hosting is Firecracker-only.
+
+    Refuses TBE_SANDBOX_BACKEND in {docker,dind,gvisor} under production multi-tenant.
+    """
+    if not is_production_runtime():
+        return
+    # multi-tenant default on
+    multi = (os.getenv("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
+    if not multi and (os.getenv("TBE_ALLOW_SINGLE_TENANT_WEAK") or "").strip() == "1":
+        return
+    backend = (os.getenv("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
+    if backend in {"docker", "dind", "gvisor"}:
+        raise RuntimeError(
+            f"Production sandbox backend refused: TBE_SANDBOX_BACKEND={backend}. "
+            "Permanent hosting requires Firecracker (set TBE_SANDBOX_BACKEND=firecracker|auto)."
+        )
+
+
 def assert_production_security() -> None:
     """Boot gate — raise RuntimeError if production would run insecurely."""
     if not is_production_runtime():
@@ -207,6 +228,11 @@ def assert_production_security() -> None:
         assert_cors_wildcard_allowed()
     except RuntimeError as exc:
         errors.append(str(exc))
+
+    try:
+        assert_production_sandbox_backend()
+    except RuntimeError as exp:
+        errors.append(str(exp))
 
     # Absolute: host LocalProcess escapes — no ACK in production
     for flag in (
@@ -267,6 +293,7 @@ def assert_production_security() -> None:
 
 __all__ = [
     "assert_production_security",
+    "assert_production_sandbox_backend",
     "assert_redis_url_tls",
     "assert_mongo_uri_tls",
     "enforce_redis_url_or_raise",

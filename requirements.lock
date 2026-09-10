@@ -171,3 +171,9 @@ yarl==1.24.5
     # via aiohttp
 zipp==4.1.0
     # via importlib-metadata
+
+# Phase C/D — API key KDF (from requirements.txt)
+argon2-cffi==23.1.0
+    # via -r requirements.txt
+argon2-cffi-bindings==21.2.0
+    # via argon2-cffi

@@ -9,6 +9,7 @@ from aiohttp import web
 
 from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, github_app, health, hosts, jobs, tenants, usage, runs_ux, secrets, secret_rotation
 from lumen.api.request_firewall import request_firewall_middleware
+from lumen.api.edge_waf import edge_waf_middleware
 
 logger = logging.getLogger("lumen_api")
 
@@ -348,6 +349,7 @@ def create_app() -> web.Application:
         pass
     _mws = [
         request_firewall_middleware,  # reject traversal/probes before auth work
+        edge_waf_middleware,  # Phase D: require provider WAF when public
         error_middleware,
         body_size_guard_middleware,
         json_body_middleware,
