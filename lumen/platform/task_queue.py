@@ -33,6 +33,8 @@ def get_redis():
     url = _redis_url()
     if not url:
         raise RuntimeError("REDIS_URL is required for the RQ task queue")
+    from lumen.platform.prod_security_gate import enforce_redis_url_or_raise
+    url = enforce_redis_url_or_raise(url)
     return redis.Redis.from_url(url)
 
 

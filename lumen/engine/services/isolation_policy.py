@@ -133,7 +133,9 @@ def select_process_driver():
                 f"({decision.reason}; {type(exc).__name__}:{exc})"
             ) from exc
 
-    if decision.allow_local:
+    # Phase A: LocalProcess only when decide_isolation already allowed (dev dual-gate).
+    # Multi-tenant / production never reach allow_local=True.
+    if decision.allow_local and is_dev_environment() and not is_multi_tenant():
         from lumen.engine.services.live_deployment.local_process_driver import (
             LocalProcessDriver,
         )

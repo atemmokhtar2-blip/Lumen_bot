@@ -38,6 +38,13 @@ class RedisRateLimiter:
 
         connect_to = float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2")
         socket_to = float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2")
+        try:
+            from lumen.platform.prod_security_gate import enforce_redis_url_or_raise
+
+            redis_url = enforce_redis_url_or_raise(redis_url)
+        except Exception:
+            # Re-raise TLS / production policy failures; connection errors handled by ping
+            raise
         self._r = redis.Redis.from_url(
             redis_url,
             decode_responses=True,

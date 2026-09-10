@@ -70,7 +70,8 @@ def require_production_data_plane() -> None:
     missing = []
     if not database_url():
         missing.append("DATABASE_URL (PostgreSQL)")
-    if not redis_url():
+    ru = redis_url()
+    if not ru:
         missing.append("REDIS_URL (Redis for RQ + rate limits — mandatory, no SQLite fallback)")
     if missing:
         raise RuntimeError(
@@ -78,6 +79,15 @@ def require_production_data_plane() -> None:
             + ", ".join(missing)
             + ". File/SQLite/Mongo backends are disabled outside verified local dev (deploy platform signals override ENVIRONMENT=dev)."
         )
+    # TLS for Redis (Phase A)
+    try:
+        from lumen.platform.prod_security_gate import assert_redis_url_tls
+
+        assert_redis_url_tls(ru)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"redis TLS validation failed: {exc}") from exc
     # Auth pepper — refuse boot with missing/weak API_KEY_PEPPER
     try:
         from lumen.platform.tenants import require_api_key_pepper

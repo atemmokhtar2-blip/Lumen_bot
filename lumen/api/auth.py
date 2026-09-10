@@ -279,6 +279,7 @@ def require_admin(request: web.Request) -> None:
         ip = "unknown"
 
     # Always charge a tight per-IP probe budget (even before token compare).
+    # Fail-closed: Redis/limiter errors refuse admin auth (no brute-force window).
     try:
         lim = get_rate_limiter()
         probe_limit = int(os.getenv("API_ADMIN_AUTH_RPM") or "20")
@@ -303,7 +304,19 @@ def require_admin(request: web.Request) -> None:
     except web.HTTPException:
         raise
     except Exception:
-        pass
+        try:
+            emit(
+                "auth.admin_rate_limit_unavailable",
+                severity="critical",
+                ip=ip,
+                path=str(request.path),
+            )
+        except Exception:
+            pass
+        raise web.HTTPServiceUnavailable(
+            text='{"error":"admin_rate_limit_unavailable","detail":"redis_required"}',
+            content_type="application/json",
+        )
 
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if not admin:

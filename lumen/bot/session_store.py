@@ -223,6 +223,12 @@ class SessionStore:
 
             connect_to = float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2")
             socket_to = float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2")
+            try:
+                from lumen.platform.prod_security_gate import enforce_redis_url_or_raise
+
+                url = enforce_redis_url_or_raise(url)
+            except RuntimeError:
+                raise
             r = redis.Redis.from_url(
                 url,
                 decode_responses=True,

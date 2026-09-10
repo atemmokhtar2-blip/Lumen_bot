@@ -220,6 +220,17 @@ def _cleanup_application(app) -> None:
     gc.collect()
 
 def main() -> None:
+    try:
+        from lumen.platform.prod_security_gate import assert_production_security
+
+        assert_production_security()
+    except RuntimeError as gate_exc:
+        logger.error("production security gate blocked bot start: %s", gate_exc)
+        raise SystemExit(1) from gate_exc
+    except Exception:
+        logger.exception("production security gate failed")
+        raise SystemExit(1)
+
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN is not set. "

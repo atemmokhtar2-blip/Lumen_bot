@@ -65,6 +65,12 @@ def get_mongo_db():
     uri = resolve_mongodb_uri()
     if not uri:
         raise ValueError("MONGODB_URI (or MONGO_URL / MONGODB_URL) is required")
+    try:
+        from lumen.platform.prod_security_gate import enforce_mongo_uri_or_raise
+
+        uri = enforce_mongo_uri_or_raise(uri)
+    except RuntimeError:
+        raise
     db_name = (os.getenv("MONGODB_DB") or "lumen").strip()
     timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "3000")
     _mongo_client = MongoClient(
