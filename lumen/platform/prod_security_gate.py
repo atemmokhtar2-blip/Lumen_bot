@@ -241,12 +241,28 @@ def assert_production_security() -> None:
         except RuntimeError as exc:
             errors.append(str(exc))
 
+    # Phase B: PAT in production requires dual-ACK
+    if _truthy("GITHUB_ALLOW_PAT"):
+        if (os.getenv("GITHUB_ALLOW_PAT_ACK") or "").strip() != "I_ACCEPT_USER_PAT_IN_PROD":
+            errors.append(
+                "GITHUB_ALLOW_PAT requires GITHUB_ALLOW_PAT_ACK=I_ACCEPT_USER_PAT_IN_PROD"
+            )
+
     if errors:
         msg = "production security gate failed: " + "; ".join(errors)
         logger.error(msg)
         raise RuntimeError(msg)
 
-    logger.info("production security gate passed (phase A complete)")
+    try:
+        from lumen.platform.secret_rotation import assert_rotation_policy
+
+        assert_rotation_policy()
+    except RuntimeError:
+        raise
+    except Exception:
+        logger.exception("secret rotation policy check failed")
+
+    logger.info("production security gate passed (phase A+B)")
 
 
 __all__ = [

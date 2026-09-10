@@ -55,6 +55,13 @@ _MANAGED_KEYS = (
     "STRIPE_WEBHOOK_SECRET",
     "LANGCHAIN_API_KEY",
     "LANGSMITH_API_KEY",
+    # Phase B — GitHub App + webhook material
+    "GITHUB_APP_PRIVATE_KEY",
+    "GITHUB_APP_CLIENT_SECRET",
+    "GITHUB_WEBHOOK_SECRET",
+    "GITHUB_APP_WEBHOOK_SECRET",
+    "CALLBACK_HMAC_SECRET",
+    "TBE_HOST_WEBHOOK_SECRET",
 )
 
 _LOCK = threading.RLock()
@@ -101,11 +108,8 @@ def _required() -> bool:
 def _allow_platform_env_fallback() -> bool:
     """Whether production may load secrets from platform-injected os.environ.
 
-    TEMPORARY DEFAULT: allow (Railway/Render/Fly env vars) so deploys boot
-    without Doppler/Vault. Re-strict with:
-      SECRETS_REQUIRE_MANAGED_PROVIDER=1
-    or:
-      SECRETS_ALLOW_PLATFORM_ENV=0
+    Phase B default: refuse. Prefer Doppler / Vault / AWS SM / GCP SM.
+    Opt-in: SECRETS_ALLOW_PLATFORM_ENV=1 or SECRETS_PLATFORM_ENV_ACK=I_ACCEPT_PLATFORM_ENV_SECRETS.
     """
     if _is_dev_environment():
         return True
@@ -116,8 +120,15 @@ def _allow_platform_env_fallback() -> bool:
         return False
     if raw in {"1", "true", "yes", "on"}:
         return True
-    # Temporary default: allow platform env until managed provider is configured.
-    return True
+    # Phase B: platform-env fallback only with explicit dual-ACK in production.
+    # Prefer Doppler / Vault / AWS SM / GCP SM (managed providers above).
+    if (os.getenv("SECRETS_PLATFORM_ENV_ACK") or "").strip() == "I_ACCEPT_PLATFORM_ENV_SECRETS":
+        logger.warning(
+            "secrets: platform env fallback enabled via SECRETS_PLATFORM_ENV_ACK "
+            "(prefer managed Secret Manager)"
+        )
+        return True
+    return False
 
 
 def load_dotenv_if_dev() -> bool:

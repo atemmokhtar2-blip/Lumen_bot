@@ -92,6 +92,20 @@ def save_github_token(user_id: int, token: str, *, meta: dict[str, Any] | None =
     tok = (token or "").strip()
     if uid <= 0 or not tok or len(tok) > 512:
         return False
+    # Phase B: do not persist new user PATs in production without dual-ACK
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        from lumen.platform.secret_rotation import pat_allowed_in_production
+
+        if is_production_runtime() and not pat_allowed_in_production():
+            logger.warning(
+                "save_github_token refused in production uid=%s "
+                "(GitHub App only; set GITHUB_ALLOW_PAT dual-ACK to override)",
+                uid,
+            )
+            return False
+    except Exception:
+        logger.debug("pat allow check failed", exc_info=True)
     aad = f"gh|{uid}".encode("utf-8")
     try:
         cipher = _encrypt(tok, aad=aad)

@@ -98,12 +98,27 @@ def is_github_connected(user_id: int) -> bool:
         return False
 
 
+def _pat_path_allowed() -> bool:
+    """Production: PAT only with GITHUB_ALLOW_PAT + dual-ACK (Phase B)."""
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        from lumen.platform.secret_rotation import pat_allowed_in_production
+
+        if not is_production_runtime():
+            return True
+        return pat_allowed_in_production()
+    except Exception:
+        # Fail closed for PAT in unknown production-like state
+        env = __import__("os").getenv("ENVIRONMENT", "production").strip().lower()
+        return env in {"dev", "development", "local", "test"}
+
+
 def resolve_github_credentials(user_id: int) -> GitHubCredentials | None:
     """Resolve a usable Bearer token for this Telegram user.
 
     Order:
       1. auth_kind=github_app + installation_id → mint/cache installation token
-      2. PAT from github_connection_store / token_store
+      2. PAT (dev always; production only with GITHUB_ALLOW_PAT dual-ACK)
     """
     uid = int(user_id or 0)
     if uid <= 0:
@@ -161,6 +176,13 @@ def resolve_github_credentials(user_id: int) -> GitHubCredentials | None:
         token = None
 
     if not token:
+        return None
+    if not _pat_path_allowed():
+        logger.warning(
+            "PAT credentials refused in production uid=%s "
+            "(set GITHUB_ALLOW_PAT=1 and GITHUB_ALLOW_PAT_ACK=I_ACCEPT_USER_PAT_IN_PROD)",
+            uid,
+        )
         return None
     return GitHubCredentials(
         token=token,

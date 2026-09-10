@@ -48,7 +48,16 @@ def github_app_configured() -> bool:
 
 
 def _load_private_key_pem() -> bytes:
-    raw = (os.getenv("GITHUB_APP_PRIVATE_KEY") or "").strip()
+    # Prefer in-process secrets store (Phase B managed keys), then environ / path.
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+
+        raw = (get_secret("GITHUB_APP_PRIVATE_KEY", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (os.getenv("GITHUB_APP_PRIVATE_KEY") or "").strip()
     if raw:
         # Support escaped newlines from env managers
         pem = raw.replace("\\n", "\n").encode("utf-8")
