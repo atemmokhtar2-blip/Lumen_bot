@@ -67,7 +67,13 @@ LOCK_BOT_TO_ALLOWLIST = _LOCK_RAW in {"1", "true", "yes", "on"}
 _ALLOW_ALL_RAW = (os.getenv("ALLOW_ALL_USERS") or "").strip().lower()
 
 if _ALLOW_ALL_RAW in {"1", "true", "yes", "on"}:
-    ALLOW_ALL_USERS = True
+    try:
+        from lumen.platform.prod_security_gate import assert_public_bot_allowed
+        assert_public_bot_allowed()
+        ALLOW_ALL_USERS = True
+    except RuntimeError as _pub_exc:
+        logger.error("ALLOW_ALL_USERS refused: %s", _pub_exc)
+        ALLOW_ALL_USERS = False
 elif _ALLOW_ALL_RAW in {"0", "false", "no", "off"}:
     ALLOW_ALL_USERS = False
 elif LOCK_BOT_TO_ALLOWLIST and ALLOWED_USER_IDS:

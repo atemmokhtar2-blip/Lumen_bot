@@ -10,6 +10,13 @@ logger = logging.getLogger("b2b.worker")
 
 
 def main() -> int:
+    try:
+        from lumen.platform.prod_security_gate import assert_production_security
+        assert_production_security()
+    except RuntimeError as exc:
+        logger.error("production security gate blocked worker: %s", exc)
+        return 2
+
     url = (os.getenv("JOB_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
     if not url:
         logger.error("REDIS_URL is required for workers")

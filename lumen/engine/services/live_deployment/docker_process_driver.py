@@ -212,14 +212,16 @@ def _assert_docker_host_policy() -> None:
             )
     sock_ok = (os.getenv("TBE_ALLOW_DOCKER_SOCKET") or "").strip().lower() in {"1", "true", "yes", "on"}
     if (not host or host.startswith("unix://")) and not sock_ok:
-        # Default socket path is common; require explicit opt-in on multi-tenant hosts
         multi = (os.getenv("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
         if multi:
-            # Soft warning path was too weak — require opt-in flag for multi-tenant
             raise RuntimeError(
                 "Multi-tenant production requires TBE_ALLOW_DOCKER_SOCKET=1 "
-                "(acknowledge host docker.sock risk) or DOCKER_HOST with TLS"
+                "and TBE_DOCKER_SOCKET_ACK=I_ACCEPT_DOCKER_SOCKET_RISK "
+                "or DOCKER_HOST with TLS"
             )
+    if sock_ok:
+        from lumen.platform.prod_security_gate import assert_docker_socket_allowed
+        assert_docker_socket_allowed()
 
 
 class DockerProcessDriver(DeploymentProvider):

@@ -44,6 +44,8 @@ except Exception:
 
 
 def main() -> None:
+    from lumen.platform.prod_security_gate import assert_production_security
+    assert_production_security()
     from lumen.api.app import run_api
     run_api()
 

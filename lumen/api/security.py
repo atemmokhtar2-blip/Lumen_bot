@@ -66,10 +66,25 @@ def is_path_inside(child: Path, parent: Path) -> bool:
 def _require_openat2() -> bool:
     """API path checks always require openat2 (fail-closed).
 
-    Production / staging / unset ENVIRONMENT never honor TBE_ALLOW_WEAK_PATH_OPEN.
-    Weak fallback is allowed only when ENVIRONMENT/TBE_ENV is explicitly
-    dev|development|local|test AND TBE_ALLOW_WEAK_PATH_OPEN is truthy.
+    Production never skips openat2. Weak path open is only possible outside
+    production runtime, or in production with dual-ACK (boot gate + runtime).
     """
+    try:
+        from lumen.platform.prod_security_gate import (
+            is_production_runtime,
+            assert_weak_path_open_allowed,
+        )
+        if is_production_runtime():
+            flag = (os.environ.get("TBE_ALLOW_WEAK_PATH_OPEN") or "").strip().lower()
+            if flag in {"1", "true", "yes", "on"}:
+                # Dual-ACK required; raises if missing
+                assert_weak_path_open_allowed()
+                return False  # operator accepted weak path with ACK
+            return True
+    except RuntimeError:
+        raise
+    except Exception:
+        return True  # fail closed: require openat2
     env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
     if env not in {"dev", "development", "local", "test"}:
         return True

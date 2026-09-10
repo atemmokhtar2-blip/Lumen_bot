@@ -26,21 +26,32 @@ _ENC1 = "enc1:"
 
 
 def _raw_secret_material() -> bytes:
-    raw = (
-        (os.getenv("TBE_TOKEN_SECRET") or "").strip()
-        or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-        or (os.getenv("SECRET_KEY") or "").strip()
-    )
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    if not raw:
-        if env in {"production", "prod", "staging"}:
+    # Production: only TBE_TOKEN_SECRET (no silent fallback to admin token).
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        prod = is_production_runtime()
+    except Exception:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
+        prod = env in {"production", "prod", "staging"} or not env
+
+    primary = (os.getenv("TBE_TOKEN_SECRET") or "").strip()
+    if prod:
+        if not primary:
             raise RuntimeError(
                 "TBE_TOKEN_SECRET is required in production for sealing bot tokens at rest"
             )
+        if len(primary) < 32:
+            raise RuntimeError("TBE_TOKEN_SECRET too short (min 32 chars in production)")
+        return primary.encode("utf-8")
+
+    raw = (
+        primary
+        or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+        or (os.getenv("SECRET_KEY") or "").strip()
+    )
+    if not raw:
         raw = "tbe-dev-insecure-token-key"
         logger.warning("using insecure default TBE token seal key (dev only)")
-    if len(raw) < 16 and env in {"production", "prod", "staging"}:
-        raise RuntimeError("TBE_TOKEN_SECRET too short (min 32 chars in production)")
     return raw.encode("utf-8")
 
 

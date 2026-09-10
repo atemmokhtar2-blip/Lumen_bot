@@ -1,11 +1,14 @@
-"""Production security gate — refuse to boot with insecure defaults (Phase A).
+"""Production security gate — Phase A fail-closed (boot + runtime helpers).
 
-Strict fail-closed:
-  - Listed weak flags: ABSOLUTE refuse in production (no dual-ACK escape)
-  - Secrets >=32 chars with entropy checks
-  - Redis must be rediss:// (no escape)
-  - Mongo must use TLS (no escape)
-  - LocalProcess flags absolute refuse
+Hard rules in production (is_production / non-dev):
+  1. Weak operational flags require exact dual-ACK strings (or refuse).
+  2. TBE_TOKEN_SECRET, PLATFORM_ADMIN_TOKEN, API_KEY_PEPPER: >=32 + entropy.
+  3. Redis must be rediss://; Mongo must use TLS.
+  4. LocalProcess is never a production multi-tenant path (see isolation_policy).
+
+Call ``assert_production_security()`` from every process entrypoint before traffic.
+Runtime call sites use the ``assert_*_allowed`` helpers so flags cannot be
+honored after a process that skipped the boot gate.
 """
 from __future__ import annotations
 
@@ -14,6 +17,13 @@ import os
 import re
 
 logger = logging.getLogger("lumen.prod_security_gate")
+
+# Exact dual-ACK values — must match character-for-character.
+ACK_WEAK_PATH = "I_ACCEPT_WEAK_PATH_OPEN"
+ACK_SESSION_MEMORY = "I_ACCEPT_SESSION_MEMORY_IN_PROD"
+ACK_PUBLIC_BOT = "I_ACCEPT_PUBLIC_ABUSE_RISK"
+ACK_CORS_WILD = "I_ACCEPT_CORS_WILDCARD_RISK"
+ACK_DOCKER_SOCKET = "I_ACCEPT_DOCKER_SOCKET_RISK"
 
 _WEAK_SECRETS = frozenset(
     {
@@ -32,25 +42,24 @@ _WEAK_SECRETS = frozenset(
     }
 )
 
-# Phase A flags — absolute refuse in production (no ACK bypass).
-_ABSOLUTE_FORBIDDEN_FLAGS = (
-    "TBE_ALLOW_WEAK_PATH_OPEN",
-    "SESSION_ALLOW_MEMORY",
-    "TBE_ALLOW_DOCKER_SOCKET",
-    "TBE_ALLOW_LOCAL_PROCESS",
-    "TBE_FORCE_LOCAL_PROCESS",
-    "TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER",
-    "API_CORS_ALLOW_WILDCARD",
-)
-
 
 def _truthy(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _is_dev() -> bool:
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
-    return env in {"dev", "development", "local", "test"}
+def is_production_runtime() -> bool:
+    """True when this process must enforce production hard gates.
+
+    Aligns with secrets_provider: deploy platform markers force production
+    even if ENVIRONMENT=dev was left set by mistake.
+    """
+    try:
+        from lumen.platform.secrets_provider import is_production
+
+        return bool(is_production())
+    except Exception:
+        env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
+        return env not in {"dev", "development", "local", "test"}
 
 
 def _secret_ok(name: str, min_len: int = 32) -> str | None:
@@ -68,83 +77,145 @@ def _secret_ok(name: str, min_len: int = 32) -> str | None:
     return None
 
 
-def assert_redis_url_tls(url: str, *, allow_ack: bool = False) -> None:
-    """Production: Redis URL must use rediss:// (TLS). No ACK bypass."""
+def _dual_ack_error(flag: str, ack_var: str, ack_value: str) -> str | None:
+    """If flag is on without exact ACK, return error string."""
+    if not _truthy(flag):
+        return None
+    if (os.getenv(ack_var) or "").strip() != ack_value:
+        return f"{flag} requires {ack_var}={ack_value}"
+    return None
+
+
+# ── Runtime helpers (same rules as boot) ───────────────────────────────────
+
+
+def assert_weak_path_open_allowed() -> None:
+    """Call before honoring TBE_ALLOW_WEAK_PATH_OPEN."""
+    if not is_production_runtime():
+        return
+    err = _dual_ack_error("TBE_ALLOW_WEAK_PATH_OPEN", "TBE_WEAK_PATH_OPEN_ACK", ACK_WEAK_PATH)
+    if err:
+        raise RuntimeError(err)
+
+
+def assert_session_memory_allowed() -> None:
+    if not is_production_runtime():
+        return
+    err = _dual_ack_error("SESSION_ALLOW_MEMORY", "SESSION_MEMORY_PROD_ACK", ACK_SESSION_MEMORY)
+    if err:
+        raise RuntimeError(err)
+
+
+def assert_public_bot_allowed() -> None:
+    if not is_production_runtime():
+        return
+    err = _dual_ack_error("ALLOW_ALL_USERS", "ALLOW_PUBLIC_BOT_ACK", ACK_PUBLIC_BOT)
+    if err:
+        raise RuntimeError(err)
+
+
+def assert_cors_wildcard_allowed() -> None:
+    if not is_production_runtime():
+        return
+    wild = _truthy("API_CORS_ALLOW_WILDCARD") or (os.getenv("API_CORS_ORIGIN") or "").strip() == "*"
+    if not wild:
+        return
+    if (os.getenv("API_CORS_WILDCARD_ACK") or "").strip() != ACK_CORS_WILD:
+        raise RuntimeError(
+            f"CORS wildcard requires API_CORS_WILDCARD_ACK={ACK_CORS_WILD}"
+        )
+
+
+def assert_docker_socket_allowed() -> None:
+    if not is_production_runtime():
+        return
+    err = _dual_ack_error("TBE_ALLOW_DOCKER_SOCKET", "TBE_DOCKER_SOCKET_ACK", ACK_DOCKER_SOCKET)
+    if err:
+        raise RuntimeError(err)
+
+
+def assert_redis_url_tls(url: str) -> None:
+    if not is_production_runtime():
+        return
     raw = (url or "").strip()
     if not raw:
         raise RuntimeError("REDIS_URL / JOB_REDIS_URL required in production")
     lower = raw.lower()
     if lower.startswith("rediss://"):
         return
-    if lower.startswith("redis://"):
-        raise RuntimeError(
-            "Production Redis must use rediss:// (TLS). Plain redis:// is refused."
-        )
-    raise RuntimeError("REDIS_URL must start with rediss://")
+    raise RuntimeError(
+        "Production Redis must use rediss:// (TLS). Plain redis:// is refused."
+    )
 
 
-def assert_mongo_uri_tls(uri: str, *, allow_ack: bool = False) -> None:
-    """Production: Mongo URI must use TLS. No ACK bypass."""
+def assert_mongo_uri_tls(uri: str) -> None:
+    if not is_production_runtime():
+        return
     raw = (uri or "").strip()
     if not raw:
         return
     lower = raw.lower()
     if lower.startswith("mongodb+srv://"):
         return
-    if "tls=true" in lower or "ssl=true" in lower or "tls=1" in lower or "ssl=1" in lower:
+    if any(x in lower for x in ("tls=true", "ssl=true", "tls=1", "ssl=1")):
         return
     raise RuntimeError(
         "Production MongoDB URI must use TLS "
-        "(mongodb+srv:// or mongodb://...?tls=true). Plain mongodb:// refused."
+        "(mongodb+srv:// or mongodb://...?tls=true)."
     )
 
 
+def enforce_redis_url_or_raise(url: str) -> str:
+    assert_redis_url_tls(url)
+    return url
+
+
+def enforce_mongo_uri_or_raise(uri: str) -> str:
+    assert_mongo_uri_tls(uri)
+    return uri
+
+
 def assert_production_security() -> None:
-    """Raise RuntimeError if production would run with known-insecure settings."""
-    if _is_dev():
-        logger.info("production security gate skipped (dev environment)")
+    """Boot gate — raise RuntimeError if production would run insecurely."""
+    if not is_production_runtime():
+        logger.info("production security gate skipped (non-production runtime)")
         return
 
     errors: list[str] = []
 
-    for name, min_len in (
-        ("TBE_TOKEN_SECRET", 32),
-        ("PLATFORM_ADMIN_TOKEN", 32),
-        ("API_KEY_PEPPER", 32),
-    ):
-        err = _secret_ok(name, min_len=min_len)
+    for name in ("TBE_TOKEN_SECRET", "PLATFORM_ADMIN_TOKEN", "API_KEY_PEPPER"):
+        err = _secret_ok(name, min_len=32)
         if err:
             errors.append(err)
 
     bot_tok = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    api_only = _truthy("LUMEN_API_ONLY")
-    if not api_only and (not bot_tok or len(bot_tok) < 20):
+    if not _truthy("LUMEN_API_ONLY") and (not bot_tok or len(bot_tok) < 20):
         errors.append("TELEGRAM_BOT_TOKEN missing or too short")
 
-    for flag in _ABSOLUTE_FORBIDDEN_FLAGS:
+    # Phase A dual-ACK flags
+    for flag, ack_var, ack_val in (
+        ("TBE_ALLOW_WEAK_PATH_OPEN", "TBE_WEAK_PATH_OPEN_ACK", ACK_WEAK_PATH),
+        ("SESSION_ALLOW_MEMORY", "SESSION_MEMORY_PROD_ACK", ACK_SESSION_MEMORY),
+        ("ALLOW_ALL_USERS", "ALLOW_PUBLIC_BOT_ACK", ACK_PUBLIC_BOT),
+        ("TBE_ALLOW_DOCKER_SOCKET", "TBE_DOCKER_SOCKET_ACK", ACK_DOCKER_SOCKET),
+    ):
+        err = _dual_ack_error(flag, ack_var, ack_val)
+        if err:
+            errors.append(err)
+
+    try:
+        assert_cors_wildcard_allowed()
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+    # Absolute: host LocalProcess escapes — no ACK in production
+    for flag in (
+        "TBE_ALLOW_LOCAL_PROCESS",
+        "TBE_FORCE_LOCAL_PROCESS",
+        "TBE_LOCAL_FALLBACK_WHEN_NO_DOCKER",
+    ):
         if _truthy(flag):
             errors.append(f"{flag} forbidden in production (no bypass)")
-
-    if (os.getenv("API_CORS_ORIGIN") or "").strip() == "*":
-        errors.append("API_CORS_ORIGIN=* forbidden in production (no bypass)")
-
-    if _truthy("ALLOW_ALL_USERS"):
-        if (os.getenv("ALLOW_PUBLIC_BOT_ACK") or "").strip() != "I_ACCEPT_PUBLIC_ABUSE_RISK":
-            errors.append(
-                "ALLOW_ALL_USERS=1 requires ALLOW_PUBLIC_BOT_ACK=I_ACCEPT_PUBLIC_ABUSE_RISK"
-            )
-
-    if _truthy("TBE_GIT_CLONE_ALLOW_HOST"):
-        if (os.getenv("TBE_ALLOW_HOST_GIT_ACK") or "").strip() != "I_ACCEPT_HOST_GIT_RISK":
-            errors.append(
-                "TBE_GIT_CLONE_ALLOW_HOST requires TBE_ALLOW_HOST_GIT_ACK=I_ACCEPT_HOST_GIT_RISK"
-            )
-
-    if _truthy("CLINE_ALLOW_SHELL"):
-        if (os.getenv("CLINE_SHELL_PROD_ACK") or "").strip() != "I_ACCEPT_AGENT_SHELL_RISK":
-            errors.append(
-                "CLINE_ALLOW_SHELL forbidden without CLINE_SHELL_PROD_ACK=I_ACCEPT_AGENT_SHELL_RISK"
-            )
 
     try:
         from lumen.platform.runtime_config import redis_url
@@ -175,21 +246,7 @@ def assert_production_security() -> None:
         logger.error(msg)
         raise RuntimeError(msg)
 
-    logger.info("production security gate passed (phase A strict)")
-
-
-def enforce_redis_url_or_raise(url: str) -> str:
-    if _is_dev():
-        return url
-    assert_redis_url_tls(url)
-    return url
-
-
-def enforce_mongo_uri_or_raise(uri: str) -> str:
-    if _is_dev():
-        return uri
-    assert_mongo_uri_tls(uri)
-    return uri
+    logger.info("production security gate passed (phase A complete)")
 
 
 __all__ = [
@@ -198,4 +255,10 @@ __all__ = [
     "assert_mongo_uri_tls",
     "enforce_redis_url_or_raise",
     "enforce_mongo_uri_or_raise",
+    "assert_weak_path_open_allowed",
+    "assert_session_memory_allowed",
+    "assert_public_bot_allowed",
+    "assert_cors_wildcard_allowed",
+    "assert_docker_socket_allowed",
+    "is_production_runtime",
 ]

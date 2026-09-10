@@ -249,19 +249,39 @@ class SessionStore:
         env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
         is_local = env in {"dev", "development", "local", "test"} and not on_platform
 
-        if allow_memory and is_local:
-            self._client = _MemoryBackend()
-            self._backend_name = "memory"
-            logger.warning(
-                "session_store backend=memory (SESSION_ALLOW_MEMORY=1, local only) — "
-                "not multi-worker safe"
-            )
-            return
+        if allow_memory:
+            # Production: only with dual-ACK (still not multi-worker safe — last resort)
+            try:
+                from lumen.platform.prod_security_gate import (
+                    is_production_runtime,
+                    assert_session_memory_allowed,
+                )
+                if is_production_runtime():
+                    assert_session_memory_allowed()
+                    self._client = _MemoryBackend()
+                    self._backend_name = "memory"
+                    logger.critical(
+                        "session_store backend=memory in production with dual-ACK — "
+                        "not multi-worker safe"
+                    )
+                    return
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            if is_local:
+                self._client = _MemoryBackend()
+                self._backend_name = "memory"
+                logger.warning(
+                    "session_store backend=memory (SESSION_ALLOW_MEMORY=1, local only) — "
+                    "not multi-worker safe"
+                )
+                return
 
         raise RuntimeError(
             "REDIS_URL is required for Telegram session persistence "
             "(multi-worker / restart-safe context). "
-            "Set REDIS_URL, or for local only: ENVIRONMENT=dev SESSION_ALLOW_MEMORY=1"
+            "Set REDIS_URL, or dual-ACK SESSION_MEMORY_PROD_ACK for emergency only."
         )
 
     @property

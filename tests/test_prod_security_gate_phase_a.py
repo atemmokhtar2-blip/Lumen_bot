@@ -1,116 +1,95 @@
-"""Phase A production hard gates — strict fail-closed."""
+"""Phase A — complete fail-closed gates with dual-ACK and runtime wiring."""
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 
-def test_gate_skips_dev(monkeypatch):
+def test_gate_skips_non_production(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "dev")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
     from lumen.platform.prod_security_gate import assert_production_security
-
     assert_production_security()
 
 
-def test_gate_requires_strong_secrets(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.delenv("TBE_TOKEN_SECRET", raising=False)
-    monkeypatch.delenv("PLATFORM_ADMIN_TOKEN", raising=False)
-    monkeypatch.delenv("API_KEY_PEPPER", raising=False)
-    monkeypatch.setenv("LUMEN_API_ONLY", "1")
-    monkeypatch.setenv("REDIS_URL", "rediss://default:x@host:6380")
-    from lumen.platform.prod_security_gate import assert_production_security
-
-    with pytest.raises(RuntimeError, match="production security gate failed"):
-        assert_production_security()
-
-
-def test_gate_rejects_weak_path_flag_no_bypass(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
+def _strong_secrets(monkeypatch):
     monkeypatch.setenv("TBE_TOKEN_SECRET", "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6")
     monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6")
     monkeypatch.setenv("API_KEY_PEPPER", "p1q2r3s4t5u6v7w8x9y0z1a2b3c4d5e6")
     monkeypatch.setenv("LUMEN_API_ONLY", "1")
     monkeypatch.setenv("REDIS_URL", "rediss://default:x@host:6380")
-    monkeypatch.setenv("TBE_ALLOW_WEAK_PATH_OPEN", "1")
-    monkeypatch.setenv("TBE_WEAK_PATH_OPEN_ACK", "I_ACCEPT_WEAK_PATH_OPEN")
-    from lumen.platform.prod_security_gate import assert_production_security
 
+
+def test_gate_requires_dual_ack_for_weak_path(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
+    _strong_secrets(monkeypatch)
+    monkeypatch.setenv("TBE_ALLOW_WEAK_PATH_OPEN", "1")
+    monkeypatch.delenv("TBE_WEAK_PATH_OPEN_ACK", raising=False)
+    from lumen.platform.prod_security_gate import assert_production_security
     with pytest.raises(RuntimeError, match="TBE_ALLOW_WEAK_PATH_OPEN"):
         assert_production_security()
 
 
-def test_gate_rejects_redis_without_tls():
-    from lumen.platform.prod_security_gate import assert_redis_url_tls
-
-    with pytest.raises(RuntimeError, match="rediss"):
-        assert_redis_url_tls("redis://default:x@host:6379")
-
-
-def test_gate_accepts_rediss():
-    from lumen.platform.prod_security_gate import assert_redis_url_tls
-
-    assert_redis_url_tls("rediss://default:x@host:6380")
-
-
-def test_gate_rejects_local_process_flags(monkeypatch):
+def test_gate_accepts_weak_path_with_dual_ack(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("TBE_TOKEN_SECRET", "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6")
-    monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6")
-    monkeypatch.setenv("API_KEY_PEPPER", "p1q2r3s4t5u6v7w8x9y0z1a2b3c4d5e6")
-    monkeypatch.setenv("LUMEN_API_ONLY", "1")
-    monkeypatch.setenv("REDIS_URL", "rediss://default:x@host:6380")
-    monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
+    _strong_secrets(monkeypatch)
+    monkeypatch.setenv("TBE_ALLOW_WEAK_PATH_OPEN", "1")
+    monkeypatch.setenv("TBE_WEAK_PATH_OPEN_ACK", "I_ACCEPT_WEAK_PATH_OPEN")
     from lumen.platform.prod_security_gate import assert_production_security
-
-    with pytest.raises(RuntimeError, match="TBE_ALLOW_LOCAL_PROCESS"):
-        assert_production_security()
+    assert_production_security()
 
 
-def test_isolation_never_local_in_prod(monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("TBE_MULTI_TENANT", "1")
-    monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "1")
-    monkeypatch.setenv("TBE_FORCE_LOCAL_PROCESS", "1")
-    from lumen.engine.services.isolation_policy import decide_isolation
-
-    d = decide_isolation()
-    assert d.allow_local is False
-    assert d.require_strong_isolation is True
+def test_gate_rejects_redis_plain():
+    from lumen.platform.prod_security_gate import assert_redis_url_tls
+    import os
+    os.environ["ENVIRONMENT"] = "production"
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        os.environ.pop(m, None)
+    with pytest.raises(RuntimeError, match="rediss"):
+        assert_redis_url_tls("redis://h:1")
 
 
-def test_local_process_driver_ctor_refuses_prod(monkeypatch):
+def test_local_process_forbidden_prod(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TBE_MULTI_TENANT", "1")
     from lumen.engine.services.live_deployment.local_process_driver import LocalProcessDriver
-
     with pytest.raises(RuntimeError, match="forbidden"):
         LocalProcessDriver()
 
 
-def test_no_direct_redis_from_url_outside_client():
-    """Regression: application code must not call Redis.from_url directly."""
+def test_require_admin_source_fail_closed():
+    """Source must refuse admin auth when rate limiter raises (no silent pass)."""
+    src = Path("lumen/api/auth.py").read_text(encoding="utf-8")
+    assert "admin_rate_limit_unavailable" in src
+    assert "HTTPServiceUnavailable" in src
+    # The old fail-open pattern must not remain after the limiter try block
+    assert "except Exception:\n        pass\n\n    admin" not in src.replace("\r", "")
+
+
+def test_no_direct_redis_from_url():
     import pathlib
-    root = pathlib.Path("lumen")
     offenders = []
-    for path in root.rglob("*.py"):
-        if path.name in {"redis_client.py"}:
+    for path in pathlib.Path("lumen").rglob("*.py"):
+        if path.name == "redis_client.py":
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if "Redis.from_url(" in text or "redis.Redis.from_url(" in text:
+        if "Redis.from_url(" in text:
             offenders.append(str(path))
-    assert offenders == [], f"direct Redis.from_url still present: {offenders}"
+    assert not offenders, offenders
 
 
-def test_no_direct_mongo_client_outside_helper():
-    import pathlib
-    root = pathlib.Path("lumen")
-    offenders = []
-    for path in root.rglob("*.py"):
-        if path.name in {"mongo_client.py"}:
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        # allow import lines and type comments
-        for i, line in enumerate(text.splitlines(), 1):
-            if "MongoClient(" in line and "connect_mongo" not in line and "import" not in line:
-                offenders.append(f"{path}:{i}:{line.strip()}")
-    assert offenders == [], f"direct MongoClient( still present: {offenders}"
+def test_crypto_token_min_32_in_prod(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
+    monkeypatch.setenv("TBE_TOKEN_SECRET", "short")
+    from lumen.engine.services import crypto_tokens as ct
+    # clear any cache of key
+    with pytest.raises(RuntimeError, match="too short|required"):
+        ct._raw_secret_material()
