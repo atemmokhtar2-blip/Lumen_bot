@@ -204,9 +204,17 @@ def resolve_github_token(user_id: int) -> str | None:
     return creds.token if creds else None
 
 
+def github_client_for_user(user_id: int):
+    """GitHubClient for this Telegram user (no platform token fallback)."""
+    from lumen.engine.services.integrations.github.client import client_for_user
+
+    return client_for_user(int(user_id))
+
+
 __all__ = [
     "GitHubCredentials",
     "is_github_connected",
     "resolve_github_credentials",
     "resolve_github_token",
+    "github_client_for_user",
 ]

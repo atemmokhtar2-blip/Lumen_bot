@@ -11,6 +11,7 @@ from .credentials import (
     is_github_connected,
     resolve_github_credentials,
     resolve_github_token,
+    github_client_for_user,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "is_github_connected",
     "resolve_github_credentials",
     "resolve_github_token",
+    "github_client_for_user",
 ]

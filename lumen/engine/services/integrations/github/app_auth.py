@@ -310,6 +310,35 @@ def list_installation_repos(
     return out
 
 
+
+def get_repo_installation(owner: str, repo: str) -> dict[str, Any]:
+    """GET /repos/{owner}/{repo}/installation — requires App JWT."""
+    import requests
+
+    own = (owner or "").strip()
+    name = (repo or "").strip()
+    if not own or not name:
+        raise ValueError("owner_repo_required")
+    jwt = build_app_jwt()
+    resp = requests.get(
+        f"{_API}/repos/{own}/{name}/installation",
+        headers=_app_headers(jwt),
+        timeout=float(os.getenv("GITHUB_HTTP_TIMEOUT") or "30"),
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"github_repo_install_{resp.status_code}:{resp.text[:400]}")
+    return dict(resp.json() or {})
+
+
+def get_token_for_repo(owner: str, repo: str) -> str:
+    """Installation access token with rights on this repository (App path)."""
+    inst = get_repo_installation(owner, repo)
+    iid = inst.get("id")
+    if not iid:
+        raise RuntimeError("github_repo_installation_id_missing")
+    return get_installation_token(iid)
+
+
 def install_url(*, state: str = "") -> str:
     """Public install URL for phase 2 Telegram deep-link."""
     slug = (os.getenv("GITHUB_APP_SLUG") or "").strip()
@@ -341,6 +370,8 @@ __all__ = [
     "clear_installation_token_cache",
     "get_installation",
     "list_installation_repos",
+    "get_repo_installation",
+    "get_token_for_repo",
     "install_url",
     "fingerprint_installation",
 ]

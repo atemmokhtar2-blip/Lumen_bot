@@ -1,7 +1,8 @@
 """GitHub REST API v3 client using requests (official API, not a mock).
 
-Auth: GITHUB_TOKEN or token argument (PAT with repo scope).
+Auth: explicit token, per-user credentials (App/PAT), or platform GITHUB_TOKEN.
 API base: https://api.github.com
+Prefer client_for_user(user_id) for Telegram-user operations.
 """
 from __future__ import annotations
 
@@ -179,8 +180,79 @@ class GitHubClient:
         )
 
 
-def _client(token: str | None = None) -> GitHubClient:
-    return GitHubClient(token=token)
+def resolve_access_token(
+    *,
+    token: str | None = None,
+    user_id: int | None = None,
+    owner: str | None = None,
+    repo: str | None = None,
+    allow_platform: bool = True,
+) -> str:
+    """Resolve a Bearer token for GitHub API/git.
+
+    Priority:
+      1) explicit token
+      2) per-user credentials (GitHub App install or PAT)
+      3) App installation token for owner/repo (platform App)
+      4) platform GITHUB_TOKEN / GH_TOKEN (if allow_platform)
+    """
+    if token and str(token).strip():
+        return str(token).strip()
+    if user_id and int(user_id) > 0:
+        try:
+            from lumen.engine.services.integrations.connections.credentials import (
+                resolve_github_token,
+            )
+
+            t = resolve_github_token(int(user_id))
+            if t:
+                return t
+        except Exception:
+            pass
+    if owner and repo:
+        try:
+            from lumen.engine.services.integrations.github.app_auth import (
+                get_token_for_repo,
+                github_app_configured,
+            )
+
+            if github_app_configured():
+                return get_token_for_repo(str(owner), str(repo))
+        except Exception:
+            pass
+    if allow_platform:
+        plat = (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+        if plat:
+            return plat
+    raise ValueError("github_token_unavailable")
+
+
+def _client(token: str | None = None, **kw: Any) -> GitHubClient:
+    if token:
+        return GitHubClient(token=token)
+    try:
+        resolved = resolve_access_token(
+            token=token,
+            user_id=kw.get("user_id"),
+            owner=kw.get("owner"),
+            repo=kw.get("repo"),
+            allow_platform=bool(kw.get("allow_platform", True)),
+        )
+        return GitHubClient(token=resolved)
+    except ValueError:
+        return GitHubClient(token=token)  # raises GITHUB_TOKEN required
+
+
+def client_for_user(user_id: int) -> GitHubClient:
+    """GitHubClient authenticated as this Telegram user's connection."""
+    return GitHubClient(token=resolve_access_token(user_id=int(user_id), allow_platform=False))
+
+
+def client_for_repo(owner: str, repo: str) -> GitHubClient:
+    """GitHubClient with App installation rights on owner/repo (or platform token)."""
+    return GitHubClient(
+        token=resolve_access_token(owner=str(owner), repo=str(repo), allow_platform=True)
+    )
 
 
 def list_repo_issues(owner: str, repo: str, **kw: Any) -> list[dict]:

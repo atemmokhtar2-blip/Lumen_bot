@@ -1,5 +1,8 @@
 """Durable encrypted GitHub PAT + connection profile + repo list cache.
 
+load_github_token is PAT-only. Product paths must use
+connections.credentials.resolve_github_token (App install or PAT).
+
 Redis primary (multi-worker). secret_inbox is mirror only.
 
 Responsibility split

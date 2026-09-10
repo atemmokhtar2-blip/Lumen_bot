@@ -1,6 +1,9 @@
 """GitHub REST API integration (Issues, PRs, comments) + App auth."""
 from .client import (
     GitHubClient,
+    client_for_user,
+    client_for_repo,
+    resolve_access_token,
     get_authenticated_user,
     list_user_repos,
     add_issue_comment,
@@ -20,10 +23,15 @@ from .app_auth import (
     get_installation,
     install_url,
     list_installation_repos,
+    get_repo_installation,
+    get_token_for_repo,
 )
 
 __all__ = [
     "GitHubClient",
+    "client_for_user",
+    "client_for_repo",
+    "resolve_access_token",
     "get_authenticated_user",
     "list_user_repos",
     "add_issue_comment",
@@ -41,4 +49,6 @@ __all__ = [
     "get_installation",
     "install_url",
     "list_installation_repos",
+    "get_repo_installation",
+    "get_token_for_repo",
 ]

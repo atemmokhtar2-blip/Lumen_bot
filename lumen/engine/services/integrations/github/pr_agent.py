@@ -18,8 +18,19 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _token() -> str:
-    return (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+def _token(*, owner: str = "", repo: str = "", user_id: int | None = None) -> str:
+    """Resolve token: user connection → App install for repo → platform env."""
+    try:
+        from lumen.engine.services.integrations.github.client import resolve_access_token
+
+        return resolve_access_token(
+            user_id=user_id,
+            owner=owner or None,
+            repo=repo or None,
+            allow_platform=True,
+        )
+    except Exception:
+        return (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
 
 
 def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
@@ -32,11 +43,18 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
     number = payload.get("number")
     if not repo or not number or "/" not in repo:
         return {"ok": False, "error": "missing_repo_or_number"}
-    if not _token():
-        return {"ok": False, "error": "GITHUB_TOKEN required"}
 
     owner, name_repo = repo.split("/", 1)
     number = int(number)
+    user_id = payload.get("telegram_user_id") or payload.get("user_id")
+    try:
+        user_id = int(user_id) if user_id is not None else None
+    except (TypeError, ValueError):
+        user_id = None
+
+    token = _token(owner=owner, repo=name_repo, user_id=user_id)
+    if not token:
+        return {"ok": False, "error": "GITHUB_TOKEN required"}
 
     from lumen.engine.services.integrations.github.client import (
         get_pull,
@@ -45,8 +63,8 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
         add_issue_comment,
     )
 
-    pr = get_pull(owner, name_repo, number)
-    files_meta = list_pull_files(owner, name_repo, number) or []
+    pr = get_pull(owner, name_repo, number, token=token)
+    files_meta = list_pull_files(owner, name_repo, number, token=token) or []
     filenames = [str(f.get("filename") or "") for f in files_meta if f.get("filename")]
 
     head = pr.get("head") or {}
@@ -77,6 +95,7 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
             files_meta=files_meta,
             head_owner=head_owner,
             head_name=head_name,
+            token=token,
         )
     except Exception as exc:
         logger.exception("pr pipeline failed")
@@ -106,6 +125,7 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
                 event=rev_event,
                 commit_id=post_sha or None,
                 comments=line_comments or None,
+                token=token,
             )
         except Exception as rev_exc:
             logger.warning("review with comments failed (%s); body-only", type(rev_exc).__name__)
@@ -118,11 +138,12 @@ def handle_pr_event(ev: dict[str, Any]) -> dict[str, Any]:
                     event="COMMENT",
                     commit_id=post_sha or None,
                     comments=None,
+                    token=token,
                 )
             except Exception:
                 logger.exception("body-only review failed; issue comment")
                 try:
-                    comment_resp = add_issue_comment(owner, name_repo, number, body)
+                    comment_resp = add_issue_comment(owner, name_repo, number, body, token=token)
                 except Exception:
                     logger.exception("issue comment failed")
 
@@ -295,9 +316,11 @@ def _safe_https_github_clone_url(clone_url: str) -> str:
     return urlunparse(("https", "github.com", path, "", "", ""))
 
 
-def _git_clone_authenticated(clone_url: str, dest: Path, *, ref: str = "") -> None:
+def _git_clone_authenticated(
+    clone_url: str, dest: Path, *, ref: str = "", token: str = ""
+) -> None:
     """Clone via GIT_ASKPASS — token never appears in argv or remote URL."""
-    token = (_token() or "").strip()
+    token = (token or _token() or "").strip()
     url = _safe_https_github_clone_url(clone_url)
     cmd = ["git", "-c", "credential.helper=", "clone", "--depth", "1"]
     if ref:
@@ -361,10 +384,11 @@ def _run_clone_review_repair(
     files_meta: list[dict[str, Any]],
     head_owner: str,
     head_name: str,
+    token: str = "",
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="lumen_pr_") as td:
         root = Path(td) / "repo"
-        _git_clone_authenticated(clone_url, root, ref=ref or "")
+        _git_clone_authenticated(clone_url, root, ref=ref or "", token=token)
 
         from lumen.engine.services.multi_agent.execution_feedback import run_execution_feedback
         from lumen.engine.services.code_intelligence.hybrid_retrieval import hybrid_search
