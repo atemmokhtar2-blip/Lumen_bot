@@ -244,12 +244,17 @@ def assert_production_security() -> None:
         errors.append(str(exp))
 
     # Edge WAF: public production must have shared secret (not spoofable CF-Ray alone)
-    edge_opt = (os.getenv("TBE_EDGE_WAF_OPTIONAL") or "").strip().lower() in {"1", "true", "yes", "on"}
     require_edge = (os.getenv("TBE_REQUIRE_EDGE_WAF") or "").strip().lower()
-    if not edge_opt and require_edge not in {"0", "false", "no", "off"}:
+    edge_opt = (os.getenv("TBE_EDGE_WAF_OPTIONAL") or "").strip().lower() in {"1", "true", "yes", "on"}
+    edge_ack = (os.getenv("TBE_EDGE_WAF_OPTIONAL_ACK") or "").strip()
+    edge_opt_ok = edge_opt and edge_ack == "I_ACCEPT_PUBLIC_ORIGIN_WITHOUT_EDGE_WAF"
+    if require_edge in {"0", "false", "no", "off"}:
+        pass  # explicit disable
+    elif not edge_opt_ok:
         if not (os.getenv("TBE_EDGE_WAF_SECRET") or "").strip():
             errors.append(
-                "TBE_EDGE_WAF_SECRET required in production (or set TBE_EDGE_WAF_OPTIONAL=1 / TBE_REQUIRE_EDGE_WAF=0)"
+                "TBE_EDGE_WAF_SECRET required in production "
+                "(or TBE_EDGE_WAF_OPTIONAL=1 + TBE_EDGE_WAF_OPTIONAL_ACK=I_ACCEPT_PUBLIC_ORIGIN_WITHOUT_EDGE_WAF)"
             )
 
     # Absolute: host LocalProcess escapes — no ACK in production

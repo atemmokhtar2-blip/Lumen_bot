@@ -27,7 +27,7 @@ from .types import SandboxProbe
 logger = logging.getLogger(__name__)
 
 _PRIMARY = "firecracker"
-_DEV_ONLY = frozenset({"gvisor", "dind", "docker"})
+_DEV_ONLY = frozenset({"gvisor", "dind"})  # docker allowed in prod only with isolation ACK
 
 
 def _requested_backend() -> str:

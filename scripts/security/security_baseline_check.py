@@ -211,6 +211,28 @@ def main() -> int:
         "requirements.lock present for pinned production installs",
         failures,
     )
+    # Phase D lock sync + WAF secret dual-ACK + isolated docker ACK strings in code
+    check(
+        "supply.assert_lockfile_script",
+        (ROOT / "scripts/security/assert_lockfile.py").exists(),
+        "assert_lockfile.py exists",
+        failures,
+    )
+    gate = _read("lumen/platform/prod_security_gate.py")
+    check(
+        "prod_gate.docker_isolation_ack",
+        "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER" in gate
+        or "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER" in _read("lumen/engine/services/sandbox_runtime/select.py"),
+        "isolated docker dual-ACK string present",
+        failures,
+    )
+    waf = _read("lumen/api/edge_waf.py")
+    check(
+        "edge_waf.secret_not_cf_ray_alone",
+        "TBE_EDGE_WAF_SECRET" in waf and "compare_digest" in waf,
+        "WAF requires shared secret (not CF-Ray alone)",
+        failures,
+    )
 
     print("---")
     print(f"failures={len(failures)} {failures}")

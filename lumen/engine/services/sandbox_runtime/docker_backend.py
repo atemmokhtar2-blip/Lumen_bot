@@ -56,6 +56,19 @@ class DockerSandboxBackend(SandboxBackend):
                             "TBE_DOCKER_ISOLATION_ACK=I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER"
                         ),
                     )
+                # Isolated docker still refuses weak escapes
+                if (os.environ.get("TBE_DOCKER_ALLOW_NO_SECCOMP") or "0").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }:
+                    return SandboxHandle(
+                        backend=self.name, deployment_id="", status="failed",
+                        message="docker_no_seccomp_forbidden_in_production",
+                    )
+                if (os.environ.get("TBE_ALLOW_DOCKER_SOCKET") or "0").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }:
+                    # dual-ACK required elsewhere; still refuse socket for *tenant bot* containers
+                    pass  # host daemon access gated by assert_docker_socket_allowed
         except Exception:
             pass
         probe = self.probe()

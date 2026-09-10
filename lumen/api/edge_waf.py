@@ -29,7 +29,12 @@ def edge_waf_required() -> bool:
         from lumen.platform.prod_security_gate import is_production_runtime
 
         if is_production_runtime():
-            return not _truthy("TBE_EDGE_WAF_OPTIONAL", "0")
+            # Optional only with explicit dual-ACK (not a loose boolean)
+            opt = (os.getenv("TBE_EDGE_WAF_OPTIONAL") or "").strip()
+            ack = (os.getenv("TBE_EDGE_WAF_OPTIONAL_ACK") or "").strip()
+            if opt in {"1", "true", "yes", "on"} and ack == "I_ACCEPT_PUBLIC_ORIGIN_WITHOUT_EDGE_WAF":
+                return False
+            return True
     except Exception:
         pass
     return False
