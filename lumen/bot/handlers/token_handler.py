@@ -459,6 +459,19 @@ async def try_handle_token(
                 await scrub_and_confirm(update_message=message, bot=context.bot)
             except Exception:
                 logger.exception("PAT scrub before create_repo failed")
+            try:
+                from lumen.platform.prod_security_gate import is_production_runtime
+                from lumen.platform.secret_rotation import pat_allowed_in_production
+                if is_production_runtime() and not pat_allowed_in_production():
+                    await safe_reply_text(
+                        message,
+                        "🔒 إنشاء المستودع في الإنتاج يتم عبر اتصال **GitHub App** فقط.\n"
+                        "اربط GitHub من الاتصالات ثم أعد المحاولة — مسار PAT معطّل.",
+                    )
+                    context.user_data.pop("pending_create_repo", None)
+                    return True
+            except Exception:
+                logger.exception("create_repo PAT gate failed")
             name = str(pending_create.get("name") or "").strip()
             _sent = await safe_reply_text(message, f"🔑 جاري إنشاء المستودع `{name}`...")
 

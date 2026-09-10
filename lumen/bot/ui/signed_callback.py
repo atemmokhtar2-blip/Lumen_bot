@@ -40,7 +40,14 @@ def _secret() -> bytes:
     Production without an explicit secret or bot token fails closed —
     never falls back to a public constant (callback forgery risk).
     """
-    raw = (os.getenv("CALLBACK_HMAC_SECRET") or "").strip()
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (get_secret("CALLBACK_HMAC_SECRET", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (os.getenv("CALLBACK_HMAC_SECRET") or "").strip()
     if raw:
         return hashlib.sha256(raw.encode("utf-8")).digest()
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()

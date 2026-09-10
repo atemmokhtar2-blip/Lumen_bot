@@ -1,14 +1,14 @@
-"""Secret rotation policy (Phase B).
+"""Secret rotation policy (Phase B) — operator-driven, not theater.
 
-Tracks last-rotation timestamps for long-lived platform secrets and enforces
-a maximum age at boot. Operators record a rotation after changing a secret in
-the Secret Manager / platform variables.
+Timestamps are recorded ONLY when:
+  - Admin calls POST /v1/admin/secret-rotation, or
+  - record_rotation() is invoked after a real secret change, or
+  - SECRET_ROTATION_BOOTSTRAP_ACK=I_ACCEPT_ROTATION_BASELINE at first boot
+    (explicit one-time baseline, not silent health fake).
 
-Redis keys: lumen:secret_rotation:{name} → unix ts (string)
-Env overrides:
-  SECRET_ROTATION_MAX_DAYS   default 90
-  SECRET_ROTATION_FAIL_CLOSED  if 1, boot fails when overdue (else critical log)
-  SECRET_ROTATION_NAMES      comma list (default core set)
+Boot policy:
+  - never_recorded → critical log; fail if SECRET_ROTATION_FAIL_CLOSED=1
+  - overdue (age > SECRET_ROTATION_MAX_DAYS, default 90) → same
 """
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ _DEFAULT_NAMES = (
     "GITHUB_WEBHOOK_SECRET",
     "CALLBACK_HMAC_SECRET",
 )
+_BOOTSTRAP_ACK = "I_ACCEPT_ROTATION_BASELINE"
+_PAT_ACK = "I_ACCEPT_USER_PAT_IN_PROD"
 
 
 def _max_age_sec() -> float:
@@ -50,14 +52,16 @@ def _redis():
         url = (redis_url() or "").strip()
         if not url:
             return None
-        return connect_redis_url(url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+        return connect_redis_url(
+            url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+        )
     except Exception:
         logger.debug("secret_rotation redis unavailable", exc_info=True)
         return None
 
 
 def record_rotation(name: str, *, when: float | None = None) -> bool:
-    """Mark ``name`` as rotated now (call after secret is replaced in SM)."""
+    """Mark secret as rotated — call only after the value changed in Secret Manager."""
     key = f"{_PREFIX}{name.strip()}"
     ts = str(int(when if when is not None else time.time()))
     r = _redis()
@@ -66,7 +70,7 @@ def record_rotation(name: str, *, when: float | None = None) -> bool:
         return False
     try:
         r.set(key, ts)
-        logger.info("secret_rotation recorded name=%s", name)
+        logger.info("secret_rotation recorded name=%s ts=%s", name, ts)
         return True
     except Exception:
         logger.exception("record_rotation failed name=%s", name)
@@ -87,7 +91,6 @@ def last_rotation_ts(name: str) -> float | None:
 
 
 def rotation_status(names: Iterable[str] | None = None) -> list[dict]:
-    """Return status rows for operators / admin diagnostics."""
     now = time.time()
     max_age = _max_age_sec()
     out: list[dict] = []
@@ -100,7 +103,7 @@ def rotation_status(names: Iterable[str] | None = None) -> list[dict]:
                 "last_rotation_ts": ts,
                 "age_sec": age,
                 "max_age_sec": max_age,
-                "overdue": age is not None and age > max_age,
+                "overdue": bool(age is not None and age > max_age),
                 "never_recorded": ts is None,
             }
         )
@@ -108,11 +111,7 @@ def rotation_status(names: Iterable[str] | None = None) -> list[dict]:
 
 
 def assert_rotation_policy(*, fail_closed: bool | None = None) -> None:
-    """Boot check: log overdue secrets; optionally refuse start.
-
-    First boot (never_recorded): records baseline timestamps so operators get a
-    90-day window from deploy, not an immediate fail.
-    """
+    """Boot check — does NOT silently baseline (that was hollow)."""
     try:
         from lumen.platform.prod_security_gate import is_production_runtime
 
@@ -125,23 +124,34 @@ def assert_rotation_policy(*, fail_closed: bool | None = None) -> None:
 
     if fail_closed is None:
         fail_closed = (os.getenv("SECRET_ROTATION_FAIL_CLOSED") or "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
+            "1", "true", "yes", "on",
         }
 
+    bootstrap = (os.getenv("SECRET_ROTATION_BOOTSTRAP_ACK") or "").strip() == _BOOTSTRAP_ACK
     rows = rotation_status()
-    overdue: list[str] = []
+    problems: list[str] = []
+
     for row in rows:
         name = row["name"]
         if row["never_recorded"]:
-            # Baseline: mark as rotated at boot so policy starts from now
-            record_rotation(name)
-            logger.info("secret_rotation baseline recorded name=%s", name)
-            continue
-        if row["overdue"]:
-            overdue.append(name)
+            if bootstrap:
+                record_rotation(name)
+                logger.warning(
+                    "secret_rotation BOOTSTRAP baseline name=%s "
+                    "(remove SECRET_ROTATION_BOOTSTRAP_ACK after first deploy)",
+                    name,
+                )
+                continue
+            problems.append(f"{name}:never_recorded")
+            logger.critical(
+                "secret_rotation never recorded for %s — "
+                "POST /v1/admin/secret-rotation after rotating in Secret Manager "
+                "or set SECRET_ROTATION_BOOTSTRAP_ACK=%s once",
+                name,
+                _BOOTSTRAP_ACK,
+            )
+        elif row["overdue"]:
+            problems.append(f"{name}:overdue_age={int(row['age_sec'] or 0)}")
             logger.critical(
                 "secret_rotation overdue name=%s age_sec=%s max=%s",
                 name,
@@ -149,23 +159,18 @@ def assert_rotation_policy(*, fail_closed: bool | None = None) -> None:
                 int(row["max_age_sec"]),
             )
 
-    if overdue and fail_closed:
+    if problems and fail_closed:
         raise RuntimeError(
-            "secret rotation overdue (set SECRET_ROTATION_FAIL_CLOSED=0 to warn-only): "
-            + ", ".join(overdue)
+            "secret rotation policy failed: " + ", ".join(problems)
         )
 
 
 def pat_allowed_in_production() -> bool:
-    """True when operator explicitly allows user PAT path in production."""
     if (os.getenv("GITHUB_ALLOW_PAT") or "").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
+        "1", "true", "yes", "on",
     }:
         return False
-    return (os.getenv("GITHUB_ALLOW_PAT_ACK") or "").strip() == "I_ACCEPT_USER_PAT_IN_PROD"
+    return (os.getenv("GITHUB_ALLOW_PAT_ACK") or "").strip() == _PAT_ACK
 
 
 __all__ = [

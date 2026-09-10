@@ -316,18 +316,24 @@ def _scrub_environ(keys: list[str]) -> int:
 
 
 def get_secret(key: str, default: str = "") -> str:
-    """Read a secret from process memory first, then (dev only) os.environ."""
+    """Read a secret from process memory first, then (dev only) os.environ.
+
+    Production + managed key: store only — never os.environ (Phase B).
+    """
     k = (key or "").strip()
     if not k:
         return default
     with _LOCK:
         if k in _STORE and _STORE[k]:
             return _STORE[k]
-    # Production: do not fall back to environ for managed keys (already scrubbed).
-    # Dev: allow environ / dotenv ergonomics.
     if k in _MANAGED_KEYS and is_production():
         return default
     return (os.getenv(k) or default).strip() or default
+
+
+def managed_secret(key: str, default: str = "") -> str:
+    """Alias for application code — prefer this over os.getenv for secrets."""
+    return get_secret(key, default)
 
 
 def require_secret(key: str) -> str:

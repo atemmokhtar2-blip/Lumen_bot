@@ -57,7 +57,14 @@ def _redis():
 
 
 def _aes_key() -> bytes:
-    raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
     if raw and len(raw) >= 16:
         return hashlib.sha256(raw.encode("utf-8")).digest()

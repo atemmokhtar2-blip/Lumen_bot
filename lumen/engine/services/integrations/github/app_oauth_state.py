@@ -44,11 +44,20 @@ def _b64url_decode(s: str) -> bytes:
 
 
 def _hmac_key() -> bytes:
-    raw = (
-        (os.getenv("TBE_TOKEN_SECRET") or "").strip()
-        or (os.getenv("GITHUB_APP_CLIENT_SECRET") or "").strip()
-        or (os.getenv("SECRET_INBOX_KEY") or "").strip()
-    )
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (
+            (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+            or (get_secret("GITHUB_APP_CLIENT_SECRET", "") or "").strip()
+        )
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (
+            (os.getenv("TBE_TOKEN_SECRET") or "").strip()
+            or (os.getenv("GITHUB_APP_CLIENT_SECRET") or "").strip()
+            or (os.getenv("SECRET_INBOX_KEY") or "").strip()
+        )
     if len(raw) < 16:
         env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
         if env in {"dev", "development", "local", "test"}:

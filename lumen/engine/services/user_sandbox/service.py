@@ -298,12 +298,21 @@ def get_user_sandbox(user_id: int, base_dir: str | Path | None = None) -> UserSa
 def _platform_secret() -> bytes:
     """Legacy helper — prefer crypto_tokens. Never use TELEGRAM_BOT_TOKEN as key."""
     import hashlib
-    raw = (
-        (os.getenv("TBE_TOKEN_SECRET") or "").strip()
-        or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-        or (os.getenv("SECRET_KEY") or "").strip()
-        or "tbe-dev-insecure-token-key"
-    )
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (
+            (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+            or (get_secret("PLATFORM_ADMIN_TOKEN", "") or "").strip()
+        )
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (
+            (os.getenv("TBE_TOKEN_SECRET") or "").strip()
+            or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+            or (os.getenv("SECRET_KEY") or "").strip()
+            or "tbe-dev-insecure-token-key"
+        )
     return hashlib.sha256(raw.encode("utf-8")).digest()
 
 

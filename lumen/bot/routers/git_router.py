@@ -108,10 +108,8 @@ async def try_handle_git(
                 "private": True,
             }
             await safe_reply_text(message, 
-                f"🔒 لإنشاء المستودع `{name}` على GitHub أحتاج توكن PAT:\n\n"
-                "• Classic: `ghp_...` (صلاحية `repo`)\n"
-                "• Fine-grained: `github_pat_...`\n\n"
-                "أرسل التوكن الآن وسأُنشئ المستودع تلقائياً."
+                f"🔒 لإنشاء المستودع `{name}` اربط **GitHub App** من الاتصالات أولاً.\n"
+                "مسار PAT اليدوي متاح في التطوير فقط (أو بإعداد مشغّل متقدم)."
             )
             try:
                 from lumen.bot.ui.input_prompt import ask_text_input
@@ -271,8 +269,7 @@ async def try_handle_git(
             tip = (
                 "⚠️ *الدفع عملية حساسة*\n\n"
                 f"المسار: `{path}`\n"
-                "اضغط تأكيد لتنفيذ `git push` باستخدام اتصال GitHub المحفوظ "
-                "(أو أرسل PAT إن لم يكن هناك اتصال)."
+                "اضغط تأكيد لتنفيذ `git push` باستخدام اتصال GitHub App المحفوظ."
             )
             await safe_reply_text(message, tip, reply_markup=kb, parse_mode="Markdown")
             return True
@@ -282,7 +279,7 @@ async def try_handle_git(
                 context.user_data["pending_git_push"] = {"path": path, "confirmed": True}
             await safe_reply_text(
                 message,
-                "🔒 لا يوجد اتصال GitHub صالح.\nاربط GitHub App أو أرسل PAT بصلاحية push الآن.",
+                "🔒 لا يوجد اتصال GitHub صالح.\nاربط **GitHub App** من الاتصالات ثم أعد المحاولة.",
             )
             return True
 

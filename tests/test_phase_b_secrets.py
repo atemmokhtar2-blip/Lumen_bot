@@ -130,3 +130,36 @@ def test_stripe_uses_managed_secret():
 def test_secret_rotation_routes_registered():
     src = open("lumen/api/app.py", encoding="utf-8").read()
     assert "/v1/admin/secret-rotation" in src
+
+
+def test_rotation_does_not_silent_baseline(monkeypatch):
+    """Without bootstrap ACK, never_recorded stays a problem (not auto-healed)."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
+    monkeypatch.delenv("SECRET_ROTATION_BOOTSTRAP_ACK", raising=False)
+    monkeypatch.setenv("SECRET_ROTATION_FAIL_CLOSED", "1")
+    monkeypatch.setattr(
+        "lumen.platform.secret_rotation.last_rotation_ts",
+        lambda name: None,
+    )
+    monkeypatch.setattr(
+        "lumen.platform.secret_rotation._redis",
+        lambda: None,
+    )
+    from lumen.platform.secret_rotation import assert_rotation_policy
+    with pytest.raises(RuntimeError, match="never_recorded|rotation"):
+        assert_rotation_policy(fail_closed=True)
+
+
+def test_get_secret_no_environ_for_managed_in_prod(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    for m in ("RAILWAY_ENVIRONMENT", "RENDER_SERVICE_ID", "FLY_APP_NAME", "K_SERVICE", "DYNO", "AWS_EXECUTION_ENV"):
+        monkeypatch.delenv(m, raising=False)
+    monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "should_not_be_read_from_environ_after_scrub")
+    from lumen.platform import secrets_provider as sp
+    monkeypatch.setattr(sp, "is_production", lambda: True)
+    # empty store
+    with sp._LOCK:
+        sp._STORE.clear()
+    assert sp.get_secret("PLATFORM_ADMIN_TOKEN", "") == ""
