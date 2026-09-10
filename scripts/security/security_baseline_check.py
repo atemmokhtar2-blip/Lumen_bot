@@ -234,6 +234,32 @@ def main() -> int:
         failures,
     )
 
+    # Phase E — monitoring + pen suite presence
+    check(
+        "phase_e.security_alerts",
+        (ROOT / "lumen/platform/security_alerts.py").exists(),
+        "security_alerts module present",
+        failures,
+    )
+    check(
+        "phase_e.pen_tests",
+        (ROOT / "tests/test_phase_e_monitoring_pen.py").exists(),
+        "Phase E penetration test suite present",
+        failures,
+    )
+    check(
+        "phase_e.weekly_review_workflow",
+        (ROOT / ".github/workflows/security-review-weekly.yml").exists(),
+        "weekly security review workflow present",
+        failures,
+    )
+    se = _read("lumen/platform/security_events.py")
+    check(
+        "phase_e.emit_dispatches_alerts",
+        "dispatch_alert" in se,
+        "security_events.emit dispatches alerts",
+        failures,
+    )
     print("---")
     print(f"failures={len(failures)} {failures}")
     if args.strict and failures:

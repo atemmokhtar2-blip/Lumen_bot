@@ -47,6 +47,17 @@ async def github_webhook(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "GITHUB_WEBHOOK_SECRET not set"}, status=503)
     if not verify_signature(raw, sig):
         logger.warning("github webhook signature failed")
+        try:
+            from lumen.platform.security_events import emit, client_ip
+            emit(
+                "webhook.github_signature_failed",
+                severity="critical",
+                ip=client_ip(request),
+                path=str(request.path),
+                detail={"has_signature": bool(sig)},
+            )
+        except Exception:
+            pass
         return web.json_response({"ok": False, "error": "invalid_signature"}, status=401)
 
     try:

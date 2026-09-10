@@ -1,0 +1,85 @@
+# Phase E — continuous verification: gitleaks + lockfile + baseline + DAST probe
+name: Security Review (weekly)
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"   # Monday 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+concurrency:
+  group: security-review-weekly
+  cancel-in-progress: false
+
+jobs:
+  gitleaks:
+    name: Gitleaks (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lockfile-and-audit:
+    name: Lockfile + pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install audit tools
+        run: pip install -U pip pip-audit
+      - name: Lockfile sync
+        run: python scripts/security/assert_lockfile.py
+      - name: pip-audit (lockfile)
+        run: |
+          set -euo pipefail
+          pip-audit -r requirements.lock --progress-spinner off \
+            || { echo "::error::pip-audit found vulnerabilities"; exit 1; }
+
+  baseline-and-pen:
+    name: Baseline + Phase E pen probes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -U pip
+          if [ -f requirements.lock ]; then pip install -r requirements.lock -q; else pip install -r requirements.txt -q; fi
+          pip install pytest aiohttp -q
+      - name: Security baseline (strict)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENVIRONMENT: test
+          TBE_ENV: test
+        run: python scripts/security/security_baseline_check.py --strict
+      - name: Phase E penetration tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ENVIRONMENT: test
+          TBE_ENV: test
+        run: pytest tests/test_phase_e_monitoring_pen.py -q --tb=line
+
+  dependabot-hygiene:
+    name: Dependabot config present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require dependabot + gitleaks config
+        run: |
+          test -f .github/dependabot.yml
+          test -f .gitleaks.toml
+          grep -q 'package-ecosystem: "pip"' .github/dependabot.yml
+          echo "Dependabot pip ecosystem OK — review open PRs labeled security weekly"

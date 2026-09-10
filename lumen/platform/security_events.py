@@ -90,6 +90,19 @@ def emit(
             logger.critical("security_event %s %s", event_type, ev.detail)
         else:
             logger.info("security_event type=%s severity=%s tenant=%s", event_type, severity, tenant_id)
+        # Phase E — operational alerts for watched / critical events
+        try:
+            from lumen.platform.security_alerts import dispatch_alert
+            dispatch_alert(
+                event_type,
+                severity=severity,
+                ip=ev.ip,
+                path=ev.path,
+                tenant_id=ev.tenant_id,
+                detail=ev.detail,
+            )
+        except Exception:
+            logger.debug("security_alert_dispatch_skipped", exc_info=True)
     except Exception:
         logger.exception("security_event_emit_failed type=%s", event_type)
 

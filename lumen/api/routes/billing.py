@@ -148,12 +148,34 @@ async def stripe_webhook(request: web.Request) -> web.Response:
         ok = bool(verify_webhook_signature(payload, sig))
     except Exception as exc:
         logger.warning("stripe webhook verify failed: %s", exc)
+        try:
+            from lumen.platform.security_events import emit, client_ip
+            emit(
+                "webhook.stripe_signature_failed",
+                severity="critical",
+                ip=client_ip(request),
+                path=str(request.path),
+                detail={"reason": type(exc).__name__},
+            )
+        except Exception:
+            pass
         raise web.HTTPBadRequest(
             text='{"error":"invalid_signature"}',
             content_type="application/json",
         ) from exc
     if not ok:
         logger.warning("stripe webhook invalid_signature")
+        try:
+            from lumen.platform.security_events import emit, client_ip
+            emit(
+                "webhook.stripe_signature_failed",
+                severity="critical",
+                ip=client_ip(request),
+                path=str(request.path),
+                detail={"reason": "invalid_signature"},
+            )
+        except Exception:
+            pass
         raise web.HTTPBadRequest(
             text='{"error":"invalid_signature"}',
             content_type="application/json",
