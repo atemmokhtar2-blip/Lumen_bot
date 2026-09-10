@@ -105,12 +105,16 @@ def bind_github_repo(
 
     try:
         from lumen.engine.services.integrations.connections.credentials import (
-            resolve_github_token,
+            resolve_github_credentials,
         )
 
-        token = resolve_github_token(uid)
+        creds = resolve_github_credentials(uid)
+        token = creds.token if creds else None
+        auth_kind = creds.auth_kind if creds else ""
     except Exception:
-        token = token_store.load_github_token(uid)
+        logger.exception("bind_repo credentials resolve failed uid=%s", uid)
+        token = None
+        auth_kind = ""
     if not token:
         return BindRepoResult(
             ok=False,
@@ -139,6 +143,7 @@ def bind_github_repo(
             url_override=url,
             branch=br,
             depth=1,
+            user_id=uid,
         )
     except Exception as exc:
         logger.exception("bind_github_repo clone failed uid=%s", uid)

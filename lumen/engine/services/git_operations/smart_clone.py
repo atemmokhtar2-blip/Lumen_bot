@@ -590,6 +590,7 @@ def smart_clone(
     timeout_sec: Optional[int] = None,
     sparse_paths: Optional[list[str]] = None,
     prefer_mirror: bool = True,
+    user_id: Optional[int] = None,
 ) -> CloneResult:
     """Clone or refresh via Power Git multi-strategy engine (honest verify).
 
@@ -598,6 +599,9 @@ def smart_clone(
       2. HTTPS shallow clone (+ optional sparse-checkout)
       3. ZIP archive fallback
     Success only after structural verification.
+
+    Token resolution when token is omitted:
+      explicit token → extract from text → per-user credentials (user_id)
     """
     t0 = time.monotonic()
     extracted = extract_repo_url(text) if not url_override else None
@@ -607,6 +611,15 @@ def smart_clone(
         return CloneResult(ok=False, message=err or "لم يتم العثور على رابط مستودع صالح")
 
     tok = token or extract_token(text)
+    if not tok and user_id and int(user_id) > 0:
+        try:
+            from lumen.engine.services.integrations.connections.credentials import (
+                resolve_github_token,
+            )
+
+            tok = resolve_github_token(int(user_id))
+        except Exception:
+            tok = None
     depth_i = 1 if depth is None else max(0, min(int(depth), 50))
     br = (branch or "").strip() or None
     if br and (len(br) > 200 or not re.match(r"^[A-Za-z0-9._/-]+$", br)):

@@ -149,16 +149,11 @@ def resolve_github_credentials(user_id: int) -> GitHubCredentials | None:
     token: str | None = None
     source = "pat"
     try:
-        from lumen.bot.ui.github_connection_store import read_github_token as _read_pat
-
-        # Avoid recursion: read path detects app first; for pure PAT it decrypts.
-        # If profile said pat / empty, call underlying PAT loaders directly.
         from lumen.engine.services.integrations.connections import token_store as ts
 
         token = ts.load_github_token(uid)
         source = "redis_pat"
         if not token:
-            # Mongo recovery without going through App branch again
             token = _read_pat_from_mongo_only(uid)
             source = "mongo_pat" if token else source
     except Exception:

@@ -13,7 +13,7 @@ LABEL_AR = "GitHub"
 
 
 def _token_for_user(user_id: int) -> str | None:
-    """Resolve via credentials (App install token or PAT)."""
+    """Resolve via credentials only (App install token or PAT). Never PAT-store alone."""
     try:
         from lumen.engine.services.integrations.connections.credentials import (
             resolve_github_token,
@@ -22,7 +22,7 @@ def _token_for_user(user_id: int) -> str | None:
         return resolve_github_token(int(user_id))
     except Exception:
         logger.debug("credentials resolve failed uid=%s", user_id, exc_info=True)
-        return token_store.load_github_token(int(user_id))
+        return None
 
 
 class GitHubConnectionProvider:

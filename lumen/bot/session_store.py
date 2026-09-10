@@ -368,10 +368,9 @@ def ensure_account_links(user_id: int, user_data: dict) -> None:
         gc = user_data.get("github_connection")
         if isinstance(gc, dict) and gc.get("connected"):
             return
-        from lumen.bot.ui.github_connection_store import read_github_profile, read_github_token
+        from lumen.bot.ui.github_connection_store import read_github_profile
 
-        # Touch token to self-heal Redis; profile for session flag
-        _ = read_github_token(int(user_id))
+        # Profile only — never mint App tokens on session hydrate
         prof = read_github_profile(int(user_id))
         if isinstance(prof, dict) and prof.get("connected"):
             user_data["github_connection"] = dict(prof)

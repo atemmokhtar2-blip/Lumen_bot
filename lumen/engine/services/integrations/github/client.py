@@ -228,19 +228,15 @@ def resolve_access_token(
 
 
 def _client(token: str | None = None, **kw: Any) -> GitHubClient:
-    if token:
-        return GitHubClient(token=token)
-    try:
-        resolved = resolve_access_token(
-            token=token,
-            user_id=kw.get("user_id"),
-            owner=kw.get("owner"),
-            repo=kw.get("repo"),
-            allow_platform=bool(kw.get("allow_platform", True)),
-        )
-        return GitHubClient(token=resolved)
-    except ValueError:
-        return GitHubClient(token=token)  # raises GITHUB_TOKEN required
+    if token and str(token).strip():
+        return GitHubClient(token=str(token).strip())
+    resolved = resolve_access_token(
+        user_id=kw.get("user_id"),
+        owner=kw.get("owner"),
+        repo=kw.get("repo"),
+        allow_platform=bool(kw.get("allow_platform", True)),
+    )
+    return GitHubClient(token=resolved)
 
 
 def client_for_user(user_id: int) -> GitHubClient:
@@ -255,44 +251,62 @@ def client_for_repo(owner: str, repo: str) -> GitHubClient:
     )
 
 
+def _kw_client(owner: str | None = None, repo: str | None = None, **kw: Any) -> GitHubClient:
+    """Build client from explicit token or resolve via user/repo/platform."""
+    return _client(
+        kw.get("token"),
+        user_id=kw.get("user_id"),
+        owner=owner or kw.get("owner"),
+        repo=repo or kw.get("repo"),
+        allow_platform=kw.get("allow_platform", True),
+    )
+
+
 def list_repo_issues(owner: str, repo: str, **kw: Any) -> list[dict]:
-    return _client(kw.pop("token", None)).list_issues(owner, repo, **kw)
+    client = _kw_client(owner, repo, **kw)
+    kw.pop("token", None)
+    kw.pop("user_id", None)
+    kw.pop("allow_platform", None)
+    return client.list_issues(owner, repo, **kw)
 
 
 def create_issue(owner: str, repo: str, title: str, body: str = "", **kw: Any) -> dict:
-    return _client(kw.get("token")).create_issue(owner, repo, title, body)
+    return _kw_client(owner, repo, **kw).create_issue(owner, repo, title, body)
 
 
 def add_issue_comment(owner: str, repo: str, issue_number: int, body: str, **kw: Any) -> dict:
-    return _client(kw.get("token")).add_comment(owner, repo, issue_number, body)
+    return _kw_client(owner, repo, **kw).add_comment(owner, repo, issue_number, body)
 
 
 def list_issue_comments(owner: str, repo: str, issue_number: int, **kw: Any) -> list[dict]:
-    return _client(kw.get("token")).list_comments(owner, repo, issue_number)
+    return _kw_client(owner, repo, **kw).list_comments(owner, repo, issue_number)
 
 
 def get_pull(owner: str, repo: str, number: int, **kw: Any) -> dict:
-    return _client(kw.get("token")).get_pull(owner, repo, number)
+    return _kw_client(owner, repo, **kw).get_pull(owner, repo, number)
 
 
 def list_pull_files(owner: str, repo: str, number: int, **kw: Any) -> list[dict]:
-    return _client(kw.get("token")).list_pull_files(owner, repo, number)
-
-
+    return _kw_client(owner, repo, **kw).list_pull_files(owner, repo, number)
 
 
 def get_authenticated_user(**kw: Any) -> dict:
-    return _client(kw.get("token")).get_user()
+    return _kw_client(**kw).get_user()
 
 
 def list_user_repos(**kw: Any) -> list[dict]:
     token = kw.pop("token", None)
-    return _client(token).list_user_repos(**kw)
+    user_id = kw.pop("user_id", None)
+    allow_platform = kw.pop("allow_platform", True)
+    client = _client(token, user_id=user_id, allow_platform=allow_platform)
+    return client.list_user_repos(**kw)
+
 
 def create_pull_review(
     owner: str, repo: str, number: int, body: str, **kw: Any
 ) -> dict:
-    return _client(kw.get("token")).create_pull_review(
+    client = _kw_client(owner, repo, **kw)
+    return client.create_pull_review(
         owner,
         repo,
         number,
@@ -305,6 +319,9 @@ def create_pull_review(
 
 __all__ = [
     "GitHubClient",
+    "resolve_access_token",
+    "client_for_user",
+    "client_for_repo",
     "get_authenticated_user",
     "list_user_repos",
     "list_repo_issues",
