@@ -211,7 +211,7 @@ async def try_handle_git(
     if intent == "push":
         path = _active_path(context)
         if not path:
-            await safe_reply_text(message, "مفيش مستودع نشط. اسحب أو أنشئ مستودع أولاً ثم اطلب البوش.")
+            await safe_reply_text(message, "مفيش مستودع نشط مرتبط بالجلسة حالياً.")
             return True
         try:
             path = _validate_user_path(user, path)

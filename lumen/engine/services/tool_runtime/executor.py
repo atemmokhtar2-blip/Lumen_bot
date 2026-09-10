@@ -772,7 +772,7 @@ def _tool_host(
                 tool=name,
                 message=(
                     "ما فيش مشروع نشط للاستضافة.\n"
-                    "اسحب مستودع أو ولّد بوت أولاً، بعدين اطلب الاستضافة."
+                    "لا يوجد مشروع نشط للاستضافة في هذه الجلسة."
                 ),
                 data={"needs_project": True},
             )
@@ -933,7 +933,7 @@ def _tool_git_push(
         return ToolResult(
             ok=False,
             tool="git_push",
-            message="لا يوجد مستودع نشط. اسحب أو اربط مستودعاً أولاً.",
+            message="لا يوجد مستودع نشط مرتبط بهذه الجلسة.",
         )
     token = _resolve_github_token_for_tool(user_id, params)
     if not token:
@@ -985,7 +985,7 @@ def _tool_git_pull(
 ) -> ToolResult:
     path = _active_repo_path(params, user_data)
     if not path or not Path(path).is_dir():
-        return ToolResult(ok=False, tool="git_pull", message="لا يوجد مستودع نشط للسحب.")
+        return ToolResult(ok=False, tool="git_pull", message="لا يوجد مستودع نشط مرتبط بهذه الجلسة.")
     token = _resolve_github_token_for_tool(user_id, params)
     branch = str(params.get("branch") or "").strip() or None
     try:
