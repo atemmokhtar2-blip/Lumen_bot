@@ -47,14 +47,18 @@ def assert_no_unsafe_sandbox_flags() -> None:
 
 
 def assert_firecracker_only_for_hosting() -> None:
-    """Commercial hosting path must not select weak backends in production."""
+    """Commercial hosting: Firecracker default; isolated docker only with dual-ACK."""
     if not is_production():
         return
     pref = (os.environ.get("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
-    if pref in {"docker", "dind", "gvisor"}:
-        raise RuntimeError(
-            f"production_hosting_requires_firecracker: backend={pref}"
-        )
+    if pref in {"gvisor", "dind"}:
+        raise RuntimeError(f"production_hosting_rejects_backend: backend={pref}")
+    if pref == "docker":
+        ack = (os.environ.get("TBE_DOCKER_ISOLATION_ACK") or "").strip()
+        if ack != "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER":
+            raise RuntimeError(
+                "production_hosting_requires_firecracker_or_docker_isolation_ack"
+            )
 
 
 __all__ = [

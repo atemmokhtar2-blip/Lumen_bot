@@ -44,15 +44,18 @@ class DockerSandboxBackend(SandboxBackend):
     def start(self, spec: SandboxSpec) -> SandboxHandle:
         try:
             from .strict import is_production
-            if is_production() and (os.environ.get("TBE_ALLOW_WEAK_SANDBOX") or "0").strip().lower() not in {
-                "1", "true", "yes", "on",
-            }:
-                return SandboxHandle(
-                    backend=self.name,
-                    deployment_id="",
-                    status="failed",
-                    message="docker_forbidden_in_production: use Firecracker",
-                )
+            if is_production():
+                ack = (os.environ.get("TBE_DOCKER_ISOLATION_ACK") or "").strip()
+                if ack != "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER":
+                    return SandboxHandle(
+                        backend=self.name,
+                        deployment_id="",
+                        status="failed",
+                        message=(
+                            "docker_forbidden_in_production: use Firecracker, or set "
+                            "TBE_DOCKER_ISOLATION_ACK=I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER"
+                        ),
+                    )
         except Exception:
             pass
         probe = self.probe()

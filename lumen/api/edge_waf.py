@@ -1,13 +1,16 @@
-"""Edge WAF / reverse-proxy presence check (Phase D).
+"""Edge WAF enforcement (Phase D) — real, not header-theater.
 
-When the API is public on the internet, production should sit behind the
-provider's official WAF (Cloudflare, AWS WAF, GCP Cloud Armor, Azure WAF).
+CF-Ray / CF-Connecting-IP alone are spoofable if the origin is reachable.
+Production therefore requires one of:
+  1) TBE_EDGE_WAF_SECRET  — shared secret injected by the edge (recommended)
+  2) TBE_EDGE_WAF_OPTIONAL=1  — explicit operator opt-out (logged)
 
-This middleware does not replace a real WAF — it refuses direct origin hits
-when required so traffic is forced through the edge.
+When the secret is set, only requests presenting it are accepted (constant-time).
+Provider headers (CF-Ray, etc.) are additional signals, never sufficient alone in prod.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from typing import Any
@@ -36,13 +39,30 @@ def _provider() -> str:
     return (os.getenv("TBE_EDGE_WAF_PROVIDER") or "cloudflare").strip().lower()
 
 
-def _has_edge_mark(request: Any) -> bool:
-    """Detect that the request came through a known edge / WAF."""
+def _edge_secret() -> str:
+    return (os.getenv("TBE_EDGE_WAF_SECRET") or "").strip()
+
+
+def _has_valid_secret(request: Any) -> bool:
+    expected = _edge_secret()
+    if not expected:
+        return False
+    headers = getattr(request, "headers", {}) or {}
+    got = (
+        headers.get("X-Lumen-Edge-Token")
+        or headers.get("X-Edge-Token")
+        or headers.get("X-Lumen-WAF-Token")
+        or ""
+    ).strip()
+    if not got:
+        return False
+    return hmac.compare_digest(got, expected)
+
+
+def _has_provider_mark(request: Any) -> bool:
+    """Soft signal only — never sufficient alone in production."""
     prov = _provider()
     headers = getattr(request, "headers", {}) or {}
-    path = getattr(request, "path", "") or ""
-    peer = getattr(request, "remote", "") or ""
-
     if prov in {"cloudflare", "cf"}:
         if headers.get("CF-Ray") or headers.get("cf-ray"):
             return True
@@ -52,27 +72,42 @@ def _has_edge_mark(request: Any) -> bool:
         if headers.get("X-Amz-Cf-Id") or headers.get("X-Amzn-Trace-Id"):
             return True
     if prov in {"gcp", "cloud_armor", "google"}:
-        if headers.get("Via") and "google" in (headers.get("Via") or "").lower():
-            return True
         if headers.get("X-Cloud-Trace-Context"):
             return True
     if prov in {"azure", "front_door"}:
-        if headers.get("X-Azure-Ref") or headers.get("X-FD-HealthProbe"):
+        if headers.get("X-Azure-Ref"):
             return True
-
-    expected = (os.getenv("TBE_EDGE_WAF_SECRET") or "").strip()
-    if expected:
-        got = (headers.get("X-Lumen-Edge-Token") or headers.get("X-Edge-Token") or "").strip()
-        if got and got == expected:
-            return True
-
-    if peer in {"127.0.0.1", "::1"} and path in {"/ready", "/health", "/metrics"}:
-        return True
     return False
 
 
+def _has_edge_mark(request: Any) -> bool:
+    path = getattr(request, "path", "") or ""
+    peer = getattr(request, "remote", "") or ""
+    if peer in {"127.0.0.1", "::1"} and path in {"/ready", "/health", "/metrics"}:
+        return True
+
+    secret_ok = _has_valid_secret(request)
+    if secret_ok:
+        return True
+
+    # Production: secret is mandatory unless explicitly optional
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+
+        if is_production_runtime() and edge_waf_required():
+            if not _edge_secret():
+                # Misconfiguration: required but no secret → reject (fail closed)
+                logger.error("edge_waf: production requires TBE_EDGE_WAF_SECRET")
+                return False
+            return False  # secret set but not presented
+    except Exception:
+        pass
+
+    # Dev: allow provider marks without secret
+    return _has_provider_mark(request)
+
+
 async def edge_waf_middleware(request, handler):
-    """aiohttp middleware — registered as bare coroutine (aiohttp wraps it)."""
     from aiohttp import web
 
     if not edge_waf_required():
@@ -82,18 +117,20 @@ async def edge_waf_middleware(request, handler):
     if _has_edge_mark(request):
         return await handler(request)
     logger.warning(
-        "edge_waf_rejected path=%s peer=%s provider=%s",
+        "edge_waf_rejected path=%s peer=%s provider=%s has_secret_cfg=%s",
         request.path,
         request.remote,
         _provider(),
+        bool(_edge_secret()),
     )
     return web.json_response(
         {
             "ok": False,
             "error": "edge_waf_required",
             "detail": (
-                "Direct origin access denied. Place the API behind the provider WAF "
-                f"({_provider()}) or set TBE_EDGE_WAF_SECRET / TBE_EDGE_WAF_OPTIONAL=1."
+                "Origin is protected. Configure the provider WAF to inject "
+                "X-Lumen-Edge-Token matching TBE_EDGE_WAF_SECRET, or set "
+                "TBE_EDGE_WAF_OPTIONAL=1 only if the API is not public."
             ),
         },
         status=403,

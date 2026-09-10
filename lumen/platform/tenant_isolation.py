@@ -105,16 +105,23 @@ def verify_project_under_owner(
     user_id: int,
     project_path: str | Path,
     tenant_id: str = "",
+    base_dir: str | Path | None = None,
 ) -> Path:
-    """Resolve + contain project path under the owner's sandbox (no symlink escape)."""
+    """Resolve + contain project path under the owner's sandbox (no symlink escape).
+
+    ``base_dir`` must match HostService.output_root / bot OUTPUT_DIR — never guess a
+    different root (that was a real isolation false-reject / false-accept bug).
+    """
     from lumen.engine.services.user_sandbox import get_user_sandbox
 
-    try:
-        from lumen.platform.paths import default_output_dir
-
-        base = default_output_dir()
-    except Exception:
-        base = os.environ.get("OUTPUT_DIR") or "/tmp"
+    if base_dir is not None:
+        base = base_dir
+    else:
+        try:
+            from lumen.platform.paths import default_output_dir
+            base = default_output_dir()
+        except Exception:
+            base = os.environ.get("OUTPUT_DIR") or "/tmp"
 
     sandbox = get_user_sandbox(int(user_id), base)
     sandbox.ensure()

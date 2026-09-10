@@ -87,19 +87,35 @@ def select_sandbox_backend(*, require_available: bool = True) -> Tuple[SandboxBa
     prod = is_production_sandbox_path()
 
     if prod:
-        if req in _DEV_ONLY:
+        if req in {"gvisor", "dind"}:
             raise RuntimeError(
-                f"production_requires_firecracker: "
-                f"TBE_SANDBOX_BACKEND={req} is dev-only; "
-                f"set TBE_SANDBOX_BACKEND=firecracker (or auto)"
+                f"production_requires_firecracker_or_isolated_docker: "
+                f"TBE_SANDBOX_BACKEND={req} is not allowed in production"
             )
+        if req == "docker":
+            ack = (os.environ.get("TBE_DOCKER_ISOLATION_ACK") or "").strip()
+            if ack != "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER":
+                raise RuntimeError(
+                    "production docker requires TBE_DOCKER_ISOLATION_ACK="
+                    "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER"
+                )
+            b = DockerSandboxBackend()
+            p = b.probe()
+            if require_available and not p.available:
+                raise RuntimeError(f"sandbox_backend_unavailable:docker:{p.reason}")
+            logger.warning(
+                "sandbox selected isolated-docker production=1 reason=%s (prefer Firecracker)",
+                p.reason,
+            )
+            return b, p
+        # auto / firecracker
         b = _primary_backend()
         p = b.probe()
         if require_available and not p.available:
             raise RuntimeError(
                 f"sandbox_backend_unavailable:firecracker:{p.reason}. "
-                "Production hosting requires Firecracker+KVM+jailer+kernel+rootfs. "
-                "No fallback to gVisor/Docker."
+                "Production default is Firecracker+KVM+jailer+kernel+rootfs. "
+                "Or set TBE_SANDBOX_BACKEND=docker with isolation ACK."
             )
         logger.info("sandbox selected backend=firecracker production=1 reason=%s", p.reason)
         return b, p

@@ -254,6 +254,20 @@ class HostingService:
         entry_point: str = "",
         tenant_id: str = "",
     ) -> HostResult:
+        # Phase D: multi-tenant production requires tenant binding on permanent host
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+            if is_production_runtime() and multi and not (tenant_id or "").strip():
+                return HostResult(
+                    ok=False,
+                    message="tenant_id_required: الاستضافة الدائمة في الإنتاج تتطلب ربط المستأجر",
+                )
+        except Exception as _tid_exc:
+            if "tenant_id_required" in str(_tid_exc):
+                raise
         # Phase D isolation: verify path under owner sandbox (openat2 when available)
         try:
             from lumen.platform.tenant_isolation import verify_project_under_owner
@@ -261,6 +275,7 @@ class HostingService:
                 user_id=int(user_id),
                 project_path=project_path,
                 tenant_id=tenant_id or "",
+                base_dir=self.output_root,
             )
         except ValueError as ve:
             return HostResult(ok=False, message=f"عزل المسار: {ve}")
@@ -396,7 +411,7 @@ class HostingService:
         except Exception as gate_exc:
             return HostResult(ok=False, message=f"فشل بوابة السوق: {gate_exc}")
 
-        # Phase D — permanent host plane is Firecracker only (no Docker/gVisor path)
+        # Phase D — permanent host: Firecracker (default) or isolated Docker (+ACK)
         try:
             from lumen.engine.services.sandbox_runtime.select import (
                 is_production_sandbox_path,
@@ -407,11 +422,11 @@ class HostingService:
             assert_production_sandbox_backend()
             if is_production_sandbox_path():
                 backend, probe = select_sandbox_backend(require_available=True)
-                if backend.name != "firecracker":
+                if backend.name not in {"firecracker", "docker"}:
                     return HostResult(
                         ok=False,
                         message=(
-                            "الاستضافة الدائمة في الإنتاج على Firecracker فقط. "
+                            "الاستضافة الدائمة: Firecracker أو Docker المعزول فقط. "
                             f"backend={backend.name} مرفوض."
                         ),
                         details={"backend": backend.name, "probe": getattr(probe, "reason", "")},
@@ -639,15 +654,23 @@ class HostingService:
         # Production / multi-tenant: Firecracker only — never accept weak backends
         try:
             from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
-            if is_production_sandbox_path() and backend_name != "firecracker":
+            if is_production_sandbox_path() and backend_name not in {"firecracker", "docker"}:
                 return HostResult(
                     ok=False,
                     message=(
                         f"مسار الإنتاج يرفض backend={backend_name}. "
-                        "الاستضافة التجارية تتطلب Firecracker microVM فقط."
+                        "المسموح: Firecracker أو Docker المعزول (مع ACK)."
                     ),
                     details={"backend": backend_name},
                 )
+            if is_production_sandbox_path() and backend_name == "docker":
+                ack = (os.environ.get("TBE_DOCKER_ISOLATION_ACK") or "").strip()
+                if ack != "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER":
+                    return HostResult(
+                        ok=False,
+                        message="Docker في الإنتاج يتطلب TBE_DOCKER_ISOLATION_ACK",
+                        details={"backend": backend_name},
+                    )
         except Exception:
             pass
         # Permanent host: refuse "running" without bot health when FC reports meta

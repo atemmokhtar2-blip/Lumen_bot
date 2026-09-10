@@ -24,6 +24,7 @@ ACK_SESSION_MEMORY = "I_ACCEPT_SESSION_MEMORY_IN_PROD"
 ACK_PUBLIC_BOT = "I_ACCEPT_PUBLIC_ABUSE_RISK"
 ACK_CORS_WILD = "I_ACCEPT_CORS_WILDCARD_RISK"
 ACK_DOCKER_SOCKET = "I_ACCEPT_DOCKER_SOCKET_RISK"
+ACK_DOCKER_ISOLATION = "I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER"
 
 _WEAK_SECRETS = frozenset(
     {
@@ -178,22 +179,30 @@ def enforce_mongo_uri_or_raise(uri: str) -> str:
 
 
 def assert_production_sandbox_backend() -> None:
-    """Production permanent hosting is Firecracker-only.
+    """Production hosting: Firecracker (default) or isolated Docker with dual-ACK.
 
-    Refuses TBE_SANDBOX_BACKEND in {docker,dind,gvisor} under production multi-tenant.
+    gVisor/DinD remain forbidden in production. Plain docker requires
+    TBE_DOCKER_ISOLATION_ACK=I_ACCEPT_ISOLATED_DOCKER_NOT_FIRECRACKER and must
+    not enable TBE_ALLOW_DOCKER_SOCKET without its own ACK.
     """
     if not is_production_runtime():
         return
-    # multi-tenant default on
     multi = (os.getenv("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
     if not multi and (os.getenv("TBE_ALLOW_SINGLE_TENANT_WEAK") or "").strip() == "1":
         return
     backend = (os.getenv("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
-    if backend in {"docker", "dind", "gvisor"}:
+    if backend in {"gvisor", "dind"}:
         raise RuntimeError(
             f"Production sandbox backend refused: TBE_SANDBOX_BACKEND={backend}. "
-            "Permanent hosting requires Firecracker (set TBE_SANDBOX_BACKEND=firecracker|auto)."
+            "Use firecracker (default) or docker with TBE_DOCKER_ISOLATION_ACK."
         )
+    if backend == "docker":
+        ack = (os.getenv("TBE_DOCKER_ISOLATION_ACK") or "").strip()
+        if ack != ACK_DOCKER_ISOLATION:
+            raise RuntimeError(
+                "Production docker requires TBE_DOCKER_ISOLATION_ACK="
+                f"{ACK_DOCKER_ISOLATION} (isolated docker path). Prefer Firecracker."
+            )
 
 
 def assert_production_security() -> None:
@@ -233,6 +242,15 @@ def assert_production_security() -> None:
         assert_production_sandbox_backend()
     except RuntimeError as exp:
         errors.append(str(exp))
+
+    # Edge WAF: public production must have shared secret (not spoofable CF-Ray alone)
+    edge_opt = (os.getenv("TBE_EDGE_WAF_OPTIONAL") or "").strip().lower() in {"1", "true", "yes", "on"}
+    require_edge = (os.getenv("TBE_REQUIRE_EDGE_WAF") or "").strip().lower()
+    if not edge_opt and require_edge not in {"0", "false", "no", "off"}:
+        if not (os.getenv("TBE_EDGE_WAF_SECRET") or "").strip():
+            errors.append(
+                "TBE_EDGE_WAF_SECRET required in production (or set TBE_EDGE_WAF_OPTIONAL=1 / TBE_REQUIRE_EDGE_WAF=0)"
+            )
 
     # Absolute: host LocalProcess escapes — no ACK in production
     for flag in (

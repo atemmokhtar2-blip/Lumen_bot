@@ -32,8 +32,9 @@ def test_assert_production_sandbox_allows_firecracker(monkeypatch):
     assert_production_sandbox_backend()  # no raise
 
 
-def test_edge_waf_detects_cloudflare(monkeypatch):
+def test_edge_waf_rejects_spoofable_cf_ray_in_prod(monkeypatch):
     monkeypatch.setenv("TBE_REQUIRE_EDGE_WAF", "1")
+    monkeypatch.setenv("TBE_EDGE_WAF_SECRET", "edge-secret-value-32-characters-x")
     monkeypatch.setenv("TBE_EDGE_WAF_PROVIDER", "cloudflare")
     import importlib.util
     from pathlib import Path
@@ -44,10 +45,18 @@ def test_edge_waf_detects_cloudflare(monkeypatch):
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
+    monkeypatch.setattr(
+        "lumen.platform.prod_security_gate.is_production_runtime", lambda: True
+    )
+    # CF-Ray alone must NOT pass in production
     req = SimpleNamespace(headers={"CF-Ray": "abc123"}, remote="1.2.3.4", path="/v1/me")
-    assert mod._has_edge_mark(req) is True
-    req2 = SimpleNamespace(headers={}, remote="1.2.3.4", path="/v1/me")
-    assert mod._has_edge_mark(req2) is False
+    assert mod._has_edge_mark(req) is False
+    req_ok = SimpleNamespace(
+        headers={"X-Lumen-Edge-Token": "edge-secret-value-32-characters-x"},
+        remote="1.2.3.4",
+        path="/v1/me",
+    )
+    assert mod._has_edge_mark(req_ok) is True
 
 
 def test_edge_waf_secret_header(monkeypatch):
@@ -62,6 +71,9 @@ def test_edge_waf_secret_header(monkeypatch):
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(mod)
+    monkeypatch.setattr(
+        "lumen.platform.prod_security_gate.is_production_runtime", lambda: True
+    )
     req = SimpleNamespace(
         headers={"X-Lumen-Edge-Token": "edge-secret-xyz"},
         remote="1.2.3.4",
@@ -72,8 +84,9 @@ def test_edge_waf_secret_header(monkeypatch):
 
 def test_host_service_has_phase_d_firecracker_gate():
     src = open("lumen/engine/services/hosting/service.py", encoding="utf-8").read()
-    assert "Phase D — permanent host plane" in src
     assert "select_sandbox_backend" in src
+    assert "assert_production_sandbox_backend" in src
+    assert "Firecracker" in src or "firecracker" in src
 
 
 def test_pip_audit_prefers_lockfile():
