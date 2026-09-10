@@ -219,13 +219,34 @@ def _load_pending(state: AgentState) -> Optional[PendingAction]:
 
 
 def _consume_token(action_id: str, token: str) -> bool:
+    """Single-use confirm token — Redis in production, process set in dev."""
     key = f"{action_id}:{token}"
+    redis_key = f"lumen:hitl:consumed:{action_id}:{token[:32]}"
+    try:
+        from lumen.platform.redis_client import connect_redis_url
+        from lumen.platform.runtime_config import redis_url
+        from lumen.platform.prod_security_gate import is_production_runtime
+
+        url = (redis_url() or "").strip()
+        if url:
+            r = connect_redis_url(url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+            # SET NX: first writer wins
+            ok = r.set(redis_key, "1", nx=True, ex=int(_ttl_seconds()) + 300)
+            return bool(ok)
+        if is_production_runtime():
+            return False
+    except Exception:
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            if is_production_runtime():
+                return False
+        except Exception:
+            pass
     with _CONSUMED_LOCK:
         if key in _CONSUMED:
             return False
         _CONSUMED.add(key)
         if len(_CONSUMED) > 2000:
-            # drop arbitrary half
             for _ in range(1000):
                 _CONSUMED.pop()
         return True
@@ -296,6 +317,8 @@ def confirm_action(
     state.extensions["hitl_execute_grant"] = {
         "action_id": action_id,
         "tool": pending.tool,
+        "user_id": int(pending.user_id or state.user_id or 0),
+        "params_digest": str(pending.params_digest or ""),
         "granted_at": time.time(),
         "single_use": True,
     }
@@ -376,16 +399,32 @@ def parse_confirmation_message(text: str) -> tuple[str, str, str] | None:
     return None
 
 
-def consume_execute_grant(state: AgentState, tool: str) -> bool:
-    """Single-use grant after confirm — must match tool and be present."""
+def consume_execute_grant(
+    state: AgentState,
+    tool: str,
+    *,
+    user_id: int = 0,
+    params: dict | None = None,
+) -> bool:
+    """Single-use grant after confirm — bound to user_id + tool + params_digest."""
     grant = (state.extensions or {}).get("hitl_execute_grant")
     if not isinstance(grant, dict):
         return False
-    if str(grant.get("tool") or "") != tool:
+    if str(grant.get("tool") or "") != (tool or "").strip():
         return False
     if not grant.get("single_use"):
         return False
-    # consume
+    uid = int(user_id or state.user_id or 0)
+    grant_uid = int(grant.get("user_id") or 0)
+    if grant_uid and uid and grant_uid != uid:
+        state.record(AgentRole.HITL, "grant_user_mismatch", tool)
+        return False
+    expected_digest = str(grant.get("params_digest") or "")
+    if expected_digest and params is not None:
+        if _params_digest(params) != expected_digest:
+            state.record(AgentRole.HITL, "grant_params_mismatch", tool)
+            return False
+    # consume once
     state.extensions.pop("hitl_execute_grant", None)
     state.extensions["hitl_confirmed"] = False
     pending = _load_pending(state)

@@ -63,30 +63,93 @@ def _sse_ticket_secret() -> bytes:
 
 
 def mint_sse_ticket(tenant_id: str, job_id: str, ttl_sec: int = _SSE_TICKET_DEFAULT_TTL) -> str:
-    """Mint a short-lived, job-scoped ticket for EventSource auth.
+    """Mint a short-lived, job-scoped, single-use ticket for EventSource auth.
 
-    Format (urlsafe): base64url( tenant_id:job_id:exp . hmac_sha256 )
-    The long-lived API key never appears in the EventSource URL.
+    Format (urlsafe): base64url( tenant_id:job_id:exp:jti . hmac_sha256 )
+    jti is reserved in Redis and consumed on first successful verify (Phase C).
     """
+    import secrets as _secrets
+
     tid = (tenant_id or "").strip()
     jid = (job_id or "").strip()
     if not tid or not jid:
         raise ValueError("tenant_id and job_id required")
     ttl = max(60, min(int(ttl_sec), _SSE_TICKET_MAX_TTL))
     exp = int(time.time()) + ttl
-    payload = f"{tid}:{jid}:{exp}".encode("utf-8")
+    jti = _secrets.token_hex(16)
+    payload = f"{tid}:{jid}:{exp}:{jti}".encode("utf-8")
     sig = hmac.new(_sse_ticket_secret(), payload, hashlib.sha256).digest()
     token = base64.urlsafe_b64encode(payload + b"." + sig).decode("ascii").rstrip("=")
+    _sse_reserve_jti(jti, exp)
     return token
 
 
+def _sse_reserve_jti(jti: str, exp: int) -> None:
+    """Reserve single-use SSE jti in Redis (required in production)."""
+    ttl = max(30, int(exp - time.time()))
+    key = f"lumen:sse:jti:{jti}"
+    try:
+        from lumen.platform.redis_client import connect_redis_url
+        from lumen.platform.runtime_config import redis_url
+        from lumen.platform.prod_security_gate import is_production_runtime
+
+        url = (redis_url() or "").strip()
+        if not url:
+            if is_production_runtime():
+                raise RuntimeError("REDIS_URL required for SSE ticket single-use in production")
+            return
+        r = connect_redis_url(url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+        r.set(key, "1", ex=ttl, nx=True)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            if is_production_runtime():
+                raise RuntimeError(f"sse_jti_reserve_failed:{type(exc).__name__}") from exc
+        except RuntimeError:
+            raise
+        # dev: allow without redis
+        return
+
+
+def _sse_consume_jti(jti: str) -> bool:
+    """Consume jti once. Production: Redis only (no in-process fallback)."""
+    if not jti:
+        return False
+    key = f"lumen:sse:jti:{jti}"
+    try:
+        from lumen.platform.redis_client import connect_redis_url
+        from lumen.platform.runtime_config import redis_url
+        from lumen.platform.prod_security_gate import is_production_runtime
+
+        url = (redis_url() or "").strip()
+        if not url:
+            return not is_production_runtime()  # dev without redis: allow once-ish
+        r = connect_redis_url(url, decode_responses=True, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            val = r.getdel(key)
+        except Exception:
+            val = r.get(key)
+            if val is not None:
+                r.delete(key)
+        return val is not None
+    except Exception:
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            if is_production_runtime():
+                return False
+        except Exception:
+            return False
+        return False
+
+
 def verify_sse_ticket(ticket: str) -> tuple[str, str] | None:
-    """Verify ticket. Returns (tenant_id, job_id) or None on any failure."""
+    """Verify ticket and consume jti (single-use). Returns (tenant_id, job_id) or None."""
     raw = (ticket or "").strip()
-    if not raw or len(raw) > 512:
+    if not raw or len(raw) > 768:
         return None
     try:
-        # restore padding
         pad = "=" * (-len(raw) % 4)
         data = base64.urlsafe_b64decode(raw + pad)
         if b"." not in data:
@@ -96,13 +159,29 @@ def verify_sse_ticket(ticket: str) -> tuple[str, str] | None:
         if not hmac.compare_digest(sig, expect):
             return None
         parts = payload.decode("utf-8").split(":")
-        if len(parts) != 3:
+        # v2: tid:jid:exp:jti  | legacy v1: tid:jid:exp (rejected in production)
+        if len(parts) == 4:
+            tid, jid, exp_s, jti = parts
+        elif len(parts) == 3:
+            tid, jid, exp_s = parts
+            jti = ""
+            try:
+                from lumen.platform.prod_security_gate import is_production_runtime
+                if is_production_runtime():
+                    return None  # legacy tickets not single-use
+            except Exception:
+                return None
+        else:
             return None
-        tid, jid, exp_s = parts
         if int(exp_s) < int(time.time()):
             return None
         if not tid or not jid or len(jid) > 128 or ".." in jid or "/" in jid:
             return None
+        if jti and not _sse_consume_jti(jti):
+            return None
+        if not jti:
+            # legacy dev only already gated
+            pass
         return tid, jid
     except Exception:
         return None

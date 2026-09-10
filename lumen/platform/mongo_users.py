@@ -103,8 +103,8 @@ def _new_api_key(prefix: str = "sk_live") -> str:
 
 
 def _hash_key(raw: str) -> str:
-    import hashlib
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    from lumen.platform.api_key_crypto import hash_api_key
+    return hash_api_key(raw)
 
 
 class MongoUserStore:
@@ -216,6 +216,7 @@ class MongoUserStore:
             {
                 "$set": {
                     "api_key_hash": _hash_key(raw),
+                    "api_key_kdf": __import__("lumen.platform.api_key_crypto", fromlist=["kdf_hash"]).kdf_hash(raw),
                     "api_key_prefix": raw[:12],
                     "updated_at": time.time(),
                 }
@@ -226,9 +227,35 @@ class MongoUserStore:
     def authenticate(self, api_key: str):
         if not api_key:
             return None
-        h = _hash_key(api_key.strip())
-        doc = self.col.find_one({"api_key_hash": h, "active": True})
-        return self._doc_to_tenant(doc) if doc else None
+        key = api_key.strip()
+        from lumen.platform.api_key_crypto import lookup_hmac, legacy_sha256, verify_stored
+
+        doc = None
+        for h in (lookup_hmac(key), legacy_sha256(key)):
+            doc = self.col.find_one({"api_key_hash": h, "active": True})
+            if doc:
+                break
+        if not doc:
+            return None
+        ok, upgrade = verify_stored(
+            key,
+            stored_hash=str(doc.get("api_key_hash") or ""),
+            stored_kdf=str(doc.get("api_key_kdf") or (doc.get("metadata") or {}).get("api_key_kdf") or ""),
+        )
+        if not ok:
+            return None
+        if upgrade:
+            try:
+                self.col.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {
+                        "api_key_kdf": upgrade,
+                        "api_key_hash": lookup_hmac(key),
+                    }},
+                )
+            except Exception:
+                pass
+        return self._doc_to_tenant(doc)
 
     def get(self, tenant_id: str):
         doc = self.col.find_one({"tenant_id": tenant_id})

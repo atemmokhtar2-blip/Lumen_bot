@@ -206,13 +206,9 @@ def _key_pepper() -> bytes:
 
 
 def _hash_key(raw: str) -> str:
-    """HMAC-SHA256(api_key, pepper) — not plain SHA256.
-
-    Plain SHA256 of API keys is offline-bruteforceable if the hash store leaks.
-    HMAC with a server-side pepper binds hashes to this deployment.
-    """
-    import hmac
-    return hmac.new(_key_pepper(), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+    """Indexed API key hash (HMAC). KDF field upgraded on authenticate (Phase C)."""
+    from lumen.platform.api_key_crypto import hash_api_key
+    return hash_api_key(raw)
 
 
 @dataclass
@@ -228,6 +224,7 @@ class Tenant:
     custom_domain: str = ""
     # Auth
     api_key_hash: str = ""
+    api_key_kdf: str = ""  # Argon2id/scrypt PHC — progressive upgrade
     api_key_prefix: str = ""  # first 8 chars for display
     owner_telegram_id: int = 0
     # Status
@@ -349,6 +346,7 @@ class TenantStore:
             support_email=str(wl.get("support_email") or "")[:120],
             custom_domain=str(wl.get("custom_domain") or "")[:200],
             api_key_hash=_hash_key(raw),
+            api_key_kdf=__import__("lumen.platform.api_key_crypto", fromlist=["kdf_hash"]).kdf_hash(raw),
             api_key_prefix=raw[:12],
             owner_telegram_id=int(owner_telegram_id or 0),
         )
@@ -378,6 +376,7 @@ class TenantStore:
                 del self._by_key_hash[cur.api_key_hash]
             raw = _new_api_key()
             cur.api_key_hash = _hash_key(raw)
+            cur.api_key_kdf = __import__("lumen.platform.api_key_crypto", fromlist=["kdf_hash"]).kdf_hash(raw)
             cur.api_key_prefix = raw[:12]
             self._by_key_hash[cur.api_key_hash] = tenant_id
             raw_box["raw"] = raw
@@ -388,15 +387,36 @@ class TenantStore:
         if not api_key:
             return None
         key = api_key.strip()
-        h = _hash_key(key)
+        from lumen.platform.api_key_crypto import lookup_hmac, legacy_sha256, verify_stored
+
+        candidates = [lookup_hmac(key), legacy_sha256(key)]
         with exclusive_lock(self.index_path):
             self._load_unlocked()
-            tid = self._by_key_hash.get(h)
+            tid = None
+            for h in candidates:
+                tid = self._by_key_hash.get(h)
+                if tid:
+                    break
             if not tid:
                 return None
             t = self._by_id.get(tid)
             if not t or not t.active:
                 return None
+            ok, upgrade = verify_stored(
+                key, stored_hash=t.api_key_hash or "", stored_kdf=getattr(t, "api_key_kdf", "") or ""
+            )
+            if not ok:
+                return None
+            if upgrade:
+                t.api_key_kdf = upgrade
+                # ensure index uses HMAC form
+                new_h = lookup_hmac(key)
+                if t.api_key_hash != new_h:
+                    if t.api_key_hash in self._by_key_hash:
+                        del self._by_key_hash[t.api_key_hash]
+                    t.api_key_hash = new_h
+                    self._by_key_hash[new_h] = tid
+                self._save_unlocked()
             return t
 
     def get(self, tenant_id: str) -> Tenant | None:

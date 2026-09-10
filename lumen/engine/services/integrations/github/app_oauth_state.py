@@ -102,6 +102,14 @@ def _reserve_nonce(nonce: str, exp: int) -> None:
             return
         except Exception:
             logger.debug("nonce reserve redis failed", exc_info=True)
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        if is_production_runtime():
+            raise RuntimeError("oauth_state_nonce_requires_redis")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
     with _lock:
         _local_nonces[nonce] = float(exp)
 
@@ -124,6 +132,12 @@ def _consume_nonce(nonce: str) -> bool:
             return val is not None
         except Exception:
             logger.debug("nonce consume redis failed", exc_info=True)
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        if is_production_runtime():
+            return False  # redis path already failed
+    except Exception:
+        pass
     with _lock:
         exp = _local_nonces.pop(nonce, None)
         if exp is None:
