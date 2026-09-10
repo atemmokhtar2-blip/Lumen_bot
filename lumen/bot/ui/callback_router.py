@@ -770,6 +770,34 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             if st and st.connected:
                 result.state.slots["gh_connected"] = "1"
                 result.state.slots["gh_login"] = st.display_name or ""
+                try:
+                    from lumen.engine.services.integrations.github.activity_log import list_recent
+                    recent = list_recent(int(uid), limit=1)
+                    if recent:
+                        import time as _time
+                        ts = float(recent[0].get("ts") or 0)
+                        age = int(_time.time() - ts) if ts else 0
+                        if age < 60:
+                            result.state.slots["gh_last_sync"] = "الآن"
+                        elif age < 3600:
+                            result.state.slots["gh_last_sync"] = f"منذ {age // 60} د"
+                        else:
+                            result.state.slots["gh_last_sync"] = f"منذ {max(1, age // 3600)} س"
+                    kind_p = ""
+                    try:
+                        from lumen.bot.ui.github_connection_store import read_github_profile
+                        kind_p = str((read_github_profile(int(uid)) or {}).get("auth_kind") or "")
+                    except Exception:
+                        pass
+                    if kind_p == "github_app":
+                        result.state.slots["gh_perms_line"] = (
+                            "Contents: قراءة · إنشاء Branch/PR عند الحاجة (عبر GitHub App)"
+                        )
+                    else:
+                        result.state.slots["gh_perms_line"] = "حسب صلاحيات الـ PAT المحفوظ"
+                except Exception:
+                    pass
+
                 kind = ""
                 try:
                     from lumen.bot.ui.github_connection_store import read_github_profile
@@ -1076,8 +1104,46 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         except Exception:
             logger.exception("conn_gh_pat prompt failed")
 
-    # Disconnect GitHub — delete durable credentials + caches.
+    # Disconnect — step 1: ask confirmation (no delete yet).
     if result.ok and action_id == "conn_gh_disconnect" and uid:
+        try:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            from lumen.bot.ui.keyboards import encode_callback
+
+            result.state.slots["gh_await_disconnect"] = "1"
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "تأكيد الفصل وحذف الأسرار",
+                            callback_data=encode_callback(
+                                "conn_gh_disconnect_confirm", "", user_id=int(uid)
+                            ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "إلغاء",
+                            callback_data=encode_callback(
+                                "conn_gh_refresh", "", user_id=int(uid)
+                            ),
+                        )
+                    ],
+                ]
+            )
+            _msg = update.effective_message
+            if _msg is not None:
+                await _msg.reply_text(
+                    "⚠️ فصل GitHub سيحذف التوكن/التثبيت المحفوظ نهائيًا من Lumen.\n"
+                    "هل أنت متأكد؟",
+                    reply_markup=kb,
+                )
+            return
+        except Exception:
+            logger.exception("conn_gh_disconnect confirm prompt failed")
+
+    # Disconnect — step 2: confirmed delete.
+    if result.ok and action_id == "conn_gh_disconnect_confirm" and uid:
         try:
             from lumen.bot.ui.github_connection_store import delete_github_connection
 
@@ -1087,6 +1153,7 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                 context.user_data.pop("pending_github_connection", None)
             result.state.slots["gh_connected"] = "0"
             result.state.slots["gh_login"] = ""
+            result.state.slots.pop("gh_await_disconnect", None)
             result.state.slots["gh_status_line"] = "تم فصل الاتصال وحذف بيانات GitHub."
             for i in range(12):
                 result.state.slots.pop(f"gh_r{i}_id", None)
@@ -1102,7 +1169,89 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
             if _msg is not None:
                 await _msg.reply_text("تم فصل GitHub وحذف الأسرار المحفوظة.")
         except Exception:
-            logger.exception("conn_gh_disconnect failed uid=%s", uid)
+            logger.exception("conn_gh_disconnect_confirm failed uid=%s", uid)
+
+    # Activity log surface.
+    if result.ok and action_id == "conn_gh_activity" and uid:
+        try:
+            from lumen.engine.services.integrations.github.activity_log import (
+                format_activity_ar,
+            )
+
+            text_act = format_activity_ar(int(uid), limit=12)
+            _msg = update.effective_message
+            if _msg is not None:
+                await _msg.reply_text(text_act, parse_mode="Markdown")
+            return
+        except Exception:
+            logger.exception("conn_gh_activity failed uid=%s", uid)
+
+    # Confirm / cancel sensitive git push
+    if result.ok and action_id == "gh_confirm_push" and uid:
+        try:
+            pending = (context.user_data or {}).get("pending_git_push") or {}
+            path = str(pending.get("path") or "")
+            if not path:
+                _msg = update.effective_message
+                if _msg is not None:
+                    await _msg.reply_text("لا يوجد دفع معلّق.")
+                return
+            if context.user_data is not None:
+                context.user_data["pending_git_push"] = {
+                    "path": path,
+                    "confirmed": True,
+                    "has_token": pending.get("has_token"),
+                }
+            from lumen.bot.routers import git_router as gr
+            # Re-enter push intent with confirmation flag set
+            class _U:
+                pass
+            # Minimal: run push via internal helper if available; else message
+            token = ""
+            try:
+                from lumen.engine.services.integrations.connections.credentials import (
+                    resolve_github_token,
+                )
+                token = resolve_github_token(int(uid)) or ""
+            except Exception:
+                token = ""
+            from lumen.engine.services.git_safe_import import get_smart_git
+            git_push = get_smart_git().git_push
+            _msg = update.effective_message
+            status_msg = None
+            if _msg is not None:
+                status_msg = await _msg.reply_text("📤 جاري الدفع بعد التأكيد…")
+            import asyncio
+            result_push = await asyncio.to_thread(lambda: git_push(path, token=token or None))
+            if getattr(result_push, "ok", False):
+                if context.user_data is not None:
+                    context.user_data.pop("pending_git_push", None)
+                try:
+                    from lumen.engine.services.integrations.github.activity_log import record as _act
+                    _act(int(uid), "push", detail={"path": path[-80:], "confirmed": True})
+                except Exception:
+                    pass
+                if status_msg is not None:
+                    await status_msg.edit_text(f"✅ {getattr(result_push, 'message', 'تم')}")
+            else:
+                if status_msg is not None:
+                    await status_msg.edit_text(
+                        f"❌ {getattr(result_push, 'message', 'فشل الدفع')}"
+                    )
+            return
+        except Exception:
+            logger.exception("gh_confirm_push failed uid=%s", uid)
+
+    if result.ok and action_id == "gh_cancel_push" and uid:
+        try:
+            if context.user_data is not None:
+                context.user_data.pop("pending_git_push", None)
+            _msg = update.effective_message
+            if _msg is not None:
+                await _msg.reply_text("تم إلغاء الدفع.")
+            return
+        except Exception:
+            logger.exception("gh_cancel_push failed")
 
     text = render_ui_message(result.state, facts)
     if not result.ok:

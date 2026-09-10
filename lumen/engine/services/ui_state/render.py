@@ -171,13 +171,27 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         status = (state.slots or {}).get("gh_status_line") or ""
         bound = (state.slots or {}).get("gh_bound_path") or ""
         selected = (state.slots or {}).get("gh_selected_full") or ""
-        if (state.slots or {}).get("gh_connected") == "1":
+        last_sync = (state.slots or {}).get("gh_last_sync") or ""
+        perms = (state.slots or {}).get("gh_perms_line") or ""
+        if (state.slots or {}).get("gh_await_disconnect") == "1":
+            body = (
+                "⚠️ تأكيد فصل الاتصال: سيتم حذف أسرار GitHub من Lumen نهائيًا. "
+                "اضغط «تأكيد الفصل» للمتابعة أو «تحديث القائمة» للإلغاء."
+            )
+        elif (state.slots or {}).get("gh_connected") == "1":
             body = status or (
                 f"متصل{(' كـ @' + login) if login else ''}. اختر مستودعاً من الأزرار."
             )
         else:
-            body = status or "غير متصل. اضغط «ربط GitHub» وأرسل PAT بصلاحية repo."
+            body = status or (
+                "غير متصل. اضغط «اتصل بـ GitHub» لربط التطبيق، "
+                "أو «ربط يدوي (PAT)» للمسار المتقدم."
+            )
         sections = [("الحالة", body)]
+        if perms:
+            sections.append(("الصلاحيات", perms))
+        if last_sync:
+            sections.append(("آخر مزامنة", last_sync))
         if selected:
             sections.append(("المختار", selected))
         if bound:
@@ -185,7 +199,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         sections.append(
             (
                 "ملاحظة",
-                "القائمة من api.github.com. بعد الاختيار يتم السحب والربط تلقائياً.",
+                "القراءة تلقائية بعد الربط. الدفع وفتح PR يحتاجان تأكيدًا منفصلًا.",
             )
         )
         return html_card(

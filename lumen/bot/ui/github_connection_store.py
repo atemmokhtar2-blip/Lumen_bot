@@ -245,6 +245,21 @@ def write_github_app_connection(
             bind_installation_to_user(iid, uid)
         except Exception:
             logger.debug("bind installation index soft-fail", exc_info=True)
+        try:
+            from lumen.engine.services.integrations.github.activity_log import record as _act
+
+            _act(
+                uid,
+                "connected",
+                detail={
+                    "auth_kind": "github_app",
+                    "login": account,
+                    "installation_id": iid,
+                    "repo_selection": (repo_selection or "")[:20],
+                },
+            )
+        except Exception:
+            pass
     return ok
 
 
@@ -356,6 +371,12 @@ def delete_github_connection(user_id: int) -> None:
         )
 
         clear_installation_index(iid or None, user_id=uid)
+    except Exception:
+        pass
+    try:
+        from lumen.engine.services.integrations.github.activity_log import record as _act
+
+        _act(uid, "disconnected", detail={"installation_id": iid or ""}, severity="info")
     except Exception:
         pass
     col = _get_mongo_collection()

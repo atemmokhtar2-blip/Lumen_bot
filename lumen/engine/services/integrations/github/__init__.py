@@ -52,3 +52,5 @@ __all__ = [
     "get_repo_installation",
     "get_token_for_repo",
 ]
+
+from . import activity_log  # noqa: F401

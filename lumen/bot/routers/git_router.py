@@ -213,70 +213,110 @@ async def try_handle_git(
         if not path:
             await safe_reply_text(message, "مفيش مستودع نشط. اسحب أو أنشئ مستودع أولاً ثم اطلب البوش.")
             return True
-        # SECURITY (Vuln #3): validate path against per-user sandbox before git ops
         try:
             path = _validate_user_path(user, path)
         except ValueError:
             try:
                 from lumen.bot.ui.actionable_errors import send_actionable_error
-                await send_actionable_error(message, kind="generic", title="مسار غير صالح", detail="خارج العزل", user_id=int(uid or 0))
+                await send_actionable_error(
+                    message, kind="generic", title="مسار غير صالح", detail="خارج العزل", user_id=int(uid or 0)
+                )
             except Exception:
                 await safe_reply_text(message, "❌ مسار المشروع غير صالح.")
             return True
-        if not token:
-            # try without token; if needs_auth, ask
-            _sent = await safe_reply_text(message, "📤 جاري الدفع...")
 
-            status = _sent[-1] if _sent else None
-
-            if status is None:
-
-                return
-            result = await asyncio.to_thread(lambda: git_push(path, token=None))
-            if result.ok:
-                await safe_edit_text(status, f"✅ {result.message}")
-                return True
-            if result.needs_auth or True:
-                context.user_data["pending_git_push"] = {"path": path}
-                await safe_edit_text(status, 
-                    "🔒 الدفع يحتاج صلاحية.\n\n"
-                    "أرسل توكن GitHub (PAT) بصلاحية `repo` الآن وسأُكمل البوش."
+        if not token and uid:
+            try:
+                from lumen.engine.services.integrations.connections.credentials import (
+                    resolve_github_token,
                 )
-                return True
-        _sent = await safe_reply_text(message, "📤 جاري الدفع بالتوكن...")
+                token = resolve_github_token(int(uid)) or ""
+            except Exception:
+                token = token or ""
 
+        pending = (context.user_data or {}).get("pending_git_push") or {}
+        confirmed = bool(pending.get("confirmed")) and str(pending.get("path") or "") == str(path)
+        if not confirmed:
+            if context.user_data is not None:
+                context.user_data["pending_git_push"] = {
+                    "path": path,
+                    "confirmed": False,
+                    "has_token": bool(token),
+                }
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                from lumen.bot.ui.keyboards import encode_callback
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ تأكيد الدفع إلى GitHub",
+                                callback_data=encode_callback(
+                                    "gh_confirm_push", "", user_id=int(uid or 0)
+                                ),
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "إلغاء",
+                                callback_data=encode_callback(
+                                    "gh_cancel_push", "", user_id=int(uid or 0)
+                                ),
+                            )
+                        ],
+                    ]
+                )
+            except Exception:
+                kb = None
+            tip = (
+                "⚠️ *الدفع عملية حساسة*\n\n"
+                f"المسار: `{path}`\n"
+                "اضغط تأكيد لتنفيذ `git push` باستخدام اتصال GitHub المحفوظ "
+                "(أو أرسل PAT إن لم يكن هناك اتصال)."
+            )
+            await safe_reply_text(message, tip, reply_markup=kb, parse_mode="Markdown")
+            return True
+
+        if not token:
+            if context.user_data is not None:
+                context.user_data["pending_git_push"] = {"path": path, "confirmed": True}
+            await safe_reply_text(
+                message,
+                "🔒 لا يوجد اتصال GitHub صالح.\nاربط GitHub App أو أرسل PAT بصلاحية push الآن.",
+            )
+            return True
+
+        _sent = await safe_reply_text(message, "📤 جاري الدفع…")
         status = _sent[-1] if _sent else None
-
         if status is None:
-
-            return
+            return True
         result = await asyncio.to_thread(lambda: git_push(path, token=token))
         if result.ok:
-            context.user_data.pop("pending_git_push", None)
+            if context.user_data is not None:
+                context.user_data.pop("pending_git_push", None)
+            try:
+                from lumen.engine.services.integrations.github.activity_log import record as _act
+                _act(int(uid or 0), "push", detail={"path": str(path)[-80:]})
+            except Exception:
+                pass
             await safe_edit_text(status, f"✅ {result.message}")
         elif result.needs_auth:
-            context.user_data["pending_git_push"] = {"path": path}
+            if context.user_data is not None:
+                context.user_data["pending_git_push"] = {"path": path, "confirmed": True}
             try:
                 from lumen.bot.ui.actionable_errors import needs_auth_prompt
                 text, markup = needs_auth_prompt(user_id=int(uid or 0), op="clone")
                 await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
-                try:
-                    from lumen.bot.ui.actionable_errors import send_actionable_error
-                    await send_actionable_error(status, kind="needs_auth", user_id=int(uid or 0))
-                except Exception:
-                    await safe_edit_text(status, "🔒 التوكن مرفوض. أرسل PAT.")
+                await safe_edit_text(status, "🔒 التوكن مرفوض. أعد ربط GitHub أو أرسل PAT.")
         else:
             try:
                 from lumen.bot.ui.actionable_errors import git_op_error
                 text, markup = git_op_error(op="pull", detail="server_logs", user_id=int(uid or 0))
                 await safe_edit_text(status, text, reply_markup=markup)
             except Exception:
-                try:
-                    from lumen.bot.ui.actionable_errors import send_actionable_error
-                    await send_actionable_error(status, kind="git", detail="op_failed", user_id=int(uid or 0))
-                except Exception:
-                    await safe_edit_text(status, "❌ فشلت العملية.")
+                await safe_edit_text(status, "❌ فشلت العملية.")
+            return True
         return True
 
     # ── PULL (update existing active repo) ────────────────────────

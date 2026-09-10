@@ -224,6 +224,52 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
             }
         ),
     ),
+    "conn_gh_disconnect_confirm": UiActionSpec(
+        "conn_gh_disconnect_confirm",
+        "Confirm permanent GitHub disconnect",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "conn_gh_activity": UiActionSpec(
+        "conn_gh_activity",
+        "Show GitHub connection activity log",
+        frozenset(
+            {
+                EngineUiPhase.CONNECTIONS,
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.SETTINGS,
+            }
+        ),
+    ),
+    "gh_confirm_push": UiActionSpec(
+        "gh_confirm_push",
+        "Confirm pending git push",
+        frozenset(
+            {
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.HOME,
+                EngineUiPhase.GEN_DONE,
+            }
+        ),
+    ),
+    "gh_cancel_push": UiActionSpec(
+        "gh_cancel_push",
+        "Cancel pending git push",
+        frozenset(
+            {
+                EngineUiPhase.CONN_GITHUB,
+                EngineUiPhase.DASHBOARD,
+                EngineUiPhase.HOME,
+                EngineUiPhase.GEN_DONE,
+            }
+        ),
+    ),
     "conn_gh_refresh": UiActionSpec(
         "conn_gh_refresh",
         "Refresh GitHub repo list",

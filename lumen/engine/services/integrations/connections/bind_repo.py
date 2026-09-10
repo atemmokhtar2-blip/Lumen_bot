@@ -319,6 +319,16 @@ def bind_github_repo(
             active["understanding_level"] = active.get("understanding_level") or "structural"
             active.setdefault("bound_for_grok", True)
 
+    try:
+        from lumen.engine.services.integrations.github.activity_log import record as _act
+
+        _act(
+            uid,
+            "repo_imported",
+            detail={"full_name": full_name, "url": url, "auth_kind": auth_kind},
+        )
+    except Exception:
+        pass
     return BindRepoResult(
         ok=True,
         message_ar="تم سحب المستودع وربطه وفهمه عبر محرك الوكيل.",

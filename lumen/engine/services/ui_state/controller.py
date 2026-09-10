@@ -264,7 +264,12 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
                 UiButton("إعادة الربط", "conn_gh_connect", style="primary"),
             )
         )
-        rows.append((UiButton("فصل الاتصال", "conn_gh_disconnect", style="danger"),))
+        rows.append(
+            (
+                UiButton("سجل النشاط", "conn_gh_activity", style="primary"),
+                UiButton("فصل الاتصال", "conn_gh_disconnect", style="danger"),
+            )
+        )
     page = int((state.slots or {}).get("gh_page") or "1")
     nav_row: list[UiButton] = []
     if page > 1:
@@ -579,12 +584,28 @@ def apply_action(
         msg = "ربط يدوي: أرسل توكن GitHub (PAT)."
     elif action_id == "conn_gh_disconnect":
         new.phase = EngineUiPhase.CONN_GITHUB
+        new.slots["gh_await_disconnect"] = "1"
+        new.missing = []
+        msg = "تأكيد فصل GitHub؟ سيتم حذف الأسرار نهائيًا."
+    elif action_id == "conn_gh_disconnect_confirm":
+        new.phase = EngineUiPhase.CONN_GITHUB
         new.slots["gh_connected"] = "0"
         new.slots["gh_login"] = ""
         new.slots.pop("gh_await_pat", None)
         new.slots.pop("gh_await_app", None)
+        new.slots.pop("gh_await_disconnect", None)
         new.missing = []
-        msg = "تم طلب فصل اتصال GitHub."
+        msg = "تم فصل اتصال GitHub."
+    elif action_id == "conn_gh_activity":
+        new.phase = EngineUiPhase.CONN_GITHUB
+        new.missing = []
+        msg = "سجل نشاط GitHub."
+    elif action_id == "gh_confirm_push":
+        new.missing = []
+        msg = "تأكيد الدفع إلى GitHub…"
+    elif action_id == "gh_cancel_push":
+        new.missing = []
+        msg = "أُلغي الدفع."
     elif action_id == "conn_gh_refresh":
         new.phase = EngineUiPhase.CONN_GITHUB
         new.slots["gh_page"] = new.slots.get("gh_page") or "1"
