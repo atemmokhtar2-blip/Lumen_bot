@@ -75,7 +75,7 @@ jobs:
           output_format: cli,sarif
           output_file_path: console,checkov.sarif
           # No broad skip list — Dockerfile now has HEALTHCHECK + non-root
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov.sarif
