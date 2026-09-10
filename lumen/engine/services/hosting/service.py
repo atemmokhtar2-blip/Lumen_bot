@@ -40,6 +40,7 @@ class HostInstance:
     instance_id: str
     user_id: int
     project_path: str
+    tenant_id: str = ""  # B2B tenant binding — required for multi-tenant isolation
     entry_point: str = ""
     bot_username: str = ""
     status: str = "stopped"  # starting | running | stopped | failed
@@ -219,12 +220,18 @@ class HostingService:
             pass
         return list(out.values())
 
-    def get(self, instance_id: str, user_id: int | None = None) -> HostInstance | None:
+    def get(
+        self,
+        instance_id: str,
+        user_id: int | None = None,
+        *,
+        tenant_id: str = "",
+    ) -> HostInstance | None:
         inst = self._instances.get(instance_id)
         if inst is None:
             try:
                 from lumen.engine.services.hosting import redis_state as host_redis
-                remote = host_redis.get_instance(str(instance_id))
+                remote = host_redis.get_instance(str(instance_id), tenant_id=tenant_id or "")
                 if remote:
                     inst = self._inst_from_row(remote)
                     self._instances[str(instance_id)] = inst
@@ -232,7 +239,8 @@ class HostingService:
                 inst = None
         if inst is None:
             return None
-        if user_id is not None and inst.user_id != user_id:
+        from lumen.platform.tenant_isolation import assert_instance_owner
+        if not assert_instance_owner(inst, user_id=user_id, tenant_id=tenant_id or ""):
             return None
         return inst
 
@@ -244,8 +252,20 @@ class HostingService:
         bot_token: str,
         bot_username: str = "",
         entry_point: str = "",
+        tenant_id: str = "",
     ) -> HostResult:
-        path = Path(project_path).resolve()
+        # Phase D isolation: verify path under owner sandbox (openat2 when available)
+        try:
+            from lumen.platform.tenant_isolation import verify_project_under_owner
+            path = verify_project_under_owner(
+                user_id=int(user_id),
+                project_path=project_path,
+                tenant_id=tenant_id or "",
+            )
+        except ValueError as ve:
+            return HostResult(ok=False, message=f"عزل المسار: {ve}")
+        except Exception:
+            path = Path(project_path).resolve()
         if not path.is_dir():
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
@@ -668,6 +688,7 @@ class HostingService:
         inst = HostInstance(
             instance_id=instance_id,
             user_id=user_id,
+            tenant_id=str(tenant_id or ""),
             project_path=str(path),
             entry_point=entry_resolved or "",
             bot_username=username,
@@ -789,8 +810,8 @@ class HostingService:
             instance=inst,
         )
 
-    def stop(self, *, instance_id: str, user_id: int) -> HostResult:
-        inst = self.get(instance_id, user_id=user_id)
+    def stop(self, *, instance_id: str, user_id: int, tenant_id: str = "") -> HostResult:
+        inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if inst is None:
             return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
 
@@ -842,7 +863,7 @@ class HostingService:
         bot_token: str = "",
     ) -> HostResult:
         """Stop then start. Token optional if sealed secrets exist on project."""
-        inst = self.get(instance_id, user_id=user_id)
+        inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if inst is None:
             return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
         path = inst.project_path
@@ -893,7 +914,7 @@ class HostingService:
         bot_token: str = "",
     ) -> HostResult:
         """One-shot: re-prepare project (deps/version) then restart same instance_id."""
-        inst = self.get(instance_id, user_id=user_id)
+        inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if inst is None:
             return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
         try:
@@ -920,7 +941,7 @@ class HostingService:
 
         items = self.list_for_user(user_id)
         if instance_id:
-            inst = self.get(instance_id, user_id=user_id)
+            inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
             if not inst:
                 return HostResult(ok=False, message="المثيل غير موجود")
             # live probe + diagnose
@@ -944,7 +965,7 @@ class HostingService:
 
     def logs(self, *, user_id: int, instance_id: str, limit: int = 80) -> HostResult:
         """Return recent sandbox/run logs for an instance (sanitized)."""
-        inst = self.get(instance_id, user_id=user_id)
+        inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if inst is None:
             return HostResult(ok=False, message="المثيل غير موجود أو غير مسموح")
         lines: list[str] = []
@@ -1000,7 +1021,7 @@ class HostingService:
         )
 
     def diagnose(self, *, user_id: int, instance_id: str) -> HostResult:
-        inst = self.get(instance_id, user_id=user_id)
+        inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if not inst:
             return HostResult(ok=False, message="المثيل غير موجود")
         contract = self._diagnose_instance(inst)

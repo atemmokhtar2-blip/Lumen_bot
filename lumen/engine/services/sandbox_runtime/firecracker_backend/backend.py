@@ -47,12 +47,19 @@ class FirecrackerSandboxBackend(SandboxBackend):
     name = "firecracker"
     strength = 100
 
-    def __init__(self) -> None:
-        self._state_dir = Path(
-            os.environ.get("TBE_FC_STATE_DIR")
-            or os.path.join(os.environ.get("OUTPUT_DIR") or "/tmp", "fc_vms")
-        )
-        self._state_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, *, user_id: int = 0, tenant_id: str = "") -> None:
+        try:
+            from lumen.platform.tenant_isolation import firecracker_state_dir
+            self._state_dir = firecracker_state_dir(
+                user_id=int(user_id or 0),
+                tenant_id=str(tenant_id or ""),
+            )
+        except Exception:
+            self._state_dir = Path(
+                os.environ.get("TBE_FC_STATE_DIR")
+                or os.path.join(os.environ.get("OUTPUT_DIR") or "/tmp", "fc_vms")
+            )
+            self._state_dir.mkdir(parents=True, exist_ok=True)
 
     def _api_socket(self, vm_id: str) -> Path:
         return self._state_dir / f"{vm_id}.sock"

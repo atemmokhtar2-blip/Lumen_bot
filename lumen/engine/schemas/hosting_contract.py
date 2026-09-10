@@ -33,6 +33,7 @@ class HostInstanceRecord(BaseModel):
 
     instance_id: str = Field(..., min_length=1, max_length=128)
     user_id: int = Field(..., ge=0)
+    tenant_id: str = Field(default="", max_length=128)
     project_path: str = Field(..., min_length=1)
     entry_point: str = ""
     bot_username: str = ""
@@ -102,6 +103,7 @@ class HostInstanceRecord(BaseModel):
         return HostInstance(
             instance_id=self.instance_id,
             user_id=int(self.user_id),
+            tenant_id=str(self.tenant_id or ""),
             project_path=self.project_path,
             entry_point=self.entry_point or "",
             bot_username=self.bot_username or "",

@@ -99,6 +99,7 @@ async def host_start(request: web.Request) -> web.Response:
             project_path=str(safe_path),
             bot_token=bot_token,
             bot_username=str(body.get("bot_username") or ""),
+            tenant_id=tenant.tenant_id,
         )
     )
     if result.ok:
@@ -140,14 +141,14 @@ async def host_stop(request: web.Request) -> web.Response:
     uid = _tenant_user_id(tenant.tenant_id)
     # Explicit ownership probe before stop (uniform 404)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(
             text='{"error":"instance_not_found"}',
             content_type="application/json",
         )
     result = await asyncio.to_thread(
-        lambda: svc.stop(instance_id=instance_id, user_id=uid)
+        lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     )
     try:
         from lumen.bot.sanitize import sanitize_error
@@ -285,10 +286,10 @@ async def host_redeploy(request: web.Request) -> web.Response:
         )
     uid = _tenant_user_id(tenant.tenant_id)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"instance_not_found"}', content_type="application/json")
-    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
+    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id))
     result = await asyncio.to_thread(
         lambda: svc.start(
             user_id=uid,
@@ -325,10 +326,10 @@ async def host_delete(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text='{"error":"instance_id_required"}', content_type="application/json")
     uid = _tenant_user_id(tenant.tenant_id)
     svc = get_hosting_service()
-    inst = svc.get(instance_id, user_id=uid)
+    inst = svc.get(instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     if inst is None:
         raise web.HTTPNotFound(text='{"error":"instance_not_found"}', content_type="application/json")
-    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid))
+    await asyncio.to_thread(lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id))
     try:
         svc._instances.pop(instance_id, None)
         svc._save()

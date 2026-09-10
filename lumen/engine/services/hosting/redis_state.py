@@ -79,13 +79,22 @@ def put_instance(inst: Any) -> bool:
         d = _dump(inst)
         iid = str(d.get("instance_id") or "")
         uid = int(d.get("user_id") or 0)
+        tid = str(d.get("tenant_id") or "")
         if not iid:
             return False
+        from lumen.platform.tenant_isolation import host_instance_redis_key, host_user_index_key
         pipe = r.pipeline()
-        pipe.setex(_PREFIX + iid, _TTL, json.dumps(d, ensure_ascii=False))
+        payload = json.dumps(d, ensure_ascii=False)
+        # Tenant-namespaced key (primary in multi-tenant)
+        pipe.setex(host_instance_redis_key(iid, tenant_id=tid), _TTL, payload)
+        # Legacy flat key for read compatibility during rollout
+        pipe.setex(_PREFIX + iid, _TTL, payload)
         if uid:
+            pipe.sadd(host_user_index_key(uid, tenant_id=tid), iid)
             pipe.sadd(_USER_PREFIX + str(uid), iid)
             pipe.expire(_USER_PREFIX + str(uid), _TTL)
+            if tid:
+                pipe.expire(host_user_index_key(uid, tenant_id=tid), _TTL)
         pipe.execute()
         return True
     except Exception as exc:
@@ -93,15 +102,25 @@ def put_instance(inst: Any) -> bool:
         return False
 
 
-def get_instance(instance_id: str) -> Optional[dict[str, Any]]:
+def get_instance(instance_id: str, *, tenant_id: str = "") -> Optional[dict[str, Any]]:
     try:
         r = _client()
         if r is None:
             return None
-        raw = r.get(_PREFIX + str(instance_id))
+        from lumen.platform.tenant_isolation import host_instance_redis_key
+        iid = str(instance_id)
+        raw = None
+        if tenant_id:
+            raw = r.get(host_instance_redis_key(iid, tenant_id=tenant_id))
+        if not raw:
+            raw = r.get(_PREFIX + iid)
         if not raw:
             return None
-        return json.loads(raw)
+        d = json.loads(raw)
+        # Enforce tenant match when requested
+        if tenant_id and str(d.get("tenant_id") or "") not in ("", tenant_id):
+            return None
+        return d
     except Exception:
         return None
 
