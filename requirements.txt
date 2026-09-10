@@ -24,7 +24,7 @@ redis==5.2.1
 rq==2.1.0
 
 # Observability (OpenTelemetry + Prometheus)
-opentelemetry-api==1.33.1
+opentelemetry-api==1.44.0
 opentelemetry-sdk==1.33.1
 opentelemetry-exporter-otlp-proto-http==1.33.1
 prometheus-client==0.21.1
