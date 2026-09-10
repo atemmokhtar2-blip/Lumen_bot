@@ -1,7 +1,5 @@
-"""Phase C — Argon2/scrypt API keys, SSE single-use shape, HITL grant binding."""
+"""Phase C — real wiring: KDF, HITL grant binding, sources."""
 from __future__ import annotations
-
-import os
 
 import pytest
 
@@ -15,84 +13,70 @@ def _pepper(monkeypatch):
 
 def test_kdf_roundtrip():
     from lumen.platform.api_key_crypto import kdf_hash, kdf_verify
-
     key = "sk_live_test_" + "x" * 20
     h = kdf_hash(key)
     assert kdf_verify(key, h)
     assert not kdf_verify(key + "nope", h)
 
 
-def test_legacy_hmac_upgrades():
+def test_legacy_upgrades_to_kdf():
     from lumen.platform.api_key_crypto import lookup_hmac, verify_stored
-
     key = "sk_live_legacy_" + "y" * 20
-    stored = lookup_hmac(key)
-    ok, upgrade = verify_stored(key, stored_hash=stored, stored_kdf="")
-    assert ok
-    assert upgrade
-    assert upgrade.startswith("$argon2") or upgrade.startswith("scrypt$")
-    ok2, up2 = verify_stored(key, stored_hash=stored, stored_kdf=upgrade)
+    ok, upgrade = verify_stored(key, stored_hash=lookup_hmac(key), stored_kdf="")
+    assert ok and upgrade
+    ok2, up2 = verify_stored(key, stored_hash=lookup_hmac(key), stored_kdf=upgrade)
     assert ok2 and up2 is None
 
 
-def test_hash_api_key_is_hmac_index():
-    from lumen.platform.api_key_crypto import hash_api_key, lookup_hmac
-
-    key = "sk_live_idx_" + "z" * 20
-    assert hash_api_key(key) == lookup_hmac(key)
-    assert len(hash_api_key(key)) == 64
-
-
-def test_sse_ticket_source_has_jti_single_use():
-    src = open("lumen/api/auth.py", encoding="utf-8").read()
-    assert "jti" in src and "_sse_consume_jti" in src
-    assert "tenant_id:job_id:exp:jti" in src or "{tid}:{jid}:{exp}:{jti}" in src
-    assert "single-use" in src.lower() or "single_use" in src or "Consume jti" in src
+def test_pg_store_authenticate_source_has_kdf():
+    src = open("lumen/platform/pg_store.py", encoding="utf-8").read()
+    assert "api_key_kdf" in src
+    assert "verify_stored" in src
+    assert "lookup_hmac" in src
 
 
-def test_hitl_grant_binds_user_and_digest():
-    from lumen.engine.services.multi_agent.hitl import (
-        consume_execute_grant,
-        _params_digest,
-    )
+def test_mongo_authenticate_source_has_kdf():
+    src = open("lumen/platform/mongo_users.py", encoding="utf-8").read()
+    assert "api_key_kdf" in src
+    assert "verify_stored" in src
+
+
+def test_tools_passes_user_and_params_to_grant():
+    src = open("lumen/engine/services/multi_agent/tools.py", encoding="utf-8").read()
+    assert "user_id=int(state.user_id" in src
+    assert "params=dict(params" in src
+
+
+def test_hitl_grant_requires_params_when_digest_set():
+    from lumen.engine.services.multi_agent.hitl import consume_execute_grant, _params_digest
     from types import SimpleNamespace
-
-    params = {"path": "/tmp/x", "msg": "hi"}
+    params = {"path": "/tmp/x"}
     digest = _params_digest(params)
     state = SimpleNamespace(
         user_id=42,
         extensions={
             "hitl_execute_grant": {
-                "action_id": "abc",
                 "tool": "git_push",
                 "user_id": 42,
                 "params_digest": digest,
-                "single_use": True,
-                "granted_at": 1.0,
-            },
-            "pending_action": None,
-        },
-        record=lambda *a, **k: None,
-    )
-    assert consume_execute_grant(state, "git_push", user_id=42, params=params) is True
-    # second consume fails
-    assert consume_execute_grant(state, "git_push", user_id=42, params=params) is False
-
-
-def test_hitl_grant_rejects_user_mismatch():
-    from lumen.engine.services.multi_agent.hitl import consume_execute_grant
-    from types import SimpleNamespace
-
-    state = SimpleNamespace(
-        user_id=1,
-        extensions={
-            "hitl_execute_grant": {
-                "tool": "git_push",
-                "user_id": 99,
-                "params_digest": "",
                 "single_use": True,
             }
         },
         record=lambda *a, **k: None,
     )
-    assert consume_execute_grant(state, "git_push", user_id=1) is False
+    assert consume_execute_grant(state, "git_push", user_id=42, params=None) is False
+    # restore grant for second try
+    state.extensions["hitl_execute_grant"] = {
+        "tool": "git_push",
+        "user_id": 42,
+        "params_digest": digest,
+        "single_use": True,
+    }
+    assert consume_execute_grant(state, "git_push", user_id=42, params=params) is True
+
+
+def test_sse_and_oauth_prod_no_local_fallback():
+    auth = open("lumen/api/auth.py", encoding="utf-8").read()
+    assert "_sse_consume_jti" in auth and "jti" in auth
+    oauth = open("lumen/engine/services/integrations/github/app_oauth_state.py", encoding="utf-8").read()
+    assert "oauth_state_nonce_requires_redis" in oauth

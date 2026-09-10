@@ -105,8 +105,10 @@ class PendingAction:
 
 
 def _params_digest(params: dict[str, Any] | None) -> str:
-    raw = repr(sorted((str(k), str(v)[:80]) for k, v in dict(params or {}).items())).encode()
-    return hashlib.sha256(raw).hexdigest()[:20]
+    """Stable digest of execution params (full SHA-256 hex) for HITL grant binding."""
+    items = sorted((str(k), str(v)[:200]) for k, v in dict(params or {}).items())
+    raw = repr(items).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def tool_requires_confirmation(tool: str) -> bool:
@@ -420,7 +422,10 @@ def consume_execute_grant(
         state.record(AgentRole.HITL, "grant_user_mismatch", tool)
         return False
     expected_digest = str(grant.get("params_digest") or "")
-    if expected_digest and params is not None:
+    if expected_digest:
+        if params is None:
+            state.record(AgentRole.HITL, "grant_params_missing", tool)
+            return False
         if _params_digest(params) != expected_digest:
             state.record(AgentRole.HITL, "grant_params_mismatch", tool)
             return False

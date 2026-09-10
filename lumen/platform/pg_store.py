@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE INDEX IF NOT EXISTS idx_tenants_telegram ON tenants(owner_telegram_id);
 CREATE INDEX IF NOT EXISTS idx_tenants_plan ON tenants(plan_id);
 CREATE INDEX IF NOT EXISTS idx_tenants_api_hash ON tenants(api_key_hash);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS api_key_kdf TEXT NOT NULL DEFAULT '';
+
 
 CREATE TABLE IF NOT EXISTS metering (
     tenant_id TEXT NOT NULL,
@@ -112,6 +114,7 @@ class PostgresTenantStore:
             support_email=str(row.get("support_email") or ""),
             custom_domain=str(row.get("custom_domain") or ""),
             api_key_hash=str(row.get("api_key_hash") or ""),
+            api_key_kdf=str(row.get("api_key_kdf") or ""),
             api_key_prefix=str(row.get("api_key_prefix") or ""),
             owner_telegram_id=int(row.get("owner_telegram_id") or 0),
             active=bool(row.get("active", True)),
@@ -142,6 +145,7 @@ class PostgresTenantStore:
             support_email=str(wl.get("support_email") or "")[:120],
             custom_domain=str(wl.get("custom_domain") or "")[:200],
             api_key_hash=_hash_key(raw),
+            api_key_kdf=__import__("lumen.platform.api_key_crypto", fromlist=["kdf_hash"]).kdf_hash(raw),
             api_key_prefix=raw[:12],
             owner_telegram_id=int(owner_telegram_id or 0),
         )
@@ -150,12 +154,12 @@ class PostgresTenantStore:
                 """
                 INSERT INTO tenants (
                     tenant_id, name, plan_id, brand_name, brand_logo_url, primary_color,
-                    support_email, custom_domain, api_key_hash, api_key_prefix,
+                    support_email, custom_domain, api_key_hash, api_key_kdf, api_key_prefix,
                     owner_telegram_id, active, created_at, metadata, updated_at
                 ) VALUES (
                     %(tenant_id)s, %(name)s, %(plan_id)s, %(brand_name)s, %(brand_logo_url)s,
                     %(primary_color)s, %(support_email)s, %(custom_domain)s, %(api_key_hash)s,
-                    %(api_key_prefix)s, %(owner_telegram_id)s, %(active)s, %(created_at)s,
+                    %(api_key_kdf)s, %(api_key_prefix)s, %(owner_telegram_id)s, %(active)s, %(created_at)s,
                     %(metadata)s::jsonb, %(updated_at)s
                 )
                 """,
@@ -169,6 +173,7 @@ class PostgresTenantStore:
                     "support_email": t.support_email,
                     "custom_domain": t.custom_domain,
                     "api_key_hash": t.api_key_hash,
+                    "api_key_kdf": getattr(t, "api_key_kdf", "") or "",
                     "api_key_prefix": t.api_key_prefix,
                     "owner_telegram_id": t.owner_telegram_id,
                     "active": t.active,
@@ -183,13 +188,44 @@ class PostgresTenantStore:
     def authenticate(self, api_key: str) -> Tenant | None:
         if not api_key:
             return None
-        h = _hash_key(api_key)
+        key = api_key.strip()
+        from lumen.platform.api_key_crypto import lookup_hmac, legacy_sha256, verify_stored
+
+        row = None
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM tenants WHERE api_key_hash=%s AND active=TRUE LIMIT 1",
-                (h,),
-            ).fetchone()
-        return self._row_to_tenant(row)
+            for h in (lookup_hmac(key), legacy_sha256(key)):
+                row = conn.execute(
+                    "SELECT * FROM tenants WHERE api_key_hash=%s AND active=TRUE LIMIT 1",
+                    (h,),
+                ).fetchone()
+                if row:
+                    break
+        t = self._row_to_tenant(row)
+        if not t:
+            return None
+        ok, upgrade = verify_stored(
+            key,
+            stored_hash=t.api_key_hash or "",
+            stored_kdf=getattr(t, "api_key_kdf", "") or "",
+        )
+        if not ok:
+            return None
+        if upgrade:
+            try:
+                with self._conn() as conn:
+                    conn.execute(
+                        """
+                        UPDATE tenants SET api_key_kdf=%s, api_key_hash=%s, updated_at=%s
+                        WHERE tenant_id=%s
+                        """,
+                        (upgrade, lookup_hmac(key), time.time(), t.tenant_id),
+                    )
+                    conn.commit()
+                t.api_key_kdf = upgrade
+                t.api_key_hash = lookup_hmac(key)
+            except Exception:
+                logger.exception("pg api_key_kdf upgrade failed tenant=%s", t.tenant_id)
+        return t
 
     def get(self, tenant_id: str) -> Tenant | None:
         with self._conn() as conn:
@@ -253,13 +289,15 @@ class PostgresTenantStore:
         if not self.get(tenant_id):
             return None
         raw = _new_api_key()
+        from lumen.platform.api_key_crypto import kdf_hash
+        kdf = kdf_hash(raw)
         with self._conn() as conn:
             conn.execute(
                 """
-                UPDATE tenants SET api_key_hash=%s, api_key_prefix=%s, updated_at=%s
+                UPDATE tenants SET api_key_hash=%s, api_key_kdf=%s, api_key_prefix=%s, updated_at=%s
                 WHERE tenant_id=%s
                 """,
-                (_hash_key(raw), raw[:12], time.time(), str(tenant_id)),
+                (_hash_key(raw), kdf, raw[:12], time.time(), str(tenant_id)),
             )
             conn.commit()
         return raw

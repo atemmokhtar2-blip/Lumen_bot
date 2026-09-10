@@ -161,6 +161,7 @@ class MongoUserStore:
         fields.setdefault("support_email", doc.get("support_email") or "")
         fields.setdefault("custom_domain", doc.get("custom_domain") or "")
         fields.setdefault("api_key_hash", doc.get("api_key_hash") or "")
+        fields.setdefault("api_key_kdf", doc.get("api_key_kdf") or "")
         fields.setdefault("api_key_prefix", doc.get("api_key_prefix") or "")
         fields.setdefault("owner_telegram_id", int(doc.get("owner_telegram_id") or 0))
         fields.setdefault("active", bool(doc.get("active", True)))
@@ -199,6 +200,7 @@ class MongoUserStore:
             support_email=str(wl.get("support_email") or "")[:120],
             custom_domain=str(wl.get("custom_domain") or "")[:200],
             api_key_hash=_hash_key(raw),
+            api_key_kdf=__import__("lumen.platform.api_key_crypto", fromlist=["kdf_hash"]).kdf_hash(raw),
             api_key_prefix=raw[:12],
             owner_telegram_id=int(owner_telegram_id or 0),
         )

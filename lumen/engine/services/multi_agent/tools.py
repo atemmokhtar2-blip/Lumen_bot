@@ -112,7 +112,12 @@ def execute_tool_gated(
     if needs_hitl:
         # Only proceed if we can consume a grant (from successful confirm)
         if skip_hitl or (state.extensions or {}).get("hitl_confirmed"):
-            if not consume_execute_grant(state, tool):
+            if not consume_execute_grant(
+                state,
+                tool,
+                user_id=int(state.user_id or 0),
+                params=dict(params or {}),
+            ):
                 # No valid grant — re-request confirmation
                 request_confirmation(
                     state, tool, params,
