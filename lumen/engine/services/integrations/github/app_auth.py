@@ -163,8 +163,36 @@ def _parse_expires_at(expires_at: str) -> float:
         return time.time() + 3600
 
 
+def _redis_token_key(iid: str) -> str:
+    return f"lumen:ghapp:install_token:{iid}"
+
+
+def _redis_client():
+    try:
+        from lumen.platform.runtime_config import redis_url as _ru
+
+        url = (_ru() or "").strip()
+    except Exception:
+        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+    if not url:
+        return None
+    try:
+        import redis
+
+        r = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
+            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "3"),
+        )
+        r.ping()
+        return r
+    except Exception:
+        return None
+
+
 def get_installation_token(installation_id: int | str) -> str:
-    """Cached installation access token (refresh ~60s before expiry)."""
+    """Cached installation access token (process + Redis, refresh ~60s early)."""
     iid = str(int(installation_id))
     now = time.time()
     with _lock:
@@ -172,22 +200,55 @@ def get_installation_token(installation_id: int | str) -> str:
         if hit and float(hit.get("expires_at") or 0) - _TOKEN_SKEW_SEC > now:
             return str(hit["token"])
 
+    # Cross-worker cache (short TTL — never treat as durable secret store)
+    r = _redis_client()
+    if r is not None:
+        try:
+            raw = r.get(_redis_token_key(iid))
+            if raw:
+                data = json.loads(raw)
+                exp = float(data.get("expires_at") or 0)
+                tok = str(data.get("token") or "")
+                if tok and exp - _TOKEN_SKEW_SEC > now:
+                    with _lock:
+                        _install_token_cache[iid] = {"token": tok, "expires_at": exp}
+                    return tok
+        except Exception:
+            logger.debug("redis install token read failed install=%s", iid, exc_info=True)
+
     issued = create_installation_access_token(iid)
     exp = _parse_expires_at(str(issued.get("expires_at") or ""))
+    tok = str(issued["token"])
     with _lock:
-        _install_token_cache[iid] = {
-            "token": issued["token"],
-            "expires_at": exp,
-        }
-    return str(issued["token"])
+        _install_token_cache[iid] = {"token": tok, "expires_at": exp}
+    if r is not None:
+        try:
+            ttl = max(30, int(exp - now - _TOKEN_SKEW_SEC))
+            r.set(
+                _redis_token_key(iid),
+                json.dumps({"token": tok, "expires_at": exp}),
+                ex=ttl,
+            )
+        except Exception:
+            logger.debug("redis install token write failed install=%s", iid, exc_info=True)
+    return tok
 
 
 def clear_installation_token_cache(installation_id: int | str | None = None) -> None:
     with _lock:
         if installation_id is None:
+            keys = list(_install_token_cache.keys())
             _install_token_cache.clear()
         else:
-            _install_token_cache.pop(str(int(installation_id)), None)
+            keys = [str(int(installation_id))]
+            _install_token_cache.pop(keys[0], None)
+    r = _redis_client()
+    if r is not None:
+        for k in keys:
+            try:
+                r.delete(_redis_token_key(k))
+            except Exception:
+                pass
 
 
 def get_installation(installation_id: int | str) -> dict[str, Any]:

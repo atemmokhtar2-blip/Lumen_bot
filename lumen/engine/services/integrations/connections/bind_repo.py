@@ -104,15 +104,18 @@ def bind_github_repo(
         )
 
     try:
-        from lumen.bot.ui.github_connection_store import read_github_token
-        token = read_github_token(uid)
+        from lumen.engine.services.integrations.connections.credentials import (
+            resolve_github_token,
+        )
+
+        token = resolve_github_token(uid)
     except Exception:
         token = token_store.load_github_token(uid)
     if not token:
         return BindRepoResult(
             ok=False,
             needs_auth=True,
-            message_ar="اتصال GitHub غير متاح — أعد الربط بـ PAT (صلاحية Contents: Read).",
+            message_ar="اتصال GitHub غير متاح — اربط GitHub App أو PAT (Contents: Read).",
             full_name=full_name,
             url=url,
         )

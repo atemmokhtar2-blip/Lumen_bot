@@ -94,6 +94,7 @@ def _persist_connection_record(user_id: int, record: dict[str, Any]) -> bool:
             uid,
         )
 
+    profile_ok = False
     try:
         from lumen.engine.services.integrations.connections import token_store as ts
 
@@ -111,9 +112,11 @@ def _persist_connection_record(user_id: int, record: dict[str, Any]) -> bool:
                 "repo_selection": str(record.get("repo_selection") or "")[:20],
             },
         )
+        profile_ok = True
     except Exception:
         logger.debug("token_store profile write soft-fail uid=%s", uid, exc_info=True)
 
+    session_ok = False
     try:
         from lumen.bot.session_store import get_session_store
 
@@ -132,10 +135,12 @@ def _persist_connection_record(user_id: int, record: dict[str, Any]) -> bool:
                 }
             },
         )
+        session_ok = True
     except Exception:
         logger.debug("session github_connection flag save soft-fail", exc_info=True)
 
-    return mongo_ok
+    # Success if any durable plane accepted the record (Mongo preferred).
+    return bool(mongo_ok or profile_ok or session_ok)
 
 
 def write_github_connection(
@@ -260,91 +265,20 @@ def _load_raw_connection_record(user_id: int) -> dict[str, Any] | None:
 
 
 def read_github_token(user_id: int) -> str | None:
-    """Return a usable GitHub token for API/clone.
+    """Usable GitHub token for API/clone — delegates to credentials resolver.
 
-    - auth_kind=github_app → short-lived installation access token (minted)
-    - auth_kind=pat / legacy → decrypted PAT from Redis/Mongo
+    App installs mint short-lived installation tokens; PAT path decrypts
+    durable ciphertext. Prefer resolve_github_credentials for metadata.
     """
-    uid = int(user_id or 0)
-    if uid <= 0:
-        return None
-
-    rec = _load_raw_connection_record(uid)
-    auth_kind = str((rec or {}).get("auth_kind") or "").strip().lower()
-    installation_id = str((rec or {}).get("installation_id") or "").strip()
-
-    if auth_kind == "github_app" or (not auth_kind and installation_id and not (rec or {}).get("ciphertext")):
-        if not installation_id:
-            return None
-        try:
-            from lumen.engine.services.integrations.github.app_auth import (
-                get_installation_token,
-            )
-
-            return get_installation_token(installation_id)
-        except Exception:
-            logger.exception(
-                "github_app installation token mint failed uid=%s install=%s",
-                uid,
-                installation_id,
-            )
-            return None
-
-    # PAT path (legacy + explicit auth_kind=pat)
     try:
-        from lumen.engine.services.integrations.connections import token_store as ts
-
-        tok = ts.load_github_token(uid)
-        if tok:
-            return tok
-    except Exception:
-        logger.debug("Redis github token read failed uid=%s", uid, exc_info=True)
-
-    if not rec:
-        return None
-    cipher = str(rec.get("ciphertext") or "")
-    if not cipher:
-        return None
-    tok = _decrypt_token(uid, cipher)
-    if not tok:
-        return None
-    logger.info(
-        "github_connection recovered from MongoDB → Redis uid=%s login=%s",
-        uid,
-        rec.get("login") or "—",
-    )
-    try:
-        from lumen.engine.services.integrations.connections import token_store as ts
-
-        ts.save_github_token(
-            uid,
-            tok,
-            meta={
-                "login": str(rec.get("login") or ""),
-                "provider": "github",
-                "auth_kind": "pat",
-            },
+        from lumen.engine.services.integrations.connections.credentials import (
+            resolve_github_token,
         )
-    except Exception:
-        logger.debug("self-heal Redis token failed", exc_info=True)
-    try:
-        from lumen.bot.session_store import get_session_store
 
-        get_session_store().save(
-            uid,
-            {
-                "github_connection": {
-                    "provider": "github",
-                    "auth_kind": "pat",
-                    "login": str(rec.get("login") or ""),
-                    "connected": True,
-                    "connected_at": rec.get("connected_at") or time.time(),
-                }
-            },
-        )
+        return resolve_github_token(int(user_id))
     except Exception:
-        pass
-    return tok
+        logger.exception("read_github_token resolve failed uid=%s", user_id)
+        return None
 
 
 def read_github_profile(user_id: int) -> dict[str, Any] | None:
@@ -453,10 +387,47 @@ def delete_github_connection(user_id: int) -> None:
 
 
 def recover_after_session_drop(user_id: int) -> None:
-    """Called from drop_user_data — re-hydrate connection from Mongo into Redis."""
+    """Called from drop_user_data — re-hydrate connection from Mongo into Redis/session."""
     uid = int(user_id or 0)
     if uid <= 0:
         return
-    tok = read_github_token(uid)  # self-heals Redis + session flag
+    prof = read_github_profile(uid)
+    if prof and prof.get("connected"):
+        try:
+            from lumen.bot.session_store import get_session_store
+
+            get_session_store().save(
+                uid,
+                {
+                    "github_connection": {
+                        "provider": "github",
+                        "connected": True,
+                        "login": str(prof.get("login") or ""),
+                        "auth_kind": str(prof.get("auth_kind") or ""),
+                        "installation_id": str(prof.get("installation_id") or ""),
+                        "account_login": str(prof.get("account_login") or ""),
+                        "repo_selection": str(prof.get("repo_selection") or ""),
+                        "connected_at": prof.get("connected_at") or time.time(),
+                    }
+                },
+            )
+        except Exception:
+            logger.debug("recover session flag failed uid=%s", uid, exc_info=True)
+        # PAT self-heal into Redis; App path has no durable token to cache
+        if str(prof.get("auth_kind") or "").lower() != "github_app":
+            tok = read_github_token(uid)
+            if tok:
+                logger.info(
+                    "drop_user_data: restored github PAT connection uid=%s from MongoDB",
+                    uid,
+                )
+        else:
+            logger.info(
+                "drop_user_data: restored github_app connection uid=%s install=%s",
+                uid,
+                prof.get("installation_id") or "",
+            )
+        return
+    tok = read_github_token(uid)
     if tok:
         logger.info("drop_user_data: restored github_connection uid=%s from MongoDB", uid)

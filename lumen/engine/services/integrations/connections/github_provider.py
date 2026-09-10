@@ -13,12 +13,15 @@ LABEL_AR = "GitHub"
 
 
 def _token_for_user(user_id: int) -> str | None:
-    # MongoDB source of truth + Redis cache (survives deploy / Redis flush)
+    """Resolve via credentials (App install token or PAT)."""
     try:
-        from lumen.bot.ui.github_connection_store import read_github_token
+        from lumen.engine.services.integrations.connections.credentials import (
+            resolve_github_token,
+        )
 
-        return read_github_token(int(user_id))
+        return resolve_github_token(int(user_id))
     except Exception:
+        logger.debug("credentials resolve failed uid=%s", user_id, exc_info=True)
         return token_store.load_github_token(int(user_id))
 
 
@@ -30,7 +33,12 @@ class GitHubConnectionProvider:
         uid = int(user_id or 0)
         if uid <= 0:
             return ConnectionStatus(PROVIDER_ID, False, detail="invalid_user")
-        profile = token_store.load_connection_profile(uid) or {}
+        try:
+            from lumen.bot.ui.github_connection_store import read_github_profile
+
+            profile = read_github_profile(uid) or token_store.load_connection_profile(uid) or {}
+        except Exception:
+            profile = token_store.load_connection_profile(uid) or {}
         auth_kind = str(profile.get("auth_kind") or "").strip().lower()
         installation_id = str(profile.get("installation_id") or "").strip()
 
@@ -145,7 +153,16 @@ class GitHubConnectionProvider:
         page = max(1, int(page))
         per_page = max(1, min(30, int(per_page)))
         try:
-            profile = token_store.load_connection_profile(uid) or {}
+            try:
+                from lumen.bot.ui.github_connection_store import read_github_profile
+
+                profile = (
+                    read_github_profile(uid)
+                    or token_store.load_connection_profile(uid)
+                    or {}
+                )
+            except Exception:
+                profile = token_store.load_connection_profile(uid) or {}
             auth_kind = str(profile.get("auth_kind") or "").strip().lower()
             installation_id = str(profile.get("installation_id") or "").strip()
             if auth_kind == "github_app" and installation_id:

@@ -6,6 +6,12 @@ from .github_provider import GitHubConnectionProvider
 from .bind_repo import BindRepoResult, apply_bind_to_user_data, bind_github_repo
 from .readiness import ReadinessResult, evaluate_readiness, missing_env_from_contract
 from .registry import get_provider, list_providers
+from .credentials import (
+    GitHubCredentials,
+    is_github_connected,
+    resolve_github_credentials,
+    resolve_github_token,
+)
 
 __all__ = [
     "ConnectionProvider",
@@ -20,4 +26,8 @@ __all__ = [
     "missing_env_from_contract",
     "get_provider",
     "list_providers",
+    "GitHubCredentials",
+    "is_github_connected",
+    "resolve_github_credentials",
+    "resolve_github_token",
 ]
