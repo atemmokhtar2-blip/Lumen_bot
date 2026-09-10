@@ -128,8 +128,7 @@ async def try_handle_token(
                 else ""
             )
             if git_tok:
-                # Delete the secret-bearing message; no intermediate confirm toast —
-                # success path renders the full repo list surface immediately.
+                # Always scrub the secret-bearing message first (Phase B hygiene)
                 try:
                     from lumen.bot.ui.token_hygiene import scrub_and_confirm
                     await scrub_and_confirm(
@@ -137,6 +136,22 @@ async def try_handle_token(
                     )
                 except Exception:
                     logger.exception("PAT scrub before github connection failed")
+                # Production: GitHub App only unless dual-ACK
+                try:
+                    from lumen.platform.prod_security_gate import is_production_runtime
+                    from lumen.platform.secret_rotation import pat_allowed_in_production
+
+                    if is_production_runtime() and not pat_allowed_in_production():
+                        await safe_reply_text(
+                            message,
+                            "🔒 في الإنتاج يتم الربط عبر **GitHub App** فقط.\n"
+                            "افتح: الاتصالات → GitHub → اتصل بـ GitHub.\n"
+                            "(مسار PAT معطّل إلا بإعداد تشغيل متقدم من المشغّل.)",
+                        )
+                        context.user_data.pop("pending_github_connection", None)
+                        return True
+                except Exception:
+                    logger.exception("pat production gate failed")
                 # Verify against official API before persisting
                 try:
                     user_info = await asyncio.to_thread(

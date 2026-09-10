@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 def _secret() -> str:
-    return (os.getenv("GITHUB_WEBHOOK_SECRET") or "").strip()
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        v = (get_secret("GITHUB_WEBHOOK_SECRET", "") or get_secret("GITHUB_APP_WEBHOOK_SECRET", "") or "").strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return (os.getenv("GITHUB_WEBHOOK_SECRET") or os.getenv("GITHUB_APP_WEBHOOK_SECRET") or "").strip()
 
 
 def verify_signature(raw_body: bytes, signature_header: str | None) -> bool:

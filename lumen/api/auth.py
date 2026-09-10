@@ -29,11 +29,22 @@ def _sse_ticket_secret() -> bytes:
     long-lived tenant API key itself. No hardcoded secrets remain.
     In pure dev, reuses the same auto-generated local pepper as API key hashing.
     """
-    raw = (
-        (os.getenv("TBE_TOKEN_SECRET") or "").strip()
-        or (os.getenv("API_KEY_PEPPER") or "").strip()
-        or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
-    )
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (
+            (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+            or (get_secret("API_KEY_PEPPER", "") or "").strip()
+            or (get_secret("PLATFORM_ADMIN_TOKEN", "") or "").strip()
+        )
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (
+            (os.getenv("TBE_TOKEN_SECRET") or "").strip()
+            or (os.getenv("API_KEY_PEPPER") or "").strip()
+            or (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+        )
     if raw:
         return hashlib.sha256(raw.encode("utf-8")).digest()
     # Pure dev fallback: reuse the tenants pepper mechanism (strong, persisted)
@@ -318,7 +329,14 @@ def require_admin(request: web.Request) -> None:
             content_type="application/json",
         )
 
-    admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
+    admin = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        admin = (get_secret("PLATFORM_ADMIN_TOKEN", "") or "").strip()
+    except Exception:
+        admin = ""
+    if not admin:
+        admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if not admin:
         try:
             emit(

@@ -7,7 +7,7 @@ import os
 
 from aiohttp import web
 
-from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, github_app, health, hosts, jobs, tenants, usage, runs_ux, secrets
+from lumen.api.routes import audit, billing, dashboard, generate, github_webhooks, github_app, health, hosts, jobs, tenants, usage, runs_ux, secrets, secret_rotation
 from lumen.api.request_firewall import request_firewall_middleware
 
 logger = logging.getLogger("lumen_api")
@@ -512,6 +512,9 @@ window.ui = SwaggerUIBundle({
     app.router.add_post("/v1/telegram/secrets/status", secrets.secret_status)
     app.router.add_get("/v1/me", tenants.me)
     app.router.add_post("/v1/me/rotate_key", tenants.rotate_key)
+    app.router.add_get("/v1/admin/secret-rotation", secret_rotation.rotation_status)
+    app.router.add_post("/v1/admin/secret-rotation", secret_rotation.record)
+
     app.router.add_patch("/v1/me/white-label", tenants.update_white_label)
     app.router.add_post("/v1/generate", generate.generate)
     app.router.add_get("/v1/jobs/{job_id}", jobs.get_job)

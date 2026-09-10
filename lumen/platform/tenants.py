@@ -175,35 +175,34 @@ def _load_or_create_dev_pepper() -> bytes:
 def _key_pepper() -> bytes:
     """Server-side pepper for API key hashes.
 
-    DEV (verified local only): auto-generated strong pepper in .lumen_dev_pepper
-    (mode 0600). Weak operator values are ignored — never used.
-
-    PRODUCTION: requires strong API_KEY_PEPPER (or PLATFORM_ADMIN_TOKEN /
-    TBE_TOKEN_SECRET). Weak values are rejected.
+    DEV: auto-generated strong pepper in .lumen_dev_pepper when unset.
+    PRODUCTION: requires strong API_KEY_PEPPER from secrets provider / env.
     """
+    def _read_pepper() -> str:
+        try:
+            from lumen.platform.secrets_provider import get_secret
+            return (get_secret("API_KEY_PEPPER", "") or os.getenv("API_KEY_PEPPER") or "").strip()
+        except Exception:
+            return (os.getenv("API_KEY_PEPPER") or "").strip()
+
     if _is_dev_environment():
-        v = (os.getenv("API_KEY_PEPPER") or "").strip()
+        v = _read_pepper()
         if v and _pepper_is_strong(v.encode("utf-8")):
             return v.encode("utf-8")
         return _load_or_create_dev_pepper()
 
     for name in ("API_KEY_PEPPER", "PLATFORM_ADMIN_TOKEN", "TBE_TOKEN_SECRET"):
-        v = (os.getenv(name) or "").strip()
-        if not v:
-            continue
-        raw = v.encode("utf-8")
-        if _pepper_is_strong(raw):
-            return raw
-        raise RuntimeError(
-            name
-            + " is too weak (need >= 32 chars, high entropy, not a known default). "
-            "Generate with secrets.token_urlsafe(48)."
-        )
+        try:
+            from lumen.platform.secrets_provider import get_secret
+            raw = (get_secret(name, "") or os.getenv(name) or "").strip()
+        except Exception:
+            raw = (os.getenv(name) or "").strip()
+        if raw and _pepper_is_strong(raw.encode("utf-8")):
+            return raw.encode("utf-8")
     raise RuntimeError(
         "API_KEY_PEPPER is required in production. "
-        "Generate with secrets.token_urlsafe(48)."
+        "Set a strong random secret (>=32 chars) via Secret Manager."
     )
-
 
 
 def _hash_key(raw: str) -> str:

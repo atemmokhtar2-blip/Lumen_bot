@@ -88,3 +88,45 @@ def test_gate_rejects_pat_flag_without_ack(monkeypatch):
 
     with pytest.raises(RuntimeError, match="GITHUB_ALLOW_PAT"):
         assert_production_security()
+
+
+def test_write_github_connection_refuses_prod_pat(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "dev")
+    monkeypatch.setenv("SECRETS_ALLOW_PLATFORM_ENV", "1")
+    monkeypatch.setattr(
+        "lumen.platform.prod_security_gate.is_production_runtime",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "lumen.platform.secret_rotation.pat_allowed_in_production",
+        lambda: False,
+    )
+    import lumen.bot.ui.github_connection_store as gcs
+    monkeypatch.setattr(
+        gcs,
+        "is_production_runtime",
+        lambda: True,
+        raising=False,
+    )
+    # Patch at module used inside function
+    import lumen.platform.prod_security_gate as psg
+    monkeypatch.setattr(psg, "is_production_runtime", lambda: True)
+    import lumen.platform.secret_rotation as sr
+    monkeypatch.setattr(sr, "pat_allowed_in_production", lambda: False)
+    assert gcs.write_github_connection(1, "ghp_TEST_ONLY_NOT_REAL_xxxxxxxxxxxx") is False
+
+
+def test_admin_uses_get_secret_path():
+    src = open("lumen/api/auth.py", encoding="utf-8").read()
+    assert 'get_secret("PLATFORM_ADMIN_TOKEN"' in src
+
+
+def test_stripe_uses_managed_secret():
+    src = open("lumen/platform/stripe_client.py", encoding="utf-8").read()
+    assert "_managed" in src
+    assert "STRIPE_WEBHOOK_SECRET" in src
+
+
+def test_secret_rotation_routes_registered():
+    src = open("lumen/api/app.py", encoding="utf-8").read()
+    assert "/v1/admin/secret-rotation" in src

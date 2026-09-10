@@ -19,12 +19,20 @@ logger = logging.getLogger("lumen.platform.stripe")
 STRIPE_API = "https://api.stripe.com/v1"
 
 
+def _managed(name: str) -> str:
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        return (get_secret(name, "") or "").strip()
+    except Exception:
+        return (os.getenv(name) or "").strip()
+
+
 def stripe_configured() -> bool:
-    return bool((os.getenv("STRIPE_SECRET_KEY") or "").strip())
+    return bool(_managed("STRIPE_SECRET_KEY"))
 
 
 def _secret() -> str:
-    return (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    return _managed("STRIPE_SECRET_KEY")
 
 
 def _price_for_plan(plan_id: str) -> str:
@@ -225,7 +233,7 @@ def verify_webhook_signature(
     tolerance: int = 300,
 ) -> bool:
     """Verify Stripe-Signature header (t=...,v1=...)."""
-    secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+    secret = _managed("STRIPE_WEBHOOK_SECRET")
     if not secret:
         # Production (Stripe live key present) must never skip verification —
         # otherwise anyone can POST forged checkout.session.completed events

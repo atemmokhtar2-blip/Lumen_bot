@@ -43,7 +43,14 @@ def _store_path() -> Path:
 
 
 def _fernet():
-    raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
     is_dev = env in {"dev", "development", "local", "test"}
     if raw and len(raw) >= 16:
@@ -67,7 +74,14 @@ def _fernet():
 
 def _aes_key() -> bytes:
     """32-byte AES-256 key derived from TBE_TOKEN_SECRET (or dev fallback)."""
-    raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
+    raw = ""
+    try:
+        from lumen.platform.secrets_provider import get_secret
+        raw = (get_secret("TBE_TOKEN_SECRET", "") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = (os.getenv("TBE_TOKEN_SECRET") or os.getenv("SECRET_INBOX_KEY") or "").strip()
     env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "production").strip().lower()
     is_dev = env in {"dev", "development", "local", "test"}
     if raw and len(raw) >= 16:

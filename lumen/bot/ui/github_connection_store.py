@@ -149,11 +149,27 @@ def write_github_connection(
     *,
     login: str = "",
 ) -> bool:
-    """Persist PAT + profile to MongoDB (truth) and Redis (cache). Legacy path."""
+    """Persist PAT + profile to MongoDB (truth) and Redis (cache). Legacy path.
+
+    Phase B: refused in production unless GITHUB_ALLOW_PAT dual-ACK is set.
+    Prefer write_github_app_connection + installation tokens.
+    """
     uid = int(user_id or 0)
     tok = (token or "").strip()
     if uid <= 0 or not tok:
         return False
+    try:
+        from lumen.platform.prod_security_gate import is_production_runtime
+        from lumen.platform.secret_rotation import pat_allowed_in_production
+
+        if is_production_runtime() and not pat_allowed_in_production():
+            logger.warning(
+                "write_github_connection refused uid=%s — GitHub App only in production",
+                uid,
+            )
+            return False
+    except Exception:
+        logger.debug("pat allow check failed", exc_info=True)
 
     try:
         cipher = _encrypt_token(uid, tok)
