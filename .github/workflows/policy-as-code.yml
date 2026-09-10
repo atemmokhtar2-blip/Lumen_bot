@@ -95,7 +95,7 @@ jobs:
           output_path: kics-results
           output_formats: json,sarif
           enable_comments: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: kics-results
