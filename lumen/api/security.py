@@ -66,16 +66,15 @@ def is_path_inside(child: Path, parent: Path) -> bool:
 def _require_openat2() -> bool:
     """API path checks always require openat2 (fail-closed).
 
-    Weak O_NOFOLLOW-only fallback is not acceptable for tenant/user sandboxes.
-    Set TBE_ALLOW_WEAK_PATH_OPEN=1 only for non-production emergency (not recommended).
+    Production / staging / unset ENVIRONMENT never honor TBE_ALLOW_WEAK_PATH_OPEN.
+    Weak fallback is allowed only when ENVIRONMENT/TBE_ENV is explicitly
+    dev|development|local|test AND TBE_ALLOW_WEAK_PATH_OPEN is truthy.
     """
-    if (os.environ.get("TBE_ALLOW_WEAK_PATH_OPEN") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }:
-        env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
-        if env in {"dev", "development", "local", "test"}:
-            return False
-    return True
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
+    if env not in {"dev", "development", "local", "test"}:
+        return True
+    flag = (os.environ.get("TBE_ALLOW_WEAK_PATH_OPEN") or "").strip().lower()
+    return flag not in {"1", "true", "yes", "on"}
 
 
 def _reject_unsafe_path_string(raw: str) -> None:

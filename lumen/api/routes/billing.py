@@ -135,15 +135,40 @@ async def dev_activate(request: web.Request) -> web.Response:
 
 
 async def stripe_webhook(request: web.Request) -> web.Response:
+    """Verify Stripe-Signature on raw body, then parse JSON event.
+
+    Mandatory order: read raw bytes → HMAC verify → reject if invalid →
+    json.loads → handle_stripe_event. Never treat verify() bool as the event.
+    """
+    import json
+
     payload = await request.read()
     sig = request.headers.get("Stripe-Signature") or ""
     try:
-        event = verify_webhook_signature(payload, sig)
+        ok = bool(verify_webhook_signature(payload, sig))
     except Exception as exc:
         logger.warning("stripe webhook verify failed: %s", exc)
         raise web.HTTPBadRequest(
             text='{"error":"invalid_signature"}',
             content_type="application/json",
         ) from exc
-    result = get_billing().handle_stripe_webhook(event)
+    if not ok:
+        logger.warning("stripe webhook invalid_signature")
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_signature"}',
+            content_type="application/json",
+        )
+    try:
+        event = json.loads(payload.decode("utf-8") or "{}")
+    except Exception as exc:
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_json"}',
+            content_type="application/json",
+        ) from exc
+    if not isinstance(event, dict):
+        raise web.HTTPBadRequest(
+            text='{"error":"invalid_event"}',
+            content_type="application/json",
+        )
+    result = get_billing().handle_stripe_event(event)
     return web.json_response(result)

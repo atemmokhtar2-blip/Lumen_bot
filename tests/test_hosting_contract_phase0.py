@@ -210,7 +210,7 @@ def test_pydantic_rejects_raw_token_in_token_fp() -> None:
                 "user_id": 1,
                 "project_path": "/p",
                 "status": "stopped",
-                "token_fp": "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw",
+                "token_fp": "999999999:TEST_ONLY_RAW_TOKEN_SHAPE_MUST_BE_REJECTED",
             }
         )
 

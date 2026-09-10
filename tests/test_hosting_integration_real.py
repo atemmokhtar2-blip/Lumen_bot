@@ -57,7 +57,7 @@ def test_2_secrets_aes_roundtrip_scrubs_env(tmp_path):
         seal_project_secrets,
     )
 
-    secret = "123456789:AAH-real-looking-telegram-token"
+    secret = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0001"
     (tmp_path / ".env").write_text(f"BOT_TOKEN={secret}\nOTHER=ok\n", encoding="utf-8")
     seal_project_secrets(tmp_path, {"BOT_TOKEN": secret, "TELEGRAM_BOT_TOKEN": secret})
     sealed = (tmp_path / ".lumen_secrets.sealed").read_text(encoding="utf-8")

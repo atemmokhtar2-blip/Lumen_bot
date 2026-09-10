@@ -267,15 +267,51 @@ def require_admin(request: web.Request) -> None:
 
     Fail-closed: missing PLATFORM_ADMIN_TOKEN → 403.
     Wrong / missing X-Admin-Token → 401 (timing-safe compare).
+    Per-IP probe RPM + failed-attempt lockout (API_ADMIN_AUTH_RPM / API_ADMIN_FAIL_LIMIT).
     """
+    from lumen.platform.rate_limit import get_rate_limiter
+    from lumen.platform.security_events import client_ip, emit
+
+    ip = ""
+    try:
+        ip = client_ip(request)
+    except Exception:
+        ip = "unknown"
+
+    # Always charge a tight per-IP probe budget (even before token compare).
+    try:
+        lim = get_rate_limiter()
+        probe_limit = int(os.getenv("API_ADMIN_AUTH_RPM") or "20")
+        probe_key = f"admin_auth_probe:{ip}"
+        if probe_limit > 0 and not lim.allow(probe_key, limit=probe_limit, window_sec=60.0):
+            retry = lim.seconds_until_allow(probe_key, limit=probe_limit, window_sec=60.0)
+            raise web.HTTPTooManyRequests(
+                text=f'{{"error":"admin_rate_limited","retry_after":{retry}}}',
+                content_type="application/json",
+                headers={"Retry-After": str(retry)},
+            )
+        # Hard lockout if prior failures exhausted the fail window.
+        fail_limit = int(os.getenv("API_ADMIN_FAIL_LIMIT") or "5")
+        fail_key = f"admin_auth_fail:{ip}"
+        if fail_limit > 0 and lim.remaining(fail_key, limit=fail_limit, window_sec=300.0) <= 0:
+            retry = lim.seconds_until_allow(fail_key, limit=fail_limit, window_sec=300.0)
+            raise web.HTTPTooManyRequests(
+                text=f'{{"error":"admin_locked","retry_after":{retry}}}',
+                content_type="application/json",
+                headers={"Retry-After": str(retry)},
+            )
+    except web.HTTPException:
+        raise
+    except Exception:
+        pass
+
     admin = (os.getenv("PLATFORM_ADMIN_TOKEN") or "").strip()
     if not admin:
         try:
-            from lumen.platform.security_events import client_ip, emit
             emit(
                 "auth.admin_token_unset",
                 severity="critical",
-                ip=client_ip(request),
+                ip=ip,
                 path=str(request.path),
             )
         except Exception:
@@ -287,11 +323,15 @@ def require_admin(request: web.Request) -> None:
     provided = request.headers.get("X-Admin-Token") or ""
     if not admin_token_matches(provided, admin):
         try:
-            from lumen.platform.security_events import client_ip, emit
+            fail_limit = int(os.getenv("API_ADMIN_FAIL_LIMIT") or "5")
+            if fail_limit > 0:
+                get_rate_limiter().allow(
+                    f"admin_auth_fail:{ip}", limit=fail_limit, window_sec=300.0
+                )
             emit(
                 "auth.admin_rejected",
                 severity="critical",
-                ip=client_ip(request),
+                ip=ip,
                 path=str(request.path),
                 detail={"has_header": bool(provided)},
             )

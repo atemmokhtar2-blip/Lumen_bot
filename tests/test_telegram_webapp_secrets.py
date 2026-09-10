@@ -22,7 +22,7 @@ def _sign_init_data(bot_token: str, fields: dict[str, str]) -> str:
 
 
 def test_validate_init_data_accepts_good_signature(monkeypatch, tmp_path):
-    token = "123456789:AAHfakeTokenForUnitTestsOnly_xxxxxxxxxxxx"
+    token = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0001"
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
     user = json.dumps({"id": 42, "username": "alice", "first_name": "A"})
     init = _sign_init_data(token, {"user": user, "query_id": "AAE"})
@@ -36,7 +36,7 @@ def test_validate_init_data_accepts_good_signature(monkeypatch, tmp_path):
 
 
 def test_validate_init_data_rejects_tamper(monkeypatch):
-    token = "123456789:AAHfakeTokenForUnitTestsOnly_xxxxxxxxxxxx"
+    token = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0001"
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
     user = json.dumps({"id": 42, "username": "alice"})
     init = _sign_init_data(token, {"user": user})
@@ -50,7 +50,7 @@ def test_validate_init_data_rejects_tamper(monkeypatch):
 
 
 def test_validate_init_data_rejects_stale(monkeypatch):
-    token = "123456789:AAHfakeTokenForUnitTestsOnly_xxxxxxxxxxxx"
+    token = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0001"
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
     user = json.dumps({"id": 7, "username": "x"})
     init = _sign_init_data(
@@ -69,7 +69,7 @@ def test_secret_inbox_put_consume_roundtrip(monkeypatch, tmp_path):
     from lumen.platform import secret_inbox as si
 
     # reload path binding
-    assert si.put_secret(user_id=99, kind="bot", plaintext="1234567890:AAHrealLookingTokenValue_abcdefghijkl")
+    assert si.put_secret(user_id=99, kind="bot", plaintext="TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0002")
     meta = si.peek_meta(user_id=99, kind="bot")
     assert meta is not None
     plain = si.consume_secret(user_id=99, kind="bot")
@@ -82,7 +82,7 @@ def test_secret_inbox_never_stores_plaintext(monkeypatch, tmp_path):
     monkeypatch.setenv("TBE_TOKEN_SECRET", "y" * 40)
     from lumen.platform import secret_inbox as si
 
-    secret = "ghp_" + ("a" * 36)
+    secret = "ghs_TEST_ONLY_NOT_A_REAL_TOKEN_" + ("x" * 12)
     assert si.put_secret(user_id=1, kind="github", plaintext=secret)
     raw = (tmp_path / "secret_inbox" / "inbox.json").read_text(encoding="utf-8")
     assert secret not in raw
@@ -102,7 +102,7 @@ def test_api_route_rejects_without_init_data():
         )
         # inject body
         async def read():
-            return b'{"kind":"bot","secret":"123456:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'
+            return b'{"kind":"bot","secret":"TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0003"}'
         req.read = read  # type: ignore
         resp = await submit_telegram_secret(req)
         assert resp.status == 401
@@ -111,13 +111,13 @@ def test_api_route_rejects_without_init_data():
 
 
 def test_api_route_accepts_valid_webapp(monkeypatch, tmp_path):
-    token = "123456789:AAHfakeTokenForUnitTestsOnly_xxxxxxxxxxxx"
+    token = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0001"
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("TBE_TOKEN_SECRET", "z" * 40)
     user = json.dumps({"id": 55, "username": "dev"})
     init = _sign_init_data(token, {"user": user})
-    bot_token = "9876543210:AAHvalidFormatTokenValue_zzzzzzzzzzzzzz"
+    bot_token = "TEST_ONLY_BOT_TOKEN_NOT_A_SECRET_0004"
 
     from aiohttp.test_utils import make_mocked_request
     import asyncio
