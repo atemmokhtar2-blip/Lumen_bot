@@ -67,7 +67,7 @@ jobs:
           if [ -f requirements.lock ]; then pip install -r requirements.lock -q; else pip install -r requirements.txt -q; fi
           cyclonedx-py environment -o sbom.cdx.json 2>/dev/null \
             || cyclonedx-py requirements requirements.txt -o sbom.cdx.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: dependency-artifacts
@@ -101,7 +101,7 @@ jobs:
           # GATE: HIGH and CRITICAL only — exit non-zero fails the job (no || true)
           bandit -r $TARGETS -c pyproject.toml -x tests -lll -s B101,B601
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bandit-report
@@ -141,7 +141,7 @@ jobs:
             --exclude tests \
             --sarif -o semgrep.sarif \
             || { echo "::error::semgrep ERROR findings"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: semgrep-sarif
