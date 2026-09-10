@@ -346,7 +346,7 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
 
     text = str(params.get("text") or params.get("url") or "")
     url = str(params.get("url") or "").strip() or (extract_repo_url(text) or "")
-    token = str(params.get("token") or "").strip() or None
+    token = _resolve_github_token_for_tool(int(user_id or 0), params)
     branch = str(params.get("branch") or "").strip() or None
     try:
         depth = int(params.get("depth") if params.get("depth") is not None else 1)
@@ -399,6 +399,7 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
             depth=depth if depth > 0 else 1,
             url_override=url or None,
             branch=branch,
+            user_id=int(user_id or 0),
         )
     except TypeError:
         # older signature without branch
@@ -438,6 +439,16 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
         f"• أسطر الكود: {st.get('code_lines', '—')}\n"
         f"• الاستراتيجية: {getattr(result, 'strategy', '') or '—'}"
     )
+    try:
+        from lumen.engine.services.integrations.github.activity_log import record as _act
+
+        _act(
+            int(user_id or 0),
+            "repo_imported",
+            detail={"url": str(result.url or "")[:120], "path": str(result.path or "")[-80:]},
+        )
+    except Exception:
+        pass
     return ToolResult(
         ok=True,
         tool="clone_repo",
@@ -537,8 +548,8 @@ def _tool_repo_understand(
                 except Exception:
                     dest = _output_dir() / "clones" / str(uid or "anon")
                     dest.mkdir(parents=True, exist_ok=True)
-                token = str(params.get("token") or "").strip() or None
-                clone_res = sc.smart_clone(found, dest_dir=dest, token=token, url_override=found)
+                token = _resolve_github_token_for_tool(int(user_data.get("user_id") or user_id or 0), params)
+                clone_res = sc.smart_clone(found, dest_dir=dest, token=token, url_override=found, user_id=int(user_data.get("user_id") or user_id or 0))
                 if not getattr(clone_res, "ok", False):
                     return ToolResult(
                         ok=False,
@@ -809,3 +820,203 @@ def _tool_host(
             return ToolResult(ok=False, tool=name, message=f"فشل بدء الاستضافة: {type(exc).__name__}")
 
     return ToolResult(ok=False, tool=name, message=f"أداة استضافة غير معروفة: {name}")
+
+
+def _resolve_github_token_for_tool(
+    user_id: int,
+    params: dict[str, Any] | None = None,
+) -> str | None:
+    """Explicit param token wins; else user GitHub App / PAT credentials."""
+    params = params or {}
+    explicit = str(params.get("token") or "").strip()
+    if explicit:
+        return explicit
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return None
+    try:
+        from lumen.engine.services.integrations.connections.credentials import (
+            resolve_github_token,
+        )
+
+        return resolve_github_token(uid)
+    except Exception:
+        logger.debug("tool github token resolve failed uid=%s", uid, exc_info=True)
+        return None
+
+
+def _active_repo_path(params: dict[str, Any], user_data: dict[str, Any] | None) -> str:
+    path = str(params.get("path") or "").strip()
+    if path:
+        return path
+    ud = user_data or {}
+    active = ud.get("active_repo")
+    if isinstance(active, dict):
+        path = str(active.get("path") or "").strip()
+        if path:
+            return path
+    return str(ud.get("last_project_path") or "").strip()
+
+
+def _tool_create_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
+    name = str(params.get("name") or "").strip()
+    if not name:
+        return ToolResult(ok=False, tool="create_repo", message="مطلوب اسم المستودع")
+    token = _resolve_github_token_for_tool(user_id, params)
+    if not token:
+        return ToolResult(
+            ok=False,
+            tool="create_repo",
+            message=(
+                "لا يوجد اتصال GitHub. "
+                "اربط GitHub App من شاشة الاتصالات، أو مرّر token مؤقتاً."
+            ),
+            needs_auth=True,
+        )
+    private = params.get("private")
+    if private is None:
+        private = True
+    elif isinstance(private, str):
+        private = private.strip().lower() not in {"0", "false", "no", "public"}
+    description = str(params.get("description") or "").strip()
+    try:
+        from lumen.engine.services.git_safe_import import get_smart_git
+
+        r = get_smart_git().create_github_repo(
+            name,
+            token,
+            private=bool(private),
+            description=description,
+        )
+        ok = bool(getattr(r, "ok", False))
+        msg = str(getattr(r, "message", "") or "")
+        url = str(getattr(r, "url", "") or "")
+        path = str(getattr(r, "path", "") or "")
+        needs = bool(getattr(r, "needs_auth", False))
+    except Exception as exc:
+        logger.exception("create_repo tool failed")
+        return ToolResult(
+            ok=False,
+            tool="create_repo",
+            message=f"فشل إنشاء المستودع: {type(exc).__name__}",
+        )
+    if ok:
+        try:
+            from lumen.engine.services.integrations.github.activity_log import record as _act
+
+            _act(int(user_id), "create_repo", detail={"name": name, "url": url[:120]})
+        except Exception:
+            pass
+        return ToolResult(
+            ok=True,
+            tool="create_repo",
+            message=msg or f"تم إنشاء المستودع `{name}`",
+            data={"name": name, "url": url, "path": path, "private": bool(private)},
+        )
+    return ToolResult(
+        ok=False,
+        tool="create_repo",
+        message=msg or "فشل إنشاء المستودع",
+        needs_auth=needs,
+        data={"name": name},
+    )
+
+
+def _tool_git_push(
+    params: dict[str, Any],
+    *,
+    user_id: int,
+    user_data: dict[str, Any] | None = None,
+) -> ToolResult:
+    path = _active_repo_path(params, user_data)
+    if not path or not Path(path).is_dir():
+        return ToolResult(
+            ok=False,
+            tool="git_push",
+            message="لا يوجد مستودع نشط. اسحب أو اربط مستودعاً أولاً.",
+        )
+    token = _resolve_github_token_for_tool(user_id, params)
+    if not token:
+        return ToolResult(
+            ok=False,
+            tool="git_push",
+            message=(
+                "الدفع يحتاج اتصال GitHub (App أو PAT). "
+                "اربط الحساب من شاشة الاتصالات ثم أعد المحاولة."
+            ),
+            needs_auth=True,
+        )
+    message = str(params.get("message") or params.get("commit_message") or "update").strip() or "update"
+    branch = str(params.get("branch") or "").strip() or None
+    try:
+        from lumen.engine.services.git_safe_import import get_smart_git
+
+        result = get_smart_git().git_push(path, token=token, message=message, branch=branch)
+    except Exception as exc:
+        logger.exception("git_push tool failed")
+        return ToolResult(ok=False, tool="git_push", message=f"فشل الدفع: {type(exc).__name__}")
+    if getattr(result, "ok", False):
+        try:
+            from lumen.engine.services.integrations.github.activity_log import record as _act
+
+            _act(int(user_id), "push", detail={"path": str(path)[-100:], "message": message[:80]})
+        except Exception:
+            pass
+        return ToolResult(
+            ok=True,
+            tool="git_push",
+            message=str(getattr(result, "message", "") or "تم الدفع"),
+            data={"path": path, "url": getattr(result, "url", "")},
+        )
+    return ToolResult(
+        ok=False,
+        tool="git_push",
+        message=str(getattr(result, "message", "") or "فشل الدفع"),
+        needs_auth=bool(getattr(result, "needs_auth", False)),
+        data={"path": path},
+    )
+
+
+def _tool_git_pull(
+    params: dict[str, Any],
+    *,
+    user_id: int,
+    user_data: dict[str, Any] | None = None,
+) -> ToolResult:
+    path = _active_repo_path(params, user_data)
+    if not path or not Path(path).is_dir():
+        return ToolResult(ok=False, tool="git_pull", message="لا يوجد مستودع نشط للسحب.")
+    token = _resolve_github_token_for_tool(user_id, params)
+    branch = str(params.get("branch") or "").strip() or None
+    try:
+        from lumen.engine.services.git_safe_import import get_smart_git
+
+        git_pull = get_smart_git().git_pull
+        try:
+            result = git_pull(path, token=token, branch=branch)
+        except TypeError:
+            result = git_pull(path, token=token)
+    except Exception as exc:
+        logger.exception("git_pull tool failed")
+        return ToolResult(ok=False, tool="git_pull", message=f"فشل السحب: {type(exc).__name__}")
+    if getattr(result, "ok", False):
+        try:
+            from lumen.engine.services.integrations.github.activity_log import record as _act
+
+            _act(int(user_id), "pull", detail={"path": str(path)[-100:]})
+        except Exception:
+            pass
+        return ToolResult(
+            ok=True,
+            tool="git_pull",
+            message=str(getattr(result, "message", "") or "تم السحب"),
+            data={"path": path},
+        )
+    return ToolResult(
+        ok=False,
+        tool="git_pull",
+        message=str(getattr(result, "message", "") or "فشل السحب"),
+        needs_auth=bool(getattr(result, "needs_auth", False)),
+        data={"path": path},
+    )
+

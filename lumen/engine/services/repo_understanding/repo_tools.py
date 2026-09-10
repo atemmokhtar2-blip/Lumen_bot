@@ -726,9 +726,17 @@ def tool_diff_since(root: Path, since: str = "HEAD~10") -> dict[str, Any]:
 
 
 
-def tool_git_push(root: Path, *, token: str = "", message: str = "") -> dict[str, Any]:
+def tool_git_push(root: Path, *, token: str = "", message: str = "", user_id: int = 0) -> dict[str, Any]:
     """Push active repo via smart_git engine (not simulation)."""
     root = Path(root).resolve()
+    if not token and int(user_id or 0) > 0:
+        try:
+            from lumen.engine.services.integrations.connections.credentials import (
+                resolve_github_token,
+            )
+            token = resolve_github_token(int(user_id)) or ""
+        except Exception:
+            pass
     try:
         from lumen.engine.services.git_safe_import import get_smart_git
         sg = get_smart_git()
@@ -745,9 +753,17 @@ def tool_git_push(root: Path, *, token: str = "", message: str = "") -> dict[str
         return {"tool": "git_push", "ok": False, "error": type(exc).__name__, "detail": str(exc)[:200]}
 
 
-def tool_git_pull(root: Path, *, token: str = "") -> dict[str, Any]:
+def tool_git_pull(root: Path, *, token: str = "", user_id: int = 0) -> dict[str, Any]:
     """Pull latest for active repo via smart_git engine."""
     root = Path(root).resolve()
+    if not token and int(user_id or 0) > 0:
+        try:
+            from lumen.engine.services.integrations.connections.credentials import (
+                resolve_github_token,
+            )
+            token = resolve_github_token(int(user_id)) or ""
+        except Exception:
+            pass
     try:
         from lumen.engine.services.git_safe_import import get_smart_git
         sg = get_smart_git()
@@ -783,8 +799,8 @@ REPO_TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
     "config_scan": lambda root, **kw: tool_config_scan(root),
     "security_scan": lambda root, **kw: tool_security_scan(root),
     "diff_since": lambda root, **kw: tool_diff_since(root, str(kw.get("since") or "HEAD~10")),
-    "git_push": lambda root, **kw: tool_git_push(root, token=str(kw.get("token") or ""), message=str(kw.get("message") or "")),
-    "git_pull": lambda root, **kw: tool_git_pull(root, token=str(kw.get("token") or "")),
+    "git_push": lambda root, **kw: tool_git_push(root, token=str(kw.get("token") or ""), message=str(kw.get("message") or ""), user_id=int(kw.get("user_id") or 0)),
+    "git_pull": lambda root, **kw: tool_git_pull(root, token=str(kw.get("token") or ""), user_id=int(kw.get("user_id") or 0)),
 }
 
 

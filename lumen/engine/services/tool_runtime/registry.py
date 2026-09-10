@@ -12,10 +12,10 @@ try:
 except Exception:
     TOOL_SPECS = {
     "create_repo": {
-        "description": "إنشاء مستودع جديد على GitHub باستخدام توكن المستخدم (PAT)",
+        "description": "إنشاء مستودع على GitHub عبر GitHub App أو PAT المرتبط بالمستخدم",
         "params": {
             "name": "اسم المستودع",
-            "token": "توكن GitHub PAT بصلاحية repo",
+            "token": "اختياري إن كان GitHub App/PAT مربوطاً",
             "private": "اختياري — true/false (افتراضي true)",
             "description": "اختياري — وصف المستودع",
         },
@@ -25,7 +25,7 @@ except Exception:
         "description": "دفع التغييرات (commit+push) للمستودع النشط أو المسار المحدد",
         "params": {
             "path": "اختياري — مسار المستودع المحلي",
-            "token": "اختياري — PAT إن كان المستودع خاصاً",
+            "token": "اختياري — يُستنتج من اتصال GitHub App/PAT",
             "message": "اختياري — رسالة الكوميت",
         },
         "requires_confirmation": True,
@@ -34,7 +34,7 @@ except Exception:
         "description": "سحب آخر نسخة من المستودع النشط (git pull)",
         "params": {
             "path": "اختياري — مسار المستودع",
-            "token": "اختياري — PAT للمستودعات الخاصة",
+            "token": "اختياري — من اتصال GitHub إن وُجد",
         },
         "requires_confirmation": False,
     },
@@ -42,7 +42,7 @@ except Exception:
         "description": "سحب مستودع Git (GitHub/GitLab/Bitbucket) إلى مساحة المستخدم",
         "params": {
             "url": "رابط المستودع https",
-            "token": "اختياري — PAT للمستودعات الخاصة",
+            "token": "اختياري — من اتصال GitHub إن وُجد",
             "branch": "اختياري — فرع محدد",
             "depth": "اختياري — عمق الـ shallow clone (افتراضي 1)",
         },
@@ -134,7 +134,7 @@ _TOOL_RISK: dict[str, str] = {
 }
 
 _REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
-    "create_repo": ("name", "token"),
+    "create_repo": ("name",),
     "clone_repo": ("url",),
     "git_push": (),  # path optional if active repo
     "host_start": (),

@@ -26,14 +26,14 @@ class ToolContract:
 
 def build_default_contracts() -> Dict[str, ToolContract]:
     specs = [
-        ToolContract("create_repo", "إنشاء مستودع جديد على GitHub",
-            [ToolParamSpec("name", required=True), ToolParamSpec("token", required=True),
+        ToolContract("create_repo", "إنشاء مستودع جديد على GitHub عبر اتصال المستخدم (App/PAT)",
+            [ToolParamSpec("name", required=True), ToolParamSpec("token"),
              ToolParamSpec("private"), ToolParamSpec("description")], True, "git"),
-        ToolContract("git_push", "دفع التغييرات للمستودع",
+        ToolContract("git_push", "دفع التغييرات للمستودع عبر GitHub App أو PAT المرتبط",
             [ToolParamSpec("path"), ToolParamSpec("token"), ToolParamSpec("message")], True, "git"),
         ToolContract("git_pull", "سحب آخر نسخة",
             [ToolParamSpec("path"), ToolParamSpec("token")], False, "git"),
-        ToolContract("clone_repo", "سحب مستودع Git",
+        ToolContract("clone_repo", "سحب مستودع Git باستخدام اتصال GitHub إن وُجد",
             [ToolParamSpec("url", required=True), ToolParamSpec("token"),
              ToolParamSpec("branch"), ToolParamSpec("depth")], False, "git"),
         ToolContract("repo_inspect", "فحص مستودع", [ToolParamSpec("path")], False, "inspect"),
