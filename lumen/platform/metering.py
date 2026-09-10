@@ -157,7 +157,8 @@ class MongoMeteringService:
             raise ValueError("MONGODB_URI required for MongoMeteringService")
         self.db_name = (db_name or os.getenv("MONGODB_DB") or "lumen").strip()
         timeout = int(os.getenv("MONGODB_TIMEOUT_MS") or "8000")
-        self._client = MongoClient(
+        from lumen.platform.mongo_client import connect_mongo
+        self._client = connect_mongo(
             self.uri,
             serverSelectionTimeoutMS=timeout,
             connectTimeoutMS=timeout,

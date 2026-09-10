@@ -38,14 +38,9 @@ class RedisRateLimiter:
 
         connect_to = float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2")
         socket_to = float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2")
-        try:
-            from lumen.platform.prod_security_gate import enforce_redis_url_or_raise
+        from lumen.platform.redis_client import connect_redis_url
 
-            redis_url = enforce_redis_url_or_raise(redis_url)
-        except Exception:
-            # Re-raise TLS / production policy failures; connection errors handled by ping
-            raise
-        self._r = redis.Redis.from_url(
+        self._r = connect_redis_url(
             redis_url,
             decode_responses=True,
             socket_connect_timeout=connect_to,
@@ -214,8 +209,8 @@ def check_tenant_llm_budget(
         url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
     if url:
         try:
-            import redis
-            r = redis.Redis.from_url(
+            from lumen.platform.redis_client import connect_redis_url
+            r = connect_redis_url(
                 url,
                 decode_responses=True,
                 socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "5"),

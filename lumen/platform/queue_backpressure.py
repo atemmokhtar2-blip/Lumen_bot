@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from typing import Any
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger("b2b.queue_backpressure")
 
@@ -47,7 +48,7 @@ def _redis():
         return None
     try:
         import redis
-        return redis.Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+        return connect_redis_url(url, socket_connect_timeout=2, socket_timeout=2)
     except Exception:
         return None
 

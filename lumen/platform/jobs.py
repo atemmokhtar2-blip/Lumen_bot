@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .sanitize import sanitize_for_storage
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger("lumen.platform.jobs")
 
@@ -118,7 +119,7 @@ class RedisJobStore:
         url = (redis_url or os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
         if not url:
             raise ValueError("REDIS_URL required for RedisJobStore")
-        self._r = redis.Redis.from_url(url, decode_responses=True)
+        self._r = connect_redis_url(url, decode_responses=True)
         self._r.ping()
         self._prefix = (os.getenv("JOB_REDIS_PREFIX") or "tbe:job:").strip() or "tbe:job:"
 
@@ -512,7 +513,7 @@ class JobRunner:
                 qname = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
                 q = Queue(
                     qname,
-                    connection=Redis.from_url(rurl),
+                    connection=connect_redis_url(rurl),
                     default_timeout=int(os.getenv("RQ_JOB_TIMEOUT") or "600"),
                 )
                 q.enqueue(

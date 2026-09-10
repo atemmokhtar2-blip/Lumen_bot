@@ -19,6 +19,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class EventBus:
             return None
         try:
             import redis
-            self._redis = redis.Redis.from_url(url, decode_responses=True)
+            self._redis = connect_redis_url(url, decode_responses=True)
             self._redis.ping()
             return self._redis
         except Exception:

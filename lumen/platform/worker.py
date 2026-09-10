@@ -17,9 +17,8 @@ def main() -> int:
     from redis import Redis
     from rq import Worker, Queue
     name = (os.getenv("RQ_QUEUE_NAME") or "tbe").strip() or "tbe"
-    from lumen.platform.prod_security_gate import enforce_redis_url_or_raise
-    url = enforce_redis_url_or_raise(url)
-    conn = Redis.from_url(url)
+    from lumen.platform.redis_client import connect_redis_url
+    conn = connect_redis_url(url)
     queues = [Queue(name, connection=conn)]
     # Resume interrupted multi-agent generations left mid-flight after a crash.
     try:

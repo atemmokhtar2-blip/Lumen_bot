@@ -78,7 +78,8 @@ def _try_acquire_mongo_lock(*, wait_seconds: float) -> Path | None:
     except ImportError as exc:
         raise SystemExit("MONGODB_URI is configured but pymongo is missing") from exc
     try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        from lumen.platform.mongo_client import connect_mongo
+        client = connect_mongo(uri, serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
         coll = _resolve_mongo_db(client)["ai_agent_runtime_locks"]
     except (ConfigurationError, PyMongoError, Exception) as exc:

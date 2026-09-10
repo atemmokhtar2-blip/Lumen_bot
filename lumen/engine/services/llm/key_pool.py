@@ -17,6 +17,7 @@ import logging
 import os
 import time
 from typing import Iterable
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def _redis():
         if not url:
             return None
         import redis
-        client = redis.Redis.from_url(
+        client = connect_redis_url(
             url,
             socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
             socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "2"),

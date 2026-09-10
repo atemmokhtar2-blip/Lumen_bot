@@ -6,7 +6,7 @@ Wire formats (newest first):
   enc1:  XOR+HMAC              (legacy readable, never written)
 
 Environment:
-  TBE_TOKEN_SECRET   required in production (min 16 chars)
+  TBE_TOKEN_SECRET   required in production (min 32 chars)
   Never derive from TELEGRAM_BOT_TOKEN (platform token).
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ def _raw_secret_material() -> bytes:
         raw = "tbe-dev-insecure-token-key"
         logger.warning("using insecure default TBE token seal key (dev only)")
     if len(raw) < 16 and env in {"production", "prod", "staging"}:
-        raise RuntimeError("TBE_TOKEN_SECRET too short (min 16 chars in production)")
+        raise RuntimeError("TBE_TOKEN_SECRET too short (min 32 chars in production)")
     return raw.encode("utf-8")
 
 

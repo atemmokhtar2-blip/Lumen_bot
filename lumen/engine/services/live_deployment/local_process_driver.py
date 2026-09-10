@@ -119,7 +119,22 @@ def _local_process_allowed() -> bool:
 
 
 class LocalProcessDriver(DeploymentProvider):
+    # phase_a_hard_refuse: constructor blocks multi-tenant / production
     name = "local_process"
+
+    def __init__(self) -> None:
+        from lumen.engine.services.isolation_policy import (
+            is_dev_environment,
+            is_multi_tenant,
+            decide_isolation,
+        )
+        if is_multi_tenant() or not is_dev_environment():
+            raise RuntimeError(
+                "LocalProcessDriver forbidden under multi-tenant/production (phase A)"
+            )
+        if not decide_isolation().allow_local:
+            raise RuntimeError("LocalProcessDriver denied by isolation policy")
+
 
     def deploy(
         self,

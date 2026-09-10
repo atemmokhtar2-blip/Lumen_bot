@@ -20,6 +20,7 @@ import secrets
 import threading
 import time
 from typing import Any
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger("lumen.github.app_oauth_state")
 
@@ -69,7 +70,7 @@ def _redis():
     try:
         import redis
 
-        r = redis.Redis.from_url(
+        r = connect_redis_url(
             url,
             decode_responses=True,
             socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),

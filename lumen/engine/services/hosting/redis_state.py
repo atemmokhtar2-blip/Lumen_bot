@@ -15,6 +15,7 @@ import logging
 import os
 import time
 from typing import Any, Optional
+from lumen.platform.redis_client import connect_redis_url
 
 logger = logging.getLogger("tbe.hosting.redis_state")
 
@@ -45,7 +46,7 @@ def _client():
         )
     import redis
 
-    return redis.Redis.from_url(
+    return connect_redis_url(
         url,
         decode_responses=True,
         socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
