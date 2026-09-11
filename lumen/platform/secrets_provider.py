@@ -62,6 +62,9 @@ _MANAGED_KEYS = (
     "GITHUB_APP_WEBHOOK_SECRET",
     "CALLBACK_HMAC_SECRET",
     "TBE_HOST_WEBHOOK_SECRET",
+    # Platform serverless host (internal — never exposed to end users)
+    "VERCEL_TOKEN",
+    "VERCEL_TEAM_ID",
 )
 
 _LOCK = threading.RLock()
