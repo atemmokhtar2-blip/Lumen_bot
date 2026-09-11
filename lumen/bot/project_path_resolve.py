@@ -13,6 +13,11 @@ def resolve_session_project_path(
     pending: dict[str, Any] | None = None,
     user_data: dict[str, Any] | None = None,
 ) -> str:
+    try:
+        from lumen.bot.message_classify import resolve_on_disk_path
+        return resolve_on_disk_path(user_data, pending)
+    except Exception:
+        pass
     pending = dict(pending or {})
     ud = dict(user_data or {})
     pre = ud.get("pending_repo_env") if isinstance(ud.get("pending_repo_env"), dict) else {}

@@ -1,0 +1,163 @@
+"""Strict classification of user messages — prevents env/token/chat confusion.
+
+Rules (fail-closed):
+  - Bot tokens and GitHub PATs are NEVER env values.
+  - Free-form Arabic/English chat is NEVER an env value.
+  - Env values only accepted in explicit configure mode with type checks.
+  - Host/run always resolve a real on-disk path before proceeding.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+
+class MessageKind(str, Enum):
+    BOT_TOKEN = "bot_token"
+    GITHUB_PAT = "github_pat"
+    ENV_VALUE = "env_value"
+    CHAT = "chat"
+    EMPTY = "empty"
+
+
+@dataclass(frozen=True)
+class ClassifiedMessage:
+    kind: MessageKind
+    normalized: str
+    reason: str = ""
+
+
+_BOT_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
+_PAT_PREFIXES = ("ghp_", "github_pat_", "glpat_", "gho_", "ghu_")
+# Conversational / intent markers — never env
+_CHAT_MARKERS = (
+    "اعمل", "أسحب", "اسحب", "شغّل", "شغل", "استضف", "انشر", "تعديل",
+    "أضف", "اضف", "حذف", "اشرح", "فهم", "حلل", "بوت", "مستودع", "ريبو",
+    "clone", "deploy", "host", "generate", "help", "مساعدة",
+)
+_NUMERIC_ENV_HINTS = (
+    "TIMEOUT", "SECONDS", "LIMIT", "BURST", "SIZE", "PORT", "COUNT", "MAX",
+    "MIN", "TTL", "DELAY", "INTERVAL", "RATE", "MB", "KB",
+)
+
+
+def normalize_ws(text: str) -> str:
+    return re.sub(r"\s+", "", (text or "").strip())
+
+
+def looks_like_bot_token(text: str) -> bool:
+    return bool(_BOT_RE.match(normalize_ws(text)))
+
+
+def looks_like_pat(text: str) -> bool:
+    v = (text or "").strip()
+    return any(v.startswith(p) for p in _PAT_PREFIXES)
+
+
+def looks_like_chat(text: str) -> bool:
+    v = (text or "").strip()
+    if not v:
+        return False
+    if looks_like_bot_token(v) or looks_like_pat(v):
+        return False
+    if len(v) > 80 and v.count(" ") >= 3:
+        return True
+    if any(ch in v for ch in "؟?!"):
+        return True
+    low = v.lower()
+    if any(m in low for m in _CHAT_MARKERS):
+        return True
+    # Arabic letters density
+    ar = sum(1 for c in v if "\u0600" <= c <= "\u06FF")
+    if ar >= 6 and v.count(" ") >= 2:
+        return True
+    return False
+
+
+def is_plausible_env_value(var_name: str, value: str) -> bool:
+    """Strict: only short machine-like values, typed by variable name."""
+    v = (value or "").strip()
+    name = (var_name or "").strip().upper()
+    if not v or not name or len(v) > 200:
+        return False
+    if looks_like_bot_token(v) or looks_like_pat(v):
+        return False
+    if looks_like_chat(v):
+        return False
+    if "\n" in v or "\r" in v:
+        return False
+    if v.count(" ") >= 3:
+        return False
+    if any(h in name for h in _NUMERIC_ENV_HINTS):
+        try:
+            float(v.replace("_", ""))
+        except ValueError:
+            return False
+        return True
+    # generic: no spaces, printable, not a sentence
+    if " " in v and not (v.startswith("http://") or v.startswith("https://")):
+        # allow single-space tokens only for non-numeric
+        if v.count(" ") > 1:
+            return False
+    return True
+
+
+def classify(text: str, *, pending_env_var: str = "") -> ClassifiedMessage:
+    raw = (text or "").strip()
+    if not raw:
+        return ClassifiedMessage(MessageKind.EMPTY, "", "empty")
+    if looks_like_bot_token(raw):
+        return ClassifiedMessage(MessageKind.BOT_TOKEN, normalize_ws(raw), "bot_token")
+    if looks_like_pat(raw):
+        return ClassifiedMessage(MessageKind.GITHUB_PAT, raw.strip(), "pat")
+    if pending_env_var and is_plausible_env_value(pending_env_var, raw):
+        return ClassifiedMessage(MessageKind.ENV_VALUE, raw.strip(), f"env:{pending_env_var}")
+    return ClassifiedMessage(MessageKind.CHAT, raw, "chat")
+
+
+def resolve_on_disk_path(user_data: dict[str, Any] | None, pending: dict[str, Any] | None = None) -> str:
+    from pathlib import Path
+
+    ud = dict(user_data or {})
+    pending = dict(pending or {})
+    pre = ud.get("pending_repo_env") if isinstance(ud.get("pending_repo_env"), dict) else {}
+    ph = ud.get("pending_host") if isinstance(ud.get("pending_host"), dict) else {}
+    pr = ud.get("pending_run") if isinstance(ud.get("pending_run"), dict) else {}
+    ar = ud.get("active_repo") if isinstance(ud.get("active_repo"), dict) else {}
+    candidates = [
+        pending.get("project_path"),
+        pending.get("path"),
+        ph.get("project_path"),
+        pr.get("project_path"),
+        pre.get("path"),
+        pre.get("project_path"),
+        ar.get("path"),
+        ud.get("last_project_path"),
+        ud.get("last_clone_path"),
+    ]
+    for c in candidates:
+        p = str(c or "").strip()
+        if not p:
+            continue
+        try:
+            root = Path(p).expanduser().resolve()
+        except Exception:
+            continue
+        if root.is_dir():
+            return str(root)
+    return ""
+
+
+__all__ = [
+    "MessageKind",
+    "ClassifiedMessage",
+    "classify",
+    "looks_like_bot_token",
+    "looks_like_pat",
+    "looks_like_chat",
+    "is_plausible_env_value",
+    "resolve_on_disk_path",
+    "normalize_ws",
+]

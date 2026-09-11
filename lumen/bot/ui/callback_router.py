@@ -904,13 +904,11 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                         rr = evaluate_readiness(
                             active_repo=context.user_data.get("active_repo") or {}
                         )
+                        # FORBIDDEN: auto sequential env collection (hallucination source).
+                        # Store advisory list only; host waits for bot token.
                         if rr.missing_env:
-                            context.user_data["pending_repo_env"] = {
-                                "queue": list(rr.missing_env),
-                                "path": bind.path,
-                                "full_name": bind.full_name,
-                            }
-                        # Always allow host/run with path — env is optional advisory
+                            context.user_data["advisory_missing_env"] = list(rr.missing_env)[:20]
+                        context.user_data.pop("pending_repo_env", None)
                         if bind.is_runnable and bind.path:
                             context.user_data["pending_host"] = {
                                 "project_path": bind.path,
@@ -918,6 +916,9 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                                 "plane": "permanent_host",
                             }
                             context.user_data["last_project_path"] = bind.path
+                            ar = dict(context.user_data.get("active_repo") or {})
+                            ar["path"] = bind.path
+                            context.user_data["active_repo"] = ar
                             result.state.slots["gh_missing_env"] = ",".join(rr.missing_env[:12])
                             result.state.slots["gh_ready"] = "0"
                         else:
@@ -956,22 +957,18 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                         from lumen.bot.ui.repo_sections import section_keyboard
 
                         header = bind.header_ar or f"✅ تم سحب `{bind.full_name or label}`"
-                        pending_env = (context.user_data or {}).get("pending_repo_env") or {}
-                        queue = list(pending_env.get("queue") or [])
-                        if queue:
+                        # Never open sequential env trap — token starts host
+                        context.user_data.pop("pending_repo_env", None)
+                        adv = list((context.user_data or {}).get("advisory_missing_env") or [])
+                        if adv:
                             header += (
-                                "\n\n⚙️ قبل التجربة/الاستضافة أرسل قيمة:\n"
-                                f"`{queue[0]}`\n"
-                                f"(متبقي {len(queue)} متغير)"
+                                "\n\n⚙️ متغيرات اختيارية لاحقًا: "
+                                + ", ".join(f"`{x}`" for x in adv[:5])
+                                + ("…" if len(adv) > 5 else "")
                             )
-                            markup = section_keyboard(
-                                user_id=int(uid),
-                                show_run=False,
-                            )
-                        elif bind.is_runnable:
+                        if bind.is_runnable:
                             header += (
-                                "\n\n🚀 للتشغيل الحقيقي: أرسل توكن البوت من @BotFather "
-                                "أو استخدم أزرار الأقسام."
+                                "\n\n🚀 أرسل توكن البوت من @BotFather للاستضافة على Lumen."
                             )
                             markup = section_keyboard(
                                 user_id=int(uid),
