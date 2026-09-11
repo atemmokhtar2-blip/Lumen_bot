@@ -35,6 +35,11 @@ def _loop(get_service: Callable) -> None:
             svc = get_service()
             if svc is not None:
                 try:
+                    from lumen.engine.services.hosting.health_monitor import run_once as health_run_once
+                    health_run_once(svc)
+                except Exception:
+                    logger.exception("ops health pass failed")
+                try:
                     from lumen.hosting.log_aggregator import aggregate_all_running
                     aggregate_all_running(svc)
                 except Exception:

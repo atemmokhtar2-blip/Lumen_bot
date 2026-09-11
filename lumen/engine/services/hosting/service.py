@@ -1122,6 +1122,32 @@ class HostingService:
         lines: list[str] = []
         dep = (inst.deployment_id or "").strip()
         backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
+        if backend in {"lumen_serverless", "serverless", "vercel"}:
+            try:
+                from lumen.hosting.serverless_health import collect_serverless_logs
+                from lumen.bot.sanitize import sanitize_log_text
+                raw = collect_serverless_logs(inst, limit=max(10, min(200, int(limit))))
+                lines = [sanitize_log_text(str(x)) for x in (raw or [])]
+            except Exception as exc:
+                return HostResult(
+                    ok=False,
+                    message=f"تعذّر قراءة سجلات الاستضافة السريعة: {type(exc).__name__}",
+                    instance=inst,
+                )
+            if not lines:
+                return HostResult(
+                    ok=True,
+                    message="لا سجلات متاحة بعد لهذا المثيل (سريعة).",
+                    instance=inst,
+                    details={"log_lines": [], "backend": "lumen_serverless"},
+                )
+            body = chr(10).join(lines[-int(limit):])
+            return HostResult(
+                ok=True,
+                message=body[:3500],
+                instance=inst,
+                details={"log_lines": lines[-int(limit):], "line_count": len(lines), "backend": "lumen_serverless"},
+            )
         try:
             from lumen.bot.sanitize import sanitize_log_text
             if backend == "firecracker" or dep.startswith("fc-") or dep:

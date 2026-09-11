@@ -1,4 +1,4 @@
-"""Phase 6 — serverless health probe + auto-repair path."""
+"""Phase 6 strong — multi-signal serverless health + monitor."""
 from __future__ import annotations
 
 import os
@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
 from lumen.engine.services.hosting.health_monitor import check_instance, run_once
+from lumen.hosting.serverless_health import evaluate_serverless_instance, HealthReport
 
 
 @dataclass
@@ -26,27 +27,69 @@ class _Inst:
     last_diagnosis: dict = field(default_factory=lambda: {"webhook_path": "/api"})
 
 
-def test_serverless_probe_healthy():
+def test_evaluate_all_signals_ok():
     inst = _Inst()
     with patch(
-        "lumen.hosting.serverless_verify.health_check_deployment",
-        return_value={"ok": True, "adapter_ok": True},
+        "lumen.hosting.serverless_health.probe_platform_status",
+        return_value=(True, "platform_ready", {"platform_status": "running"}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_http_adapter",
+        return_value=(True, "http_ok", {"adapter_ok": True}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_telegram_webhook",
+        return_value=(True, "telegram_ok", {"telegram_checked": True}),
     ):
-        ok, reason = check_instance(inst)
-    assert ok and reason == "http_ok"
+        r = evaluate_serverless_instance(inst)
+    assert r.ok
+    assert r.reason == "all_signals_ok"
 
 
-def test_serverless_probe_unhealthy():
+def test_evaluate_fails_on_platform():
     inst = _Inst()
     with patch(
-        "lumen.hosting.serverless_verify.health_check_deployment",
-        return_value={"ok": False, "error": "adapter_health_not_confirmed"},
+        "lumen.hosting.serverless_health.probe_platform_status",
+        return_value=(False, "platform_error", {}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_http_adapter",
+        return_value=(True, "http_ok", {}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_telegram_webhook",
+        return_value=(True, "telegram_skipped_no_token", {"telegram_checked": False}),
+    ):
+        r = evaluate_serverless_instance(inst)
+    assert not r.ok
+    assert "platform" in r.reason
+
+
+def test_evaluate_telegram_mismatch_when_checked():
+    inst = _Inst()
+    with patch(
+        "lumen.hosting.serverless_health.probe_platform_status",
+        return_value=(True, "platform_ready", {}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_http_adapter",
+        return_value=(True, "http_ok", {}),
+    ), patch(
+        "lumen.hosting.serverless_health.probe_telegram_webhook",
+        return_value=(False, "telegram_webhook_mismatch", {"telegram_checked": True}),
+    ):
+        r = evaluate_serverless_instance(inst)
+    assert not r.ok
+    assert "telegram" in r.reason
+
+
+def test_check_instance_uses_evaluate():
+    inst = _Inst()
+    with patch(
+        "lumen.hosting.serverless_health.evaluate_serverless_instance",
+        return_value=HealthReport(ok=True, reason="all_signals_ok", signals={"http": {"ok": True}}),
     ):
         ok, reason = check_instance(inst)
-    assert not ok
+    assert ok
+    assert inst.last_diagnosis.get("last_health_ok") is True
 
 
-def test_run_once_marks_failed_without_auto_repair(monkeypatch):
+def test_run_once_marks_failed(monkeypatch):
     monkeypatch.setenv("TBE_HOST_AUTO_REPAIR", "0")
     inst = _Inst()
     svc = MagicMock()
@@ -54,12 +97,11 @@ def test_run_once_marks_failed_without_auto_repair(monkeypatch):
     svc._save = MagicMock()
     with patch(
         "lumen.engine.services.hosting.health_monitor.check_instance",
-        return_value=(False, "http_down"),
+        return_value=(False, "platform_down+http_unhealthy"),
     ):
         stats = run_once(svc)
     assert stats["failed"] == 1
     assert inst.status == "failed"
-    assert "health_failed" in inst.last_error
 
 
 def test_run_once_auto_repair(monkeypatch):

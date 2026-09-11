@@ -45,54 +45,25 @@ def repair_cooldown_sec() -> float:
         return 300.0
 
 
-def _serverless_http_probe(inst) -> tuple[bool, str]:
-    """GET public URL / webhook path — same adapter contract as phase-3 verify."""
-    base = str(getattr(inst, "public_base_url", "") or "").rstrip("/")
-    diag = dict(getattr(inst, "last_diagnosis", None) or {})
-    path = str(diag.get("webhook_path") or "/api")
-    if not path.startswith("/"):
-        path = "/" + path
-    if not base.startswith("https://"):
-        # fallback: webhook_public_url may be full hook URL
-        hook = str(getattr(inst, "webhook_public_url", "") or diag.get("webhook_url") or "")
-        if hook.startswith("https://"):
-            base = hook
-            path = ""
-        else:
-            return False, "no_public_url"
-    try:
-        from lumen.hosting.serverless_verify import health_check_deployment, normalize_public_url
-
-        if path:
-            result = health_check_deployment(
-                normalize_public_url(base),
-                webhook_path=path,
-                retries=2,
-                delay_sec=0.5,
-                timeout=10.0,
-            )
-        else:
-            result = health_check_deployment(
-                normalize_public_url(base),
-                webhook_path="/api",
-                retries=2,
-                delay_sec=0.5,
-                timeout=10.0,
-            )
-        if result.get("ok"):
-            return True, "http_ok"
-        return False, str(result.get("error") or result.get("status") or "http_unhealthy")
-    except Exception as exc:
-        return False, f"probe_{type(exc).__name__}"
-
-
 def check_instance(inst, *, get_backend_status: Callable | None = None) -> tuple[bool, str]:
-    """Return (healthy, reason)."""
+    """Return (healthy, reason). Serverless uses multi-signal evaluate."""
     dep = (getattr(inst, "deployment_id", None) or "").strip()
     backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
 
     if backend in {"lumen_serverless", "serverless", "vercel"}:
-        return _serverless_http_probe(inst)
+        try:
+            from lumen.hosting.serverless_health import evaluate_serverless_instance
+            report = evaluate_serverless_instance(inst)
+            # persist signals on instance for diagnose/status
+            try:
+                diag = dict(getattr(inst, "last_diagnosis", None) or {})
+                diag.update(report.as_diag())
+                inst.last_diagnosis = diag
+            except Exception:
+                pass
+            return bool(report.ok), str(report.reason or ("ok" if report.ok else "unhealthy"))
+        except Exception as exc:
+            return False, f"serverless_eval:{type(exc).__name__}"
 
     if not dep:
         return False, "no_deployment_id"

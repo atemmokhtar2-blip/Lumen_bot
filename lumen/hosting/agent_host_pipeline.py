@@ -380,6 +380,12 @@ def format_instances_status(instances: list[Any]) -> str:
             lines.append("  التحقق: ناجح")
         elif st == "running":
             lines.append("  التحقق: غير مؤكد")
+        if "last_health_ok" in diag:
+            lines.append(
+                "  الصحة: "
+                + ("سليمة" if diag.get("last_health_ok") else "متدهورة")
+                + (f" ({diag.get('last_health_reason')})" if diag.get("last_health_reason") else "")
+            )
         err = str(getattr(inst, "last_error", "") or "")
         if err and st != "running":
             lines.append(f"  خطأ: {err[:120]}")
