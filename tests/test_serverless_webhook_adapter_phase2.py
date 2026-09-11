@@ -101,6 +101,7 @@ def test_prepare_serverless(tmp_path):
 
 def test_orchestration_injects_webhook_secret(tmp_path, monkeypatch):
     monkeypatch.setenv("TBE_HOST_BACKEND", "lumen_serverless")
+    monkeypatch.setenv("LUMEN_SERVERLESS_SKIP_VERIFY", "1")
     (tmp_path / "main.py").write_text(
         "from telegram.ext import Application\n"
         "application = Application.builder().token('t').build()\n"

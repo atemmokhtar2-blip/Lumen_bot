@@ -715,6 +715,10 @@ class HostingService:
                 "webhook_url": str(handle.meta.get("webhook_url") or ""),
                 "provider": "lumen_serverless",
                 "webhook_secret": str(handle.meta.get("webhook_secret") or ""),
+                "lifecycle_state": str(handle.meta.get("lifecycle_state") or ""),
+                "webhook_registered": bool(handle.meta.get("verify_ok")),
+                "webhook_verified": bool(handle.meta.get("verify_ok")),
+                "verify_ok": bool(handle.meta.get("verify_ok")),
             }
         if not public_url:
             public_url = public_url_for_instance(instance_id)

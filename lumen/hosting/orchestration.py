@@ -204,30 +204,96 @@ def _start_serverless(
     st = driver.deploy(project_path, env_vars=env, service_name=svc)
 
     status = (st.status or "").lower()
-    if status in {"running", "deploy_running", "success"}:
-        mapped = "running"
-    elif status in {"pending", "building", "deploying"}:
-        mapped = "starting"
-    else:
-        mapped = "failed"
+    public_url = str(st.url or "")
+    if public_url and not public_url.startswith("http"):
+        public_url = f"https://{public_url}"
+    webhook_secret = (env.get("TELEGRAM_WEBHOOK_SECRET") or env.get("WEBHOOK_SECRET") or "")[:64]
+    base_meta = {
+        "url": public_url,
+        "project_id": st.project_id,
+        "provider": "lumen_serverless",
+        "service_id": st.service_id,
+        "webhook_path": webhook_path,
+        "webhook_url": (public_url.rstrip("/") + webhook_path) if public_url else "",
+        "prepare": prepare_meta,
+        "webhook_secret": webhook_secret,
+        "lifecycle_state": "DEPLOYED" if status in {"running", "deploy_running", "success", "pending"} else "FAILED",
+    }
 
-    handle = SandboxHandle(
-        backend="lumen_serverless",
-        deployment_id=str(st.deployment_id or ""),
-        container_or_vm_id=str(st.project_id or ""),
-        status=mapped,
-        message=str(st.message or "")[:500],
-        meta={
-            "url": st.url,
-            "project_id": st.project_id,
-            "provider": "lumen_serverless",
-            "service_id": st.service_id,
-            "webhook_path": webhook_path,
-            "webhook_url": (str(st.url).rstrip("/") + webhook_path) if st.url else "",
-            "prepare": prepare_meta,
-            "webhook_secret": (env.get("TELEGRAM_WEBHOOK_SECRET") or "")[:64],
-        },
-    )
+    if status not in {"running", "deploy_running", "success", "pending", "building", "deploying"}:
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id=str(st.deployment_id or ""),
+            container_or_vm_id=str(st.project_id or ""),
+            status="failed",
+            message=str(st.message or "تعذّر نشر البوت على استضافة Lumen.")[:500],
+            meta=base_meta,
+        )
+        return _ServerlessBackend(), handle
+
+    # Phase 3 — health + setWebhook + getWebhookInfo (fail-closed on webhook)
+    try:
+        from lumen.hosting.serverless_verify import verify_serverless_bot, STATE_RUNNING
+        # Skip live HTTP health when no public URL yet (pending build)
+        skip_health = status in {"pending", "building", "deploying"} or not public_url.startswith("https://")
+        # Allow skip via env for offline unit tests
+        import os as _os
+        if (_os.environ.get("LUMEN_SERVERLESS_SKIP_VERIFY") or "").strip() in {"1", "true", "yes"}:
+            verify = None
+        else:
+            verify = verify_serverless_bot(
+                bot_token=bot_token or env.get("BOT_TOKEN") or "",
+                public_url=public_url,
+                webhook_path=webhook_path,
+                webhook_secret=webhook_secret,
+                skip_health=skip_health,
+            )
+    except Exception as vexc:
+        logger.warning("serverless verify error: %s", type(vexc).__name__)
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id=str(st.deployment_id or ""),
+            container_or_vm_id=str(st.project_id or ""),
+            status="failed",
+            message="فشل التحقق من الاستضافة بعد النشر.",
+            meta={**base_meta, "lifecycle_state": "FAILED", "verify_error": type(vexc).__name__},
+        )
+        return _ServerlessBackend(), handle
+
+    if verify is None:
+        # explicit skip (tests / maintenance)
+        mapped = "running" if status in {"running", "deploy_running", "success"} else "starting"
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id=str(st.deployment_id or ""),
+            container_or_vm_id=str(st.project_id or ""),
+            status=mapped,
+            message=str(st.message or "")[:500],
+            meta={**base_meta, "lifecycle_state": "RUNNING" if mapped == "running" else "DEPLOYED", "verify_skipped": True},
+        )
+        return _ServerlessBackend(), handle
+
+    meta = {**base_meta, **verify.as_meta()}
+    if verify.webhook_url:
+        meta["webhook_url"] = verify.webhook_url
+    if verify.ok and verify.state == STATE_RUNNING:
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id=str(st.deployment_id or ""),
+            container_or_vm_id=str(st.project_id or ""),
+            status="running",
+            message=verify.message[:500],
+            meta=meta,
+        )
+    else:
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id=str(st.deployment_id or ""),
+            container_or_vm_id=str(st.project_id or ""),
+            status="failed",
+            message=(verify.message or "فشل التحقق من الاستضافة")[:500],
+            meta=meta,
+        )
     return _ServerlessBackend(), handle
 
 
