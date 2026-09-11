@@ -22,7 +22,7 @@ def list_tools() -> list[str]:
     except Exception:
         return [
             "generate_bot", "refine_bot", "clone_repo", "create_repo",
-            "git_push", "git_pull", "host_start", "host_stop", "host_status",
+            "git_push", "git_pull", "host_start", "host_stop", "host_status", "host_diagnose", "host_heal",
             "repo_inspect", "repo_understand", "repo_modify",
         ]
 

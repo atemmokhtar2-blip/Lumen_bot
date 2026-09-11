@@ -57,6 +57,17 @@ class ChatRoute:
 
 _BUILTIN: list[Capability] = [
     Capability(
+        id="host_heal",
+        title_ar="إصلاح الاستضافة",
+        description_ar="إصلاح بوت الاستضافة عند تعطل الصحة",
+        keywords=(
+            "اصلح الاستضافة", "أصلح الاستضافة", "صلح البوت", "إصلاح الاستضافة",
+            "heal host", "repair host", "صلح الاستضافة",
+        ),
+        patterns=(r"اصلح|أصلح|صلح.*(استضاف|بوت)",),
+        priority=7,
+    ),
+    Capability(
         id="host_start",
         title_ar="بدء الاستضافة",
         description_ar="تشغيل البوت كخدمة استضافة طويلة الأمد",

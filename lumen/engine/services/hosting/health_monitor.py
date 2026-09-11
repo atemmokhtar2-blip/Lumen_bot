@@ -161,14 +161,26 @@ def _try_auto_repair(hosting_service, inst) -> bool:
 def run_once(hosting_service) -> dict:
     """Probe all running instances."""
     stats: dict[str, Any] = {"checked": 0, "healthy": 0, "failed": 0, "repaired": 0}
+    instances = []
     try:
-        instances = list((getattr(hosting_service, "_instances", None) or {}).values())
+        fn = getattr(hosting_service, "iter_running_instances", None)
+        if callable(fn):
+            raw = fn()
+            if isinstance(raw, (list, tuple)):
+                instances = list(raw)
     except Exception:
         instances = []
+    if not instances:
+        try:
+            instances = [
+                i
+                for i in list((getattr(hosting_service, "_instances", None) or {}).values())
+                if str(getattr(i, "status", "") or "") == "running"
+            ]
+        except Exception:
+            instances = []
     now = time.time()
     for inst in instances:
-        if (getattr(inst, "status", "") or "") != "running":
-            continue
         stats["checked"] += 1
         ok, reason = check_instance(inst)
         if ok:

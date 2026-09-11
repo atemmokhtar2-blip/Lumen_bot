@@ -205,6 +205,32 @@ class HostingService:
         with exclusive_state_lock(self._lock_path()):
             self._save_unlocked()
 
+    def iter_running_instances(self) -> list[HostInstance]:
+        """All running instances visible to this worker (memory + durable store).
+
+        Health monitor must not depend on in-memory map alone.
+        """
+        by_id: dict[str, HostInstance] = {}
+        for inst in list(self._instances.values()):
+            if str(getattr(inst, "status", "") or "") == "running":
+                by_id[str(inst.instance_id)] = inst
+        try:
+            store = getattr(self, "_store", None) or get_host_state_store()
+            rows = store.list_all() if store is not None and hasattr(store, "list_all") else []
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("status") or "") != "running":
+                    continue
+                inst = self._inst_from_row(row) if hasattr(self, "_inst_from_row") else None
+                if inst is None:
+                    continue
+                by_id[str(inst.instance_id)] = inst
+                self._instances[str(inst.instance_id)] = inst
+        except Exception:
+            pass
+        return list(by_id.values())
+
     def list_for_user(self, user_id: int) -> list[HostInstance]:
         out = {i.instance_id: i for i in self._instances.values() if i.user_id == user_id}
         try:

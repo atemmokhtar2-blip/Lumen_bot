@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Any,  Dict, List, Optional
 
 from .deployment_provider import DeploymentProvider
 from .report_data import (
@@ -243,7 +243,35 @@ class VercelProcessDriver(DeploymentProvider):
         return self.deploy(project_path, env_vars=env, service_name=sanitize_project_name(f"lumen-{deployment_id[:12]}"))
 
     def logs(self, deployment_id: str, *, limit: int = 50) -> List[str]:
-        return []
+        dep = (deployment_id or "").strip()
+        if not dep or not _ID_RE.match(dep) or not self._client.configured:
+            return []
+        try:
+            r = self._client.list_deployment_events(dep, limit=max(1, min(100, int(limit))))
+        except Exception:
+            return []
+        if not r.ok:
+            return []
+        rows: List[Any] = []
+        data = r.data
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            rows = list(data.get("events") or data.get("builds") or data.get("payloads") or [])
+        out: List[str] = []
+        for row in rows[-int(limit):]:
+            if isinstance(row, str):
+                out.append(row[:500])
+                continue
+            if not isinstance(row, dict):
+                continue
+            text = (
+                str(row.get("text") or row.get("payload") or row.get("message") or row.get("type") or "")
+            ).strip()
+            ts = str(row.get("created") or row.get("date") or row.get("timestamp") or "")
+            if text:
+                out.append(f"{ts} {text}"[:500] if ts else text[:500])
+        return out[-int(limit):]
 
 
 __all__ = ["VercelProcessDriver"]

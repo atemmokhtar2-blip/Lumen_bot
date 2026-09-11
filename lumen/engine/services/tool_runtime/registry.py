@@ -99,6 +99,19 @@ except Exception:
         "params": {"project_path": "مسار المشروع"},
         "requires_confirmation": True,
     },
+    "host_diagnose": {
+        "description": "تشخيص صحة مثيل الاستضافة (منصة + HTTP + تيليجرام)",
+        "params": {"instance_id": "اختياري"},
+        "requires_confirmation": False,
+    },
+    "host_heal": {
+        "description": "إصلاح مثيل استضافة متدهور وإعادة التفعيل",
+        "params": {
+            "instance_id": "اختياري — وإلا أحدث مثيل",
+            "token": "اختياري — توكن البوت",
+        },
+        "requires_confirmation": True,
+    },
 }
 
 
@@ -131,6 +144,8 @@ _TOOL_RISK: dict[str, str] = {
     "repo_modify": "high",
     "host_start": "critical",
     "host_stop": "critical",
+    "host_heal": "high",
+    "host_diagnose": "low",
 }
 
 _REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {

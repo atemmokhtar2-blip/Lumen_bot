@@ -49,6 +49,10 @@ def build_default_contracts() -> Dict[str, ToolContract]:
             [ToolParamSpec("project_path")], True, "hosting"),
         ToolContract("host_stop", "إيقاف استضافة بوت",
             [ToolParamSpec("project_path")], True, "hosting"),
+        ToolContract("host_diagnose", "تشخيص صحة الاستضافة",
+            [ToolParamSpec("instance_id")], False, "hosting"),
+        ToolContract("host_heal", "إصلاح مثيل استضافة متدهور",
+            [ToolParamSpec("instance_id"), ToolParamSpec("token")], True, "hosting"),
     ]
     return {c.name: c for c in specs}
 

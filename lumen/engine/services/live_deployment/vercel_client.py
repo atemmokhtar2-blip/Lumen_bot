@@ -400,6 +400,16 @@ class PlatformHostClient:
         did = urllib.parse.quote(str(deployment_id), safe="")
         return self.request_json("PATCH", f"/v12/deployments/{did}/cancel")
 
+    def list_deployment_events(self, deployment_id: str, *, limit: int = 50) -> ApiResult:
+        """Best-effort deployment events (platform log stream)."""
+        did = urllib.parse.quote(str(deployment_id), safe="")
+        lim = max(1, min(100, int(limit)))
+        # Try v3 then v2
+        r = self.request_json("GET", f"/v3/deployments/{did}/events", query={"limit": str(lim)})
+        if r.ok:
+            return r
+        return self.request_json("GET", f"/v2/deployments/{did}/events", query={"limit": str(lim)})
+
     def wait_ready(
         self,
         deployment_id: str,

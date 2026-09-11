@@ -47,7 +47,7 @@ def _with_network_recovery(
         return result
     _NETWORK = {
         "clone_repo", "create_repo", "git_push", "git_pull",
-        "host_start", "host_stop", "host_status", "host_diagnose",
+        "host_start", "host_stop", "host_status", "host_diagnose", "host_heal",
     }
     if name not in _NETWORK:
         return result
@@ -783,6 +783,88 @@ def _tool_host(
         except Exception as exc:
             logger.exception("host_diagnose failed")
             return ToolResult(ok=False, tool=name, message=f"فشل التشخيص: {type(exc).__name__}")
+
+    if name == "host_heal":
+        try:
+            items = list(svc.list_for_user(uid))
+            if not items:
+                return ToolResult(ok=False, tool=name, message="ما فيش مثيل لإصلاحه.")
+            iid = str(params.get("instance_id") or "").strip()
+            if not iid:
+                target = sorted(
+                    items,
+                    key=lambda x: float(getattr(x, "started_at", 0) or 0),
+                    reverse=True,
+                )[0]
+                iid = str(getattr(target, "instance_id", "") or "")
+            inst = svc.get(iid, user_id=uid)
+            if inst is None:
+                return ToolResult(ok=False, tool=name, message="المثيل غير موجود.")
+            # Force probe then repair path via pipeline
+            try:
+                from lumen.engine.services.hosting.health_monitor import check_instance
+                healthy, reason = check_instance(inst)
+            except Exception:
+                healthy, reason = False, "probe_failed"
+            if healthy:
+                return ToolResult(
+                    ok=True,
+                    tool=name,
+                    message=f"المثيل سليم — لا حاجة لإصلاح ({reason}).",
+                    data={"instance_id": iid, "healthy": True, "reason": reason},
+                )
+            from lumen.hosting.serverless_repair import repair_serverless_project
+            from lumen.hosting.agent_host_pipeline import attach_serverless_instance, resolve_bot_token
+            token = resolve_bot_token(str(inst.project_path or ""), params=params, user_data=user_data)
+            if not token:
+                return ToolResult(
+                    ok=False,
+                    tool=name,
+                    message="للإصلاح يلزم توكن البوت (أو أسرار مشفّرة على المشروع).",
+                    needs_auth=True,
+                    data={"needs_bot_token": True, "instance_id": iid, "reason": reason},
+                )
+            if str(inst.sandbox_backend or "") == "lumen_serverless":
+                rep = repair_serverless_project(
+                    str(inst.project_path),
+                    bot_token=token,
+                    user_id=uid,
+                    service_name=f"lumen-u{uid}-heal",
+                )
+                if not rep.ok:
+                    return ToolResult(ok=False, tool=name, message=rep.message, data={"instance_id": iid})
+                meta = dict(rep.meta or {})
+                meta["from_repair"] = True
+                attach_serverless_instance(
+                    svc,
+                    user_id=uid,
+                    project_path=str(inst.project_path),
+                    bot_token=token,
+                    tenant_id=str(getattr(inst, "tenant_id", "") or ""),
+                    deployment_id=rep.deployment_id,
+                    public_url=rep.url,
+                    webhook_url=str(meta.get("webhook_url") or ""),
+                    meta=meta,
+                    instance_id=iid,
+                )
+                return ToolResult(
+                    ok=True,
+                    tool=name,
+                    message=rep.message or "تم إصلاح البوت وتفعيله.",
+                    data={"instance_id": iid, "deployment_id": rep.deployment_id, "repaired": True},
+                )
+            # Firecracker: restart path
+            result = svc.restart(instance_id=iid, user_id=uid, bot_token=token)
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(getattr(result, "message", ""))
+            return ToolResult(
+                ok=bool(getattr(result, "ok", False)),
+                tool=name,
+                message=str(text)[:4000],
+                data={"instance_id": iid, "backend": str(inst.sandbox_backend or "")},
+            )
+        except Exception as exc:
+            logger.exception("host_heal failed")
+            return ToolResult(ok=False, tool=name, message=f"فشل الإصلاح: {type(exc).__name__}")
 
     if name == "host_stop":
         try:
