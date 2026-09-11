@@ -77,9 +77,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Require dependabot + gitleaks config
-        run: |
-          test -f .github/dependabot.yml
-          test -f .gitleaks.toml
-          grep -q 'package-ecosystem: "pip"' .github/dependabot.yml
-          echo "Dependabot pip ecosystem OK — review open PRs labeled security weekly"
+      - name: Monitoring hygiene (Dependabot + gitleaks + alert wiring)
+        run: python scripts/security/assert_monitoring_hygiene.py

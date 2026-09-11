@@ -243,6 +243,17 @@ def assert_production_security() -> None:
     except RuntimeError as exp:
         errors.append(str(exp))
 
+    # Phase E: production must have alert channel or explicit log-only dual-ACK
+    try:
+        from lumen.platform.security_alerts import has_external_channel, log_only_mode_allowed, ACK_LOG_ONLY
+        if not has_external_channel() and not log_only_mode_allowed():
+            errors.append(
+                "SECURITY_ALERT_WEBHOOK_URL or SECURITY_ALERT_TELEGRAM_CHAT_ID required "
+                f"(or SECURITY_ALERT_LOG_ONLY=1 + SECURITY_ALERT_LOG_ONLY_ACK={ACK_LOG_ONLY})"
+            )
+    except Exception as alert_exc:
+        errors.append(f"security_alert_config:{type(alert_exc).__name__}")
+
     # Edge WAF: public production must have shared secret (not spoofable CF-Ray alone)
     require_edge = (os.getenv("TBE_REQUIRE_EDGE_WAF") or "").strip().lower()
     edge_opt = (os.getenv("TBE_EDGE_WAF_OPTIONAL") or "").strip().lower() in {"1", "true", "yes", "on"}

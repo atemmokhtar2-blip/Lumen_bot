@@ -255,9 +255,21 @@ def main() -> int:
     )
     se = _read("lumen/platform/security_events.py")
     check(
-        "phase_e.emit_dispatches_alerts",
+        "phase_e.emit_dispatches_alerts_metrics",
         "dispatch_alert" in se,
         "security_events.emit dispatches alerts",
+        failures,
+    )
+    check(
+        "phase_e.metrics_module",
+        (ROOT / "lumen/platform/security_metrics.py").exists(),
+        "security_metrics module",
+        failures,
+    )
+    check(
+        "phase_e.monitoring_hygiene_script",
+        (ROOT / "scripts/security/assert_monitoring_hygiene.py").exists(),
+        "assert_monitoring_hygiene.py",
         failures,
     )
     print("---")

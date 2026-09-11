@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import re
-from aiohttp import web
 
 logger = logging.getLogger("lumen.api.firewall")
 
@@ -36,6 +35,21 @@ _PROBE = re.compile(
 )
 
 # Endpoints that legitimately carry larger/ freer text in body only — path still filtered
+
+
+def path_is_rejected(path: str, raw_url: str = "") -> bool:
+    """Pure check used by middleware and Phase E pen tests."""
+    p = path or ""
+    u = raw_url or p
+    if len(u) > _MAX_URL_CHARS:
+        return True
+    if _TRAVERSAL.search(p) or _TRAVERSAL.search(u):
+        return True
+    if _PROBE.search(p) or _PROBE.search(u):
+        return True
+    return False
+
+
 _SKIP_PATH_PREFIXES = (
     "/health",
     "/ready",
@@ -43,8 +57,8 @@ _SKIP_PATH_PREFIXES = (
 )
 
 
-@web.middleware
-async def request_firewall_middleware(request: web.Request, handler):
+async def request_firewall_middleware(request, handler):
+    from aiohttp import web
     path = request.path or "/"
     raw_url = str(request.rel_url) if request.rel_url is not None else path
 
@@ -74,4 +88,4 @@ async def request_firewall_middleware(request: web.Request, handler):
     return await handler(request)
 
 
-__all__ = ["request_firewall_middleware"]
+__all__ = ["request_firewall_middleware", "path_is_rejected"]

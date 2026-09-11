@@ -64,7 +64,7 @@ def reject_identity_spoof(
                 emit(
                     "idor.identity_spoof",
                     severity="critical",
-                    tenant_id=tenant_id,
+                    tenant_id=str(tenant_id or "")[:120],
                     detail={"field": key, "claimed": str(claimed)[:80]},
                 )
             except Exception:
