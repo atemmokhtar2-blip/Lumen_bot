@@ -449,6 +449,15 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
         )
     except Exception:
         pass
+    try:
+        from lumen.engine.services.user_sandbox import get_user_sandbox
+
+        get_user_sandbox(int(user_id), _output_dir()).register_clone(
+            path=str(result.path),
+            url=str(result.url or url or ""),
+        )
+    except Exception:
+        logger.debug("register_clone after tool clone failed", exc_info=True)
     return ToolResult(
         ok=True,
         tool="clone_repo",
@@ -463,6 +472,11 @@ def _tool_clone_repo(params: dict[str, Any], *, user_id: int) -> ToolResult:
             "code_lines": st.get("code_lines"),
             "meta": getattr(result, "meta", {}) or {},
             "facts": st,
+            "active_repo": {
+                "path": str(result.path),
+                "url": str(result.url or url or ""),
+                "source": "clone_repo",
+            },
         },
     )
 
@@ -778,6 +792,13 @@ def _tool_host(
             )
         token = str(params.get("token") or params.get("bot_token") or "").strip()
         if not token:
+            try:
+                from lumen.hosting.secrets_env import load_project_secrets
+                sealed = load_project_secrets(project_path)
+                token = (sealed.get("BOT_TOKEN") or sealed.get("TELEGRAM_BOT_TOKEN") or "").strip()
+            except Exception:
+                token = ""
+        if not token:
             return ToolResult(
                 ok=False,
                 tool=name,
@@ -793,11 +814,17 @@ def _tool_host(
                 },
                 needs_auth=True,
             )
+        tenant_id = str(
+            params.get("tenant_id")
+            or (user_data or {}).get("tenant_id")
+            or (f"tg:{uid}" if uid else "")
+        ).strip()
         try:
             result = svc.start(
                 project_path=project_path,
                 user_id=uid,
                 bot_token=token,
+                tenant_id=tenant_id,
             )
             text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
             return ToolResult(
@@ -983,14 +1010,53 @@ def _tool_git_pull(
     user_id: int,
     user_data: dict[str, Any] | None = None,
 ) -> ToolResult:
+    user_data = dict(user_data or {})
     path = _active_repo_path(params, user_data)
     if not path or not Path(path).is_dir():
-        return ToolResult(ok=False, tool="git_pull", message="لا يوجد مستودع نشط مرتبط بهذه الجلسة.")
+        for key in ("last_clone_path", "last_project_path"):
+            cand = str(user_data.get(key) or "").strip()
+            if cand and Path(cand).is_dir() and (Path(cand) / ".git").exists():
+                path = cand
+                break
+        if (not path or not Path(path).is_dir()) and int(user_id or 0) > 0:
+            try:
+                from lumen.engine.services.user_sandbox import get_user_sandbox
+                sb = get_user_sandbox(int(user_id), _output_dir())
+                for attr in ("latest_clone_path", "get_latest_clone"):
+                    fn = getattr(sb, attr, None)
+                    if callable(fn):
+                        cand = str(fn() or "")
+                        if cand and Path(cand).is_dir():
+                            path = cand
+                            break
+            except Exception:
+                pass
+        if not path or not Path(path).is_dir():
+            return ToolResult(
+                ok=False,
+                tool="git_pull",
+                message="لا يوجد مستودع نشط. اسحب المستودع أولاً ثم اطلب التحديث.",
+                data={"needs_clone": True},
+            )
     token = _resolve_github_token_for_tool(user_id, params)
+    if not token:
+        connected = False
+        try:
+            from lumen.engine.services.integrations.connections.credentials import is_github_connected
+            connected = bool(is_github_connected(int(user_id)))
+        except Exception:
+            connected = False
+        if not connected:
+            return ToolResult(
+                ok=False,
+                tool="git_pull",
+                message="اربط GitHub أولاً (Connect) أو أرسل توكن صالح لإتمام السحب.",
+                needs_auth=True,
+                data={"needs_github_connection": True, "path": path},
+            )
     branch = str(params.get("branch") or "").strip() or None
     try:
         from lumen.engine.services.git_safe_import import get_smart_git
-
         git_pull = get_smart_git().git_pull
         try:
             result = git_pull(path, token=token, branch=branch)
@@ -1002,21 +1068,28 @@ def _tool_git_pull(
     if getattr(result, "ok", False):
         try:
             from lumen.engine.services.integrations.github.activity_log import record as _act
-
             _act(int(user_id), "pull", detail={"path": str(path)[-100:]})
         except Exception:
             pass
         return ToolResult(
             ok=True,
             tool="git_pull",
-            message=str(getattr(result, "message", "") or "تم السحب"),
-            data={"path": path},
+            message=str(getattr(result, "message", "") or "تم سحب آخر نسخة من المستودع."),
+            data={
+                "path": path,
+                "active_repo": {"path": path, "source": "git_pull"},
+            },
         )
+    needs_auth = bool(getattr(result, "needs_auth", False))
+    msg = str(getattr(result, "message", "") or "فشل السحب")
+    if needs_auth:
+        msg = "فشل السحب: تحقق من اتصال GitHub أو صلاحية التوكن ثم أعد المحاولة."
     return ToolResult(
         ok=False,
         tool="git_pull",
-        message=str(getattr(result, "message", "") or "فشل السحب"),
-        needs_auth=bool(getattr(result, "needs_auth", False)),
+        message=msg,
+        needs_auth=needs_auth,
         data={"path": path},
     )
+
 

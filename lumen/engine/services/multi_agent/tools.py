@@ -189,6 +189,18 @@ def execute_tool_gated(
             "message": str(getattr(result, "message", "")),
         }
         state.extensions["tool_result"] = data
+        # Phase-4 agent binding: keep active_repo after clone/pull so next tools see it
+        if data.get("ok") and tool in {"clone_repo", "git_pull", "git_push"}:
+            payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+            ar = payload.get("active_repo") if isinstance(payload, dict) else None
+            if not isinstance(ar, dict):
+                path = str((payload or {}).get("path") or data.get("path") or "").strip()
+                url = str((payload or {}).get("url") or "").strip()
+                if path:
+                    ar = {"path": path, "url": url, "source": tool}
+            if isinstance(ar, dict) and ar.get("path"):
+                state.extensions["active_repo"] = dict(ar)
+                state.extensions["last_project_path"] = str(ar.get("path"))
         state.record(AgentRole.TOOL, "executed", f"{tool}:ok={data.get('ok')}:risk={risk}")
         if data.get("ok"):
             state.final_message = str(data.get("message") or f"تم تنفيذ {tool}")
