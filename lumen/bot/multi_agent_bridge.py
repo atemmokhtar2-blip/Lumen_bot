@@ -51,28 +51,36 @@ def try_handle_hitl_message(
         if not token:
             token = str(pending.get("confirm_token") or "")
 
-    # Always prefer durable blackboard pending for this user (multi-worker safe)
+    # Board is source of truth (multi-worker). ALWAYS overwrite session token
+    # for the owning user — stale multi_agent_pending tokens caused bad_token.
     try:
-        if not state_id or not action_id or (verb == "confirm" and not token):
-            latest = latest_for_user(int(user_id or 0))
-            if latest is not None:
-                if not state_id:
-                    state_id = str(getattr(latest, "state_id", "") or "")
-                ext = getattr(latest, "extensions", None) or {}
-                bp = ext.get("pending_action") or {}
-                if isinstance(bp, dict):
-                    if not action_id:
-                        action_id = str(bp.get("action_id") or "")
-                    if not token:
-                        token = str(bp.get("confirm_token") or "")
-                    if isinstance(user_data, dict) and (action_id or token):
-                        user_data["multi_agent_pending"] = {
-                            "action_id": action_id or bp.get("action_id"),
-                            "state_id": state_id or bp.get("state_id"),
-                            "tool": bp.get("tool") or "langgraph_plan_approve",
-                            "confirm_token": token or bp.get("confirm_token") or "",
-                        }
-                        user_data["multi_agent_state_id"] = state_id
+        latest = latest_for_user(int(user_id or 0))
+        if latest is not None:
+            if not state_id:
+                state_id = str(getattr(latest, "state_id", "") or "")
+            elif str(getattr(latest, "state_id", "") or "") and int(getattr(latest, "user_id", 0) or 0) == int(user_id or 0):
+                # Prefer latest open HITL state for this user
+                state_id = str(getattr(latest, "state_id", "") or state_id)
+            ext = getattr(latest, "extensions", None) or {}
+            bp = ext.get("pending_action") or {}
+            if isinstance(bp, dict) and str(bp.get("status") or "pending") == "pending":
+                board_action = str(bp.get("action_id") or "").strip()
+                board_token = str(bp.get("confirm_token") or "").strip()
+                board_state = str(bp.get("state_id") or getattr(latest, "state_id", "") or "").strip()
+                if board_action:
+                    action_id = board_action
+                if board_token:
+                    token = board_token  # overwrite stale session token
+                if board_state:
+                    state_id = board_state
+                if isinstance(user_data, dict):
+                    user_data["multi_agent_pending"] = {
+                        "action_id": action_id,
+                        "state_id": state_id,
+                        "tool": bp.get("tool") or "langgraph_plan_approve",
+                        "confirm_token": token,
+                    }
+                    user_data["multi_agent_state_id"] = state_id
     except Exception:
         logger.exception("HITL board hydrate failed")
 
@@ -139,11 +147,16 @@ def try_handle_hitl_message(
         }.get(str(reason), str(reason))
         return True, f"تعذر الرفض: {reason_ar}", None
 
-    # confirm
-    if not action_id or not token:
+    # confirm — action_id required; token may be empty (bound from board for owner)
+    if not action_id:
         return True, (
-            "تعذر التأكيد: بيانات الموافقة ناقصة.\n"
+            "تعذر التأكيد: لا يوجد إجراء معلّق.\n"
             "أعد طلب التوليد ثم اضغط ✅ تأكيد مباشرة."
+        ), None
+    if not state_id:
+        return True, (
+            "تعذر التأكيد: جلسة التوليد غير موجودة.\n"
+            "أعد التوليد ثم اضغط تأكيد."
         ), None
 
     ok, state, reason = confirm_action(

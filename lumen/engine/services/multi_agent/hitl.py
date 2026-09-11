@@ -293,15 +293,20 @@ def confirm_action(
         _audit("expired", action_id=action_id)
         return False, state, "expired"
 
-    # Token: button path often sends verb-only (empty token). For the owning user,
-    # bind the board token so confirm is not rejected as "expired token".
-    expected = (pending.confirm_token or "").strip() or _sign(
-        pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
-    )
+    # Token: board pending token is authority. Verb-only OR stale session token
+    # from Telegram user_data must not fail the owning user on button confirm.
+    expected = (pending.confirm_token or "").strip()
+    if not expected:
+        expected = _sign(
+            pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
+        )
     supplied = (confirm_token or "").strip()
-    if not supplied and expected and int(user_id or 0) in {0, int(pending.user_id or 0)}:
-        supplied = expected
-        _audit("token_bound_from_pending", action_id=action_id, user_id=user_id)
+    owner_ok = int(user_id or 0) in {0, int(pending.user_id or 0)}
+    if owner_ok and expected:
+        if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
+            # Rebind for owner (button path / multi-worker stale session)
+            supplied = expected
+            _audit("token_rebound_owner", action_id=action_id, user_id=user_id)
     if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
         _audit("confirm_fail", reason="bad_token", action_id=action_id)
         state.record(AgentRole.HITL, "bad_token", action_id)
