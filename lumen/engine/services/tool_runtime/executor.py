@@ -723,13 +723,29 @@ def _tool_host(
     uid = int(user_id or 0)
     if name == "host_status":
         try:
-            result = svc.status(user_id=uid)
-            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
+            items = list(svc.list_for_user(uid))
+            try:
+                from lumen.hosting.agent_host_pipeline import format_instances_status
+                text = format_instances_status(items)
+            except Exception:
+                result = svc.status(user_id=uid)
+                text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
             return ToolResult(
-                ok=bool(getattr(result, "ok", True)),
+                ok=True,
                 tool=name,
                 message=str(text)[:4000],
-                data={"status": True},
+                data={
+                    "status": True,
+                    "count": len(items),
+                    "instances": [
+                        {
+                            "instance_id": getattr(i, "instance_id", ""),
+                            "status": getattr(i, "status", ""),
+                            "backend": getattr(i, "sandbox_backend", ""),
+                        }
+                        for i in items[:20]
+                    ],
+                },
             )
         except Exception as exc:
             logger.exception("host_status failed")
@@ -819,31 +835,36 @@ def _tool_host(
             or (user_data or {}).get("tenant_id")
             or (f"tg:{uid}" if uid else "")
         ).strip()
+        # Phase 5: unified agent pipeline (quota → start → optional repair)
         try:
-            result = svc.start(
-                project_path=project_path,
+            from lumen.hosting.agent_host_pipeline import run_host_pipeline
+
+            pipe = run_host_pipeline(
                 user_id=uid,
+                project_path=project_path,
                 bot_token=token,
                 tenant_id=tenant_id,
+                bot_username=str(params.get("bot_username") or ""),
+                allow_repair=True,
             )
-            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
             return ToolResult(
-                ok=bool(getattr(result, "ok", True)),
+                ok=bool(pipe.ok),
                 tool=name,
-                message=str(text)[:4000],
-                data={"project_path": project_path},
+                message=str(pipe.message or "")[:4000],
+                data={
+                    "project_path": project_path,
+                    "instance_id": pipe.instance_id,
+                    "deployment_id": pipe.deployment_id,
+                    "public_url": pipe.public_url,
+                    "webhook_url": pipe.webhook_url,
+                    "lifecycle_state": pipe.lifecycle_state,
+                    "backend": pipe.backend,
+                    **dict(pipe.data or {}),
+                },
+                needs_auth=bool((pipe.data or {}).get("needs_bot_token")),
             )
-        except TypeError:
-            # Older signature variants
-            try:
-                result = svc.start(path=project_path, user_id=uid, token=token)
-                text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
-                return ToolResult(ok=True, tool=name, message=str(text)[:4000])
-            except Exception as exc:
-                logger.exception("host_start failed")
-                return ToolResult(ok=False, tool=name, message=f"فشل بدء الاستضافة: {type(exc).__name__}")
         except Exception as exc:
-            logger.exception("host_start failed")
+            logger.exception("host_start pipeline failed")
             return ToolResult(ok=False, tool=name, message=f"فشل بدء الاستضافة: {type(exc).__name__}")
 
     return ToolResult(ok=False, tool=name, message=f"أداة استضافة غير معروفة: {name}")
