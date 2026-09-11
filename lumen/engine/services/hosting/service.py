@@ -725,11 +725,30 @@ class HostingService:
                     )
         except Exception:
             pass
-        # Permanent host: refuse "running" without bot health when FC reports meta
+        # Refuse hollow "running" without real health signals
         meta = dict(handle.meta or {})
-        if backend_name == "lumen_serverless" and meta.get("url"):
-            # Serverless path: public URL is the health signal for phase-1
-            pass
+        if backend_name == "lumen_serverless":
+            # Phase-3 contract: verify_ok + lifecycle RUNNING required (not URL alone)
+            verify_ok = bool(meta.get("verify_ok"))
+            life = str(meta.get("lifecycle_state") or "").upper()
+            pub = str(meta.get("url") or "").strip()
+            if st == "running" and (not verify_ok or life not in {"RUNNING", ""}):
+                # empty lifecycle tolerated only when verify_ok explicitly True from older handles
+                if not verify_ok:
+                    return HostResult(
+                        ok=False,
+                        message=(
+                            "الاستضافة السريعة رُفضت: لم يكتمل التحقق "
+                            f"(lifecycle={life or '—'}, verify={verify_ok})."
+                        ),
+                        details={"backend": backend_name, "meta": meta},
+                    )
+            if st == "running" and not pub.startswith("https://"):
+                return HostResult(
+                    ok=False,
+                    message="الاستضافة السريعة رُفضت: لا يوجد رابط عام صالح بعد النشر.",
+                    details={"backend": backend_name, "meta": meta},
+                )
         if backend_name == "firecracker" and meta.get("bot_healthy") is False and meta.get("claim", "").endswith("failed"):
             return HostResult(
                 ok=False,
@@ -749,8 +768,15 @@ class HostingService:
                 pid = None
 
         instance_id = f"host-{uuid.uuid4().hex[:10]}"
-        running_like = st in ("running", "deploy_running") or "running" in st.lower()
-        failed_like = "fail" in st.lower()
+        running_like = st in ("running", "deploy_running") or (
+            "running" in st.lower() and "fail" not in st.lower()
+        )
+        if backend_name == "lumen_serverless":
+            # Never mark running without verify_ok
+            running_like = running_like and bool(meta.get("verify_ok")) and st == "running"
+        failed_like = "fail" in st.lower() or (
+            backend_name == "lumen_serverless" and st == "running" and not bool(meta.get("verify_ok"))
+        )
         from lumen.engine.services.hosting.ingress import (
             public_url_for_instance,
             write_traefik_route,
@@ -836,9 +862,11 @@ class HostingService:
             pass
 
         if inst.status == "failed":
-            # Diagnose logs if available
-            run_log = getattr(status, "run_log", "") or ""
-            install_log = getattr(status, "install_log", "") or message
+            # Diagnose logs if available (never reference undefined names)
+            run_log = ""
+            if isinstance(handle.meta, dict):
+                run_log = str(handle.meta.get("run_log") or handle.meta.get("logs") or "")
+            install_log = message or ""
             contract = None
             try:
                 from ..error_intelligence import analyze_logs
