@@ -753,13 +753,33 @@ def _tool_host(
 
     if name == "host_diagnose":
         try:
-            diagnose = getattr(svc, "diagnose", None)
-            if callable(diagnose):
-                result = diagnose(user_id=uid)
-            else:
-                result = svc.status(user_id=uid)
-            text = result.to_user_text() if hasattr(result, "to_user_text") else str(result)
-            return ToolResult(ok=True, tool=name, message=str(text)[:4000], data={"diagnose": True})
+            items = list(svc.list_for_user(uid))
+            if not items:
+                return ToolResult(ok=False, tool=name, message="ما فيش مثيلات استضافة للتشخيص.")
+            iid = str(params.get("instance_id") or "").strip()
+            if not iid:
+                # latest by started_at
+                target = sorted(
+                    items,
+                    key=lambda x: float(getattr(x, "started_at", 0) or 0),
+                    reverse=True,
+                )[0]
+                iid = str(getattr(target, "instance_id", "") or "")
+            result = svc.diagnose(user_id=uid, instance_id=iid)
+            text = result.to_user_text() if hasattr(result, "to_user_text") else str(getattr(result, "message", "") or result)
+            # live probe once more for tool data
+            healthy = (result.details or {}).get("healthy")
+            return ToolResult(
+                ok=bool(getattr(result, "ok", True)),
+                tool=name,
+                message=str(text)[:4000],
+                data={
+                    "diagnose": True,
+                    "instance_id": iid,
+                    "healthy": healthy,
+                    "reason": (result.details or {}).get("reason"),
+                },
+            )
         except Exception as exc:
             logger.exception("host_diagnose failed")
             return ToolResult(ok=False, tool=name, message=f"فشل التشخيص: {type(exc).__name__}")

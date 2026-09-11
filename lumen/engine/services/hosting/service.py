@@ -1089,8 +1089,7 @@ class HostingService:
             )
         return self.restart(instance_id=instance_id, user_id=user_id, bot_token=bot_token)
 
-    def status(self, *, user_id: int, instance_id: str | None = None) -> HostResult:
-
+    def status(self, *, user_id: int, instance_id: str | None = None, tenant_id: str = "") -> HostResult:
         items = self.list_for_user(user_id)
         if instance_id:
             inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
@@ -1115,7 +1114,7 @@ class HostingService:
         return HostResult(ok=True, message="\n".join(lines), details={"count": len(items)})
 
 
-    def logs(self, *, user_id: int, instance_id: str, limit: int = 80) -> HostResult:
+    def logs(self, *, user_id: int, instance_id: str, limit: int = 80, tenant_id: str = "") -> HostResult:
         """Return recent sandbox/run logs for an instance (sanitized)."""
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if inst is None:
@@ -1172,25 +1171,63 @@ class HostingService:
             details={"log_lines": lines[-int(limit):], "line_count": len(lines)},
         )
 
-    def diagnose(self, *, user_id: int, instance_id: str) -> HostResult:
+    def diagnose(self, *, user_id: int, instance_id: str, tenant_id: str = "") -> HostResult:
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
         if not inst:
             return HostResult(ok=False, message="المثيل غير موجود")
+        healthy = True
+        reason = "probe_skipped"
+        try:
+            from lumen.engine.services.hosting.health_monitor import check_instance
+            healthy, reason = check_instance(inst)
+            diag = dict(inst.last_diagnosis or {})
+            diag["last_health_ok"] = bool(healthy)
+            diag["last_health_reason"] = str(reason)
+            if healthy:
+                inst.last_health_at = time.time()
+            else:
+                diag["lifecycle_state"] = diag.get("lifecycle_state") or "FAILED"
+            inst.last_diagnosis = diag
+            self._save()
+        except Exception:
+            pass
         contract = self._diagnose_instance(inst)
+        backend = str(inst.sandbox_backend or "")
+        kind = "سريعة" if backend == "lumen_serverless" else ("دائمة" if backend == "firecracker" else "استضافة")
+        health_ar = "سليمة" if healthy else "متدهورة"
+        lines = [
+            f"تشخيص [{kind}] `{inst.instance_id}`",
+            f"• الحالة: {inst.status}",
+            f"• الصحة: {health_ar} ({reason})",
+            f"• التحقق: {(inst.last_diagnosis or {}).get('verify_ok')}",
+            f"• lifecycle: {(inst.last_diagnosis or {}).get('lifecycle_state') or '—'}",
+        ]
+        if contract and getattr(contract, "primary", None):
+            lines.append(
+                f"• تحليل: {contract.primary.summary_ar or contract.primary.category}"
+            )
+        ok = bool(healthy) if inst.status == "running" else True
         return HostResult(
-            ok=contract.ok if contract else True,
-            message="تشخيص الاستضافة",
+            ok=ok,
+            message=chr(10).join(lines),
             instance=inst,
             error_contract=contract,
+            details={"healthy": healthy, "reason": reason},
         )
 
     def _is_alive(self, inst: HostInstance) -> bool:
-        """Liveness via sandbox backend matching deployment_id prefix."""
+        """Liveness via sandbox backend or serverless HTTP probe."""
+        backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
+        if backend in {"lumen_serverless", "serverless", "vercel"}:
+            try:
+                from lumen.engine.services.hosting.health_monitor import check_instance
+                ok, _ = check_instance(inst)
+                return bool(ok)
+            except Exception:
+                return False
         dep = (inst.deployment_id or "").strip()
         if not dep:
             return False
-        backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
-        # Firecracker microVMs
         if backend == "firecracker" or dep.startswith("fc-"):
             try:
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
@@ -1199,12 +1236,10 @@ class HostingService:
                 st = FirecrackerSandboxBackend().status(dep)
                 if str(st.status).lower() != "running":
                     return False
-                # Permanent host: VMM alone is not enough — need bot marker
                 meta = dict(getattr(st, "meta", None) or {})
                 return bool(meta.get("bot_marker") or meta.get("bot_healthy"))
             except Exception:
                 return False
-        # Permanent host plane: no Docker liveness — Firecracker only
         return False
 
 
