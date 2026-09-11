@@ -1,13 +1,10 @@
 """Webhook manager — product control plane for hosted-bot Telegram webhooks.
 
 Responsibilities:
-  - Build stable webhook URL per instance
-  - Register / clear Telegram setWebhook
+  - Build stable webhook URL per instance (API ingress OR serverless public URL)
+  - Register / clear Telegram setWebhook (via serverless_verify for real API)
   - Enqueue inbound updates (Redis) for guest/sidecar consumers
   - Optional secret rotation metadata on instance diagnosis
-
-Gateway path (API):
-  POST /v1/hooks/telegram/{instance_id}  →  lumen.api.routes.host_webhooks
 """
 from __future__ import annotations
 
@@ -46,7 +43,6 @@ def should_register(webhook_url: str) -> bool:
         return False
     if m in {"1", "true", "yes", "on", "webhook"}:
         return bool(webhook_url.startswith("https://"))
-    # auto
     return bool(webhook_url.startswith("https://"))
 
 
@@ -62,13 +58,40 @@ def ensure_secret(inst_diagnosis: dict | None = None) -> str:
 
 
 def register_webhook(bot_token: str, webhook_url: str, *, secret: str = "") -> dict[str, Any]:
-    if not bot_token or not webhook_url.startswith("https://"):
+    """Register webhook using the same real Telegram path as phase-3 verify."""
+    if not bot_token or not str(webhook_url).startswith("https://"):
         return {"ok": False, "error": "invalid_args"}
+    sec = (secret or "").strip()
+    if not sec:
+        return {"ok": False, "error": "secret_required"}
     try:
-        from lumen.bot.singleton import set_telegram_webhook
+        from lumen.hosting.serverless_verify import set_webhook, get_webhook_info, urls_equivalent
 
-        ok = set_telegram_webhook(bot_token, webhook_url, secret_token=secret or None)
-        return {"ok": bool(ok), "url": webhook_url, "registered_at": time.time()}
+        reg = set_webhook(bot_token, webhook_url, secret=sec, retries=3)
+        if not reg.get("ok"):
+            return {"ok": False, "error": reg.get("error") or "setWebhook_failed", "url": webhook_url}
+        info = get_webhook_info(bot_token)
+        if not info.get("ok"):
+            return {
+                "ok": False,
+                "error": info.get("error") or "getWebhookInfo_failed",
+                "url": webhook_url,
+                "registered_at": time.time(),
+            }
+        if not urls_equivalent(str(info.get("url") or ""), webhook_url):
+            return {
+                "ok": False,
+                "error": "webhook_url_mismatch",
+                "url": webhook_url,
+                "reported": str(info.get("url") or ""),
+            }
+        return {
+            "ok": True,
+            "url": webhook_url,
+            "registered_at": time.time(),
+            "verified": True,
+            "pending_update_count": info.get("pending_update_count"),
+        }
     except Exception as exc:
         logger.warning("register_webhook failed: %s", type(exc).__name__)
         return {"ok": False, "error": type(exc).__name__}
@@ -78,12 +101,16 @@ def clear_webhook(bot_token: str) -> dict[str, Any]:
     if not bot_token:
         return {"ok": False, "error": "no_token"}
     try:
-        from lumen.bot.singleton import clear_telegram_webhook
+        from lumen.hosting.serverless_verify import delete_webhook
 
-        ok = clear_telegram_webhook(bot_token)
-        return {"ok": bool(ok)}
+        return delete_webhook(bot_token)
     except Exception as exc:
-        return {"ok": False, "error": type(exc).__name__}
+        try:
+            from lumen.bot.singleton import clear_telegram_webhook
+            ok = clear_telegram_webhook(bot_token)
+            return {"ok": bool(ok)}
+        except Exception:
+            return {"ok": False, "error": type(exc).__name__}
 
 
 def enqueue_update(instance_id: str, update: dict[str, Any]) -> bool:
@@ -109,30 +136,48 @@ def apply_to_instance(
     bot_token: str,
     inst: Any,
 ) -> dict[str, Any]:
-    """Fill webhook fields on HostInstance and register with Telegram when appropriate."""
+    """Fill webhook fields and register with Telegram when needed."""
     url = webhook_url_for(instance_id)
-    # Phase 2: serverless bots receive updates on their public deployment URL
     backend = str(getattr(inst, "sandbox_backend", "") or "")
-    if backend == "lumen_serverless":
-        pub = str(getattr(inst, "public_base_url", "") or "").rstrip("/")
-        path = "/api"
-        try:
-            diag0 = dict(getattr(inst, "last_diagnosis", None) or {})
-            path = str(diag0.get("webhook_path") or path)
-        except Exception:
-            pass
-        if pub.startswith("https://"):
-            url = pub + (path if path.startswith("/") else "/" + path)
-    inst.webhook_public_url = url
     diag = dict(getattr(inst, "last_diagnosis", None) or {})
-    # Prefer secret already issued for serverless env
+
+    if backend == "lumen_serverless":
+        # Prefer URL already verified in orchestration phase-3
+        verified_url = str(diag.get("webhook_url") or "").strip()
+        pub = str(getattr(inst, "public_base_url", "") or "").rstrip("/")
+        path = str(diag.get("webhook_path") or "/api")
+        if not path.startswith("/"):
+            path = "/" + path
+        if verified_url.startswith("https://"):
+            url = verified_url
+        elif pub.startswith("https://"):
+            url = pub + path
+
+    inst.webhook_public_url = url
     secret = str(diag.get("webhook_secret") or "").strip() or ensure_secret(diag)
     diag["webhook_secret"] = secret
-    result: dict[str, Any] = {"url": url, "registered": False}
+    result: dict[str, Any] = {"url": url, "registered": False, "backend": backend}
+
+    # Already verified in phase-3 orchestration — do not re-register weakly
+    if (
+        backend == "lumen_serverless"
+        and diag.get("verify_ok")
+        and diag.get("webhook_verified")
+        and str(diag.get("webhook_url") or "").startswith("https://")
+    ):
+        result["registered"] = True
+        result["already_verified"] = True
+        diag["webhook_registered"] = True
+        diag["webhook_url"] = str(diag.get("webhook_url") or url)
+        inst.last_diagnosis = diag
+        return result
+
     if should_register(url) and str(getattr(inst, "status", "") or "") == "running":
         reg = register_webhook(bot_token, url, secret=secret)
         result["registered"] = bool(reg.get("ok"))
+        result["verify"] = {k: reg.get(k) for k in ("verified", "reported", "error") if k in reg}
         diag["webhook_registered"] = bool(reg.get("ok"))
+        diag["webhook_verified"] = bool(reg.get("verified"))
         diag["webhook_url"] = url
         if not reg.get("ok"):
             diag["webhook_error"] = str(reg.get("error") or "register_failed")

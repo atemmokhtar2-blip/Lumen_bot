@@ -447,10 +447,16 @@ class HostingService:
         token_norm = (bot_token or "").strip()
         token_fp = token_fingerprint(token_norm)
 
-        # Part 1 — real server run: resolve entry + install deps on host (has network)
-        from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
-
-        prepared = prepare_project_for_host(path, entry_point=entry_point or "")
+        # Part 1 — prepare: serverless webhook adapter OR permanent host deps
+        from lumen.engine.services.hosting.prepare_runtime import (
+            prepare_project_for_host,
+            prepare_project_for_serverless,
+        )
+        _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+        if _hb in {"lumen_serverless", "serverless", "vercel"}:
+            prepared = prepare_project_for_serverless(path, entry_point=entry_point or "")
+        else:
+            prepared = prepare_project_for_host(path, entry_point=entry_point or "")
         if not prepared.ok:
             return HostResult(
                 ok=False,
@@ -820,6 +826,24 @@ class HostingService:
 
         if serverless_diag:
             inst.last_diagnosis = {**(inst.last_diagnosis or {}), **serverless_diag}
+            if serverless_diag.get("webhook_url"):
+                inst.webhook_public_url = str(serverless_diag["webhook_url"])
+            if serverless_diag.get("webhook_url") or inst.public_base_url:
+                # public_base_url already set from meta url
+                pass
+        # Fail closed: serverless without verify_ok cannot be "running"
+        if str(inst.sandbox_backend or "") == "lumen_serverless":
+            if not (inst.last_diagnosis or {}).get("verify_ok") and inst.status == "running":
+                inst.status = "failed"
+                inst.last_error = "النشر بدون تحقق Webhook مرفوض"
+                self._instances[instance_id] = inst
+                self._save()
+                return HostResult(
+                    ok=False,
+                    message=inst.last_error,
+                    instance=inst,
+                    details={"backend": "lumen_serverless", "meta": dict(handle.meta or {})},
+                )
         self._instances[instance_id] = inst
         self._save()
         try:

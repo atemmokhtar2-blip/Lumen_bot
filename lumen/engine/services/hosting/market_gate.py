@@ -90,6 +90,26 @@ def _firecracker_track_ready() -> tuple[bool, list[str]]:
     return (len(missing) == 0), missing
 
 
+
+def _host_backend() -> str:
+    return (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+
+
+def _serverless_track_ready() -> tuple[bool, list[str]]:
+    """Lumen-owned serverless host: platform token required (never user-visible)."""
+    missing: list[str] = []
+    try:
+        from lumen.engine.services.live_deployment.vercel_client import token_configured
+        if not token_configured():
+            missing.append("VERCEL_TOKEN (مفتاح منصة Lumen للاستضافة)")
+    except Exception:
+        tok = (os.environ.get("VERCEL_TOKEN") or "").strip()
+        if not tok:
+            missing.append("VERCEL_TOKEN (مفتاح منصة Lumen للاستضافة)")
+    # Shared commercial secrets still required via caller
+    return (not missing), missing
+
+
 def evaluate_market_gate() -> GateResult:
     if not market_gate_enabled():
         return GateResult(ok=True, warnings=["market_gate_skipped_dev"], track="dev")
@@ -101,22 +121,39 @@ def evaluate_market_gate() -> GateResult:
     if len(secret) < 32:
         missing.append("TBE_TOKEN_SECRET (32+ حرف)")
 
+    if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
+        missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
+
+    pref = _backend_pref()
+    # Serverless host track (Lumen-controlled; parallel to Firecracker permanent path)
+    hb = _host_backend()
+    if hb in {"lumen_serverless", "serverless", "vercel"}:
+        ok_s, miss_s = _serverless_track_ready()
+        if not ok_s:
+            missing.extend(miss_s)
+        # Postgres optional for pure serverless control-plane in early track
+        db = (os.environ.get("TBE_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip().lower()
+        if db and not (db.startswith("postgres://") or db.startswith("postgresql://")):
+            warnings.append("DATABASE_URL غير Postgres — يُفضّل postgresql للتحكم")
+        return GateResult(
+            ok=not missing,
+            missing=missing,
+            warnings=warnings,
+            track="lumen_serverless",
+        )
+
     if not _on("TBE_SCALE_MODE", "0"):
-        missing.append("TBE_SCALE_MODE=1 (طابور + workers — إلزامي للبيع)")
+        missing.append("TBE_SCALE_MODE=1 (طابور + workers — إلزامي لمسار Firecracker)")
 
     db = (os.environ.get("TBE_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip().lower()
     if not (db.startswith("postgres://") or db.startswith("postgresql://")):
         missing.append("TBE_DATABASE_URL=postgresql://... (Postgres للتحكم)")
 
-    if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
-        missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
-
-    pref = _backend_pref()
     if pref in {"gvisor", "dind", "docker"}:
         missing.append(
             f"TBE_SANDBOX_BACKEND={pref} غير مقبول تجارياً — "
-            "المسار التجاري الوحيد هو Firecracker "
-            "(اضبط TBE_SANDBOX_BACKEND=firecracker أو auto)"
+            "المسار التجاري: Firecracker أو lumen_serverless "
+            "(TBE_HOST_BACKEND=lumen_serverless)"
         )
         return GateResult(ok=False, missing=missing, warnings=warnings, track="rejected")
 
