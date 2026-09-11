@@ -243,7 +243,7 @@ def execute_tool(
     # Heavy-tool rate limit (clone / git / host) — per user, fail closed on abuse
     _HEAVY = {
         "clone_repo", "create_repo", "git_push", "git_pull",
-        "repo_modify", "host_start", "generate_bot", "refine_bot",
+        "repo_modify", "host_start", "host_heal", "generate_bot", "refine_bot",
     }
     if name in _HEAVY and int(user_id or 0) > 0:
         try:
@@ -297,7 +297,7 @@ def execute_tool(
             return _tool_repo_understand(params, user_data=user_data or {}, user_id=int(user_id or 0))
         if name == "repo_modify":
             return _tool_repo_modify(params, user_data=user_data or {})
-        if name in {"host_start", "host_stop", "host_status", "host_diagnose"}:
+        if name in {"host_start", "host_stop", "host_status", "host_diagnose", "host_heal"}:
             return _with_network_recovery(
                 name, params,
                 _tool_host(name, params, user_id=user_id, user_data=user_data or {}),

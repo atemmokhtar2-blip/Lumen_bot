@@ -101,7 +101,10 @@ def test_ingress_stable_url(monkeypatch, tmp_path) -> None:
 def test_production_rejects_non_firecracker_in_service_source() -> None:
     src = Path("lumen/engine/services/hosting/service.py").read_text(encoding="utf-8")
     assert "is_production_sandbox_path" in src
-    assert 'backend_name != "firecracker"' in src
+    # Dual production path: Firecracker/Docker permanent OR lumen_serverless
+    assert "lumen_serverless" in src
+    assert "firecracker" in src
+    assert 'backend_name not in {"firecracker", "docker", "lumen_serverless"}' in src
 
 
 def test_health_monitor_interval_default() -> None:

@@ -13,7 +13,11 @@ def test_market_gate_serverless_track(monkeypatch):
     monkeypatch.setenv("TBE_TOKEN_SECRET", "x" * 32)
     monkeypatch.setenv("TBE_ALLOW_LOCAL_PROCESS", "0")
     monkeypatch.setenv("VERCEL_TOKEN", "vcel_test_token_value_here")
-    g = evaluate_market_gate()
+    with patch(
+        "lumen.engine.services.live_deployment.vercel_client.token_configured",
+        return_value=True,
+    ):
+        g = evaluate_market_gate()
     assert g.track == "lumen_serverless"
     assert g.ok is True
 
