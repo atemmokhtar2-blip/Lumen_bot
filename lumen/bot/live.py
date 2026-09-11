@@ -27,10 +27,29 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
     status = await message.reply_text(
         "🧪 تجربة مؤقتة (ليست استضافة دائمة)\n🔐 1/4 التحقق من التوكن..."
     )
-    project_path = pending.get("project_path")
-    entry = pending.get("entry_point") or ""
+    try:
+        from lumen.bot.project_path_resolve import resolve_session_project_path
+        project_path = resolve_session_project_path(
+            pending, getattr(context, "user_data", None) or {}
+        )
+    except Exception:
+        project_path = str((pending or {}).get("project_path") or "").strip()
+    if not project_path:
+        try:
+            await safe_edit_text(
+                status,
+                "❌ مفيش مشروع جاهز للتجربة.
+"
+                "اسحب المستودع أولاً (أو ولّد بوت) ثم أرسل التوكن.",
+            )
+        except Exception:
+            await message.reply_text(
+                "❌ مفيش مشروع جاهز للتجربة. اسحب المستودع أولاً ثم أرسل التوكن."
+            )
+        return
+    entry = (pending or {}).get("entry_point") or ""
     run_seconds = float(
-        pending.get("run_seconds")
+        (pending or {}).get("run_seconds")
         or LIVE_RUN_SECONDS
     )
 

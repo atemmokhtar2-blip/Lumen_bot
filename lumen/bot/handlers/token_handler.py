@@ -268,13 +268,28 @@ async def try_handle_token(
     if pending_host and looks_like_bot_token(request):
         # Resolve path if UI left a relative/stale ref
         try:
+            from lumen.bot.project_path_resolve import resolve_session_project_path
             from lumen.bot.ui.project_resolve import resolve_project_path, resolve_entry_point
-            _root = resolve_project_path(str(pending_host.get("project_path") or ""), context.user_data)
-            if _root is not None:
+            _root = resolve_session_project_path(pending_host, context.user_data or {})
+            if not _root:
+                _rp = resolve_project_path(str(pending_host.get("project_path") or ""), context.user_data)
+                _root = str(_rp) if _rp is not None else ""
+            if _root:
                 pending_host = dict(pending_host)
                 pending_host["project_path"] = str(_root)
-                pending_host.setdefault("entry_point", resolve_entry_point(_root))
+                try:
+                    pending_host.setdefault("entry_point", resolve_entry_point(_root))
+                except Exception:
+                    pass
                 context.user_data["pending_host"] = pending_host
+            else:
+                await safe_reply_text(
+                    message,
+                    "❌ مسار المشروع غير موجود للاستضافة.
+"
+                    "اسحب المستودع أولاً ثم أرسل توكن البوت.",
+                )
+                return True
         except Exception:
             pass
         context.user_data.pop("pending_host", None)
@@ -283,8 +298,9 @@ async def try_handle_token(
             context.user_data.pop("pending_run", None)
             context.user_data.pop("pending_live_run", None)
             context.user_data.pop("pending_deploy", None)
-        _sent = await safe_reply_text(message, 
-            "🚀 جاري بدء الاستضافة الدائمة (HostService / Firecracker)..."
+        _sent = await safe_reply_text(
+            message,
+            "🚀 جاري بدء الاستضافة على Lumen...",
         )
 
         status = _sent[-1] if _sent else None
@@ -424,7 +440,23 @@ async def try_handle_token(
                 context.user_data["pending_run"] = pending_run
         # Phase 1: never invent trial pending from active_repo or disk recovery.
         # User must choose «تجربة في الشات» or «استضافة دائمة» first.
-        if pending_run and pending_run.get("project_path"):
+        if pending_run:
+            try:
+                from lumen.bot.project_path_resolve import resolve_session_project_path
+                _pp = resolve_session_project_path(pending_run, context.user_data or {})
+            except Exception:
+                _pp = str(pending_run.get("project_path") or "").strip()
+            if not _pp:
+                await safe_reply_text(
+                    message,
+                    "❌ مسار المشروع غير موجود للتشغيل.
+"
+                    "اسحب المستودع أولاً ثم أرسل توكن البوت، أو اكتب: استضف",
+                )
+                return True
+            pending_run = dict(pending_run)
+            pending_run["project_path"] = _pp
+            context.user_data["pending_run"] = pending_run
             try:
                 from lumen.bot.ui.token_hygiene import scrub_and_confirm
                 await scrub_and_confirm(update_message=message, bot=context.bot)

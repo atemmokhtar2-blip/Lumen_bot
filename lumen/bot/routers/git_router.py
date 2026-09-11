@@ -480,11 +480,25 @@ async def try_handle_git(
                     entry = ""
                     if getattr(repo_contract, "entry_points", None):
                         entry = repo_contract.entry_points[0].path
-                    context.user_data["pending_run"] = {
-                        "project_path": result.path,
-                        "entry_point": entry,
-                        "run_seconds": _plan_live_seconds(user),
-                    }
+                    try:
+                        from lumen.bot.project_path_resolve import wants_host_after_clone
+                        _want_host = wants_host_after_clone(request or "")
+                    except Exception:
+                        _want_host = False
+                    if _want_host:
+                        context.user_data["pending_host"] = {
+                            "project_path": result.path,
+                            "entry_point": entry,
+                            "plane": "permanent_host",
+                        }
+                        context.user_data.pop("pending_run", None)
+                        context.user_data.pop("pending_live_run", None)
+                    else:
+                        context.user_data["pending_run"] = {
+                            "project_path": result.path,
+                            "entry_point": entry,
+                            "run_seconds": _plan_live_seconds(user),
+                        }
                 from lumen.bot.ui.repo_sections import (
                     build_sections_from_contract,
                     section_keyboard,

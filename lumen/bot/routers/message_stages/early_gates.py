@@ -245,13 +245,34 @@ async def try_bot_token(*, message, context, user, request: str) -> bool:
                 "أرسل طلباً لإنشاء بوت أولاً، ثم أرسل التوكن لتشغيله."
             )
             return True
-        # handle_live_run_token(message, context, token, pending) — trial chat run
-        if pending_run:
-            await handle_live_run_token(message, context, tok, pending_run)
-            return True
-        # handle_live_deploy_token(message, context, token, pending) — permanent host
+        # Prefer host deploy when pending_host/deploy has a resolvable path
         if pending_deploy:
+            try:
+                from lumen.bot.project_path_resolve import resolve_session_project_path
+                _pp = resolve_session_project_path(pending_deploy, ud)
+                if _pp:
+                    pending_deploy = dict(pending_deploy)
+                    pending_deploy["project_path"] = _pp
+            except Exception:
+                pass
             await handle_live_deploy_token(message, context, tok, pending_deploy)
+            return True
+        if pending_run:
+            try:
+                from lumen.bot.project_path_resolve import resolve_session_project_path
+                _pp = resolve_session_project_path(pending_run, ud)
+            except Exception:
+                _pp = str((pending_run or {}).get("project_path") or "")
+            if not _pp:
+                await message.reply_text(
+                    "❌ مسار المشروع غير موجود للتشغيل.
+"
+                    "اسحب المستودع أو اختر مشروعًا نشطًا ثم أعد إرسال توكن البوت."
+                )
+                return True
+            pending_run = dict(pending_run)
+            pending_run["project_path"] = _pp
+            await handle_live_run_token(message, context, tok, pending_run)
             return True
         return False
     except Exception:
