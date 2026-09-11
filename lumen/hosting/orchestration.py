@@ -158,6 +158,32 @@ def _start_serverless(
         )
         return _ServerlessBackend(), handle
 
+    # Phase 2: webhook adapter before upload (idempotent)
+    try:
+        from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_serverless
+        prepared = prepare_project_for_serverless(project_path)
+        if not prepared.ok:
+            handle = SandboxHandle(
+                backend="lumen_serverless",
+                deployment_id="",
+                status="failed",
+                message=prepared.message or "فشل تجهيز المشروع",
+                meta={"prepare": dict(prepared.details or {})},
+            )
+            return _ServerlessBackend(), handle
+        prepare_meta = dict(prepared.details or {})
+        webhook_path = str(prepare_meta.get("webhook_path") or "/api")
+    except Exception as prep_exc:
+        logger.warning("serverless prepare failed: %s", type(prep_exc).__name__)
+        handle = SandboxHandle(
+            backend="lumen_serverless",
+            deployment_id="",
+            status="failed",
+            message="فشل تجهيز المشروع لاستضافة Lumen",
+            meta={"error": type(prep_exc).__name__},
+        )
+        return _ServerlessBackend(), handle
+
     env = dict(env_vars or {})
     if bot_token:
         env.setdefault("BOT_TOKEN", bot_token)
@@ -186,6 +212,9 @@ def _start_serverless(
             "project_id": st.project_id,
             "provider": "lumen_serverless",
             "service_id": st.service_id,
+            "webhook_path": webhook_path,
+            "webhook_url": (str(st.url).rstrip("/") + webhook_path) if st.url else "",
+            "prepare": prepare_meta,
         },
     )
     return _ServerlessBackend(), handle

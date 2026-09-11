@@ -268,9 +268,74 @@ def prepare_project_for_host(
     )
 
 
+def prepare_project_for_serverless(
+    project_path: str | Path,
+    *,
+    entry_point: str = "",
+) -> PrepareResult:
+    """Adapt project for Lumen serverless host (webhook entry + platform config).
+
+    Does not pip-install host deps (builder installs from requirements.txt).
+    Never writes BOT_TOKEN into project files.
+    """
+    root = Path(project_path).resolve()
+    if not root.is_dir():
+        return PrepareResult(ok=False, message="مسار المشروع غير موجود")
+    try:
+        from lumen.hosting.serverless_webhook_adapter import adapt_project_for_serverless
+    except Exception as exc:
+        return PrepareResult(ok=False, message=f"محوّل Webhook غير متاح: {type(exc).__name__}")
+
+    adapted = adapt_project_for_serverless(root, entry_point=entry_point or "")
+    if not adapted.ok:
+        return PrepareResult(
+            ok=False,
+            entry_point=adapted.detect.entry_point,
+            message=adapted.message or "فشل تجهيز Webhook",
+            details=dict(adapted.details or {}),
+        )
+    entry = adapted.detect.entry_point or entry_point or resolve_entry_point(root, entry_point)
+    env = {
+        "LUMEN_BOT_ENTRY": entry or "",
+        "LUMEN_SERVERLESS": "1",
+        "LUMEN_WEBHOOK_PATH": adapted.webhook_path or "/api",
+    }
+    version_ref = snapshot_project_version(root)
+    details = {
+        "entry_point": entry,
+        "serverless": True,
+        "webhook_path": adapted.webhook_path,
+        "files_written": list(adapted.files_written),
+        "framework": (adapted.details or {}).get("framework") or adapted.detect.framework,
+        "mode_detected": adapted.detect.mode,
+        "version_ref": version_ref,
+        **{k: v for k, v in (adapted.details or {}).items() if k not in {"evidence"}},
+    }
+    try:
+        from lumen.hosting.project_space import write_runtime_manifest
+        write_runtime_manifest(
+            root,
+            entry_point=entry or "",
+            backend="lumen_serverless",
+            env_keys=sorted(env.keys()),
+            details={"version_ref": version_ref, "webhook_path": adapted.webhook_path},
+        )
+        details["runtime_manifest"] = ".lumen_runtime.json"
+    except Exception as exc:
+        logger.info("runtime manifest skipped: %s", type(exc).__name__)
+    return PrepareResult(
+        ok=True,
+        entry_point=entry or "",
+        message=adapted.message or "جاهز لاستضافة Lumen",
+        env_vars=env,
+        details=details,
+    )
+
+
 __all__ = [
     "PrepareResult",
     "prepare_project_for_host",
+    "prepare_project_for_serverless",
     "resolve_entry_point",
     "HOST_DEPS_DIRNAME",
     "snapshot_project_version",

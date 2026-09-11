@@ -111,6 +111,18 @@ def apply_to_instance(
 ) -> dict[str, Any]:
     """Fill webhook fields on HostInstance and register with Telegram when appropriate."""
     url = webhook_url_for(instance_id)
+    # Phase 2: serverless bots receive updates on their public deployment URL
+    backend = str(getattr(inst, "sandbox_backend", "") or "")
+    if backend == "lumen_serverless":
+        pub = str(getattr(inst, "public_base_url", "") or "").rstrip("/")
+        path = "/api"
+        try:
+            diag0 = dict(getattr(inst, "last_diagnosis", None) or {})
+            path = str(diag0.get("webhook_path") or path)
+        except Exception:
+            pass
+        if pub.startswith("https://"):
+            url = pub + (path if path.startswith("/") else "/" + path)
     inst.webhook_public_url = url
     diag = dict(getattr(inst, "last_diagnosis", None) or {})
     secret = ensure_secret(diag)

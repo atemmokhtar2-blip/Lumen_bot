@@ -707,8 +707,14 @@ class HostingService:
             write_traefik_route,
         )
         public_url = ""
+        serverless_diag = {}
         if backend_name == "lumen_serverless" and isinstance(handle.meta, dict):
             public_url = str(handle.meta.get("url") or "")
+            serverless_diag = {
+                "webhook_path": str(handle.meta.get("webhook_path") or "/api"),
+                "webhook_url": str(handle.meta.get("webhook_url") or ""),
+                "provider": "lumen_serverless",
+            }
         if not public_url:
             public_url = public_url_for_instance(instance_id)
         try:
@@ -807,6 +813,8 @@ class HostingService:
                 error_contract=contract,
             )
 
+        if serverless_diag:
+            inst.last_diagnosis = {**(inst.last_diagnosis or {}), **serverless_diag}
         self._instances[instance_id] = inst
         self._save()
         try:
@@ -854,10 +862,8 @@ class HostingService:
             # Permanent host plane: stop via Firecracker only (no Docker fallback)
             if dep:
                 try:
-                    from lumen.engine.services.sandbox_runtime.firecracker_backend import (
-                        FirecrackerSandboxBackend,
-                    )
-                    FirecrackerSandboxBackend().stop(dep)
+                    from lumen.hosting.orchestration import stop_host as _orch_stop
+                    _orch_stop(dep, backend=str(inst.sandbox_backend or "firecracker"))
                     stopped = True
                 except Exception as fc_exc:
                     inst.last_error = f"fc_stop:{type(fc_exc).__name__}:{fc_exc}"[:300]

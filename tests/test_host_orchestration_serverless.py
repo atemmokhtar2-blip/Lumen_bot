@@ -43,8 +43,12 @@ def test_start_serverless_without_token_fails_closed(tmp_path, monkeypatch):
 
 def test_start_serverless_success_mocked(tmp_path, monkeypatch):
     monkeypatch.setenv("TBE_HOST_BACKEND", "lumen_serverless")
-    (tmp_path / "api").mkdir()
-    (tmp_path / "api" / "index.py").write_text("ok", encoding="utf-8")
+    (tmp_path / "main.py").write_text(
+        "from telegram.ext import Application\n"
+        "application = Application.builder().token('t').build()\n"
+        "application.run_polling()\n",
+        encoding="utf-8",
+    )
 
     class FakeDriver:
         name = "lumen_serverless"
