@@ -82,24 +82,36 @@ def evaluate_readiness(
             collected[str(k).upper()] = str(v)
 
     still = [n for n in missing if n not in collected]
+    is_bot = False
+    if isinstance(contract, dict):
+        is_bot = bool(
+            contract.get("is_telegram_bot")
+            or contract.get("is_runnable_bot")
+            or "telegram" in str(contract.get("kind") or "").lower()
+        )
+    else:
+        try:
+            is_bot = bool(getattr(contract, "is_telegram_bot", False))
+        except Exception:
+            is_bot = False
+
+    # Env gaps are advisory — never block host/trial path resolution.
+    # BOT_TOKEN is collected separately via pending_host / pending_run.
     if still:
         return ReadinessResult(
             ready=False,
             missing_env=still,
-            summary_ar="ناقص متغيرات بيئة: " + ", ".join(still[:8]),
-            can_show_trial=False,
-            can_show_host=False,
+            summary_ar="ناقص متغيرات بيئة (اختياري قبل التشغيل): " + ", ".join(still[:8]),
+            can_show_trial=True,
+            can_show_host=True,
         )
 
-    is_bot = False
-    if isinstance(contract, dict):
-        is_bot = bool(contract.get("is_telegram_bot"))
     return ReadinessResult(
         ready=True,
         missing_env=[],
         summary_ar="المستودع جاهز لمساحة العمل.",
         can_show_trial=True,
-        can_show_host=True if is_bot or True else True,
+        can_show_host=True,
     )
 
 

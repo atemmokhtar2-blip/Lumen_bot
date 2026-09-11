@@ -70,48 +70,89 @@ async def try_handle_token(
         queue = list(pending_env.get("queue") or [])
         name = str(queue[0] or "").strip()
         value = (request or "").strip()
-        # Do not swallow GitHub PATs / bot tokens meant for other flows
-        if name and value and not value.startswith(("ghp_", "github_pat_", "glpat-")):
-            if looks_like_bot_token(value) and name not in {"TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN"}:
-                pass  # fall through to bot-token handlers
-            else:
+
+        def _is_plausible_env_value(var_name: str, val: str) -> bool:
+            v = (val or "").strip()
+            if not v or len(v) > 500:
+                return False
+            # Never treat conversation / generation requests as env values
+            if any(ch in v for ch in "؟?!\n") or v.count(" ") >= 4:
+                return False
+            if any(x in v for x in ("اعمل", "اسحب", "شغّل", "شغل", "بوت ", "مستودع")):
+                return False
+            vn = (var_name or "").upper()
+            if any(k in vn for k in ("TIMEOUT", "SECONDS", "LIMIT", "BURST", "SIZE", "PORT", "COUNT", "MAX")):
                 try:
-                    from lumen.engine.services.integrations.connections.readiness import (
-                        apply_collected_env,
-                        evaluate_readiness,
+                    float(v.replace("_", ""))
+                except ValueError:
+                    return False
+            return True
+
+        # Bot token / PAT must never be stored as generic env queue values
+        if looks_like_bot_token(value) or value.startswith(("ghp_", "github_pat_", "glpat-")):
+            # Ensure host/run pending has a real path from env-collect context
+            _path = (
+                str(pending_env.get("path") or pending_env.get("project_path") or "").strip()
+            )
+            if _path:
+                ar = dict((context.user_data or {}).get("active_repo") or {})
+                ar.setdefault("path", _path)
+                context.user_data["active_repo"] = ar
+                context.user_data.setdefault("last_project_path", _path)
+                if not (context.user_data or {}).get("pending_host") and not (
+                    context.user_data or {}
+                ).get("pending_run"):
+                    context.user_data["pending_host"] = {
+                        "project_path": _path,
+                        "entry_point": str(pending_env.get("entry_point") or ""),
+                        "plane": "permanent_host",
+                    }
+            # Do not consume the message as env — fall through to host/token handlers
+        elif name and value and _is_plausible_env_value(name, value):
+            try:
+                from lumen.engine.services.integrations.connections.readiness import (
+                    apply_collected_env,
+                    evaluate_readiness,
+                )
+                active = dict((context.user_data or {}).get("active_repo") or {})
+                if pending_env.get("path") and not active.get("path"):
+                    active["path"] = str(pending_env.get("path"))
+                active = apply_collected_env(active, name, value)
+                context.user_data["active_repo"] = active
+                queue = queue[1:]
+                if queue:
+                    context.user_data["pending_repo_env"] = {
+                        **pending_env,
+                        "queue": queue,
+                        "path": pending_env.get("path") or active.get("path") or "",
+                    }
+                    await safe_reply_text(
+                        message,
+                        f"✅ تم حفظ `{name}`.\nأرسل الآن: `{queue[0]}`\n"
+                        "أو أرسل توكن البوت مباشرة للتشغيل/الاستضافة.",
                     )
-                    active = dict((context.user_data or {}).get("active_repo") or {})
-                    active = apply_collected_env(active, name, value)
-                    context.user_data["active_repo"] = active
-                    queue = queue[1:]
-                    if queue:
-                        context.user_data["pending_repo_env"] = {
-                            **pending_env,
-                            "queue": queue,
-                        }
-                        await safe_reply_text(
-                            message,
-                            f"✅ تم حفظ `{name}`.\nأرسل الآن: `{queue[0]}`",
-                        )
-                    else:
-                        context.user_data.pop("pending_repo_env", None)
-                        rr = evaluate_readiness(active_repo=active)
-                        if rr.ready:
-                            await safe_reply_text(
-                                message,
-                                "✅ اكتملت متغيرات مساحة العمل.\n"
-                                "يمكنك الآن استخدام أزرار التجربة/التشغيل من فهم المستودع.",
-                            )
-                        else:
-                            await safe_reply_text(message, f"✅ تم حفظ `{name}`.")
-                    try:
-                        from lumen.bot.session_store import get_session_store
-                        get_session_store().save(int(user.id), dict(context.user_data))
-                    except Exception:
-                        logger.exception("persist pending_repo_env failed")
-                    return True
+                else:
+                    context.user_data.pop("pending_repo_env", None)
+                    await safe_reply_text(
+                        message,
+                        f"✅ تم حفظ `{name}`.\n"
+                        "أرسل توكن البوت من @BotFather للتشغيل على استضافة Lumen.",
+                    )
+                try:
+                    from lumen.bot.session_store import get_session_store
+                    get_session_store().save(int(user.id), dict(context.user_data))
                 except Exception:
-                    logger.exception("pending_repo_env collect failed")
+                    logger.exception("persist pending_repo_env failed")
+                return True
+            except Exception:
+                logger.exception("pending_repo_env collect failed")
+        elif name and value:
+            await safe_reply_text(
+                message,
+                f"❌ القيمة غير صالحة لـ `{name}`.\n"
+                "أرسل قيمة مناسبة فقط، أو أرسل توكن البوت للتشغيل مباشرة.",
+            )
+            return True
 
     # Settings → Connections → GitHub: store PAT for official repo listing
     if (context.user_data or {}).get("pending_github_connection"):

@@ -910,6 +910,14 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
                                 "path": bind.path,
                                 "full_name": bind.full_name,
                             }
+                        # Always allow host/run with path — env is optional advisory
+                        if bind.is_runnable and bind.path:
+                            context.user_data["pending_host"] = {
+                                "project_path": bind.path,
+                                "entry_point": str(getattr(bind, "entry_point", "") or ""),
+                                "plane": "permanent_host",
+                            }
+                            context.user_data["last_project_path"] = bind.path
                             result.state.slots["gh_missing_env"] = ",".join(rr.missing_env[:12])
                             result.state.slots["gh_ready"] = "0"
                         else:

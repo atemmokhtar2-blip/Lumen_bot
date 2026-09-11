@@ -15,9 +15,16 @@ def resolve_session_project_path(
 ) -> str:
     pending = dict(pending or {})
     ud = dict(user_data or {})
+    pre = ud.get("pending_repo_env") if isinstance(ud.get("pending_repo_env"), dict) else {}
+    ph = ud.get("pending_host") if isinstance(ud.get("pending_host"), dict) else {}
+    prun = ud.get("pending_run") if isinstance(ud.get("pending_run"), dict) else {}
     candidates = [
         pending.get("project_path"),
         pending.get("path"),
+        ph.get("project_path"),
+        prun.get("project_path"),
+        pre.get("path"),
+        pre.get("project_path"),
         (ud.get("active_repo") or {}).get("path") if isinstance(ud.get("active_repo"), dict) else None,
         ud.get("last_project_path"),
         ud.get("last_clone_path"),
