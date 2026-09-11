@@ -15,6 +15,8 @@ from .report_data import (
     TokenValidationResult,
 )
 from .token_validator import TokenValidator, looks_like_bot_token
+from .vercel_process_driver import VercelProcessDriver
+from .vercel_client import PlatformHostClient, token_configured
 
 __all__ = [
     "DEPLOY_FAILED",
@@ -25,4 +27,7 @@ __all__ = [
     "TokenValidationResult",
     "TokenValidator",
     "looks_like_bot_token",
+    "VercelProcessDriver",
+    "PlatformHostClient",
+    "token_configured",
 ]

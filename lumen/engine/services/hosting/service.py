@@ -419,8 +419,11 @@ class HostingService:
             )
             from lumen.platform.prod_security_gate import assert_production_sandbox_backend
 
-            assert_production_sandbox_backend()
-            if is_production_sandbox_path():
+            # Serverless host path does not use microVM sandbox select
+            _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+            if _hb not in {"lumen_serverless", "serverless", "vercel"}:
+                assert_production_sandbox_backend()
+            if is_production_sandbox_path() and _hb not in {"lumen_serverless", "serverless", "vercel"}:
                 backend, probe = select_sandbox_backend(require_available=True)
                 if backend.name not in {"firecracker", "docker"}:
                     return HostResult(
@@ -654,12 +657,12 @@ class HostingService:
         # Production / multi-tenant: Firecracker only — never accept weak backends
         try:
             from lumen.engine.services.sandbox_runtime.select import is_production_sandbox_path
-            if is_production_sandbox_path() and backend_name not in {"firecracker", "docker"}:
+            if is_production_sandbox_path() and backend_name not in {"firecracker", "docker", "lumen_serverless"}:
                 return HostResult(
                     ok=False,
                     message=(
                         f"مسار الإنتاج يرفض backend={backend_name}. "
-                        "المسموح: Firecracker أو Docker المعزول (مع ACK)."
+                        "المسموح: Firecracker أو Docker المعزول أو استضافة Lumen."
                     ),
                     details={"backend": backend_name},
                 )
@@ -675,6 +678,9 @@ class HostingService:
             pass
         # Permanent host: refuse "running" without bot health when FC reports meta
         meta = dict(handle.meta or {})
+        if backend_name == "lumen_serverless" and meta.get("url"):
+            # Serverless path: public URL is the health signal for phase-1
+            pass
         if backend_name == "firecracker" and meta.get("bot_healthy") is False and meta.get("claim", "").endswith("failed"):
             return HostResult(
                 ok=False,
@@ -700,7 +706,11 @@ class HostingService:
             public_url_for_instance,
             write_traefik_route,
         )
-        public_url = public_url_for_instance(instance_id)
+        public_url = ""
+        if backend_name == "lumen_serverless" and isinstance(handle.meta, dict):
+            public_url = str(handle.meta.get("url") or "")
+        if not public_url:
+            public_url = public_url_for_instance(instance_id)
         try:
             write_traefik_route(instance_id=instance_id, enabled=running_like)
             from lumen.engine.services.hosting.ingress import write_caddy_route
