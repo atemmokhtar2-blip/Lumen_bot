@@ -65,12 +65,12 @@ jobs:
           ENVIRONMENT: test
           TBE_ENV: test
         run: python scripts/security/security_baseline_check.py --strict
-      - name: Phase E penetration tests
+      - name: Phase E penetration + hygiene (strict)
         env:
           PYTHONPATH: ${{ github.workspace }}
           ENVIRONMENT: test
           TBE_ENV: test
-        run: pytest tests/test_phase_e_monitoring_pen.py -q --tb=line
+        run: python scripts/security/run_phase_e_pen.py
 
   dependabot-hygiene:
     name: Dependabot config present

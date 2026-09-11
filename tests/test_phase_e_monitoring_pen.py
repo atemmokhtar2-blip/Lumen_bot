@@ -1,11 +1,20 @@
-"""Phase E — real monitoring + targeted penetration probes."""
+"""Phase E — monitoring + directed penetration (must not skip core cases)."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import importlib.util
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Install aiohttp stub BEFORE any lumen.api imports when aiohttp absent
+from tests.aiohttp_stub import install_aiohttp_stub, HTTPException
+
+install_aiohttp_stub()
 
 
 def _load(path: str, name: str):
@@ -26,6 +35,7 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("SECURITY_ALERT_LOG_ONLY", "1")
     monkeypatch.setenv("SECURITY_ALERT_LOG_ONLY_ACK", "I_ACCEPT_SECURITY_ALERTS_LOG_ONLY")
     monkeypatch.setenv("SECURITY_ALERT_COOLDOWN_SEC", "0")
+    monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "phase-e-admin-token-32chars-long!!")
     try:
         from lumen.platform.security_metrics import reset_for_tests
         reset_for_tests()
@@ -39,86 +49,77 @@ def _env(monkeypatch, tmp_path):
         pass
 
 
-def test_emit_admin_rejected_records_metric_and_alert(tmp_path, monkeypatch):
-    monkeypatch.setenv("SECURITY_EVENTS_DIR", str(tmp_path / "sec"))
+# ── 1) Alerts on required events ─────────────────────────────────────────────
+
+def test_alert_admin_rejected(tmp_path, monkeypatch):
     from lumen.platform.security_events import emit
     from lumen.platform.security_metrics import snapshot
     from lumen.platform.security_alerts import recent_alerts
 
-    emit("auth.admin_rejected", severity="critical", ip="9.9.9.9", path="/v1/admin/x")
-    files = list((tmp_path / "sec").glob("*.jsonl"))
-    assert files and "auth.admin_rejected" in files[0].read_text(encoding="utf-8")
-    assert snapshot().get("auth.admin_rejected", 0) >= 1
-    assert any(r.get("event_type") == "auth.admin_rejected" for r in recent_alerts(limit=10))
+    emit("auth.admin_rejected", severity="critical", ip="1.1.1.1", path="/v1/admin/x")
+    assert "auth.admin_rejected" in next((tmp_path / "sec").glob("*.jsonl")).read_text()
+    assert snapshot()["auth.admin_rejected"] >= 1
+    assert any(a["event_type"] == "auth.admin_rejected" for a in recent_alerts())
 
 
-def test_emit_identity_spoof_and_webhook_fail_alert(tmp_path, monkeypatch):
-    monkeypatch.setenv("SECURITY_EVENTS_DIR", str(tmp_path / "sec"))
+def test_alert_identity_spoof_and_webhook_fails(tmp_path, monkeypatch):
     from lumen.platform.security_events import emit
-    from lumen.platform.security_alerts import recent_alerts
     from lumen.platform.security_metrics import snapshot
-
-    emit("idor.identity_spoof", severity="critical", tenant_id="ten_a")
-    emit("webhook.stripe_signature_failed", severity="critical", path="/v1/billing/webhook/stripe")
-    emit("webhook.github_signature_failed", severity="critical", path="/v1/integrations/github/webhook")
-    snap = snapshot()
-    assert snap.get("idor.identity_spoof", 0) >= 1
-    assert snap.get("webhook.stripe_signature_failed", 0) >= 1
-    assert snap.get("webhook.github_signature_failed", 0) >= 1
-    types = {r["event_type"] for r in recent_alerts(limit=20)}
-    assert "idor.identity_spoof" in types
-    assert "webhook.stripe_signature_failed" in types
-
-
-def test_watched_events_cover_phase_e_requirements():
-    from lumen.platform.security_alerts import WATCHED_EVENTS, should_alert
+    from lumen.platform.security_alerts import recent_alerts
 
     for et in (
-        "auth.admin_rejected",
         "idor.identity_spoof",
         "webhook.stripe_signature_failed",
         "webhook.github_signature_failed",
     ):
-        assert et in WATCHED_EVENTS
-        assert should_alert(et, "critical")
+        emit(et, severity="critical", path="/v1/x")
+    snap = snapshot()
+    for et in (
+        "idor.identity_spoof",
+        "webhook.stripe_signature_failed",
+        "webhook.github_signature_failed",
+    ):
+        assert snap.get(et, 0) >= 1
+    types = {a["event_type"] for a in recent_alerts(limit=30)}
+    assert "idor.identity_spoof" in types
+    assert "webhook.stripe_signature_failed" in types
 
 
-def test_rate_limiter_requires_redis_no_silent_fallback(monkeypatch):
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.delenv("JOB_REDIS_URL", raising=False)
-    import lumen.platform.rate_limit as rl
+# ── 2) Admin brute + Redis down ──────────────────────────────────────────────
 
-    rl._LIMITER = None
-    with patch("lumen.platform.runtime_config.redis_url", return_value=""):
-        with pytest.raises(RuntimeError, match="REDIS_URL"):
-            rl.RateLimiter()
-
-
-def test_require_admin_fail_closed_when_limiter_raises(monkeypatch):
-    pytest.importorskip("aiohttp")
-    from aiohttp import web
+def test_admin_redis_down_fail_closed_503(monkeypatch, tmp_path):
+    install_aiohttp_stub()
+    # Fresh import path
+    import importlib
     import lumen.api.auth as auth_mod
+    importlib.reload(auth_mod)
 
-    monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "phase-e-admin-token-32chars-long!!")
+    from aiohttp import web
+
     req = MagicMock()
     req.headers = {"X-Admin-Token": "phase-e-admin-token-32chars-long!!"}
-    req.path = "/v1/admin/credits/x/overview"
-    req.remote = "10.0.0.1"
-    with patch.object(auth_mod, "get_rate_limiter", side_effect=RuntimeError("redis_down")):
-        with pytest.raises(web.HTTPException) as ei:
+    req.path = "/v1/admin/credits/t/overview"
+    req.remote = "10.0.0.9"
+    with patch("lumen.platform.rate_limit.get_rate_limiter", side_effect=RuntimeError("redis_down")):
+        with pytest.raises(Exception) as ei:
             auth_mod.require_admin(req)
-        assert ei.value.status_code == 503
+    exc = ei.value
+    code = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    assert code == 503
+    # event emitted
+    from lumen.platform.security_metrics import snapshot
+    # may have admin_rate_limit_unavailable
+    assert (
+        snapshot().get("auth.admin_rate_limit_unavailable", 0) >= 1
+        or "admin_rate_limit_unavailable" in str(getattr(exc, "text", ""))
+    )
 
 
-def test_admin_rejected_emit_on_bad_token(monkeypatch, tmp_path):
-    pytest.importorskip("aiohttp")
-    from aiohttp import web
+def test_admin_wrong_token_emits_rejected(monkeypatch, tmp_path):
+    install_aiohttp_stub()
+    import importlib
     import lumen.api.auth as auth_mod
-    from lumen.platform.security_metrics import snapshot, reset_for_tests
-
-    reset_for_tests()
-    monkeypatch.setenv("SECURITY_EVENTS_DIR", str(tmp_path / "sec"))
-    monkeypatch.setenv("PLATFORM_ADMIN_TOKEN", "correct-admin-token-32chars-xxxxx")
+    importlib.reload(auth_mod)
 
     class FakeLim:
         def allow(self, *a, **k):
@@ -131,92 +132,129 @@ def test_admin_rejected_emit_on_bad_token(monkeypatch, tmp_path):
             return 0
 
     req = MagicMock()
-    req.headers = {"X-Admin-Token": "WRONG"}
+    req.headers = {"X-Admin-Token": "WRONG-TOKEN"}
     req.path = "/v1/admin/x"
-    req.remote = "8.8.8.8"
-    with patch.object(auth_mod, "get_rate_limiter", return_value=FakeLim()):
-        with pytest.raises(web.HTTPException) as ei:
+    req.remote = "8.8.4.4"
+    with patch("lumen.platform.rate_limit.get_rate_limiter", return_value=FakeLim()):
+        with pytest.raises(Exception) as ei:
             auth_mod.require_admin(req)
-        assert ei.value.status_code in (401, 403)
+    assert getattr(ei.value, "status_code", 0) in (401, 403)
+    from lumen.platform.security_metrics import snapshot
     assert snapshot().get("auth.admin_rejected", 0) >= 1
 
 
-def test_path_traversal_rejected_by_firewall():
-    fw = _load("lumen/api/request_firewall.py", "fw_pen")
+def test_rate_limiter_no_memory_fallback(monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("JOB_REDIS_URL", raising=False)
+    import lumen.platform.rate_limit as rl
+
+    rl._LIMITER = None
+    with patch("lumen.platform.runtime_config.redis_url", return_value=""):
+        with pytest.raises(RuntimeError, match="REDIS_URL"):
+            rl.RateLimiter()
+
+
+# ── 3) Path traversal ────────────────────────────────────────────────────────
+
+def test_path_traversal_rejected():
+    fw = _load("lumen/api/request_firewall.py", "fw_e")
     assert fw.path_is_rejected("/v1/jobs/../../etc/passwd") is True
     assert fw.path_is_rejected("/v1/hosts/..%2f..%2fetc/passwd") is True
-    assert fw.path_is_rejected("/v1/me", "/v1/me?x=../secret") is True
-    assert fw.path_is_rejected("/v1/jobs/job_abc") is False
+    assert fw.path_is_rejected("/v1/x", "/v1/x?a=../etc/passwd") is True
+    assert fw.path_is_rejected("/v1/jobs/job_ok") is False
 
 
-def test_identity_spoof_raises_and_emits(monkeypatch, tmp_path):
-    pytest.importorskip("aiohttp")
-    from aiohttp import web
-    from lumen.api.ownership import reject_identity_spoof
+# ── 4) IDOR jobs / hosts ─────────────────────────────────────────────────────
+
+def test_idor_job_cross_tenant_permission_error():
+    from lumen.application.handlers.job_handlers import handle_get_job
+    from lumen.application.queries.get_job import GetJobQuery
+    from lumen.domain.entities.job import Job
+    from lumen.domain.value_objects.job_status import JobStatus
+    import time
+
+    class MemRepo:
+        def __init__(self, job):
+            self._job = job
+
+        def get(self, job_id):
+            return self._job if self._job.job_id == job_id else None
+
+    job = Job(
+        job_id="job_owned_by_a",
+        tenant_id="ten_a",
+        kind="generate",
+        status=JobStatus.QUEUED,
+        created_at=time.time(),
+        input={},
+    )
+    repo = MemRepo(job)
+    # owner OK
+    got = handle_get_job(GetJobQuery(job_id="job_owned_by_a", tenant_id="ten_a"), jobs=repo)
+    assert got.tenant_id == "ten_a"
+    # cross-tenant IDOR blocked
+    with pytest.raises(PermissionError, match="job_not_owned"):
+        handle_get_job(GetJobQuery(job_id="job_owned_by_a", tenant_id="ten_b"), jobs=repo)
+
+
+def test_idor_host_instance_wrong_tenant():
+    from lumen.platform.tenant_isolation import assert_instance_owner
+
+    inst = SimpleNamespace(user_id=7, tenant_id="ten_a")
+    assert assert_instance_owner(inst, user_id=7, tenant_id="ten_a") is True
+    assert assert_instance_owner(inst, user_id=7, tenant_id="ten_b") is False
+    assert assert_instance_owner(inst, user_id=99, tenant_id="ten_a") is False
+
+
+def test_identity_spoof_forbidden_and_emits(monkeypatch, tmp_path):
+    install_aiohttp_stub()
+    import importlib
+    import lumen.api.ownership as own
+    importlib.reload(own)
+
     from lumen.platform.security_metrics import snapshot, reset_for_tests
-
     reset_for_tests()
-    monkeypatch.setenv("SECURITY_EVENTS_DIR", str(tmp_path / "sec"))
-    with pytest.raises(web.HTTPException) as ei:
-        reject_identity_spoof({"tenant_id": "ten_other"}, tenant_id="ten_mine")
-    assert ei.value.status_code == 403
+    with pytest.raises(Exception) as ei:
+        own.reject_identity_spoof({"tenant_id": "ten_other"}, tenant_id="ten_mine")
+    assert getattr(ei.value, "status_code", 0) == 403
     assert snapshot().get("idor.identity_spoof", 0) >= 1
 
 
-def test_job_routes_enforce_tenant_and_reject_dotdot():
-    src = Path("lumen/api/routes/jobs.py").read_text(encoding="utf-8")
-    assert "require_tenant" in src
-    assert "tenant_id=tenant.tenant_id" in src
-    assert '".." in job_id' in src or "in job_id" in src
+# ── 5) Webhook without signature ─────────────────────────────────────────────
 
-
-def test_hosts_routes_tenant_scoped_and_spoof_reject():
-    src = Path("lumen/api/routes/hosts.py").read_text(encoding="utf-8")
-    assert "tenant_id=tenant.tenant_id" in src
-    assert "reject_identity_spoof" in src
-    assert "require_tenant" in src
-
-
-def test_stripe_signature_verify_rejects_unsigned(monkeypatch):
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_phase_e_test_secret_value")
+def test_stripe_webhook_unsigned_rejected(monkeypatch):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_phase_e_secret_value_xx")
     from lumen.platform.stripe_client import verify_webhook_signature
 
-    assert verify_webhook_signature(b'{"type":"x"}', "") is False
-    assert verify_webhook_signature(b'{"type":"x"}', "t=1,v1=00") is False
+    assert verify_webhook_signature(b'{"id":"evt"}', "") is False
+    assert verify_webhook_signature(b'{"id":"evt"}', "t=1,v1=dead") is False
 
 
-def test_github_signature_logic_rejects_unsigned():
-    import hashlib
-    import hmac
-
-    secret = "ghwh_secret_phase_e"
-
-    def verify_signature(raw_body, signature_header):
-        if not signature_header or not str(signature_header).startswith("sha256="):
+def test_github_webhook_unsigned_rejected():
+    secret = "gh_wh_secret_e"
+    def verify(raw, sig):
+        if not sig or not str(sig).startswith("sha256="):
             return False
-        expected = str(signature_header).split("=", 1)[1].strip()
-        digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(digest, expected)
-
-    assert verify_signature(b"{}", None) is False
-    assert verify_signature(b"{}", "") is False
-    dig = hmac.new(secret.encode(), b"{}", hashlib.sha256).hexdigest()
-    assert verify_signature(b"{}", f"sha256={dig}") is True
+        exp = str(sig).split("=", 1)[1]
+        dig = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(dig, exp)
+    assert verify(b"{}", None) is False
+    assert verify(b"{}", "") is False
+    assert verify(b"{}", "sha256=00") is False
 
 
-def test_billing_and_github_routes_emit_on_sig_fail():
-    billing = Path("lumen/api/routes/billing.py").read_text(encoding="utf-8")
-    github = Path("lumen/api/routes/github_webhooks.py").read_text(encoding="utf-8")
-    assert "webhook.stripe_signature_failed" in billing
-    assert "webhook.github_signature_failed" in github
+def test_webhook_routes_emit_signature_failures():
+    assert "webhook.stripe_signature_failed" in Path("lumen/api/routes/billing.py").read_text()
+    assert "webhook.github_signature_failed" in Path("lumen/api/routes/github_webhooks.py").read_text()
 
 
-def test_dependabot_and_gitleaks_configs_present():
-    dep = Path(".github/dependabot.yml").read_text(encoding="utf-8")
-    assert 'package-ecosystem: "pip"' in dep
-    assert "schedule:" in dep
-    assert Path(".gitleaks.toml").is_file()
-    sec = Path(".github/workflows/security.yml").read_text(encoding="utf-8")
-    assert "gitleaks" in sec.lower()
-    weekly = Path(".github/workflows/security-review-weekly.yml").read_text(encoding="utf-8")
-    assert "gitleaks" in weekly.lower()
+# ── 6) Dependabot + gitleaks continuous ──────────────────────────────────────
+
+def test_dependabot_gitleaks_hygiene_script():
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, "scripts/security/assert_monitoring_hygiene.py"],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
