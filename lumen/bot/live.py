@@ -38,9 +38,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
         try:
             await safe_edit_text(
                 status,
-                "❌ مفيش مشروع جاهز للتجربة.
-"
-                "اسحب المستودع أولاً (أو ولّد بوت) ثم أرسل التوكن.",
+                "❌ مفيش مشروع جاهز للتجربة.\nاسحب المستودع أولاً (أو ولّد بوت) ثم أرسل التوكن.",
             )
         except Exception:
             await message.reply_text(

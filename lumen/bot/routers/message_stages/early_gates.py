@@ -265,9 +265,7 @@ async def try_bot_token(*, message, context, user, request: str) -> bool:
                 _pp = str((pending_run or {}).get("project_path") or "")
             if not _pp:
                 await message.reply_text(
-                    "❌ مسار المشروع غير موجود للتشغيل.
-"
-                    "اسحب المستودع أو اختر مشروعًا نشطًا ثم أعد إرسال توكن البوت."
+                    "❌ مسار المشروع غير موجود للتشغيل.\nاسحب المستودع أو اختر مشروعًا نشطًا ثم أعد إرسال توكن البوت."
                 )
                 return True
             pending_run = dict(pending_run)

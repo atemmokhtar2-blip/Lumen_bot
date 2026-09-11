@@ -285,9 +285,7 @@ async def try_handle_token(
             else:
                 await safe_reply_text(
                     message,
-                    "❌ مسار المشروع غير موجود للاستضافة.
-"
-                    "اسحب المستودع أولاً ثم أرسل توكن البوت.",
+                    "❌ مسار المشروع غير موجود للاستضافة.\nاسحب المستودع أولاً ثم أرسل توكن البوت.",
                 )
                 return True
         except Exception:
@@ -449,8 +447,7 @@ async def try_handle_token(
             if not _pp:
                 await safe_reply_text(
                     message,
-                    "❌ مسار المشروع غير موجود للتشغيل.
-"
+                    "❌ مسار المشروع غير موجود للتشغيل.\n"
                     "اسحب المستودع أولاً ثم أرسل توكن البوت، أو اكتب: استضف",
                 )
                 return True
