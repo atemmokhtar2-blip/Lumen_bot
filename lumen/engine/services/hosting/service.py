@@ -611,6 +611,23 @@ class HostingService:
                 ),
             )
 
+        # Phase 4 — serverless plan quota (strict free/pro)
+        try:
+            from lumen.hosting.serverless_policy import (
+                assert_serverless_quota,
+                count_serverless_running,
+                is_serverless_backend_request,
+            )
+            if is_serverless_backend_request():
+                running_sl = count_serverless_running(list(self._instances.values()), user_id=int(user_id))
+                ok_q, reason_q = assert_serverless_quota(user_id=int(user_id), running_serverless=running_sl)
+                if not ok_q:
+                    return HostResult(ok=False, message=reason_q)
+        except Exception as q_exc:
+            env = (os.environ.get("ENVIRONMENT") or "").lower()
+            if env not in {"dev", "development", "local", "test"}:
+                return HostResult(ok=False, message=f"serverless_quota_unavailable:{type(q_exc).__name__}")
+
         # Isolation: sandbox_runtime ONLY — no LocalProcess fallback
         try:
             from lumen.engine.services.live_deployment.token_validator import (
@@ -874,9 +891,22 @@ class HostingService:
             self._save()
         except Exception:
             logger.exception("architecture plane (webhook/gateway/manifest) failed")
+        try:
+            from lumen.hosting.serverless_policy import status_message_ar
+            if str(inst.sandbox_backend or "") == "lumen_serverless":
+                diag = dict(inst.last_diagnosis or {})
+                msg = status_message_ar(
+                    str(diag.get("lifecycle_state") or ""),
+                    verify_ok=bool(diag.get("verify_ok")),
+                    raw="",
+                )
+            else:
+                msg = f"البوت شغال كخدمة استضافة ({inst.status})"
+        except Exception:
+            msg = f"البوت شغال كخدمة استضافة ({inst.status})"
         return HostResult(
             ok=True,
-            message=f"البوت شغال كخدمة استضافة ({inst.status})",
+            message=msg,
             instance=inst,
         )
 
@@ -904,6 +934,22 @@ class HostingService:
 
         inst.status = "stopped"
         inst.pid = None
+        # Phase 4: drop Telegram webhook so updates stop hitting deleted deployment
+        try:
+            if str(getattr(inst, "sandbox_backend", "") or "") == "lumen_serverless":
+                from lumen.hosting.webhook_manager import clear_webhook
+                # Token from sealed project secrets when possible
+                tok = ""
+                try:
+                    from lumen.hosting.secrets_env import load_project_secrets
+                    sealed = load_project_secrets(inst.project_path)
+                    tok = (sealed.get("BOT_TOKEN") or sealed.get("TELEGRAM_BOT_TOKEN") or "").strip()
+                except Exception:
+                    tok = ""
+                if tok:
+                    clear_webhook(tok)
+        except Exception:
+            pass
         try:
             from lumen.engine.services.hosting.usage_billing import settle_instance
             uid = int(getattr(inst, "user_id", 0) or 0)
@@ -929,6 +975,7 @@ class HostingService:
         instance_id: str,
         user_id: int,
         bot_token: str = "",
+        tenant_id: str = "",
     ) -> HostResult:
         """Stop then start. Token optional if sealed secrets exist on project."""
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")
@@ -951,13 +998,50 @@ class HostingService:
                 message="إعادة التشغيل تحتاج توكن — أرسل التوكن أو تأكد من وجود أسرار مشفّرة للمشروع",
                 instance=inst,
             )
-        self.stop(instance_id=instance_id, user_id=user_id)
+        # Phase 4: serverless repair = force adapt + deploy + verify
+        if str(getattr(inst, "sandbox_backend", "") or "") == "lumen_serverless":
+            self.stop(instance_id=instance_id, user_id=user_id, tenant_id=tenant_id or "")
+            try:
+                from lumen.hosting.serverless_repair import repair_serverless_project
+                rep = repair_serverless_project(
+                    path,
+                    bot_token=token,
+                    user_id=int(user_id),
+                    service_name=f"lumen-u{int(user_id)}-repair",
+                )
+            except Exception as rep_exc:
+                return HostResult(ok=False, message=f"فشل الإصلاح: {type(rep_exc).__name__}", instance=inst)
+            if not rep.ok:
+                inst.status = "failed"
+                inst.last_error = rep.message[:400]
+                inst.last_diagnosis = {**(inst.last_diagnosis or {}), **(rep.meta or {}), "repair_ok": False}
+                self._instances[instance_id] = inst
+                self._save()
+                return HostResult(ok=False, message=rep.message, instance=inst)
+            inst.status = "running"
+            inst.deployment_id = rep.deployment_id or inst.deployment_id
+            inst.public_base_url = rep.url or inst.public_base_url
+            inst.webhook_public_url = str((rep.meta or {}).get("webhook_url") or inst.webhook_public_url or "")
+            inst.last_error = ""
+            inst.last_diagnosis = {
+                **(inst.last_diagnosis or {}),
+                **(rep.meta or {}),
+                "repair_ok": True,
+                "verify_ok": bool((rep.meta or {}).get("verify_ok", True)),
+                "lifecycle_state": str((rep.meta or {}).get("lifecycle_state") or "RUNNING"),
+            }
+            self._instances[instance_id] = inst
+            self._save()
+            return HostResult(ok=True, message=rep.message, instance=inst)
+
+        self.stop(instance_id=instance_id, user_id=user_id, tenant_id=tenant_id or "")
         result = self.start(
             user_id=user_id,
             project_path=path,
             bot_token=token,
             bot_username=username,
             entry_point=entry,
+            tenant_id=tenant_id or "",
         )
         # Lifecycle: keep stable instance_id for the user-facing project identity
         if result.ok and result.instance is not None:

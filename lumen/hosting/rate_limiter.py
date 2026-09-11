@@ -21,7 +21,18 @@ _starts: dict[int, Deque[float]] = defaultdict(deque)
 
 
 def max_concurrent(user_id: int = 0, tenant_id: str | None = None) -> int:
-    # Plan hosted_bots (credits product still exposes a soft concurrent cap)
+    # Prefer real user plan limits (Pro vs free)
+    try:
+        from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+        lim = resolve_plan_limits(int(user_id or 0))
+        plan_cap = max(1, int(lim.max_bots))
+        env_raw = (os.environ.get("TBE_HOST_MAX_CONCURRENT_PER_USER") or "").strip()
+        if env_raw:
+            env_cap = max(1, int(env_raw))
+            return max(1, min(plan_cap, env_cap))
+        return plan_cap
+    except Exception:
+        pass
     try:
         from lumen.platform.plans import get_plan
         plan_cap = int(getattr(get_plan(None), "hosted_bots", 0) or 0)
