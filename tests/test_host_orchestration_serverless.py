@@ -18,6 +18,7 @@ def test_resolve_default_firecracker(monkeypatch):
 def test_resolve_serverless_aliases(monkeypatch):
     monkeypatch.setenv("TBE_HOST_BACKEND", "lumen_serverless")
     monkeypatch.setenv("LUMEN_SERVERLESS_SKIP_VERIFY", "1")
+    monkeypatch.setenv("ENVIRONMENT", "test")
     assert resolve_backend_name() == "lumen_serverless"
     monkeypatch.setenv("TBE_HOST_BACKEND", "serverless")
     assert resolve_backend_name() == "lumen_serverless"
@@ -28,6 +29,7 @@ def test_resolve_serverless_aliases(monkeypatch):
 def test_start_serverless_without_token_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("TBE_HOST_BACKEND", "lumen_serverless")
     monkeypatch.setenv("LUMEN_SERVERLESS_SKIP_VERIFY", "1")
+    monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.delenv("VERCEL_TOKEN", raising=False)
     (tmp_path / "app.py").write_text("x", encoding="utf-8")
     with patch("lumen.engine.services.live_deployment.vercel_client.token_configured", return_value=False):
@@ -46,6 +48,7 @@ def test_start_serverless_without_token_fails_closed(tmp_path, monkeypatch):
 def test_start_serverless_success_mocked(tmp_path, monkeypatch):
     monkeypatch.setenv("TBE_HOST_BACKEND", "lumen_serverless")
     monkeypatch.setenv("LUMEN_SERVERLESS_SKIP_VERIFY", "1")
+    monkeypatch.setenv("ENVIRONMENT", "test")
     (tmp_path / "main.py").write_text(
         "from telegram.ext import Application\n"
         "application = Application.builder().token('t').build()\n"
