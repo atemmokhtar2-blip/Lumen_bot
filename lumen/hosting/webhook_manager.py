@@ -125,7 +125,8 @@ def apply_to_instance(
             url = pub + (path if path.startswith("/") else "/" + path)
     inst.webhook_public_url = url
     diag = dict(getattr(inst, "last_diagnosis", None) or {})
-    secret = ensure_secret(diag)
+    # Prefer secret already issued for serverless env
+    secret = str(diag.get("webhook_secret") or "").strip() or ensure_secret(diag)
     diag["webhook_secret"] = secret
     result: dict[str, Any] = {"url": url, "registered": False}
     if should_register(url) and str(getattr(inst, "status", "") or "") == "running":

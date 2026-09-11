@@ -188,6 +188,16 @@ def _start_serverless(
     if bot_token:
         env.setdefault("BOT_TOKEN", bot_token)
         env.setdefault("TELEGRAM_BOT_TOKEN", bot_token)
+    # Secret token for Telegram webhook header verification inside adapter
+    try:
+        import secrets as _secrets
+        wh_secret = (env.get("TELEGRAM_WEBHOOK_SECRET") or env.get("WEBHOOK_SECRET") or "").strip()
+        if not wh_secret:
+            wh_secret = _secrets.token_urlsafe(24)
+            env["TELEGRAM_WEBHOOK_SECRET"] = wh_secret
+            env["WEBHOOK_SECRET"] = wh_secret
+    except Exception:
+        pass
 
     svc = (service_name or f"lumen-u{int(user_id) or 0}-bot").strip()
     driver = VercelProcessDriver()
@@ -215,6 +225,7 @@ def _start_serverless(
             "webhook_path": webhook_path,
             "webhook_url": (str(st.url).rstrip("/") + webhook_path) if st.url else "",
             "prepare": prepare_meta,
+            "webhook_secret": (env.get("TELEGRAM_WEBHOOK_SECRET") or "")[:64],
         },
     )
     return _ServerlessBackend(), handle
