@@ -111,11 +111,20 @@ def _required() -> bool:
 def _allow_platform_env_fallback() -> bool:
     """Whether production may load secrets from platform-injected os.environ.
 
-    Phase B default: refuse. Prefer Doppler / Vault / AWS SM / GCP SM.
-    Opt-in: SECRETS_ALLOW_PLATFORM_ENV=1 or SECRETS_PLATFORM_ENV_ACK=I_ACCEPT_PLATFORM_ENV_SECRETS.
+    TEMPORARY default: allow Railway/Render/Fly injected env when no managed
+    provider (Doppler/Vault/AWS/GCP) is configured — so deploy is not blocked
+    before a secret manager is wired.
+
+    Re-enable the hard gate (permanent posture) with either:
+      SECRETS_REQUIRE_MANAGED_PROVIDER=1
+      or SECRETS_ALLOW_PLATFORM_ENV=0
+
+    Explicit allow remains available via SECRETS_ALLOW_PLATFORM_ENV=1 or
+    SECRETS_PLATFORM_ENV_ACK=I_ACCEPT_PLATFORM_ENV_SECRETS.
     """
     if _is_dev_environment():
         return True
+    # Hard gate back on — managed provider only
     if _truthy("SECRETS_REQUIRE_MANAGED_PROVIDER"):
         return False
     raw = (os.getenv("SECRETS_ALLOW_PLATFORM_ENV") or "").strip().lower()
@@ -123,15 +132,20 @@ def _allow_platform_env_fallback() -> bool:
         return False
     if raw in {"1", "true", "yes", "on"}:
         return True
-    # Phase B: platform-env fallback only with explicit dual-ACK in production.
-    # Prefer Doppler / Vault / AWS SM / GCP SM (managed providers above).
     if (os.getenv("SECRETS_PLATFORM_ENV_ACK") or "").strip() == "I_ACCEPT_PLATFORM_ENV_SECRETS":
         logger.warning(
             "secrets: platform env fallback enabled via SECRETS_PLATFORM_ENV_ACK "
             "(prefer managed Secret Manager)"
         )
         return True
-    return False
+    # TEMPORARY: default allow platform-injected env in production until a
+    # managed secret store is configured. Not permanent — flip
+    # SECRETS_REQUIRE_MANAGED_PROVIDER=1 when ready.
+    logger.warning(
+        "secrets: TEMPORARY platform_env fallback DEFAULT "
+        "(set SECRETS_REQUIRE_MANAGED_PROVIDER=1 to enforce Doppler/Vault/AWS/GCP)"
+    )
+    return True
 
 
 def load_dotenv_if_dev() -> bool:
