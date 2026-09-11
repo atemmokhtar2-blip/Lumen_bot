@@ -846,21 +846,30 @@ def _tool_host(
                 tenant_id=tenant_id,
                 bot_username=str(params.get("bot_username") or ""),
                 allow_repair=True,
+                params=dict(params or {}),
+                user_data=dict(user_data or {}),
             )
+            data = {
+                "project_path": pipe.project_path or project_path,
+                "path": pipe.project_path or project_path,
+                "instance_id": pipe.instance_id,
+                "deployment_id": pipe.deployment_id,
+                "public_url": pipe.public_url,
+                "webhook_url": pipe.webhook_url,
+                "lifecycle_state": pipe.lifecycle_state,
+                "backend": pipe.backend,
+                **dict(pipe.data or {}),
+            }
+            if pipe.project_path or project_path:
+                data["active_repo"] = {
+                    "path": pipe.project_path or project_path,
+                    "source": "host_start",
+                }
             return ToolResult(
                 ok=bool(pipe.ok),
                 tool=name,
                 message=str(pipe.message or "")[:4000],
-                data={
-                    "project_path": project_path,
-                    "instance_id": pipe.instance_id,
-                    "deployment_id": pipe.deployment_id,
-                    "public_url": pipe.public_url,
-                    "webhook_url": pipe.webhook_url,
-                    "lifecycle_state": pipe.lifecycle_state,
-                    "backend": pipe.backend,
-                    **dict(pipe.data or {}),
-                },
+                data=data,
                 needs_auth=bool((pipe.data or {}).get("needs_bot_token")),
             )
         except Exception as exc:

@@ -679,14 +679,36 @@ def handle_user_turn(
     ok = bool(tr.get("ok", True)) if tr else bool(reply)
 
     updates = {"multi_agent_state_id": state.state_id}
-    # Propagate active_repo if tool data includes path
+    # Propagate session bindings from tool data (clone / pull / host)
     data = tr.get("data") if isinstance(tr, dict) else None
-    if isinstance(data, dict) and data.get("path"):
-        updates["active_repo"] = {
-            "path": data["path"],
-            "url": data.get("url") or "",
-        }
-        updates["last_project_path"] = data["path"]
+    if isinstance(data, dict):
+        ar = data.get("active_repo") if isinstance(data.get("active_repo"), dict) else None
+        path = ""
+        if ar and ar.get("path"):
+            path = str(ar.get("path"))
+            updates["active_repo"] = {
+                "path": path,
+                "url": str(ar.get("url") or data.get("url") or ""),
+                "source": str(ar.get("source") or tool),
+            }
+        elif data.get("path"):
+            path = str(data.get("path"))
+            updates["active_repo"] = {
+                "path": path,
+                "url": str(data.get("url") or ""),
+                "source": str(tool),
+            }
+        if path:
+            updates["last_project_path"] = path
+        if data.get("instance_id"):
+            updates["last_host_instance_id"] = str(data.get("instance_id"))
+            updates["last_host_status"] = {
+                "instance_id": str(data.get("instance_id")),
+                "lifecycle_state": str(data.get("lifecycle_state") or ""),
+                "public_url": str(data.get("public_url") or ""),
+                "backend": str(data.get("backend") or ""),
+                "ok": bool(tr.get("ok")),
+            }
 
     # repo_modify → refine via multi-agent (structural change owned by agents)
     if isinstance(tr, dict) and (tr.get("data") or {}).get("defer_refine"):
