@@ -24,8 +24,7 @@ _WEAK = frozenset({"docker", "gvisor", "dind"})
 _SERVERLESS = frozenset({"lumen_serverless", "serverless"})
 
 
-def _env_name() -> str:
-    return (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+from lumen.platform.envutil import environment_name as _env_name
 
 
 def is_production_path() -> bool:

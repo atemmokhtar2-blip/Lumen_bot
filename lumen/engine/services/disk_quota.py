@@ -13,7 +13,7 @@ def max_user_bytes(user_id: int = 0) -> int:
     # Pro plan entitlement (3 GB) takes priority over env default
     if user_id:
         try:
-            from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+            from lumen.platform.entitlement import resolve_plan_limits
             limits = resolve_plan_limits(int(user_id))
             return max(64, limits.disk_mb) * 1024 * 1024
         except Exception:

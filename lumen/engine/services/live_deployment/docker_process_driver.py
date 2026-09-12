@@ -147,16 +147,7 @@ def _safe_name(value: str, max_len: int = 40) -> str:
     return s.strip("-") or "x"
 
 
-def _find_entry_point(project_path: Path) -> Optional[Path]:
-    for name in ("main.py", "bot.py", "app.py", "run.py"):
-        p = project_path / name
-        if p.is_file():
-            return p
-    for c in project_path.glob("*/main.py"):
-        return c
-    for c in project_path.glob("*/bot.py"):
-        return c
-    return None
+from lumen.engine.services.live_deployment.entry_point import find_entry_point as _find_entry_point
 
 
 def _extract_user_id(project_path: Path) -> str:

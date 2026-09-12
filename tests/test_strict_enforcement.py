@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from lumen.bot.ui.pro_plan_entitlement import (
+from lumen.platform.entitlement import (
     ProEntitlement,
     PlanLimits,
     resolve_pro_entitlement,
@@ -214,7 +214,7 @@ def test_resources_for_non_pro_not_pro_values(monkeypatch):
 
 def test_entitlement_re_evaluated_every_call(monkeypatch):
     """If the store changes between calls, the entitlement must update."""
-    import lumen.bot.ui.pro_plan_entitlement as ent_mod
+    import lumen.platform.entitlement as ent_mod
 
     store = _FakeStore(None)
     monkeypatch.setattr("lumen.bot.session_store.get_session_store", lambda: store)

@@ -100,7 +100,7 @@ def default_resources_for_user(user_id: int) -> ResourceSpec:
     Shared RAM is split fairly across max_bots so the pool is not exceeded.
     """
     try:
-        from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+        from lumen.platform.entitlement import resolve_plan_limits
 
         limits = resolve_plan_limits(int(user_id or 0))
         if limits.is_pro:

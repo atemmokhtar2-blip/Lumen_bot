@@ -503,7 +503,7 @@ class HostingService:
                 # of falling back to a high env default (50) that would let a Pro
                 # user exceed their 3-bot limit.
                 try:
-                    from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                    from lumen.platform.entitlement import resolve_plan_limits
                     max_bots = resolve_plan_limits(int(user_id)).max_bots
                 except Exception:
                     logger.warning("pro plan bot-limit resolve FAILED (fail-closed) uid=%s", user_id, exc_info=True)
@@ -584,7 +584,7 @@ class HostingService:
             # env default).  Instead we block the start so a Pro user can never
             # exceed their plan limit due to an infrastructure hiccup.
             try:
-                from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                from lumen.platform.entitlement import resolve_plan_limits
                 _limits = resolve_plan_limits(int(user_id))
                 if running_n >= _limits.max_bots:
                     return HostResult(

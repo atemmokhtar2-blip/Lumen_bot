@@ -37,8 +37,7 @@ def _requested_backend() -> str:
 from lumen.platform.envutil import env_flag as _flag
 
 
-def _env_name() -> str:
-    return (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
+from lumen.platform.envutil import environment_name as _env_name
 
 
 def _is_dev_environment() -> bool:

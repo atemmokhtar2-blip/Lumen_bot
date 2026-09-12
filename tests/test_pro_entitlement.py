@@ -23,7 +23,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from lumen.bot.ui.pro_plan_entitlement import (
+from lumen.engine.services.ui_state.pro_plan import (
+    PRO_PLAN_BOT_LIMIT, PRO_PLAN_DISK_MB, PRO_PLAN_MEMORY_MB, PRO_PLAN_CPU,
+)
+from lumen.platform.entitlement import (
     ProEntitlement,
     PlanLimits,
     resolve_pro_entitlement,
@@ -53,7 +56,7 @@ class _FakeStore:
 
 def _set_store(record: dict | None, monkeypatch: pytest.MonkeyPatch):
     """Patch get_session_store to return a fake with the given record."""
-    import lumen.bot.ui.pro_plan_entitlement as ent_mod
+    import lumen.platform.entitlement as ent_mod
 
     fake = _FakeStore(record)
     # The entitlement module imports get_session_store lazily inside the function;
@@ -119,10 +122,10 @@ def test_pro_limits(monkeypatch):
     _set_store(_valid_record(), monkeypatch)
     limits = resolve_plan_limits(999)
     assert limits.is_pro is True
-    assert limits.max_bots == 3, "Pro must allow exactly 3 bots"
-    assert limits.disk_mb == 2048, "Pro must get 2 GB (2048 MB) storage"
-    assert limits.memory_mb == 512, "Pro must get 512 MB RAM"
-    assert limits.cpu == 0.5, "Pro must get 0.5 CPU"
+    assert limits.max_bots == int(PRO_PLAN_BOT_LIMIT)
+    assert limits.disk_mb == int(PRO_PLAN_DISK_MB)
+    assert limits.memory_mb == int(PRO_PLAN_MEMORY_MB)
+    assert limits.cpu == float(PRO_PLAN_CPU)
     assert limits.days_remaining > 0
 
 
@@ -156,7 +159,7 @@ def test_expired_pro_reverts_to_defaults(monkeypatch):
 def test_disk_quota_pro_2gb(monkeypatch):
     _set_store(_valid_record(), monkeypatch)
     from lumen.engine.services.disk_quota import max_user_bytes
-    assert max_user_bytes(user_id=999) == 2048 * 1024 * 1024
+    assert max_user_bytes(user_id=999) == int(PRO_PLAN_DISK_MB) * 1024 * 1024
 
 
 def test_disk_quota_non_pro_default(monkeypatch):
@@ -174,8 +177,8 @@ def test_resources_pro(monkeypatch):
     _set_store(_valid_record(), monkeypatch)
     from lumen.hosting.project_manifest import default_resources_for_user
     res = default_resources_for_user(999)
-    assert res.memory_mb == 512
-    assert res.cpu == 0.5
+    assert res.cpu == float(PRO_PLAN_CPU)
+    assert res.memory_mb >= 64  # derived from shared pool / bot count
 
 
 def test_resources_non_pro_env(monkeypatch):

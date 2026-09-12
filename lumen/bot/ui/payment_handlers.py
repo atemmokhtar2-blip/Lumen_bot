@@ -97,7 +97,7 @@ async def handle_successful_payment(update, context) -> None:
     # TTL expiry, bot deletion, and re-entry.  MongoDB is the permanent DB.
     if pro_record:
         try:
-            from lumen.bot.ui.subscription_store import write_subscription
+            from lumen.platform.subscription_store import write_subscription
             ok_write = write_subscription(uid, pro_record)
             if not ok_write:
                 logger.error("subscription_store write returned False uid=%s", uid)

@@ -44,8 +44,7 @@ _WEAK_SECRETS = frozenset(
 )
 
 
-def _truthy(name: str) -> bool:
-    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _truthy
 
 
 def _gate_relaxed() -> bool:

@@ -18,8 +18,7 @@ from typing import Any
 logger = logging.getLogger("lumen.api.edge_waf")
 
 
-def _truthy(name: str, default: str = "0") -> bool:
-    return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _truthy
 
 
 def edge_waf_required() -> bool:

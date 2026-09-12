@@ -145,7 +145,7 @@ async def execute_post_side_effect(
         assert root is not None
         # Permanent host is a Pro entitlement — free users get trial only
         try:
-            from lumen.bot.ui.pro_plan_entitlement import resolve_pro_entitlement
+            from lumen.platform.entitlement import resolve_pro_entitlement
 
             if uid and resolve_pro_entitlement(int(uid)) is None:
                 return (

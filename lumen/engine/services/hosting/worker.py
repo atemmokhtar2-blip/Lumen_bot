@@ -134,7 +134,7 @@ def process_one(queue=None, fleet=None) -> bool:
             # This worker-side check is the authoritative gate: count the user's
             # running bots across the cluster and block if at/over the plan limit.
             try:
-                from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+                from lumen.platform.entitlement import resolve_plan_limits
                 _limits = resolve_plan_limits(int(job.user_id))
                 _running_user = int(q.count_running_for_user(int(job.user_id)))
                 if _running_user >= _limits.max_bots:

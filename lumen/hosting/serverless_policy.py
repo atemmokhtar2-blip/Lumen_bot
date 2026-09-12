@@ -34,7 +34,7 @@ def _pro_serverless_cap() -> int:
 def max_serverless_bots(user_id: int) -> int:
     """Max concurrent lumen_serverless instances for this user."""
     try:
-        from lumen.bot.ui.pro_plan_entitlement import resolve_plan_limits
+        from lumen.platform.entitlement import resolve_plan_limits
 
         limits = resolve_plan_limits(int(user_id or 0))
         if limits.is_pro:

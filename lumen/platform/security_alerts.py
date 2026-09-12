@@ -41,8 +41,7 @@ _RECENT: list[dict[str, Any]] = []  # ring buffer for tests / local ops
 _RECENT_MAX = 200
 
 
-def _truthy(name: str, default: str = "0") -> bool:
-    return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _truthy
 
 
 def should_alert(event_type: str, severity: str) -> bool:

@@ -26,7 +26,7 @@ _MONGO_META_FIELD = "github_connection"
 
 def _get_mongo_collection():
     try:
-        from lumen.bot.ui.subscription_store import _get_mongo_collection as _col
+        from lumen.platform.subscription_store import _get_mongo_collection as _col
 
         return _col()
     except Exception:

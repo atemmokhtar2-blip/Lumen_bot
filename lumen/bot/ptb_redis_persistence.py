@@ -167,7 +167,7 @@ class RedisPersistence(BasePersistence[UD, CD, BD]):
 
         # Re-hydrate paid Pro subscription from MongoDB
         try:
-            from lumen.bot.ui.subscription_store import read_subscription
+            from lumen.platform.subscription_store import read_subscription
             rec = read_subscription(uid)
             if rec and isinstance(rec, dict):
                 logger.info(

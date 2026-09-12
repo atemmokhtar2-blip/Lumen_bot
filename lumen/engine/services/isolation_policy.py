@@ -16,12 +16,7 @@ from dataclasses import dataclass
 from lumen.platform.envutil import env_flag as _flag
 
 
-def environment_name() -> str:
-    return (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").strip().lower()
-
-
-def is_dev_environment() -> bool:
-    return environment_name() in {"dev", "development", "local", "test"}
+from lumen.platform.envutil import environment_name, is_dev_environment
 
 
 def is_multi_tenant() -> bool:
