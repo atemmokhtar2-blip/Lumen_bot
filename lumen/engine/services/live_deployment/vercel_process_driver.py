@@ -86,7 +86,10 @@ class VercelProcessDriver(DeploymentProvider):
         if not project_id and isinstance(proj.mapping.get("project"), dict):
             project_id = str((proj.mapping["project"] or {}).get("id") or "")
 
-        # Encrypted project env for secrets (official type=encrypted)
+        # Encrypted project env for secrets (official type=encrypted).
+        # BOT_TOKEN is mandatory; other keys soft-fail so deploy still proceeds.
+        env_target = project_id or name
+        token_ok = False
         for key, val in env.items():
             if not key or val is None or str(val) == "":
                 continue
@@ -98,20 +101,43 @@ class VercelProcessDriver(DeploymentProvider):
                 or "KEY" in upper
             )
             er = self._client.upsert_env(
-                project_id or name,
+                env_target,
                 key,
                 str(val),
                 encrypted=is_secret,
                 targets=["production", "preview"],
             )
+            if er.ok and upper in {"BOT_TOKEN", "TELEGRAM_BOT_TOKEN"}:
+                token_ok = True
             if not er.ok and upper in {"BOT_TOKEN", "TELEGRAM_BOT_TOKEN"}:
-                logger.warning("bot token env failed")
-                return DeploymentStatus(
-                    provider=self.name,
-                    project_id=project_id,
-                    status=DEPLOY_FAILED,
-                    message=_user_msg("env_failed"),
+                logger.warning(
+                    "bot token env failed status=%s err=%s — retry once",
+                    er.status,
+                    (er.error or "")[:120],
                 )
+                er2 = self._client.upsert_env(
+                    env_target,
+                    key,
+                    str(val),
+                    encrypted=True,
+                    targets=["production", "preview"],
+                )
+                if er2.ok:
+                    token_ok = True
+                else:
+                    logger.warning("bot token env failed after retry: %s", (er2.error or "")[:160])
+        # Require at least one of BOT_TOKEN / TELEGRAM_BOT_TOKEN when provided
+        need_token = any(
+            (k or "").upper() in {"BOT_TOKEN", "TELEGRAM_BOT_TOKEN"} and v
+            for k, v in env.items()
+        )
+        if need_token and not token_ok:
+            return DeploymentStatus(
+                provider=self.name,
+                project_id=project_id,
+                status=DEPLOY_FAILED,
+                message=_user_msg("env_failed"),
+            )
 
         dep = self._client.create_deployment_from_files(
             project_name=name,

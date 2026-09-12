@@ -261,6 +261,15 @@ class PlatformHostClient:
             return existing
         return created
 
+    def list_env(self, project_id_or_name: str) -> ApiResult:
+        pid = urllib.parse.quote(str(project_id_or_name), safe="")
+        return self.request_json("GET", f"/v9/projects/{pid}/env")
+
+    def delete_env(self, project_id_or_name: str, env_id: str) -> ApiResult:
+        pid = urllib.parse.quote(str(project_id_or_name), safe="")
+        eid = urllib.parse.quote(str(env_id), safe="")
+        return self.request_json("DELETE", f"/v9/projects/{pid}/env/{eid}")
+
     def upsert_env(
         self,
         project_id_or_name: str,
@@ -270,21 +279,60 @@ class PlatformHostClient:
         targets: list[str] | None = None,
         encrypted: bool = True,
     ) -> ApiResult:
+        """Create or replace a project env var (official Vercel REST).
+
+        Vercel often returns 400 when the key already exists even with upsert=True
+        for some account/API versions. On conflict: list → delete matching keys → POST.
+        """
         if not key:
             return ApiResult(ok=False, error="env_key_missing")
+        tgt = targets or ["production", "preview"]
         body = {
             "key": str(key),
             "value": str(value),
             "type": "encrypted" if encrypted else "plain",
-            "target": targets or ["production", "preview"],
+            "target": tgt,
             "upsert": True,
         }
-        pid = urllib.parse.quote(str(project_id_or_name), safe="")
+        pid_raw = str(project_id_or_name)
+        pid = urllib.parse.quote(pid_raw, safe="")
         # Primary: v10 upsert-style
         r = self.request_json("POST", f"/v10/projects/{pid}/env", body=body)
         if r.ok:
             return r
-        # Fallback without upsert flag (older)
+        err = (r.error or "").lower()
+        conflict = r.status in {400, 403, 409} or "already" in err or "exists" in err
+        if conflict:
+            listed = self.list_env(pid_raw)
+            rows: list = []
+            if listed.ok:
+                if isinstance(listed.data, list):
+                    rows = listed.data
+                elif isinstance(listed.data, dict):
+                    rows = list(listed.data.get("envs") or listed.data.get("env") or [])
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("key") or "") != str(key):
+                    continue
+                eid = str(row.get("id") or "").strip()
+                if eid:
+                    self.delete_env(pid_raw, eid)
+            # Retry create after delete
+            body_retry = {
+                "key": str(key),
+                "value": str(value),
+                "type": "encrypted" if encrypted else "plain",
+                "target": tgt,
+            }
+            r2 = self.request_json("POST", f"/v10/projects/{pid}/env", body=body_retry)
+            if r2.ok:
+                return r2
+            r3 = self.request_json("POST", f"/v9/projects/{pid}/env", body=body_retry)
+            if r3.ok:
+                return r3
+            return r2 if r2.status else r3
+        # Fallback without upsert flag
         body2 = {k: v for k, v in body.items() if k != "upsert"}
         return self.request_json("POST", f"/v10/projects/{pid}/env", body=body2)
 
