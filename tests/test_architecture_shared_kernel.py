@@ -244,3 +244,28 @@ def test_symbol_id_shared():
             if isinstance(node, ast.FunctionDef) and node.name == "_sid":
                 body = ast.get_source_segment(src, node) or ""
                 assert "sha1" not in body, f"local _sid in {rel}"
+
+
+def test_entry_resolve_delegates():
+    for rel in (
+        "engine/services/hosting/prepare_runtime.py",
+        "bot/ui/project_resolve.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "resolve_entry_point":
+                body = ast.get_source_segment(src, node) or ""
+                assert "resolve_entry_rel" in body, f"{rel} must use resolve_entry_rel"
+                assert "rglob" not in body, f"{rel} must not reimplement discovery"
+
+
+def test_clip_text_shared():
+    for rel in (
+        "engine/services/presentation/table_policy.py",
+        "bot/ui/repo_sections.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        assert "clip_text" in src or "textutil" in src

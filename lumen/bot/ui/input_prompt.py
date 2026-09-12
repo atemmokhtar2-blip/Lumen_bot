@@ -53,10 +53,8 @@ _PROMPTS: dict[str, tuple[str, str]] = {
 
 
 def _clip_placeholder(text: str, limit: int = 64) -> str:
-    s = (text or "").strip()
-    if len(s) <= limit:
-        return s
-    return s[: limit - 1] + "…"
+    from lumen.platform.textutil import clip_text
+    return clip_text(text, limit)
 
 
 def force_reply_markup(placeholder: str, *, selective: bool = False) -> Any:

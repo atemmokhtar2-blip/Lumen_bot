@@ -25,10 +25,8 @@ _MAX_RICH = 12000
 
 
 def _clip(text: str, limit: int = _MAX_SECTION) -> str:
-    s = (text or "").strip()
-    if len(s) <= limit:
-        return s
-    return s[: limit - 20] + "\n…(مختصر)"
+    from lumen.platform.textutil import clip_text
+    return clip_text(text, limit, ellipsis="\n…(مختصر)")
 
 
 def _esc(text: object) -> str:

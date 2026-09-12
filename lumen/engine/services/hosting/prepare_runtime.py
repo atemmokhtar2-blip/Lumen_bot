@@ -35,42 +35,9 @@ from lumen.engine.services.runtime_files import find_requirements as _find_requi
 
 
 def resolve_entry_point(root: Path, hint: str = "") -> str:
-    """Return path relative to root, or absolute under root."""
-    root = root.resolve()
-    hint = (hint or "").strip().replace("\\", "/")
-    if hint:
-        p = Path(hint)
-        if not p.is_absolute():
-            p = root / hint
-        try:
-            p = p.resolve()
-            p.relative_to(root)
-        except Exception:
-            pass
-        else:
-            if p.is_file() and p.suffix == ".py":
-                return str(p.relative_to(root)).replace("\\", "/")
-    for rel in ("main.py", "bot.py", "app.py", "run.py", "src/main.py"):
-        p = root / rel
-        if p.is_file():
-            return rel
-    for p in sorted(root.glob("*.py")):
-        try:
-            text = p.read_text(encoding="utf-8", errors="ignore")[:12000]
-        except Exception:
-            continue
-        if any(
-            x in text
-            for x in (
-                "run_polling",
-                "start_polling",
-                "Application.builder",
-                "telebot",
-                "aiogram",
-            )
-        ):
-            return p.name
-    return ""
+    """Return path relative to root."""
+    from lumen.engine.services.live_deployment.entry_point import resolve_entry_rel
+    return resolve_entry_rel(root, preferred=hint, scan_polling=True)
 
 
 def _install_requirements_target(root: Path, req: Path) -> tuple[bool, str]:

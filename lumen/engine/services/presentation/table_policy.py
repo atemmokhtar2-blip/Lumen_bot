@@ -58,8 +58,8 @@ class TableSpec:
 
 
 def _clip(s: object, n: int = 40) -> str:
-    t = str(s if s is not None else "").replace("\n", " ").strip()
-    return t if len(t) <= n else t[: n - 1] + "…"
+    from lumen.platform.textutil import clip_text
+    return clip_text(s, n, flatten_newlines=True)
 
 
 def should_use_table(*, columns: int, rows: int, kind: str = "") -> bool:
