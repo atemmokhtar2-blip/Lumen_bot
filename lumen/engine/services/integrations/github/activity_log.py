@@ -28,28 +28,7 @@ _local: dict[int, list[dict[str, Any]]] = {}
 _SECURITY_MIRROR = frozenset({"connected", "disconnected", "push", "pull_request"})
 
 
-def _redis():
-    try:
-        from lumen.platform.runtime_config import redis_url as _ru
-
-        url = (_ru() or "").strip()
-    except Exception:
-        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
-    if not url:
-        return None
-    try:
-        import redis
-
-        r = connect_redis_url(
-            url,
-            decode_responses=True,
-            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
-            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "3"),
-        )
-        r.ping()
-        return r
-    except Exception:
-        return None
+from lumen.engine.services.integrations.github.util import github_redis as _redis
 
 
 def _scrub_detail(detail: dict[str, Any] | None) -> dict[str, Any]:

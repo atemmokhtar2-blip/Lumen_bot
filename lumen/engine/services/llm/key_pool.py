@@ -34,8 +34,7 @@ _REDIS_INIT_TRIED = False
 _BOOT_KEYS: dict[str, list[tuple[str, str]]] | None = None
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import truthy_value as _truthy
 
 
 def _redis():

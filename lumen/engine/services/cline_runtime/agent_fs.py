@@ -22,8 +22,7 @@ _MAX_READ = 120_000
 _MAX_TREE_ENTRIES = 200
 
 
-def _root(work_dir: str | Path) -> Path:
-    return Path(work_dir).resolve()
+from lumen.engine.services.cline_runtime.paths import workspace_root as _root
 
 
 def list_dir(work_dir: str, path: str = ".") -> dict[str, Any]:

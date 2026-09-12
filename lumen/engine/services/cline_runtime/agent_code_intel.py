@@ -14,8 +14,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _root(work_dir: str | Path) -> Path:
-    return Path(work_dir).resolve()
+from lumen.engine.services.cline_runtime.paths import workspace_root as _root
 
 
 def _graph(work_dir: str | Path, *, rebuild: bool = False) -> dict[str, Any]:

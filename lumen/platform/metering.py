@@ -263,9 +263,7 @@ class MongoMeteringService:
         return get_rate_limiter().allow(f"api:{tenant_id}", limit=limit, window_sec=60.0)
 
 
-def _is_dev_env() -> bool:
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    return env in {"dev", "development", "local", "test"}
+from lumen.platform.envutil import is_dev_environment as _is_dev_env
 
 
 

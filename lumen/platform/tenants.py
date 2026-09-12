@@ -16,8 +16,7 @@ from typing import Any
 from .filelock import atomic_write_text, exclusive_lock
 
 
-def _new_api_key(prefix: str = "sk_live") -> str:
-    return f"{prefix}_{secrets.token_urlsafe(32)}"
+from lumen.platform.api_keys import new_api_key as _new_api_key
 
 
 def _production_signals_present() -> bool:

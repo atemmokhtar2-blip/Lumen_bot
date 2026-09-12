@@ -21,7 +21,25 @@ _flag = env_flag
 _truthy = lambda name: env_flag(name, "0")  # noqa: E731
 
 
+def production_signals_present() -> bool:
+    """True when common cloud/deploy markers are set (overrides ENVIRONMENT=dev)."""
+    markers = (
+        "KUBERNETES_SERVICE_HOST",
+        "K_SERVICE",
+        "AWS_EXECUTION_ENV",
+        "AWS_REGION",
+        "RAILWAY_ENVIRONMENT",
+        "RENDER",
+        "FLY_APP_NAME",
+        "DYNO",
+    )
+    return any((os.environ.get(m) or "").strip() for m in markers)
+
+
 def is_dev_environment() -> bool:
+    """True only for explicit local/dev/test — never when deploy signals present."""
+    if production_signals_present():
+        return False
     return environment_name() in {"dev", "development", "local", "test"}
 
 
@@ -32,6 +50,11 @@ def is_production() -> bool:
 
 def is_production_runtime() -> bool:
     return is_production()
+
+
+def truthy_value(value: str | None) -> bool:
+    """Parse an already-read string as boolean (not an env lookup)."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 __all__ = [

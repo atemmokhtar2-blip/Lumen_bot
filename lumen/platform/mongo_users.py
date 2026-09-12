@@ -98,8 +98,7 @@ def normalize_plan_id(plan_id: str | None) -> str:
         return aliases.get(key, "free")
 
 
-def _new_api_key(prefix: str = "sk_live") -> str:
-    return f"{prefix}_{secrets.token_urlsafe(32)}"
+from lumen.platform.api_keys import new_api_key as _new_api_key
 
 
 def _hash_key(raw: str) -> str:

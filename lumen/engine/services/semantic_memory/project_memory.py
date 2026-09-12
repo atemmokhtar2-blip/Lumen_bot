@@ -39,8 +39,7 @@ def _default_db_path() -> Path:
     return root / "project_memory.sqlite3"
 
 
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+from lumen.engine.services.timeutil import utc_now_iso as _now
 
 
 @dataclass

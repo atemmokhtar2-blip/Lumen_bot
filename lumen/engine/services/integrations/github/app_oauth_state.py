@@ -21,6 +21,7 @@ import threading
 import time
 from typing import Any
 from lumen.platform.redis_client import connect_redis_url
+from lumen.engine.services.integrations.github.util import github_redis as _redis
 
 logger = logging.getLogger("lumen.github.app_oauth_state")
 
@@ -34,13 +35,7 @@ _lock = threading.Lock()
 _local_nonces: dict[str, float] = {}  # nonce -> exp
 
 
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _b64url_decode(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
+from lumen.engine.services.integrations.github.util import b64url as _b64url, b64url_decode as _b64url_decode
 
 
 def _hmac_key() -> bytes:
@@ -67,28 +62,6 @@ def _hmac_key() -> bytes:
     return hashlib.sha256(b"lumen-ghapp-state-v1|" + raw.encode("utf-8")).digest()
 
 
-def _redis():
-    try:
-        from lumen.platform.runtime_config import redis_url as _ru
-
-        url = (_ru() or "").strip()
-    except Exception:
-        url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
-    if not url:
-        return None
-    try:
-        import redis
-
-        r = connect_redis_url(
-            url,
-            decode_responses=True,
-            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "2"),
-            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "3"),
-        )
-        r.ping()
-        return r
-    except Exception:
-        return None
 
 
 def _reserve_nonce(nonce: str, exp: int) -> None:

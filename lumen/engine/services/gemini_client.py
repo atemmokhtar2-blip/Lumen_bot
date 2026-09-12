@@ -188,8 +188,7 @@ _ARCHITECT_SCHEMA: dict[str, Any] = {
 }
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import truthy_value as _truthy
 
 
 def model_name() -> str:

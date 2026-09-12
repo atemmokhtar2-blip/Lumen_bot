@@ -70,8 +70,7 @@ def _load_private_key_pem() -> bytes:
     raise RuntimeError("GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH required")
 
 
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+from lumen.engine.services.integrations.github.util import b64url as _b64url
 
 
 def build_app_jwt(*, now: int | None = None) -> str:

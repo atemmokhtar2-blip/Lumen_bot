@@ -131,3 +131,33 @@ def test_entry_point_single_module():
                 if "main.py" in body and "bot.py" in body:
                     offenders.append(name)
     assert not offenders, f"duplicate entry-point discovery: {offenders}"
+
+
+def test_no_duplicate_github_redis_helper():
+    """activity_log and app_oauth_state must use github.util.github_redis."""
+    for rel in (
+        "engine/services/integrations/github/activity_log.py",
+        "engine/services/integrations/github/app_oauth_state.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        assert tree is not None
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "_redis":
+                body = ast.get_source_segment(src, node) or ""
+                assert "connect_redis_url" not in body, f"local _redis body in {rel}"
+
+
+def test_pg_dsn_single_source():
+    for rel in (
+        "engine/services/hosting/pg_state_store.py",
+        "engine/services/hosting/pg_deploy_queue.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "_dsn":
+                body = ast.get_source_segment(src, node) or ""
+                assert "DATABASE_URL" not in body, f"local _dsn in {rel}"

@@ -51,9 +51,7 @@ def set_rls_bypass(conn, enabled: bool = True) -> None:
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
-def _hash_entry(prev: str, payload: dict) -> str:
-    raw = prev + json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode()).hexdigest()
+from lumen.platform.credits.hashing import hash_entry as _hash_entry
 
 
 class PostgresCreditsStore:

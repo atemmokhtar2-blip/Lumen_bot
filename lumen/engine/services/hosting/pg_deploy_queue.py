@@ -38,8 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_tbe_jobs_user ON tbe_deploy_jobs(user_id);
 """
 
 
-def _dsn() -> str:
-    return (os.getenv("TBE_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+from lumen.engine.services.hosting.pg_dsn import database_url as _dsn
 
 
 def available() -> bool:

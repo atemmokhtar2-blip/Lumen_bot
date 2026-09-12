@@ -44,8 +44,7 @@ CREATE INDEX IF NOT EXISTS idx_tbe_host_status ON tbe_host_instances(status);
 """
 
 
-def _dsn() -> str:
-    return (os.getenv("TBE_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+from lumen.engine.services.hosting.pg_dsn import database_url as _dsn
 
 
 def is_postgres_url(url: str | None = None) -> bool:
