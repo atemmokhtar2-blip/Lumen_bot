@@ -257,16 +257,35 @@ class HostingService:
                 message=f"سياسة العزل الصارمة: {type(_st).__name__}: {_st}",
             )
 
-        # Cost guard: no hosting when balance lifecycle suspends the tenant
+        # Cost guard: only explicit suspension blocks hosting.
+        # Free-tier seats (max_bots) are enforced later; try welcome grant first
+        # so metering has a wallet when available.
         try:
-            from lumen.platform.credits.guards import GenerationBlockedError, assert_hosting_allowed
+            from lumen.platform.credits.guards import (
+                GenerationBlockedError,
+                assert_hosting_allowed,
+                resolve_tenant_id,
+            )
+            try:
+                _tid_w = resolve_tenant_id(user_id=int(user_id or 0))
+                if _tid_w:
+                    from lumen.platform.credits.onboarding import grant_welcome_credits
+
+                    grant_welcome_credits(str(_tid_w))
+            except Exception:
+                pass
             assert_hosting_allowed(user_id=int(user_id or 0))
         except Exception as _hg:
             if type(_hg).__name__ == "GenerationBlockedError" or "generation_blocked" in str(_hg) or "hosting" in str(_hg).lower():
-                return HostResult(
-                    ok=False,
-                    message="رصيدك غير كافٍ أو الحساب موقوف للاستضافة. اشحن رصيدك ثم أعد المحاولة.",
-                )
+                reason = str(_hg)[:120]
+                if "suspended" in reason.lower():
+                    msg = "الحساب موقوف للاستضافة. تواصل مع الدعم أو اشحن الرصيد."
+                else:
+                    msg = (
+                        "تعذر التحقق من صلاحية الاستضافة حالياً. "
+                        "أعد المحاولة أو اشحن الرصيد إن لزم."
+                    )
+                return HostResult(ok=False, message=msg)
             raise
 
         # Containment: must live under THIS user's sandbox (IDOR root fix).

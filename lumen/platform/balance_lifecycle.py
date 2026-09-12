@@ -504,6 +504,12 @@ class BalanceLifecycle:
         return LifecycleAction(True, "unsuspended", state=state)
 
     def is_hosting_allowed(self, tenant_id: str) -> tuple[bool, str]:
+        """Hosting gate — product free tier.
+
+        Free permanent templates (up to plan max_bots, typically 3) must work
+        without a paid balance. Only explicit suspension blocks hosting.
+        Generation still requires available credits via is_generation_allowed.
+        """
         tid = str(tenant_id or "").strip()
         if not tid:
             return False, "no_tenant"
@@ -513,12 +519,15 @@ class BalanceLifecycle:
         try:
             w = self._credits.get_wallet(tid)
         except Exception:
-            return False, "wallet_unavailable"
-        if int(getattr(w, "available", 0) or 0) <= 0:
-            if state.grace_until > time.time():
-                return True, "in_grace"
-            return False, "insufficient_balance"
-        return True, "ok"
+            # Wallet missing: still allow free-tier host seats (bot-count limited)
+            return True, "wallet_soft_allow"
+        available = int(getattr(w, "available", 0) or 0)
+        if available > 0:
+            return True, "ok"
+        if state.grace_until > time.time():
+            return True, "in_grace"
+        # Zero balance: allow free-tier hosting (HostService enforces max_bots)
+        return True, "free_tier_host"
 
     def is_generation_allowed(self, tenant_id: str) -> tuple[bool, str]:
         """Fail-closed gate for starting a new generation.
