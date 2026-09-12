@@ -63,11 +63,14 @@ class JsonTemplateCatalog:
         return self._load()
 
     def get(self, template_id: str) -> TemplateSpec | None:
+        """Resolve by full id or short_id (Telegram callback arg)."""
         tid = (template_id or "").strip()
         if not tid:
             return None
         for s in self._load():
-            if s.id == tid and s.enabled:
+            if not s.enabled:
+                continue
+            if s.id == tid or s.short_id == tid:
                 return s
         return None
 

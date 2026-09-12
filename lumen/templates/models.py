@@ -56,6 +56,7 @@ class TemplateSpec:
     description: str
     tags: tuple[str, ...] = ()
     asset_key: str = ""
+    short_id: str = ""  # ≤6 chars for Telegram signed callback arg
     enabled: bool = True
     version: int = 1
 
@@ -69,6 +70,10 @@ class TemplateSpec:
         tags = tuple(str(t).strip() for t in (self.tags or ()) if str(t).strip())
         object.__setattr__(self, "tags", tags)
         object.__setattr__(self, "asset_key", (self.asset_key or self.id).strip())
+        sid = (self.short_id or "").strip().lower() or self.id[:6]
+        # Telegram signed arg hard-cap is 12; keep short_id ≤ 6
+        sid = re.sub(r"[^a-z0-9]", "", sid)[:6] or self.id[:6]
+        object.__setattr__(self, "short_id", sid)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +82,7 @@ class TemplateSpec:
             "description": self.description,
             "tags": list(self.tags),
             "asset_key": self.asset_key,
+            "short_id": self.short_id,
             "enabled": self.enabled,
             "version": int(self.version),
         }
@@ -94,6 +100,7 @@ class TemplateSpec:
             description=str(raw.get("description") or ""),
             tags=tuple(str(t) for t in tags_raw),
             asset_key=str(raw.get("asset_key") or ""),
+            short_id=str(raw.get("short_id") or ""),
             enabled=bool(raw.get("enabled", True)),
             version=int(raw.get("version") or 1),
         )

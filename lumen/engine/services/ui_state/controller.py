@@ -95,14 +95,15 @@ def _template_gallery_buttons() -> tuple[tuple[UiButton, ...], ...]:
         specs = []
     rows: list[tuple[UiButton, ...]] = []
     for spec in specs[:12]:
-        rows.append((UiButton(spec.title[:40], "tpl_select", spec.id, style="primary"),))
+        rows.append((UiButton(spec.title[:40], "tpl_select", spec.short_id or spec.id, style="primary"),))
     if not rows:
         rows.append((UiButton("لا توجد قوالب", "open_templates"),))
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATES)
 
 
 def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ...]:
-    tid = (template_id or "").strip()[:40]
+    # Always use short_id in callback arg (Telegram signed arg ≤12)
+    tid = _template_arg_code(template_id)
     return _with_nav(
         (
             (
@@ -115,8 +116,23 @@ def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ..
     )
 
 
+def _template_arg_code(template_id: str) -> str:
+    """Map full or short id → short code safe for signed callbacks."""
+    raw = (template_id or "").strip()
+    if not raw:
+        return ""
+    try:
+        from lumen.templates.service import TemplateService
+        spec = TemplateService().get_catalog_item(raw)
+        if spec is not None:
+            return (spec.short_id or spec.id)[:6]
+    except Exception:
+        pass
+    return raw[:6]
+
+
 def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ...]:
-    tid = (template_id or "").strip()[:40]
+    tid = _template_arg_code(template_id)
     # Product: max 50 minutes; offer common buckets
     choices = (5, 15, 30, 50)
     rows: list[tuple[UiButton, ...]] = []
@@ -128,7 +144,7 @@ def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], .
             row = []
     if row:
         rows.append(tuple(row))
-    rows.append((UiButton("رجوع", "tpl_select", tid),))
+    rows.append((UiButton("رجوع", "tpl_select", tid),))  # tid is short code
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_TRIAL_MINUTES)
 
 
@@ -268,10 +284,10 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     if phase == EngineUiPhase.TEMPLATES:
         return _template_gallery_buttons()
     if phase == EngineUiPhase.TEMPLATE_DETAIL:
-        tid = (state.slots.get("template_id") or "").strip()
+        tid = (state.slots.get("template_short") or state.slots.get("template_id") or "").strip()
         return _template_detail_buttons(tid)
     if phase == EngineUiPhase.TEMPLATE_TRIAL_MINUTES:
-        tid = (state.slots.get("template_id") or "").strip()
+        tid = (state.slots.get("template_short") or state.slots.get("template_id") or "").strip()
         return _template_minutes_buttons(tid)
     if phase == EngineUiPhase.CONTEXT:
 
@@ -641,32 +657,57 @@ def apply_action(
             )
         new.phase = EngineUiPhase.TEMPLATE_DETAIL
         new.slots["template_id"] = spec.id
+        new.slots["template_short"] = spec.short_id
         new.slots["template_title"] = spec.title
         new.slots["template_description"] = (spec.description or "")[:500]
         new.missing = []
         msg = spec.title
     elif action_id == "tpl_trial":
-        tid = (arg or new.slots.get("template_id") or "").strip()
-        new.slots["template_id"] = tid
+        code = (arg or new.slots.get("template_short") or new.slots.get("template_id") or "").strip()
+        try:
+            from lumen.templates.service import TemplateService
+            spec = TemplateService().get_catalog_item(code)
+        except Exception:
+            spec = None
+        if spec is None:
+            return ApplyResult(state=state, ok=False, message_ar="القالب غير موجود.", buttons=buttons_for_state(state))
+        new.slots["template_id"] = spec.id
+        new.slots["template_short"] = spec.short_id
         new.phase = EngineUiPhase.TEMPLATE_TRIAL_MINUTES
         new.missing = []
         msg = "اختر مدة التجربة (حتى 50 دقيقة)."
     elif action_id == "tpl_minutes":
         parts = (arg or "").split(":", 1)
-        tid = (parts[0] if parts else new.slots.get("template_id") or "").strip()
+        code = (parts[0] if parts else new.slots.get("template_short") or new.slots.get("template_id") or "").strip()
         try:
             mins = int(parts[1]) if len(parts) > 1 else 0
         except ValueError:
             mins = 0
-        new.slots["template_id"] = tid
+        try:
+            from lumen.templates.service import TemplateService
+            spec = TemplateService().get_catalog_item(code)
+        except Exception:
+            spec = None
+        if spec is None:
+            return ApplyResult(state=state, ok=False, message_ar="القالب غير موجود.", buttons=buttons_for_state(state))
+        new.slots["template_id"] = spec.id
+        new.slots["template_short"] = spec.short_id
         new.slots["trial_minutes"] = str(mins)
         new.phase = EngineUiPhase.TEMPLATE_DETAIL
         new.missing = []
         msg = f"تجربة مؤقتة — {mins} دقيقة (قيد التجهيز)."
         post_fx = "tpl_reserve_trial"
     elif action_id == "tpl_permanent":
-        tid = (arg or new.slots.get("template_id") or "").strip()
-        new.slots["template_id"] = tid
+        code = (arg or new.slots.get("template_short") or new.slots.get("template_id") or "").strip()
+        try:
+            from lumen.templates.service import TemplateService
+            spec = TemplateService().get_catalog_item(code)
+        except Exception:
+            spec = None
+        if spec is None:
+            return ApplyResult(state=state, ok=False, message_ar="القالب غير موجود.", buttons=buttons_for_state(state))
+        new.slots["template_id"] = spec.id
+        new.slots["template_short"] = spec.short_id
         new.phase = EngineUiPhase.TEMPLATE_DETAIL
         new.missing = []
         msg = "استخدام دائم — حتى 30 يومًا (قيد التجهيز)."

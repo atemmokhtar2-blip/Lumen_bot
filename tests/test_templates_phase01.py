@@ -138,19 +138,20 @@ def test_phase2_ui_open_templates_and_reserve_effect():
     r = apply_action(st, "open_templates")
     assert r.ok and r.state.phase == EngineUiPhase.TEMPLATES
 
-    r2 = apply_action(r.state, "tpl_select", "group_moderator")
+    r2 = apply_action(r.state, "tpl_select", "gm")
     assert r2.ok and r2.state.phase == EngineUiPhase.TEMPLATE_DETAIL
     assert r2.state.slots.get("template_id") == "group_moderator"
+    assert r2.state.slots.get("template_short") == "gm"
 
-    r3 = apply_action(r2.state, "tpl_trial", "group_moderator")
+    r3 = apply_action(r2.state, "tpl_trial", "gm")
     assert r3.state.phase == EngineUiPhase.TEMPLATE_TRIAL_MINUTES
 
-    r4 = apply_action(r3.state, "tpl_minutes", "group_moderator:30")
+    r4 = apply_action(r3.state, "tpl_minutes", "gm:30")
     assert r4.ok
     assert r4.post_side_effect == "tpl_reserve_trial"
     assert r4.state.slots.get("trial_minutes") == "30"
 
-    r5 = apply_action(r2.state, "tpl_permanent", "group_moderator")
+    r5 = apply_action(r2.state, "tpl_permanent", "gm")
     assert r5.post_side_effect == "tpl_reserve_permanent"
 
 
@@ -171,3 +172,22 @@ def test_phase2_reserve_side_effect_real_service():
     )
     assert "تجربة" in note or "15" in note
     assert "تعذر تحديد" not in note
+
+
+def test_signed_template_callbacks_roundtrip():
+    import os
+    os.environ.setdefault("ENVIRONMENT", "test")
+    from lumen.bot.ui.signed_callback import encode_signed, decode_signed
+
+    uid = 42
+    for action, arg in (
+        ("open_templates", ""),
+        ("tpl_select", "gm"),
+        ("tpl_trial", "gm"),
+        ("tpl_minutes", "gm:50"),
+        ("tpl_permanent", "fq"),
+    ):
+        wire = encode_signed(action, arg, user_id=uid)
+        assert len(wire.encode("utf-8")) <= 64
+        got = decode_signed(wire, user_id=uid)
+        assert got == (action, arg), got

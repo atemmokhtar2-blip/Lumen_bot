@@ -3,24 +3,36 @@
     "id": "group_moderator",
     "title": "مشرف مجموعات",
     "description": "بوت إدارة مجموعات: ترحيب، قوانين، حظر/كتم بسيط، وردود جاهزة للمشرفين.",
-    "tags": ["telegram", "moderation"],
+    "tags": [
+      "telegram",
+      "moderation"
+    ],
     "asset_key": "group_moderator",
-    "enabled": true
+    "enabled": true,
+    "short_id": "gm"
   },
   {
     "id": "shop_assistant",
     "title": "مساعد متجر",
     "description": "بوت متجر بسيط: قائمة منتجات، استقبال طلبات، وتأكيد للعميل (بدون دفع مدمج).",
-    "tags": ["telegram", "shop"],
+    "tags": [
+      "telegram",
+      "shop"
+    ],
     "asset_key": "shop_assistant",
-    "enabled": true
+    "enabled": true,
+    "short_id": "sa"
   },
   {
     "id": "faq_helper",
     "title": "ردود أسئلة شائعة",
     "description": "بوت FAQ: أسئلة وأجوبة ثابتة، بحث بسيط في القائمة، وتحويل لرسالة دعم.",
-    "tags": ["telegram", "faq"],
+    "tags": [
+      "telegram",
+      "faq"
+    ],
     "asset_key": "faq_helper",
-    "enabled": true
+    "enabled": true,
+    "short_id": "fq"
   }
 ]
