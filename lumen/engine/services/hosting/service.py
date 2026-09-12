@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from lumen.platform.paths import default_output_dir as _cm_default_output_dir
 
-
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass, field
@@ -27,11 +27,7 @@ from .state_lock import atomic_write_text, exclusive_state_lock
 from .state_store import HostingStateStore, get_host_state_store
 from .models import HostInstance, HostResult
 
-
-@dataclass
-
-
-@dataclass
+logger = logging.getLogger("tbe.hosting")
 
 
 class HostingService:
