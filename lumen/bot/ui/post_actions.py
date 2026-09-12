@@ -93,6 +93,7 @@ async def execute_post_side_effect(
             effect=effect,
             user_id=int(uid or 0),
             user_data=ud if isinstance(ud, dict) else {},
+            message=message,
         )
 
     root = resolve_project_path(project_ref, ud)
