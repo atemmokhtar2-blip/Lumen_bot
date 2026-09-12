@@ -58,8 +58,8 @@ def resolve_project_path(
         "path": str(params.get("path") or params.get("project_path") or "").strip(),
     }
     try:
-        from lumen.bot.project_path_resolve import resolve_session_project_path
-        hit = resolve_session_project_path(pending, ud)
+        from lumen.platform.project_paths import resolve_on_disk_path
+        hit = resolve_on_disk_path(ud, pending)
         if hit:
             return hit
     except Exception:

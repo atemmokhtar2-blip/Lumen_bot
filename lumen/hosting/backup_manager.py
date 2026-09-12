@@ -31,9 +31,9 @@ def _backup_root() -> Path:
         p = Path(raw)
     else:
         try:
-            from lumen.bot.config import OUTPUT_DIR
+            from lumen.platform.paths import default_output_dir
 
-            p = Path(OUTPUT_DIR) / "hosting" / "backups"
+            p = Path(default_output_dir()) / "hosting" / "backups"
         except Exception:
             p = Path.home() / ".lumen" / "hosting" / "backups"
     p.mkdir(parents=True, exist_ok=True)

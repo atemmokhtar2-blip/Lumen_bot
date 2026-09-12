@@ -122,37 +122,13 @@ def classify(text: str, *, pending_env_var: str = "") -> ClassifiedMessage:
     return ClassifiedMessage(MessageKind.CHAT, raw, "chat")
 
 
-def resolve_on_disk_path(user_data: dict[str, Any] | None, pending: dict[str, Any] | None = None) -> str:
-    from pathlib import Path
+def resolve_on_disk_path(
+    user_data: dict[str, Any] | None = None,
+    pending: dict[str, Any] | None = None,
+) -> str:
+    from lumen.platform.project_paths import resolve_on_disk_path as _r
+    return _r(user_data, pending)
 
-    ud = dict(user_data or {})
-    pending = dict(pending or {})
-    pre = ud.get("pending_repo_env") if isinstance(ud.get("pending_repo_env"), dict) else {}
-    ph = ud.get("pending_host") if isinstance(ud.get("pending_host"), dict) else {}
-    pr = ud.get("pending_run") if isinstance(ud.get("pending_run"), dict) else {}
-    ar = ud.get("active_repo") if isinstance(ud.get("active_repo"), dict) else {}
-    candidates = [
-        pending.get("project_path"),
-        pending.get("path"),
-        ph.get("project_path"),
-        pr.get("project_path"),
-        pre.get("path"),
-        pre.get("project_path"),
-        ar.get("path"),
-        ud.get("last_project_path"),
-        ud.get("last_clone_path"),
-    ]
-    for c in candidates:
-        p = str(c or "").strip()
-        if not p:
-            continue
-        try:
-            root = Path(p).expanduser().resolve()
-        except Exception:
-            continue
-        if root.is_dir():
-            return str(root)
-    return ""
 
 
 __all__ = [

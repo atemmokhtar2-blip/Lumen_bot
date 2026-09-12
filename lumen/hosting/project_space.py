@@ -13,7 +13,7 @@ Layout under the project root (source stays at root for compatibility):
     .lumen_host.json           # host backend prefs
     .lumen_host_versions.json  # version index
 
-Also registers paths under OUTPUT_DIR/hosting/spaces/{user_id}/{space_id}
+Also registers paths under default_output_dir/hosting/spaces/{user_id}/{space_id}
 when ensure_registered_space() is used (control-plane index).
 """
 from __future__ import annotations
@@ -153,9 +153,9 @@ def spaces_index_root() -> Path:
         p = Path(raw)
     else:
         try:
-            from lumen.bot.config import OUTPUT_DIR
+            from lumen.platform.paths import default_output_dir
 
-            p = Path(OUTPUT_DIR) / "hosting" / "spaces"
+            p = Path(default_output_dir()) / "hosting" / "spaces"
         except Exception:
             p = Path.home() / ".lumen" / "hosting" / "spaces"
     p.mkdir(parents=True, exist_ok=True)

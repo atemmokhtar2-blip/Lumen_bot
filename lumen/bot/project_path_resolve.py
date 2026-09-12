@@ -14,7 +14,7 @@ def resolve_session_project_path(
     user_data: dict[str, Any] | None = None,
 ) -> str:
     try:
-        from lumen.bot.message_classify import resolve_on_disk_path
+        from lumen.platform.project_paths import resolve_on_disk_path
         return resolve_on_disk_path(user_data, pending)
     except Exception:
         pass

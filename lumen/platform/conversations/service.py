@@ -52,7 +52,7 @@ class ConversationService:
     ) -> Message:
         # Defense: never persist Telegram bot tokens in conversation history
         try:
-            from lumen.bot.helpers import looks_like_bot_token
+            from lumen.platform.token_patterns import looks_like_bot_token
             if looks_like_bot_token(content or ""):
                 content = "[redacted_bot_token]"
         except Exception:

@@ -23,9 +23,9 @@ def _local_dir() -> Path:
         p = Path(raw)
     else:
         try:
-            from lumen.bot.config import OUTPUT_DIR
+            from lumen.platform.paths import default_output_dir
 
-            p = Path(OUTPUT_DIR) / "hosting" / "logs"
+            p = Path(default_output_dir()) / "hosting" / "logs"
         except Exception:
             p = Path.home() / ".lumen" / "hosting" / "logs"
     p.mkdir(parents=True, exist_ok=True)
