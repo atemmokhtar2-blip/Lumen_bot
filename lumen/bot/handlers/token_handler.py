@@ -372,14 +372,36 @@ async def try_handle_token(
                 await safe_edit_text(status, "❌ مسار المشروع غير صالح.")
             return True
 
+        # Template free-tier permanent path: re-check 3-slot policy before HostService
+        if str((pending_host or {}).get("source") or "") == "template":
+            try:
+                from lumen.templates.host_adapter import preflight_before_host_start
+
+                _uid_pf = int(message.from_user.id) if message.from_user else 0
+                ok_pf, reason_pf = preflight_before_host_start(_uid_pf, pending_host)
+                if not ok_pf:
+                    await safe_edit_text(
+                        status,
+                        "تعذر بدء استضافة القالب: وصلت لحد 3 قوالب أو انتهت صلاحية الحجز. "
+                        f"({reason_pf})",
+                    )
+                    return True
+            except Exception:
+                logger.exception("template host preflight failed")
+                await safe_edit_text(status, "تعذر التحقق من حصة القوالب قبل الاستضافة.")
+                return True
+
         def _do_host():
             from lumen.engine.services.hosting import get_hosting_service
             svc = get_hosting_service(OUTPUT_DIR)
+            _uid_h = message.from_user.id if message.from_user else 0
+            _tenant = str((pending_host or {}).get("tenant_id") or _uid_h or "")
             return svc.start(
-                user_id=message.from_user.id if message.from_user else 0,
+                user_id=int(_uid_h or 0),
                 project_path=pending_host.get("project_path") or "",
                 bot_token=normalize_bot_token(request),
                 entry_point=str(pending_host.get("entry_point") or ""),
+                tenant_id=_tenant,
             )
 
         # Scrub secret from chat BEFORE long host work (reduces residual exposure)
@@ -461,21 +483,20 @@ async def try_handle_token(
             except Exception:
                 pass
 
-        # Template permanent plane: bind HostResult to reserved template instance
+        # Template permanent plane: bind HostResult via host_adapter
         try:
             tpl_iid = str((pending_host or {}).get("template_instance_id") or "").strip()
             if tpl_iid:
-                from lumen.templates.service import get_template_service
-                from lumen.templates.models import TemplateInstanceStatus
+                from lumen.templates.host_adapter import on_host_result
 
                 _uid = int(message.from_user.id) if message.from_user else 0
-                if getattr(result, "ok", False):
-                    host_id = str(getattr(result, "instance_id", "") or "")[:80]
-                    get_template_service().mark_running(_uid, tpl_iid, host_instance_id=host_id)
-                else:
-                    get_template_service()._patch(  # noqa: SLF001
-                        _uid, tpl_iid, status=TemplateInstanceStatus.FAILED
-                    )
+                host_id = str(getattr(result, "instance_id", "") or "")[:80]
+                on_host_result(
+                    _uid,
+                    template_instance_id=tpl_iid,
+                    ok=bool(getattr(result, "ok", False)),
+                    host_instance_id=host_id,
+                )
         except Exception:
             logger.exception("template permanent instance update after host failed")
         return True

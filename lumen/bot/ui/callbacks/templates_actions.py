@@ -149,69 +149,19 @@ async def execute_template_reserve(
             return body
 
         if effect == "tpl_reserve_permanent":
-            res = svc.reserve(
-                int(user_id),
-                template_id=tid,
-                mode=TemplateLaunchMode.PERMANENT,
-            )
-            if not res.ok or res.instance is None:
-                return _deny_ar(res.reason)
-            inst = res.instance
-            try:
-                from lumen.templates.materialize import materialize_to_sandbox
+            from lumen.templates.host_adapter import prepare_permanent_launch
+            from lumen.bot.ui.project_resolve import bind_active_repo
 
-                root = materialize_to_sandbox(int(user_id), inst.template_id)
-            except Exception:
-                logger.exception("template permanent materialize failed")
-                try:
-                    svc.mark_stopped(int(user_id), inst.instance_id)
-                except Exception:
-                    pass
-                return _deny_ar("materialize_failed")
-
-            from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
-            from lumen.bot.ui.project_resolve import bind_active_repo, resolve_entry_point
-
-            entry = resolve_entry_point(root) or "main.py"
-            try:
-                from lumen.bot.ui.post_actions import _host_backend_hint
-                backend = _host_backend_hint()
-            except Exception:
-                backend = "hosting"
-
-            payload = {
-                "project_path": str(root),
-                "user_id": int(user_id),
-                "entry_point": entry,
-                "plane": RuntimePlane.PERMANENT_HOST.value,
-                "backend_hint": backend,
-                "source": "template",
-                "template_id": inst.template_id,
-                "template_instance_id": inst.instance_id,
-                "expires_at": float(inst.expires_at or 0),
-                "template_ttl_days": 30,
-            }
-            ud["pending_host"] = dict(payload)
+            plan = prepare_permanent_launch(int(user_id), template_id=tid)
+            if not plan.ok or not plan.pending_host:
+                return _deny_ar(plan.reason)
+            ud["pending_host"] = dict(plan.pending_host)
             ud.pop("pending_run", None)
             ud.pop("pending_live_run", None)
             ud.pop("pending_deploy", None)
-            ud["last_template_instance_id"] = inst.instance_id
-            bind_active_repo(ud, root, entry=entry)
-
-            try:
-                meta = dict(inst.meta or {})
-                meta["project_path"] = str(root)
-                meta["expires_at"] = float(inst.expires_at or 0)
-                meta["plane"] = RuntimePlane.PERMANENT_HOST.value
-                svc._patch(  # noqa: SLF001
-                    int(user_id),
-                    inst.instance_id,
-                    status=TemplateInstanceStatus.PREPARING,
-                    meta=meta,
-                )
-            except Exception:
-                logger.debug("template permanent meta patch failed", exc_info=True)
-
+            if plan.instance is not None:
+                ud["last_template_instance_id"] = plan.instance.instance_id
+            bind_active_repo(ud, plan.project_path, entry=plan.entry_point or "main.py")
             try:
                 from lumen.bot.session_store import get_session_store
                 if user_id:
@@ -219,13 +169,12 @@ async def execute_template_reserve(
             except Exception:
                 logger.debug("template permanent session persist failed", exc_info=True)
 
-            label = plane_label_ar(RuntimePlane.PERMANENT_HOST)
             lines = [
-                "تم تجهيز القالب للاستخدام الدائم: " + str(inst.template_id),
-                "• " + label,
-                "• المدة: 30 يومًا ضمن حد 3 قوالب مجانية شغّالة",
-                "• المشروع: `" + str(root) + "`",
-                "• نقطة الدخول: `" + str(entry) + "`",
+                "تم تجهيز القالب للاستخدام الدائم: " + str(tid),
+                "• استضافة دائمة (HostService)",
+                "• المدة: 30 يومًا — حد 3 قوالب مجانية شغّالة",
+                "• المشروع: `" + str(plan.project_path) + "`",
+                "• نقطة الدخول: `" + str(plan.entry_point) + "`",
                 "",
                 "أرسل توكن البوت من @BotFather لبدء الاستضافة.",
             ]

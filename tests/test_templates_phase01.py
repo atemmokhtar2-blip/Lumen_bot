@@ -298,3 +298,43 @@ def test_phase4_permanent_pending_host(tmp_path, monkeypatch):
     assert not ud.get("pending_run")
     from pathlib import Path
     assert Path(ph["project_path"]).joinpath("main.py").is_file()
+
+
+def test_host_adapter_prepare_and_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("LUMEN_OUTPUT_DIR", str(tmp_path / "out"))
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+
+    from lumen.templates.service import reset_template_service_for_tests, get_template_service
+    from lumen.templates.host_adapter import (
+        prepare_permanent_launch,
+        preflight_before_host_start,
+        on_host_result,
+        reconcile_expired,
+    )
+    from lumen.templates.models import TemplateInstanceStatus
+
+    reset_template_service_for_tests()
+    uid = 930001
+    plan = prepare_permanent_launch(uid, template_id="faq_helper")
+    assert plan.ok, plan.reason
+    assert plan.pending_host.get("source") == "template"
+    assert plan.pending_host.get("tenant_id") == str(uid)
+    assert plan.pending_host.get("max_template_slots") == 3
+    ok, reason = preflight_before_host_start(uid, plan.pending_host)
+    assert ok, reason
+    on_host_result(uid, template_instance_id=plan.instance.instance_id, ok=True, host_instance_id="h_test")
+    insts = get_template_service().list_user_instances(uid)
+    match = [i for i in insts if i.instance_id == plan.instance.instance_id][0]
+    assert match.status == TemplateInstanceStatus.RUNNING
+    assert match.host_instance_id == "h_test"
+
+    # Force expire
+    match.expires_at = 1.0
+    get_template_service()._store.save_for_user(uid, insts)  # noqa: SLF001
+    reconcile_expired(uid, now=999.0, stop_hosts=False)
+    insts2 = get_template_service().list_user_instances(uid)
+    assert any(i.status == TemplateInstanceStatus.EXPIRED for i in insts2)
+    ok2, reason2 = preflight_before_host_start(uid, plan.pending_host, now=999.0)
+    assert ok2 is False
+    assert "expired" in reason2 or "missing" in reason2 or "status" in reason2
