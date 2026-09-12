@@ -121,9 +121,6 @@ def evaluate_market_gate() -> GateResult:
     if len(secret) < 32:
         missing.append("TBE_TOKEN_SECRET (32+ حرف)")
 
-    if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
-        missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
-
     pref = _backend_pref()
     # Serverless host track (Lumen-controlled; parallel to Firecracker permanent path)
     hb = _host_backend()
@@ -137,6 +134,9 @@ def evaluate_market_gate() -> GateResult:
         ok_s, miss_s = _serverless_track_ready()
         if not ok_s:
             missing.extend(miss_s)
+        # LocalProcess flag is irrelevant on Vercel serverless — do not block.
+        if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
+            warnings.append("TBE_ALLOW_LOCAL_PROCESS=1 متجاهل على مسار lumen_serverless")
         # Postgres optional for pure serverless control-plane in early track
         db = (os.environ.get("TBE_DATABASE_URL") or os.environ.get("DATABASE_URL") or "").strip().lower()
         if db and not (db.startswith("postgres://") or db.startswith("postgresql://")):
@@ -147,6 +147,10 @@ def evaluate_market_gate() -> GateResult:
             warnings=warnings,
             track="lumen_serverless",
         )
+
+    # Firecracker commercial track only: forbid LocalProcess
+    if _on("TBE_ALLOW_LOCAL_PROCESS", "0"):
+        missing.append("TBE_ALLOW_LOCAL_PROCESS يجب أن يكون 0")
 
     if not _on("TBE_SCALE_MODE", "0"):
         missing.append("TBE_SCALE_MODE=1 (طابور + workers — إلزامي لمسار Firecracker)")
