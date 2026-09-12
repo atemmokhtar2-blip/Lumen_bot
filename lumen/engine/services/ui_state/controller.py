@@ -36,13 +36,14 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
         (
             UiButton("إنشاء بوت", "open_generate", style="success"),
+            UiButton("القوالب", "open_templates", style="success"),
+        ),
+        (
             UiButton("لوحة التحكم", "open_dashboard", style="primary"),
-        ),
-        (
             UiButton("الرصيد", "open_billing", style="primary"),
-            UiButton("الإعدادات", "open_settings", style="primary"),
         ),
         (
+            UiButton("الإعدادات", "open_settings", style="primary"),
             UiButton("المساعدة", "open_help"),
         ),
     )
@@ -82,6 +83,53 @@ def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> Engin
         state.slots["intent_kind"] = plan.intent_kind
     return state
 
+
+
+
+def _template_gallery_buttons() -> tuple[tuple[UiButton, ...], ...]:
+    """One row per catalog template — detail opens via tpl_select."""
+    try:
+        from lumen.templates.service import TemplateService
+        specs = list(TemplateService().list_catalog())
+    except Exception:
+        specs = []
+    rows: list[tuple[UiButton, ...]] = []
+    for spec in specs[:12]:
+        rows.append((UiButton(spec.title[:40], "tpl_select", spec.id, style="primary"),))
+    if not rows:
+        rows.append((UiButton("لا توجد قوالب", "open_templates"),))
+    return _with_nav(tuple(rows), EngineUiPhase.TEMPLATES)
+
+
+def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ...]:
+    tid = (template_id or "").strip()[:40]
+    return _with_nav(
+        (
+            (
+                UiButton("تجربة مؤقتة", "tpl_trial", tid, style="primary"),
+                UiButton("استخدام دائم", "tpl_permanent", tid, style="success"),
+            ),
+            (UiButton("رجوع للقوالب", "open_templates"),),
+        ),
+        EngineUiPhase.TEMPLATE_DETAIL,
+    )
+
+
+def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ...]:
+    tid = (template_id or "").strip()[:40]
+    # Product: max 50 minutes; offer common buckets
+    choices = (5, 15, 30, 50)
+    rows: list[tuple[UiButton, ...]] = []
+    row: list[UiButton] = []
+    for m in choices:
+        row.append(UiButton(f"{m} دقيقة", "tpl_minutes", f"{tid}:{m}", style="primary"))
+        if len(row) == 2:
+            rows.append(tuple(row))
+            row = []
+    if row:
+        rows.append(tuple(row))
+    rows.append((UiButton("رجوع", "tpl_select", tid),))
+    return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_TRIAL_MINUTES)
 
 
 def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
@@ -217,7 +265,16 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav(_connections_buttons(), phase)
     if phase == EngineUiPhase.CONN_GITHUB:
         return _with_nav(_conn_github_buttons(state), phase)
+    if phase == EngineUiPhase.TEMPLATES:
+        return _template_gallery_buttons()
+    if phase == EngineUiPhase.TEMPLATE_DETAIL:
+        tid = (state.slots.get("template_id") or "").strip()
+        return _template_detail_buttons(tid)
+    if phase == EngineUiPhase.TEMPLATE_TRIAL_MINUTES:
+        tid = (state.slots.get("template_id") or "").strip()
+        return _template_minutes_buttons(tid)
     if phase == EngineUiPhase.CONTEXT:
+
         kind = (state.slots or {}).get("ui_event") or ""
         return _with_nav(buttons_for_event(kind), phase)
     return _with_nav((), phase)
@@ -322,7 +379,7 @@ def apply_action(
     state: EngineUiState, action_id: str, arg: str = "", *, user_id: int | None = None
 ) -> ApplyResult:
     action_id = (action_id or "").strip().lower()
-    arg = (arg or "").strip()[:40]
+    arg = (arg or "").strip()[:64]
     if not is_known_action(action_id):
         return ApplyResult(
             state=state,
@@ -561,6 +618,59 @@ def apply_action(
         new.phase = EngineUiPhase.REFERRAL
         new.missing = []
         msg = "برنامج الإحالة — $5."
+    elif action_id == "open_templates":
+        new.phase = EngineUiPhase.TEMPLATES
+        new.slots.pop("template_id", None)
+        new.slots.pop("template_title", None)
+        new.slots.pop("template_description", None)
+        new.missing = []
+        msg = "قوالب جاهزة — اختر بوتًا للعرض."
+    elif action_id == "tpl_select":
+        tid = (arg or "").strip()
+        try:
+            from lumen.templates.service import TemplateService
+            spec = TemplateService().get_catalog_item(tid)
+        except Exception:
+            spec = None
+        if spec is None:
+            return ApplyResult(
+                state=state,
+                ok=False,
+                message_ar="القالب غير موجود.",
+                buttons=buttons_for_state(state),
+            )
+        new.phase = EngineUiPhase.TEMPLATE_DETAIL
+        new.slots["template_id"] = spec.id
+        new.slots["template_title"] = spec.title
+        new.slots["template_description"] = (spec.description or "")[:500]
+        new.missing = []
+        msg = spec.title
+    elif action_id == "tpl_trial":
+        tid = (arg or new.slots.get("template_id") or "").strip()
+        new.slots["template_id"] = tid
+        new.phase = EngineUiPhase.TEMPLATE_TRIAL_MINUTES
+        new.missing = []
+        msg = "اختر مدة التجربة (حتى 50 دقيقة)."
+    elif action_id == "tpl_minutes":
+        parts = (arg or "").split(":", 1)
+        tid = (parts[0] if parts else new.slots.get("template_id") or "").strip()
+        try:
+            mins = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            mins = 0
+        new.slots["template_id"] = tid
+        new.slots["trial_minutes"] = str(mins)
+        new.phase = EngineUiPhase.TEMPLATE_DETAIL
+        new.missing = []
+        msg = f"تجربة مؤقتة — {mins} دقيقة (قيد التجهيز)."
+        post_fx = "tpl_reserve_trial"
+    elif action_id == "tpl_permanent":
+        tid = (arg or new.slots.get("template_id") or "").strip()
+        new.slots["template_id"] = tid
+        new.phase = EngineUiPhase.TEMPLATE_DETAIL
+        new.missing = []
+        msg = "استخدام دائم — حتى 30 يومًا (قيد التجهيز)."
+        post_fx = "tpl_reserve_permanent"
     elif action_id == "open_connections":
         new.phase = EngineUiPhase.CONNECTIONS
         new.missing = []

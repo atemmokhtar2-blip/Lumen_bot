@@ -1,11 +1,12 @@
-"""Store facade — prefer TemplateService; thin helpers for tests."""
+"""Thin test helpers over MemoryTemplateStore + TemplateService."""
 from __future__ import annotations
 
-from lumen.templates.models import TemplateInstance
+import time
+
+from lumen.templates.models import TemplateInstance, TemplateInstanceStatus
 from lumen.templates.service import TemplateService
 from lumen.templates.store_memory import MemoryTemplateStore
 
-# Module-level memory store for unit tests (no Redis)
 _mem = MemoryTemplateStore()
 _svc = TemplateService(store=_mem)
 
@@ -33,27 +34,25 @@ def reserve_instance(
 
 
 def update_instance(user_id: int, instance_id: str, **fields: object) -> TemplateInstance | None:
-    if "status" in fields and fields.get("host_instance_id") is not None:
-        return _svc.mark_running(
-            user_id, instance_id, host_instance_id=str(fields.get("host_instance_id") or "")
-        )
-    if fields.get("status") is not None:
-        from lumen.templates.models import TemplateInstanceStatus
-
-        st = fields["status"]
-        if st == TemplateInstanceStatus.RUNNING or str(st) == "running":
-            return _svc.mark_running(
-                user_id, instance_id, host_instance_id=str(fields.get("host_instance_id") or "")
-            )
-        if st == TemplateInstanceStatus.STOPPED or str(st) == "stopped":
+    status = fields.get("status")
+    host = str(fields.get("host_instance_id") or "")
+    if status is not None:
+        st = status
+        if not isinstance(st, TemplateInstanceStatus):
+            try:
+                st = TemplateInstanceStatus.parse(st)
+            except Exception:
+                st = None
+        if st is TemplateInstanceStatus.RUNNING:
+            return _svc.mark_running(user_id, instance_id, host_instance_id=host)
+        if st is TemplateInstanceStatus.STOPPED:
             return _svc.mark_stopped(user_id, instance_id)
+        if st is TemplateInstanceStatus.EXPIRED:
+            return _svc._patch(user_id, instance_id, status=TemplateInstanceStatus.EXPIRED)  # noqa: SLF001
     return _svc._patch(user_id, instance_id, **fields)  # noqa: SLF001
 
 
 def mark_expired(user_id: int, *, now: float | None = None) -> list[TemplateInstance]:
-    import time
-    from lumen.templates.models import TemplateInstanceStatus
-
     ts = float(now if now is not None else time.time())
     insts = list_instances(user_id)
     changed = False

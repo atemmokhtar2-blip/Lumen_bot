@@ -49,6 +49,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
                 (
                     "ماذا تقدر تعمل؟",
                     "• إنشاء بوت — اكتب وصفاً واحداً\n"
+                    "• القوالب — بوتات جاهزة للتجربة أو الاستخدام\n"
                     "• الرصيد — رصيدك الحالي فقط\n"
                     "• لوحة التحكم — الاستضافة والمشاريع\n"
                     "• المساعدة — شرح سريع للأوامر",
@@ -311,7 +312,47 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             return html_card("تحديث", [("", raw)])
         return raw
 
+    if phase == EngineUiPhase.TEMPLATES:
+        return html_card(
+            "القوالب الجاهزة",
+            [
+                (
+                    "اختر بوتًا",
+                    "كل قالب يوضح وظيفته. بعد الاختيار: تجربة مؤقتة (حتى 50 دقيقة) أو استخدام دائم (30 يومًا).\n"
+                    "الحد المجاني: 3 قوالب شغّالة في نفس الوقت.",
+                ),
+            ],
+            subtitle="قوالب منفصلة عن التوليد الحر",
+        )
+
+    if phase == EngineUiPhase.TEMPLATE_DETAIL:
+        title = escape_html((state.slots.get("template_title") or "قالب").strip() or "قالب")
+        desc = escape_html((state.slots.get("template_description") or "").strip() or "—")
+        return html_card(
+            title,
+            [
+                ("الوصف", desc),
+                (
+                    "التشغيل",
+                    "• تجربة مؤقتة — تختار المدة (حد أقصى 50 دقيقة)\n"
+                    "• استخدام دائم — يبقى حتى شهر ضمن حد الـ 3 بوتات",
+                ),
+            ],
+        )
+
+    if phase == EngineUiPhase.TEMPLATE_TRIAL_MINUTES:
+        return html_card(
+            "مدة التجربة المؤقتة",
+            [
+                (
+                    "اختر الدقائق",
+                    "الحد الأقصى 50 دقيقة. بعد الحجز يُجهَّز التشغيل على مسار الاستضافة.",
+                ),
+            ],
+        )
+
     if phase == EngineUiPhase.HELP:
+
         from lumen.bot.telegram_text import looks_like_telegram_html
 
         hint = (facts.generate_hint or "").strip()

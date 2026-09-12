@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from lumen.templates.catalog import JsonTemplateCatalog
-from lumen.templates.errors import PolicyDenied
 from lumen.templates.models import (
     TemplateInstance,
     TemplateInstanceStatus,
@@ -138,13 +137,16 @@ class TemplateService:
 
 def default_service() -> TemplateService:
     """Production preference: Redis store when reachable, else memory."""
-    store: TemplateStorePort
+    store: TemplateStorePort = MemoryTemplateStore()
     try:
         from lumen.templates.store_redis import RedisTemplateStore
+        from lumen.platform.runtime_config import redis_url
 
-        rs = RedisTemplateStore()
-        rs.list_for_user(0)  # connectivity probe (empty)
-        store = rs
+        if (redis_url() or "").strip():
+            rs = RedisTemplateStore()
+            # real ping via client
+            rs._client()  # noqa: SLF001
+            store = rs
     except Exception:
         store = MemoryTemplateStore()
     return TemplateService(store=store)

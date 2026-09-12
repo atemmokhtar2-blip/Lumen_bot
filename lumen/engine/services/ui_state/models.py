@@ -30,6 +30,9 @@ class EngineUiPhase(str, Enum):
     SETTINGS = "settings"
     REFERRAL = "referral"
     CONNECTIONS = "connections"  # Account connections hub (GitHub, …)
+    TEMPLATES = "templates"  # Ready-made bot template gallery
+    TEMPLATE_DETAIL = "template_detail"  # One template: trial / permanent
+    TEMPLATE_TRIAL_MINUTES = "template_trial_minutes"  # Pick 1–50 minutes
     CONN_GITHUB = "conn_github"  # GitHub repos list / connect
     CONTEXT = "context"  # Batch 6 contextual event surface
 

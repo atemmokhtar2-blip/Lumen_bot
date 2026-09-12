@@ -180,6 +180,39 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
             }
         ),
     ),
+
+    "open_templates": UiActionSpec(
+        "open_templates",
+        "Templates gallery",
+        frozenset({
+            EngineUiPhase.HOME,
+            EngineUiPhase.IDLE,
+            EngineUiPhase.TEMPLATES,
+            EngineUiPhase.TEMPLATE_DETAIL,
+            EngineUiPhase.TEMPLATE_TRIAL_MINUTES,
+            EngineUiPhase.DASHBOARD,
+        }),
+    ),
+    "tpl_select": UiActionSpec(
+        "tpl_select",
+        "Select template",
+        frozenset({EngineUiPhase.TEMPLATES, EngineUiPhase.TEMPLATE_DETAIL}),
+    ),
+    "tpl_trial": UiActionSpec(
+        "tpl_trial",
+        "Template trial",
+        frozenset({EngineUiPhase.TEMPLATE_DETAIL, EngineUiPhase.TEMPLATE_TRIAL_MINUTES}),
+    ),
+    "tpl_minutes": UiActionSpec(
+        "tpl_minutes",
+        "Template trial minutes",
+        frozenset({EngineUiPhase.TEMPLATE_TRIAL_MINUTES, EngineUiPhase.TEMPLATE_DETAIL}),
+    ),
+    "tpl_permanent": UiActionSpec(
+        "tpl_permanent",
+        "Template permanent",
+        frozenset({EngineUiPhase.TEMPLATE_DETAIL}),
+    ),
     "conn_github": UiActionSpec(
         "conn_github",
         "Open GitHub connection / repos",

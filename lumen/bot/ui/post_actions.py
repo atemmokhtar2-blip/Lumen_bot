@@ -87,6 +87,14 @@ async def execute_post_side_effect(
     effect = (effect or "").strip()
     ud = context.user_data if context.user_data is not None else {}
     uid = int(getattr(user, "id", 0) or 0)
+    if effect in {"tpl_reserve_trial", "tpl_reserve_permanent"}:
+        from lumen.bot.ui.callbacks.templates_actions import execute_template_reserve
+        return await execute_template_reserve(
+            effect=effect,
+            user_id=int(uid or 0),
+            user_data=ud if isinstance(ud, dict) else {},
+        )
+
     root = resolve_project_path(project_ref, ud)
     if root is None and effect in {"post_trial", "post_host", "post_zip", "post_preview"}:
         return "لا يوجد مشروع على القرص — ولّد بوت أو اربط مشروعاً نشطاً أولاً."
