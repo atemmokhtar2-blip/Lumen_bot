@@ -27,7 +27,7 @@ from lumen.templates.policy import (
     evaluate_launch,
     clamp_trial_minutes,
 )
-from lumen.templates.service import ReserveResult, TemplateService, default_service
+from lumen.templates.service import ReserveResult, TemplateService, default_service, get_template_service
 from lumen.templates.store import list_instances, reserve_instance
 
 # alias
@@ -50,6 +50,7 @@ __all__ = [
     "TemplateService",
     "ReserveResult",
     "default_service",
+    "get_template_service",
     "list_instances",
     "reserve_instance",
 ]

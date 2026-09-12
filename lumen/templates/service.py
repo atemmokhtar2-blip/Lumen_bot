@@ -135,21 +135,53 @@ class TemplateService:
         return found
 
 
+_svc_lock = __import__("threading").RLock()
+_svc_singleton: TemplateService | None = None
+_mem_store_singleton: MemoryTemplateStore | None = None
+
+
+def _shared_memory_store() -> MemoryTemplateStore:
+    global _mem_store_singleton
+    if _mem_store_singleton is None:
+        _mem_store_singleton = MemoryTemplateStore()
+    return _mem_store_singleton
+
+
 def default_service() -> TemplateService:
-    """Production preference: Redis store when reachable, else memory."""
-    store: TemplateStorePort = MemoryTemplateStore()
+    """Build a service: Redis when reachable, else process-wide memory store."""
     try:
         from lumen.templates.store_redis import RedisTemplateStore
         from lumen.platform.runtime_config import redis_url
 
         if (redis_url() or "").strip():
             rs = RedisTemplateStore()
-            # real ping via client
-            rs._client()  # noqa: SLF001
-            store = rs
+            rs._client()  # noqa: SLF001 — connectivity
+            return TemplateService(store=rs)
     except Exception:
-        store = MemoryTemplateStore()
-    return TemplateService(store=store)
+        pass
+    return TemplateService(store=_shared_memory_store())
 
 
-__all__ = ["ReserveResult", "TemplateService", "default_service", "PolicyDenied"]
+def get_template_service() -> TemplateService:
+    """Process-wide TemplateService so quota is shared across requests/workers-in-process."""
+    global _svc_singleton
+    with _svc_lock:
+        if _svc_singleton is None:
+            _svc_singleton = default_service()
+        return _svc_singleton
+
+
+def reset_template_service_for_tests() -> None:
+    """Test helper — drop singleton (keeps shared memory unless cleared)."""
+    global _svc_singleton
+    with _svc_lock:
+        _svc_singleton = None
+
+
+__all__ = [
+    "ReserveResult",
+    "TemplateService",
+    "default_service",
+    "get_template_service",
+    "reset_template_service_for_tests",
+]

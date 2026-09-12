@@ -122,6 +122,31 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
         except Exception:
             hb_task.cancel()
 
+    # Template plane: mark reserved instance RUNNING when trial actually started
+    try:
+        tid_inst = str((pending or {}).get("template_instance_id") or "").strip()
+        if tid_inst and getattr(report, "ok", False):
+            from lumen.templates.service import get_template_service
+            from lumen.templates.models import TemplateInstanceStatus
+
+            uid = int(message.from_user.id) if message.from_user else 0
+            host_ref = ""
+            if getattr(report, "pid", None):
+                host_ref = f"pid:{int(report.pid)}"
+            elif getattr(report, "bot_username", None):
+                host_ref = f"bot:{report.bot_username}"
+            get_template_service().mark_running(uid, tid_inst, host_instance_id=host_ref)
+        elif tid_inst and not getattr(report, "ok", False):
+            from lumen.templates.service import get_template_service
+            from lumen.templates.models import TemplateInstanceStatus
+
+            uid = int(message.from_user.id) if message.from_user else 0
+            get_template_service()._patch(  # noqa: SLF001
+                uid, tid_inst, status=TemplateInstanceStatus.FAILED
+            )
+    except Exception:
+        logger.exception("template instance status update after live run failed")
+
     context.user_data.pop("pending_run", None)
     text_out = report.to_user_text()
     if len(text_out) > 3500:

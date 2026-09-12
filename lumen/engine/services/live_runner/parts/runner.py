@@ -88,10 +88,12 @@ class LiveRunnerService:
             )
 
         # Cap trial length (chat experience, not hosting)
+        # Product: template trials up to 50 minutes; env can raise/lower.
         try:
-            max_trial = float(os.environ.get("TRIAL_CHAT_MAX_SECONDS") or "300")
+            max_trial = float(os.environ.get("TRIAL_CHAT_MAX_SECONDS") or str(50 * 60))
         except ValueError:
-            max_trial = 300.0
+            max_trial = float(50 * 60)
+        max_trial = max(15.0, min(max_trial, float(50 * 60)))  # hard ceiling 50 min
         seconds = max(15.0, min(float(run_seconds or 60), max_trial))
 
         # Token validation (shared helper) → (ok, data, error)

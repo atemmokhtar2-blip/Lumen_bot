@@ -46,10 +46,10 @@ async def execute_template_reserve(
         return "تعذر تحديد القالب."
 
     try:
-        from lumen.templates.service import TemplateService
+        from lumen.templates.service import get_template_service
         from lumen.templates.models import TemplateLaunchMode, TemplateInstanceStatus
 
-        svc = TemplateService()
+        svc = get_template_service()
         if effect == "tpl_reserve_trial":
             try:
                 mins = int(slots.get("trial_minutes") or 0)

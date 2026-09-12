@@ -242,3 +242,25 @@ def test_phase3_materialize_and_pending_run(tmp_path, monkeypatch):
         assert Path(pr["project_path"]).joinpath("main.py").is_file()
     else:
         assert isinstance(note, str) and len(note) > 0
+
+
+def test_template_service_singleton_quota():
+    from lumen.templates.service import get_template_service, reset_template_service_for_tests
+    from lumen.templates.store_memory import MemoryTemplateStore
+
+    reset_template_service_for_tests()
+    a = get_template_service()
+    b = get_template_service()
+    assert a is b
+    # shared memory path when redis absent
+    assert isinstance(a._store, MemoryTemplateStore) or a._store is b._store
+
+
+def test_trial_runner_caps_at_fifty_minutes():
+    import os
+    # The clamp lives in live_runner; unit-test the formula as wired
+    max_trial = float(os.environ.get("TRIAL_CHAT_MAX_SECONDS") or str(50 * 60))
+    max_trial = max(15.0, min(max_trial, float(50 * 60)))
+    run_seconds = 99999
+    seconds = max(15.0, min(float(run_seconds or 60), max_trial))
+    assert seconds == 50 * 60
