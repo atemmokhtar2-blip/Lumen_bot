@@ -12,6 +12,7 @@ from typing import Any
 from ...schemas.error_contract import ErrorContract
 
 
+@dataclass
 class HostInstance:
     instance_id: str
     user_id: int
@@ -36,6 +37,8 @@ class HostInstance:
     version_ref: str = ""  # git commit sha of project snapshot at deploy
     last_health_at: float = 0.0
 
+
+@dataclass
 class HostResult:
     ok: bool
     message: str

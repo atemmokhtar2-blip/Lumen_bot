@@ -232,20 +232,28 @@ async def try_bot_token(*, message, context, user, request: str) -> bool:
         return False
     try:
         tok = normalize_bot_token(request)
-        # Retrieve the pending project payload from session state.
-        # The delivery flow stores it under multiple keys (pending_run,
-        # pending_live_run, pending_deploy) so any token-handler path can find it.
+        # Session keys: pending_host (permanent templates / HostService),
+        # pending_run / pending_live_run (trial), pending_deploy (legacy deploy).
+        # Permanent template path ONLY sets pending_host — must not be ignored.
         ud = context.user_data or {}
+        pending_host = ud.get("pending_host") if isinstance(ud.get("pending_host"), dict) else {}
         pending_run = ud.get("pending_run") or ud.get("pending_live_run") or {}
-        pending_deploy = ud.get("pending_deploy") or {}
-        # If there is no pending project at all, tell the user instead of crashing.
-        if not pending_run and not pending_deploy:
+        if not isinstance(pending_run, dict):
+            pending_run = {}
+        pending_deploy = ud.get("pending_deploy") if isinstance(ud.get("pending_deploy"), dict) else {}
+
+        # Permanent host: defer to token_handler (full HostService + template preflight)
+        if pending_host and (pending_host.get("project_path") or pending_host.get("template_id")):
+            return False
+
+        if not pending_run and not pending_deploy and not pending_host:
             await message.reply_text(
                 "⚠️ لا يوجد مشروع جاهز للتشغيل حالياً.\n"
-                "أرسل طلباً لإنشاء بوت أولاً، ثم أرسل التوكن لتشغيله."
+                "اختر قالبًا أو ولّد بوتًا أولًا، ثم أرسل التوكن."
             )
             return True
-        # Prefer host deploy when pending_host/deploy has a resolvable path
+
+        # Prefer host deploy when pending_deploy has a resolvable path
         if pending_deploy:
             try:
                 from lumen.bot.project_path_resolve import resolve_session_project_path
