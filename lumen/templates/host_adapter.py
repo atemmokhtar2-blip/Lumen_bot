@@ -96,6 +96,12 @@ def prepare_permanent_launch(
     except Exception:
         plane = "permanent_host"
 
+    try:
+        from lumen.templates.product import resolve_max_template_slots
+        _cap = int(resolve_max_template_slots(uid))
+    except Exception:
+        _cap = FREE_MAX_RUNNING
+
     pending = {
         "project_path": str(root),
         "user_id": uid,
@@ -107,7 +113,7 @@ def prepare_permanent_launch(
         "expires_at": float(inst.expires_at or 0),
         "template_ttl_days": 30,
         "tenant_id": str(uid),  # production multi-tenant binding
-        "max_template_slots": FREE_MAX_RUNNING,
+        "max_template_slots": _cap,
     }
     try:
         meta = dict(inst.meta or {})
@@ -176,19 +182,13 @@ def preflight_before_host_start(
 
     # Count other actives excluding this instance — must stay under free cap
     others = [i for i in insts if i.instance_id != iid and i.is_active(ts)]
-    if len(others) >= FREE_MAX_RUNNING:
-        return False, f"max_running_templates:{len(others)}>={FREE_MAX_RUNNING}"
-
-    # Policy re-check snapshot (should allow since slot already reserved)
-    decision = evaluate_launch(
-        mode=TemplateLaunchMode.PERMANENT,
-        instances=others,  # this slot already reserved
-        now=ts,
-        max_running=FREE_MAX_RUNNING,
-    )
-    # others alone can be up to 2 when we hold the 3rd
-    if len(others) >= FREE_MAX_RUNNING:
-        return False, decision.reason or "max_running_templates"
+    try:
+        from lumen.templates.product import resolve_max_template_slots
+        cap = resolve_max_template_slots(uid)
+    except Exception:
+        cap = FREE_MAX_RUNNING
+    if len(others) >= cap:
+        return False, f"max_running_templates:{len(others)}>={cap}"
     return True, "ok"
 
 
@@ -305,20 +305,34 @@ def list_user_status(user_id: int, *, now: float | None = None) -> list[Template
         except Exception:
             pass
 
+        mode_raw = inst.mode.value if hasattr(inst.mode, "value") else str(inst.mode)
+        st_raw = inst.status.value if hasattr(inst.status, "value") else str(inst.status)
+        try:
+            from lumen.templates.product import status_label_ar, mode_label_ar
+            st_show = status_label_ar(st_raw)
+            mode_show = mode_label_ar(mode_raw)
+        except Exception:
+            st_show, mode_show = st_raw, mode_raw
         rows.append(
             TemplateStatusRow(
                 instance_id=inst.instance_id,
                 template_id=inst.template_id,
                 title=title,
-                mode=inst.mode.value if hasattr(inst.mode, "value") else str(inst.mode),
-                status=inst.status.value if hasattr(inst.status, "value") else str(inst.status),
+                mode=mode_show,
+                status=st_show,
                 remaining_sec=rem,
                 remaining_label_ar=label,
                 host_instance_id=inst.host_instance_id or "",
             )
         )
     # Active first
-    order = {"running": 0, "preparing": 1, "failed": 2, "stopped": 3, "expired": 4}
+    order = {
+        "running": 0, "شغّال": 0,
+        "preparing": 1, "قيد التجهيز": 1,
+        "failed": 2, "فشل": 2,
+        "stopped": 3, "متوقف": 3,
+        "expired": 4, "منتهٍ": 4,
+    }
     rows.sort(key=lambda r: (order.get(r.status, 9), -r.remaining_sec))
     return rows
 

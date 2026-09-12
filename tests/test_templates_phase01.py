@@ -387,3 +387,19 @@ def test_phase5_status_panel_and_stop(tmp_path, monkeypatch):
     for action, arg in (("tpl_mine", ""), ("tpl_stop", "0"), ("tpl_refresh_mine", "")):
         wire = encode_signed(action, arg, user_id=uid)
         assert decode_signed(wire, user_id=uid) == (action, arg)
+
+
+def test_phase6_product_polish_catalog_and_labels():
+    from lumen.templates.catalog import reload_catalog, list_templates, get_template
+    from lumen.templates.product import status_label_ar, mode_label_ar, resolve_max_template_slots
+    from lumen.templates.policy import FREE_MAX_RUNNING
+
+    reload_catalog()
+    specs = list_templates()
+    assert len(specs) >= 5
+    assert get_template("wb") is not None or get_template("welcome_bot") is not None
+    assert status_label_ar("running") == "شغّال"
+    assert mode_label_ar("trial") == "تجربة مؤقتة"
+    # free user without pro store → 3
+    assert resolve_max_template_slots(0) == FREE_MAX_RUNNING
+    assert resolve_max_template_slots(999999001) == FREE_MAX_RUNNING

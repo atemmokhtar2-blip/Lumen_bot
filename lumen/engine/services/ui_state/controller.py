@@ -120,8 +120,8 @@ def _template_status_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...]
         if rem:
             label = f"{title} · {st} · {rem}"
         rows.append((UiButton(label[:40], "tpl_refresh_mine"),))
-        if st in {"running", "preparing", "شغال", "تجهيز"}:
-            rows.append((UiButton("إيقاف", "tpl_stop", str(i), style="danger"),))
+        if st in {"running", "preparing", "شغال", "شغّال", "تجهيز", "قيد التجهيز"}:
+            rows.append((UiButton(f"إيقاف #{i+1}", "tpl_stop", str(i), style="danger"),))
     rows.append(
         (
             UiButton("تحديث", "tpl_refresh_mine", style="primary"),
@@ -140,7 +140,7 @@ def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ..
                 UiButton("تجربة مؤقتة", "tpl_trial", tid, style="primary"),
                 UiButton("استخدام دائم", "tpl_permanent", tid, style="success"),
             ),
-            (UiButton("رجوع للقوالب", "open_templates"),),
+            (UiButton("بوتاتي", "tpl_mine", style="primary"), UiButton("رجوع للقوالب", "open_templates"),),
         ),
         EngineUiPhase.TEMPLATE_DETAIL,
     )
@@ -441,7 +441,7 @@ def _fill_template_status_slots(state: EngineUiState, user_id: int | None) -> En
         rows = list_user_status(int(user_id))[:5]
         for i, row in enumerate(rows):
             state.slots[f"tpl_i{i}"] = row.instance_id
-            state.slots[f"tpl_s{i}"] = row.status
+            state.slots[f"tpl_s{i}"] = row.status  # Arabic label for display
             state.slots[f"tpl_t{i}"] = row.title[:40]
             state.slots[f"tpl_r{i}"] = row.remaining_label_ar[:20]
             state.slots[f"tpl_m{i}"] = row.mode

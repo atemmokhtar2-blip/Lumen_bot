@@ -1,38 +1,70 @@
 [
   {
     "id": "group_moderator",
-    "title": "مشرف مجموعات",
-    "description": "بوت إدارة مجموعات: ترحيب، قوانين، حظر/كتم بسيط، وردود جاهزة للمشرفين.",
+    "title": "🛡️ مشرف مجموعات",
+    "description": "إدارة مجموعات تيليجرام: ترحيب تلقائي للأعضاء الجدد، عرض القوانين، وأوامر مشرف بسيطة. مناسب للمجتمعات والقنوات المرتبطة بمجموعة نقاش.",
     "tags": [
       "telegram",
-      "moderation"
+      "moderation",
+      "groups"
     ],
     "asset_key": "group_moderator",
     "enabled": true,
-    "short_id": "gm"
+    "short_id": "gm",
+    "version": 2
   },
   {
     "id": "shop_assistant",
-    "title": "مساعد متجر",
-    "description": "بوت متجر بسيط: قائمة منتجات، استقبال طلبات، وتأكيد للعميل (بدون دفع مدمج).",
+    "title": "🛒 مساعد متجر",
+    "description": "واجهة طلبات خفيفة: قائمة منتجات، استقبال «أطلب رقم»، وتأكيد للعميل. بدون بوابة دفع — مثالي لتجربة متجر قبل الربط الكامل.",
     "tags": [
       "telegram",
-      "shop"
+      "shop",
+      "orders"
     ],
     "asset_key": "shop_assistant",
     "enabled": true,
-    "short_id": "sa"
+    "short_id": "sa",
+    "version": 2
   },
   {
     "id": "faq_helper",
-    "title": "ردود أسئلة شائعة",
-    "description": "بوت FAQ: أسئلة وأجوبة ثابتة، بحث بسيط في القائمة، وتحويل لرسالة دعم.",
+    "title": "❓ ردود أسئلة شائعة",
+    "description": "قاعدة أسئلة ثابتة (ساعات / سعر / دعم) مع /faq. يقلل تكرار نفس الردود على فريق الدعم في الأيام الأولى للإطلاق.",
     "tags": [
       "telegram",
-      "faq"
+      "faq",
+      "support"
     ],
     "asset_key": "faq_helper",
     "enabled": true,
-    "short_id": "fq"
+    "short_id": "fq",
+    "version": 2
+  },
+  {
+    "id": "welcome_bot",
+    "title": "👋 بوت ترحيب",
+    "description": "رسالة ترحيب واضحة لكل /start مع أزرار نصية بسيطة. نقطة بداية سريعة لأي مشروع يحتاج «أول انطباع» نظيف.",
+    "tags": [
+      "telegram",
+      "onboarding"
+    ],
+    "asset_key": "welcome_bot",
+    "enabled": true,
+    "short_id": "wb",
+    "version": 1
+  },
+  {
+    "id": "echo_tools",
+    "title": "🔧 أدوات سريعة",
+    "description": "أوامر مساعدة: /id لعرض معرّفك، /ping للتحقق أن البوت حي. مفيد للاختبار والتشخيص السريع.",
+    "tags": [
+      "telegram",
+      "utils"
+    ],
+    "asset_key": "echo_tools",
+    "enabled": true,
+    "short_id": "et",
+    "version": 1
   }
 ]

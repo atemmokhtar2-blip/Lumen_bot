@@ -74,12 +74,17 @@ class TemplateService:
         ts = float(now if now is not None else time.time())
         current = self._store.list_for_user(uid)
         # Soft-expire in snapshot for policy (store also expires under lock)
+        try:
+            from lumen.templates.product import resolve_max_template_slots
+            _cap = resolve_max_template_slots(uid)
+        except Exception:
+            _cap = FREE_MAX_RUNNING
         decision = evaluate_launch(
             mode=mode,
             instances=current,
             now=ts,
             trial_minutes=trial_minutes,
-            max_running=FREE_MAX_RUNNING,
+            max_running=_cap,
         )
         if decision.denied or decision.plan is None:
             return ReserveResult(False, decision.reason)

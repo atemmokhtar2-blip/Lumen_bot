@@ -21,7 +21,7 @@ def _slots_from_ud(ud: dict[str, Any]) -> dict[str, Any]:
 def _deny_ar(reason: str) -> str:
     r = reason or ""
     if "max_running" in r:
-        return "وصلت لحد 3 قوالب شغّالة في الخطة المجانية. أوقف أحدها أولًا."
+        return "وصلت لحد القوالب الشغّالة (3 مجاني / حتى 10 لـ Pro). أوقف أحدها أولًا."
     if "trial_minutes" in r:
         return "مدة التجربة يجب أن تكون بين 1 و 50 دقيقة."
     if "template_not_found" in r:
