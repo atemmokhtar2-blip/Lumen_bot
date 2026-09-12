@@ -24,13 +24,19 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("/start — ترحيب\n/help — هذه الرسالة")
 
 
-def main() -> None:
+def build_application() -> Application:
+    """Export for Lumen serverless webhook adapter."""
     token = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        raise SystemExit("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN missing")
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    return app
+
+
+def main() -> None:
+    app = build_application()
     log.info("welcome_bot template starting")
     app.run_polling(drop_pending_updates=True)
 

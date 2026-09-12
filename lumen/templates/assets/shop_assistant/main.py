@@ -35,14 +35,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("استخدم /catalog أو اكتب: أطلب 1")
 
 
-def main() -> None:
+def build_application() -> Application:
     token = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        raise SystemExit("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN missing")
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("catalog", catalog))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    return app
+
+
+def main() -> None:
+    app = build_application()
     log.info("shop_assistant template starting")
     app.run_polling(drop_pending_updates=True)
 

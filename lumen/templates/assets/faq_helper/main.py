@@ -22,7 +22,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def faq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def faq_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = "\n".join(f"• {k}: {v}" for k, v in FAQ.items())
     await update.effective_message.reply_text(lines)
 
@@ -36,14 +36,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("لم أجد جوابًا. جرّب /faq")
 
 
-def main() -> None:
+def build_application() -> Application:
     token = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        raise SystemExit("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN missing")
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("faq", faq))
+    app.add_handler(CommandHandler("faq", faq_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    return app
+
+
+def main() -> None:
+    app = build_application()
     log.info("faq_helper template starting")
     app.run_polling(drop_pending_updates=True)
 

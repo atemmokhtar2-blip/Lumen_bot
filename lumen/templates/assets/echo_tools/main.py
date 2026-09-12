@@ -31,14 +31,19 @@ async def uid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("\n".join(lines) or "لا بيانات")
 
 
-def main() -> None:
+def build_application() -> Application:
     token = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        raise SystemExit("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN missing")
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("id", uid))
+    return app
+
+
+def main() -> None:
+    app = build_application()
     log.info("echo_tools template starting")
     app.run_polling(drop_pending_updates=True)
 

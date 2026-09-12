@@ -106,12 +106,13 @@ def _find_ptb_app(mod):
             try:
                 app = fn()
             except TypeError:
-                # maybe needs token
                 tok = _token()
                 try:
                     app = fn(tok) if tok else None
                 except Exception:
                     app = None
+            except Exception:
+                app = None
             if app is not None and hasattr(app, "process_update"):
                 return app
     # Scan module attrs for Application-like
@@ -181,9 +182,15 @@ async def _ptb_process(app, update_data: dict):
     from telegram import Update
     bot = getattr(app, "bot", None)
     update = Update.de_json(update_data, bot)
-    # Initialize app once if needed (PTB v20+)
-    if hasattr(app, "initialize") and not getattr(app, "_lumen_inited", False):
-        await app.initialize()
+    # Initialize + start once (PTB v20+ needs both for handlers to reply)
+    if not getattr(app, "_lumen_inited", False):
+        if hasattr(app, "initialize"):
+            await app.initialize()
+        if hasattr(app, "start"):
+            try:
+                await app.start()
+            except Exception:
+                pass
         app._lumen_inited = True  # type: ignore[attr-defined]
     result = app.process_update(update)
     if hasattr(result, "__await__"):
