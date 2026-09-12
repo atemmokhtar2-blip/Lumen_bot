@@ -64,12 +64,22 @@ CREATE TABLE IF NOT EXISTS tbe_host_instances (
   bot_username TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'stopped',
   deployment_id TEXT NOT NULL DEFAULT '',
+  sandbox_backend TEXT NOT NULL DEFAULT '',
   image_tag TEXT NOT NULL DEFAULT '',
   node_id TEXT NOT NULL DEFAULT '',
   pid BIGINT,
   started_at DOUBLE PRECISION NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL DEFAULT '',
+  last_diagnosis TEXT NOT NULL DEFAULT '',
   token_fp TEXT NOT NULL DEFAULT '',
+  public_base_url TEXT NOT NULL DEFAULT '',
+  webhook_public_url TEXT NOT NULL DEFAULT '',
+  internal_port BIGINT NOT NULL DEFAULT 0,
+  platform TEXT NOT NULL DEFAULT 'telegram',
+  cpu_quota DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+  memory_mb BIGINT NOT NULL DEFAULT 256,
+  version_ref TEXT NOT NULL DEFAULT '',
+  last_health_at DOUBLE PRECISION NOT NULL DEFAULT 0,
   updated_at DOUBLE PRECISION NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_tbe_inst_user ON tbe_host_instances(user_id);

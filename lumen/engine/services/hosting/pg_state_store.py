@@ -67,13 +67,49 @@ class PgHostStateStore:
         return psycopg.connect(self.dsn)
 
     def _ensure_schema(self) -> None:
+        """CREATE TABLE IF NOT EXISTS + migrate every column the app expects.
+
+        Production DBs often have an older tbe_host_instances from control-plane
+        bootstrap without public_base_url / webhook_public_url / etc. CREATE IF
+        NOT EXISTS does not add columns — must ALTER explicitly.
+        """
+        alters = (
+            ("sandbox_backend", "TEXT NOT NULL DEFAULT ''"),
+            ("last_diagnosis", "TEXT NOT NULL DEFAULT ''"),
+            ("token_fp", "TEXT NOT NULL DEFAULT ''"),
+            ("public_base_url", "TEXT NOT NULL DEFAULT ''"),
+            ("webhook_public_url", "TEXT NOT NULL DEFAULT ''"),
+            ("internal_port", "BIGINT NOT NULL DEFAULT 0"),
+            ("platform", "TEXT NOT NULL DEFAULT 'telegram'"),
+            ("cpu_quota", "DOUBLE PRECISION NOT NULL DEFAULT 0.5"),
+            ("memory_mb", "BIGINT NOT NULL DEFAULT 256"),
+            ("version_ref", "TEXT NOT NULL DEFAULT ''"),
+            ("last_health_at", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("updated_at", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("entry_point", "TEXT NOT NULL DEFAULT ''"),
+            ("bot_username", "TEXT NOT NULL DEFAULT ''"),
+            ("status", "TEXT NOT NULL DEFAULT 'stopped'"),
+            ("deployment_id", "TEXT NOT NULL DEFAULT ''"),
+            ("project_path", "TEXT NOT NULL DEFAULT ''"),
+            ("started_at", "DOUBLE PRECISION NOT NULL DEFAULT 0"),
+            ("last_error", "TEXT NOT NULL DEFAULT ''"),
+            ("pid", "BIGINT"),
+        )
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(_SCHEMA)
-                try:
-                    cur.execute("ALTER TABLE tbe_host_instances ADD COLUMN IF NOT EXISTS sandbox_backend TEXT NOT NULL DEFAULT ''")
-                except Exception:
-                    pass
+                for col, decl in alters:
+                    try:
+                        cur.execute(
+                            f"ALTER TABLE tbe_host_instances "
+                            f"ADD COLUMN IF NOT EXISTS {col} {decl}"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "host schema migrate skip col=%s: %s",
+                            col,
+                            type(exc).__name__,
+                        )
             conn.commit()
 
     def _row_to_dict(self, row) -> dict[str, Any]:
@@ -88,11 +124,31 @@ class PgHostStateStore:
         return {k: row[i] for i, k in enumerate(keys)}
 
     def list_all(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT instance_id, user_id, project_path, entry_point, bot_username, status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, token_fp, public_base_url, webhook_public_url, internal_port, platform, cpu_quota, memory_mb, version_ref, last_health_at, updated_at FROM tbe_host_instances")
-                rows = cur.fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        sql = (
+            "SELECT instance_id, user_id, project_path, entry_point, bot_username, status, "
+            "deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis, "
+            "token_fp, public_base_url, webhook_public_url, internal_port, platform, "
+            "cpu_quota, memory_mb, version_ref, last_health_at, updated_at "
+            "FROM tbe_host_instances"
+        )
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+                    rows = cur.fetchall()
+            return [self._row_to_dict(r) for r in rows]
+        except Exception as exc:
+            name = type(exc).__name__
+            msg = str(exc).lower()
+            if "undefinedcolumn" in name.lower() or "does not exist" in msg or "undefined column" in msg:
+                logger.warning("host list_all schema lag — remigrating: %s", name)
+                self._ensure_schema()
+                with self._connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql)
+                        rows = cur.fetchall()
+                return [self._row_to_dict(r) for r in rows]
+            raise
 
     def upsert(self, inst: dict[str, Any]) -> None:
         diag = inst.get("last_diagnosis") or ""
@@ -122,10 +178,7 @@ class PgHostStateStore:
             "last_health_at": float(inst.get("last_health_at") or 0),
             "updated_at": time.time(),
         }
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        sql = """
                     INSERT INTO tbe_host_instances (
                       instance_id, user_id, project_path, entry_point, bot_username,
                       status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
@@ -157,10 +210,24 @@ class PgHostStateStore:
                       version_ref=EXCLUDED.version_ref,
                       last_health_at=EXCLUDED.last_health_at,
                       updated_at=EXCLUDED.updated_at
-                    """,
-                    payload,
-                )
-            conn.commit()
+                    """
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, payload)
+                conn.commit()
+        except Exception as exc:
+            name = type(exc).__name__
+            msg = str(exc).lower()
+            if "undefinedcolumn" in name.lower() or "does not exist" in msg or "undefined column" in msg:
+                logger.warning("host upsert schema lag — remigrating: %s", name)
+                self._ensure_schema()
+                with self._connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql, payload)
+                    conn.commit()
+            else:
+                raise
 
 
     def delete(self, instance_id: str) -> None:
@@ -178,7 +245,8 @@ class PgHostStateStore:
                     """
                     SELECT instance_id, user_id, project_path, entry_point, bot_username,
                            status, deployment_id, sandbox_backend, pid, started_at, last_error, last_diagnosis,
-                           token_fp, updated_at
+                           token_fp, public_base_url, webhook_public_url, internal_port, platform,
+                           cpu_quota, memory_mb, version_ref, last_health_at, updated_at
                     FROM tbe_host_instances
                     WHERE status = 'running'
                       AND user_id = %s
