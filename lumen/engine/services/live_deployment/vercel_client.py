@@ -486,6 +486,79 @@ class PlatformHostClient:
             time.sleep(poll_sec)
         return ApiResult(ok=False, status=last.status, data=last.data, error="deploy_timeout")
 
+    def resolve_public_url(
+        self,
+        *,
+        deployment_id: str = "",
+        project_name: str = "",
+        fallback_url: str = "",
+    ) -> str:
+        """Prefer production alias over deployment-hash / team-scoped URLs.
+
+        Deployment URLs like ``app-xxxx-team.vercel.app`` often sit behind
+        Vercel Authentication and return HTML/401 — Telegram webhooks and
+        health probes must use the clean production alias
+        (``app.vercel.app``) instead.
+        """
+        candidates: list[str] = []
+        if deployment_id:
+            ar = self.request_json(
+                "GET",
+                f"/v2/deployments/{urllib.parse.quote(deployment_id, safe='')}/aliases",
+            )
+            if ar.ok:
+                rows = []
+                if isinstance(ar.data, dict):
+                    rows = list(ar.data.get("aliases") or [])
+                elif isinstance(ar.data, list):
+                    rows = ar.data
+                for row in rows:
+                    if isinstance(row, dict):
+                        a = str(row.get("alias") or "").strip()
+                        if a:
+                            candidates.append(a)
+                    elif isinstance(row, str) and row.strip():
+                        candidates.append(row.strip())
+            dep = self.get_deployment(deployment_id)
+            if dep.ok:
+                raw_alias = dep.mapping.get("alias")
+                if isinstance(raw_alias, list):
+                    candidates.extend(str(x).strip() for x in raw_alias if x)
+                elif isinstance(raw_alias, str) and raw_alias.strip():
+                    candidates.append(raw_alias.strip())
+                u = str(dep.mapping.get("url") or "").strip()
+                if u:
+                    candidates.append(u)
+        name = sanitize_project_name(project_name or "")
+        if name:
+            candidates.append(f"{name}.vercel.app")
+        if fallback_url:
+            candidates.append(
+                fallback_url.replace("https://", "").replace("http://", "").split("/")[0]
+            )
+
+        def _score(host: str) -> tuple:
+            h = host.lower().strip().rstrip(".")
+            plain = 0 if re.match(r"^[a-z0-9-]+\.vercel\.app$", h) else 1
+            # Prefer shortest host without deployment hash segment
+            has_long_hash = 1 if re.search(r"-[a-z0-9]{9,}-", h) else 0
+            return (plain, has_long_hash, len(h))
+
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for c in candidates:
+            host = c.replace("https://", "").replace("http://", "").split("/")[0].strip().lower()
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            cleaned.append(host)
+        if not cleaned:
+            return ""
+        cleaned.sort(key=_score)
+        return f"https://{cleaned[0]}"
+
+
+
 
 # Back-compat alias used by earlier tests
 def collect_project_files(project_path: str | Path, **kwargs: Any) -> list[dict[str, str]]:

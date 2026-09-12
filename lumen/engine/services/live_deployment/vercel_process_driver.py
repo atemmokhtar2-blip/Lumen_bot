@@ -169,9 +169,15 @@ class VercelProcessDriver(DeploymentProvider):
             waited = self._client.wait_ready(dep_id, timeout_sec=_wait_timeout())
             if waited.ok:
                 d = waited.mapping
-                url = str(d.get("url") or url)
-                if url and not url.startswith("http"):
-                    url = f"https://{url}"
+                raw = str(d.get("url") or url)
+                if raw and not raw.startswith("http"):
+                    raw = f"https://{raw}"
+                public = self._client.resolve_public_url(
+                    deployment_id=dep_id,
+                    project_name=name,
+                    fallback_url=raw,
+                )
+                url = public or raw
                 return DeploymentStatus(
                     provider=self.name,
                     deployment_id=dep_id,
