@@ -15,7 +15,7 @@ def test_orchestration_is_fc_only() -> None:
 
 
 def test_secrets_seal_roundtrip(tmp_path: Path) -> None:
-    from lumen.engine.services.hosting.secrets_env import (
+    from lumen.hosting.secrets_env import (
         inject_secrets_env,
         load_project_secrets,
         seal_project_secrets,
@@ -37,7 +37,7 @@ def test_secrets_seal_roundtrip(tmp_path: Path) -> None:
 def test_rate_limiter_blocks_excess(monkeypatch) -> None:
     monkeypatch.setenv("TBE_HOST_MAX_CONCURRENT_PER_USER", "2")
     monkeypatch.setenv("TBE_HOST_MAX_STARTS_PER_HOUR", "100")
-    from lumen.engine.services.hosting.rate_limiter import check_can_start
+    from lumen.hosting.rate_limiter import check_can_start
 
     ok, _ = check_can_start(user_id=42, running_count=1)
     assert ok
@@ -48,7 +48,7 @@ def test_rate_limiter_blocks_excess(monkeypatch) -> None:
 
 def test_usage_billing_compute() -> None:
     from types import SimpleNamespace
-    from lumen.engine.services.hosting.usage_billing import compute_credits, compute_session_usage
+    from lumen.hosting.usage_billing import compute_credits, compute_session_usage
     import time
 
     inst = SimpleNamespace(
@@ -65,7 +65,7 @@ def test_usage_billing_compute() -> None:
 
 def test_backup_manager_creates_tar(tmp_path: Path) -> None:
     (tmp_path / "bot.db").write_bytes(b"sqlite-bytes")
-    from lumen.engine.services.hosting.backup_manager import backup_project
+    from lumen.hosting.backup_manager import backup_project
 
     r = backup_project(tmp_path, instance_id="testinst")
     assert r["ok"] is True

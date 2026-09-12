@@ -56,12 +56,12 @@ def test_serverless_running_without_verify_rejected(tmp_path, monkeypatch):
     ), patch(
         "lumen.engine.services.live_deployment.token_validator.TokenValidator"
     ) as TV, patch(
-        "lumen.engine.services.hosting.orchestration.start_host",
+        "lumen.hosting.orchestration.start_host",
         return_value=(_Backend(), handle),
     ), patch(
-        "lumen.engine.services.hosting.secrets_env.seal_project_secrets"
+        "lumen.hosting.secrets_env.seal_project_secrets"
     ), patch(
-        "lumen.engine.services.hosting.secrets_env.inject_secrets_env",
+        "lumen.hosting.secrets_env.inject_secrets_env",
         side_effect=lambda path, env: env,
     ), patch(
         "lumen.platform.tenant_isolation.verify_project_under_owner",
@@ -95,12 +95,12 @@ def test_failed_start_no_nameerror(tmp_path, monkeypatch):
     ), patch(
         "lumen.engine.services.live_deployment.token_validator.TokenValidator"
     ) as TV, patch(
-        "lumen.engine.services.hosting.orchestration.start_host",
+        "lumen.hosting.orchestration.start_host",
         return_value=(_Backend(), handle),
     ), patch(
-        "lumen.engine.services.hosting.secrets_env.seal_project_secrets"
+        "lumen.hosting.secrets_env.seal_project_secrets"
     ), patch(
-        "lumen.engine.services.hosting.secrets_env.inject_secrets_env",
+        "lumen.hosting.secrets_env.inject_secrets_env",
         side_effect=lambda path, env: env,
     ), patch(
         "lumen.platform.tenant_isolation.verify_project_under_owner",

@@ -583,7 +583,7 @@ class HostingService:
 
         # Host rate limits (concurrent + starts/hour)
         try:
-            from lumen.engine.services.hosting.rate_limiter import check_can_start, record_start
+            from lumen.hosting.rate_limiter import check_can_start, record_start
             running_n = sum(1 for i in self.list_for_user(int(user_id)) if i.status == "running")
 
             # ── Pro plan bot limit enforcement (FAIL-CLOSED) ──
@@ -674,8 +674,8 @@ class HostingService:
         }
         env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
-            from lumen.engine.services.hosting.orchestration import start_host as _orch_start
-            from lumen.engine.services.hosting.secrets_env import inject_secrets_env, seal_project_secrets
+            from lumen.hosting.orchestration import start_host as _orch_start
+            from lumen.hosting.secrets_env import inject_secrets_env, seal_project_secrets
             try:
                 seal_project_secrets(path, {"BOT_TOKEN": token_norm, "TELEGRAM_BOT_TOKEN": token_norm})
             except Exception:
@@ -918,12 +918,12 @@ class HostingService:
         self._instances[instance_id] = inst
         self._save()
         try:
-            from lumen.engine.services.hosting.rate_limiter import record_start
+            from lumen.hosting.rate_limiter import record_start
             record_start(int(user_id))
         except Exception:
             pass
         try:
-            from lumen.engine.services.hosting.secrets_env import seal_project_secrets
+            from lumen.hosting.secrets_env import seal_project_secrets
             seal_project_secrets(path, {"BOT_TOKEN": token_norm, "TELEGRAM_BOT_TOKEN": token_norm})
         except Exception:
             pass
@@ -1005,7 +1005,7 @@ class HostingService:
         except Exception:
             pass
         try:
-            from lumen.engine.services.hosting.usage_billing import settle_instance
+            from lumen.hosting.usage_billing import settle_instance
             uid = int(getattr(inst, "user_id", 0) or 0)
             settle_instance(inst, tenant_id=f"tg:{uid}" if uid else None)
         except Exception:
@@ -1016,7 +1016,7 @@ class HostingService:
         except Exception:
             pass
         try:
-            from lumen.engine.services.hosting.backup_manager import backup_project
+            from lumen.hosting.backup_manager import backup_project
             backup_project(inst.project_path, instance_id=inst.instance_id)
         except Exception:
             pass
@@ -1205,7 +1205,7 @@ class HostingService:
         try:
             from lumen.bot.sanitize import sanitize_log_text
             if backend == "firecracker" or dep.startswith("fc-") or dep:
-                from lumen.engine.services.hosting.log_aggregator import (
+                from lumen.hosting.log_aggregator import (
                     collect_instance_logs,
                     ship_to_loki,
                 )
@@ -1392,7 +1392,7 @@ def get_hosting_service(state_dir: str | Path | None = None) -> HostingService:
         except Exception:
             pass
         try:
-            from lumen.engine.services.hosting.ops_scheduler import start_ops_scheduler
+            from lumen.hosting.ops_scheduler import start_ops_scheduler
             start_ops_scheduler(lambda: _SERVICE)
         except Exception:
             pass

@@ -3,14 +3,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 def test_orchestration_resolves_fc_by_default():
-    from lumen.engine.services.hosting.orchestration import resolve_backend_name
+    from lumen.hosting.orchestration import resolve_backend_name
     assert resolve_backend_name(project_path="/tmp") == "firecracker"
 
 def test_orchestration_rejects_docker_in_prod(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TBE_MULTI_TENANT", "1")
     monkeypatch.delenv("TBE_HOST_ALLOW_WEAK_BACKEND", raising=False)
-    from lumen.engine.services.hosting.orchestration import resolve_backend_name
+    from lumen.hosting.orchestration import resolve_backend_name
     import pytest
     with pytest.raises(RuntimeError):
         resolve_backend_name(requested="docker")
@@ -22,7 +22,7 @@ def test_lumen_hosting_package_imports():
     assert callable(h.check_can_start)
 
 def test_ops_scheduler_module():
-    from lumen.engine.services.hosting.ops_scheduler import start_ops_scheduler
+    from lumen.hosting.ops_scheduler import start_ops_scheduler
     assert callable(start_ops_scheduler)
 
 def test_projects_api_paths_in_app():

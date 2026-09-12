@@ -162,7 +162,7 @@ def process_one(queue=None, fleet=None) -> bool:
                 return True
             from pathlib import Path as _P
             from lumen.engine.services.hosting.prepare_runtime import prepare_project_for_host
-            from lumen.engine.services.hosting.orchestration import start_host as start_permanent_host_bot
+            from lumen.hosting.orchestration import start_host as start_permanent_host_bot
             from lumen.engine.services.hosting.ingress import (
                 public_url_for_instance,
                 write_traefik_route,
@@ -188,7 +188,7 @@ def process_one(queue=None, fleet=None) -> bool:
             env = {"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token}
             env.update({k: str(v) for k, v in (prep.env_vars or {}).items() if k and v})
             try:
-                from lumen.engine.services.hosting.secrets_env import seal_project_secrets, inject_secrets_env
+                from lumen.hosting.secrets_env import seal_project_secrets, inject_secrets_env
                 seal_project_secrets(build_path, {"BOT_TOKEN": token, "TELEGRAM_BOT_TOKEN": token})
                 env = inject_secrets_env(build_path, env)
             except Exception:
