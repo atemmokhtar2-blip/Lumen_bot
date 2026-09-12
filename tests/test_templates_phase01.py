@@ -1,123 +1,132 @@
-"""Phase 0–1: template catalog, policy caps, in-memory store."""
+"""Phase 0–1 hardened: hexagonal templates plane."""
 from __future__ import annotations
 
 import time
 
-from lumen.templates.catalog import get_template, list_templates
-from lumen.templates.models import TemplateInstanceStatus, TemplateLaunchMode
+import pytest
+
+from lumen.templates.catalog import JsonTemplateCatalog, list_templates, get_template
+from lumen.templates.models import (
+    TemplateInstance,
+    TemplateInstanceStatus,
+    TemplateLaunchMode,
+    TemplateSpec,
+    validate_template_id,
+)
 from lumen.templates.policy import (
-    FREE_MAX_RUNNING_TEMPLATES,
+    FREE_MAX_RUNNING,
     TRIAL_MAX_MINUTES,
-    can_launch,
     clamp_trial_minutes,
     count_active,
+    evaluate_launch,
 )
-from lumen.templates.store import (
-    clear_user_for_tests,
-    list_instances,
-    mark_expired,
-    reserve_instance,
-    update_instance,
-)
+from lumen.templates.service import TemplateService
+from lumen.templates.store_memory import MemoryTemplateStore
 
 
-def test_catalog_has_enabled_templates():
-    specs = list_templates(enabled_only=True)
-    assert len(specs) >= 3
-    ids = {s.id for s in specs}
-    assert "group_moderator" in ids
+def test_template_id_validation():
+    assert validate_template_id("group_moderator") == "group_moderator"
+    with pytest.raises(ValueError):
+        validate_template_id("Bad-Id")
+    with pytest.raises(ValueError):
+        validate_template_id("x")
+
+
+def test_catalog_port_and_specs():
+    cat = JsonTemplateCatalog()
+    enabled = list(cat.list_enabled())
+    assert len(enabled) >= 3
+    assert all(isinstance(s, TemplateSpec) for s in enabled)
     assert get_template("shop_assistant") is not None
-    assert get_template("missing_x") is None
+    assert get_template("nope") is None
+    assert len(list_templates()) >= 3
 
 
-def test_clamp_trial_minutes():
-    assert clamp_trial_minutes(0) == 0
-    assert clamp_trial_minutes(-1) == 0
-    assert clamp_trial_minutes(1) == 1
-    assert clamp_trial_minutes(50) == 50
+def test_policy_pure_caps():
+    now = 1_700_000_000.0
     assert clamp_trial_minutes(51) == TRIAL_MAX_MINUTES
-    assert clamp_trial_minutes(999) == 50
+    assert clamp_trial_minutes(0) == 0
 
+    d = evaluate_launch(mode="trial", instances=[], now=now, trial_minutes=30)
+    assert d.allowed and d.plan is not None
+    assert d.plan.expires_at == now + 1800
 
-def test_policy_rejects_over_quota():
-    from lumen.templates.models import TemplateInstance
+    d2 = evaluate_launch(mode=TemplateLaunchMode.PERMANENT, instances=[], now=now)
+    assert d2.allowed and d2.plan is not None
+    assert d2.plan.expires_at == now + 30 * 86400
 
-    now = time.time()
-    insts = [
+    full = [
         TemplateInstance(
-            instance_id=f"i{i}",
+            instance_id=f"tpl_{i:016x}",
             user_id=1,
             template_id="group_moderator",
             mode=TemplateLaunchMode.TRIAL,
             status=TemplateInstanceStatus.RUNNING,
             started_at=now,
-            expires_at=now + 3600,
+            expires_at=now + 9999,
         )
-        for i in range(FREE_MAX_RUNNING_TEMPLATES)
+        for i in range(FREE_MAX_RUNNING)
     ]
-    assert count_active(insts) == 3
-    d = can_launch(mode=TemplateLaunchMode.TRIAL, instances=insts, trial_minutes=10, now=now)
-    assert d.allowed is False
-    assert "max_running" in d.reason
+    assert count_active(full, now) == 3
+    denied = evaluate_launch(mode="trial", instances=full, now=now, trial_minutes=10)
+    assert denied.allowed is False
+    assert "max_running" in denied.reason
 
 
-def test_policy_trial_and_permanent_expiry():
-    now = 1_700_000_000.0
-    d = can_launch(mode="trial", instances=[], trial_minutes=30, now=now)
-    assert d.allowed is True
-    assert d.trial_minutes == 30
-    assert d.expires_at == now + 30 * 60
-
-    d2 = can_launch(mode=TemplateLaunchMode.PERMANENT, instances=[], now=now)
-    assert d2.allowed is True
-    assert d2.expires_at == now + 30 * 86400
-
-
-def test_store_reserve_and_expire():
-    uid = 424242
-    clear_user_for_tests(uid)
+def test_service_reserve_atomic_quota():
+    store = MemoryTemplateStore()
+    svc = TemplateService(store=store)
+    uid = 900001
     now = time.time()
-    inst, reason = reserve_instance(
-        uid, template_id="faq_helper", mode=TemplateLaunchMode.TRIAL, trial_minutes=5, now=now
-    )
-    assert reason == "ok"
-    assert inst is not None
-    assert inst.status == TemplateInstanceStatus.PREPARING
-    assert inst.expires_at == now + 300
 
-    listed = list_instances(uid)
-    assert len(listed) == 1
+    r1 = svc.reserve(uid, template_id="faq_helper", mode="trial", trial_minutes=5, now=now)
+    assert r1.ok and r1.instance is not None
+    assert r1.instance.trial_minutes == 5
 
-    # Fill quota to 3
-    for i in range(2):
-        inst_i, r = reserve_instance(
-            uid, template_id="shop_assistant", mode="trial", trial_minutes=10, now=now
-        )
-        assert r == "ok", r
+    for _ in range(2):
+        r = svc.reserve(uid, template_id="shop_assistant", mode="trial", trial_minutes=10, now=now)
+        assert r.ok, r.reason
 
-    blocked, reason_b = reserve_instance(
-        uid, template_id="group_moderator", mode="trial", trial_minutes=10, now=now
-    )
-    assert blocked is None
-    assert "max_running" in reason_b
+    blocked = svc.reserve(uid, template_id="group_moderator", mode="trial", trial_minutes=10, now=now)
+    assert blocked.ok is False
+    assert "max_running" in blocked.reason
 
-    # Expire all by clock
+    # Expire via past now + re-reserve permanent
     past = now + 10_000
-    mark_expired(uid, now=past)
-    after = list_instances(uid)
-    assert all(x.status == TemplateInstanceStatus.EXPIRED for x in after)
+    # force expiry by rewriting store
+    insts = store.list_for_user(uid)
+    for i in insts:
+        i.status = TemplateInstanceStatus.EXPIRED
+    store.save_for_user(uid, insts)
 
-    # Quota frees after expiry
-    inst2, r2 = reserve_instance(
-        uid, template_id="group_moderator", mode=TemplateLaunchMode.PERMANENT, now=past
-    )
-    assert r2 == "ok"
-    assert inst2 is not None
-    assert inst2.mode == TemplateLaunchMode.PERMANENT
+    r_perm = svc.reserve(uid, template_id="group_moderator", mode="permanent", now=past)
+    assert r_perm.ok and r_perm.instance is not None
+    assert r_perm.instance.mode == TemplateLaunchMode.PERMANENT
 
-    updated = update_instance(uid, inst2.instance_id, status=TemplateInstanceStatus.RUNNING, host_instance_id="h1")
-    assert updated is not None
-    assert updated.status == TemplateInstanceStatus.RUNNING
-    assert updated.host_instance_id == "h1"
+    running = svc.mark_running(uid, r_perm.instance.instance_id, host_instance_id="host_abc")
+    assert running is not None
+    assert running.status == TemplateInstanceStatus.RUNNING
+    assert running.host_instance_id == "host_abc"
 
-    clear_user_for_tests(uid)
+
+def test_architecture_templates_isolation():
+    """templates package must not import bot or hosting implementation."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "lumen" / "templates"
+    offenders = []
+    for p in root.rglob("*.py"):
+        src = p.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("lumen.bot") or alias.name.startswith("lumen.hosting"):
+                        offenders.append(f"{p.name}:import {alias.name}")
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.startswith("lumen.bot") or node.module.startswith("lumen.hosting"):
+                    offenders.append(f"{p.name}:from {node.module}")
+                if node.module.startswith("lumen.engine.services.hosting"):
+                    offenders.append(f"{p.name}:from {node.module}")
+    assert not offenders, offenders

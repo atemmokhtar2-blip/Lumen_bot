@@ -1,59 +1,97 @@
-"""Built-in template catalog (Phase 0).
-
-Loads the static JSON registry shipped with the package. No network, no user
-input — pure read model for UI and policy later.
-"""
+"""JSON file catalog adapter implementing TemplateCatalogPort."""
 from __future__ import annotations
 
 import json
 import logging
-from functools import lru_cache
 from pathlib import Path
+from typing import Sequence
 
+from lumen.templates.errors import CatalogError
 from lumen.templates.models import TemplateSpec
 
 logger = logging.getLogger(__name__)
 
-_DATA = Path(__file__).resolve().parent / "data" / "catalog.json"
+_DEFAULT_PATH = Path(__file__).resolve().parent / "data" / "catalog.json"
 
 
-def _load_raw() -> list[dict]:
-    try:
-        raw = json.loads(_DATA.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("templates catalog unreadable: %s", type(exc).__name__)
-        return []
-    if not isinstance(raw, list):
-        return []
-    return [x for x in raw if isinstance(x, dict)]
+class JsonTemplateCatalog:
+    """Read-only catalog. Validates every row; skips corrupt rows with log."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path or _DEFAULT_PATH
+        self._cache: tuple[TemplateSpec, ...] | None = None
+
+    def reload(self) -> None:
+        self._cache = None
+
+    def _load(self) -> tuple[TemplateSpec, ...]:
+        if self._cache is not None:
+            return self._cache
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise CatalogError(f"catalog_missing:{self._path}") from exc
+        except Exception as exc:
+            raise CatalogError(f"catalog_unreadable:{type(exc).__name__}") from exc
+        if not isinstance(raw, list):
+            raise CatalogError("catalog_not_a_list")
+        specs: list[TemplateSpec] = []
+        seen: set[str] = set()
+        for i, row in enumerate(raw):
+            if not isinstance(row, dict):
+                logger.warning("templates catalog row %s ignored (not object)", i)
+                continue
+            try:
+                spec = TemplateSpec.from_dict(row)
+            except Exception as exc:
+                logger.warning("templates catalog row %s invalid: %s", i, exc)
+                continue
+            if spec.id in seen:
+                logger.warning("templates catalog duplicate id=%s skipped", spec.id)
+                continue
+            seen.add(spec.id)
+            specs.append(spec)
+        if not specs:
+            raise CatalogError("catalog_empty_after_validation")
+        self._cache = tuple(specs)
+        return self._cache
+
+    def list_enabled(self) -> Sequence[TemplateSpec]:
+        return tuple(s for s in self._load() if s.enabled)
+
+    def list_all(self) -> Sequence[TemplateSpec]:
+        return self._load()
+
+    def get(self, template_id: str) -> TemplateSpec | None:
+        tid = (template_id or "").strip()
+        if not tid:
+            return None
+        for s in self._load():
+            if s.id == tid and s.enabled:
+                return s
+        return None
 
 
-@lru_cache(maxsize=1)
+# Process-wide default catalog (tests may construct their own)
+_default = JsonTemplateCatalog()
+
+
 def list_templates(*, enabled_only: bool = True) -> tuple[TemplateSpec, ...]:
-    out: list[TemplateSpec] = []
-    for item in _load_raw():
-        spec = TemplateSpec.from_dict(item)
-        if spec is None:
-            continue
-        if enabled_only and not spec.enabled:
-            continue
-        out.append(spec)
-    return tuple(out)
+    cat = _default
+    return tuple(cat.list_enabled() if enabled_only else cat.list_all())
 
 
 def get_template(template_id: str) -> TemplateSpec | None:
-    tid = (template_id or "").strip()
-    if not tid:
-        return None
-    for spec in list_templates(enabled_only=False):
-        if spec.id == tid:
-            return spec if spec.enabled else None
-    return None
+    return _default.get(template_id)
 
 
 def reload_catalog() -> None:
-    """Test helper — clear cache after mutating catalog file."""
-    list_templates.cache_clear()
+    _default.reload()
 
 
-__all__ = ["list_templates", "get_template", "reload_catalog"]
+__all__ = [
+    "JsonTemplateCatalog",
+    "list_templates",
+    "get_template",
+    "reload_catalog",
+]
