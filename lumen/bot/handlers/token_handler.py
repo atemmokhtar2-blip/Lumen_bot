@@ -460,6 +460,24 @@ async def try_handle_token(
                 )
             except Exception:
                 pass
+
+        # Template permanent plane: bind HostResult to reserved template instance
+        try:
+            tpl_iid = str((pending_host or {}).get("template_instance_id") or "").strip()
+            if tpl_iid:
+                from lumen.templates.service import get_template_service
+                from lumen.templates.models import TemplateInstanceStatus
+
+                _uid = int(message.from_user.id) if message.from_user else 0
+                if getattr(result, "ok", False):
+                    host_id = str(getattr(result, "instance_id", "") or "")[:80]
+                    get_template_service().mark_running(_uid, tpl_iid, host_instance_id=host_id)
+                else:
+                    get_template_service()._patch(  # noqa: SLF001
+                        _uid, tpl_iid, status=TemplateInstanceStatus.FAILED
+                    )
+        except Exception:
+            logger.exception("template permanent instance update after host failed")
         return True
 
 

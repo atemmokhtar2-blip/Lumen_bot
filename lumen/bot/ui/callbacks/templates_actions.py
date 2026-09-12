@@ -156,12 +156,91 @@ async def execute_template_reserve(
             )
             if not res.ok or res.instance is None:
                 return _deny_ar(res.reason)
-            ud["last_template_instance_id"] = res.instance.instance_id
-            return (
-                "تم حجز استخدام دائم للقالب "
-                + tid
-                + " لمدة 30 يومًا (حد 3 قوالب). ربط الاستضافة الدائمة لاحقًا."
-            )
+            inst = res.instance
+            try:
+                from lumen.templates.materialize import materialize_to_sandbox
+
+                root = materialize_to_sandbox(int(user_id), inst.template_id)
+            except Exception:
+                logger.exception("template permanent materialize failed")
+                try:
+                    svc.mark_stopped(int(user_id), inst.instance_id)
+                except Exception:
+                    pass
+                return _deny_ar("materialize_failed")
+
+            from lumen.engine.services.runtime_planes import RuntimePlane, plane_label_ar
+            from lumen.bot.ui.project_resolve import bind_active_repo, resolve_entry_point
+
+            entry = resolve_entry_point(root) or "main.py"
+            try:
+                from lumen.bot.ui.post_actions import _host_backend_hint
+                backend = _host_backend_hint()
+            except Exception:
+                backend = "hosting"
+
+            payload = {
+                "project_path": str(root),
+                "user_id": int(user_id),
+                "entry_point": entry,
+                "plane": RuntimePlane.PERMANENT_HOST.value,
+                "backend_hint": backend,
+                "source": "template",
+                "template_id": inst.template_id,
+                "template_instance_id": inst.instance_id,
+                "expires_at": float(inst.expires_at or 0),
+                "template_ttl_days": 30,
+            }
+            ud["pending_host"] = dict(payload)
+            ud.pop("pending_run", None)
+            ud.pop("pending_live_run", None)
+            ud.pop("pending_deploy", None)
+            ud["last_template_instance_id"] = inst.instance_id
+            bind_active_repo(ud, root, entry=entry)
+
+            try:
+                meta = dict(inst.meta or {})
+                meta["project_path"] = str(root)
+                meta["expires_at"] = float(inst.expires_at or 0)
+                meta["plane"] = RuntimePlane.PERMANENT_HOST.value
+                svc._patch(  # noqa: SLF001
+                    int(user_id),
+                    inst.instance_id,
+                    status=TemplateInstanceStatus.PREPARING,
+                    meta=meta,
+                )
+            except Exception:
+                logger.debug("template permanent meta patch failed", exc_info=True)
+
+            try:
+                from lumen.bot.session_store import get_session_store
+                if user_id:
+                    get_session_store().save(int(user_id), dict(ud))
+            except Exception:
+                logger.debug("template permanent session persist failed", exc_info=True)
+
+            label = plane_label_ar(RuntimePlane.PERMANENT_HOST)
+            lines = [
+                "تم تجهيز القالب للاستخدام الدائم: " + str(inst.template_id),
+                "• " + label,
+                "• المدة: 30 يومًا ضمن حد 3 قوالب مجانية شغّالة",
+                "• المشروع: `" + str(root) + "`",
+                "• نقطة الدخول: `" + str(entry) + "`",
+                "",
+                "أرسل توكن البوت من @BotFather لبدء الاستضافة.",
+            ]
+            body = chr(10).join(lines)
+            if message is not None:
+                try:
+                    from lumen.bot.ui.secret_prompt import prompt_for_secret
+                    await prompt_for_secret(
+                        message=message, kind="bot", body=body, user_id=int(user_id or 0)
+                    )
+                    return ""
+                except Exception:
+                    logger.exception("template permanent secret prompt failed")
+            return body
+
     except Exception:
         logger.exception("template reserve failed effect=%s uid=%s", effect, user_id)
         return "تعذر حجز القالب حاليًا."

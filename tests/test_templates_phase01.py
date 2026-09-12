@@ -264,3 +264,37 @@ def test_trial_runner_caps_at_fifty_minutes():
     run_seconds = 99999
     seconds = max(15.0, min(float(run_seconds or 60), max_trial))
     assert seconds == 50 * 60
+
+
+def test_phase4_permanent_pending_host(tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("LUMEN_OUTPUT_DIR", str(tmp_path / "out"))
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+
+    from lumen.templates.service import reset_template_service_for_tests, get_template_service
+    reset_template_service_for_tests()
+
+    from lumen.bot.ui.callbacks.templates_actions import execute_template_reserve
+
+    ud = {
+        "engine_ui": {
+            "phase": "template_detail",
+            "slots": {"template_id": "shop_assistant", "template_short": "sa"},
+        }
+    }
+    note = asyncio.run(
+        execute_template_reserve(
+            effect="tpl_reserve_permanent", user_id=920001, user_data=ud, message=None
+        )
+    )
+    assert ud.get("pending_host"), note
+    ph = ud["pending_host"]
+    assert ph.get("source") == "template"
+    assert ph.get("plane") == "permanent_host"
+    assert ph.get("template_id") == "shop_assistant"
+    assert ph.get("template_instance_id")
+    assert int(ph.get("template_ttl_days") or 0) == 30
+    assert not ud.get("pending_run")
+    from pathlib import Path
+    assert Path(ph["project_path"]).joinpath("main.py").is_file()
