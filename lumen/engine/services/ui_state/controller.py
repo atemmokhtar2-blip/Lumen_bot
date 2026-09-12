@@ -89,16 +89,46 @@ def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> Engin
 def _template_gallery_buttons() -> tuple[tuple[UiButton, ...], ...]:
     """One row per catalog template — detail opens via tpl_select."""
     try:
-        from lumen.templates.service import TemplateService
-        specs = list(TemplateService().list_catalog())
+        from lumen.templates.service import get_template_service
+        specs = list(get_template_service().list_catalog())
     except Exception:
-        specs = []
+        try:
+            from lumen.templates.service import TemplateService
+            specs = list(TemplateService().list_catalog())
+        except Exception:
+            specs = []
     rows: list[tuple[UiButton, ...]] = []
+    rows.append((UiButton("بوتاتي من القوالب", "tpl_mine", style="primary"),))
     for spec in specs[:12]:
         rows.append((UiButton(spec.title[:40], "tpl_select", spec.short_id or spec.id, style="primary"),))
-    if not rows:
+    if len(rows) == 1:
         rows.append((UiButton("لا توجد قوالب", "open_templates"),))
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATES)
+
+
+def _template_status_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
+    """Stop buttons use short index arg (signed callback ≤12)."""
+    rows: list[tuple[UiButton, ...]] = []
+    for i in range(5):
+        iid = (state.slots.get(f"tpl_i{i}") or "").strip()
+        if not iid:
+            continue
+        st = (state.slots.get(f"tpl_s{i}") or "?")[:12]
+        title = (state.slots.get(f"tpl_t{i}") or f"#{i+1}")[:24]
+        rem = (state.slots.get(f"tpl_r{i}") or "")[:16]
+        label = f"{title} · {st}"
+        if rem:
+            label = f"{title} · {st} · {rem}"
+        rows.append((UiButton(label[:40], "tpl_refresh_mine"),))
+        if st in {"running", "preparing", "شغال", "تجهيز"}:
+            rows.append((UiButton("إيقاف", "tpl_stop", str(i), style="danger"),))
+    rows.append(
+        (
+            UiButton("تحديث", "tpl_refresh_mine", style="primary"),
+            UiButton("رجوع للقوالب", "open_templates"),
+        )
+    )
+    return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_STATUS)
 
 
 def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ...]:
@@ -283,6 +313,8 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav(_conn_github_buttons(state), phase)
     if phase == EngineUiPhase.TEMPLATES:
         return _template_gallery_buttons()
+    if phase == EngineUiPhase.TEMPLATE_STATUS:
+        return _template_status_buttons(state)
     if phase == EngineUiPhase.TEMPLATE_DETAIL:
         tid = (state.slots.get("template_short") or state.slots.get("template_id") or "").strip()
         return _template_detail_buttons(tid)
@@ -390,6 +422,32 @@ def composed_request(state: EngineUiState) -> str:
         desc = preset_description((state.slots.get("bot_type") or "").strip())
     return enrich_description(desc, state.slots)
 
+
+
+def _fill_template_status_slots(state: EngineUiState, user_id: int | None) -> EngineUiState:
+    """Load user template instances into slots tpl_i* for the status panel."""
+    for i in range(5):
+        state.slots.pop(f"tpl_i{i}", None)
+        state.slots.pop(f"tpl_s{i}", None)
+        state.slots.pop(f"tpl_t{i}", None)
+        state.slots.pop(f"tpl_r{i}", None)
+        state.slots.pop(f"tpl_m{i}", None)
+    if not user_id:
+        return state
+    try:
+        from lumen.templates.host_adapter import list_user_status, reconcile_expired
+
+        reconcile_expired(int(user_id), stop_hosts=False)
+        rows = list_user_status(int(user_id))[:5]
+        for i, row in enumerate(rows):
+            state.slots[f"tpl_i{i}"] = row.instance_id
+            state.slots[f"tpl_s{i}"] = row.status
+            state.slots[f"tpl_t{i}"] = row.title[:40]
+            state.slots[f"tpl_r{i}"] = row.remaining_label_ar[:20]
+            state.slots[f"tpl_m{i}"] = row.mode
+    except Exception:
+        pass
+    return state
 
 def apply_action(
     state: EngineUiState, action_id: str, arg: str = "", *, user_id: int | None = None
@@ -640,7 +698,26 @@ def apply_action(
         new.slots.pop("template_title", None)
         new.slots.pop("template_description", None)
         new.missing = []
+        if user_id:
+            try:
+                from lumen.templates.host_adapter import reconcile_expired
+                reconcile_expired(int(user_id), stop_hosts=False)
+            except Exception:
+                pass
         msg = "قوالب جاهزة — اختر بوتًا للعرض."
+    elif action_id == "tpl_mine" or action_id == "tpl_refresh_mine":
+        new.phase = EngineUiPhase.TEMPLATE_STATUS
+        new = _fill_template_status_slots(new, user_id)
+        new.missing = []
+        msg = "بوتاتك من القوالب."
+    elif action_id == "tpl_stop":
+        new.phase = EngineUiPhase.TEMPLATE_STATUS
+        idx = (arg or "").strip()
+        iid = (new.slots.get(f"tpl_i{idx}") or "").strip() if idx.isdigit() else ""
+        new.slots["tpl_stop_target"] = iid
+        new.missing = []
+        msg = "جاري إيقاف القالب…"
+        post_fx = "tpl_stop_instance"
     elif action_id == "tpl_select":
         tid = (arg or "").strip()
         try:

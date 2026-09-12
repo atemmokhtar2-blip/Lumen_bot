@@ -338,3 +338,52 @@ def test_host_adapter_prepare_and_preflight(tmp_path, monkeypatch):
     ok2, reason2 = preflight_before_host_start(uid, plan.pending_host, now=999.0)
     assert ok2 is False
     assert "expired" in reason2 or "missing" in reason2 or "status" in reason2
+
+
+def test_phase5_status_panel_and_stop(tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+
+    from lumen.templates.service import reset_template_service_for_tests, get_template_service
+    from lumen.templates.host_adapter import prepare_permanent_launch, list_user_status, stop_user_instance
+    from lumen.templates.models import TemplateInstanceStatus
+    from lumen.engine.services.ui_state.controller import apply_action
+    from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
+    from lumen.bot.ui.signed_callback import encode_signed, decode_signed
+    import os
+    os.environ.setdefault("ENVIRONMENT", "test")
+
+    reset_template_service_for_tests()
+    uid = 940001
+    plan = prepare_permanent_launch(uid, template_id="group_moderator")
+    assert plan.ok
+    rows = list_user_status(uid)
+    assert rows and rows[0].template_id == "group_moderator"
+
+    st = EngineUiState(phase=EngineUiPhase.TEMPLATES)
+    r = apply_action(st, "tpl_mine", user_id=uid)
+    assert r.state.phase == EngineUiPhase.TEMPLATE_STATUS
+    assert r.state.slots.get("tpl_i0")
+
+    r2 = apply_action(r.state, "tpl_stop", "0", user_id=uid)
+    assert r2.post_side_effect == "tpl_stop_instance"
+    assert r2.state.slots.get("tpl_stop_target") == r.state.slots.get("tpl_i0")
+
+    note = asyncio.run(
+        __import__("lumen.bot.ui.callbacks.templates_actions", fromlist=["execute_template_reserve"]).execute_template_reserve(
+            effect="tpl_stop_instance",
+            user_id=uid,
+            user_data={"engine_ui": r2.state.to_dict()},
+            message=None,
+        )
+    )
+    assert "إيقاف" in note or "تحري" in note
+    ok, reason, _ = stop_user_instance(uid, plan.instance.instance_id)
+    # already stopped is ok
+    insts = get_template_service().list_user_instances(uid)
+    assert any(i.status == TemplateInstanceStatus.STOPPED for i in insts)
+
+    for action, arg in (("tpl_mine", ""), ("tpl_stop", "0"), ("tpl_refresh_mine", "")):
+        wire = encode_signed(action, arg, user_id=uid)
+        assert decode_signed(wire, user_id=uid) == (action, arg)

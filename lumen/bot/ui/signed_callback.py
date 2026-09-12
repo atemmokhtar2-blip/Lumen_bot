@@ -112,6 +112,9 @@ _ACTION_SHORT: dict[str, str] = {
     "tpl_trial": "tt",
     "tpl_minutes": "tm",
     "tpl_permanent": "tp",
+    "tpl_mine": "tmy",
+    "tpl_stop": "tsp",
+    "tpl_refresh_mine": "trm",
 }
 _SHORT_ACTION: dict[str, str] = {v: k for k, v in _ACTION_SHORT.items()}
 

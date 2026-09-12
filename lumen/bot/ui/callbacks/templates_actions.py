@@ -41,6 +41,57 @@ async def execute_template_reserve(
     """Reserve quota + for trial: materialize project and bind TRIAL_CHAT plane."""
     ud = user_data if isinstance(user_data, dict) else {}
     slots = _slots_from_ud(ud)
+
+    if effect == "tpl_stop_instance":
+        iid = str(slots.get("tpl_stop_target") or ud.get("tpl_stop_target") or "").strip()
+        if not iid:
+            return "لم يُحدد قالب للإيقاف."
+        try:
+            from lumen.templates.host_adapter import stop_user_instance, list_user_status
+
+            ok, reason, host_id = stop_user_instance(int(user_id), iid)
+            if not ok:
+                return "تعذر الإيقاف (" + reason + ")."
+            # Best-effort host stop outside templates package
+            if host_id and not str(host_id).startswith("pid:"):
+                try:
+                    import os
+                    from pathlib import Path as _P
+                    from lumen.engine.services.hosting import get_hosting_service
+                    from lumen.bot.helpers import OUTPUT_DIR  # type: ignore
+
+                    get_hosting_service(OUTPUT_DIR).stop(
+                        instance_id=str(host_id), user_id=int(user_id)
+                    )
+                except Exception:
+                    logger.debug("host stop after template stop soft-fail", exc_info=True)
+            # Refresh engine_ui status slots
+            try:
+                st = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+                slots2 = dict(st.get("slots") or {})
+                for i in range(5):
+                    slots2.pop(f"tpl_i{i}", None)
+                    slots2.pop(f"tpl_s{i}", None)
+                    slots2.pop(f"tpl_t{i}", None)
+                    slots2.pop(f"tpl_r{i}", None)
+                rows = list_user_status(int(user_id))[:5]
+                for i, row in enumerate(rows):
+                    slots2[f"tpl_i{i}"] = row.instance_id
+                    slots2[f"tpl_s{i}"] = row.status
+                    slots2[f"tpl_t{i}"] = row.title[:40]
+                    slots2[f"tpl_r{i}"] = row.remaining_label_ar[:20]
+                slots2.pop("tpl_stop_target", None)
+                st = dict(st)
+                st["slots"] = slots2
+                st["phase"] = "template_status"
+                ud["engine_ui"] = st
+            except Exception:
+                logger.debug("refresh template status slots failed", exc_info=True)
+            return "تم إيقاف القالب وتحرير مقعد من الحصة (حد 3)."
+        except Exception:
+            logger.exception("tpl_stop_instance failed")
+            return "تعذر إيقاف القالب."
+
     tid = str(slots.get("template_id") or ud.get("template_id") or "").strip()
     if not tid:
         return "تعذر تحديد القالب."

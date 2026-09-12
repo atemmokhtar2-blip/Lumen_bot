@@ -87,7 +87,7 @@ async def execute_post_side_effect(
     effect = (effect or "").strip()
     ud = context.user_data if context.user_data is not None else {}
     uid = int(getattr(user, "id", 0) or 0)
-    if effect in {"tpl_reserve_trial", "tpl_reserve_permanent"}:
+    if effect in {"tpl_reserve_trial", "tpl_reserve_permanent", "tpl_stop_instance"}:
         from lumen.bot.ui.callbacks.templates_actions import execute_template_reserve
         return await execute_template_reserve(
             effect=effect,

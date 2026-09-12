@@ -351,6 +351,32 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             ],
         )
 
+    if phase == EngineUiPhase.TEMPLATE_STATUS:
+        lines: list[str] = []
+        for i in range(5):
+            title = (state.slots.get(f"tpl_t{i}") or "").strip()
+            if not title:
+                continue
+            st = escape_html((state.slots.get(f"tpl_s{i}") or "?").strip())
+            rem = escape_html((state.slots.get(f"tpl_r{i}") or "—").strip())
+            mode = escape_html((state.slots.get(f"tpl_m{i}") or "").strip())
+            line = f"{escape_html(title)} — {st} — متبقي: {rem}"
+            if mode:
+                line += f" ({mode})"
+            lines.append(line)
+        body = chr(10).join(lines) if lines else "لا توجد قوالب شغّالة أو محجوزة حاليًا."
+        return html_card(
+            "بوتاتي من القوالب",
+            [
+                ("الحالة", body),
+                (
+                    "الحد المجاني",
+                    "حتى 3 قوالب شغّالة معًا. الإيقاف يحرّر مقعدًا فورًا.",
+                ),
+            ],
+            subtitle="حالة القوالب فقط",
+        )
+
     if phase == EngineUiPhase.HELP:
 
         from lumen.bot.telegram_text import looks_like_telegram_html

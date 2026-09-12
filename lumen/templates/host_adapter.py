@@ -256,7 +256,93 @@ def reconcile_expired(
     return insts
 
 
+@dataclass(frozen=True, slots=True)
+class TemplateStatusRow:
+    instance_id: str
+    template_id: str
+    title: str
+    mode: str
+    status: str
+    remaining_sec: int
+    remaining_label_ar: str
+    host_instance_id: str = ""
+
+
+def list_user_status(user_id: int, *, now: float | None = None) -> list[TemplateStatusRow]:
+    """Human-facing status rows after reconcile (no internal paths)."""
+    uid = int(user_id or 0)
+    ts = float(now if now is not None else time.time())
+    if uid <= 0:
+        return []
+    reconcile_expired(uid, now=ts, stop_hosts=False)
+    svc = get_template_service()
+    rows: list[TemplateStatusRow] = []
+    try:
+        from lumen.templates.catalog import get_template
+    except Exception:
+        get_template = lambda _x: None  # type: ignore
+
+    for inst in svc.list_user_instances(uid):
+        rem = 0
+        if inst.expires_at > 0:
+            rem = max(0, int(inst.expires_at - ts))
+        if rem >= 86400:
+            label = f"{rem // 86400} يوم"
+        elif rem >= 3600:
+            label = f"{rem // 3600} ساعة"
+        elif rem >= 60:
+            label = f"{rem // 60} دقيقة"
+        elif rem > 0:
+            label = f"{rem} ثانية"
+        else:
+            label = "منتهٍ" if inst.expires_at > 0 else "—"
+
+        title = inst.template_id
+        try:
+            spec = get_template(inst.template_id)
+            if spec is not None:
+                title = spec.title
+        except Exception:
+            pass
+
+        rows.append(
+            TemplateStatusRow(
+                instance_id=inst.instance_id,
+                template_id=inst.template_id,
+                title=title,
+                mode=inst.mode.value if hasattr(inst.mode, "value") else str(inst.mode),
+                status=inst.status.value if hasattr(inst.status, "value") else str(inst.status),
+                remaining_sec=rem,
+                remaining_label_ar=label,
+                host_instance_id=inst.host_instance_id or "",
+            )
+        )
+    # Active first
+    order = {"running": 0, "preparing": 1, "failed": 2, "stopped": 3, "expired": 4}
+    rows.sort(key=lambda r: (order.get(r.status, 9), -r.remaining_sec))
+    return rows
+
+
+def stop_user_instance(user_id: int, instance_id: str) -> tuple[bool, str, str]:
+    """Mark STOPPED and return (ok, reason, host_instance_id for optional host stop)."""
+    uid = int(user_id or 0)
+    iid = (instance_id or "").strip()
+    if uid <= 0 or not iid:
+        return False, "invalid", ""
+    svc = get_template_service()
+    insts = svc.list_user_instances(uid)
+    target = next((i for i in insts if i.instance_id == iid), None)
+    if target is None:
+        return False, "not_found", ""
+    host_id = target.host_instance_id or ""
+    updated = svc.mark_stopped(uid, iid)
+    if updated is None:
+        return False, "update_failed", host_id
+    return True, "ok", host_id
+
+
 __all__ = [
+
     "TemplateHostPlan",
     "prepare_permanent_launch",
     "preflight_before_host_start",

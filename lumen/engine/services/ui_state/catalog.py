@@ -190,6 +190,7 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
             EngineUiPhase.TEMPLATES,
             EngineUiPhase.TEMPLATE_DETAIL,
             EngineUiPhase.TEMPLATE_TRIAL_MINUTES,
+            EngineUiPhase.TEMPLATE_STATUS,
             EngineUiPhase.DASHBOARD,
         }),
     ),
@@ -212,6 +213,27 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "tpl_permanent",
         "Template permanent",
         frozenset({EngineUiPhase.TEMPLATE_DETAIL}),
+    ),
+
+    "tpl_mine": UiActionSpec(
+        "tpl_mine",
+        "My template bots",
+        frozenset({
+            EngineUiPhase.TEMPLATES,
+            EngineUiPhase.TEMPLATE_DETAIL,
+            EngineUiPhase.TEMPLATE_STATUS,
+            EngineUiPhase.HOME,
+        }),
+    ),
+    "tpl_stop": UiActionSpec(
+        "tpl_stop",
+        "Stop template instance",
+        frozenset({EngineUiPhase.TEMPLATE_STATUS}),
+    ),
+    "tpl_refresh_mine": UiActionSpec(
+        "tpl_refresh_mine",
+        "Refresh my templates",
+        frozenset({EngineUiPhase.TEMPLATE_STATUS}),
     ),
     "conn_github": UiActionSpec(
         "conn_github",

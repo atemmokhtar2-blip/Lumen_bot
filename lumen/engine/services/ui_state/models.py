@@ -33,6 +33,7 @@ class EngineUiPhase(str, Enum):
     TEMPLATES = "templates"  # Ready-made bot template gallery
     TEMPLATE_DETAIL = "template_detail"  # One template: trial / permanent
     TEMPLATE_TRIAL_MINUTES = "template_trial_minutes"  # Pick 1–50 minutes
+    TEMPLATE_STATUS = "template_status"  # User template instances panel
     CONN_GITHUB = "conn_github"  # GitHub repos list / connect
     CONTEXT = "context"  # Batch 6 contextual event surface
 
