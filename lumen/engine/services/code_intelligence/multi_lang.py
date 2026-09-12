@@ -58,8 +58,7 @@ _LANG_BY_EXT: dict[str, tuple[str, Language | None]] = {
 }
 
 
-def _sid(path: str, kind: str, name: str, line: int) -> str:
-    return hashlib.sha1(f"{path}:{kind}:{name}:{line}".encode()).hexdigest()[:16]
+from lumen.engine.services.code_intelligence.symbol_id import symbol_id as _sid
 
 
 def _extract_python(path: str, data: bytes) -> list[dict[str, Any]]:

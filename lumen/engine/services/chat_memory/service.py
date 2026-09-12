@@ -38,13 +38,8 @@ class ChatMemory:
         self._init()
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(str(self.path), timeout=30, check_same_thread=False)
-        c.row_factory = sqlite3.Row
-        try:
-            c.execute("PRAGMA journal_mode=WAL")
-        except Exception:
-            pass
-        return c
+        from lumen.platform.sqlite_util import open_wal_connection
+        return open_wal_connection(self.path)
 
     def _init(self) -> None:
         with self._lock:

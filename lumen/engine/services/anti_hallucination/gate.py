@@ -249,10 +249,12 @@ def _read(path: Path) -> str:
 
 
 def _find_entry(root: Path) -> Path | None:
-    for rel in _CORE_ENTRY_CANDIDATES:
-        p = root / rel
-        if p.is_file():
-            return p
+    from lumen.engine.services.live_deployment.entry_point import find_entry_point
+    hints = list(_CORE_ENTRY_CANDIDATES) if "_CORE_ENTRY_CANDIDATES" in globals() else None
+    found = find_entry_point(root, hints=hints)
+    if found:
+        return found
+    # deep search main.py/bot.py skipping venv (gate-specific)
     for name in ("main.py", "bot.py"):
         for p in root.rglob(name):
             if any(x in p.parts for x in (".venv", "venv", "__pycache__")):

@@ -25,67 +25,17 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from lumen.engine.services.sandbox_runtime.firecracker_backend.vmm_api import (
+    api_put as _api_put,
+    api_patch as _api_patch,
+)
+
 
 from lumen.platform.envutil import env_flag as _flag
 
 
-def _api_put(sock_path: Path, path: str, body: dict, *, timeout: float = 60.0) -> None:
-    payload = json.dumps(body).encode("utf-8")
-    req = (
-        f"PUT {path} HTTP/1.1\r\n"
-        f"Host: localhost\r\n"
-        f"Content-Type: application/json\r\n"
-        f"Accept: application/json\r\n"
-        f"Content-Length: {len(payload)}\r\n"
-        f"\r\n"
-    ).encode("utf-8") + payload
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        s.connect(str(sock_path))
-        s.sendall(req)
-        chunks: list[bytes] = []
-        while True:
-            try:
-                data = s.recv(4096)
-            except socket.timeout:
-                break
-            if not data:
-                break
-            chunks.append(data)
-            if b"\r\n\r\n" in b"".join(chunks):
-                try:
-                    s.settimeout(0.2)
-                    while True:
-                        more = s.recv(4096)
-                        if not more:
-                            break
-                        chunks.append(more)
-                except (socket.timeout, OSError):
-                    pass
-                break
-    raw = b"".join(chunks).decode("utf-8", errors="replace")
-    if "HTTP/1.1 2" not in raw and "HTTP/1.0 2" not in raw:
-        raise RuntimeError(f"fc_api_error:{path}:{raw[:300]}")
 
 
-def _api_patch(sock_path: Path, path: str, body: dict, *, timeout: float = 30.0) -> None:
-    payload = json.dumps(body).encode("utf-8")
-    req = (
-        f"PATCH {path} HTTP/1.1\r\n"
-        f"Host: localhost\r\n"
-        f"Content-Type: application/json\r\n"
-        f"Accept: application/json\r\n"
-        f"Content-Length: {len(payload)}\r\n"
-        f"\r\n"
-    ).encode("utf-8") + payload
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(timeout)
-        s.connect(str(sock_path))
-        s.sendall(req)
-        data = s.recv(8192)
-    raw = data.decode("utf-8", errors="replace")
-    if "HTTP/1.1 2" not in raw and "HTTP/1.0 2" not in raw:
-        raise RuntimeError(f"fc_api_patch_error:{path}:{raw[:300]}")
 
 
 @dataclass

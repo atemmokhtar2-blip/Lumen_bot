@@ -58,9 +58,7 @@ class Symbol:
         }
 
 
-def _sid(path: str, kind: str, name: str, line: int) -> str:
-    raw = f"{path}:{kind}:{name}:{line}"
-    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+from lumen.engine.services.code_intelligence.symbol_id import symbol_id as _sid
 
 
 def _node_text(source: bytes, node: Node) -> str:

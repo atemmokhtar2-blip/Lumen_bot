@@ -1,19 +1,27 @@
-"""Firecracker HTTP API over Unix socket."""
+"""Firecracker HTTP API over Unix socket (single client for all FC modules)."""
 from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
+import socket
 import subprocess
-import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-def _api_put(sock: Path, path: str, body: dict, timeout: float = 15.0) -> None:
-    data = json.dumps(body)
-    # Prefer curl unix-socket (ubiquitous); fallback to Python http if needed.
+
+def api_request(
+    sock: Path,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    *,
+    timeout: float = 30.0,
+) -> None:
+    """PUT/PATCH/GET against Firecracker API socket. Fails closed on non-2xx."""
+    method = (method or "PUT").upper()
+    data = json.dumps(body or {})
     if shutil.which("curl"):
         r = subprocess.run(
             [
@@ -22,7 +30,7 @@ def _api_put(sock: Path, path: str, body: dict, timeout: float = 15.0) -> None:
                 str(sock),
                 "-sS",
                 "-X",
-                "PUT",
+                method,
                 f"http://localhost{path}",
                 "-H",
                 "Content-Type: application/json",
@@ -34,28 +42,58 @@ def _api_put(sock: Path, path: str, body: dict, timeout: float = 15.0) -> None:
             check=False,
         )
         if r.returncode != 0:
-            raise RuntimeError(f"fc_api_put_failed:{path}:{(r.stderr or b'')!r}")
+            err = (r.stderr or b"")
+            raise RuntimeError(f"fc_api_{method.lower()}_failed:{path}:{err!r}")
         return
-    # Minimal fallback without third-party deps
-    import http.client
-    import socket as _socket
 
-    class _UnixHTTPConnection(http.client.HTTPConnection):
-        def __init__(self, socket_path: str) -> None:
-            super().__init__("localhost")
-            self._socket_path = socket_path
+    payload = data.encode("utf-8")
+    req = (
+        f"{method} {path} HTTP/1.1\r\n"
+        f"Host: localhost\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Accept: application/json\r\n"
+        f"Content-Length: {len(payload)}\r\n"
+        f"\r\n"
+    ).encode("utf-8") + payload
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect(str(sock))
+        s.sendall(req)
+        chunks: list[bytes] = []
+        while True:
+            try:
+                chunk = s.recv(4096)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+            joined = b"".join(chunks)
+            if b"\r\n\r\n" in joined:
+                try:
+                    s.settimeout(0.2)
+                    while True:
+                        more = s.recv(4096)
+                        if not more:
+                            break
+                        chunks.append(more)
+                except (socket.timeout, OSError):
+                    pass
+                break
+    raw = b"".join(chunks).decode("utf-8", errors="replace")
+    if "HTTP/1.1 2" not in raw and "HTTP/1.0 2" not in raw:
+        raise RuntimeError(f"fc_api_error:{method}:{path}:{raw[:300]}")
 
-        def connect(self) -> None:
-            self.sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-            self.sock.connect(self._socket_path)
 
-    conn = _UnixHTTPConnection(str(sock))
-    try:
-        conn.request("PUT", path, body=data, headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        if resp.status >= 300:
-            raise RuntimeError(f"fc_api_put_http:{path}:{resp.status}")
-    finally:
-        conn.close()
+def api_put(sock: Path, path: str, body: dict, *, timeout: float = 30.0) -> None:
+    api_request(sock, "PUT", path, body, timeout=timeout)
 
 
+def api_patch(sock: Path, path: str, body: dict, *, timeout: float = 30.0) -> None:
+    api_request(sock, "PATCH", path, body, timeout=timeout)
+
+
+_api_put = api_put
+_api_patch = api_patch
+
+__all__ = ["api_request", "api_put", "api_patch", "_api_put", "_api_patch"]

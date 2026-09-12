@@ -78,15 +78,13 @@ def _load_token() -> str:
 
 
 def _find_entry() -> Path:
+    from lumen.engine.services.live_deployment.entry_point import find_entry_point
+    import os
     hint = (os.environ.get("LUMEN_BOT_ENTRY") or "").strip()
-    if hint:
-        p = PROJECT / hint if not hint.startswith("/") else Path(hint)
-        if p.is_file():
-            return p
-    for rel in ("main.py", "bot.py", "app.py", "src/main.py"):
-        p = PROJECT / rel
-        if p.is_file():
-            return p
+    hints = [hint] if hint else ["main.py", "bot.py", "app.py", "src/main.py"]
+    found = find_entry_point(PROJECT, hints=hints)
+    if found is not None:
+        return found
     raise FileNotFoundError("no_entry_main_py")
 
 

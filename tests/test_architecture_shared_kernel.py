@@ -210,3 +210,37 @@ def test_public_base_url_single():
             if isinstance(node, ast.FunctionDef) and node.name == "_public_base":
                 body = ast.get_source_segment(src, node) or ""
                 assert "public_base_url" in body, f"{rel} must use runtime_config.public_base_url"
+
+
+def test_fc_snapshot_uses_vmm_api():
+    p = LUMEN / "engine/services/sandbox_runtime/fc_snapshot.py"
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    tree = _parse(p)
+    for node in (tree.body if tree else []):
+        if isinstance(node, ast.FunctionDef) and node.name in {"_api_put", "_api_patch"}:
+            body = ast.get_source_segment(src, node) or ""
+            assert "socket.AF_UNIX" not in body, "fc_snapshot must use vmm_api client"
+
+
+def test_sqlite_wal_helper():
+    for rel in (
+        "engine/services/chat_memory/service.py",
+        "engine/services/semantic_memory/project_memory.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        assert "open_wal_connection" in src
+
+
+def test_symbol_id_shared():
+    for rel in (
+        "engine/services/code_intelligence/multi_lang.py",
+        "engine/services/code_intelligence/tree_sitter_index.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "_sid":
+                body = ast.get_source_segment(src, node) or ""
+                assert "sha1" not in body, f"local _sid in {rel}"
