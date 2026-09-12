@@ -18,7 +18,8 @@ logger = logging.getLogger("lumen_bot.ui.secret_prompt")
 
 
 def _public_base() -> str:
-    return (os.getenv("PUBLIC_BASE_URL") or os.getenv("WEB_APP_URL") or "").strip().rstrip("/")
+    from lumen.platform.runtime_config import public_base_url
+    return public_base_url()
 
 
 def secrets_web_url(*, kind: str = "bot") -> str | None:

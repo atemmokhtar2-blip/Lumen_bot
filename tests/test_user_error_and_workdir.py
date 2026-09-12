@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lumen.bot.sanitize import user_facing_generation_error
+from lumen.platform.sanitize import user_facing_generation_error
 from lumen.engine.services.user_sandbox import allocate_fallback_workdir
 
 

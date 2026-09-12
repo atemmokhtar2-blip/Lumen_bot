@@ -151,7 +151,7 @@ async def host_stop(request: web.Request) -> web.Response:
         lambda: svc.stop(instance_id=instance_id, user_id=uid, tenant_id=tenant.tenant_id)
     )
     try:
-        from lumen.bot.sanitize import sanitize_error
+        from lumen.platform.sanitize import sanitize_error
         msg = sanitize_error(str(result.message or ""), max_len=300)
     except Exception:
         msg = "host_operation_completed" if result.ok else "host_operation_failed"

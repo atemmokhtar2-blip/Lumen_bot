@@ -18,7 +18,7 @@ async def run_guided_generation(
 ) -> Any:
     """Invoke run_generation + deliver_generation_result — no parallel engine."""
     from lumen.bot.config import OUTPUT_DIR
-    from lumen.bot.sanitize import user_facing_generation_error
+    from lumen.platform.sanitize import user_facing_generation_error
     from lumen.bot.helpers import run_generation, safe_edit_text
     from lumen.bot.progress_tracker import run_with_heartbeat
 

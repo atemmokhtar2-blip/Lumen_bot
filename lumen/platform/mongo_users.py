@@ -101,9 +101,7 @@ def normalize_plan_id(plan_id: str | None) -> str:
 from lumen.platform.api_keys import new_api_key as _new_api_key
 
 
-def _hash_key(raw: str) -> str:
-    from lumen.platform.api_key_crypto import hash_api_key
-    return hash_api_key(raw)
+from lumen.platform.api_key_crypto import hash_api_key as _hash_key
 
 
 class MongoUserStore:

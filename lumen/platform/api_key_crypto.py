@@ -158,3 +158,7 @@ __all__ = [
     "argon2_hash",
     "argon2_verify",
 ]
+
+# back-compat for tenants/mongo_users
+def _hash_key(raw: str) -> str:
+    return hash_api_key(raw)

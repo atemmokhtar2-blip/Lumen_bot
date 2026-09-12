@@ -26,6 +26,15 @@ def is_dev() -> bool:
     return environment() in {"dev", "development", "local", "test"}
 
 
+def public_base_url() -> str:
+    """Public HTTPS origin for webhooks / OAuth callbacks / secret inbox links."""
+    return (
+        (os.getenv("PUBLIC_BASE_URL") or "")
+        or (os.getenv("API_PUBLIC_URL") or "")
+        or (os.getenv("WEB_APP_URL") or "")
+    ).strip().rstrip("/")
+
+
 def database_url() -> str:
     return (
         (os.getenv("DATABASE_URL") or "")

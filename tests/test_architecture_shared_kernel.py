@@ -190,3 +190,23 @@ def test_sqlite_default_paths_use_platform():
             if isinstance(node, ast.FunctionDef) and node.name == "_default_db_path":
                 body = ast.get_source_segment(src, node) or ""
                 assert "sqlite_under_data" in body, f"{rel} must use paths.sqlite_under_data"
+
+
+def test_sanitize_canonical_is_platform():
+    """engine/api must not reintroduce bot.sanitize as the implementation home."""
+    # bot.sanitize may re-export; platform.sanitize must define sanitize_error body
+    p = LUMEN / "platform" / "sanitize.py"
+    src = p.read_text(encoding="utf-8", errors="ignore")
+    assert "def sanitize_error" in src
+    assert "REDACTED_TELEGRAM_TOKEN" in src
+
+
+def test_public_base_url_single():
+    for rel in ("api/routes/github_app.py", "bot/ui/secret_prompt.py"):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "_public_base":
+                body = ast.get_source_segment(src, node) or ""
+                assert "public_base_url" in body, f"{rel} must use runtime_config.public_base_url"

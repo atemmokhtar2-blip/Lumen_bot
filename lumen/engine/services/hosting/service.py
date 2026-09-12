@@ -1171,7 +1171,7 @@ class HostingService:
         if backend in {"lumen_serverless", "serverless", "vercel"}:
             try:
                 from lumen.hosting.serverless_health import collect_serverless_logs
-                from lumen.bot.sanitize import sanitize_log_text
+                from lumen.platform.sanitize import sanitize_log_text
                 raw = collect_serverless_logs(inst, limit=max(10, min(200, int(limit))))
                 lines = [sanitize_log_text(str(x)) for x in (raw or [])]
             except Exception as exc:
@@ -1195,7 +1195,7 @@ class HostingService:
                 details={"log_lines": lines[-int(limit):], "line_count": len(lines), "backend": "lumen_serverless"},
             )
         try:
-            from lumen.bot.sanitize import sanitize_log_text
+            from lumen.platform.sanitize import sanitize_log_text
             if backend == "firecracker" or dep.startswith("fc-") or dep:
                 from lumen.hosting.log_aggregator import (
                     collect_instance_logs,
@@ -1221,7 +1221,7 @@ class HostingService:
         # Fallback: project deploy log files
         if not lines:
             try:
-                from lumen.bot.sanitize import sanitize_log_text as _slog
+                from lumen.platform.sanitize import sanitize_log_text as _slog
                 root = Path(inst.project_path)
                 for pth in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
                     chunk = _slog(pth.read_text(encoding="utf-8", errors="ignore")[-6000:])
@@ -1326,7 +1326,7 @@ class HostingService:
         dep = (inst.deployment_id or "").strip()
         backend = (getattr(inst, "sandbox_backend", None) or "").strip().lower()
         try:
-            from lumen.bot.sanitize import sanitize_log_text
+            from lumen.platform.sanitize import sanitize_log_text
             if backend == "firecracker" or dep.startswith("fc-"):
                 from lumen.engine.services.sandbox_runtime.firecracker_backend import (
                     FirecrackerSandboxBackend,
@@ -1347,10 +1347,10 @@ class HostingService:
         try:
             if not run_log:
                 for p in sorted(root.glob(".deploy_*.run.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
-                    from lumen.bot.sanitize import sanitize_log_text
+                    from lumen.platform.sanitize import sanitize_log_text
                     run_log = sanitize_log_text(p.read_text(encoding="utf-8", errors="ignore")[-8000:])
             for p in sorted(root.glob(".deploy_*.install.log"), key=lambda x: x.stat().st_mtime, reverse=True)[:1]:
-                from lumen.bot.sanitize import sanitize_log_text as _slog
+                from lumen.platform.sanitize import sanitize_log_text as _slog
                 install_log = _slog(p.read_text(encoding="utf-8", errors="ignore")[-5000:])
         except Exception:
             pass

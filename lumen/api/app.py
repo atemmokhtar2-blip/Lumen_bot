@@ -142,7 +142,7 @@ async def error_middleware(request: web.Request, handler):
     except Exception as exc:
         # Never leak exception text / paths / stack traces to clients
         try:
-            from lumen.bot.sanitize import sanitize_error, install_secret_log_filter
+            from lumen.platform.sanitize import sanitize_error, install_secret_log_filter
             install_secret_log_filter()
             safe = sanitize_error(f"{type(exc).__name__}: {exc}", max_len=200)
             logger.exception("unhandled api error path=%s detail=%s", request.path, safe)
@@ -343,7 +343,7 @@ def create_app() -> web.Application:
     # client_max_size: hard cap on request body (default 256 KiB)
     max_size = int(os.getenv("API_CLIENT_MAX_SIZE") or str(256 * 1024))
     try:
-        from lumen.bot.sanitize import install_secret_log_filter
+        from lumen.platform.sanitize import install_secret_log_filter
         install_secret_log_filter()
     except Exception:
         pass

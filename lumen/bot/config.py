@@ -41,7 +41,7 @@ except Exception:
     )
 logger = logging.getLogger("lumen_bot")
 try:
-    from lumen.bot.sanitize import install_secret_log_filter
+    from lumen.platform.sanitize import install_secret_log_filter
     install_secret_log_filter()
 except Exception:
     pass

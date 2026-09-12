@@ -23,9 +23,8 @@ _setup_hits: dict[str, list[float]] = {}
 
 
 def _public_base() -> str:
-    return (
-        (os.getenv("PUBLIC_BASE_URL") or os.getenv("API_PUBLIC_URL") or "").strip().rstrip("/")
-    )
+    from lumen.platform.runtime_config import public_base_url
+    return public_base_url()
 
 
 def _client_ip(request: web.Request) -> str:

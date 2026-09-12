@@ -868,7 +868,7 @@ def run_agent(
             result = dict(result)
             result["elapsed_ms"] = _elapsed_ms
             try:
-                from lumen.bot.sanitize import sanitize_log_text
+                from lumen.platform.sanitize import sanitize_log_text
 
                 for _k in ("stdout", "stderr", "content", "message", "error"):
                     if isinstance(result.get(_k), str):

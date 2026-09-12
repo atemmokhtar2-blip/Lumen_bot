@@ -28,19 +28,8 @@ from lumen.engine.services.runtime_files import find_requirements as _find_requi
 
 
 def _find_entry(root: Path, hints: list[str] | None = None) -> Path | None:
-    for h in hints or []:
-        p = root / h
-        if p.exists() and p.suffix == ".py":
-            return p
-    for name in ("main.py", "bot.py", "app.py", "run.py"):
-        p = root / name
-        if p.exists():
-            return p
-    for p in root.glob("*.py"):
-        text = p.read_text(encoding="utf-8", errors="ignore")[:8000]
-        if any(x in text for x in ("run_polling", "start_polling", "infinity_polling", "Application.builder")):
-            return p
-    return None
+    from lumen.engine.services.live_deployment.entry_point import find_entry_point
+    return find_entry_point(root, hints=hints, scan_polling=True)
 
 
 def _venv_python(venv: Path) -> Path:

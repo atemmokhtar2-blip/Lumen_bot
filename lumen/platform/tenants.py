@@ -196,10 +196,7 @@ def _key_pepper() -> bytes:
     )
 
 
-def _hash_key(raw: str) -> str:
-    """Indexed API key hash (HMAC). KDF field upgraded on authenticate (Phase C)."""
-    from lumen.platform.api_key_crypto import hash_api_key
-    return hash_api_key(raw)
+from lumen.platform.api_key_crypto import hash_api_key as _hash_key
 
 
 @dataclass
