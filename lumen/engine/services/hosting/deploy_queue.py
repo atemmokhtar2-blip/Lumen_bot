@@ -8,15 +8,7 @@ Job lifecycle: queued → claimed → building → running | failed | cancelled
 """
 from __future__ import annotations
 
-def _cm_default_output_dir() -> str:
-    try:
-        from lumen.platform.paths import default_output_dir
-        return default_output_dir()
-    except Exception:
-        from pathlib import Path as _P
-        p = _P.home() / '.lumen'
-        p.mkdir(parents=True, exist_ok=True)
-        return str(p)
+from lumen.platform.paths import default_output_dir as _cm_default_output_dir
 
 
 import json

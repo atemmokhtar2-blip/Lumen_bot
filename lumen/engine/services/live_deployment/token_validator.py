@@ -22,7 +22,9 @@ _TOKEN_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
 
 
 def looks_like_bot_token(token: str) -> bool:
-    return bool(token and _TOKEN_RE.match(token.strip()))
+    from lumen.platform.token_patterns import looks_like_bot_token as _ll
+    return bool(_ll(token))
+
 
 
 def _api_timeout() -> float:

@@ -20,7 +20,8 @@ def env_name() -> str:
 
 
 def is_production() -> bool:
-    return env_name() in {"production", "prod", "staging"}
+    from lumen.platform.envutil import is_production as _ip
+    return bool(_ip())
 
 
 def require_langgraph() -> bool:

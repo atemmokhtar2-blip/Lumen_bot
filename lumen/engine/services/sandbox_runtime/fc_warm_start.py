@@ -23,8 +23,7 @@ from .fc_snapshot import SnapshotArtifacts, fast_link_or_copy, get_warm_pool, lo
 logger = logging.getLogger(__name__)
 
 
-def _flag(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _flag
 
 
 def warm_pool_enabled() -> bool:

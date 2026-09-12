@@ -75,21 +75,14 @@ def detect_host_intent(text: str) -> str:
 
 
 def normalize_bot_token(text: str) -> str:
-    """Collapse whitespace/newlines so pasted tokens still match."""
-    try:
-        from lumen.bot.message_classify import normalize_ws
-        return normalize_ws(text)
-    except Exception:
-        return re.sub(r"\s+", "", (text or "").strip())
+    from lumen.platform.token_patterns import normalize_bot_token as _n
+    return _n(text)
 
 
 def looks_like_bot_token(text: str) -> bool:
-    """Single classification path — never diverge from message_classify."""
-    try:
-        from lumen.bot.message_classify import looks_like_bot_token as _ll
-        return bool(_ll(text))
-    except Exception:
-        return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", normalize_bot_token(text)))
+    from lumen.platform.token_patterns import looks_like_bot_token as _ll
+    return bool(_ll(text))
+
 
 
 def escape_md(text: object) -> str:

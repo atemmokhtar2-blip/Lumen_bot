@@ -21,8 +21,7 @@ logger = logging.getLogger(__name__)
 _SAFE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$")
 
 
-def _flag(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _flag
 
 
 def _run(cmd: list[str], timeout: float = 20.0) -> Tuple[int, str, str]:

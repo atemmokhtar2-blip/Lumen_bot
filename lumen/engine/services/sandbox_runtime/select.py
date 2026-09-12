@@ -34,8 +34,7 @@ def _requested_backend() -> str:
     return (os.environ.get("TBE_SANDBOX_BACKEND") or "auto").strip().lower()
 
 
-def _flag(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _flag
 
 
 def _env_name() -> str:

@@ -8,9 +8,7 @@ from __future__ import annotations
 import os
 
 
-def is_production() -> bool:
-    env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
-    return env in {"production", "prod", "staging"}
+from lumen.platform.envutil import is_production
 
 
 def auto_heal_pip_allowed() -> bool:

@@ -92,7 +92,8 @@ def _is_dev_environment() -> bool:
 
 
 def is_production() -> bool:
-    return not _is_dev_environment()
+    from lumen.platform.envutil import is_production as _ip
+    return bool(_ip())
 
 
 def _truthy(name: str) -> bool:

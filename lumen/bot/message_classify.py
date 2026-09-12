@@ -13,6 +13,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from lumen.platform.token_patterns import (
+    looks_like_bot_token,
+    looks_like_github_pat,
+    normalize_bot_token,
+)
+
 
 class MessageKind(str, Enum):
     BOT_TOKEN = "bot_token"
@@ -29,8 +35,6 @@ class ClassifiedMessage:
     reason: str = ""
 
 
-_BOT_RE = re.compile(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$")
-_PAT_PREFIXES = ("ghp_", "github_pat_", "glpat_", "gho_", "ghu_")
 # Conversational / intent markers — never env
 _CHAT_MARKERS = (
     "اعمل", "أسحب", "اسحب", "شغّل", "شغل", "استضف", "انشر", "تعديل",
@@ -44,16 +48,17 @@ _NUMERIC_ENV_HINTS = (
 
 
 def normalize_ws(text: str) -> str:
-    return re.sub(r"\s+", "", (text or "").strip())
+    return normalize_bot_token(text)
 
 
-def looks_like_bot_token(text: str) -> bool:
-    return bool(_BOT_RE.match(normalize_ws(text)))
+
+# looks_like_bot_token imported from lumen.platform.token_patterns
+
 
 
 def looks_like_pat(text: str) -> bool:
-    v = (text or "").strip()
-    return any(v.startswith(p) for p in _PAT_PREFIXES)
+    return looks_like_github_pat(text)
+
 
 
 def looks_like_chat(text: str) -> bool:

@@ -15,6 +15,13 @@ _ENTRY_CANDIDATES = (
 
 
 def resolve_project_path(project_ref: str, user_data: dict[str, Any] | None) -> Path | None:
+    try:
+        from lumen.bot.project_path_resolve import resolve_session_project_path
+        hit = resolve_session_project_path({"project_path": project_ref or ""}, user_data)
+        if hit:
+            return Path(hit)
+    except Exception:
+        pass
     ud = user_data if isinstance(user_data, dict) else {}
     candidates: list[str] = []
     if project_ref:

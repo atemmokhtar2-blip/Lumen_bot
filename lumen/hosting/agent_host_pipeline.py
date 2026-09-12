@@ -48,20 +48,31 @@ def resolve_project_path(
     params: dict[str, Any] | None = None,
     user_data: dict[str, Any] | None = None,
 ) -> str:
+    """Single path resolver — delegates to bot.project_path_resolve."""
     params = dict(params or {})
     ud = dict(user_data or {})
-    candidates = [
-        params.get("project_path"),
-        params.get("path"),
-        (params.get("active_repo") or {}).get("path") if isinstance(params.get("active_repo"), dict) else None,
+    if isinstance(params.get("active_repo"), dict) and not isinstance(ud.get("active_repo"), dict):
+        ud = {**ud, "active_repo": params["active_repo"]}
+    pending = {
+        "project_path": str(params.get("project_path") or params.get("path") or "").strip(),
+        "path": str(params.get("path") or params.get("project_path") or "").strip(),
+    }
+    try:
+        from lumen.bot.project_path_resolve import resolve_session_project_path
+        hit = resolve_session_project_path(pending, ud)
+        if hit:
+            return hit
+    except Exception:
+        pass
+    for c in (
+        pending.get("project_path"),
         (ud.get("active_repo") or {}).get("path") if isinstance(ud.get("active_repo"), dict) else None,
         ud.get("last_project_path"),
         ud.get("last_clone_path"),
-    ]
-    for c in candidates:
-        p = str(c or "").strip()
-        if p and Path(p).is_dir():
-            return str(Path(p).resolve())
+    ):
+        s = str(c or "").strip()
+        if s and Path(s).is_dir():
+            return str(Path(s).resolve())
     return ""
 
 

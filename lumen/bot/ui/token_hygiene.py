@@ -112,15 +112,7 @@ async def scrub_and_confirm(
     return deleted
 
 
-def looks_like_github_pat(text: str) -> bool:
-    s = (text or "").strip()
-    return s.startswith(("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_"))
+def looks_like_github_pat(value: str) -> bool:
+    from lumen.platform.token_patterns import looks_like_github_pat as _lp
+    return bool(_lp(value))
 
-
-async def scrub_if_secret_message(*, update_message, bot=None) -> bool:
-    """Scrub when the user message itself looks like a secret token."""
-    text = getattr(update_message, "text", None) or getattr(update_message, "caption", None) or ""
-    if not looks_like_github_pat(text) and "sk_live" not in text and "sk_test" not in text:
-        # also classic bot tokens are handled elsewhere
-        return False
-    return await scrub_and_confirm(update_message=update_message, bot=bot, confirm=False)

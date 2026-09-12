@@ -127,14 +127,12 @@ def validate_init_data(
 
 
 def looks_like_bot_token(value: str) -> bool:
-    import re
-    return bool(re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", (value or "").strip()))
+    from lumen.platform.token_patterns import looks_like_bot_token as _ll
+    return bool(_ll(value))
+
 
 
 def looks_like_github_pat(value: str) -> bool:
-    v = (value or "").strip()
-    if v.startswith("ghp_") and len(v) >= 40:
-        return True
-    if v.startswith("github_pat_") and len(v) >= 50:
-        return True
-    return False
+    from lumen.platform.token_patterns import looks_like_github_pat as _lp
+    return bool(_lp(value))
+

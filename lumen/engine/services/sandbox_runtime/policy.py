@@ -15,8 +15,7 @@ from dataclasses import dataclass, field
 from typing import FrozenSet, Tuple
 
 
-def _flag(name: str, default: str = "0") -> bool:
-    return (os.environ.get(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+from lumen.platform.envutil import env_flag as _flag
 
 
 _DEFAULT_EGRESS_HOSTS: Tuple[str, ...] = (
