@@ -884,42 +884,13 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         except Exception:
             logger.exception("rich dashboard failed — HTML fallback action=%s", action_id)
 
-    # buy_pro_plan: send Telegram Stars (XTR) invoice — MUST be before the
-    # PRO_PLAN Rich Messages block, otherwise the rich table intercepts the
-    # callback (phase == PRO_PLAN) and returns before the invoice is sent.
-    if result.ok and action_id == "buy_pro_plan":
-        try:
-            from lumen.engine.services.ui_state.pro_plan import (
-                PRO_PLAN_TITLE,
-                PRO_PLAN_PRICE_STARS,
-                PRO_PLAN_INVOICE_PAYLOAD,
-                pro_plan_invoice_description,
-            )
-            from telegram import LabeledPrice
-
-            bot = getattr(context, "bot", None)
-            chat_id = None
-            if q is not None and getattr(q, "message", None) is not None:
-                chat_id = getattr(q.message.chat, "id", None)
-            elif msg is not None:
-                chat_id = getattr(getattr(msg, "chat", None), "id", None)
-            if bot is not None and chat_id is not None:
-                await bot.send_invoice(
-                    chat_id=int(chat_id),
-                    title=PRO_PLAN_TITLE,
-                    description=pro_plan_invoice_description(),
-                    payload=PRO_PLAN_INVOICE_PAYLOAD,
-                    currency="XTR",
-                    prices=[LabeledPrice(label=PRO_PLAN_TITLE, amount=PRO_PLAN_PRICE_STARS)],
-                    # provider_token must be empty for Telegram Stars (XTR)
-                    provider_token="",
-                )
-                logger.info("Stars invoice sent uid=%s chat=%s amount=%s", uid, chat_id, PRO_PLAN_PRICE_STARS)
-                return
-            else:
-                logger.warning("buy_pro_plan: bot or chat_id missing uid=%s", uid)
-        except Exception:
-            logger.exception("send_invoice (Stars) failed action=buy_pro_plan")
+    # buy_pro_plan → callbacks.billing_actions
+    from lumen.bot.ui.callbacks.billing_actions import handle_buy_pro_plan
+    if await handle_buy_pro_plan(
+        action_id=action_id, result=result, update=update,
+        context=context, q=q, msg=msg, uid=uid,
+    ):
+        return
 
     # Lumen Pro plan details: official Rich Messages native table (Bot API 10.1+)
     # Only shown for view_pro_plan (not buy_pro_plan, which is handled above).

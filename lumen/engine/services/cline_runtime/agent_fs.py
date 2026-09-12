@@ -964,14 +964,11 @@ def run_tools_parallel(
     *,
     max_parallel: int = 3,
 ) -> list[dict[str, Any]]:
-    """Run independent inspect tools concurrently (max 3) via asyncio.gather.
+    """Run independent inspect tools concurrently via shared parallel_batch.
 
-    Each call: {"tool": str, "args": dict}.
-    Mutating / unknown tools are executed sequentially after the parallel batch
-    so ordering of side effects stays safe.
-    Returns results in the same order as ``calls``.
+    Mutating / unknown tools run sequentially after the parallel batch.
     """
-    import asyncio
+    from lumen.engine.services.parallel_batch import run_indexed_parallel
 
     max_parallel = max(1, min(int(max_parallel or 3), 3))
     calls = list(calls or [])
@@ -989,67 +986,30 @@ def run_tools_parallel(
         else:
             sequential_idx.append(i)
 
-    async def _one(idx: int) -> tuple[int, dict[str, Any]]:
+    def _sync_one(idx: int) -> dict[str, Any]:
         call = calls[idx] or {}
         name = str(call.get("tool") or call.get("name") or "").strip()
         args = dict(call.get("args") or {})
         try:
-            out = await asyncio.to_thread(run_tool, work_dir, name, args)
+            out = run_tool(work_dir, name, args)
             if not isinstance(out, dict):
                 out = {"ok": False, "error": "invalid_tool_result", "tool": name}
             out.setdefault("tool", name)
             out.setdefault("parallel", True)
-            return idx, out
+            return out
         except Exception as exc:
-            return idx, {
+            return {
                 "ok": False,
                 "error": f"{type(exc).__name__}:{exc}",
                 "tool": name,
                 "parallel": True,
             }
 
-    async def _runner() -> None:
-        # Chunk parallel-safe calls to max_parallel
-        for start in range(0, len(parallel_idx), max_parallel):
-            batch = parallel_idx[start:start + max_parallel]
-            if not batch:
-                continue
-            done = await asyncio.gather(*[_one(i) for i in batch])
-            for idx, out in done:
-                results[idx] = out
+    if parallel_idx:
+        got = run_indexed_parallel(parallel_idx, _sync_one, max_workers=max_parallel)
+        for idx, out in got.items():
+            results[idx] = out
 
-    try:
-        asyncio.run(_runner())
-    except RuntimeError:
-        # Nested event loop (e.g. already inside async) — fallback to threads
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def _sync_one(idx: int) -> tuple[int, dict[str, Any]]:
-            call = calls[idx] or {}
-            name = str(call.get("tool") or call.get("name") or "").strip()
-            args = dict(call.get("args") or {})
-            try:
-                out = run_tool(work_dir, name, args)
-                if not isinstance(out, dict):
-                    out = {"ok": False, "error": "invalid_tool_result", "tool": name}
-                out.setdefault("tool", name)
-                out.setdefault("parallel", True)
-                return idx, out
-            except Exception as exc:
-                return idx, {
-                    "ok": False,
-                    "error": f"{type(exc).__name__}:{exc}",
-                    "tool": name,
-                    "parallel": True,
-                }
-
-        with ThreadPoolExecutor(max_workers=max_parallel) as pool:
-            futs = [pool.submit(_sync_one, i) for i in parallel_idx]
-            for fut in as_completed(futs):
-                idx, out = fut.result()
-                results[idx] = out
-
-    # Sequential mutating / unsafe tools (preserve order)
     for idx in sequential_idx:
         call = calls[idx] or {}
         name = str(call.get("tool") or call.get("name") or "").strip()

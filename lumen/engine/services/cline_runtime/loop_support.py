@@ -37,14 +37,24 @@ def _tools_help() -> str:
     )
 
 
-def _max_steps() -> int:
+def env_max_steps_ceiling() -> int:
+    """Single source for CLINE_AGENT_MAX_STEPS ceiling used by LoopGovernor.
+
+    - Explicit env: clamp 5..50
+    - Unset: 15 so hard-band (14) is not silently capped by a lower default
+    """
+    raw = (os.getenv("CLINE_AGENT_MAX_STEPS") or "").strip()
+    if not raw:
+        return 15
     try:
-        # Default 12 steps (was 24) — weakness #2 fix: fewer steps means the
-        # loop cannot run for 108 minutes even without the time budget. The
-        # time budget (150s) is the primary guarantee; this is a secondary cap.
-        return max(5, min(50, int(os.getenv("CLINE_AGENT_MAX_STEPS") or "12")))
+        return max(5, min(50, int(raw)))
     except ValueError:
-        return 12
+        return 15
+
+
+def _max_steps() -> int:
+    """Back-compat alias → env_max_steps_ceiling()."""
+    return env_max_steps_ceiling()
 
 
 def _time_budget() -> float:

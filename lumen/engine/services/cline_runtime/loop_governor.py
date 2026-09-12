@@ -105,16 +105,9 @@ class LoopGovernor:
     ) -> "LoopGovernor":
         band = str((diff or {}).get("band") or "medium").strip().lower()
         limits = _band_limits(band)
-        # Env override only when CLINE_AGENT_MAX_STEPS is *explicitly* set.
-        # Default ceiling must not defeat hard-band (14).
-        raw_env = (os.getenv("CLINE_AGENT_MAX_STEPS") or "").strip()
-        if raw_env:
-            try:
-                env_ceiling = max(5, min(50, int(raw_env)))
-            except ValueError:
-                env_ceiling = 15
-        else:
-            env_ceiling = 15  # allows hard band full budget
+        # Single source: loop_support.env_max_steps_ceiling()
+        from .loop_support import env_max_steps_ceiling
+        env_ceiling = int(env_max_steps_ceiling())
         if explicit_max_steps is not None:
             max_steps = max(1, min(int(explicit_max_steps), env_ceiling))
             source = "explicit_max_steps"
