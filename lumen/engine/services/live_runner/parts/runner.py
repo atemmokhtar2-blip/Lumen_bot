@@ -116,6 +116,91 @@ class LiveRunnerService:
 
         deployment_id = ""
         backend_name = ""
+        log = __import__("logging").getLogger(__name__)
+
+        # ── Prefer Lumen serverless (Vercel platform token) when available ──
+        # Railway/PaaS hosts rarely have Firecracker/Docker; serverless is the
+        # scalable path: adapt webhook → deploy → setWebhook → stop after trial.
+        try:
+            from lumen.engine.services.live_deployment.vercel_client import token_configured
+
+            serverless_ok = bool(token_configured())
+        except Exception:
+            serverless_ok = bool((os.environ.get("VERCEL_TOKEN") or "").strip())
+
+        if serverless_ok:
+            try:
+                from lumen.hosting.orchestration import _start_serverless
+
+                backend, handle = _start_serverless(
+                    project_path=str(root),
+                    bot_token=bot_token,
+                    user_id=0,
+                    service_name=f"trial-{int(time.time()) % 10_000_000}",
+                    env_vars={
+                        "TELEGRAM_BOT_TOKEN": bot_token,
+                        "BOT_TOKEN": bot_token,
+                        "LUMEN_RUNTIME_PLANE": plane.value,
+                        "LUMEN_TRIAL": "1",
+                    },
+                )
+                backend_name = getattr(backend, "name", "") or "lumen_serverless"
+                deployment_id = getattr(handle, "deployment_id", "") or ""
+                if not getattr(handle, "ok", False):
+                    msg = (getattr(handle, "message", None) or "serverless_trial_failed")[:300]
+                    return LiveRunReport(
+                        ok=False,
+                        phase="trial_start",
+                        message=(
+                            f"تعذر بدء {plane_label_ar(plane)} عبر استضافة Lumen:\n{msg}"
+                        ),
+                        errors=["trial_serverless_failed", backend_name],
+                        duration_ms=(time.perf_counter() - t0) * 1000,
+                        entry_point=entry_hint or "",
+                        details=dict(getattr(handle, "meta", None) or {}),
+                    )
+                # Ephemeral: keep deployed for trial window then stop
+                time.sleep(seconds)
+                try:
+                    from lumen.hosting.orchestration import stop_host
+
+                    if deployment_id:
+                        stop_host(deployment_id, backend="lumen_serverless")
+                except Exception as stop_exc:
+                    log.warning("trial serverless stop: %s", type(stop_exc).__name__)
+                    return LiveRunReport(
+                        ok=True,
+                        phase="trial_stop_warn",
+                        bot_username=bot_username,
+                        message=(
+                            f"✅ {plane_label_ar(plane)} اشتغلت ~{int(seconds)}ث "
+                            f"على استضافة Lumen ثم تعذر الإيقاف النظيف "
+                            f"({type(stop_exc).__name__}). ليست استضافة دائمة."
+                        ),
+                        duration_ms=(time.perf_counter() - t0) * 1000,
+                        details={"backend": backend_name, "deployment_id": deployment_id},
+                    )
+                return LiveRunReport(
+                    ok=True,
+                    phase="trial_done",
+                    bot_username=bot_username,
+                    message=(
+                        f"✅ {plane_label_ar(plane)} اكتملت (~{int(seconds)}ث) "
+                        f"على استضافة Lumen (Webhook).\n"
+                        "هذه تجربة مؤقتة فقط — ليست استضافة دائمة.\n"
+                        "للاستضافة الدائمة: اختر «استضافة دائمة» ثم أرسل التوكن."
+                    ),
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                    details={"backend": backend_name, "deployment_id": deployment_id},
+                )
+            except Exception as sl_exc:
+                log.warning(
+                    "trial serverless path failed: %s: %s",
+                    type(sl_exc).__name__,
+                    str(sl_exc)[:200],
+                )
+                # fall through to microVM/docker trial
+
         try:
             from lumen.engine.services.sandbox_runtime import start_trial_sandboxed_bot
 
@@ -155,7 +240,7 @@ class LiveRunnerService:
                     phase="trial_stop_warn",
                     message=(
                         f"✅ {plane_label_ar(plane)} اشتغلت ~{int(seconds)}ث "
-                        f"على {backend_name} ثم تعذر الإيقاف النظيف "
+                        f"على عزل {backend_name} ثم تعذر الإيقاف النظيف "
                         f"({type(stop_exc).__name__}). "
                         "هذه ليست استضافة دائمة."
                     ),
@@ -183,13 +268,12 @@ class LiveRunnerService:
                 phase="trial_error",
                 message=(
                     "❌ فشلت التجربة المؤقتة (ليست استضافة دائمة).\n"
-                    "العزل القوي غير متاح على خادم التشغيل حالياً.\n"
                     f"التفاصيل: `{type(exc).__name__}: {err}`\n\n"
-                    "• التجربة تحتاج Firecracker أو Docker على worker العزل.\n"
-                    "• التشغيل على المضيف ممنوع لحماية المنصة.\n"
-                    "• للاستضافة الدائمة: اشترك في Lumen Pro ثم «استضافة دائمة»."
+                    "• اضبط VERCEL_TOKEN على منصة Lumen لتفعيل مسار Webhook التلقائي.\n"
+                    "• أو وفّر Firecracker/Docker على worker العزل.\n"
+                    "• التشغيل على المضيف ممنوع لحماية المنصة."
                 ),
-                errors=[f"trial:{type(exc).__name__}"],
+                errors=[f"trial:{type(exc).__name__}:{err[:120]}"],
                 warnings=["trial_sandbox_unavailable"],
                 duration_ms=(time.perf_counter() - t0) * 1000,
                 entry_point=entry_hint or "",

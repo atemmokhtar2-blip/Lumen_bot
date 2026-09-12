@@ -292,10 +292,30 @@ def get_host_state_store(sqlite_path: str | Path | None = None):
         logging.getLogger("tbe.hosting").warning("postgres state unavailable in dev: %s", exc)
 
     if not is_dev:
-        raise RuntimeError(
-            "DATABASE_URL (postgresql://...) is required for host state outside ENVIRONMENT=dev. "
-            "SQLite instances.sqlite3 is not multi-node safe."
-        )
+        # Serverless-only control plane (VERCEL_TOKEN / TBE_HOST_BACKEND=lumen_serverless):
+        # allow local SQLite so Railway single-node can host without Postgres.
+        # Multi-node still requires Postgres — set DATABASE_URL when scaling out.
+        hb = (os.getenv("TBE_HOST_BACKEND") or "").strip().lower()
+        vercel = (os.getenv("VERCEL_TOKEN") or "").strip()
+        try:
+            from lumen.engine.services.live_deployment.vercel_client import token_configured
+
+            vercel_ok = bool(token_configured())
+        except Exception:
+            vercel_ok = bool(vercel)
+        serverless_plane = hb in {"lumen_serverless", "serverless", "vercel"} or vercel_ok
+        if serverless_plane:
+            import logging
+
+            logging.getLogger("tbe.hosting").warning(
+                "host state: SQLite fallback for serverless plane "
+                "(set DATABASE_URL=postgresql:// for multi-node)"
+            )
+        else:
+            raise RuntimeError(
+                "DATABASE_URL (postgresql://...) is required for host state outside ENVIRONMENT=dev. "
+                "SQLite instances.sqlite3 is not multi-node safe."
+            )
 
     # --- Dev-only SQLite path below ---
 

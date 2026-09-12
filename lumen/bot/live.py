@@ -100,7 +100,7 @@ async def handle_live_run_token(message, context, token: str, pending: dict) -> 
             from lumen.bot.ui.actionable_errors import host_error
             uid = message.from_user.id if message.from_user else 0
             text, markup = host_error(
-                detail=f"live_run:{type(e).__name__}",
+                detail=f"live_run:{type(e).__name__}: {str(e)[:200]}",
                 project_path=str(project_path or ""),
                 user_id=int(uid or 0),
             )
