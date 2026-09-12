@@ -18,10 +18,11 @@ def is_serverless_backend_request() -> bool:
 
 
 def _free_serverless_cap() -> int:
+    # Align with free-tier product policy: up to 3 concurrent template hosts.
     try:
-        return max(0, int((os.environ.get("TBE_SERVERLESS_MAX_FREE") or "1").strip()))
+        return max(0, int((os.environ.get("TBE_SERVERLESS_MAX_FREE") or "3").strip()))
     except ValueError:
-        return 1
+        return 3
 
 
 def _pro_serverless_cap() -> int:
