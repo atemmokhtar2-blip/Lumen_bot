@@ -50,3 +50,11 @@ def durable_data_dir() -> Path:
 def default_output_dir() -> str:
     """String form for env-style defaults (replaces /tmp/generated)."""
     return str(durable_data_dir())
+
+
+def sqlite_under_data(filename: str) -> Path:
+    """Durable sqlite path: durable_data_dir() / filename."""
+    name = (filename or "app.sqlite3").strip().lstrip("/")
+    root = durable_data_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    return root / name

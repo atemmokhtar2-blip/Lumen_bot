@@ -27,14 +27,8 @@ _SUMMARY_EVERY = int(os.getenv("CHAT_MEMORY_SUMMARY_EVERY") or "8")
 
 
 def _default_db_path() -> Path:
-    try:
-        from lumen.platform.paths import default_output_dir
-
-        root = Path(default_output_dir())
-    except Exception:
-        root = Path(os.getenv("OUTPUT_DIR") or (Path.home() / ".lumen"))
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "chat_memory.sqlite3"
+    from lumen.platform.paths import sqlite_under_data
+    return sqlite_under_data("chat_memory.sqlite3")
 
 
 class ChatMemory:

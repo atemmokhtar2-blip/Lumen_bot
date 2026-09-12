@@ -30,13 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 def _default_db_path() -> Path:
-    try:
-        from lumen.platform.paths import durable_data_dir
-        root = Path(durable_data_dir())
-    except Exception:
-        root = Path(os.getenv("OUTPUT_DIR") or (Path.home() / ".lumen"))
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "project_memory.sqlite3"
+    from lumen.platform.paths import sqlite_under_data
+    return sqlite_under_data("project_memory.sqlite3")
 
 
 from lumen.engine.services.timeutil import utc_now_iso as _now

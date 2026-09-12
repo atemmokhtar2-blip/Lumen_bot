@@ -31,12 +31,7 @@ class PrepareResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
-def _find_requirements(root: Path) -> Path | None:
-    for name in ("requirements.txt", "requirements-bot.txt", "reqs.txt"):
-        p = root / name
-        if p.is_file():
-            return p
-    return None
+from lumen.engine.services.runtime_files import find_requirements as _find_requirements
 
 
 def resolve_entry_point(root: Path, hint: str = "") -> str:

@@ -161,3 +161,32 @@ def test_pg_dsn_single_source():
             if isinstance(node, ast.FunctionDef) and node.name == "_dsn":
                 body = ast.get_source_segment(src, node) or ""
                 assert "DATABASE_URL" not in body, f"local _dsn in {rel}"
+
+
+def test_requirements_finder_single_source():
+    for rel in (
+        "engine/services/hosting/prepare_runtime.py",
+        "engine/services/live_runner/parts/runtime_bootstrap.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "_find_requirements":
+                body = ast.get_source_segment(src, node) or ""
+                assert "requirements.txt" not in body, f"local requirements finder in {rel}"
+
+
+def test_sqlite_default_paths_use_platform():
+    for rel in (
+        "engine/services/chat_memory/service.py",
+        "engine/services/semantic_memory/store.py",
+        "engine/services/semantic_memory/project_memory.py",
+    ):
+        p = LUMEN / rel
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = _parse(p)
+        for node in (tree.body if tree else []):
+            if isinstance(node, ast.FunctionDef) and node.name == "_default_db_path":
+                body = ast.get_source_segment(src, node) or ""
+                assert "sqlite_under_data" in body, f"{rel} must use paths.sqlite_under_data"

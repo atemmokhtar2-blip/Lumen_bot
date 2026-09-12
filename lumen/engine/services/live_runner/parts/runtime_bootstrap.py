@@ -24,12 +24,7 @@ from typing import Any
 import ast
 
 
-def _find_requirements(root: Path) -> Path | None:
-    for name in ("requirements.txt", "requirements-bot.txt", "reqs.txt"):
-        p = root / name
-        if p.exists():
-            return p
-    return None
+from lumen.engine.services.runtime_files import find_requirements as _find_requirements
 
 
 def _find_entry(root: Path, hints: list[str] | None = None) -> Path | None:
