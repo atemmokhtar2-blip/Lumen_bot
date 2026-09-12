@@ -127,6 +127,12 @@ def evaluate_market_gate() -> GateResult:
     pref = _backend_pref()
     # Serverless host track (Lumen-controlled; parallel to Firecracker permanent path)
     hb = _host_backend()
+    # Auto: when platform VERCEL_TOKEN is present and host backend not forced to
+    # firecracker, take serverless track (webhook path for user bots).
+    if not hb or hb in {"auto", "default", "permanent"}:
+        ok_s0, _miss_s0 = _serverless_track_ready()
+        if ok_s0:
+            hb = "lumen_serverless"
     if hb in {"lumen_serverless", "serverless", "vercel"}:
         ok_s, miss_s = _serverless_track_ready()
         if not ok_s:

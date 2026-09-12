@@ -62,6 +62,12 @@ def resolve_backend_name(*, project_path: str = "", requested: str = "") -> str:
     if req in {"vercel"}:
         req = "lumen_serverless"
     if not req or req in {"auto", "permanent", "default"}:
+        # Prefer Lumen serverless (Vercel-backed platform token) when configured —
+        # avoids Firecracker-only crash on hosts without microVM, and ensures
+        # webhook-adapted deploys for user bots.
+        ok_sl, _reason = _serverless_available()
+        if ok_sl:
+            return "lumen_serverless"
         return "firecracker"
     if req == "firecracker":
         return "firecracker"

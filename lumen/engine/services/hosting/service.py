@@ -287,6 +287,14 @@ class HostingService:
 
 
         # ── Production / scale foundation gates ──────────────────────────
+        # Serverless (platform Vercel token) is not a microVM path — skip FC demand.
+        try:
+            from lumen.hosting.orchestration import resolve_backend_name as _rb_iso
+
+            _iso_backend = _rb_iso(project_path=str(path), requested="")
+        except Exception:
+            _iso_backend = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+        _is_serverless_host = _iso_backend in {"lumen_serverless", "serverless", "vercel"}
         try:
             from lumen.engine.services.isolation_policy import (
                 decide_isolation,
@@ -294,7 +302,7 @@ class HostingService:
                 strong_sandbox_available,
             )
             decision = decide_isolation()
-            if decision.require_strong_isolation:
+            if decision.require_strong_isolation and not _is_serverless_host:
                 ok_sbx, sbx_reason = strong_sandbox_available()
                 if not ok_sbx:
                     return HostResult(
@@ -371,15 +379,19 @@ class HostingService:
             return HostResult(ok=False, message=f"فشل بوابة السوق: {gate_exc}")
 
         # Phase D — permanent host: Firecracker (default) or isolated Docker (+ACK)
+        # Serverless (Vercel-backed lumen_serverless) skips microVM select.
         try:
             from lumen.engine.services.sandbox_runtime.select import (
                 is_production_sandbox_path,
                 select_sandbox_backend,
             )
+            from lumen.hosting.orchestration import resolve_backend_name as _resolve_hb_early
             from lumen.platform.prod_security_gate import assert_production_sandbox_backend
 
-            # Serverless host path does not use microVM sandbox select
-            _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+            try:
+                _hb = _resolve_hb_early(project_path=str(path), requested="")
+            except Exception:
+                _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
             if _hb not in {"lumen_serverless", "serverless", "vercel"}:
                 assert_production_sandbox_backend()
             if is_production_sandbox_path() and _hb not in {"lumen_serverless", "serverless", "vercel"}:
@@ -411,7 +423,12 @@ class HostingService:
             prepare_project_for_host,
             prepare_project_for_serverless,
         )
-        _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
+        try:
+            from lumen.hosting.orchestration import resolve_backend_name as _resolve_hb
+
+            _hb = _resolve_hb(project_path=str(path), requested="")
+        except Exception:
+            _hb = (os.environ.get("TBE_HOST_BACKEND") or "").strip().lower()
         if _hb in {"lumen_serverless", "serverless", "vercel"}:
             prepared = prepare_project_for_serverless(path, entry_point=entry_point or "")
         else:

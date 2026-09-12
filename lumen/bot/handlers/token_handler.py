@@ -419,7 +419,7 @@ async def try_handle_token(
                 from lumen.bot.ui.actionable_errors import host_error
                 uid = message.from_user.id if message.from_user else 0
                 text, markup = host_error(
-                    detail=f"{type(e).__name__}",
+                    detail=f"{type(e).__name__}: {str(e)[:200]}",
                     project_path=str(pending_host.get("project_path") or ""),
                     user_id=int(uid or 0),
                 )
