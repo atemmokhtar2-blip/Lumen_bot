@@ -114,25 +114,23 @@ class HostingService:
         for inst in self._instances.values():
             record = HostInstanceRecord.from_host_instance(inst)
             payload = record.to_persist_dict()
+            # Durable truth = Postgres/SQLite via self._store (already written above).
+            # Redis is a hot multi-worker cache only — never abort a successful
+            # host start because the cache write failed (missing REDIS_URL,
+            # TLS flake, brief outage). Health/ingress rehydrate from DB.
             self._store.upsert(payload)
             try:
                 ok_r = host_redis.put_instance(payload)
                 if ok_r is False:
-                    # put returned False = Redis unavailable in allowed-dev skip
-                    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").lower()
-                    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
-                        "1", "true", "yes", "on",
-                    }
-                    if multi and env not in {"dev", "development", "local", "test"}:
-                        raise RuntimeError(
-                            "host_redis_put_failed: REDIS_URL required for durable host state in production"
-                        )
-            except RuntimeError:
-                raise
+                    logger.warning(
+                        "host redis cache miss on put instance_id=%s — durable store ok",
+                        payload.get("instance_id"),
+                    )
             except Exception as exc:
-                env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "").lower()
-                if env not in {"dev", "development", "local", "test"}:
-                    raise RuntimeError(f"host_redis_put_error:{type(exc).__name__}") from exc
+                logger.warning(
+                    "host redis cache error on put: %s — durable store ok",
+                    type(exc).__name__,
+                )
 
     def _save(self) -> None:
         with exclusive_state_lock(self._lock_path()):
