@@ -52,10 +52,15 @@ class HostingStateStore:
     def __init__(self, db_path: Path) -> None:
         env = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower()
         if env not in {"dev", "development", "local", "test"}:
-            raise RuntimeError(
-                "SQLite HostingStateStore is forbidden outside ENVIRONMENT=dev. "
-                "Set DATABASE_URL (postgresql://...) for PgHostStateStore."
-            )
+            # Allow SQLite only when Vercel serverless plane is active (single-node)
+            hb = (os.getenv("TBE_HOST_BACKEND") or "").strip().lower()
+            vercel = (os.getenv("VERCEL_TOKEN") or "").strip()
+            serverless = hb in {"lumen_serverless", "serverless", "vercel"} or bool(vercel)
+            if not serverless:
+                raise RuntimeError(
+                    "SQLite HostingStateStore is forbidden outside ENVIRONMENT=dev. "
+                    "Set DATABASE_URL (postgresql://...) for PgHostStateStore."
+                )
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
@@ -291,19 +296,20 @@ def get_host_state_store(sqlite_path: str | Path | None = None):
         import logging
         logging.getLogger("tbe.hosting").warning("postgres state unavailable in dev: %s", exc)
 
+    hb = (os.getenv("TBE_HOST_BACKEND") or "").strip().lower()
+    vercel = (os.getenv("VERCEL_TOKEN") or "").strip()
+    try:
+        from lumen.engine.services.live_deployment.vercel_client import token_configured
+
+        vercel_ok = bool(token_configured())
+    except Exception:
+        vercel_ok = bool(vercel)
+    serverless_plane = hb in {"lumen_serverless", "serverless", "vercel"} or vercel_ok
+
     if not is_dev:
         # Serverless-only control plane (VERCEL_TOKEN / TBE_HOST_BACKEND=lumen_serverless):
         # allow local SQLite so Railway single-node can host without Postgres.
         # Multi-node still requires Postgres — set DATABASE_URL when scaling out.
-        hb = (os.getenv("TBE_HOST_BACKEND") or "").strip().lower()
-        vercel = (os.getenv("VERCEL_TOKEN") or "").strip()
-        try:
-            from lumen.engine.services.live_deployment.vercel_client import token_configured
-
-            vercel_ok = bool(token_configured())
-        except Exception:
-            vercel_ok = bool(vercel)
-        serverless_plane = hb in {"lumen_serverless", "serverless", "vercel"} or vercel_ok
         if serverless_plane:
             import logging
 
@@ -320,7 +326,8 @@ def get_host_state_store(sqlite_path: str | Path | None = None):
     # --- Dev-only SQLite path below ---
 
     # Multi-node guard: fail-closed if scale mode is on without shared FS.
-    if _is_scale_mode() and not _shared_fs_available():
+    # Serverless plane does not use FC worker queue — SQLite on single node is OK.
+    if _is_scale_mode() and not _shared_fs_available() and not serverless_plane:
         raise RuntimeError(
             "TBE_SCALE_MODE=1 (multi-node) requires a shared filesystem for SQLite "
             "or DATABASE_URL=postgresql://... — local-disk SQLite will corrupt under "

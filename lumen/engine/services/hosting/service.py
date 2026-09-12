@@ -467,10 +467,19 @@ class HostingService:
         except Exception:
             pass
 
-        # ── Scale mode (20k path): enqueue for workers, never block API on docker build ──
+        # ── Scale mode (20k path): Firecracker workers only — NEVER for Vercel serverless.
+        # Railway often has TBE_SCALE_MODE=1; queue path used invalid HostResult(instance_id=...)
+        # and blocked the real lumen_serverless deploy.
+        _serverless_track = _hb in {"lumen_serverless", "serverless", "vercel"}
         scale = (os.environ.get("TBE_SCALE_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
         multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {"1", "true", "yes", "on"}
-        if scale or (os.environ.get("TBE_FORCE_QUEUE") or "0").strip().lower() in {"1", "true", "yes", "on"}:
+        if (
+            not _serverless_track
+            and (
+                scale
+                or (os.environ.get("TBE_FORCE_QUEUE") or "0").strip().lower() in {"1", "true", "yes", "on"}
+            )
+        ):
             try:
                 from lumen.engine.services.hosting.deploy_queue import get_deploy_queue
                 from lumen.engine.services.hosting.capacity import estimate_nodes_for, local_node_capacity
@@ -526,7 +535,7 @@ class HostingService:
                         f"تخطيط 20k: ~{plan['nodes_required']} عقدة × {plan['bots_per_node']} بوت "
                         f"(حد العقدة {local_node_capacity().max_bots})."
                     ),
-                    instance_id=job.job_id,
+                    details={"job_id": job.job_id, "queued": True, "backend": "firecracker_queue"},
                 )
             except Exception as qexc:
                 return HostResult(ok=False, message=f"فشل إدخال الطابور: {type(qexc).__name__}: {qexc}")

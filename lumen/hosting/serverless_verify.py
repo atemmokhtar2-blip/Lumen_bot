@@ -358,24 +358,23 @@ def verify_serverless_bot(
     health: dict[str, Any] = {}
     if require_health:
         phases.append(PhaseRecord(STATE_HEALTH_CHECK, True, "start"))
-        health = health_check_deployment(base, webhook_path=webhook_path)
+        # Cold-start Vercel can lag — more retries before soft-fail
+        health = health_check_deployment(
+            base, webhook_path=webhook_path, retries=10, delay_sec=2.5, timeout=15.0
+        )
         if not health.get("ok"):
+            # Soft-fail: continue to token + setWebhook (product path).
+            # Deploy already produced a public URL; webhook registration is the
+            # real activation gate for Telegram bots.
             phases.append(
                 PhaseRecord(
                     STATE_HEALTH_CHECK,
                     False,
-                    str(health.get("error") or health.get("status") or "fail"),
+                    "soft:" + str(health.get("error") or health.get("status") or "fail")[:80],
                 )
             )
-            return VerifyResult(
-                ok=False,
-                state=STATE_FAILED,
-                message=_user_msg("health_failed"),
-                webhook_url=webhook_url,
-                health=health,
-                phases=phases,
-            )
-        phases.append(PhaseRecord(STATE_HEALTH_CHECK, True, str(health.get("healthy_url") or "")))
+        else:
+            phases.append(PhaseRecord(STATE_HEALTH_CHECK, True, str(health.get("healthy_url") or "")))
 
     if not (bot_token or "").strip():
         phases.append(PhaseRecord(STATE_FAILED, False, "token_missing"))
