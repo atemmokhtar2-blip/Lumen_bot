@@ -108,13 +108,20 @@ class RedisTemplateStore:
                                     current.append(TemplateInstance.from_dict(row))
                                 except Exception:
                                     continue
+                preparing_ttl = 45 * 60
                 for inst in current:
-                    if (
-                        inst.status in {TemplateInstanceStatus.PREPARING, TemplateInstanceStatus.RUNNING}
-                        and inst.expires_at > 0
-                        and inst.expires_at <= now
-                    ):
-                        inst.status = TemplateInstanceStatus.EXPIRED
+                    if inst.status in {
+                        TemplateInstanceStatus.PREPARING,
+                        TemplateInstanceStatus.RUNNING,
+                    }:
+                        if inst.expires_at > 0 and inst.expires_at <= now:
+                            inst.status = TemplateInstanceStatus.EXPIRED
+                        elif (
+                            inst.status is TemplateInstanceStatus.PREPARING
+                            and inst.started_at > 0
+                            and (now - float(inst.started_at)) >= preparing_ttl
+                        ):
+                            inst.status = TemplateInstanceStatus.EXPIRED
                 active = sum(1 for i in current if i.is_active(now))
                 if active >= max_active:
                     r.unwatch()

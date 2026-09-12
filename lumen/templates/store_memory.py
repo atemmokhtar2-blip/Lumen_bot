@@ -31,9 +31,17 @@ class MemoryTemplateStore:
         return out
 
     def _expire_inplace(self, current: list[TemplateInstance], now: float) -> None:
+        # PREPARING that never launched: free the seat after 45 minutes
+        preparing_ttl = 45 * 60
         for inst in current:
             if inst.status in {TemplateInstanceStatus.PREPARING, TemplateInstanceStatus.RUNNING}:
                 if inst.expires_at > 0 and inst.expires_at <= now:
+                    inst.status = TemplateInstanceStatus.EXPIRED
+                elif (
+                    inst.status is TemplateInstanceStatus.PREPARING
+                    and inst.started_at > 0
+                    and (now - float(inst.started_at)) >= preparing_ttl
+                ):
                     inst.status = TemplateInstanceStatus.EXPIRED
 
     def save_for_user(self, user_id: int, instances: list[TemplateInstance]) -> None:

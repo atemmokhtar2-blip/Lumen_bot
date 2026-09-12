@@ -21,14 +21,18 @@ def _slots_from_ud(ud: dict[str, Any]) -> dict[str, Any]:
 def _deny_ar(reason: str) -> str:
     r = reason or ""
     if "max_running" in r:
-        return "وصلت لحد القوالب الشغّالة (3 مجاني / حتى 10 لـ Pro). أوقف أحدها أولًا."
+        return "وصلت لحد القوالب الشغّالة (3 مجاني / حتى 10 لـ Pro). أوقف أحدها أولًا من «بوتاتي»."
     if "trial_minutes" in r:
         return "مدة التجربة يجب أن تكون بين 1 و 50 دقيقة."
-    if "template_not_found" in r:
-        return "القالب غير موجود."
+    if "template_not_found" in r or "invalid_template" in r:
+        return "القالب غير موجود أو غير مفعّل في الكتالوج."
     if "materialize" in r or "asset" in r:
         return "تعذر تجهيز ملفات القالب على الخادم."
-    return f"تعذر الحجز ({r})."
+    if "redis" in r.lower() or "store" in r.lower():
+        return "تعذر حفظ الحجز مؤقتًا (تخزين القوالب). أعد المحاولة بعد ثوانٍ."
+    if "reserve_contention" in r:
+        return "الحجز متزامن — أعد المحاولة."
+    return f"تعذر الحجز ({r[:120]})."
 
 
 async def execute_template_reserve(
@@ -106,6 +110,9 @@ async def execute_template_reserve(
                 mins = int(slots.get("trial_minutes") or 0)
             except (TypeError, ValueError):
                 mins = 0
+            # Product default: if minutes never set (stale UI), use 15
+            if mins <= 0:
+                mins = 15
             res = svc.reserve(
                 int(user_id),
                 template_id=tid,
@@ -241,9 +248,9 @@ async def execute_template_reserve(
                     logger.exception("template permanent secret prompt failed")
             return body
 
-    except Exception:
+    except Exception as exc:
         logger.exception("template reserve failed effect=%s uid=%s", effect, user_id)
-        return "تعذر حجز القالب حاليًا."
+        return _deny_ar(f"{type(exc).__name__}:{str(exc)[:100]}")
     return ""
 
 

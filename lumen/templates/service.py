@@ -74,6 +74,28 @@ class TemplateService:
         ts = float(now if now is not None else time.time())
         current = self._store.list_for_user(uid)
         # Soft-expire in snapshot for policy (store also expires under lock)
+        preparing_ttl = 45 * 60
+        dirty = False
+        for inst in current:
+            if inst.status in {
+                TemplateInstanceStatus.PREPARING,
+                TemplateInstanceStatus.RUNNING,
+            }:
+                if inst.expires_at > 0 and inst.expires_at <= ts:
+                    inst.status = TemplateInstanceStatus.EXPIRED
+                    dirty = True
+                elif (
+                    inst.status is TemplateInstanceStatus.PREPARING
+                    and inst.started_at > 0
+                    and (ts - float(inst.started_at)) >= preparing_ttl
+                ):
+                    inst.status = TemplateInstanceStatus.EXPIRED
+                    dirty = True
+        if dirty:
+            try:
+                self._store.save_for_user(uid, current)
+            except Exception:
+                pass
         try:
             from lumen.templates.product import resolve_max_template_slots
             _cap = resolve_max_template_slots(uid)
@@ -101,9 +123,15 @@ class TemplateService:
             trial_minutes=plan.trial_minutes,
             meta={"template_version": int(spec.version)},
         )
-        ok, reason = self._store.atomic_reserve(
-            uid, inst, max_active=plan.max_running, now=ts
-        )
+        try:
+            ok, reason = self._store.atomic_reserve(
+                uid, inst, max_active=plan.max_running, now=ts
+            )
+        except Exception as store_exc:
+            return ReserveResult(
+                False,
+                f"store:{type(store_exc).__name__}:{str(store_exc)[:80]}",
+            )
         if not ok:
             return ReserveResult(False, reason)
         return ReserveResult(True, "ok", instance=inst, plan=plan)
