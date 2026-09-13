@@ -151,6 +151,8 @@ async def execute_template_reserve(
                 "template_id": inst.template_id,
                 "template_instance_id": inst.instance_id,
                 "source": "template",
+                "owner_admin_id": int(user_id),
+                "owner_user_id": int(user_id),
             }
             ud["pending_run"] = dict(payload)
             ud["pending_live_run"] = dict(payload)

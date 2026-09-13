@@ -112,7 +112,9 @@ def prepare_permanent_launch(
         "template_instance_id": inst.instance_id,
         "expires_at": float(inst.expires_at or 0),
         "template_ttl_days": 30,
-        "tenant_id": str(uid),  # production multi-tenant binding
+        "tenant_id": str(uid),
+        "owner_admin_id": uid,
+        "owner_user_id": uid,
         "max_template_slots": _cap,
     }
     try:

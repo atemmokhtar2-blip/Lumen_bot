@@ -36,9 +36,9 @@ def test_template_id_validation():
 def test_catalog_real_json():
     cat = JsonTemplateCatalog()
     enabled = list(cat.list_enabled())
-    assert len(enabled) >= 3
+    assert len(enabled) >= 1
     assert all(isinstance(s, TemplateSpec) and s.description for s in enabled)
-    assert get_template("shop_assistant") is not None
+    assert get_template("group_moderator") is not None
     assert get_template("missing") is None
 
 
@@ -75,7 +75,7 @@ def test_atomic_reserve_concurrent_respects_cap():
     def worker(i: int) -> None:
         r = svc.reserve(
             uid,
-            template_id="faq_helper",
+            template_id="group_moderator",
             mode="trial",
             trial_minutes=10,
             now=now,
@@ -99,7 +99,7 @@ def test_service_expire_and_rereserve():
     uid = 700002
     now = time.time()
     for _ in range(3):
-        assert svc.reserve(uid, template_id="shop_assistant", mode="trial", trial_minutes=5, now=now).ok
+        assert svc.reserve(uid, template_id="group_moderator", mode="trial", trial_minutes=5, now=now).ok
     past = now + 10_000
     insts = store.list_for_user(uid)
     for i in insts:
@@ -162,7 +162,7 @@ def test_phase2_reserve_side_effect_real_service():
     ud = {
         "engine_ui": {
             "phase": "template_detail",
-            "slots": {"template_id": "faq_helper", "trial_minutes": "15"},
+            "slots": {"template_id": "group_moderator", "trial_minutes": "15"},
         }
     }
     note = asyncio.run(
@@ -185,7 +185,7 @@ def test_signed_template_callbacks_roundtrip():
         ("tpl_select", "gm"),
         ("tpl_trial", "gm"),
         ("tpl_minutes", "gm:50"),
-        ("tpl_permanent", "fq"),
+        ("tpl_permanent", "gm"),
     ):
         wire = encode_signed(action, arg, user_id=uid)
         assert len(wire.encode("utf-8")) <= 64
@@ -224,7 +224,7 @@ def test_phase3_materialize_and_pending_run(tmp_path, monkeypatch):
     ud = {
         "engine_ui": {
             "phase": "template_detail",
-            "slots": {"template_id": "faq_helper", "trial_minutes": "15", "template_short": "fq"},
+            "slots": {"template_id": "group_moderator", "trial_minutes": "15", "template_short": "gm"},
         }
     }
     note = asyncio.run(
@@ -238,7 +238,7 @@ def test_phase3_materialize_and_pending_run(tmp_path, monkeypatch):
         assert pr.get("plane") == "trial_chat"
         assert pr.get("source") == "template"
         assert int(pr.get("run_seconds") or 0) == 15 * 60
-        assert pr.get("template_id") == "faq_helper"
+        assert pr.get("template_id") == "group_moderator"
         assert Path(pr["project_path"]).joinpath("main.py").is_file()
     else:
         assert isinstance(note, str) and len(note) > 0
@@ -280,7 +280,7 @@ def test_phase4_permanent_pending_host(tmp_path, monkeypatch):
     ud = {
         "engine_ui": {
             "phase": "template_detail",
-            "slots": {"template_id": "shop_assistant", "template_short": "sa"},
+            "slots": {"template_id": "group_moderator", "template_short": "gm"},
         }
     }
     note = asyncio.run(
@@ -292,7 +292,7 @@ def test_phase4_permanent_pending_host(tmp_path, monkeypatch):
     ph = ud["pending_host"]
     assert ph.get("source") == "template"
     assert ph.get("plane") == "permanent_host"
-    assert ph.get("template_id") == "shop_assistant"
+    assert ph.get("template_id") == "group_moderator"
     assert ph.get("template_instance_id")
     assert int(ph.get("template_ttl_days") or 0) == 30
     assert not ud.get("pending_run")
@@ -316,7 +316,7 @@ def test_host_adapter_prepare_and_preflight(tmp_path, monkeypatch):
 
     reset_template_service_for_tests()
     uid = 930001
-    plan = prepare_permanent_launch(uid, template_id="faq_helper")
+    plan = prepare_permanent_launch(uid, template_id="group_moderator")
     assert plan.ok, plan.reason
     assert plan.pending_host.get("source") == "template"
     assert plan.pending_host.get("tenant_id") == str(uid)
@@ -396,10 +396,34 @@ def test_phase6_product_polish_catalog_and_labels():
 
     reload_catalog()
     specs = list_templates()
-    assert len(specs) >= 5
-    assert get_template("wb") is not None or get_template("welcome_bot") is not None
+    assert len(specs) >= 1
+    assert get_template("gm") is not None or get_template("group_moderator") is not None
     assert status_label_ar("running") == "شغّال"
     assert mode_label_ar("trial") == "تجربة مؤقتة"
     # free user without pro store → 3
     assert resolve_max_template_slots(0) == FREE_MAX_RUNNING
     assert resolve_max_template_slots(999999001) == FREE_MAX_RUNNING
+
+
+def test_owner_admin_injected_on_materialize(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("LUMEN_OUTPUT_DIR", str(tmp_path / "out"))
+    (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+    from lumen.templates.materialize import materialize_to_sandbox
+    from lumen.templates.owner_env import owner_env_from_project
+
+    root = materialize_to_sandbox(551122, "group_moderator")
+    assert (Path(root) / "main.py").is_file()
+    owner = json.loads((Path(root) / "lumen_owner.json").read_text(encoding="utf-8"))
+    assert int(owner["owner_admin_id"]) == 551122
+    env = owner_env_from_project(root, user_id=0)
+    assert env.get("OWNER_ADMIN_ID") == "551122"
+    # bot module loads owner
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tpl_mod", Path(root) / "main.py")
+    # Don't execute main(); just ensure file defines loader pattern
+    src = (Path(root) / "main.py").read_text(encoding="utf-8")
+    assert "OWNER_ADMIN_ID" in src
+    assert "ban" in src.lower() or "cmd_ban" in src

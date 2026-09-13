@@ -646,6 +646,11 @@ class HostingService:
         }
         env.update({k: str(v) for k, v in (prepared.env_vars or {}).items() if k and v is not None})
         try:
+            from lumen.templates.owner_env import merge_owner_into_env
+            env = merge_owner_into_env(env, project_path=path, user_id=int(user_id or 0))
+        except Exception:
+            pass
+        try:
             from lumen.hosting.orchestration import start_host as _orch_start
             from lumen.hosting.secrets_env import inject_secrets_env, seal_project_secrets
             try:

@@ -81,6 +81,49 @@ def materialize_to_sandbox(user_id: int, template_id: str) -> Path:
             shutil.copy2(item, target)
     if not (dest / "main.py").is_file():
         raise MaterializeError("materialize_incomplete")
+
+    # Platform intelligence: bind Lumen user as template owner/admin
+    try:
+        import json
+
+        owner_payload = {
+            "owner_admin_id": uid,
+            "owner_user_id": uid,
+            "template_id": str(template_id),
+            "source": "lumen_templates",
+        }
+        (dest / "lumen_owner.json").write_text(
+            json.dumps(owner_payload, ensure_ascii=False, indent=2) + chr(10),
+            encoding="utf-8",
+        )
+        env_lines = [
+            f"OWNER_ADMIN_ID={uid}",
+            f"LUMEN_OWNER_ID={uid}",
+            f"LUMEN_OWNER_ADMIN_ID={uid}",
+        ]
+        existing = dest / ".env"
+        if existing.is_file():
+            try:
+                for line in existing.read_text(encoding="utf-8").splitlines():
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    key = s.split("=", 1)[0].strip().upper()
+                    if key in {
+                        "OWNER_ADMIN_ID",
+                        "LUMEN_OWNER_ID",
+                        "LUMEN_OWNER_ADMIN_ID",
+                        "BOT_TOKEN",
+                        "TELEGRAM_BOT_TOKEN",
+                    }:
+                        continue
+                    env_lines.append(line.rstrip())
+            except Exception:
+                pass
+        existing.write_text(chr(10).join(env_lines) + chr(10), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("owner inject failed uid=%s: %s", uid, type(exc).__name__)
+
     logger.info("template materialized uid=%s template=%s path=%s", uid, template_id, dest)
     return dest.resolve()
 

@@ -142,6 +142,7 @@ class LiveRunnerService:
                         "BOT_TOKEN": bot_token,
                         "LUMEN_RUNTIME_PLANE": plane.value,
                         "LUMEN_TRIAL": "1",
+                        **__import__("lumen.templates.owner_env", fromlist=["owner_env_from_project"]).owner_env_from_project(root),
                     },
                 )
                 backend_name = getattr(backend, "name", "") or "lumen_serverless"
@@ -214,6 +215,7 @@ class LiveRunnerService:
                     "BOT_TOKEN": bot_token,
                     "LUMEN_RUNTIME_PLANE": plane.value,
                     "LUMEN_TRIAL": "1",
+                    **__import__("lumen.templates.owner_env", fromlist=["owner_env_from_project"]).owner_env_from_project(root),
                 },
             )
             backend_name = getattr(backend, "name", "") or ""
@@ -713,6 +715,11 @@ class LiveRunnerService:
             env[key] = bot_token
         for key in ("TELEGRAM_BOT_TOKEN", "BOT_TOKEN", "TOKEN", "TG_TOKEN", "API_TOKEN", "TELEGRAM_TOKEN", "BOTTOKEN"):
             env[key] = bot_token
+        try:
+            from lumen.templates.owner_env import owner_env_from_project
+            env.update(owner_env_from_project(root))
+        except Exception:
+            pass
 
         # Token stays in process env only. Disk: sealed file, never plaintext .env.
         try:
