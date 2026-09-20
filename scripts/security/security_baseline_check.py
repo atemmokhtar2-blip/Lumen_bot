@@ -148,12 +148,10 @@ def main() -> int:
             failures,
         )
 
-    # 9) Multi-tenant defaults (settings + isolation policy — not only app.py)
-    settings = _read("lumen/api/settings.py")
+    # 9) Multi-tenant defaults (isolation policy — not only app.py)
     isolation = _read("lumen/engine/services/isolation_policy.py")
     multi_ok = (
-        ("TBE_MULTI_TENANT" in settings and "default=True" in settings)
-        or ('TBE_MULTI_TENANT' in isolation and '"1"' in isolation)
+        ('TBE_MULTI_TENANT' in isolation and '"1"' in isolation)
         or ("TBE_MULTI_TENANT" in app)
     )
     check(
