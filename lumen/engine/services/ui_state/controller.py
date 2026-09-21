@@ -64,74 +64,6 @@ def _copy_state(state: EngineUiState) -> EngineUiState:
 
 
 
-def _nav_stack_get(state: EngineUiState) -> list[str]:
-    raw = (state.slots.get("_nav") or "").strip()
-    if not raw:
-        return []
-    return [p for p in raw.split(",") if p]
-
-
-def _nav_stack_set(state: EngineUiState, stack: list[str]) -> None:
-    stack = stack[-10:]
-    if stack:
-        state.slots["_nav"] = ",".join(stack)
-    else:
-        state.slots.pop("_nav", None)
-
-
-def _nav_push(state: EngineUiState, leaving: EngineUiPhase) -> None:
-    """Record the phase we are leaving so nav_back can restore one step."""
-    if leaving in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
-        return
-    stack = _nav_stack_get(state)
-    val = leaving.value
-    if not stack or stack[-1] != val:
-        stack.append(val)
-    _nav_stack_set(state, stack)
-
-
-def _nav_pop(state: EngineUiState) -> EngineUiPhase | None:
-    stack = _nav_stack_get(state)
-    if not stack:
-        return None
-    prev = stack.pop()
-    _nav_stack_set(state, stack)
-    try:
-        return EngineUiPhase(prev)
-    except ValueError:
-        return None
-
-
-def _nav_clear(state: EngineUiState) -> None:
-    state.slots.pop("_nav", None)
-
-
-def _parent_phase(phase: EngineUiPhase) -> EngineUiPhase:
-    """Static one-step parent when history stack is empty (cold start / deep link)."""
-    tree: dict[EngineUiPhase, EngineUiPhase] = {
-        EngineUiPhase.GEN_SLOTS: EngineUiPhase.GEN_TYPE,
-        EngineUiPhase.GEN_CONFIRM: EngineUiPhase.GEN_SLOTS,
-        EngineUiPhase.GENERATING: EngineUiPhase.GEN_CONFIRM,
-        EngineUiPhase.GEN_DONE: EngineUiPhase.HOME,
-        EngineUiPhase.GEN_TYPE: EngineUiPhase.HOME,
-        EngineUiPhase.HOST_CONFIRM: EngineUiPhase.GEN_DONE,
-        EngineUiPhase.PRO_PLAN: EngineUiPhase.BILLING,
-        EngineUiPhase.BILLING: EngineUiPhase.HOME,
-        EngineUiPhase.DASHBOARD: EngineUiPhase.HOME,
-        EngineUiPhase.HELP: EngineUiPhase.HOME,
-        EngineUiPhase.SETTINGS: EngineUiPhase.HOME,
-        EngineUiPhase.REFERRAL: EngineUiPhase.SETTINGS,
-        EngineUiPhase.CONNECTIONS: EngineUiPhase.SETTINGS,
-        EngineUiPhase.CONN_GITHUB: EngineUiPhase.CONNECTIONS,
-        EngineUiPhase.TEMPLATES: EngineUiPhase.HOME,
-        EngineUiPhase.TEMPLATE_DETAIL: EngineUiPhase.TEMPLATES,
-        EngineUiPhase.TEMPLATE_TRIAL_MINUTES: EngineUiPhase.TEMPLATE_DETAIL,
-        EngineUiPhase.TEMPLATE_STATUS: EngineUiPhase.TEMPLATES,
-        EngineUiPhase.CONTEXT: EngineUiPhase.HOME,
-        EngineUiPhase.IDLE: EngineUiPhase.HOME,
-    }
-    return tree.get(phase, EngineUiPhase.HOME)
-
 
 def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> EngineUiState:
     """Recompute needs from current description; drop filled slots from missing."""
@@ -195,7 +127,7 @@ def _template_status_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...]
     rows.append(
         (
             UiButton("🔄 تحديث", "tpl_refresh_mine", style="primary"),
-            UiButton("📦 رجوع للقوالب", "open_templates"),
+            UiButton("📦 رجوع للقوالب", "nav_back"),
         )
     )
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_STATUS)
@@ -210,7 +142,7 @@ def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ..
                 UiButton("⏱ تجربة مؤقتة", "tpl_trial", tid, style="primary"),
                 UiButton("🚀 استخدام دائم", "tpl_permanent", tid, style="success"),
             ),
-            (UiButton("🤖 بوتاتي", "tpl_mine", style="primary"), UiButton("📦 رجوع للقوالب", "open_templates"),),
+            (UiButton("🤖 بوتاتي", "tpl_mine", style="primary"), UiButton("📦 رجوع للقوالب", "nav_back"),),
         ),
         EngineUiPhase.TEMPLATE_DETAIL,
     )
@@ -244,7 +176,7 @@ def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], .
             row = []
     if row:
         rows.append(tuple(row))
-    rows.append((UiButton("◀️ رجوع", "tpl_select", tid),))  # tid is short code
+    rows.append((UiButton("◀️ رجوع", "nav_back"),))  # tid is short code
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_TRIAL_MINUTES)
 
 
@@ -367,7 +299,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav(
             (
                 (UiButton(f"اشترك — {PRO_PLAN_PRICE_STARS} ⭐", "buy_pro_plan", style="success"),),
-                (UiButton("💎 رجوع للرصيد", "open_billing", style="primary"),),
+                (UiButton("💎 رجوع للرصيد", "nav_back", style="primary"),),
             ),
             phase,
         )
@@ -414,7 +346,7 @@ def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
 def _connections_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
         (UiButton("🐙 GitHub", "conn_github", style="success"),),
-        (UiButton("⚙️ رجوع للإعدادات", "open_settings", style="primary"),),
+        (UiButton("⚙️ رجوع للإعدادات", "nav_back", style="primary"),),
     )
 
 
@@ -463,7 +395,7 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         )
     elif (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "0":
         rows.append((UiButton("✏️ أكمِل المتغيرات", "conn_gh_refresh", style="primary"),))
-    rows.append((UiButton("🔗 رجوع للاتصالات", "open_connections", style="primary"),))
+    rows.append((UiButton("🔗 رجوع للاتصالات", "nav_back", style="primary"),))
     return tuple(rows)
 
 
@@ -551,23 +483,7 @@ def apply_action(
     dash_tgt = ""
 
     if action_id == "nav_back":
-        # 1) Prefer real history stack (true one-step back)
-        prev = _nav_pop(new)
-        if prev is None:
-            prev = _parent_phase(new.phase)
-        # phase-specific cleanup when landing
-        if prev == EngineUiPhase.GEN_TYPE:
-            new.slots["awaiting_text"] = "1"
-        elif prev == EngineUiPhase.GEN_SLOTS:
-            new = _refresh_needs(new, user_id=user_id)
-        elif prev == EngineUiPhase.BILLING:
-            new.slots["billing_expanded"] = "1"
-        elif prev == EngineUiPhase.HOME:
-            new.slots.pop("awaiting_text", None)
-            new.slots.pop("billing_expanded", None)
-        new.phase = prev
-        new.missing = []
-        msg = "رجوع خطوة."
+        new, msg = _apply_nav_back(new, user_id=user_id)
     elif action_id == "home":
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
@@ -990,8 +906,13 @@ def apply_action(
             state=state, ok=False, message_ar="إجراء غير منفَّذ.", buttons=buttons_for_state(state)
         )
 
-    # Record navigation history for true one-step back (skip nav_back / home / cancel)
-    if action_id not in {"nav_back", "home", "cancel_generate"} and new.phase != state.phase:
+    # Navigation history bookkeeping
+    if action_id == "nav_back":
+        pass  # already popped
+    elif action_id in _ROOT_NAV_ACTIONS:
+        # Root destinations: path is HOME → this screen only (no stale children)
+        _nav_clear(new)
+    elif action_id not in {"nav_back"} and new.phase != state.phase:
         _nav_push(new, state.phase)
     if action_id == "cancel_generate":
         _nav_clear(new)
@@ -1007,3 +928,120 @@ def apply_action(
         dash_effect=dash_fx,
         dash_target=dash_tgt,
     )
+
+
+# ── Navigation history (true one-step back) ─────────────────────────────
+# slots["_nav"] = comma-separated phase values under the current screen.
+# Root open_* actions reset the stack. Child actions push the phase left.
+
+_ROOT_NAV_ACTIONS = frozenset({
+    "home",
+    "cancel_generate",
+    "open_generate",
+    "await_generate_text",
+    "open_templates",
+    "open_dashboard",
+    "open_billing",
+    "open_help",
+    "open_settings",
+})
+
+
+def _nav_stack_get(state: EngineUiState) -> list[str]:
+    raw = (state.slots.get("_nav") or "").strip()
+    if not raw:
+        return []
+    return [p for p in raw.split(",") if p]
+
+
+def _nav_stack_set(state: EngineUiState, stack: list[str]) -> None:
+    stack = [p for p in stack[-12:] if p]
+    if stack:
+        state.slots["_nav"] = ",".join(stack)
+    else:
+        state.slots.pop("_nav", None)
+
+
+def _nav_push(state: EngineUiState, leaving: EngineUiPhase) -> None:
+    """Push the phase we leave so nav_back can restore exactly one step."""
+    if leaving in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
+        return
+    stack = _nav_stack_get(state)
+    val = leaving.value
+    if not stack or stack[-1] != val:
+        stack.append(val)
+    _nav_stack_set(state, stack)
+
+
+def _nav_pop(state: EngineUiState) -> EngineUiPhase | None:
+    stack = _nav_stack_get(state)
+    while stack:
+        prev = stack.pop()
+        _nav_stack_set(state, stack)
+        try:
+            phase = EngineUiPhase(prev)
+        except ValueError:
+            continue
+        if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
+            continue
+        return phase
+    return None
+
+
+def _nav_clear(state: EngineUiState) -> None:
+    state.slots.pop("_nav", None)
+
+
+def _parent_phase(phase: EngineUiPhase) -> EngineUiPhase:
+    """Static parent when history is empty (cold start / lost session)."""
+    tree: dict[EngineUiPhase, EngineUiPhase] = {
+        EngineUiPhase.GEN_SLOTS: EngineUiPhase.GEN_TYPE,
+        EngineUiPhase.GEN_CONFIRM: EngineUiPhase.GEN_SLOTS,
+        EngineUiPhase.GENERATING: EngineUiPhase.GEN_CONFIRM,
+        EngineUiPhase.GEN_DONE: EngineUiPhase.HOME,
+        EngineUiPhase.GEN_TYPE: EngineUiPhase.HOME,
+        EngineUiPhase.HOST_CONFIRM: EngineUiPhase.GEN_DONE,
+        EngineUiPhase.PRO_PLAN: EngineUiPhase.BILLING,
+        EngineUiPhase.BILLING: EngineUiPhase.HOME,
+        EngineUiPhase.DASHBOARD: EngineUiPhase.HOME,
+        EngineUiPhase.HELP: EngineUiPhase.HOME,
+        EngineUiPhase.SETTINGS: EngineUiPhase.HOME,
+        EngineUiPhase.REFERRAL: EngineUiPhase.SETTINGS,
+        EngineUiPhase.CONNECTIONS: EngineUiPhase.SETTINGS,
+        EngineUiPhase.CONN_GITHUB: EngineUiPhase.CONNECTIONS,
+        EngineUiPhase.TEMPLATES: EngineUiPhase.HOME,
+        EngineUiPhase.TEMPLATE_DETAIL: EngineUiPhase.TEMPLATES,
+        EngineUiPhase.TEMPLATE_TRIAL_MINUTES: EngineUiPhase.TEMPLATE_DETAIL,
+        EngineUiPhase.TEMPLATE_STATUS: EngineUiPhase.TEMPLATES,
+        EngineUiPhase.CONTEXT: EngineUiPhase.HOME,
+        EngineUiPhase.IDLE: EngineUiPhase.HOME,
+    }
+    return tree.get(phase, EngineUiPhase.HOME)
+
+
+def _apply_nav_back(state: EngineUiState, *, user_id: int | None) -> tuple[EngineUiState, str]:
+    """Mutate state to previous screen; return (state, message)."""
+    prev = _nav_pop(state)
+    if prev is None:
+        prev = _parent_phase(state.phase)
+    # Never stay on the same phase
+    if prev == state.phase:
+        prev = _parent_phase(prev)
+        if prev == state.phase:
+            prev = EngineUiPhase.HOME
+    if prev == EngineUiPhase.GEN_TYPE:
+        state.slots["awaiting_text"] = "1"
+    elif prev == EngineUiPhase.GEN_SLOTS:
+        state = _refresh_needs(state, user_id=user_id)
+    elif prev == EngineUiPhase.BILLING:
+        state.slots["billing_expanded"] = "1"
+    elif prev == EngineUiPhase.HOME:
+        state.slots.pop("awaiting_text", None)
+        state.slots.pop("billing_expanded", None)
+    elif prev == EngineUiPhase.TEMPLATES:
+        state.slots.pop("template_id", None)
+        state.slots.pop("template_title", None)
+    state.phase = prev
+    state.missing = []
+    return state, "رجوع خطوة."
+
