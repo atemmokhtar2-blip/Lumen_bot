@@ -41,9 +41,19 @@ def escape_md(text: object) -> str:
 
 
 def escape_html(text: object) -> str:
-    """Escape &, <, > for Telegram HTML parse_mode (official requirement)."""
+    """Escape &, <, > for Telegram HTML parse_mode (official requirement).
+
+    Preserves official <tg-emoji emoji-id="...">fallback</tg-emoji> tags so
+    premium custom emoji survive the escape pass.
+    """
     s = "" if text is None else str(text)
-    return _html_mod.escape(s, quote=False)
+    try:
+        from lumen.bot.html_emoji import protect_tg_emoji, restore_tg_emoji
+        s = protect_tg_emoji(s)
+        s = _html_mod.escape(s, quote=False)
+        return restore_tg_emoji(s)
+    except Exception:
+        return _html_mod.escape(s, quote=False)
 
 
 def looks_like_telegram_html(text: object) -> bool:
@@ -63,6 +73,8 @@ def looks_like_telegram_html(text: object) -> bool:
         "<pre>",
         "</pre>",
         "<tg-spoiler>",
+        "<tg-emoji",
+        "</tg-emoji>",
     )
     return any(m in s for m in markers)
 
@@ -203,11 +215,29 @@ def mdv2_status(
 
 
 def html_title(text: object, *, subtitle: object = "") -> str:
-    """Primary screen title — bold + optional italic subtitle (official HTML)."""
-    t = escape_html("" if text is None else str(text).strip())
-    if not t:
+    """Primary screen title — bold + optional italic subtitle (official HTML).
+
+    Leading <tg-emoji> tags are placed *outside* <b> so custom-emoji entities
+    do not nest inside bold (Telegram may drop nested custom emoji).
+    """
+    raw = "" if text is None else str(text).strip()
+    if not raw:
         return ""
-    out = f"<b>{t}</b>"
+    prefix = ""
+    rest = raw
+    # peel leading tg-emoji tags (possibly space-separated)
+    import re as _re
+    while True:
+        m = _re.match(r'(\s*<tg-emoji\s+emoji-id="\d+">[^<]*</tg-emoji>\s*)', rest, _re.I)
+        if not m:
+            break
+        prefix += m.group(1)
+        rest = rest[m.end():]
+    body = escape_html(rest) if rest else ""
+    if body:
+        out = f"{prefix}<b>{body}</b>" if prefix else f"<b>{body}</b>"
+    else:
+        out = prefix
     sub = ("" if subtitle is None else str(subtitle)).strip()
     if sub:
         out += f"\n<i>{escape_html(sub)}</i>"
@@ -248,12 +278,26 @@ def html_blockquote(body: object, *, expandable: bool = False) -> str:
 
 
 def html_section(title: object, body: object, *, expandable: bool = True) -> str:
-    """Bold section label + blue box (expandable by default for long copy)."""
-    t = escape_html("" if title is None else str(title).strip())
+    """Bold section label + blue box (expandable by default for long copy).
+
+    Leading <tg-emoji> stay outside <b> (no nested custom-emoji entities).
+    """
+    raw = "" if title is None else str(title).strip()
+    prefix = ""
+    rest = raw
+    import re as _re
+    while True:
+        m = _re.match(r'(\s*<tg-emoji\s+emoji-id="\d+">[^<]*</tg-emoji>\s*)', rest, _re.I)
+        if not m:
+            break
+        prefix += m.group(1)
+        rest = rest[m.end():]
+    t = escape_html(rest) if rest else ""
+    head = f"{prefix}<b>{t}</b>" if t else prefix
     block = html_blockquote(body, expandable=expandable)
-    if t and block:
-        return f"<b>{t}</b>\n{block}"
-    return t or block
+    if head and block:
+        return f"{head}\n{block}"
+    return head or block
 
 
 def html_card(

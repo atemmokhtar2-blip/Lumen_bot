@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from .models import EngineUiPhase, EngineUiState
 from .presets import preset_label
 
+from lumen.bot.html_emoji import he
+
 
 @dataclass
 class HostRow:
@@ -42,17 +44,17 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     phase = state.phase
 
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
-        # Homepage — balance only under open_billing (product rule)
+        # Homepage — HTML custom emoji (tg-emoji) + unicode fallback
         return html_card(
-            "🔮 مرحباً بك في Lumen",
+            f"{he('spark')} مرحباً بك في Lumen",
             [
                 (
-                    "✨ ماذا تقدر تعمل؟",
-                    "• ✨ إنشاء بوت — اكتب وصفاً واحداً\n"
-                    "• 📦 القوالب — بوتات جاهزة للتجربة أو الاستخدام\n"
-                    "• 💎 الرصيد — رصيدك الحالي فقط\n"
-                    "• 📊 لوحة التحكم — الاستضافة والمشاريع\n"
-                    "• ❓ المساعدة — شرح سريع للأوامر",
+                    f"{he('idea')} ماذا تقدر تعمل؟",
+                    f"• {he('spark')} إنشاء بوت — اكتب وصفاً واحداً\n"
+                    f"• {he('package')} القوالب — بوتات جاهزة للتجربة أو الاستخدام\n"
+                    f"• {he('wallet')} الرصيد — رصيدك الحالي فقط\n"
+                    f"• {he('stats')} لوحة التحكم — الاستضافة والمشاريع\n"
+                    f"• {he('question')} المساعدة — شرح سريع للأوامر",
                 ),
             ],
             subtitle="المنصة الأولى لإنشاء وإدارة بوتات المحادثة دون برمجة",

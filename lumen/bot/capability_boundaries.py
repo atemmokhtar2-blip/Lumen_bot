@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from lumen.bot.telegram_text import html_bullets, html_card
+from lumen.bot.html_emoji import he
 
 CAN_DO_AR = [
     "🎁 برنامج إحالة: /referral — ادعُ أصدقاءك واحصل على رصيد عند استخدامهم للبوت.",
