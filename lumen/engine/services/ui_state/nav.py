@@ -14,7 +14,7 @@ from typing import Sequence
 from .models import EngineUiPhase, UiButton
 
 _NAV_ACTIONS = frozenset({"home", "cancel_generate", "nav_back"})
-_NAV_LABELS = frozenset({"رجوع", "القائمة", "إلغاء", "الرئيسية"})
+_NAV_LABELS = frozenset({"رجوع", "◀️ رجوع", "القائمة", "إلغاء", "🗑 إلغاء", "الرئيسية", "🏠 الرئيسية"})
 
 
 def nav_footer(phase: EngineUiPhase | str | None = None) -> tuple[UiButton, ...]:
@@ -28,13 +28,13 @@ def nav_footer(phase: EngineUiPhase | str | None = None) -> tuple[UiButton, ...]
         return tuple()
     if ph == EngineUiPhase.GENERATING:
         return (
-            UiButton("الرئيسية", "home"),
-            UiButton("إلغاء", "cancel_generate", style="danger"),
+            UiButton("🏠 الرئيسية", "home"),
+            UiButton("🗑 إلغاء", "cancel_generate", style="danger"),
         )
     return (
-        UiButton("رجوع", "nav_back", style="primary"),
-        UiButton("الرئيسية", "home"),
-        UiButton("إلغاء", "cancel_generate", style="danger"),
+        UiButton("◀️ رجوع", "nav_back", style="primary"),
+        UiButton("🏠 الرئيسية", "home"),
+        UiButton("🗑 إلغاء", "cancel_generate", style="danger"),
     )
 
 
@@ -69,9 +69,9 @@ def with_nav(
     elif force:
         cleaned.append(
             (
-                UiButton("رجوع", "nav_back", style="primary"),
-                UiButton("الرئيسية", "home"),
-                UiButton("إلغاء", "cancel_generate", style="danger"),
+                UiButton("◀️ رجوع", "nav_back", style="primary"),
+                UiButton("🏠 الرئيسية", "home"),
+                UiButton("🗑 إلغاء", "cancel_generate", style="danger"),
             )
         )
     return tuple(cleaned)

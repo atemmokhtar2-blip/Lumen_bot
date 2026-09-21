@@ -35,16 +35,16 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     # Bot API 9.4 native colors: success=green, primary=blue, danger=red
     return (
         (
-            UiButton("إنشاء بوت", "open_generate", style="success"),
-            UiButton("القوالب", "open_templates", style="success"),
+            UiButton("✨ إنشاء بوت", "open_generate", style="success"),
+            UiButton("📦 القوالب", "open_templates", style="success"),
         ),
         (
-            UiButton("لوحة التحكم", "open_dashboard", style="primary"),
-            UiButton("الرصيد", "open_billing", style="primary"),
+            UiButton("📊 لوحة التحكم", "open_dashboard", style="primary"),
+            UiButton("💎 الرصيد", "open_billing", style="primary"),
         ),
         (
-            UiButton("الإعدادات", "open_settings", style="primary"),
-            UiButton("المساعدة", "open_help"),
+            UiButton("⚙️ الإعدادات", "open_settings", style="primary"),
+            UiButton("❓ المساعدة", "open_help"),
         ),
     )
 
@@ -98,11 +98,11 @@ def _template_gallery_buttons() -> tuple[tuple[UiButton, ...], ...]:
         except Exception:
             specs = []
     rows: list[tuple[UiButton, ...]] = []
-    rows.append((UiButton("بوتاتي من القوالب", "tpl_mine", style="primary"),))
+    rows.append((UiButton("🤖 بوتاتي من القوالب", "tpl_mine", style="primary"),))
     for spec in specs[:12]:
         rows.append((UiButton(spec.title[:40], "tpl_select", spec.short_id or spec.id, style="primary"),))
     if len(rows) == 1:
-        rows.append((UiButton("لا توجد قوالب", "open_templates"),))
+        rows.append((UiButton("📭 لا توجد قوالب", "open_templates"),))
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATES)
 
 
@@ -121,11 +121,11 @@ def _template_status_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...]
             label = f"{title} · {st} · {rem}"
         rows.append((UiButton(label[:40], "tpl_refresh_mine"),))
         if st in {"running", "preparing", "شغال", "شغّال", "تجهيز", "قيد التجهيز"}:
-            rows.append((UiButton(f"إيقاف #{i+1}", "tpl_stop", str(i), style="danger"),))
+            rows.append((UiButton(f"⏹ إيقاف #{i+1}", "tpl_stop", str(i), style="danger"),))
     rows.append(
         (
-            UiButton("تحديث", "tpl_refresh_mine", style="primary"),
-            UiButton("رجوع للقوالب", "open_templates"),
+            UiButton("🔄 تحديث", "tpl_refresh_mine", style="primary"),
+            UiButton("📦 رجوع للقوالب", "open_templates"),
         )
     )
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_STATUS)
@@ -137,10 +137,10 @@ def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ..
     return _with_nav(
         (
             (
-                UiButton("تجربة مؤقتة", "tpl_trial", tid, style="primary"),
-                UiButton("استخدام دائم", "tpl_permanent", tid, style="success"),
+                UiButton("⏱ تجربة مؤقتة", "tpl_trial", tid, style="primary"),
+                UiButton("🚀 استخدام دائم", "tpl_permanent", tid, style="success"),
             ),
-            (UiButton("بوتاتي", "tpl_mine", style="primary"), UiButton("رجوع للقوالب", "open_templates"),),
+            (UiButton("🤖 بوتاتي", "tpl_mine", style="primary"), UiButton("📦 رجوع للقوالب", "open_templates"),),
         ),
         EngineUiPhase.TEMPLATE_DETAIL,
     )
@@ -168,13 +168,13 @@ def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], .
     rows: list[tuple[UiButton, ...]] = []
     row: list[UiButton] = []
     for m in choices:
-        row.append(UiButton(f"{m} دقيقة", "tpl_minutes", f"{tid}:{m}", style="primary"))
+        row.append(UiButton(f"⏱ {m} دقيقة", "tpl_minutes", f"{tid}:{m}", style="primary"))
         if len(row) == 2:
             rows.append(tuple(row))
             row = []
     if row:
         rows.append(tuple(row))
-    rows.append((UiButton("رجوع", "tpl_select", tid),))  # tid is short code
+    rows.append((UiButton("◀️ رجوع", "tpl_select", tid),))  # tid is short code
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_TRIAL_MINUTES)
 
 
@@ -191,7 +191,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
     if phase == EngineUiPhase.GEN_SLOTS:
         rem = remaining_needs(state.needs or [], state.slots)
         if not rem:
-            return _with_nav(((UiButton("متابعة للتأكيد", "to_confirm"),),), phase)
+            return _with_nav(((UiButton("✅ متابعة للتأكيد", "to_confirm"),),), phase)
         need = rem[0]
         rows: list[tuple[UiButton, ...]] = []
         # choice chips in rows of 2
@@ -205,8 +205,8 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             rows.append(tuple(row))
         rows.append(
             (
-                UiButton("تخطي هذا", "skip_need"),
-                UiButton("توليد بما هو متاح", "to_confirm"),
+                UiButton("⏭ تخطي هذا", "skip_need"),
+                UiButton("🚀 توليد بما هو متاح", "to_confirm"),
             )
         )
         return _with_nav(tuple(rows), phase)
@@ -216,11 +216,11 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         rows = []
         if rem:
             # engine still wants something — offer continue slots or force generate
-            rows.append((UiButton("أكمل الناقص", "resume_slots"),))
+            rows.append((UiButton("✏️ أكمل الناقص", "resume_slots"),))
         rows.append(
             (
-                UiButton("نعم، ابدأ التوليد", "confirm_generate", style="success"),
-                UiButton("تعديل", "open_generate"),
+                UiButton("✅ نعم، ابدأ التوليد", "confirm_generate", style="success"),
+                UiButton("✏️ تعديل", "open_generate"),
             )
         )
         return _with_nav(tuple(rows), phase)
@@ -232,18 +232,18 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         if (state.project_ref or "").strip():
             rows.append(
                 (
-                    UiButton("تجربة في الشات", "post_trial", style="success"),
-                    UiButton("استضافة دائمة", "post_host", style="success"),
+                    UiButton("🧪 تجربة في الشات", "post_trial", style="success"),
+                    UiButton("🚀 استضافة دائمة", "post_host", style="success"),
                 )
             )
             rows.append(
                 (
-                    UiButton("تحميل ZIP", "post_zip", style="primary"),
-                    UiButton("معاينة الملفات", "post_preview", style="primary"),
+                    UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
+                    UiButton("👁 معاينة الملفات", "post_preview", style="primary"),
                 )
             )
-        rows.append((UiButton("إنشاء بوت آخر", "open_generate", style="success"),))
-        rows.append((UiButton("لوحة التحكم", "open_dashboard", style="primary"),))
+        rows.append((UiButton("✨ إنشاء بوت آخر", "open_generate", style="success"),))
+        rows.append((UiButton("📊 لوحة التحكم", "open_dashboard", style="primary"),))
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.DASHBOARD:
         rows: list[tuple[UiButton, ...]] = []
@@ -260,28 +260,28 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             rows.append((UiButton(label[:40], "dash_status", str(i)),))
             rows.append(
                 (
-                    UiButton("حالة", "dash_status", str(i), style="primary"),
-                    UiButton("إيقاف", "dash_stop", str(i), style="danger"),
-                    UiButton("تشخيص", "dash_diagnose", str(i), style="primary"),
+                    UiButton("📡 حالة", "dash_status", str(i), style="primary"),
+                    UiButton("⏹ إيقاف", "dash_stop", str(i), style="danger"),
+                    UiButton("🩺 تشخيص", "dash_diagnose", str(i), style="primary"),
                 )
             )
         rows.append(
             (
-                UiButton("تحديث القائمة", "open_dashboard", style="primary"),
-                UiButton("حالة الكل", "dash_status", "all", style="primary"),
+                UiButton("🔄 تحديث القائمة", "open_dashboard", style="primary"),
+                UiButton("📡 حالة الكل", "dash_status", "all", style="primary"),
             )
         )
         rows.append(
             (
-                UiButton("تجربة المشروع", "dash_trial", style="success"),
-                UiButton("استضافة المشروع", "post_host", style="success"),
+                UiButton("🧪 تجربة المشروع", "dash_trial", style="success"),
+                UiButton("🚀 استضافة المشروع", "post_host", style="success"),
             )
         )
-        rows.append((UiButton("إنشاء بوت", "open_generate", style="success"),))
+        rows.append((UiButton("✨ إنشاء بوت", "open_generate", style="success"),))
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.BILLING:
         rows: list[tuple[UiButton, ...]] = [
-            (UiButton("تحديث الرصيد", "open_billing", style="primary"),),
+            (UiButton("🔄 تحديث الرصيد", "open_billing", style="primary"),),
         ]
         # Pro plan revealed only after "عرض المزيد" (keeps keyboard short)
         if (state.slots or {}).get("billing_expanded") == "1":
@@ -290,14 +290,14 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             )
         else:
             rows.append(
-                (UiButton("عرض المزيد", "show_more_plans", style="primary"),),
+                (UiButton("➕ عرض المزيد", "show_more_plans", style="primary"),),
             )
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.PRO_PLAN:
         return _with_nav(
             (
                 (UiButton(f"اشترك — {PRO_PLAN_PRICE_STARS} ⭐", "buy_pro_plan", style="success"),),
-                (UiButton("رجوع للرصيد", "open_billing", style="primary"),),
+                (UiButton("💎 رجوع للرصيد", "open_billing", style="primary"),),
             ),
             phase,
         )
@@ -330,21 +330,21 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
 
 def _settings_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
-        (UiButton("الاتصالات", "open_connections", style="primary"),),
-        (UiButton("الإحالة — $5", "open_referral", style="success"),),
+        (UiButton("🔗 الاتصالات", "open_connections", style="primary"),),
+        (UiButton("🎁 الإحالة — $5", "open_referral", style="success"),),
     )
 
 
 def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
-        (UiButton("تحديث", "open_referral", style="primary"),),
+        (UiButton("🔄 تحديث", "open_referral", style="primary"),),
     )
 
 
 def _connections_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
-        (UiButton("GitHub", "conn_github", style="success"),),
-        (UiButton("رجوع للإعدادات", "open_settings", style="primary"),),
+        (UiButton("🐙 GitHub", "conn_github", style="success"),),
+        (UiButton("⚙️ رجوع للإعدادات", "open_settings", style="primary"),),
     )
 
 
@@ -360,19 +360,19 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         rows.append((UiButton(title[:60], "conn_gh_select", rid, style="primary"),))
     connected = (state.slots or {}).get("gh_connected") == "1"
     if not connected:
-        rows.append((UiButton("اتصل بـ GitHub", "conn_gh_connect", style="success"),))
-        rows.append((UiButton("ربط يدوي (PAT)", "conn_gh_pat", style="primary"),))
+        rows.append((UiButton("🐙 اتصل بـ GitHub", "conn_gh_connect", style="success"),))
+        rows.append((UiButton("🔑 ربط يدوي (PAT)", "conn_gh_pat", style="primary"),))
     else:
         rows.append(
             (
-                UiButton("تحديث القائمة", "conn_gh_refresh", style="primary"),
-                UiButton("إعادة الربط", "conn_gh_connect", style="primary"),
+                UiButton("🔄 تحديث القائمة", "conn_gh_refresh", style="primary"),
+                UiButton("🔁 إعادة الربط", "conn_gh_connect", style="primary"),
             )
         )
         rows.append(
             (
-                UiButton("سجل النشاط", "conn_gh_activity", style="primary"),
-                UiButton("فصل الاتصال", "conn_gh_disconnect", style="danger"),
+                UiButton("📜 سجل النشاط", "conn_gh_activity", style="primary"),
+                UiButton("🔌 فصل الاتصال", "conn_gh_disconnect", style="danger"),
             )
         )
     page = int((state.slots or {}).get("gh_page") or "1")
@@ -380,20 +380,20 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
     if page > 1:
         nav_row.append(UiButton("◀ السابق", "conn_gh_page", f"p:{page - 1}", style="primary"))
     if (state.slots or {}).get("gh_has_more") == "1":
-        nav_row.append(UiButton("التالي ▶", "conn_gh_page", f"p:{page + 1}", style="primary"))
+        nav_row.append(UiButton("▶️ التالي", "conn_gh_page", f"p:{page + 1}", style="primary"))
     if nav_row:
         rows.append(tuple(nav_row))
     # Phase 3: trial/host only when workspace ready (after deep understand + env)
     if (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "1":
         rows.append(
             (
-                UiButton("تجربة في الشات", "post_trial", style="success"),
-                UiButton("استضافة دائمة", "post_host", style="success"),
+                UiButton("🧪 تجربة في الشات", "post_trial", style="success"),
+                UiButton("🚀 استضافة دائمة", "post_host", style="success"),
             )
         )
     elif (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "0":
-        rows.append((UiButton("أكمِل المتغيرات", "conn_gh_refresh", style="primary"),))
-    rows.append((UiButton("رجوع للاتصالات", "open_connections", style="primary"),))
+        rows.append((UiButton("✏️ أكمِل المتغيرات", "conn_gh_refresh", style="primary"),))
+    rows.append((UiButton("🔗 رجوع للاتصالات", "open_connections", style="primary"),))
     return tuple(rows)
 
 

@@ -44,15 +44,15 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
         # Homepage — balance only under open_billing (product rule)
         return html_card(
-            "مرحباً بك في Lumen 🔮",
+            "🔮 مرحباً بك في Lumen",
             [
                 (
-                    "ماذا تقدر تعمل؟",
-                    "• إنشاء بوت — اكتب وصفاً واحداً\n"
-                    "• القوالب — بوتات جاهزة للتجربة أو الاستخدام\n"
-                    "• الرصيد — رصيدك الحالي فقط\n"
-                    "• لوحة التحكم — الاستضافة والمشاريع\n"
-                    "• المساعدة — شرح سريع للأوامر",
+                    "✨ ماذا تقدر تعمل؟",
+                    "• ✨ إنشاء بوت — اكتب وصفاً واحداً\n"
+                    "• 📦 القوالب — بوتات جاهزة للتجربة أو الاستخدام\n"
+                    "• 💎 الرصيد — رصيدك الحالي فقط\n"
+                    "• 📊 لوحة التحكم — الاستضافة والمشاريع\n"
+                    "• ❓ المساعدة — شرح سريع للأوامر",
                 ),
             ],
             subtitle="المنصة الأولى لإنشاء وإدارة بوتات المحادثة دون برمجة",
@@ -60,10 +60,10 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.GEN_TYPE:
         return html_card(
-            "إنشاء بوت",
+            "✨ إنشاء بوت",
             [
                 (
-                    "اكتب الوصف",
+                    "✍️ اكتب الوصف",
                     "اكتب وصف البوت في رسالة واحدة تحت هذا الصندوق.\n"
                     "مثال: بوت متجر يرد على الطلبات ويحسب الفواتير ويرسل إشعارات.",
                 ),
@@ -104,18 +104,18 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         ]
         if filled:
             sections.append(("ما تم تسجيله", " | ".join(filled[:6])))
-        return html_card("قبل التوليد", sections)
+        return html_card("🧠 قبل التوليد", sections)
 
     if phase == EngineUiPhase.GEN_CONFIRM:
         desc = (state.slots.get("bot_description") or "")[:400] or "—"
         return html_card(
-            "تأكيد التوليد",
+            "✅ تأكيد التوليد",
             [("الوصف", desc)],
         )
 
     if phase == EngineUiPhase.GENERATING:
         return html_card(
-            "جاري التوليد",
+            "⚙️ جاري التوليد",
             [("الحالة", "المحرك يبني البوت الآن.\nلا تغلق الشات حتى يكتمل.")],
         )
 
@@ -126,14 +126,14 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         if state.plane and state.plane.value != "none":
             body = f"المستوى: {state.plane.value}\n" + body
         return html_card(
-            "اكتمل التوليد",
+            "🎉 اكتمل التوليد",
             [
                 ("المشروع", body),
                 (
-                    "الخيارات",
-                    "• تجربة في الشات — تشغيل مؤقت\n"
-                    "• استضافة دائمة — Firecracker\n"
-                    "• ZIP أو معاينة",
+                    "🔧 الخيارات",
+                    "• 🧪 تجربة في الشات — تشغيل مؤقت\n"
+                    "• 🚀 استضافة دائمة\n"
+                    "• 📦 ZIP أو معاينة",
                 ),
             ],
         )
@@ -141,12 +141,12 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.SETTINGS:
         return html_card(
-            "الإعدادات",
+            "⚙️ الإعدادات",
             [
                 (
                     "الخيارات",
-                    "• الاتصالات — ربط GitHub وعرض مستودعاتك الرسمية.\n"
-                    "• الإحالة — ادعُ أصدقاءك واحصل على $5 عند 50 مستخدماً نشطاً.",
+                    "• 🔗 الاتصالات — ربط GitHub وعرض مستودعاتك الرسمية.\n"
+                    "• 🎁 الإحالة — ادعُ أصدقاءك واحصل على $5 عند 50 مستخدماً نشطاً.",
                 ),
             ],
             subtitle="إعدادات الحساب",
@@ -155,7 +155,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     if phase == EngineUiPhase.CONNECTIONS:
         gh_line = (state.slots or {}).get("conn_github_line") or "GitHub: —"
         return html_card(
-            "الاتصالات",
+            "🔗 الاتصالات",
             [
                 ("الحالة", gh_line),
                 (
@@ -204,7 +204,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             )
         )
         return html_card(
-            "GitHub",
+            "🐙 GitHub",
             sections,
             subtitle="اتصال رسمي",
         )
@@ -213,7 +213,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         link = (state.slots or {}).get("referral_link") or ""
         stats_line = (state.slots or {}).get("referral_stats_line") or "—"
         return html_card(
-            "برنامج الإحالة — $5",
+            "🎁 برنامج الإحالة — $5",
             [
                 ("رابطك", link or "اضغط تحديث لجلب الرابط"),
                 ("التقدم", stats_line),
@@ -253,14 +253,14 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             ("المثيلات", "\n".join(host_lines)),
             (
                 "الأزرار",
-                "تحديث القائمة — حالة الكل — تجربة/استضافة المشروع\n"
-                "status / stop / diagnose من HostService مباشرة.",
+                "🔄 تحديث · 📡 حالة · 🧪 تجربة · 🚀 نشر\n"
+                "⏹ إيقاف · 🩺 تشخيص — مباشرة من HostService.",
             ),
         ]
         if facts.active_project:
             sections.insert(0, ("مشروع الجلسة", str(facts.active_project)))
         return html_card(
-            "لوحة التحكم — استضافة حقيقية",
+            "📊 لوحة المشاريع والاستضافة",
             sections,
             subtitle="إدارة المثيلات من HostService",
         )
@@ -273,8 +273,8 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             body += f"\nمحجوز: {reserved} كريدت"
         body += "\n\nالرصيد يخصم حسب التوليد والاستضافة."
         return html_card(
-            "الرصيد",
-            [("حسابك", body)],
+            "💎 الرصيد",
+            [("💳 حسابك", body)],
             subtitle="نظام الكريدت",
         )
 
@@ -314,17 +314,17 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.TEMPLATES:
         _how = chr(10).join([
-            "1) اختر قالبًا من الأزرار",
-            "2) تجربة مؤقتة (حتى 50 دقيقة) أو استخدام دائم (30 يومًا)",
-            "3) أرسل توكن @BotFather عند الطلب",
-            "الحد المجاني: 3 قوالب شغّالة — Pro حتى 10.",
+            "1) اختر قالباً من الأزرار 👇",
+            "2) ⏱ تجربة مؤقتة (حتى 50 دقيقة) أو 🚀 استخدام دائم (30 يوماً)",
+            "3) أرسل توكن @BotFather عند الطلب 🔑",
+            "🆓 الحد المجاني: 3 قوالب شغّالة — Pro حتى 10.",
         ])
         return html_card(
-            "القوالب الجاهزة",
+            "📦 القوالب الجاهزة",
             [
-                ("كيف تستخدمها؟", _how),
+                ("🧭 كيف تستخدمها؟", _how),
                 (
-                    "بوتاتي",
+                    "🤖 بوتاتي",
                     "من زر «بوتاتي من القوالب» ترى الحالة والمتبقي وتوقف ما لا تحتاجه.",
                 ),
             ],
@@ -348,7 +348,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
 
     if phase == EngineUiPhase.TEMPLATE_TRIAL_MINUTES:
         return html_card(
-            "مدة التجربة المؤقتة",
+            "⏱ مدة التجربة المؤقتة",
             [
                 (
                     "اختر الدقائق",
@@ -372,7 +372,7 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             lines.append(line)
         body = chr(10).join(lines) if lines else "لا توجد قوالب شغّالة أو محجوزة حاليًا."
         return html_card(
-            "بوتاتي من القوالب",
+            "🤖 بوتاتي من القوالب",
             [
                 ("الحالة", body),
                 (
@@ -393,10 +393,10 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
             return hint
         main = chr(10).join(
             [
-                "• إنشاء بوت — اكتب وصفاً واحداً",
-                "• الرصيد — رصيدك الحالي",
-                "• لوحة التحكم — مشاريعك والاستضافة",
-                "• /start — القائمة الرئيسية",
+                "• ✨ إنشاء بوت — اكتب وصفاً واحداً",
+                "• 💎 الرصيد — رصيدك الحالي",
+                "• 📊 لوحة التحكم — مشاريعك والاستضافة",
+                "• 🏠 /start — القائمة الرئيسية",
             ]
         )
         sections: list[tuple[str, str]] = [("الأوامر", main)]
