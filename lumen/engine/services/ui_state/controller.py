@@ -63,6 +63,76 @@ def _copy_state(state: EngineUiState) -> EngineUiState:
     )
 
 
+
+def _nav_stack_get(state: EngineUiState) -> list[str]:
+    raw = (state.slots.get("_nav") or "").strip()
+    if not raw:
+        return []
+    return [p for p in raw.split(",") if p]
+
+
+def _nav_stack_set(state: EngineUiState, stack: list[str]) -> None:
+    stack = stack[-10:]
+    if stack:
+        state.slots["_nav"] = ",".join(stack)
+    else:
+        state.slots.pop("_nav", None)
+
+
+def _nav_push(state: EngineUiState, leaving: EngineUiPhase) -> None:
+    """Record the phase we are leaving so nav_back can restore one step."""
+    if leaving in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
+        return
+    stack = _nav_stack_get(state)
+    val = leaving.value
+    if not stack or stack[-1] != val:
+        stack.append(val)
+    _nav_stack_set(state, stack)
+
+
+def _nav_pop(state: EngineUiState) -> EngineUiPhase | None:
+    stack = _nav_stack_get(state)
+    if not stack:
+        return None
+    prev = stack.pop()
+    _nav_stack_set(state, stack)
+    try:
+        return EngineUiPhase(prev)
+    except ValueError:
+        return None
+
+
+def _nav_clear(state: EngineUiState) -> None:
+    state.slots.pop("_nav", None)
+
+
+def _parent_phase(phase: EngineUiPhase) -> EngineUiPhase:
+    """Static one-step parent when history stack is empty (cold start / deep link)."""
+    tree: dict[EngineUiPhase, EngineUiPhase] = {
+        EngineUiPhase.GEN_SLOTS: EngineUiPhase.GEN_TYPE,
+        EngineUiPhase.GEN_CONFIRM: EngineUiPhase.GEN_SLOTS,
+        EngineUiPhase.GENERATING: EngineUiPhase.GEN_CONFIRM,
+        EngineUiPhase.GEN_DONE: EngineUiPhase.HOME,
+        EngineUiPhase.GEN_TYPE: EngineUiPhase.HOME,
+        EngineUiPhase.HOST_CONFIRM: EngineUiPhase.GEN_DONE,
+        EngineUiPhase.PRO_PLAN: EngineUiPhase.BILLING,
+        EngineUiPhase.BILLING: EngineUiPhase.HOME,
+        EngineUiPhase.DASHBOARD: EngineUiPhase.HOME,
+        EngineUiPhase.HELP: EngineUiPhase.HOME,
+        EngineUiPhase.SETTINGS: EngineUiPhase.HOME,
+        EngineUiPhase.REFERRAL: EngineUiPhase.SETTINGS,
+        EngineUiPhase.CONNECTIONS: EngineUiPhase.SETTINGS,
+        EngineUiPhase.CONN_GITHUB: EngineUiPhase.CONNECTIONS,
+        EngineUiPhase.TEMPLATES: EngineUiPhase.HOME,
+        EngineUiPhase.TEMPLATE_DETAIL: EngineUiPhase.TEMPLATES,
+        EngineUiPhase.TEMPLATE_TRIAL_MINUTES: EngineUiPhase.TEMPLATE_DETAIL,
+        EngineUiPhase.TEMPLATE_STATUS: EngineUiPhase.TEMPLATES,
+        EngineUiPhase.CONTEXT: EngineUiPhase.HOME,
+        EngineUiPhase.IDLE: EngineUiPhase.HOME,
+    }
+    return tree.get(phase, EngineUiPhase.HOME)
+
+
 def _refresh_needs(state: EngineUiState, *, user_id: int | None = None) -> EngineUiState:
     """Recompute needs from current description; drop filled slots from missing."""
     desc = (state.slots.get("bot_description") or "").strip()
@@ -481,56 +551,29 @@ def apply_action(
     dash_tgt = ""
 
     if action_id == "nav_back":
-        if new.phase == EngineUiPhase.GEN_SLOTS:
-            new.phase = EngineUiPhase.GEN_TYPE
+        # 1) Prefer real history stack (true one-step back)
+        prev = _nav_pop(new)
+        if prev is None:
+            prev = _parent_phase(new.phase)
+        # phase-specific cleanup when landing
+        if prev == EngineUiPhase.GEN_TYPE:
             new.slots["awaiting_text"] = "1"
-            msg = "رجعت لوصف البوت."
-        elif new.phase == EngineUiPhase.GEN_CONFIRM:
-            new.phase = EngineUiPhase.GEN_SLOTS
+        elif prev == EngineUiPhase.GEN_SLOTS:
             new = _refresh_needs(new, user_id=user_id)
-            msg = "رجعت لأسئلة التوليد."
-        elif new.phase == EngineUiPhase.PRO_PLAN:
-            new.phase = EngineUiPhase.BILLING
+        elif prev == EngineUiPhase.BILLING:
             new.slots["billing_expanded"] = "1"
-            new.missing = []
-            msg = "الرصيد."
-        elif new.phase == EngineUiPhase.CONN_GITHUB:
-            new.phase = EngineUiPhase.CONNECTIONS
-            new.missing = []
-            msg = "الاتصالات."
-        elif new.phase == EngineUiPhase.CONNECTIONS:
-            new.phase = EngineUiPhase.SETTINGS
-            new.missing = []
-            msg = "الإعدادات."
-        elif new.phase == EngineUiPhase.SETTINGS:
-            new.phase = EngineUiPhase.HOME
-            new.missing = []
-            msg = "القائمة الرئيسية."
-        elif new.phase == EngineUiPhase.REFERRAL:
-            new.phase = EngineUiPhase.SETTINGS
-            new.missing = []
-            msg = "الإعدادات."
-        elif new.phase in {
-            EngineUiPhase.DASHBOARD,
-            EngineUiPhase.BILLING,
-            EngineUiPhase.HELP,
-            EngineUiPhase.GEN_DONE,
-            EngineUiPhase.CONTEXT,
-            EngineUiPhase.GEN_TYPE,
-        }:
-            new.phase = EngineUiPhase.HOME
+        elif prev == EngineUiPhase.HOME:
             new.slots.pop("awaiting_text", None)
             new.slots.pop("billing_expanded", None)
-            new.missing = []
-            msg = "القائمة الرئيسية."
-        else:
-            new.phase = EngineUiPhase.HOME
-            msg = "القائمة الرئيسية."
+        new.phase = prev
+        new.missing = []
+        msg = "رجوع خطوة."
     elif action_id == "home":
         new.phase = EngineUiPhase.HOME
         new.slots.pop("awaiting_text", None)
         new.slots.pop("billing_expanded", None)
         new.slots.pop("pro_buy_requested", None)
+        _nav_clear(new)
         new.missing = []
         msg = "القائمة الرئيسية."
     elif action_id == "open_generate":
@@ -947,6 +990,11 @@ def apply_action(
             state=state, ok=False, message_ar="إجراء غير منفَّذ.", buttons=buttons_for_state(state)
         )
 
+    # Record navigation history for true one-step back (skip nav_back / home / cancel)
+    if action_id not in {"nav_back", "home", "cancel_generate"} and new.phase != state.phase:
+        _nav_push(new, state.phase)
+    if action_id == "cancel_generate":
+        _nav_clear(new)
     new.missing = missing_for_state(new)
     return ApplyResult(
         state=new,
