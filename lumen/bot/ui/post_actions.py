@@ -179,10 +179,46 @@ async def execute_post_side_effect(
         )
 
     if effect == "post_host":
-        if _surface_for_ud(ud) != "telegram_runtime":
+        _surf = _surface_for_ud(ud)
+        if _surf == "artifact_only":
             return (
-                "الاستضافة الحية الحالية لبوتات تيليجرام فقط.\n"
-                "المواقع وواجهات API تُسلَّم كملفات إلى أن تُفعَّل الاستضافة العامة."
+                "لا توجد قاعدة رابط عام (LUMEN_PUBLIC_BASE).\n"
+                "حمّل ZIP أو اضبط الدومين على السيرفر ثم أعد الاستضافة."
+            )
+        if _surf == "http_runtime":
+            try:
+                from lumen.engine.core.project_kind import http_runtime_hints, parse_kind
+                eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+                slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+                hints = http_runtime_hints(
+                    project_ref=str(project_ref or (root or "")),
+                    kind=parse_kind(slots.get("project_kind")),
+                )
+                ud["pending_host"] = {
+                    "project_path": str(root) if root else str(project_ref or ""),
+                    "owner_user_id": uid or None,
+                    "plane": "http_public",
+                    "project_kind": str(slots.get("project_kind") or "web_api"),
+                    "public_url": hints.get("public_url") or "",
+                    "health_path": hints.get("health_path") or "/health",
+                    "start_hint": hints.get("start_hint") or "",
+                }
+                warn = _persist(uid, ud)
+                url = hints.get("public_url") or "(غير مضبوط)"
+                return (
+                    f"تم تجهيز استضافة HTTP.\n"
+                    f"الرابط: {url}\n"
+                    f"فحص الصحة: {hints.get('health_path') or '/health'}\n"
+                    "التشغيل الفعلي على الـ VPS يتبع إعداد الحاوية/البروكسي."
+                    + warn
+                )
+            except Exception as exc:
+                logger.exception("http post_host failed")
+                return f"تعذر تجهيز استضافة HTTP: {type(exc).__name__}"
+        if _surf != "telegram_runtime":
+            return (
+                "مسار الاستضافة غير مدعوم لهذا النوع.\n"
+                "استخدم ZIP أو معاينة الملفات."
             )
         assert root is not None
         # Permanent host is a Pro entitlement — free users get trial only

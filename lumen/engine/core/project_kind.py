@@ -149,9 +149,36 @@ def delivery_surface(kind: ProjectKind) -> DeliverySurface:
     if kind == ProjectKind.TELEGRAM_BOT:
         return DeliverySurface.TELEGRAM_RUNTIME
     if kind in {ProjectKind.WEB_API, ProjectKind.WEB_SITE}:
-        # Phase 3 will flip these to HTTP_RUNTIME; honest today:
+        import os
+        # HTTP path is selected when public base is configured (VPS/domain ready).
+        # Without base → artifact only (no fake URL).
+        if (os.getenv("LUMEN_PUBLIC_BASE") or "").strip():
+            return DeliverySurface.HTTP_RUNTIME
         return DeliverySurface.ARTIFACT_ONLY
     return DeliverySurface.ARTIFACT_ONLY
+
+
+def http_runtime_hints(*, project_ref: str = "", kind: ProjectKind | None = None) -> dict[str, Any]:
+    """Public URL + health path for web kinds. Empty public_url if base unset."""
+    import os
+    from pathlib import Path as _P
+    base = (os.getenv("LUMEN_PUBLIC_BASE") or "").strip().rstrip("/")
+    health = (os.getenv("LUMEN_HEALTH_PATH") or "/health").strip() or "/health"
+    if not health.startswith("/"):
+        health = "/" + health
+    slug = ""
+    if project_ref:
+        slug = _P(str(project_ref)).name[:40].replace(" ", "-")
+    if not slug:
+        slug = "app"
+    public_url = f"{base}/p/{slug}/" if base else ""
+    return {
+        "public_url": public_url,
+        "health_path": health,
+        "health_url": (public_url.rstrip("/") + health) if public_url else "",
+        "start_hint": "uvicorn main:app --host 0.0.0.0 --port $PORT",
+        "base_configured": bool(base),
+    }
 
 
 def label_ar(kind: ProjectKind) -> str:
@@ -202,4 +229,5 @@ __all__ = [
     "cline_kind_rules",
     "kind_metadata",
     "planner_intent_kind",
+    "http_runtime_hints",
 ]

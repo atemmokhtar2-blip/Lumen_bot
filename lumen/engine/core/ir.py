@@ -62,7 +62,7 @@ class BuildIR:
     metadata: dict[str, Any] = field(default_factory=dict)
     user_id: int = 0
     # Product type: telegram_bot | web_api | web_site | … (see project_kind.py)
-    project_kind: str = "telegram_bot"
+    project_kind: str = ""  # filled by build_ir_from_package via resolve_project_kind
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -114,7 +114,7 @@ class BuildIR:
             notes=[str(x) for x in (data.get("notes") or []) if str(x).strip()],
             metadata=dict(data.get("metadata") or {}),
             user_id=int(data.get("user_id") or 0),
-            project_kind=str(data.get("project_kind") or (data.get("metadata") or {}).get("project_kind") or "telegram_bot").strip().lower() or "telegram_bot",
+            project_kind=str(data.get("project_kind") or (data.get("metadata") or {}).get("project_kind") or "").strip().lower(),
         )
 
     def non_core_keys(self) -> list[str]:

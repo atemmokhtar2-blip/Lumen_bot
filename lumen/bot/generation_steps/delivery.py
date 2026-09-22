@@ -323,13 +323,15 @@ async def deliver_generation_result(
                 DeliverySurface,
                 ProjectKind,
                 delivery_surface,
+                http_runtime_hints,
                 label_ar,
                 parse_kind,
             )
 
-            pk = parse_kind(meta.get("project_kind")) or ProjectKind.TELEGRAM_BOT
+            pk = parse_kind(meta.get("project_kind")) or ProjectKind.GENERAL_APP
             surface = delivery_surface(pk)
             label = label_ar(pk)
+            hints = http_runtime_hints(project_ref=str(project_path), kind=pk)
 
             ui = EngineUiState(
                 phase=EngineUiPhase.GEN_DONE,
@@ -338,6 +340,8 @@ async def deliver_generation_result(
                 slots={
                     "project_kind": pk.value,
                     "delivery_surface": surface.value,
+                    "public_url": hints.get("public_url") or "",
+                    "health_path": hints.get("health_path") or "/health",
                 },
             )
             save_ui_state(context.user_data, ui)
@@ -354,12 +358,29 @@ async def deliver_generation_result(
                     "• ZIP أو معاينة الملفات"
                 )
                 markup = build_inline_keyboard(buttons_for_state(ui), user_id=uid)
+            elif surface == DeliverySurface.HTTP_RUNTIME:
+                url = hints.get("public_url") or ""
+                health = hints.get("health_path") or "/health"
+                body = (
+                    f"النوع: {label}\n"
+                    f"رابط عام (عند تفعيل الاستضافة): {url}\n"
+                    f"فحص الصحة: {health}\n"
+                    "اختر:"
+                )
+                rows = (
+                    (
+                        UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
+                        UiButton("👁 معاينة الملفات", "post_preview", style="primary"),
+                    ),
+                    (UiButton("🚀 استضافة HTTP", "post_host", style="success"),),
+                    (UiButton("✨ مشروع آخر", "open_generate", style="success"),),
+                )
+                markup = build_inline_keyboard(rows, user_id=uid)
             else:
-                # Honest: no fake public URL / trial chat for non-Telegram kinds yet
                 body = (
                     f"النوع: {label}\n"
                     "المشروع جاهز كملفات (ZIP / معاينة).\n"
-                    "التشغيل على رابط عام تحت Lumen يُفعَّل لاحقاً.\n"
+                    "لربط رابط عام: عيّن LUMEN_PUBLIC_BASE على السيرفر.\n"
                     "اختر:"
                 )
                 rows = (
@@ -375,6 +396,7 @@ async def deliver_generation_result(
             await safe_reply_text(message, body, reply_markup=markup)
         except Exception:
             logger.exception("post-generation UI menu failed")
+
 
 
     else:

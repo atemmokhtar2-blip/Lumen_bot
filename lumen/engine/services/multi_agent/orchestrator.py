@@ -300,6 +300,18 @@ def orchestrate_generate(
 
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+
+    # Phase 1: ProjectKind must travel with the result (delivery/hosting depend on it)
+    try:
+        from lumen.engine.core.project_kind import kind_metadata, resolve_project_kind
+        _pk = resolve_project_kind(
+            text=str(spec_request or request or ""),
+            preferred_keys=list(preferred_keys or []),
+        )
+        _kind_meta = kind_metadata(_pk)
+    except Exception:
+        _pk = None
+        _kind_meta = {}
     try:
         from lumen.engine.services.progress_bus import report_progress
         report_progress({
@@ -388,7 +400,10 @@ def orchestrate_generate(
         preferred_keys=list(preferred_keys or []),
     )
     state.extensions["work_dir"] = str(work)
-    state.capability_id = "generate_bot"
+    state.capability_id = "generate"
+    if _pk is not None:
+        state.extensions["project_kind"] = _pk.value
+        state.extensions["ir_metadata"] = dict(_kind_meta)
     board.put(state)
 
     out = run_langgraph_pipeline(
@@ -425,6 +440,12 @@ def orchestrate_generate(
         validation_reports=[out.qa_report] if out.qa_report else [],
         errors=errors[:30],
         metadata={
+            **dict(_kind_meta or {}),
+            "project_kind": (
+                (out.extensions or {}).get("project_kind")
+                or (_kind_meta or {}).get("project_kind")
+                or ""
+            ),
             "final_message": (out.final_message or "")[:2000],
             "engine": "langgraph+cline",
             "orchestration": "langgraph+cline",
