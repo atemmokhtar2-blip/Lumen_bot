@@ -299,7 +299,11 @@ def _make_builder(registry: Any, board: Any):
             except Exception as exc:
                 logger.exception("plan tree failed")
                 state.record(AgentRole.ORCHESTRATOR, "task_tree_error", str(exc)[:200])
-                tree = TaskTree.default_bot_tree(goal=state.user_text or "bot", work_dir=str(ctx.get("work_dir") or ""))
+                tree = TaskTree.default_plan_tree(
+                    goal=state.user_text or state.spec_request or "project",
+                    work_dir=str(ctx.get("work_dir") or ""),
+                    project_kind=str((state.extensions or {}).get("project_kind") or ""),
+                )
         _save_tree(state, tree)
         state.record(AgentRole.ORCHESTRATOR, "plan_tree", f"nodes={len(tree.nodes)-1}")
         try:

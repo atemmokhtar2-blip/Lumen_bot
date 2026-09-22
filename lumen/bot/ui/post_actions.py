@@ -20,6 +20,23 @@ def _is_sensitive_name(name: str) -> bool:
     return any(p in low for p in _SECRET_NAME_PARTS)
 
 
+
+def _payload_project_kind(ud: dict) -> str:
+    """Kind for plane payloads — never invent telegram_bot for unknown."""
+    try:
+        eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+        slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+        pk = str(slots.get("project_kind") or ud.get("project_kind") or "").strip()
+        if pk:
+            return pk
+        # trial path only makes sense as telegram when surface says so
+        surf = _surface_for_ud(ud)
+        if surf == "telegram_runtime":
+            return "telegram_bot"
+        return "general_app"
+    except Exception:
+        return "general_app"
+
 def _live_seconds(user) -> int:
     try:
         from lumen.bot.helpers import plan_live_seconds  # type: ignore
@@ -146,7 +163,7 @@ async def execute_post_side_effect(
             "run_seconds": seconds,
             "sandbox": True,
             "plane": RuntimePlane.TRIAL_CHAT.value,
-            "project_kind": str((ud.get("engine_ui") or {}).get("slots", {}).get("project_kind") or "telegram_bot"),
+            "project_kind": _payload_project_kind(ud),
         }
         ud["pending_run"] = dict(payload)
         ud["pending_live_run"] = dict(payload)
@@ -246,7 +263,7 @@ async def execute_post_side_effect(
             "user_id": uid,
             "entry_point": entry,
             "plane": RuntimePlane.PERMANENT_HOST.value,
-            "project_kind": str((ud.get("engine_ui") or {}).get("slots", {}).get("project_kind") or "telegram_bot"),
+            "project_kind": _payload_project_kind(ud),
             "backend_hint": backend,
         }
         # Token must hit HostService, not trial LiveRunner

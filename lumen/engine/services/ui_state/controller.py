@@ -244,8 +244,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
             except Exception:
                 surface = ""
         if (state.project_ref or "").strip():
-            if surface == "telegram_runtime" or (not surface and not kind):
-                # Telegram bot path only
+            if surface == "telegram_runtime":
                 rows.append(
                     (
                         UiButton("🧪 تجربة في الشات", "post_trial", style="success"),
@@ -254,6 +253,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 )
             elif surface == "http_runtime":
                 rows.append((UiButton("🚀 استضافة HTTP", "post_host", style="success"),))
+            # artifact_only / unknown: ZIP + preview only (no trial/host)
             # All kinds get files
             rows.append(
                 (
@@ -290,13 +290,27 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 UiButton("📡 حالة الكل", "dash_status", "all", style="primary"),
             )
         )
-        rows.append(
-            (
-                UiButton("🧪 تجربة المشروع", "dash_trial", style="success"),
-                UiButton("🚀 استضافة المشروع", "post_host", style="success"),
+        # Host actions only when an instance exists; trial/host gated by project_kind
+        surf = (state.slots.get("delivery_surface") or "").strip()
+        kind = (state.slots.get("project_kind") or "").strip()
+        if not surf and kind:
+            try:
+                from lumen.engine.core.project_kind import delivery_surface, parse_kind
+                pk = parse_kind(kind)
+                if pk is not None:
+                    surf = delivery_surface(pk).value
+            except Exception:
+                pass
+        if surf == "telegram_runtime":
+            rows.append(
+                (
+                    UiButton("🧪 تجربة المشروع", "dash_trial", style="success"),
+                    UiButton("🚀 استضافة المشروع", "post_host", style="success"),
+                )
             )
-        )
-        rows.append((UiButton("✨ إنشاء بوت", "open_generate", style="success"),))
+        elif surf == "http_runtime":
+            rows.append((UiButton("🚀 استضافة HTTP", "post_host", style="success"),))
+        rows.append((UiButton("✨ مشروع جديد", "open_generate", style="success"),))
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.BILLING:
         rows: list[tuple[UiButton, ...]] = [
@@ -901,11 +915,19 @@ def apply_action(
         msg = "قائمة إصدارات النشر..."
     elif action_id == "dash_trial":
         new.phase = EngineUiPhase.DASHBOARD
-        # Reuse trial plane on active project
         from .models import RuntimePlaneHint
-        new.plane = RuntimePlaneHint.TRIAL_CHAT
-        post_fx = "post_trial"
-        msg = "تجربة المشروع النشط..."
+        from lumen.engine.core.project_kind import delivery_surface, parse_kind
+        pk = parse_kind(new.slots.get("project_kind"))
+        surf = (new.slots.get("delivery_surface") or "").strip()
+        if not surf and pk is not None:
+            surf = delivery_surface(pk).value
+        if surf and surf != "telegram_runtime":
+            msg = "التجربة في الشات لبوتات تيليجرام فقط."
+            post_fx = ""
+        else:
+            new.plane = RuntimePlaneHint.TRIAL_CHAT
+            post_fx = "post_trial"
+            msg = "تجربة المشروع النشط..."
     # ── Path: Post-generate delivery ─────────────────────────────
     elif action_id == "post_trial":
         if not (new.project_ref or "").strip():

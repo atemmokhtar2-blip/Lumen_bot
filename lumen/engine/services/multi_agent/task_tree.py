@@ -283,11 +283,26 @@ class TaskTree:
         return tree
 
     @classmethod
-    def default_bot_tree(cls, *, goal: str, features: Iterable[str] | None = None, work_dir: str | None = None) -> "TaskTree":
-        """Build tree via dynamic planner (intent-aware, not Telegram-only template)."""
+    def default_plan_tree(
+        cls,
+        *,
+        goal: str,
+        features: Iterable[str] | None = None,
+        work_dir: str | None = None,
+        project_kind: str | None = None,
+    ) -> "TaskTree":
+        """Build tree via dynamic planner (kind-aware — not Telegram-only)."""
         from .dynamic_planner import assemble_plan
-        plan = assemble_plan(goal=goal or "", preferred_keys=list(features or []), work_dir=work_dir)
+        plan = assemble_plan(
+            goal=goal or "",
+            preferred_keys=list(features or []),
+            work_dir=work_dir,
+            project_kind=project_kind,
+        )
         return cls.from_execution_plan(plan, goal=plan.goal)
+
+    # Back-compat alias
+    default_bot_tree = default_plan_tree
 
 
 
