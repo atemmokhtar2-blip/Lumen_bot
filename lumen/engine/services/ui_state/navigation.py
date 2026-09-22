@@ -1,19 +1,10 @@
-"""UI navigation — one step up the phase tree (no fragile history stack).
+"""UI navigation — one-step back with destination in the button itself.
 
-Every screen has exactly one parent. ``nav_back`` always goes to that parent.
-This is deterministic across workers/restarts (no Redis stack to lose).
+``nav_back`` embeds a short parent-phase code in callback arg (≤6 chars).
+Telegram signed callbacks truncate args to 12 bytes; long phase names like
+``template_detail`` were corrupted. Short codes fix that permanently.
 
-Tree
-----
-HOME
-├─ GEN_TYPE → GEN_SLOTS → GEN_CONFIRM → GENERATING → GEN_DONE → HOST_CONFIRM
-├─ TEMPLATES → TEMPLATE_DETAIL → TEMPLATE_TRIAL_MINUTES
-│            → TEMPLATE_STATUS
-├─ DASHBOARD
-├─ BILLING → PRO_PLAN
-├─ HELP
-└─ SETTINGS → CONNECTIONS → CONN_GITHUB
-            → REFERRAL
+Fallback when arg missing: PHASE_PARENT[current].
 """
 from __future__ import annotations
 
@@ -44,7 +35,35 @@ PHASE_PARENT: dict[EngineUiPhase, EngineUiPhase] = {
     EngineUiPhase.IDLE: EngineUiPhase.HOME,
 }
 
-# Kept for API compatibility; roots no longer need stack clears for back to work.
+# Short codes for signed callback arg (must stay ≤12 after encode)
+_PHASE_CODE: dict[EngineUiPhase, str] = {
+    EngineUiPhase.HOME: "home",
+    EngineUiPhase.IDLE: "idle",
+    EngineUiPhase.GEN_TYPE: "gent",
+    EngineUiPhase.GEN_SLOTS: "gens",
+    EngineUiPhase.GEN_CONFIRM: "genc",
+    EngineUiPhase.GENERATING: "genr",
+    EngineUiPhase.GEN_DONE: "gend",
+    EngineUiPhase.HOST_CONFIRM: "host",
+    EngineUiPhase.TEMPLATES: "tpls",
+    EngineUiPhase.TEMPLATE_DETAIL: "tpld",
+    EngineUiPhase.TEMPLATE_TRIAL_MINUTES: "tplm",
+    EngineUiPhase.TEMPLATE_STATUS: "tplst",
+    EngineUiPhase.DASHBOARD: "dash",
+    EngineUiPhase.BILLING: "bill",
+    EngineUiPhase.PRO_PLAN: "pro",
+    EngineUiPhase.HELP: "help",
+    EngineUiPhase.SETTINGS: "set",
+    EngineUiPhase.REFERRAL: "ref",
+    EngineUiPhase.CONNECTIONS: "conn",
+    EngineUiPhase.CONN_GITHUB: "gh",
+    EngineUiPhase.CONTEXT: "ctx",
+}
+_CODE_PHASE: dict[str, EngineUiPhase] = {v: k for k, v in _PHASE_CODE.items()}
+# also accept full phase.value
+for _p in EngineUiPhase:
+    _CODE_PHASE.setdefault(_p.value, _p)
+
 ROOT_ACTIONS: frozenset[str] = frozenset({
     "home",
     "cancel_generate",
@@ -62,12 +81,31 @@ def parent_of(phase: EngineUiPhase) -> EngineUiPhase:
     return PHASE_PARENT.get(phase, EngineUiPhase.HOME)
 
 
+def phase_code(phase: EngineUiPhase) -> str:
+    return _PHASE_CODE.get(phase, "home")
+
+
+def phase_from_code(code: str) -> EngineUiPhase | None:
+    raw = (code or "").strip().lower()
+    if not raw:
+        return None
+    return _CODE_PHASE.get(raw)
+
+
+def resolve_back_target(current: EngineUiPhase, arg: str = "") -> EngineUiPhase:
+    target = phase_from_code(arg)
+    if target is not None and target != current:
+        return target
+    prev = parent_of(current)
+    return EngineUiPhase.HOME if prev == current else prev
+
+
 def go_home(state: EngineUiState) -> EngineUiState:
     state.phase = EngineUiPhase.HOME
     state.slots.pop("awaiting_text", None)
     state.slots.pop("billing_expanded", None)
     state.slots.pop("pro_buy_requested", None)
-    state.slots.pop("_nav", None)  # drop legacy stack if present
+    state.slots.pop("_nav", None)
     state.slots.pop("_from", None)
     state.missing = []
     return state
@@ -76,14 +114,11 @@ def go_home(state: EngineUiState) -> EngineUiState:
 def go_back(
     state: EngineUiState,
     *,
+    arg: str = "",
     refresh_needs: Callable[[EngineUiState], EngineUiState] | None = None,
 ) -> tuple[EngineUiState, str]:
-    """Exactly one step: current phase → PHASE_PARENT[current]."""
-    prev = parent_of(state.phase)
-    if prev == state.phase:
-        prev = EngineUiPhase.HOME
+    prev = resolve_back_target(state.phase, arg)
 
-    # Cleanup when landing
     if prev == EngineUiPhase.GEN_TYPE:
         state.slots["awaiting_text"] = "1"
     elif prev == EngineUiPhase.GEN_SLOTS and refresh_needs is not None:
@@ -99,7 +134,6 @@ def go_back(
 
     state.phase = prev
     state.missing = []
-    # legacy keys
     state.slots.pop("_nav", None)
     state.slots.pop("_from", None)
     return state, "رجوع خطوة."
@@ -111,17 +145,10 @@ def record_transition(
     previous: EngineUiPhase,
     new_state: EngineUiState,
 ) -> None:
-    """No-op for tree-based back (parent map is enough). Clears legacy stack."""
-    if action_id in {"home", "cancel_generate", "nav_back"}:
-        new_state.slots.pop("_nav", None)
-        new_state.slots.pop("_from", None)
-        return
-    # Drop legacy stack so old sessions do not confuse anything
-    if "_nav" in new_state.slots:
-        new_state.slots.pop("_nav", None)
+    new_state.slots.pop("_nav", None)
+    new_state.slots.pop("_from", None)
 
 
-# --- legacy aliases (tests / old imports) ---
 def stack_clear(state: EngineUiState) -> None:
     state.slots.pop("_nav", None)
     state.slots.pop("_from", None)
@@ -143,6 +170,9 @@ __all__ = [
     "PHASE_PARENT",
     "ROOT_ACTIONS",
     "parent_of",
+    "phase_code",
+    "phase_from_code",
+    "resolve_back_target",
     "go_home",
     "go_back",
     "record_transition",

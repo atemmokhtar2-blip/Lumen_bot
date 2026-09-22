@@ -18,7 +18,13 @@ _NAV_LABELS = frozenset({"رجوع", "◀️ رجوع", "القائمة", "إل�
 
 
 def nav_footer(phase: EngineUiPhase | str | None = None) -> tuple[UiButton, ...]:
-    """Fixed bottom row for a phase (empty on HOME/IDLE)."""
+    """Fixed bottom row for a phase (empty on HOME/IDLE).
+
+    ``nav_back`` carries parent phase in arg so one-step back does not depend
+    on Redis session state (multi-worker safe).
+    """
+    from .navigation import parent_of, phase_code
+
     try:
         ph = phase if isinstance(phase, EngineUiPhase) else EngineUiPhase(str(phase or ""))
     except Exception:
@@ -31,8 +37,10 @@ def nav_footer(phase: EngineUiPhase | str | None = None) -> tuple[UiButton, ...]
             UiButton("🏠 الرئيسية", "home"),
             UiButton("🗑 إلغاء", "cancel_generate", style="danger"),
         )
+    parent = parent_of(ph)
+    parent_arg = phase_code(parent if parent != ph else EngineUiPhase.HOME)
     return (
-        UiButton("◀️ رجوع", "nav_back", style="primary"),
+        UiButton("◀️ رجوع", "nav_back", arg=parent_arg, style="primary"),
         UiButton("🏠 الرئيسية", "home"),
         UiButton("🗑 إلغاء", "cancel_generate", style="danger"),
     )

@@ -128,7 +128,7 @@ def _template_status_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...]
     rows.append(
         (
             UiButton("🔄 تحديث", "tpl_refresh_mine", style="primary"),
-            UiButton("📦 رجوع للقوالب", "nav_back"),
+            UiButton("📦 رجوع للقوالب", "nav_back", arg="tpls"),
         )
     )
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_STATUS)
@@ -143,7 +143,7 @@ def _template_detail_buttons(template_id: str) -> tuple[tuple[UiButton, ...], ..
                 UiButton("⏱ تجربة مؤقتة", "tpl_trial", tid, style="primary"),
                 UiButton("🚀 استخدام دائم", "tpl_permanent", tid, style="success"),
             ),
-            (UiButton("🤖 بوتاتي", "tpl_mine", style="primary"), UiButton("📦 رجوع للقوالب", "nav_back"),),
+            (UiButton("🤖 بوتاتي", "tpl_mine", style="primary"), UiButton("📦 رجوع للقوالب", "nav_back", arg="tpls"),),
         ),
         EngineUiPhase.TEMPLATE_DETAIL,
     )
@@ -177,7 +177,7 @@ def _template_minutes_buttons(template_id: str) -> tuple[tuple[UiButton, ...], .
             row = []
     if row:
         rows.append(tuple(row))
-    rows.append((UiButton("◀️ رجوع", "nav_back"),))  # tid is short code
+    rows.append((UiButton("◀️ رجوع", "nav_back", arg="tpld"),))  # tid is short code
     return _with_nav(tuple(rows), EngineUiPhase.TEMPLATE_TRIAL_MINUTES)
 
 
@@ -300,7 +300,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav(
             (
                 (UiButton(f"اشترك — {PRO_PLAN_PRICE_STARS} ⭐", "buy_pro_plan", style="success"),),
-                (UiButton("💎 رجوع للرصيد", "nav_back", style="primary"),),
+                (UiButton("💎 رجوع للرصيد", "nav_back", arg="bill", style="primary"),),
             ),
             phase,
         )
@@ -347,7 +347,7 @@ def _referral_buttons() -> tuple[tuple[UiButton, ...], ...]:
 def _connections_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
         (UiButton("🐙 GitHub", "conn_github", style="success"),),
-        (UiButton("⚙️ رجوع للإعدادات", "nav_back", style="primary"),),
+        (UiButton("⚙️ رجوع للإعدادات", "nav_back", arg="set", style="primary"),),
     )
 
 
@@ -396,7 +396,7 @@ def _conn_github_buttons(state: EngineUiState) -> tuple[tuple[UiButton, ...], ..
         )
     elif (state.slots or {}).get("gh_bound_ok") == "1" and (state.slots or {}).get("gh_ready") == "0":
         rows.append((UiButton("✏️ أكمِل المتغيرات", "conn_gh_refresh", style="primary"),))
-    rows.append((UiButton("🔗 رجوع للاتصالات", "nav_back", style="primary"),))
+    rows.append((UiButton("🔗 رجوع للاتصالات", "nav_back", arg="conn", style="primary"),))
     return tuple(rows)
 
 
@@ -487,7 +487,7 @@ def apply_action(
     if action_id == "nav_back":
         def _rn(s: EngineUiState) -> EngineUiState:
             return _refresh_needs(s, user_id=user_id)
-        new, msg = go_back(new, refresh_needs=_rn)
+        new, msg = go_back(new, arg=arg, refresh_needs=_rn)
     elif action_id == "home":
         go_home(new)
         msg = "القائمة الرئيسية."

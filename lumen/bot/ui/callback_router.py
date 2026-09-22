@@ -141,7 +141,10 @@ async def handle_ui_callback(update, context) -> None:
     parsed = decode_callback(q.data or "", user_id=uid)
     if parsed is None:
         try:
-            await q.answer()
+            await q.answer(
+                "انتهت صلاحية الأزرار — اضغط /start",
+                show_alert=True,
+            )
         except Exception:
             pass
         return
