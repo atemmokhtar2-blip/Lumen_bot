@@ -111,21 +111,45 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
         if repair_mode
         else "You are Cline, an autonomous coding agent operating as the Worker role."
     )
+    # ProjectKind rules — never force Telegram for web/cli/library
+    kind_rules = ""
+    try:
+        from lumen.engine.core.project_kind import parse_kind, cline_kind_rules, resolve_project_kind
+        pk_raw = ""
+        if isinstance(ir_hint, dict):
+            pk_raw = (
+                ir_hint.get("project_kind")
+                or (ir_hint.get("metadata") or {}).get("project_kind")
+                or ""
+            )
+            plan = ir_hint.get("execution_plan") or (ir_hint.get("metadata") or {}).get("execution_plan")
+            if not pk_raw and isinstance(plan, dict):
+                pk_raw = plan.get("project_kind") or ""
+        pk = parse_kind(pk_raw)
+        if pk is None and goal_s:
+            pk = resolve_project_kind(text=goal_s)
+        if pk is not None:
+            kind_rules = "\nKIND_RULES: " + cline_kind_rules(pk)
+    except Exception:
+        kind_rules = ""
+
     return f"""{role_line}
-Build a complete runnable project matching the GOAL (any platform). No stub-only placeholders for required features.
+Build a complete runnable project matching the GOAL. No stub-only placeholders for required features.
+{kind_rules}
 
 Workspace: {work_dir}
 
 {_tools_help()}
 
 Rules:
-1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example
-2. BOT_TOKEN / TELEGRAM_BOT_TOKEN from environment only — never hardcode secrets
-3. Valid Python syntax in every .py file; prefer telegram.ext.Application
-4. If REPAIR_DIRECTIVE is present, fix those items first (prefer edit_file)
-5. If EXECUTION_PLAN is present, complete priority-1 tasks before finish
-6. Arabic UX when goal/language is Arabic
-7. Call finish only when deliverables exist and repairs are addressed
+1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example (adjust if KIND_RULES say otherwise)
+2. Never hardcode secrets; tokens/keys from environment only
+3. Valid Python syntax in every .py file
+4. Follow KIND_RULES strictly — do NOT build a Telegram bot unless PROJECT_KIND=telegram_bot
+5. If REPAIR_DIRECTIVE is present, fix those items first (prefer edit_file)
+6. If EXECUTION_PLAN is present, complete priority-1 tasks before finish
+7. Arabic UX when goal/language is Arabic
+8. Call finish only when deliverables exist and repairs are addressed
 
 GOAL:
 {goal_s}{hint}{plan_block}{repair_block}

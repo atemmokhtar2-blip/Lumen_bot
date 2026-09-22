@@ -25,7 +25,7 @@ from .plan_contract import ExecutionPlan, PlanTask
 
 @dataclass(frozen=True)
 class PlanIntent:
-    kind: str  # telegram_bot | discord_bot | whatsapp_bot | web_api | library | refine | general_app
+    kind: str  # telegram_bot | web_site | web_api | cli_app | library | discord_bot | whatsapp_bot | refine | general_app
     platform: str = ""
     confidence: float = 0.5
     reasons: tuple[str, ...] = ()
@@ -36,6 +36,8 @@ _DISCORD = re.compile(r"\b(discord|ديسكورد|discord\.py)\b", re.I)
 _WHATSAPP = re.compile(r"\b(whatsapp|واتساب|واتس)\b", re.I)
 _WEB = re.compile(r"\b(fastapi|flask|django|api\b|rest\b|webhook|موقع|web\s*app|express)\b", re.I)
 _LIB = re.compile(r"\b(library|package|sdk|مكتبة|باكدج)\b", re.I)
+_CLI = re.compile(r"\b(cli|command\s*line|سكربت|script|argparse|click)\b", re.I)
+_SITE = re.compile(r"\b(موقع|website|web\s*site|landing|portfolio|مدونة|blog|معرض)\b", re.I)
 _REFINE = re.compile(r"\b(refine|fix|أصلح|عدل|حسّن|improve|refactor|patch)\b", re.I)
 
 
@@ -57,8 +59,14 @@ def classify_intent(goal: str, *, preferred_keys: Iterable[str] | None = None) -
         return PlanIntent("discord_bot", platform="discord", confidence=0.9, reasons=("discord_keyword",))
     if _WHATSAPP.search(blob):
         return PlanIntent("whatsapp_bot", platform="whatsapp", confidence=0.85, reasons=("whatsapp_keyword",))
+    if _SITE.search(blob) and not re.search(r"\b(api|fastapi|flask|django|rest)\b", blob, re.I):
+        return PlanIntent("web_site", platform="web", confidence=0.85, reasons=("site_keyword",))
     if _WEB.search(blob):
+        if _SITE.search(blob):
+            return PlanIntent("web_site", platform="web", confidence=0.85, reasons=("web_and_site",))
         return PlanIntent("web_api", platform="web", confidence=0.8, reasons=("web_keyword",))
+    if _CLI.search(blob):
+        return PlanIntent("cli_app", platform="cli", confidence=0.8, reasons=("cli_keyword",))
     if _LIB.search(blob):
         return PlanIntent("library", confidence=0.75, reasons=("library_keyword",))
 
@@ -440,17 +448,35 @@ def assemble_plan(
     constraints: Iterable[str] | None = None,
     language: str = "ar",
     work_dir: str | Path | None = None,
+    project_kind: str | None = None,
 ) -> ExecutionPlan:
-    """Full dynamic plan used by node_plan / architect."""
+    """Full dynamic plan used by node_plan / architect.
+
+    ``project_kind`` (ProjectKind value) wins over classify_intent when set.
+    """
+    from lumen.engine.core.project_kind import (
+        kind_from_plan_intent,
+        parse_kind,
+        resolve_project_kind,
+    )
+
     intent = classify_intent(goal, preferred_keys=preferred_keys)
+    kind = parse_kind(project_kind) or kind_from_plan_intent(intent.kind, goal=goal or "")
+    # Align planner task graph with resolved ProjectKind
+    if kind.value != intent.kind and kind.value in (
+        "telegram_bot", "web_api", "web_site", "cli_app", "library",
+        "discord_bot", "whatsapp_bot", "general_app", "refine",
+    ):
+        intent = PlanIntent(kind.value, platform=intent.platform or "", confidence=max(intent.confidence, 0.9), reasons=intent.reasons + ("project_kind_override",))
+
     feats = extract_features(goal, preferred_keys)
     snap = probe_workspace(work_dir)
     refine = snap.is_refine or intent.kind == "refine"
     tasks = build_task_list(intent, feats, refine=refine)
 
     deliverables: list[str] = []
-    for t in tasks:
-        for f in t.files:
+    for task in tasks:
+        for f in task.files:
             if f not in deliverables:
                 deliverables.append(f)
     if not deliverables:
@@ -458,8 +484,8 @@ def assemble_plan(
 
     constraints_l = list(constraints or [])[:20]
     constraints_l.append(f"intent:{intent.kind}")
+    constraints_l.append(f"project_kind:{kind.value}")
     if intent.platform:
-        constraints_l.append(f"platform:{intent.platform}")
         constraints_l.append(f"platform:{intent.platform}")
     if refine:
         constraints_l.append("mode:incremental_repair")
@@ -472,6 +498,7 @@ def assemble_plan(
         constraints=constraints_l,
         features=feats[:40],
         version="dyn1",
+        project_kind=kind.value,
     )
 
 

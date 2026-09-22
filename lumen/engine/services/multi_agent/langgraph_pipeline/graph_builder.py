@@ -265,17 +265,35 @@ def _make_builder(registry: Any, board: Any):
                     if not plan.goal:
                         plan.goal = (state.user_text or state.spec_request or "")[:2000]
                 else:
+                    # ProjectKind from IR metadata / strict_spec / text
+                    _pk = ""
+                    try:
+                        from lumen.engine.core.project_kind import resolve_project_kind
+                        _meta = (state.extensions or {}).get("ir_metadata") or {}
+                        if isinstance(state.strict_spec, dict):
+                            _pk = str(state.strict_spec.get("project_kind") or "")
+                        if not _pk and isinstance(_meta, dict):
+                            _pk = str(_meta.get("project_kind") or "")
+                        if not _pk:
+                            _pk = resolve_project_kind(
+                                text=state.user_text or state.spec_request or "",
+                                preferred_keys=feats,
+                            ).value
+                    except Exception:
+                        _pk = ""
                     plan = assemble_plan(
                         goal=state.user_text or state.spec_request or "",
                         preferred_keys=feats,
                         constraints=list((state.strict_spec or {}).get("constraints") or []) if isinstance(state.strict_spec, dict) else [],
                         language=str((state.strict_spec or {}).get("language") or "ar") if isinstance(state.strict_spec, dict) else "ar",
                         work_dir=work or None,
+                        project_kind=_pk or None,
                     )
                 state.extensions = dict(state.extensions or {})
                 state.extensions["execution_plan"] = plan.to_dict()
+                state.extensions["project_kind"] = getattr(plan, "project_kind", None) or _pk or ""
                 state.extensions["plan_intent"] = [
-                    c for c in (plan.constraints or []) if str(c).startswith("intent:") or str(c).startswith("platform:")
+                    c for c in (plan.constraints or []) if str(c).startswith("intent:") or str(c).startswith("platform:") or str(c).startswith("project_kind:")
                 ]
                 tree = TaskTree.from_execution_plan(plan, goal=plan.goal)
             except Exception as exc:

@@ -423,7 +423,21 @@ def composed_request(state: EngineUiState) -> str:
     desc = (state.slots.get("bot_description") or "").strip()
     if not desc:
         desc = preset_description((state.slots.get("bot_type") or "").strip())
-    return enrich_description(desc, state.slots)
+    text = enrich_description(desc, state.slots)
+    # Resolve ProjectKind once for generation + delivery (Phase 1)
+    try:
+        from lumen.engine.core.project_kind import resolve_project_kind, kind_metadata
+        kind = resolve_project_kind(
+            text=text,
+            preferred_keys=[],
+            explicit=state.slots.get("project_kind"),
+        )
+        state.slots["project_kind"] = kind.value
+        for k, v in kind_metadata(kind).items():
+            state.slots[str(k)] = str(v) if not isinstance(v, bool) else ("1" if v else "0")
+    except Exception:
+        pass
+    return text
 
 
 

@@ -142,6 +142,7 @@ async def execute_post_side_effect(
             "run_seconds": seconds,
             "sandbox": True,
             "plane": RuntimePlane.TRIAL_CHAT.value,
+            "project_kind": str((ud.get("engine_ui") or {}).get("slots", {}).get("project_kind") or "telegram_bot"),
         }
         ud["pending_run"] = dict(payload)
         ud["pending_live_run"] = dict(payload)
@@ -205,6 +206,7 @@ async def execute_post_side_effect(
             "user_id": uid,
             "entry_point": entry,
             "plane": RuntimePlane.PERMANENT_HOST.value,
+            "project_kind": str((ud.get("engine_ui") or {}).get("slots", {}).get("project_kind") or "telegram_bot"),
             "backend_hint": backend,
         }
         # Token must hit HostService, not trial LiveRunner

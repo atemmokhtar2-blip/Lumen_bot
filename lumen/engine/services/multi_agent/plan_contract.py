@@ -33,6 +33,7 @@ class ExecutionPlan:
     constraints: list[str] = field(default_factory=list)
     features: list[str] = field(default_factory=list)
     version: str = "a1"
+    project_kind: str = ""  # ProjectKind value when known
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class ExecutionPlan:
             "constraints": list(self.constraints),
             "features": list(self.features),
             "version": self.version,
+            "project_kind": self.project_kind or "",
         }
 
     @classmethod
@@ -71,6 +73,7 @@ class ExecutionPlan:
             constraints=list(d.get("constraints") or []),
             features=list(d.get("features") or []),
             version=str(d.get("version") or "a1"),
+            project_kind=str(d.get("project_kind") or ""),
         )
 
     def to_worker_brief(self) -> str:

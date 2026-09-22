@@ -348,6 +348,18 @@ def run_generation_with_bridge(
             feats = translation.get("features_requested") or translation.get("preferred_keys")
             if isinstance(feats, list) and feats:
                 package["preferred_keys"] = [str(x).strip() for x in feats if str(x).strip()]
+            if translation.get("project_kind"):
+                package["project_kind"] = str(translation.get("project_kind")).strip()
+        # Resolve kind once so IR + Cline share the same classification
+        try:
+            from lumen.engine.core.project_kind import resolve_project_kind
+            package["project_kind"] = resolve_project_kind(
+                text=str(package.get("spec_request") or request),
+                preferred_keys=package.get("preferred_keys") or [],
+                explicit=package.get("project_kind"),
+            ).value
+        except Exception:
+            pass
         ir = build_ir_from_package(package, user_id=int(user_id or 0))
         logger.info(
             "engine-direct IR mode=%s matched=%s gap=%s conf=%.2f",
