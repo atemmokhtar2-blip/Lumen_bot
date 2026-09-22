@@ -243,7 +243,7 @@ def default_deliverables(kind: ProjectKind) -> list[str]:
             "static/style.css",
         ]
     if kind == ProjectKind.WEB_API:
-        return ["main.py", "requirements.txt", "README.md", ".env.example"]
+        return ["main.py", "requirements.txt", "README.md", ".env.example", "routers/health.py"]
     if kind == ProjectKind.CLI_APP:
         return ["main.py", "requirements.txt", "README.md"]
     if kind == ProjectKind.LIBRARY:
@@ -321,7 +321,11 @@ def planner_intent_kind(kind: ProjectKind) -> str:
 
 
 def seed_workspace(work_dir: str | Path, kind: ProjectKind) -> list[str]:
-    """Write minimal scaffold files if missing. Never overwrites existing files."""
+    """Write minimal scaffold files if missing. Never overwrites existing files.
+
+    Web scaffolds follow 2026 FastAPI practice: thin main + routers/health + /health.
+    Site adds Jinja templates + static/. Telegram does not pre-write main.py.
+    """
     root = Path(work_dir)
     root.mkdir(parents=True, exist_ok=True)
     created: list[str] = []
@@ -336,22 +340,33 @@ def seed_workspace(work_dir: str | Path, kind: ProjectKind) -> list[str]:
 
     if kind == ProjectKind.WEB_API:
         _write("requirements.txt", "fastapi>=0.110\nuvicorn[standard]>=0.27\n")
+        _write("routers/__init__.py", '"""HTTP routers."""\n')
+        _write(
+            "routers/health.py",
+            '"""Liveness probe — required for hosting healthchecks."""\n'
+            "from __future__ import annotations\n\n"
+            "from fastapi import APIRouter\n\n"
+            'router = APIRouter(tags=["health"])\n\n\n'
+            '@router.get("/health")\n'
+            "def health():\n"
+            '    return {"status": "ok"}\n',
+        )
         _write(
             "main.py",
-            (
-                '"""API entry — extend routes; keep GET /health."""\n'
-                "from __future__ import annotations\n\n"
-                "from fastapi import FastAPI\n\n"
-                'app = FastAPI(title="Lumen API")\n\n\n'
-                '@app.get("/health")\n'
-                "def health():\n"
-                '    return {"status": "ok"}\n'
-            ),
+            '"""API entry — include routers; keep business logic out of this file."""\n'
+            "from __future__ import annotations\n\n"
+            "from fastapi import FastAPI\n\n"
+            "from routers.health import router as health_router\n\n"
+            'app = FastAPI(title="Lumen API")\n'
+            "app.include_router(health_router)\n",
         )
         _write(".env.example", "PORT=8000\n")
         _write(
             "README.md",
-            "# API\n\nRun: `uvicorn main:app --reload --port 8000`\n\nHealth: GET /health\n",
+            "# API\n\n"
+            "Entrypoint: `uvicorn main:app --host 0.0.0.0 --port 8000`\n\n"
+            "Health: `GET /health`\n\n"
+            "Add feature routers under `routers/` and `include_router` in `main.py`.\n",
         )
     elif kind == ProjectKind.WEB_SITE:
         _write(
@@ -360,61 +375,65 @@ def seed_workspace(work_dir: str | Path, kind: ProjectKind) -> list[str]:
         )
         _write(
             "main.py",
-            (
-                '"""Website entry — templates + GET / and GET /health."""\n'
-                "from __future__ import annotations\n\n"
-                "from pathlib import Path\n\n"
-                "from fastapi import FastAPI, Request\n"
-                "from fastapi.responses import HTMLResponse\n"
-                "from fastapi.staticfiles import StaticFiles\n"
-                "from fastapi.templating import Jinja2Templates\n\n"
-                "ROOT = Path(__file__).resolve().parent\n"
-                'app = FastAPI(title="Lumen Site")\n'
-                'app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")\n'
-                'templates = Jinja2Templates(directory=str(ROOT / "templates"))\n\n\n'
-                '@app.get("/", response_class=HTMLResponse)\n'
-                "def home(request: Request):\n"
-                '    return templates.TemplateResponse("index.html", {"request": request})\n\n\n'
-                '@app.get("/health")\n'
-                "def health():\n"
-                '    return {"status": "ok"}\n'
-            ),
+            '"""Website entry — templates + GET / and GET /health."""\n'
+            "from __future__ import annotations\n\n"
+            "from pathlib import Path\n\n"
+            "from fastapi import FastAPI, Request\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "from fastapi.staticfiles import StaticFiles\n"
+            "from fastapi.templating import Jinja2Templates\n\n"
+            "ROOT = Path(__file__).resolve().parent\n"
+            'app = FastAPI(title="Lumen Site")\n'
+            'app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")\n'
+            'templates = Jinja2Templates(directory=str(ROOT / "templates"))\n\n\n'
+            '@app.get("/", response_class=HTMLResponse)\n'
+            "def home(request: Request):\n"
+            '    return templates.TemplateResponse(request, "index.html", {"title": "Lumen"})\n\n\n'
+            '@app.get("/health")\n'
+            "def health():\n"
+            '    return {"status": "ok"}\n',
         )
         _write(
             "templates/index.html",
-            (
-                "<!DOCTYPE html>\n<html lang=\"ar\" dir=\"rtl\">\n<head>\n"
-                '<meta charset="utf-8">\n<title>Lumen</title>\n'
-                '<link rel="stylesheet" href="/static/style.css">\n</head>\n'
-                "<body>\n<h1>مرحباً</h1>\n<p>موقع جاهز للتوسيع.</p>\n</body>\n</html>\n"
-            ),
+            "<!DOCTYPE html>\n"
+            '<html lang="ar" dir="rtl">\n'
+            "<head>\n"
+            '<meta charset="utf-8">\n'
+            "<title>Lumen</title>\n"
+            '<link rel="stylesheet" href="/static/style.css">\n'
+            "</head>\n"
+            "<body>\n"
+            "<h1>مرحباً</h1>\n"
+            "<p>موقع جاهز للتوسيع.</p>\n"
+            "</body>\n"
+            "</html>\n",
         )
         _write("static/style.css", "body{font-family:system-ui;margin:2rem}\n")
         _write(".env.example", "PORT=8000\n")
         _write(
             "README.md",
-            "# Website\n\nRun: `uvicorn main:app --reload --port 8000`\n\nHome: GET /\nHealth: GET /health\n",
+            "# Website\n\n"
+            "Entrypoint: `uvicorn main:app --host 0.0.0.0 --port 8000`\n\n"
+            "Home: `GET /`\nHealth: `GET /health`\n",
         )
     elif kind == ProjectKind.CLI_APP:
         _write("requirements.txt", "# add deps as needed\n")
         _write(
             "main.py",
-            (
-                '"""CLI entry — extend argparse subcommands."""\n'
-                "from __future__ import annotations\n\n"
-                "import argparse\n\n\n"
-                "def main(argv: list[str] | None = None) -> int:\n"
-                '    p = argparse.ArgumentParser(description="Lumen CLI")\n'
-                '    p.add_argument("--version", action="store_true")\n'
-                "    args = p.parse_args(argv)\n"
-                "    if args.version:\n"
-                '        print("0.1.0")\n'
-                "        return 0\n"
-                "    p.print_help()\n"
-                "    return 0\n\n\n"
-                'if __name__ == "__main__":\n'
-                "    raise SystemExit(main())\n"
-            ),
+            '"""CLI entry — extend argparse subcommands."""\n'
+            "from __future__ import annotations\n\n"
+            "import argparse\n\n\n"
+            "def main(argv: list[str] | None = None) -> int:\n"
+            '    p = argparse.ArgumentParser(description="Lumen CLI")\n'
+            '    p.add_argument("--version", action="store_true")\n'
+            "    args = p.parse_args(argv)\n"
+            "    if args.version:\n"
+            '        print("0.1.0")\n'
+            "        return 0\n"
+            "    p.print_help()\n"
+            "    return 0\n\n\n"
+            'if __name__ == "__main__":\n'
+            "    raise SystemExit(main())\n",
         )
         _write("README.md", "# CLI\n\nRun: `python main.py --help`\n")
     elif kind == ProjectKind.LIBRARY:
@@ -435,9 +454,33 @@ def seed_workspace(work_dir: str | Path, kind: ProjectKind) -> list[str]:
     elif kind == ProjectKind.GENERAL_APP:
         _write(
             "README.md",
-            "# Project\n\nEntrypoint: `python main.py`\n\nDocument how to run this project after generation.\n",
+            "# Project\n\nEntrypoint: `python main.py`\n\n"
+            "Document how to run this project after generation.\n",
         )
         _write("requirements.txt", "# add dependencies here\n")
+
+    # Runtime contract sidecar for ZIP / hosting
+    try:
+        import json
+        rc = runtime_contract(kind)
+        manifest = {
+            "project_kind": kind.value,
+            "start_command": rc["start_command"],
+            "health_path": rc["health_path"],
+            "port": rc["port"],
+            "env_keys": list(rc["env_keys"]),
+            "delivery_surface": delivery_surface(kind).value,
+        }
+        man_path = root / ".lumen" / "runtime.json"
+        if not man_path.exists():
+            man_path.parent.mkdir(parents=True, exist_ok=True)
+            man_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            created.append(".lumen/runtime.json")
+    except Exception:
+        pass
 
     return created
 

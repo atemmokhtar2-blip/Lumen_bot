@@ -170,6 +170,40 @@ def check_agent_project(
         if tg_imports:
             warnings.append("unexpected_telegram_import")
 
+    # Execution-based verification when FastAPI is available (stronger than static scan)
+    if kind in {"web_site", "web_api"} and entry and "forbidden_telegram_import" not in missing:
+        try:
+            import importlib.util
+            import sys as _sys
+            _root_s = str(root.resolve())
+            if _root_s not in _sys.path:
+                _sys.path.insert(0, _root_s)
+            spec = importlib.util.spec_from_file_location("_lumen_entry", str(root / entry))
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                app = getattr(mod, "app", None)
+                if app is not None:
+                    from fastapi.testclient import TestClient
+                    client = TestClient(app)
+                    hr = client.get("/health")
+                    if hr.status_code == 200:
+                        found.append("asgi_health_probe")
+                    else:
+                        missing.append(f"health_http_{hr.status_code}")
+                    if kind == "web_site":
+                        home = client.get("/")
+                        if home.status_code == 200:
+                            found.append("asgi_root_probe")
+                        else:
+                            warnings.append(f"root_http_{home.status_code}")
+                else:
+                    warnings.append("no_app_export_for_uvicorn")
+        except ImportError:
+            warnings.append("fastapi_not_installed_for_probe")
+        except Exception as _probe_exc:
+            warnings.append(f"asgi_probe_error:{type(_probe_exc).__name__}")
+
     must = 3
     got = sum([bool(entry or kind == "library"), has_req, bool(py_files)])
     score = got / must
@@ -181,6 +215,9 @@ def check_agent_project(
         or m.startswith("entry_syntax")
         or m == "work_dir"
         or m == "forbidden_telegram_import"
+        or m == "GET_/health_required"
+        or m == "fastapi_or_flask_required"
+        or m.startswith("health_http_")
     }
     ok = got >= 2 and (bool(entry) or kind == "library") and not critical
 

@@ -214,6 +214,39 @@ def run_agent(
     except Exception as _rc_exc:
         state.metadata["repo_context_error"] = type(_rc_exc).__name__
         repo_ctx = None
+    # Phase 2: resolve ProjectKind, seed scaffold, stamp runtime metadata
+    _project_kind = ""
+    try:
+        from lumen.engine.core.project_kind import (
+            kind_metadata,
+            parse_kind,
+            resolve_project_kind,
+            seed_workspace,
+        )
+        if isinstance(ir_dict, dict):
+            _project_kind = str(
+                ir_dict.get("project_kind")
+                or (ir_dict.get("metadata") or {}).get("project_kind")
+                or ""
+            ).strip()
+            plan = ir_dict.get("execution_plan") or (ir_dict.get("metadata") or {}).get("execution_plan")
+            if not _project_kind and isinstance(plan, dict):
+                _project_kind = str(plan.get("project_kind") or "").strip()
+        _pk = parse_kind(_project_kind) or resolve_project_kind(text=goal or "")
+        _project_kind = _pk.value
+        state.metadata["project_kind"] = _project_kind
+        state.metadata.update({k: v for k, v in kind_metadata(_pk).items() if k not in state.metadata})
+        # Greenfield seed only (never overwrite agent work)
+        if not (Path(state.work_dir) / "main.py").exists() and not (
+            Path(state.work_dir) / "src" / "__init__.py"
+        ).exists():
+            created = seed_workspace(state.work_dir, _pk)
+            if created:
+                state.metadata["seeded_files"] = created
+                state.warnings.append("seeded:" + ",".join(created[:8]))
+    except Exception as _seed_exc:
+        state.warnings.append(f"seed_skip:{type(_seed_exc).__name__}")
+
     sys_prompt = _system_prompt(state.work_dir, goal, ir_dict)
     # Bind active conversation id for decide(); history inject happens once in agent_brain.decide
     try:
@@ -402,7 +435,7 @@ def run_agent(
             )
             # Attempt a graceful finish: check if anything was built so far.
             try:
-                acc = check_agent_project(state.work_dir, goal=goal)
+                acc = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
                 state.metadata["acceptance"] = acc
                 if acc.get("ok"):
                     state.stop_reason = "completed_within_budget"
@@ -782,7 +815,7 @@ def run_agent(
             step.tool_result = result
             state.steps.append(step)
             state.add_assistant(step.thought or decision.get("summary") or "done")
-            acc = check_agent_project(state.work_dir, goal=goal)
+            acc = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
             state.metadata["acceptance"] = acc
             if acc.get("ok"):
                 state.stop_reason = "completed"
@@ -797,7 +830,7 @@ def run_agent(
                 )
                 det = apply_deterministic_repairs(state.work_dir)
                 state.metadata["deterministic_on_accept"] = det
-                acc2 = check_agent_project(state.work_dir, goal=goal)
+                acc2 = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
                 state.metadata["acceptance"] = acc2
                 if acc2.get("ok"):
                     state.stop_reason = "completed_by_deterministic"
@@ -1181,7 +1214,7 @@ def run_agent(
                 (root / "requirements.txt").is_file() or (root / "pyproject.toml").is_file(),
             ]
             if sum(1 for x in core if x) >= 2 and i >= 2:
-                acc_now = check_agent_project(state.work_dir, goal=goal)
+                acc_now = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
                 state.metadata["acceptance_mid"] = acc_now
                 if acc_now.get("ok"):
                     # Explicit finish — do not burn remaining max_steps
@@ -1218,7 +1251,7 @@ def run_agent(
                             tool_result=fin,
                         )
                     )
-                    acc2 = check_agent_project(state.work_dir, goal=goal)
+                    acc2 = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
                     state.metadata["acceptance"] = acc2
                     state.metadata["forced_finish"] = True
                     if acc2.get("ok"):
@@ -1245,7 +1278,7 @@ def run_agent(
         except Exception as exc:
             state.warnings.append(f"det_max_skip:{type(exc).__name__}")
         try:
-            acc = check_agent_project(state.work_dir, goal=goal)
+            acc = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
             state.metadata["acceptance"] = acc
             if acc.get("ok"):
                 state.ok = True
@@ -1271,7 +1304,7 @@ def run_agent(
 
     # Final acceptance snapshot
     try:
-        acc = check_agent_project(state.work_dir, goal=goal)
+        acc = check_agent_project(state.work_dir, goal=goal, project_kind=str(state.metadata.get("project_kind") or ""))
         state.metadata["acceptance"] = acc
         if state.ok and not acc.get("ok"):
             state.warnings.append("acceptance_final_fail")

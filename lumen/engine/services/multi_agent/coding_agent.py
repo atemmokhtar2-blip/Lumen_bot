@@ -288,7 +288,7 @@ def run_coding_session(
         agent_acc = {}
         try:
             from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
-            agent_acc = check_agent_project(work, goal=goal)
+            agent_acc = check_agent_project(work, goal=goal, project_kind=str((getattr(state, "extensions", None) or {}).get("project_kind") or ""))
             if not agent_acc.get("ok"):
                 ok = False
         except Exception as _aa:

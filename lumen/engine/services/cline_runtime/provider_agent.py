@@ -68,9 +68,9 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
     # Phase 5: hard acceptance gate — project must pass check_agent_project
     try:
         from .agent_acceptance import check_agent_project
-        acc = state.metadata.get("acceptance") or check_agent_project(work, goal=goal)
+        acc = state.metadata.get("acceptance") or check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""))
         if not isinstance(acc, dict):
-            acc = check_agent_project(work, goal=goal)
+            acc = check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""))
         state.metadata["acceptance"] = acc
         _hard_stops = {
             "insufficient_credits",
