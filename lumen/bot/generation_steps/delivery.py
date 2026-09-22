@@ -40,6 +40,12 @@ async def deliver_generation_result(
     ]
     if project_path:
         summary_lines.append(f"• المسار: `{escape_md(project_path)}`")
+    _pkl = meta.get("project_kind_label_ar") or meta.get("project_kind")
+    if _pkl:
+        summary_lines.append(f"• النوع: {escape_md(str(_pkl))}")
+    _ds = meta.get("delivery_surface")
+    if _ds:
+        summary_lines.append(f"• مسار التسليم: `{escape_md(str(_ds))}`")
     if meta.get("preset"):
         summary_lines.append(f"• preset: `{escape_md(meta.get('preset'))}`")
     if pipeline_warnings:
@@ -307,35 +313,69 @@ async def deliver_generation_result(
         else:
             await safe_reply_text(message, "📦 جاهز — اختر تجربة أو استضافة دائمة")
 
-        # Engine UI: explicit plane choice (TRIAL_CHAT vs PERMANENT_HOST)
+        # Engine UI: branch by ProjectKind / delivery_surface (Phase 1)
         try:
-            from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState
+            from lumen.engine.services.ui_state.models import EngineUiPhase, EngineUiState, UiButton
             from lumen.engine.services.ui_state.controller import buttons_for_state
             from lumen.bot.ui.keyboards import build_inline_keyboard
             from lumen.bot.ui.state_store import save_ui_state, persist_ui_session
+            from lumen.engine.core.project_kind import (
+                DeliverySurface,
+                ProjectKind,
+                delivery_surface,
+                label_ar,
+                parse_kind,
+            )
+
+            pk = parse_kind(meta.get("project_kind")) or ProjectKind.TELEGRAM_BOT
+            surface = delivery_surface(pk)
+            label = label_ar(pk)
+
             ui = EngineUiState(
                 phase=EngineUiPhase.GEN_DONE,
                 project_ref=str(project_path),
                 last_action="generation_done",
+                slots={
+                    "project_kind": pk.value,
+                    "delivery_surface": surface.value,
+                },
             )
             save_ui_state(context.user_data, ui)
             if user:
                 persist_ui_session(int(user.id), dict(context.user_data))
-            body = (
-                "ما التالي؟\n"
-                "• تجربة في الشات — تشغيل مؤقت (LiveRunner / TRIAL_CHAT)\n"
-                "• استضافة دائمة — Firecracker (HostingService / PERMANENT_HOST)\n"
-                "• ZIP أو معاينة الملفات"
-            )
-            await safe_reply_text(
-                message,
-                body,
-                reply_markup=build_inline_keyboard(
-                    buttons_for_state(ui), user_id=int(getattr(user, "id", 0) or 0)
-                ),
-            )
+
+            uid = int(getattr(user, "id", 0) or 0)
+            if surface == DeliverySurface.TELEGRAM_RUNTIME:
+                body = (
+                    f"النوع: {label}\n"
+                    "ما التالي؟\n"
+                    "• تجربة في الشات — تشغيل مؤقت\n"
+                    "• استضافة دائمة — بيئة معزولة\n"
+                    "• ZIP أو معاينة الملفات"
+                )
+                markup = build_inline_keyboard(buttons_for_state(ui), user_id=uid)
+            else:
+                # Honest: no fake public URL / trial chat for non-Telegram kinds yet
+                body = (
+                    f"النوع: {label}\n"
+                    "المشروع جاهز كملفات (ZIP / معاينة).\n"
+                    "التشغيل على رابط عام تحت Lumen يُفعَّل لاحقاً.\n"
+                    "اختر:"
+                )
+                rows = (
+                    (
+                        UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
+                        UiButton("👁 معاينة الملفات", "post_preview", style="primary"),
+                    ),
+                    (UiButton("✨ مشروع آخر", "open_generate", style="success"),),
+                    (UiButton("📊 لوحة التحكم", "open_dashboard", style="primary"),),
+                )
+                markup = build_inline_keyboard(rows, user_id=uid)
+
+            await safe_reply_text(message, body, reply_markup=markup)
         except Exception:
             logger.exception("post-generation UI menu failed")
+
 
     else:
         await safe_reply_text(message, 

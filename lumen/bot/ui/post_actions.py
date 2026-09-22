@@ -76,7 +76,29 @@ def _host_backend_hint() -> str:
         return f"probe_error:{type(exc).__name__}"
 
 
+def _surface_for_ud(ud: dict) -> str:
+    """delivery_surface from UI slots or generation metadata (honest gate)."""
+    try:
+        from lumen.engine.core.project_kind import (
+            DeliverySurface,
+            ProjectKind,
+            delivery_surface,
+            parse_kind,
+        )
+        slots = {}
+        eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+        if isinstance(eu.get("slots"), dict):
+            slots = eu["slots"]
+        pk = parse_kind(slots.get("project_kind") or ud.get("project_kind"))
+        if pk is None:
+            return DeliverySurface.TELEGRAM_RUNTIME.value  # legacy sessions
+        return delivery_surface(pk).value
+    except Exception:
+        return "telegram_runtime"
+
+
 async def execute_post_side_effect(
+
     *,
     effect: str,
     project_ref: str,
@@ -101,6 +123,11 @@ async def execute_post_side_effect(
         return "لا يوجد مشروع على القرص — ولّد بوت أو اربط مشروعاً نشطاً أولاً."
 
     if effect == "post_trial":
+        if _surface_for_ud(ud) != "telegram_runtime":
+            return (
+                "هذا المشروع ليس بوت تيليجرام — التجربة في الشات غير متاحة.\n"
+                "استخدم ZIP أو معاينة الملفات."
+            )
         assert root is not None
         entry = resolve_entry_point(root)
         if not (root / entry).is_file() and not any((root / n).is_file() for n in ("main.py", "bot.py")):
@@ -151,6 +178,11 @@ async def execute_post_side_effect(
         )
 
     if effect == "post_host":
+        if _surface_for_ud(ud) != "telegram_runtime":
+            return (
+                "الاستضافة الحية الحالية لبوتات تيليجرام فقط.\n"
+                "المواقع وواجهات API تُسلَّم كملفات إلى أن تُفعَّل الاستضافة العامة."
+            )
         assert root is not None
         # Permanent host is a Pro entitlement — free users get trial only
         try:

@@ -66,6 +66,20 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
     if mode_raw and str(mode_raw) not in {"cline", "ai_codegen", ""}:
         logger.info("ignoring engine_mode=%s → cline", mode_raw)
 
+    from lumen.engine.core.project_kind import (
+        kind_metadata,
+        parse_kind,
+        resolve_project_kind,
+    )
+
+    text_for_kind = str(package.get("original_text") or package.get("spec_request") or "")
+    kind = resolve_project_kind(
+        text=text_for_kind,
+        preferred_keys=preferred,
+        explicit=package.get("project_kind") or package.get("kind"),
+    )
+    km = kind_metadata(kind)
+
     ir = BuildIR.from_dict(
         {
             "original_text": package.get("original_text") or "",
@@ -88,8 +102,10 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
                 "dynamic_spec": package.get("dynamic_spec"),
                 "bot_spec": package.get("bot_spec"),
                 "engine": package.get("engine"),
+                **km,
             },
             "user_id": int(user_id or 0),
+            "project_kind": kind.value,
         }
     )
     from lumen.engine.core.ir_validate import validate_and_normalize_ir
@@ -178,6 +194,10 @@ def execute_ir(
     flat = {
         "engine": cline_res.engine,
         "ir": ir.to_dict(),
+        "project_kind": getattr(ir, "project_kind", None) or (ir.metadata or {}).get("project_kind"),
+        "delivery_surface": (ir.metadata or {}).get("delivery_surface"),
+        "project_kind_label_ar": (ir.metadata or {}).get("project_kind_label_ar"),
+        "needs_bot_token": (ir.metadata or {}).get("needs_bot_token"),
         "cline": cline_res.to_dict(),
         "router": router,
         "provider": router.get("provider") or (cline_meta.get("model") or {}).get("provider"),
@@ -227,6 +247,15 @@ def _finalize(result: Any, ir: BuildIR) -> Any:
     meta = dict(getattr(result, "metadata", None) or {})
     meta["ir"] = ir.to_dict()
     meta["engine_router_mode"] = ir.engine_mode.value
+    # ProjectKind — top-level for delivery / hosting (never drop)
+    pk = (getattr(ir, "project_kind", None) or "").strip() or str(
+        (ir.metadata or {}).get("project_kind") or ""
+    )
+    if pk:
+        meta["project_kind"] = pk
+        meta.setdefault("delivery_surface", (ir.metadata or {}).get("delivery_surface"))
+        meta.setdefault("project_kind_label_ar", (ir.metadata or {}).get("project_kind_label_ar"))
+        meta.setdefault("needs_bot_token", (ir.metadata or {}).get("needs_bot_token"))
 
     # Control plane: permissions + project record + delivery gate
     try:
