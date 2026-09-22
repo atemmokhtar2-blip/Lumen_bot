@@ -44,3 +44,5 @@ __all__ = [
     "render_message",
     "state_summary_ar",
 ]
+
+# navigation tree: see navigation.PHASE_PARENT / ROOT_ACTIONS
