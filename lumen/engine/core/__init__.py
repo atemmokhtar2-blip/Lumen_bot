@@ -7,7 +7,11 @@ from .errors import (
     ValidationError, PipelineError, ConfigurationError,
 )
 from .ir import BuildIR, EngineMode, IRStatus, AcceptanceCriterion
-from .project_kind import ProjectKind, DeliverySurface, resolve_project_kind, delivery_surface, kind_metadata, label_ar, http_runtime_hints
+from .project_kind import (
+    ProjectKind, DeliverySurface, resolve_project_kind, delivery_surface,
+    kind_metadata, label_ar, http_runtime_hints, runtime_contract,
+    default_deliverables, acceptance_hints, seed_workspace,
+)
 from .ir_validate import validate_and_normalize_ir, check_project_against_ir
 
 __all__ = [
@@ -17,5 +21,6 @@ __all__ = [
     "ValidationError", "PipelineError", "ConfigurationError",
     "BuildIR", "EngineMode", "IRStatus", "AcceptanceCriterion",
     "ProjectKind", "DeliverySurface", "resolve_project_kind", "delivery_surface", "kind_metadata", "label_ar", "http_runtime_hints",
+    "runtime_contract", "default_deliverables", "acceptance_hints", "seed_workspace",
     "validate_and_normalize_ir", "check_project_against_ir",
 ]
