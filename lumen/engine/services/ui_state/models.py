@@ -44,6 +44,7 @@ class RuntimePlaneHint(str, Enum):
     NONE = "none"
     TRIAL_CHAT = "trial_chat"
     PERMANENT_HOST = "permanent_host"
+    HTTP_PUBLIC = "http_public"
 
 
 @dataclass

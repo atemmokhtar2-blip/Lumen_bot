@@ -28,9 +28,12 @@ from enum import Enum
 class RuntimePlane(str, Enum):
     PERMANENT_HOST = "permanent_host"
     TRIAL_CHAT = "trial_chat"
+    HTTP_PUBLIC = "http_public"
 
 
 def plane_label_ar(plane: RuntimePlane) -> str:
+    if plane is RuntimePlane.HTTP_PUBLIC:
+        return "استضافة HTTP عامة"
     if plane is RuntimePlane.PERMANENT_HOST:
         return "استضافة دائمة"
     return "تجربة مؤقتة في الشات"

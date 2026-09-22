@@ -91,7 +91,11 @@ def _surface_for_ud(ud: dict) -> str:
             slots = eu["slots"]
         pk = parse_kind(slots.get("project_kind") or ud.get("project_kind"))
         if pk is None:
-            return DeliverySurface.TELEGRAM_RUNTIME.value  # legacy sessions
+            # Prefer explicit surface slot; never assume telegram for unknown kind
+            raw = (slots.get("delivery_surface") or ud.get("delivery_surface") or "").strip()
+            if raw in {"telegram_runtime", "http_runtime", "artifact_only"}:
+                return raw
+            return DeliverySurface.ARTIFACT_ONLY.value
         return delivery_surface(pk).value
     except Exception:
         return "telegram_runtime"

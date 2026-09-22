@@ -232,20 +232,36 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav((), phase)
     if phase == EngineUiPhase.GEN_DONE:
         rows = []
+        # Path split by ProjectKind / delivery_surface (Phase 1 — no wrong buttons)
+        surface = (state.slots.get("delivery_surface") or "").strip()
+        kind = (state.slots.get("project_kind") or "").strip()
+        if not surface and kind:
+            try:
+                from lumen.engine.core.project_kind import delivery_surface, parse_kind
+                pk = parse_kind(kind)
+                if pk is not None:
+                    surface = delivery_surface(pk).value
+            except Exception:
+                surface = ""
         if (state.project_ref or "").strip():
-            rows.append(
-                (
-                    UiButton("🧪 تجربة في الشات", "post_trial", style="success"),
-                    UiButton("🚀 استضافة دائمة", "post_host", style="success"),
+            if surface == "telegram_runtime" or (not surface and not kind):
+                # Telegram bot path only
+                rows.append(
+                    (
+                        UiButton("🧪 تجربة في الشات", "post_trial", style="success"),
+                        UiButton("🚀 استضافة دائمة", "post_host", style="success"),
+                    )
                 )
-            )
+            elif surface == "http_runtime":
+                rows.append((UiButton("🚀 استضافة HTTP", "post_host", style="success"),))
+            # All kinds get files
             rows.append(
                 (
                     UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
                     UiButton("👁 معاينة الملفات", "post_preview", style="primary"),
                 )
             )
-        rows.append((UiButton("✨ إنشاء بوت آخر", "open_generate", style="success"),))
+        rows.append((UiButton("✨ مشروع آخر", "open_generate", style="success"),))
         rows.append((UiButton("📊 لوحة التحكم", "open_dashboard", style="primary"),))
         return _with_nav(tuple(rows), phase)
     if phase == EngineUiPhase.DASHBOARD:
@@ -892,22 +908,43 @@ def apply_action(
         msg = "تجربة المشروع النشط..."
     # ── Path: Post-generate delivery ─────────────────────────────
     elif action_id == "post_trial":
-
         if not (new.project_ref or "").strip():
-            msg = "لا يوجد مشروع — ولّد بوت أولاً."
+            msg = "لا يوجد مشروع — ولّد أولاً."
         else:
             from .models import RuntimePlaneHint
-            new.plane = RuntimePlaneHint.TRIAL_CHAT
-            msg = "تجربة مؤقتة — أرسل توكن البوت من @BotFather."
-            post_fx = "post_trial"
+            from lumen.engine.core.project_kind import delivery_surface, parse_kind
+            pk = parse_kind(new.slots.get("project_kind"))
+            surf = (new.slots.get("delivery_surface") or "").strip()
+            if not surf and pk is not None:
+                surf = delivery_surface(pk).value
+            if surf and surf != "telegram_runtime":
+                msg = "التجربة في الشات لبوتات تيليجرام فقط — استخدم ZIP أو استضافة HTTP."
+                post_fx = ""
+            else:
+                new.plane = RuntimePlaneHint.TRIAL_CHAT
+                msg = "تجربة مؤقتة — أرسل توكن البوت من @BotFather."
+                post_fx = "post_trial"
     elif action_id == "post_host":
         if not (new.project_ref or "").strip():
-            msg = "لا يوجد مشروع — ولّد بوت أولاً."
+            msg = "لا يوجد مشروع — ولّد أولاً."
         else:
             from .models import RuntimePlaneHint
-            new.plane = RuntimePlaneHint.PERMANENT_HOST
-            msg = "استضافة دائمة — أرسل توكن البوت من @BotFather."
-            post_fx = "post_host"
+            from lumen.engine.core.project_kind import delivery_surface, parse_kind
+            pk = parse_kind(new.slots.get("project_kind"))
+            surf = (new.slots.get("delivery_surface") or "").strip()
+            if not surf and pk is not None:
+                surf = delivery_surface(pk).value
+            if surf == "http_runtime":
+                new.plane = RuntimePlaneHint.HTTP_PUBLIC
+                msg = "استضافة HTTP — تجهيز الرابط وفحص الصحة."
+                post_fx = "post_host"
+            elif surf == "artifact_only":
+                msg = "لا رابط عام مضبوط (LUMEN_PUBLIC_BASE) — حمّل ZIP."
+                post_fx = ""
+            else:
+                new.plane = RuntimePlaneHint.PERMANENT_HOST
+                msg = "استضافة دائمة — أرسل توكن البوت من @BotFather."
+                post_fx = "post_host"
     elif action_id == "post_zip":
         if not (new.project_ref or "").strip():
             msg = "لا يوجد مشروع لـ ZIP."
