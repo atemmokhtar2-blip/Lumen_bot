@@ -1,22 +1,19 @@
-"""Clear UI navigation paths — single source of truth.
+"""UI navigation — one step up the phase tree (no fragile history stack).
 
-Tree (parent ← child):
-  HOME
-  ├─ GEN_TYPE → GEN_SLOTS → GEN_CONFIRM → GENERATING → GEN_DONE → HOST_CONFIRM
-  ├─ TEMPLATES → TEMPLATE_DETAIL → TEMPLATE_TRIAL_MINUTES
-  │            → TEMPLATE_STATUS
-  ├─ DASHBOARD
-  ├─ BILLING → PRO_PLAN
-  ├─ HELP
-  └─ SETTINGS → CONNECTIONS → CONN_GITHUB
-              → REFERRAL
+Every screen has exactly one parent. ``nav_back`` always goes to that parent.
+This is deterministic across workers/restarts (no Redis stack to lose).
 
-Rules
------
-1. Root actions (open_*, home, cancel) reset the stack — path is HOME → screen.
-2. Child actions push the phase being left onto slots["_nav"].
-3. nav_back pops one step; if stack empty uses PHASE_PARENT.
-4. No other module may invent parent links — edit PHASE_PARENT here only.
+Tree
+----
+HOME
+├─ GEN_TYPE → GEN_SLOTS → GEN_CONFIRM → GENERATING → GEN_DONE → HOST_CONFIRM
+├─ TEMPLATES → TEMPLATE_DETAIL → TEMPLATE_TRIAL_MINUTES
+│            → TEMPLATE_STATUS
+├─ DASHBOARD
+├─ BILLING → PRO_PLAN
+├─ HELP
+└─ SETTINGS → CONNECTIONS → CONN_GITHUB
+            → REFERRAL
 """
 from __future__ import annotations
 
@@ -24,7 +21,6 @@ from typing import Callable
 
 from .models import EngineUiPhase, EngineUiState
 
-# Explicit parent for every non-HOME phase (cold start / empty stack)
 PHASE_PARENT: dict[EngineUiPhase, EngineUiPhase] = {
     EngineUiPhase.GEN_TYPE: EngineUiPhase.HOME,
     EngineUiPhase.GEN_SLOTS: EngineUiPhase.GEN_TYPE,
@@ -48,7 +44,7 @@ PHASE_PARENT: dict[EngineUiPhase, EngineUiPhase] = {
     EngineUiPhase.IDLE: EngineUiPhase.HOME,
 }
 
-# Opening these clears history (destination is a root under HOME)
+# Kept for API compatibility; roots no longer need stack clears for back to work.
 ROOT_ACTIONS: frozenset[str] = frozenset({
     "home",
     "cancel_generate",
@@ -61,51 +57,6 @@ ROOT_ACTIONS: frozenset[str] = frozenset({
     "open_settings",
 })
 
-_SLOT_KEY = "_nav"
-_MAX_DEPTH = 12
-
-
-def stack_get(state: EngineUiState) -> list[str]:
-    raw = (state.slots.get(_SLOT_KEY) or "").strip()
-    return [p for p in raw.split(",") if p] if raw else []
-
-
-def stack_set(state: EngineUiState, stack: list[str]) -> None:
-    stack = [p for p in stack[-_MAX_DEPTH:] if p]
-    if stack:
-        state.slots[_SLOT_KEY] = ",".join(stack)
-    else:
-        state.slots.pop(_SLOT_KEY, None)
-
-
-def stack_clear(state: EngineUiState) -> None:
-    state.slots.pop(_SLOT_KEY, None)
-
-
-def stack_push(state: EngineUiState, leaving: EngineUiPhase) -> None:
-    if leaving in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
-        return
-    stack = stack_get(state)
-    val = leaving.value
-    if not stack or stack[-1] != val:
-        stack.append(val)
-    stack_set(state, stack)
-
-
-def stack_pop(state: EngineUiState) -> EngineUiPhase | None:
-    stack = stack_get(state)
-    while stack:
-        prev = stack.pop()
-        stack_set(state, stack)
-        try:
-            phase = EngineUiPhase(prev)
-        except ValueError:
-            continue
-        if phase in {EngineUiPhase.HOME, EngineUiPhase.IDLE}:
-            continue
-        return phase
-    return None
-
 
 def parent_of(phase: EngineUiPhase) -> EngineUiPhase:
     return PHASE_PARENT.get(phase, EngineUiPhase.HOME)
@@ -116,7 +67,8 @@ def go_home(state: EngineUiState) -> EngineUiState:
     state.slots.pop("awaiting_text", None)
     state.slots.pop("billing_expanded", None)
     state.slots.pop("pro_buy_requested", None)
-    stack_clear(state)
+    state.slots.pop("_nav", None)  # drop legacy stack if present
+    state.slots.pop("_from", None)
     state.missing = []
     return state
 
@@ -126,15 +78,12 @@ def go_back(
     *,
     refresh_needs: Callable[[EngineUiState], EngineUiState] | None = None,
 ) -> tuple[EngineUiState, str]:
-    """One step back. Prefer stack; fall back to PHASE_PARENT."""
-    prev = stack_pop(state)
-    if prev is None:
-        prev = parent_of(state.phase)
+    """Exactly one step: current phase → PHASE_PARENT[current]."""
+    prev = parent_of(state.phase)
     if prev == state.phase:
-        prev = parent_of(prev)
-        if prev == state.phase:
-            prev = EngineUiPhase.HOME
+        prev = EngineUiPhase.HOME
 
+    # Cleanup when landing
     if prev == EngineUiPhase.GEN_TYPE:
         state.slots["awaiting_text"] = "1"
     elif prev == EngineUiPhase.GEN_SLOTS and refresh_needs is not None:
@@ -150,6 +99,9 @@ def go_back(
 
     state.phase = prev
     state.missing = []
+    # legacy keys
+    state.slots.pop("_nav", None)
+    state.slots.pop("_from", None)
     return state, "رجوع خطوة."
 
 
@@ -159,28 +111,43 @@ def record_transition(
     previous: EngineUiPhase,
     new_state: EngineUiState,
 ) -> None:
-    """Call once after a successful action mutates phase."""
-    if action_id == "nav_back":
+    """No-op for tree-based back (parent map is enough). Clears legacy stack."""
+    if action_id in {"home", "cancel_generate", "nav_back"}:
+        new_state.slots.pop("_nav", None)
+        new_state.slots.pop("_from", None)
         return
-    if action_id in ROOT_ACTIONS:
-        stack_clear(new_state)
-        return
-    if new_state.phase != previous:
-        stack_push(new_state, previous)
-    if action_id == "cancel_generate":
-        stack_clear(new_state)
+    # Drop legacy stack so old sessions do not confuse anything
+    if "_nav" in new_state.slots:
+        new_state.slots.pop("_nav", None)
+
+
+# --- legacy aliases (tests / old imports) ---
+def stack_clear(state: EngineUiState) -> None:
+    state.slots.pop("_nav", None)
+    state.slots.pop("_from", None)
+
+
+def stack_get(state: EngineUiState) -> list[str]:
+    return []
+
+
+def stack_push(state: EngineUiState, leaving: EngineUiPhase) -> None:
+    return None
+
+
+def stack_pop(state: EngineUiState) -> EngineUiPhase | None:
+    return None
 
 
 __all__ = [
     "PHASE_PARENT",
     "ROOT_ACTIONS",
-    "stack_get",
-    "stack_set",
-    "stack_clear",
-    "stack_push",
-    "stack_pop",
     "parent_of",
     "go_home",
     "go_back",
     "record_transition",
+    "stack_clear",
+    "stack_get",
+    "stack_push",
+    "stack_pop",
 ]

@@ -360,18 +360,13 @@ async def _handle_ui_callback_body(update, context, q, action_id: str, arg: str)
         if result.state.phase != EngineUiPhase.GEN_TYPE:
             user_data.pop("engine_ui_await_generate", None)
 
-    # Persist off the event loop (SQLite can block under load)
+    # Sync persist — must complete before next callback hydrates Redis
+    # (async create_task raced and dropped nav state across workers).
     if uid:
         try:
-            import asyncio
-            asyncio.get_running_loop().create_task(
-                asyncio.to_thread(persist_ui_session, uid, dict(user_data))
-            )
+            persist_ui_session(uid, dict(user_data))
         except Exception:
-            try:
-                persist_ui_session(uid, dict(user_data))
-            except Exception:
-                pass
+            logger.exception("persist_ui_session failed uid=%s", uid)
 
     # Facts I/O (Neon/Mongo) off event loop — include hosts only for dashboard.
     # Root lag: waiting up to 8s on every click for wallet/plan. Keep a short
