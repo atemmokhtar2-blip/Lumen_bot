@@ -183,6 +183,32 @@ def run_coding_session(
     """Run official ``cline_runtime.agent_loop.run_agent`` with full context stack."""
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    # Phase 2: kind-aware scaffold before agent writes
+    try:
+        from lumen.engine.core.project_kind import (
+            kind_metadata,
+            parse_kind,
+            resolve_project_kind,
+            seed_workspace,
+        )
+        _pk_raw = ""
+        hint = ir_hint if isinstance(ir_hint, dict) else {}
+        if hint:
+            _pk_raw = str(
+                hint.get("project_kind")
+                or (hint.get("metadata") or {}).get("project_kind")
+                or ""
+            ).strip()
+        _pk = parse_kind(_pk_raw) or resolve_project_kind(text=str(goal or ""))
+        if isinstance(ir_hint, dict):
+            meta = dict(ir_hint.get("metadata") or {})
+            meta.update(kind_metadata(_pk))
+            ir_hint["metadata"] = meta
+            ir_hint["project_kind"] = _pk.value
+        if not (work / "main.py").exists() and not (work / "src" / "__init__.py").exists():
+            seed_workspace(work, _pk)
+    except Exception:
+        pass
 
     packet = build_task_packet(
         goal=goal,
@@ -288,7 +314,7 @@ def run_coding_session(
         agent_acc = {}
         try:
             from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
-            agent_acc = check_agent_project(work, goal=goal, project_kind=str((getattr(state, "extensions", None) or {}).get("project_kind") or ""))
+            agent_acc = check_agent_project(work, goal=goal, project_kind=str((getattr(state, "metadata", None) or {}).get("project_kind") or (ir_hint or {}).get("project_kind") or ""))
             if not agent_acc.get("ok"):
                 ok = False
         except Exception as _aa:

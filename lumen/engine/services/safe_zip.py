@@ -33,6 +33,11 @@ _DOTFILE_ALLOWLIST = frozenset({
     ".env.example",
 })
 
+# Project metadata dirs/files that are safe to ship (not secrets)
+_DIR_ALLOWLIST = frozenset({
+    ".lumen",
+})
+
 
 def _read_nofollow(path: Path, *, max_bytes: int) -> bytes | None:
     try:
@@ -86,7 +91,9 @@ def write_project_zip(
                 keep = []
                 for d in dirnames:
                     p = Path(dirpath) / d
-                    if d in skip_dirs or d.startswith("."):
+                    if d in skip_dirs:
+                        continue
+                    if d.startswith(".") and d not in _DIR_ALLOWLIST:
                         continue
                     try:
                         if p.is_symlink():

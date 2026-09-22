@@ -341,7 +341,10 @@ async def deliver_generation_result(
                     "project_kind": pk.value,
                     "delivery_surface": surface.value,
                     "public_url": hints.get("public_url") or "",
-                    "health_path": hints.get("health_path") or "/health",
+                    "health_path": str(meta.get("health_path") or hints.get("health_path") or "/health"),
+                    "start_command": str(meta.get("start_command") or ""),
+                    "port": str(meta.get("port") or ""),
+                    "env_keys": ",".join(meta.get("env_keys") or []) if isinstance(meta.get("env_keys"), list) else str(meta.get("env_keys") or ""),
                 },
             )
             save_ui_state(context.user_data, ui)

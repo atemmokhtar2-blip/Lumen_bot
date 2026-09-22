@@ -479,6 +479,13 @@ def seed_workspace(work_dir: str | Path, kind: ProjectKind) -> list[str]:
                 encoding="utf-8",
             )
             created.append(".lumen/runtime.json")
+        root_man = root / "lumen.runtime.json"
+        if not root_man.exists():
+            root_man.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            created.append("lumen.runtime.json")
     except Exception:
         pass
 
