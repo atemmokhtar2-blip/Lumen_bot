@@ -263,6 +263,54 @@ def check_criterion(root: Path, criterion: str, *, strict: bool = True) -> dict[
         return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "readme"}
 
 
+    if "no telegram" in c:
+        hits = []
+        for p in list(root.rglob("*.py"))[:80]:
+            if not p.is_file():
+                continue
+            if any(x in p.parts for x in (".git", "__pycache__", ".venv", ".lumen")):
+                continue
+            try:
+                src = p.read_text(encoding="utf-8", errors="replace").lower()
+            except Exception:
+                continue
+            if any(x in src for x in ("telegram", "aiogram", "pyrogram", "telebot")):
+                hits.append(p.name)
+        ok = len(hits) == 0
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "no_telegram" if ok else f"telegram_in:{hits[:3]}"}
+
+    if "fastapi or flask" in c:
+        req = _read(root, "requirements.txt").lower()
+        src = _read(root, "main.py").lower()
+        ok = any(x in req or x in src for x in ("fastapi", "flask", "starlette", "django"))
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "web_framework" if ok else "web_framework_missing"}
+
+    if "home page" in c or (c.startswith("get /") and "health" not in c):
+        src = _read(root, "main.py")
+        ok = bool(re.search(r'["\']/[\'"]|HTMLResponse|Jinja2|templates', src, re.I))
+        if not ok:
+            ok = (root / "templates" / "index.html").is_file() or (root / "static" / "index.html").is_file()
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "home_route" if ok else "home_route_missing"}
+
+    if "html template" in c or "static index" in c:
+        ok = (
+            (root / "templates" / "index.html").is_file()
+            or (root / "static" / "index.html").is_file()
+            or (root / "index.html").is_file()
+            or bool(re.search(r"HTMLResponse|Jinja2|templates", _read(root, "main.py"), re.I))
+        )
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "html_present" if ok else "html_missing"}
+
+    if "cli --help" in c or "argparse or click" in c:
+        src = _read(root, "main.py")
+        ok = bool(re.search(r"argparse|click|typer|ArgumentParser|if __name__", src, re.I))
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "cli_entrypoint" if ok else "cli_missing"}
+
+    if "/health" in c or "get /health" in c:
+        src = _read(root, "main.py")
+        ok = bool(re.search(r"/health|healthcheck|health_check", src, re.I))
+        return {"id": f"crit:{c_raw[:40]}", "ok": ok, "detail": "health_route" if ok else "health_missing"}
+
     if "core behavior" in c or "core functions" in c:
         tree, src = _main_ast(root)
         names = _ast_names(tree) if tree else set()

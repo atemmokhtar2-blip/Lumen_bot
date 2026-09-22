@@ -190,7 +190,9 @@ def needs_bot_token(kind: ProjectKind) -> bool:
 
 
 def cline_kind_rules(kind: ProjectKind) -> str:
-    return _CLINE_RULES.get(kind, _CLINE_RULES[ProjectKind.GENERAL_APP])
+    base = _CLINE_RULES.get(kind, _CLINE_RULES[ProjectKind.GENERAL_APP])
+    files = ", ".join(default_deliverables(kind)[:12])
+    return f"{base} Required files when greenfield: {files}."
 
 
 def kind_metadata(kind: ProjectKind) -> dict[str, Any]:
@@ -217,6 +219,37 @@ def planner_intent_kind(kind: ProjectKind) -> str:
     return kind.value
 
 
+
+def default_deliverables(kind: ProjectKind) -> list[str]:
+    if kind == ProjectKind.TELEGRAM_BOT:
+        return ["main.py", "requirements.txt", "README.md", ".env.example"]
+    if kind == ProjectKind.WEB_SITE:
+        return ["main.py", "requirements.txt", "README.md", ".env.example", "templates/index.html", "static/style.css"]
+    if kind == ProjectKind.WEB_API:
+        return ["main.py", "requirements.txt", "README.md", ".env.example", "routers/__init__.py"]
+    if kind == ProjectKind.CLI_APP:
+        return ["main.py", "requirements.txt", "README.md"]
+    if kind == ProjectKind.LIBRARY:
+        return ["pyproject.toml", "README.md", "src/__init__.py", "tests/test_basic.py"]
+    if kind in {ProjectKind.DISCORD_BOT, ProjectKind.WHATSAPP_BOT}:
+        return ["main.py", "requirements.txt", "README.md", ".env.example"]
+    return ["main.py", "requirements.txt", "README.md"]
+
+
+def acceptance_hints(kind: ProjectKind) -> list[str]:
+    if kind == ProjectKind.TELEGRAM_BOT:
+        return ["main.py valid Python", "python-telegram-bot or equivalent in requirements", "token from environment", "/start handler registered"]
+    if kind == ProjectKind.WEB_SITE:
+        return ["main.py valid Python", "fastapi or flask in requirements", "GET / home page", "GET /health", "no telegram imports", "HTML template or static index"]
+    if kind == ProjectKind.WEB_API:
+        return ["main.py valid Python", "fastapi or flask in requirements", "GET /health", "no telegram imports"]
+    if kind == ProjectKind.CLI_APP:
+        return ["main.py valid Python", "CLI --help works", "argparse or click entrypoint", "no telegram imports"]
+    if kind == ProjectKind.LIBRARY:
+        return ["importable package", "at least one test file", "no telegram imports"]
+    return ["main.py valid Python", "compileall passes"]
+
+
 __all__ = [
     "ProjectKind",
     "DeliverySurface",
@@ -230,4 +263,6 @@ __all__ = [
     "kind_metadata",
     "planner_intent_kind",
     "http_runtime_hints",
+    "default_deliverables",
+    "acceptance_hints",
 ]

@@ -81,6 +81,7 @@ class ExecutionPlan:
         lines = [
             f"GOAL: {self.goal[:600]}",
             f"LANG: {self.language}",
+            f"PROJECT_KIND: {self.project_kind or 'unspecified'}",
             "DELIVERABLES: " + ", ".join(self.deliverables),
         ]
         if self.features:

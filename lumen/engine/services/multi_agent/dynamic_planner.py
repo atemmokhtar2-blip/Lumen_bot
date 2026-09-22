@@ -278,7 +278,7 @@ def _tasks_telegram(feats: list[str], *, refine: bool) -> list[PlanTask]:
 
 def _tasks_discord(feats: list[str], *, refine: bool) -> list[PlanTask]:
     if refine:
-        return _tasks_telegram(feats, refine=True)
+        return _tasks_refine_generic(feats)
     tasks = [
         PlanTask(
             id="scaffold",
@@ -336,12 +336,19 @@ def _tasks_whatsapp(feats: list[str], *, refine: bool) -> list[PlanTask]:
 
 
 def _tasks_web_api(feats: list[str], *, refine: bool) -> list[PlanTask]:
+    if refine:
+        return _tasks_refine_generic(feats)
     tasks = [
         PlanTask(
             id="scaffold",
-            title="Scaffold FastAPI/Flask application",
-            files=["main.py", "requirements.txt", "README.md", ".env.example"],
-            acceptance=["compileall passes", "health or root route exists"],
+            title="Scaffold FastAPI/Flask JSON API",
+            files=["main.py", "requirements.txt", "README.md", ".env.example", "routers/__init__.py"],
+            acceptance=[
+                "main.py valid Python",
+                "fastapi or flask in requirements",
+                "GET /health",
+                "no telegram imports",
+            ],
             priority=1,
         ),
     ]
@@ -349,18 +356,129 @@ def _tasks_web_api(feats: list[str], *, refine: bool) -> list[PlanTask]:
     extra, dep = _parallel_feature_module_tasks(
         use_feats,
         module_dir="routers",
-        wire_extra_acceptance=["health or root route exists"],
+        wire_extra_acceptance=["GET /health"],
     )
     tasks.extend(extra)
     tasks.append(PlanTask(
         id="verify",
-        title="Verify project compiles and imports",
+        title="Verify API compiles without telegram deps",
         files=["main.py"],
-        acceptance=["compileall passes"],
+        acceptance=["compileall passes", "no telegram imports"],
         priority=1,
         depends_on=list(dep),
     ))
     return tasks
+
+
+
+def _tasks_web_site(feats: list[str], *, refine: bool) -> list[PlanTask]:
+    """Public website: HTML home + health — never a Telegram bot."""
+    if refine:
+        return _tasks_refine_generic(feats)
+    tasks = [
+        PlanTask(
+            id="scaffold",
+            title="Scaffold FastAPI/Flask website with templates/static",
+            files=[
+                "main.py",
+                "requirements.txt",
+                "README.md",
+                ".env.example",
+                "templates/index.html",
+                "static/style.css",
+            ],
+            acceptance=[
+                "main.py valid Python",
+                "fastapi or flask in requirements",
+                "GET / home page",
+                "GET /health",
+                "HTML template or static index",
+                "no telegram imports",
+            ],
+            priority=1,
+        ),
+    ]
+    use_feats = feats or ["home", "about"]
+    extra, dep = _parallel_feature_module_tasks(
+        use_feats,
+        module_dir="routers",
+        wire_extra_acceptance=["GET / home page", "GET /health"],
+    )
+    tasks.extend(extra)
+    tasks.append(PlanTask(
+        id="verify",
+        title="Verify site compiles and has no telegram dependency",
+        files=["main.py"],
+        acceptance=["compileall passes", "no telegram imports"],
+        priority=1,
+        depends_on=list(dep),
+    ))
+    return tasks
+
+
+def _tasks_cli_app(feats: list[str], *, refine: bool) -> list[PlanTask]:
+    """CLI entrypoint — argparse/click, not a bot."""
+    if refine:
+        return _tasks_refine_generic(feats)
+    return [
+        PlanTask(
+            id="scaffold",
+            title="Scaffold CLI application (argparse or click)",
+            files=["main.py", "requirements.txt", "README.md"],
+            acceptance=[
+                "main.py valid Python",
+                "argparse or click entrypoint",
+                "CLI --help works",
+                "no telegram imports",
+            ],
+            priority=1,
+        ),
+        PlanTask(
+            id="implement",
+            title="Implement CLI commands: " + (", ".join(feats[:12]) if feats else "core commands"),
+            files=["main.py"],
+            acceptance=["core behavior implemented", "CLI --help works"],
+            priority=1,
+            depends_on=["scaffold"],
+        ),
+        PlanTask(
+            id="verify",
+            title="Verify CLI entrypoint",
+            files=["main.py"],
+            acceptance=["compileall passes", "no telegram imports"],
+            priority=1,
+            depends_on=["implement"],
+        ),
+    ]
+
+
+def _tasks_refine_generic(feats: list[str]) -> list[PlanTask]:
+    """Kind-neutral incremental repair (not Telegram-specific)."""
+    return [
+        PlanTask(
+            id="inspect",
+            title="Inspect existing project structure",
+            files=["main.py"],
+            acceptance=["list handlers and entrypoint understood"],
+            priority=1,
+        ),
+        PlanTask(
+            id="patch",
+            title="Apply requested changes without wiping project",
+            files=["main.py"],
+            acceptance=["edits applied", "project still imports"],
+            priority=1,
+            depends_on=["inspect"],
+        ),
+        PlanTask(
+            id="verify",
+            title="Verify syntax and imports after patch",
+            files=["main.py"],
+            acceptance=["compileall passes"],
+            priority=1,
+            depends_on=["patch"],
+        ),
+    ]
 
 
 def _tasks_library(feats: list[str], *, refine: bool) -> list[PlanTask]:
@@ -369,7 +487,7 @@ def _tasks_library(feats: list[str], *, refine: bool) -> list[PlanTask]:
             id="package",
             title="Create package layout and public API",
             files=["__init__.py", "pyproject.toml", "README.md"],
-            acceptance=["importable package"],
+            acceptance=["importable package", "no telegram imports"],
             priority=1,
         ),
         PlanTask(
@@ -393,7 +511,7 @@ def _tasks_library(feats: list[str], *, refine: bool) -> list[PlanTask]:
 
 def _tasks_general(feats: list[str], *, refine: bool) -> list[PlanTask]:
     if refine:
-        return _tasks_telegram(feats, refine=True)
+        return _tasks_refine_generic(feats)
     return [
         PlanTask(
             id="scaffold",
@@ -426,8 +544,10 @@ _BUILDERS = {
     "discord_bot": _tasks_discord,
     "whatsapp_bot": _tasks_whatsapp,
     "web_api": _tasks_web_api,
+    "web_site": _tasks_web_site,
+    "cli_app": _tasks_cli_app,
     "library": _tasks_library,
-    "refine": lambda feats, refine: _tasks_telegram(feats, refine=True),
+    "refine": lambda feats, refine: _tasks_refine_generic(feats),
     "general_app": _tasks_general,
 }
 
@@ -480,7 +600,12 @@ def assemble_plan(
             if f not in deliverables:
                 deliverables.append(f)
     if not deliverables:
-        deliverables = ["main.py", "requirements.txt", "README.md"]
+        try:
+            from lumen.engine.core.project_kind import default_deliverables, parse_kind
+            pk = parse_kind(kind.value if hasattr(kind, "value") else str(kind))
+            deliverables = list(default_deliverables(pk)) if pk else ["main.py", "requirements.txt", "README.md"]
+        except Exception:
+            deliverables = ["main.py", "requirements.txt", "README.md"]
 
     constraints_l = list(constraints or [])[:20]
     constraints_l.append(f"intent:{intent.kind}")
