@@ -86,11 +86,21 @@ async def deliver_generation_result(
         return
 
     # Mandatory pre-delivery gate: never send a project before deterministic verification.
+    # Phase 2: telegram uses ready_for_token; web/cli/library use structural ok (not token).
     try:
         from lumen.engine.services.anti_hallucination import run_anti_hallucination_gate
-        _ah = run_anti_hallucination_gate(project_path, user_request=request or "")
+        _pk = str((meta.get("project_kind") if isinstance(meta, dict) else "") or "")
+        _ah = run_anti_hallucination_gate(
+            project_path,
+            user_request=request or "",
+            project_kind=_pk,
+        )
         ah = _ah.to_dict()
-        ready = bool(_ah.ready_for_token)
+        _pk_l = _pk.strip().lower()
+        if _pk_l in {"web_site", "web_api", "cli_app", "library", "general_app"}:
+            ready = bool(_ah.ok)  # kind structural gate — no bot token
+        else:
+            ready = bool(_ah.ready_for_token)
         if not ready:
             await safe_reply_text(message, _ah.to_user_text(lang="ar")[:GENERATION_STATUS_PREVIEW_LIMIT])
             return
@@ -242,10 +252,18 @@ async def deliver_generation_result(
             from lumen.engine.services.anti_hallucination import (
                 run_anti_hallucination_gate,
             )
-            _ah = run_anti_hallucination_gate(project_path, user_request=request or "")
+            _ah = run_anti_hallucination_gate(
+                project_path,
+                user_request=request or "",
+                project_kind=str((meta.get("project_kind") if isinstance(meta, dict) else "") or ""),
+            )
             await safe_reply_text(message, _ah.to_user_text(lang="ar"))
             ah = _ah.to_dict()
-            ready = ready and bool(_ah.ready_for_token)
+            _pk2 = str((meta.get("project_kind") if isinstance(meta, dict) else "") or "").strip().lower()
+            if _pk2 in {"web_site", "web_api", "cli_app", "library", "general_app"}:
+                ready = ready and bool(_ah.ok)
+            else:
+                ready = ready and bool(_ah.ready_for_token)
         elif ah:
             lines = []
             if ah.get("ok") and ah.get("ready_for_token"):

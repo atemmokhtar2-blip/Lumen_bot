@@ -552,12 +552,66 @@ def run_anti_hallucination_gate(
     *,
     claimed_features: list[str] | None = None,
     user_request: str = "",
+    project_kind: str = "",
 ) -> AntiHallucinationReport:
-    """Run full anti-hallucination checks on a generated project directory."""
+    """Run full anti-hallucination checks on a generated project directory.
+
+    Phase 2: when project_kind is web_site/web_api/cli/library, use kind-aware
+    structural gates (not Telegram Application / CommandHandler).
+    """
     root = Path(project_dir)
     rep = AntiHallucinationReport(ok=True, ready_for_token=False)
 
-    # Reject clearly non-bot user requests even if a template was emitted
+    kind = (project_kind or "").strip().lower()
+    if not kind and user_request:
+        try:
+            from lumen.engine.core.project_kind import resolve_project_kind
+            kind = resolve_project_kind(text=user_request).value
+        except Exception:
+            kind = ""
+    rep.metadata["project_kind"] = kind
+
+    # Non-bot kinds: kind-aware acceptance, not Telegram structure
+    if kind in {"web_site", "web_api", "cli_app", "library", "general_app"}:
+        try:
+            from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
+            acc = check_agent_project(root, goal=user_request or "", project_kind=kind)
+            rep.metadata["agent_acceptance"] = {
+                "ok": acc.get("ok"),
+                "missing": list(acc.get("missing") or [])[:15],
+                "found": list(acc.get("found") or [])[:15],
+                "score": acc.get("score"),
+            }
+            if not acc.get("ok"):
+                rep.ok = False
+                rep.structure_ok = False
+                rep.fidelity_ok = False
+                for m in (acc.get("missing") or [])[:10]:
+                    rep.errors.append(
+                        Finding(
+                            "error",
+                            "kind_acceptance",
+                            f"بوابة النوع ({kind}): {m}",
+                            f"kind_gate:{m}",
+                        )
+                    )
+            else:
+                rep.structure_ok = True
+                rep.syntax_ok = True
+                rep.fidelity_ok = True
+                # ready_for_token is Telegram-only; web uses different delivery
+                rep.ready_for_token = False
+                rep.metadata["delivery_mode"] = "artifact_or_http"
+            rep.metadata["user_request_preview"] = (user_request or "")[:200]
+            return rep
+        except Exception as exc:
+            rep.ok = False
+            rep.errors.append(
+                Finding("error", "kind_gate_error", str(type(exc).__name__), str(exc)[:200])
+            )
+            return rep
+
+    # Telegram bot path (legacy structural checks)
     if user_request and _is_clearly_non_bot(user_request):
         rep.ok = False
         rep.ready_for_token = False
@@ -575,7 +629,6 @@ def run_anti_hallucination_gate(
     try:
         domain, conf = _detect_bot_request_arabic(user_request or "")
         if user_request and conf < 0.15 and domain is None:
-            # soft: continue structural checks but do not claim ready
             rep.warnings.append(
                 Finding(
                     "warning",

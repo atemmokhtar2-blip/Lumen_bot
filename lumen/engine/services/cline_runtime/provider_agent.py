@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
+    """Build agent goal from IR — ProjectKind-aware (no Telegram default)."""
     import json
     parts: list[str] = []
     for key in ("raw_request", "user_request", "spec_request", "purpose", "goal"):
@@ -30,11 +31,58 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
         parts.append("Gaps / custom needs: " + ", ".join(str(x) for x in gaps[:30]))
     lang = ir_dict.get("language") or "ar"
     parts.append(f"Primary language: {lang}")
-    parts.append(
-        "Deliver a complete Telegram bot project under the workspace "
-        "(main entry, requirements, README, env example)."
-    )
+
     meta = ir_dict.get("metadata") if isinstance(ir_dict.get("metadata"), dict) else {}
+    kind = str(ir_dict.get("project_kind") or meta.get("project_kind") or "").strip().lower()
+    if not kind:
+        try:
+            from lumen.engine.core.project_kind import resolve_project_kind
+            kind = resolve_project_kind(text=parts[0] if parts else "").value
+        except Exception:
+            kind = "general_app"
+
+    parts.append(f"PROJECT_KIND={kind}")
+    try:
+        from lumen.engine.core.project_kind import cline_kind_rules, parse_kind, runtime_contract
+        pk = parse_kind(kind)
+        if pk is not None:
+            parts.append("KIND_RULES: " + cline_kind_rules(pk))
+            rc = runtime_contract(pk)
+            parts.append(
+                "RUNTIME: start_command={start_command!r} health_path={health_path!r} "
+                "port={port} env_keys={env_keys}".format(**rc)
+            )
+    except Exception:
+        pass
+
+    deliver = {
+        "telegram_bot": (
+            "Deliver a complete Telegram bot under the workspace "
+            "(main entry, requirements, README, env example)."
+        ),
+        "web_site": (
+            "Deliver a complete website: FastAPI export `app`, GET / home, GET /health, "
+            "templates/ or static/, requirements, README. uvicorn main:app. "
+            "Do NOT build a Telegram bot."
+        ),
+        "web_api": (
+            "Deliver a complete JSON API: FastAPI `app`, routers/, GET /health, "
+            "requirements, README. uvicorn main:app. Do NOT build a Telegram bot."
+        ),
+        "cli_app": (
+            "Deliver a CLI with argparse/click in main.py and --help. "
+            "Do NOT build a Telegram bot."
+        ),
+        "library": (
+            "Deliver an importable Python package with tests. Do NOT build a Telegram bot."
+        ),
+    }.get(
+        kind,
+        "Deliver a runnable Python project matching PROJECT_KIND and the user request. "
+        "Do NOT default to Telegram unless PROJECT_KIND=telegram_bot.",
+    )
+    parts.append(deliver)
+
     plan = ir_dict.get("execution_plan") or meta.get("execution_plan")
     if plan:
         parts.append("EXECUTION_PLAN_JSON=" + json.dumps(plan, ensure_ascii=False)[:1800])
@@ -42,7 +90,7 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
     if repair:
         parts.append("REPAIR_DIRECTIVE_JSON=" + json.dumps(repair, ensure_ascii=False)[:1200])
     return "\n".join(parts) if parts else (
-        "Build a complete Telegram bot project with main.py, requirements.txt, README."
+        f"Build a complete {kind or 'Python'} project with main.py, requirements.txt, README."
     )
 
 

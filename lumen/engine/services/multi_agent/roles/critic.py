@@ -58,7 +58,7 @@ class CriticAgent(Agent):
                 severity="error",
                 message=f"Missing required file: {d}",
                 path=d,
-                fix_hint=f"Create {d} with appropriate content for a Telegram bot project",
+                fix_hint=f"Create {d} matching PROJECT_KIND and the execution plan",
             ))
 
         # --- 2) Syntax AST for all Python files ---
