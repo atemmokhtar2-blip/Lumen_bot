@@ -1,0 +1,21 @@
+# Lumen Phase 3 — path-based public hosting (option A)
+# Set LUMEN_PUBLIC_BASE=https://host.lumen.example
+# Each project listens on 127.0.0.1:<internal_port>; control plane maps slug → port.
+
+{
+	email admin@lumen.example
+}
+
+host.lumen.example {
+	encode gzip
+
+	handle_path /p/* {
+		# /p/<slug>/* → upstream; replace with dynamic config or on_demand routes
+		# Example static map — production uses Caddy admin API or generated snippets
+		respond "Lumen reverse-proxy: configure per-project upstreams" 200
+	}
+
+	handle /health {
+		respond "ok" 200
+	}
+}

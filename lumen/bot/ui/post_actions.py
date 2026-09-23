@@ -209,33 +209,50 @@ async def execute_post_side_effect(
         if _surf == "http_runtime":
             try:
                 from lumen.engine.core.project_kind import http_runtime_hints, parse_kind
+                from lumen.engine.services.hosting import get_hosting_service
                 eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
                 slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
-                hints = http_runtime_hints(
-                    project_ref=str(project_ref or (root or "")),
-                    kind=parse_kind(slots.get("project_kind")),
+                kind = str(slots.get("project_kind") or "web_api")
+                proj = str(root) if root else str(project_ref or "")
+                if not proj or not Path(proj).is_dir():
+                    return "مسار المشروع غير موجود — أعد التوليد ثم انشر."
+                result = get_hosting_service().start_http_public(
+                    user_id=int(uid or 0),
+                    project_path=proj,
+                    project_kind=kind,
+                    slug=Path(proj).name,
+                    entry_point=str(slots.get("start_command") or ""),
                 )
+                inst = result.instance
+                public_url = (getattr(inst, "public_url", "") if inst else "") or ""
+                health_url = (getattr(inst, "health_url", "") if inst else "") or ""
                 ud["pending_host"] = {
-                    "project_path": str(root) if root else str(project_ref or ""),
+                    "project_path": proj,
                     "owner_user_id": uid or None,
                     "plane": "http_public",
-                    "project_kind": str(slots.get("project_kind") or "web_api"),
-                    "public_url": hints.get("public_url") or "",
-                    "health_path": hints.get("health_path") or "/health",
-                    "start_hint": hints.get("start_hint") or "",
+                    "host_mode": "http_public",
+                    "project_kind": kind,
+                    "instance_id": getattr(inst, "instance_id", "") if inst else "",
+                    "public_url": public_url,
+                    "health_path": getattr(inst, "health_path", "/health") if inst else "/health",
+                    "slug": getattr(inst, "slug", "") if inst else "",
                 }
                 warn = _persist(uid, ud)
-                url = hints.get("public_url") or "(غير مضبوط)"
-                return (
-                    f"تم تجهيز استضافة HTTP.\n"
-                    f"الرابط: {url}\n"
-                    f"فحص الصحة: {hints.get('health_path') or '/health'}\n"
-                    "التشغيل الفعلي على الـ VPS يتبع إعداد الحاوية/البروكسي."
-                    + warn
-                )
+                if not result.ok:
+                    return (result.message or "تعذر النشر") + warn
+                if public_url:
+                    return (
+                        f"تم النشر.\n"
+                        f"الرابط: {public_url}\n"
+                        f"فحص الصحة: {health_url or '/health'}\n"
+                        "افتح الرابط في المتصفح."
+                        + warn
+                    )
+                return (result.message or "تم التسجيل — اضبط LUMEN_PUBLIC_BASE") + warn
             except Exception as exc:
                 logger.exception("http post_host failed")
                 return f"تعذر تجهيز استضافة HTTP: {type(exc).__name__}"
+
         if _surf != "telegram_runtime":
             return (
                 "مسار الاستضافة غير مدعوم لهذا النوع.\n"

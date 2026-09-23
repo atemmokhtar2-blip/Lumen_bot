@@ -31,7 +31,13 @@ class HostInstance:
     public_base_url: str = ""  # stable ingress URL (Traefik/Caddy by name, not random port)
     webhook_public_url: str = ""  # https://…/v1/hooks/telegram/{instance_id}
     internal_port: int = 0  # logical service port for reverse-proxy (not random host map)
-    platform: str = "telegram"  # telegram | discord | whatsapp
+    platform: str = "telegram"  # telegram | discord | whatsapp | http
+    host_mode: str = "telegram_webhook"  # telegram_webhook | http_public
+    project_kind: str = ""  # telegram_bot | web_site | web_api | …
+    slug: str = ""  # URL slug under LUMEN_PUBLIC_BASE
+    public_url: str = ""  # browser-openable URL (Phase 3)
+    health_path: str = ""  # e.g. /health for HTTP apps
+    health_url: str = ""  # public_url + health_path
     cpu_quota: float = 0.25
     memory_mb: int = 128
     version_ref: str = ""  # git commit sha of project snapshot at deploy
@@ -56,6 +62,10 @@ class HostResult:
         if self.instance:
             inst = self.instance
             details.append(f"الحالة: {inst.status}")
+            if getattr(inst, "public_url", "") or getattr(inst, "public_base_url", ""):
+                details.append(f"الرابط: {getattr(inst, 'public_url', None) or inst.public_base_url}")
+            if getattr(inst, "host_mode", ""):
+                details.append(f"وضع الاستضافة: {inst.host_mode}")
             if inst.bot_username:
                 details.append(f"البوت: @{inst.bot_username}")
             if inst.instance_id:

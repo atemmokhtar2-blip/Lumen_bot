@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -940,6 +941,118 @@ class HostingService:
             message=msg,
             instance=inst,
         )
+
+
+    def start_http_public(
+        self,
+        *,
+        user_id: int,
+        project_path: str | Path,
+        project_kind: str = "web_api",
+        slug: str = "",
+        entry_point: str = "",
+        tenant_id: str = "",
+        start_command: str = "",
+    ) -> HostResult:
+        """PERMANENT_HOST with host_mode=http_public (Phase 3).
+
+        Registers the project in the hosting registry with a browser-openable
+        public_url when LUMEN_PUBLIC_BASE is set. Does not require a bot token.
+
+        Process/container start is deferred to the VPS worker (Docker/Caddy);
+        this method is the control-plane contract: registry + URL + kind.
+        """
+        from pathlib import Path as _Path
+        from lumen.engine.services.hosting.host_mode import (
+            HostMode,
+            host_mode_for_kind,
+            normalize_slug,
+            registry_fields,
+        )
+
+        path = _Path(project_path).resolve()
+        if not path.is_dir():
+            return HostResult(ok=False, message="مسار المشروع غير موجود")
+
+        kind = (project_kind or "web_api").strip().lower() or "web_api"
+        mode = HostMode.HTTP_PUBLIC
+        # prefer kind-derived mode (always http_public for web_*)
+        mode = host_mode_for_kind(kind)
+
+        iid = f"http-{user_id}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        slug_n = normalize_slug(slug or path.name or iid)
+        fields = registry_fields(
+            host_mode=mode,
+            project_kind=kind,
+            slug=slug_n,
+            instance_id=iid,
+        )
+
+        # entry from runtime contract if not provided
+        if not entry_point:
+            try:
+                from lumen.engine.core.project_kind import parse_kind, runtime_contract
+                pk = parse_kind(kind)
+                if pk is not None:
+                    entry_point = str(runtime_contract(pk).get("start_command") or "")
+            except Exception:
+                entry_point = start_command or "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+        if start_command:
+            entry_point = start_command
+
+        inst = HostInstance(
+            instance_id=iid,
+            user_id=int(user_id),
+            project_path=str(path),
+            tenant_id=tenant_id or "",
+            entry_point=entry_point or "",
+            status="running" if fields.get("base_configured") else "starting",
+            platform="http",
+            host_mode=fields["host_mode"],
+            project_kind=fields["project_kind"],
+            slug=fields["slug"],
+            public_url=fields["public_url"],
+            public_base_url=fields["public_url"] or fields.get("public_base_url") or "",
+            health_path=fields.get("health_path") or "/health",
+            health_url=fields.get("health_url") or "",
+            started_at=float(time.time()),
+            internal_port=8000,
+        )
+
+        self._instances[iid] = inst
+        try:
+            self._save()
+        except Exception as exc:
+            logger.exception("start_http_public save failed")
+            return HostResult(
+                ok=False,
+                message=f"تعذر حفظ سجل الاستضافة: {type(exc).__name__}",
+                instance=inst,
+            )
+
+        if not fields.get("base_configured"):
+            return HostResult(
+                ok=True,
+                message=(
+                    "تم تسجيل المشروع للاستضافة HTTP. "
+                    "اضبط LUMEN_PUBLIC_BASE على الـ VPS ثم أعد النشر للحصول على رابط عام."
+                ),
+                instance=inst,
+                details=dict(fields),
+            )
+
+        return HostResult(
+            ok=True,
+            message=(
+                "تم النشر.\n"
+                f"الرابط: {inst.public_url}\n"
+                f"فحص الصحة: {inst.health_url or inst.health_path}\n"
+                f"الأمر: {inst.entry_point}"
+            ),
+            instance=inst,
+            details=dict(fields),
+        )
+
 
     def stop(self, *, instance_id: str, user_id: int, tenant_id: str = "") -> HostResult:
         inst = self.get(instance_id, user_id=user_id, tenant_id=tenant_id or "")

@@ -6,6 +6,7 @@ Machine-readable contract: ``lumen.engine.services.hosting.contract``.
 
 from .service import HostingService, HostInstance, HostResult, get_hosting_service
 from . import contract as hosting_contract
+from .host_mode import HostMode, allocate_public_url, host_mode_for_kind
 
 __all__ = [
     "HostingService",
@@ -13,4 +14,7 @@ __all__ = [
     "HostResult",
     "get_hosting_service",
     "hosting_contract",
+    "HostMode",
+    "allocate_public_url",
+    "host_mode_for_kind",
 ]

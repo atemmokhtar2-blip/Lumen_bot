@@ -155,21 +155,23 @@ def delivery_surface(kind: ProjectKind) -> DeliverySurface:
 
 
 def http_runtime_hints(*, project_ref: str = "", kind: ProjectKind | None = None) -> dict[str, Any]:
-    import os
-    base = (os.getenv("LUMEN_PUBLIC_BASE") or "").strip().rstrip("/")
-    health = (os.getenv("LUMEN_HEALTH_PATH") or "/health").strip() or "/health"
-    if not health.startswith("/"):
-        health = "/" + health
-    slug = Path(str(project_ref)).name[:40].replace(" ", "-") if project_ref else "app"
-    if not slug:
-        slug = "app"
-    public_url = f"{base}/p/{slug}/" if base else ""
+    from lumen.engine.services.hosting.host_mode import allocate_public_url
+    slug = Path(str(project_ref)).name if project_ref else "app"
+    urls = allocate_public_url(slug=slug)
+    start = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    try:
+        if kind is not None:
+            start = str(runtime_contract(kind).get("start_command") or start)
+    except Exception:
+        pass
     return {
-        "public_url": public_url,
-        "health_path": health,
-        "health_url": (public_url.rstrip("/") + health) if public_url else "",
-        "start_hint": "uvicorn main:app --host 0.0.0.0 --port $PORT",
-        "base_configured": bool(base),
+        "public_url": urls.get("public_url") or "",
+        "health_path": urls.get("health_path") or "/health",
+        "health_url": urls.get("health_url") or "",
+        "start_hint": start,
+        "base_configured": bool(urls.get("base_configured")),
+        "slug": urls.get("slug") or "",
+        "url_scheme": urls.get("url_scheme") or "path",
     }
 
 

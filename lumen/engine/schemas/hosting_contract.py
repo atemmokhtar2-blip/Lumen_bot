@@ -49,6 +49,12 @@ class HostInstanceRecord(BaseModel):
     webhook_public_url: str = ""
     internal_port: int = 0
     platform: str = "telegram"
+    host_mode: str = Field(default="telegram_webhook", max_length=32)
+    project_kind: str = Field(default="", max_length=32)
+    slug: str = Field(default="", max_length=64)
+    public_url: str = Field(default="", max_length=512)
+    health_path: str = Field(default="", max_length=128)
+    health_url: str = Field(default="", max_length=512)
     cpu_quota: float = 0.5
     memory_mb: int = 256
     version_ref: str = Field(default="", max_length=64)
@@ -119,6 +125,12 @@ class HostInstanceRecord(BaseModel):
             webhook_public_url=self.webhook_public_url or "",
             internal_port=int(self.internal_port or 0),
             platform=self.platform or "telegram",
+            host_mode=self.host_mode or "telegram_webhook",
+            project_kind=self.project_kind or "",
+            slug=self.slug or "",
+            public_url=self.public_url or "",
+            health_path=self.health_path or "",
+            health_url=self.health_url or "",
             cpu_quota=float(self.cpu_quota or 0.5),
             memory_mb=int(self.memory_mb or 256),
             version_ref=self.version_ref or "",
