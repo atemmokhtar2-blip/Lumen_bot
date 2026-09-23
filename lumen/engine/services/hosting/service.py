@@ -1190,9 +1190,28 @@ class HostingService:
             settle_instance(inst, tenant_id=f"tg:{uid}" if uid else None)
         except Exception:
             pass
+        # Phase 3: stop local HTTP process if we spawned it
+        try:
+            if str(getattr(inst, "host_mode", "") or "") == "http_public" and inst.pid:
+                import signal
+                import os as _os
+                try:
+                    _os.kill(int(inst.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except Exception as kill_exc:
+                    logger.warning("http pid stop failed: %s", kill_exc)
+        except Exception:
+            pass
         try:
             from lumen.hosting.gateway import remove_routes_for_instance
             remove_routes_for_instance(inst.instance_id)
+        except Exception:
+            pass
+        try:
+            if str(getattr(inst, "host_mode", "") or "") == "http_public":
+                from lumen.engine.services.hosting.ingress import remove_http_path_route
+                remove_http_path_route(inst.instance_id, slug=getattr(inst, "slug", "") or "")
         except Exception:
             pass
         try:

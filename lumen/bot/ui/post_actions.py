@@ -202,10 +202,45 @@ async def execute_post_side_effect(
     if effect == "post_host":
         _surf = _surface_for_ud(ud)
         if _surf == "artifact_only":
+            # Phase 3: still register in control plane so VPS can attach base later
+            try:
+                from lumen.engine.services.hosting import get_hosting_service
+                eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+                slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+                kind = str(slots.get("project_kind") or "web_api")
+                proj = str(root) if root else str(project_ref or "")
+                if proj and Path(proj).is_dir():
+                    result = get_hosting_service().start_http_public(
+                        user_id=int(uid or 0),
+                        project_path=proj,
+                        project_kind=kind,
+                        slug=Path(proj).name,
+                        entry_point=str(slots.get("start_command") or ""),
+                    )
+                    iid = getattr(result.instance, "instance_id", "") if result.instance else ""
+                    ud["pending_host"] = {
+                        "project_path": proj,
+                        "owner_user_id": uid or None,
+                        "plane": "http_public",
+                        "host_mode": "http_public",
+                        "project_kind": kind,
+                        "instance_id": iid,
+                        "public_url": "",
+                    }
+                    warn = _persist(uid, ud)
+                    return (
+                        "تم تسجيل المشروع في مستوى التحكم.\n"
+                        "لا توجد قاعدة رابط عام (LUMEN_PUBLIC_BASE).\n"
+                        "اضبط الدومين على الـ VPS ثم أعد النشر لفتح رابط المتصفح."
+                        + warn
+                    )
+            except Exception as exc:
+                logger.exception("artifact_only register failed")
             return (
                 "لا توجد قاعدة رابط عام (LUMEN_PUBLIC_BASE).\n"
                 "حمّل ZIP أو اضبط الدومين على السيرفر ثم أعد الاستضافة."
             )
+
         if _surf == "http_runtime":
             try:
                 from lumen.engine.core.project_kind import http_runtime_hints, parse_kind

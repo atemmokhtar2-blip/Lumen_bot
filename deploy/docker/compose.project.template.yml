@@ -1,0 +1,18 @@
+# Lumen Phase 3 — per-project runtime (option A path proxy)
+# Generated conceptually: replace {{SLUG}} {{PORT}} {{PROJECT_DIR}}
+services:
+  app-{{SLUG}}:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - {{PROJECT_DIR}}:/app:ro
+    command: >
+      bash -c "pip install -q -r requirements.txt &&
+      uvicorn main:app --host 0.0.0.0 --port {{PORT}}"
+    environment:
+      PORT: "{{PORT}}"
+    ports:
+      - "127.0.0.1:{{PORT}}:{{PORT}}"
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25

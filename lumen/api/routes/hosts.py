@@ -1,3 +1,4 @@
+from pathlib import Path
 """Managed bot hosting API — sandbox-scoped paths only."""
 from __future__ import annotations
 
@@ -63,6 +64,54 @@ async def host_start(request: web.Request) -> web.Response:
             )
     project_path = str(body.get("project_path") or "").strip()
     bot_token = str(body.get("bot_token") or body.get("token") or "").strip()
+    host_mode = str(body.get("host_mode") or "").strip().lower()
+    project_kind = str(body.get("project_kind") or body.get("kind") or "").strip().lower()
+    slug = str(body.get("slug") or "").strip()
+
+    # Phase 3: HTTP public hosting — no bot token
+    if host_mode in {"http_public", "http", "web"} or project_kind in {
+        "web_site", "web_api", "cli_app", "library", "general_app",
+    }:
+        try:
+            safe_path = validate_tenant_project_path(tenant.tenant_id, project_path)
+        except ValueError as exc:
+            logger.warning("host_start http path rejected tenant=%s reason=%s", tenant.tenant_id, exc)
+            raise web.HTTPBadRequest(
+                text='{"error":"project_path_outside_sandbox"}',
+                content_type="application/json",
+            )
+        svc = get_hosting_service()
+        uid = _tenant_user_id(tenant.tenant_id)
+        result = await asyncio.to_thread(
+            lambda: svc.start_http_public(
+                user_id=uid,
+                project_path=str(safe_path),
+                project_kind=project_kind or "web_api",
+                slug=slug or Path(str(safe_path)).name,
+                tenant_id=tenant.tenant_id,
+                start_command=str(body.get("start_command") or body.get("entry_point") or ""),
+            )
+        )
+        try:
+            get_metering().record(tenant.tenant_id, host_starts=1, event="host_start_http")
+        except Exception:
+            pass
+        return web.json_response(
+            {
+                "ok": result.ok,
+                "message": result.message,
+                "host_mode": "http_public",
+                "instance": {
+                    "id": getattr(result.instance, "instance_id", None) if result.instance else None,
+                    "public_url": getattr(result.instance, "public_url", "") if result.instance else "",
+                    "slug": getattr(result.instance, "slug", "") if result.instance else "",
+                    "health_url": getattr(result.instance, "health_url", "") if result.instance else "",
+                    "status": getattr(result.instance, "status", "") if result.instance else "",
+                    "internal_port": getattr(result.instance, "internal_port", 0) if result.instance else 0,
+                },
+            },
+            status=200 if result.ok else 422,
+        )
 
     try:
         safe_path = validate_tenant_project_path(tenant.tenant_id, project_path)
