@@ -825,6 +825,13 @@ class HostingService:
             inst.cpu_quota = 0.25
             inst.memory_mb = 128
         inst.platform = "telegram"
+        inst.host_mode = "telegram_webhook"
+        inst.project_kind = "telegram_bot"
+        if not getattr(inst, "slug", ""):
+            inst.slug = str(instance_id)[:48]
+        # public_url for telegram = webhook public base when available
+        if not getattr(inst, "public_url", ""):
+            inst.public_url = str(inst.public_base_url or inst.webhook_public_url or "")
 
         # Normalize status using known constants
         try:
@@ -943,6 +950,7 @@ class HostingService:
         )
 
 
+
     def start_http_public(
         self,
         *,
@@ -954,15 +962,18 @@ class HostingService:
         tenant_id: str = "",
         start_command: str = "",
     ) -> HostResult:
-        """PERMANENT_HOST with host_mode=http_public (Phase 3).
+        """PERMANENT_HOST host_mode=http_public (Phase 3).
 
-        Registers the project in the hosting registry with a browser-openable
-        public_url when LUMEN_PUBLIC_BASE is set. Does not require a bot token.
+        Control plane:
+          1) registry (slug, kind, public_url, host_mode)
+          2) internal_port allocation
+          3) reverse-proxy route write (/p/<slug>/ → upstream)
+          4) optional local process in ENVIRONMENT=dev
 
-        Process/container start is deferred to the VPS worker (Docker/Caddy);
-        this method is the control-plane contract: registry + URL + kind.
+        Without LUMEN_PUBLIC_BASE: still registers; public_url empty (honest).
         """
         from pathlib import Path as _Path
+        import hashlib
         from lumen.engine.services.hosting.host_mode import (
             HostMode,
             host_mode_for_kind,
@@ -975,8 +986,6 @@ class HostingService:
             return HostResult(ok=False, message="مسار المشروع غير موجود")
 
         kind = (project_kind or "web_api").strip().lower() or "web_api"
-        mode = HostMode.HTTP_PUBLIC
-        # prefer kind-derived mode (always http_public for web_*)
         mode = host_mode_for_kind(kind)
 
         iid = f"http-{user_id}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
@@ -988,7 +997,13 @@ class HostingService:
             instance_id=iid,
         )
 
-        # entry from runtime contract if not provided
+        # Deterministic internal port 8000–8999
+        try:
+            h = int(hashlib.sha256(iid.encode()).hexdigest()[:6], 16)
+            internal_port = 8000 + (h % 1000)
+        except Exception:
+            internal_port = 8080
+
         if not entry_point:
             try:
                 from lumen.engine.core.project_kind import parse_kind, runtime_contract
@@ -996,28 +1011,94 @@ class HostingService:
                 if pk is not None:
                     entry_point = str(runtime_contract(pk).get("start_command") or "")
             except Exception:
-                entry_point = start_command or "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+                entry_point = ""
         if start_command:
             entry_point = start_command
+        if not entry_point:
+            entry_point = f"uvicorn main:app --host 0.0.0.0 --port {internal_port}"
+        # Expand ${PORT} for local spawn
+        entry_resolved = entry_point.replace("${PORT:-8000}", str(internal_port)).replace("$PORT", str(internal_port))
 
         inst = HostInstance(
             instance_id=iid,
             user_id=int(user_id),
             project_path=str(path),
             tenant_id=tenant_id or "",
-            entry_point=entry_point or "",
-            status="running" if fields.get("base_configured") else "starting",
+            entry_point=entry_resolved,
+            status="starting",
             platform="http",
             host_mode=fields["host_mode"],
             project_kind=fields["project_kind"],
             slug=fields["slug"],
             public_url=fields["public_url"],
-            public_base_url=fields["public_url"] or fields.get("public_base_url") or "",
+            public_base_url=fields["public_url"] or "",
             health_path=fields.get("health_path") or "/health",
             health_url=fields.get("health_url") or "",
             started_at=float(time.time()),
-            internal_port=8000,
+            internal_port=int(internal_port),
         )
+
+        # Reverse-proxy route (Caddy/Traefik dynamic when configured)
+        route_meta: dict = {}
+        try:
+            from lumen.engine.services.hosting.ingress import write_http_path_route
+            route_meta = write_http_path_route(
+                instance_id=iid,
+                slug=slug_n,
+                upstream_host="127.0.0.1",
+                upstream_port=internal_port,
+                enabled=True,
+            )
+            inst.last_diagnosis = {"ingress": route_meta}
+        except Exception as exc:
+            logger.warning("http ingress write failed: %s", exc)
+
+        # Dev: optional local process (uvicorn) so criterion can be verified without VPS
+        pid = None
+        env_name = (os.environ.get("ENVIRONMENT") or "").strip().lower()
+        spawn = (os.environ.get("LUMEN_HTTP_SPAWN_LOCAL") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        } or env_name in {"dev", "development", "test"}
+        if spawn and (path / "main.py").is_file():
+            try:
+                import subprocess
+                import sys
+                env = dict(os.environ)
+                env["PORT"] = str(internal_port)
+                # Prefer uvicorn module if available
+                cmd = [
+                    sys.executable, "-m", "uvicorn",
+                    "main:app",
+                    "--host", "127.0.0.1",
+                    "--port", str(internal_port),
+                ]
+                log_path = path / ".lumen_http.log"
+                logf = open(log_path, "a", encoding="utf-8")
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(path),
+                    env=env,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                pid = int(proc.pid)
+                inst.pid = pid
+                inst.status = "running"
+                inst.last_diagnosis = {
+                    **(inst.last_diagnosis or {}),
+                    "spawn": "local_uvicorn",
+                    "pid": pid,
+                    "port": internal_port,
+                }
+            except Exception as exc:
+                logger.warning("local http spawn failed: %s", exc)
+                inst.last_error = f"spawn:{type(exc).__name__}:{exc}"[:300]
+                # Still registered — VPS worker can start later
+                inst.status = "starting" if fields.get("base_configured") else "starting"
+        else:
+            # Production VPS: registry ready; worker/orchestrator starts container
+            inst.status = "running" if fields.get("base_configured") else "starting"
 
         self._instances[iid] = inst
         try:
@@ -1030,27 +1111,36 @@ class HostingService:
                 instance=inst,
             )
 
-        if not fields.get("base_configured"):
-            return HostResult(
-                ok=True,
-                message=(
-                    "تم تسجيل المشروع للاستضافة HTTP. "
-                    "اضبط LUMEN_PUBLIC_BASE على الـ VPS ثم أعد النشر للحصول على رابط عام."
-                ),
-                instance=inst,
-                details=dict(fields),
+        # Gateway product surface
+        try:
+            from lumen.hosting.gateway import write_routes_for_instance
+            write_routes_for_instance(iid, enabled=True)
+        except Exception:
+            pass
+
+        public = inst.public_url or ""
+        if public:
+            msg = (
+                f"تم النشر.\n"
+                f"الرابط: {public}\n"
+                f"فحص الصحة: {inst.health_url or inst.health_path}\n"
+                f"المنفذ الداخلي: {internal_port}\n"
+                f"الأمر: {inst.entry_point}"
             )
+            if pid:
+                msg += f"\nPID: {pid}"
+            if route_meta.get("written"):
+                msg += "\nتم كتابة مسار البروكسي."
+            return HostResult(ok=True, message=msg, instance=inst, details={**fields, "ingress": route_meta})
 
         return HostResult(
             ok=True,
             message=(
-                "تم النشر.\n"
-                f"الرابط: {inst.public_url}\n"
-                f"فحص الصحة: {inst.health_url or inst.health_path}\n"
-                f"الأمر: {inst.entry_point}"
+                "تم تسجيل المشروع للاستضافة HTTP. "
+                "اضبط LUMEN_PUBLIC_BASE على الـ VPS ثم أعد النشر للحصول على رابط عام."
             ),
             instance=inst,
-            details=dict(fields),
+            details={**fields, "ingress": route_meta},
         )
 
 

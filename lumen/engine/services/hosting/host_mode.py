@@ -73,7 +73,15 @@ def normalize_slug(raw: str, *, fallback: str = "app") -> str:
 
 
 def public_base() -> str:
-    return (os.getenv("LUMEN_PUBLIC_BASE") or "").strip().rstrip("/")
+    base = (os.getenv("LUMEN_PUBLIC_BASE") or "").strip().rstrip("/")
+    if base:
+        return base
+    # Fallback: derive from legacy TBE_HOST_BASE_DOMAIN (subdomain plane)
+    domain = (os.getenv("TBE_HOST_BASE_DOMAIN") or "").strip().rstrip(".")
+    if domain:
+        scheme = (os.getenv("TBE_PUBLIC_URL_SCHEME") or os.getenv("LUMEN_PUBLIC_URL_SCHEME") or "https").strip() or "https"
+        return f"{scheme}://{domain}"
+    return ""
 
 
 def url_scheme() -> UrlScheme:

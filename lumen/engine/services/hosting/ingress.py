@@ -207,6 +207,122 @@ def remove_caddy_route(instance_id: str) -> None:
     write_caddy_route(instance_id=instance_id, enabled=False)
 
 
+
+
+def http_path_prefix(slug: str) -> str:
+    """Option A path: /p/<slug>"""
+    s = (slug or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\-]", "-", s).strip("-") or "app"
+    return f"/p/{s}"
+
+
+def write_http_path_route(
+    *,
+    instance_id: str,
+    slug: str,
+    upstream_host: str = "127.0.0.1",
+    upstream_port: int = 8000,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Phase 3: reverse-proxy /p/<slug>/* → project process.
+
+    Writes Caddy + Traefik fragments when dynamic dirs are configured.
+    Without dirs, returns the intended route metadata (honest, no fake write).
+    """
+    path_prefix = http_path_prefix(slug)
+    up = f"http://{upstream_host}:{int(upstream_port)}"
+    result: dict[str, Any] = {
+        "instance_id": instance_id,
+        "slug": slug,
+        "path_prefix": path_prefix,
+        "upstream": up,
+        "written": False,
+        "caddy": False,
+        "traefik": False,
+    }
+
+    # Prefer LUMEN_PUBLIC_BASE path public URL
+    try:
+        from lumen.engine.services.hosting.host_mode import allocate_public_url
+        urls = allocate_public_url(slug=slug, instance_id=instance_id)
+        result["public_url"] = urls.get("public_url") or ""
+    except Exception:
+        result["public_url"] = ""
+
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", (instance_id or slug or "app"))[:64]
+
+    # Caddy fragment
+    cdir = caddy_dynamic_dir()
+    if cdir and enabled:
+        try:
+            cdir.mkdir(parents=True, exist_ok=True)
+            cpath = cdir / f"lumen-http-{safe}.caddy"
+            body = (
+                f"# lumen http {instance_id} slug={slug}\n"
+                f"handle_path {path_prefix}/* {{\n"
+                f"\treverse_proxy {up}\n"
+                f"}}\n"
+            )
+            cpath.write_text(body, encoding="utf-8")
+            result["caddy"] = True
+            result["written"] = True
+            result["caddy_path"] = str(cpath)
+        except Exception as exc:
+            logger.warning("write http caddy route failed: %s", exc)
+    elif cdir and not enabled:
+        try:
+            (cdir / f"lumen-http-{safe}.caddy").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # Traefik fragment
+    tdir = traefik_dynamic_dir()
+    if tdir and enabled:
+        try:
+            tdir.mkdir(parents=True, exist_ok=True)
+            tpath = tdir / f"lumen-http-{safe}.yml"
+            yaml_body = "\n".join([
+                "# lumen http path router — generated",
+                "http:",
+                "  routers:",
+                f"    lumen-http-{safe}:",
+                f'      rule: "PathPrefix(`{path_prefix}`)"',
+                "      entryPoints:",
+                "        - websecure",
+                "        - web",
+                f"      service: lumen-http-svc-{safe}",
+                "      priority: 150",
+                "  services:",
+                f"    lumen-http-svc-{safe}:",
+                "      loadBalancer:",
+                "        servers:",
+                f'          - url: "{up}"',
+                "        passHostHeader: true",
+                "",
+            ])
+            tpath.write_text(yaml_body, encoding="utf-8")
+            result["traefik"] = True
+            result["written"] = True
+            result["traefik_path"] = str(tpath)
+        except Exception as exc:
+            logger.warning("write http traefik route failed: %s", exc)
+    elif tdir and not enabled:
+        try:
+            (tdir / f"lumen-http-{safe}.yml").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return result
+
+
+def remove_http_path_route(instance_id: str, slug: str = "") -> dict[str, Any]:
+    return write_http_path_route(
+        instance_id=instance_id,
+        slug=slug or instance_id,
+        enabled=False,
+    )
+
+
 __all__ = [
     "base_domain",
     "public_url_for_instance",
@@ -218,4 +334,7 @@ __all__ = [
     "remove_caddy_route",
     "traefik_dynamic_dir",
     "caddy_dynamic_dir",
+    "http_path_prefix",
+    "write_http_path_route",
+    "remove_http_path_route",
 ]

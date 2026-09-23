@@ -67,7 +67,34 @@ def nginx_snippet(instance_id: str, upstream: str = "") -> str:
     )
 
 
+def write_http_routes_for_instance(
+    instance_id: str,
+    *,
+    slug: str,
+    port: int = 8000,
+    enabled: bool = True,
+) -> dict:
+    """Phase 3: /p/<slug> → upstream for HTTP-public hosts."""
+    out: dict = {"instance_id": instance_id, "slug": slug, "enabled": enabled}
+    try:
+        from lumen.engine.services.hosting.ingress import write_http_path_route
+        out["route"] = write_http_path_route(
+            instance_id=instance_id,
+            slug=slug,
+            upstream_port=int(port or 8000),
+            enabled=enabled,
+        )
+        out["ok"] = True
+        out["public_url"] = (out["route"] or {}).get("public_url") or ""
+    except Exception as exc:
+        out["ok"] = False
+        out["error"] = type(exc).__name__
+        logger.exception("write_http_routes failed")
+    return out
+
+
 def gateway_mode() -> str:
+
     if (os.environ.get("TBE_TRAEFIK_DYNAMIC_DIR") or "").strip():
         return "traefik"
     if (os.environ.get("TBE_CADDY_DYNAMIC_DIR") or "").strip():
@@ -80,4 +107,5 @@ __all__ = [
     "remove_routes_for_instance",
     "nginx_snippet",
     "gateway_mode",
+    "write_http_routes_for_instance",
 ]
