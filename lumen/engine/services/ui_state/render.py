@@ -15,6 +15,11 @@ class HostRow:
     status: str
     bot_username: str = ""
     backend: str = ""
+    # Phase 4 — mixed platform projects
+    project_kind: str = ""
+    host_mode: str = ""
+    public_url: str = ""
+    slug: str = ""
 
 
 @dataclass
@@ -123,22 +128,49 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         )
 
     if phase == EngineUiPhase.GEN_DONE:
-        body = "اختر الخطوة التالية من الأزرار."
-        if state.project_ref:
-            body = f"المسار: {state.project_ref}\n\n" + body
-        if state.plane and state.plane.value != "none":
-            body = f"المستوى: {state.plane.value}\n" + body
+        body = (state.project_ref or facts.active_project or "—").strip() or "—"
+        kind = (state.slots.get("project_kind") or "").strip()
+        surface = (state.slots.get("delivery_surface") or "").strip()
+        public_url = (state.slots.get("public_url") or "").strip()
+        label = kind or "مشروع"
+        try:
+            from lumen.engine.core.project_kind import label_ar, parse_kind
+            pk = parse_kind(kind)
+            if pk is not None:
+                label = label_ar(pk)
+        except Exception:
+            pass
+        if surface == "telegram_runtime" or kind == "telegram_bot":
+            options = (
+                "• 🧪 تجربة في الشات — تشغيل مؤقت\n"
+                "• 🚀 استضافة دائمة\n"
+                "• 📦 ZIP أو معاينة الملفات"
+            )
+        elif surface == "http_runtime" or kind in {"web_site", "web_api"}:
+            url_line = f"• 🌐 الرابط: {public_url}\n" if public_url.startswith("http") else "• 🌐 نشر للحصول على رابط عام\n"
+            options = (
+                url_line
+                + "• 🚀 نشر / استضافة HTTP\n"
+                + "• 📜 سجلات · ⏹ إيقاف\n"
+                + "• 📦 ZIP أو معاينة الملفات"
+            )
+        else:
+            options = (
+                "• 📦 ZIP أو معاينة الملفات\n"
+                + "• 🚀 استضافة عند توفر الدومين\n"
+                + "• 📊 لوحة التحكم"
+            )
+        sections = [
+            ("النوع", label),
+            ("المشروع", body[:200]),
+            ("🔧 الخيارات", options),
+        ]
+        if public_url.startswith("http"):
+            sections.insert(2, ("الرابط العام", public_url))
         return html_card(
             "🎉 اكتمل التوليد",
-            [
-                ("المشروع", body),
-                (
-                    "🔧 الخيارات",
-                    "• 🧪 تجربة في الشات — تشغيل مؤقت\n"
-                    "• 🚀 استضافة دائمة\n"
-                    "• 📦 ZIP أو معاينة",
-                ),
-            ],
+            sections,
+            subtitle="منصة بناء وتشغيل تطبيقات",
         )
 
 
@@ -231,33 +263,62 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
     if phase == EngineUiPhase.DASHBOARD:
         host_lines: list[str] = []
         shown = 0
+        slots = state.slots or {}
         for i in range(5):
-            iid = (state.slots or {}).get(f"dash_h{i}") or ""
+            iid = slots.get(f"dash_h{i}") or ""
             if not iid:
                 continue
-            st = (state.slots or {}).get(f"dash_s{i}") or "?"
-            un = (state.slots or {}).get(f"dash_u{i}") or "—"
-            be = (state.slots or {}).get(f"dash_b{i}") or "—"
-            host_lines.append(f"#{i + 1} {iid[-12:]} | {st} | @{un} | {be}")
+            st = slots.get(f"dash_s{i}") or "?"
+            kind = slots.get(f"dash_k{i}") or ""
+            mode = slots.get(f"dash_m{i}") or ""
+            url = slots.get(f"dash_url{i}") or ""
+            slug = slots.get(f"dash_slug{i}") or ""
+            un = slots.get(f"dash_u{i}") or ""
+            kind_tag = {
+                "telegram_bot": "🤖 بوت",
+                "web_site": "🌐 موقع",
+                "web_api": "🔌 API",
+            }.get(kind, "📦 مشروع")
+            if mode == "http_public" or kind in {"web_site", "web_api"}:
+                name = slug or (url[-30:] if url else iid[-12:])
+                line = f"#{i + 1} {kind_tag} | {st} | {name}"
+                if url.startswith("http"):
+                    line += f"\n   🔗 {url}"
+            else:
+                un_s = f"@{un}" if un else "—"
+                line = f"#{i + 1} {kind_tag} | {st} | {un_s}"
+            host_lines.append(line)
             shown += 1
         if shown == 0 and facts.hosts:
             for h in facts.hosts[:5]:
-                un = f"@{h.bot_username}" if h.bot_username else "—"
-                host_lines.append(
-                    f"• {h.instance_id} | {h.status} | {un} | {h.backend or '—'}"
-                )
+                kind = getattr(h, "project_kind", "") or ""
+                mode = getattr(h, "host_mode", "") or ""
+                url = getattr(h, "public_url", "") or ""
+                slug = getattr(h, "slug", "") or ""
+                kind_tag = {
+                    "telegram_bot": "🤖 بوت",
+                    "web_site": "🌐 موقع",
+                    "web_api": "🔌 API",
+                }.get(kind, "📦 مشروع")
+                if mode == "http_public" or kind in {"web_site", "web_api"}:
+                    line = f"• {kind_tag} | {h.status} | {slug or h.instance_id[-12:]}"
+                    if url:
+                        line += f"\n   🔗 {url}"
+                else:
+                    un = f"@{h.bot_username}" if h.bot_username else "—"
+                    line = f"• {kind_tag} | {h.status} | {un}"
+                host_lines.append(line)
             shown = len(facts.hosts[:5])
         if shown == 0:
             host_lines = [
-                "لا مثيلات HostService لهذا الحساب.",
-                "بعد التوليد: استضافة دائمة + توكن لظهور المثيل هنا.",
+                "لا مشاريع مستضافة لهذا الحساب بعد.",
+                "أنشئ مشروعاً (بوت أو موقع) ثم انشره ليظهر هنا مع الحالة والرابط.",
             ]
         sections = [
-            ("المثيلات", "\n".join(host_lines)),
+            ("المشاريع", "\n".join(host_lines)),
             (
                 "الأزرار",
-                "🔄 تحديث · 📡 حالة · 🧪 تجربة · 🚀 نشر\n"
-                "⏹ إيقاف · 🩺 تشخيص — مباشرة من HostService.",
+                "🔄 تحديث · 🌐 رابط · 📡 حالة · ⏹ إيقاف · 🩺 تشخيص",
             ),
         ]
         if facts.active_project:
@@ -265,8 +326,9 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         return html_card(
             "📊 لوحة المشاريع والاستضافة",
             sections,
-            subtitle="إدارة المثيلات من HostService",
+            subtitle="بوتات + مواقع — حالة ورابط",
         )
+
 
     if phase == EngineUiPhase.BILLING:
         bal = int(facts.credits_available or facts.credits_balance or 0)

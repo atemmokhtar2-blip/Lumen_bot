@@ -10,6 +10,33 @@ from .project_resolve import bind_active_repo, resolve_entry_point, resolve_proj
 
 logger = logging.getLogger("lumen_bot.ui")
 
+def _merge_host_slots(ud: dict, *, public_url: str = "", instance_id: str = "", kind: str = "", slug: str = "") -> None:
+    """Keep engine_ui.slots in sync so GEN_DONE / dashboard buttons see URL."""
+    try:
+        eu = ud.get("engine_ui")
+        if not isinstance(eu, dict):
+            eu = {}
+            ud["engine_ui"] = eu
+        slots = eu.get("slots")
+        if not isinstance(slots, dict):
+            slots = {}
+            eu["slots"] = slots
+        if public_url:
+            slots["public_url"] = str(public_url)[:300]
+        if instance_id:
+            slots["host_instance_id"] = str(instance_id)[:128]
+        if kind:
+            slots["project_kind"] = str(kind)[:32]
+        if slug:
+            slots["slug"] = str(slug)[:64]
+        if not slots.get("delivery_surface"):
+            slots["delivery_surface"] = "http_runtime"
+        slots["host_mode"] = "http_public"
+    except Exception:
+        pass
+
+
+
 _SECRET_NAME_PARTS = (
     "token", "secret", "password", "credential", ".env", "api_key", "private",
 )
@@ -227,6 +254,7 @@ async def execute_post_side_effect(
                         "instance_id": iid,
                         "public_url": "",
                     }
+                    _merge_host_slots(ud, public_url=str(ud.get("pending_host", {}).get("public_url") or ""), instance_id=str(ud.get("pending_host", {}).get("instance_id") or ""), kind=str(ud.get("pending_host", {}).get("project_kind") or ""), slug=str(ud.get("pending_host", {}).get("slug") or ""))
                     warn = _persist(uid, ud)
                     return (
                         "تم تسجيل المشروع في مستوى التحكم.\n"
@@ -272,6 +300,7 @@ async def execute_post_side_effect(
                     "health_path": getattr(inst, "health_path", "/health") if inst else "/health",
                     "slug": getattr(inst, "slug", "") if inst else "",
                 }
+                _merge_host_slots(ud, public_url=str(ud.get("pending_host", {}).get("public_url") or ""), instance_id=str(ud.get("pending_host", {}).get("instance_id") or ""), kind=str(ud.get("pending_host", {}).get("project_kind") or ""), slug=str(ud.get("pending_host", {}).get("slug") or ""))
                 warn = _persist(uid, ud)
                 if not result.ok:
                     return (result.message or "تعذر النشر") + warn

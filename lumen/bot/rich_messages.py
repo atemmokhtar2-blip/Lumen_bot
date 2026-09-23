@@ -78,7 +78,7 @@ def build_dashboard_rich_html(
     parts: list[str] = ["<h3>لوحة المشاريع والاستضافة</h3>"]
     if active_project:
         parts.append(f"<p><b>مشروع الجلسة:</b> {escape_rich(active_project)}</p>")
-    headers = ["#", "المشروع", "الحالة", "اليوزر", "الخلفية"]
+    headers = ["#", "النوع", "الحالة", "الاسم", "الرابط"]
     if empty or not host_rows:
         # Always render a native table so the feature is visible even with 0 hosts
         parts.append(
@@ -92,7 +92,7 @@ def build_dashboard_rich_html(
             )
         )
         parts.append(
-            "<p>أنشئ بوتاً من الزر أدناه، ثم انشره للاستضافة الدائمة ليظهر في الجدول.</p>"
+            "<p>أنشئ مشروعاً (بوت أو موقع) ثم انشره ليظهر هنا مع الحالة والرابط.</p>"
         )
     else:
         parts.append(
@@ -105,7 +105,7 @@ def build_dashboard_rich_html(
                 compact=True,
             )
         )
-    parts.append("<p><b>إجراءات:</b> تحديث · حالة · تجربة · نشر</p>")
+    parts.append("<p><b>إجراءات:</b> تحديث · رابط · حالة · إيقاف · تشخيص</p>")
     return "".join(parts)
 
 
@@ -117,13 +117,22 @@ def collect_dashboard_rows(state: Any, facts: Any) -> tuple[list[list[str]], boo
         if not iid:
             continue
         st = slots.get(f"dash_s{i}") or "?"
-        un = slots.get(f"dash_u{i}") or "—"
-        be = slots.get(f"dash_b{i}") or "—"
-        short = iid[-12:] if len(str(iid)) > 12 else str(iid)
-        un_s = str(un)
-        if un_s and un_s != "—" and not un_s.startswith("@"):
-            un_s = f"@{un_s}"
-        rows.append([str(i + 1), short, str(st), un_s, str(be)])
+        kind = slots.get(f"dash_k{i}") or "—"
+        mode = slots.get(f"dash_m{i}") or ""
+        url = slots.get(f"dash_url{i}") or ""
+        slug = slots.get(f"dash_slug{i}") or ""
+        un = slots.get(f"dash_u{i}") or ""
+        kind_label = {
+            "telegram_bot": "بوت",
+            "web_site": "موقع",
+            "web_api": "API",
+        }.get(kind, kind or "—")
+        if mode == "http_public" or kind in {"web_site", "web_api"}:
+            name = slug or (url[-20:] if url else iid[-10:])
+        else:
+            name = f"@{un}" if un else iid[-10:]
+        url_s = (url[:28] + "…") if len(url) > 28 else (url or "—")
+        rows.append([str(i + 1), kind_label[:12], str(st), str(name)[:20], url_s])
     if not rows and getattr(facts, "hosts", None):
         for i, h in enumerate(list(facts.hosts)[:8]):
             kind = str(getattr(h, "project_kind", None) or getattr(h, "kind", None) or "—")
