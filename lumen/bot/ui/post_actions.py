@@ -358,6 +358,66 @@ async def execute_post_side_effect(
             "أرسل توكن البوت من @BotFather الآن لبدء الاستضافة الدائمة."
         )
 
+    
+    if effect == "post_open_url":
+        url = ""
+        eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+        slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+        url = str(slots.get("public_url") or ud.get("pending_host", {}).get("public_url") or "").strip()
+        if not url:
+            # last hosted instance for user
+            try:
+                from lumen.engine.services.hosting import get_hosting_service
+                items = get_hosting_service().list_for_user(int(uid or 0))
+                for inst in sorted(items, key=lambda x: float(getattr(x, "started_at", 0) or 0), reverse=True):
+                    u = str(getattr(inst, "public_url", "") or getattr(inst, "public_base_url", "") or "")
+                    if u.startswith("http"):
+                        url = u
+                        break
+            except Exception:
+                pass
+        if url.startswith("http"):
+            return f"🌐 الرابط:\n{url}\nافتحه في المتصفح."
+        return "لا يوجد رابط عام بعد — انشر المشروع أولاً أو اضبط LUMEN_PUBLIC_BASE."
+
+    if effect == "post_logs":
+        try:
+            from lumen.engine.services.hosting import get_hosting_service
+            svc = get_hosting_service()
+            iid = ""
+            eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+            slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+            iid = str(ud.get("pending_host", {}).get("instance_id") or slots.get("host_instance_id") or "")
+            if not iid:
+                items = svc.list_for_user(int(uid or 0))
+                if items:
+                    iid = str(getattr(items[0], "instance_id", "") or "")
+            if not iid:
+                return "لا يوجد مشروع مستضاف لعرض سجلاته."
+            result = svc.logs(user_id=int(uid or 0), instance_id=iid, limit=40)
+            return (result.message or "لا سجلات")[:3500]
+        except Exception as exc:
+            logger.exception("post_logs failed")
+            return f"تعذر جلب السجلات: {type(exc).__name__}"
+
+    if effect == "post_stop":
+        try:
+            from lumen.engine.services.hosting import get_hosting_service
+            svc = get_hosting_service()
+            iid = str(ud.get("pending_host", {}).get("instance_id") or "")
+            if not iid:
+                items = svc.list_for_user(int(uid or 0))
+                if items:
+                    iid = str(getattr(items[0], "instance_id", "") or "")
+            if not iid:
+                return "لا يوجد مشروع لإيقافه."
+            result = svc.stop(instance_id=iid, user_id=int(uid or 0))
+            return result.message or ("تم الإيقاف" if result.ok else "تعذر الإيقاف")
+        except Exception as exc:
+            logger.exception("post_stop failed")
+            return f"تعذر الإيقاف: {type(exc).__name__}"
+
+
     if effect == "post_zip":
         assert root is not None
         try:

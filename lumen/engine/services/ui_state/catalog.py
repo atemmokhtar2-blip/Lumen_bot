@@ -350,6 +350,21 @@ UI_ACTIONS: dict[str, UiActionSpec] = {
         "Permanent host plane",
         frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONN_GITHUB}),
     ),
+    "post_open_url": UiActionSpec(
+        "post_open_url",
+        "Open public URL",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONTEXT}),
+    ),
+    "post_logs": UiActionSpec(
+        "post_logs",
+        "Project logs",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONTEXT}),
+    ),
+    "post_stop": UiActionSpec(
+        "post_stop",
+        "Stop hosted project",
+        frozenset({EngineUiPhase.GEN_DONE, EngineUiPhase.DASHBOARD, EngineUiPhase.HOME, EngineUiPhase.CONTEXT}),
+    ),
     "post_zip": UiActionSpec(
         "post_zip",
         "Send ZIP",

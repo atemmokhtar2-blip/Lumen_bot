@@ -71,6 +71,20 @@ def _make_inline_button(btn: UiButton, *, user_id: int):
     from telegram import InlineKeyboardButton
 
     text = (btn.text or "")[:64]
+    url = (getattr(btn, "url", "") or "").strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        # URL button — open in browser (no signed callback)
+        kwargs = {"text": text, "url": url[:512]}
+        style = _style_for_action(btn.action, getattr(btn, "style", "") or "")
+        if style:
+            kwargs["style"] = style
+            kwargs["api_kwargs"] = {"style": style}
+        try:
+            return InlineKeyboardButton(**kwargs)
+        except TypeError:
+            kwargs.pop("style", None)
+            kwargs.pop("api_kwargs", None)
+            return InlineKeyboardButton(text=text, url=url[:512])
     callback_data = encode_signed(btn.action, btn.arg, user_id=int(user_id or 0))
     style = _style_for_action(btn.action, getattr(btn, "style", "") or "")
     kwargs = {"text": text, "callback_data": callback_data}

@@ -388,14 +388,24 @@ async def deliver_generation_result(
                     f"فحص الصحة: {health}\n"
                     "اختر:"
                 )
-                rows = (
+                rows_list = []
+                if url.startswith("http"):
+                    rows_list.append((UiButton("🌐 فتح الرابط", "post_open_url", style="success", url=url),))
+                rows_list.append((UiButton("🚀 نشر / استضافة", "post_host", style="success"),))
+                rows_list.append(
+                    (
+                        UiButton("📜 سجلات", "post_logs", style="primary"),
+                        UiButton("⏹ إيقاف", "post_stop", style="danger"),
+                    )
+                )
+                rows_list.append(
                     (
                         UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
                         UiButton("👁 معاينة الملفات", "post_preview", style="primary"),
-                    ),
-                    (UiButton("🚀 استضافة HTTP", "post_host", style="success"),),
-                    (UiButton("✨ مشروع آخر", "open_generate", style="success"),),
+                    )
                 )
+                rows_list.append((UiButton("✨ مشروع آخر", "open_generate", style="success"),))
+                rows = tuple(rows_list)
                 markup = build_inline_keyboard(rows, user_id=uid)
             else:
                 body = (

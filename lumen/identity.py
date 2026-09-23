@@ -33,10 +33,10 @@ REDIS_KEY_PREFIX: str = "lumen:"
 
 # ── Chat / LLM — who the model is ──────────────────────────────────────────
 SYSTEM_PROMPT_IDENTITY_AR: str = (
-    "أنت Lumen: منصة توليد بوتات تيليجرام احترافية."
+    "أنت Lumen: منصة بناء وتشغيل تطبيقات (بوتات، مواقع، APIs)."
 )
 SYSTEM_PROMPT_IDENTITY_LONG_AR: str = (
-    "أنت Lumen: منصة توليد بوتات تيليجرام احترافية ومساعد هندسي للمشاريع."
+    "أنت Lumen: منصة بناء وتشغيل تطبيقات (بوتات، مواقع، APIs) ومساعد هندسي للمشاريع."
 )
 SYSTEM_PROMPT_ENGINE_NOTE_AR: str = (
     "لا تسحب مستودعات ولا تعدّل ملفات بنفسك — التنفيذ دائمًا على محركات Lumen."

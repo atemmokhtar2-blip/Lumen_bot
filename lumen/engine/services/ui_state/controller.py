@@ -36,7 +36,7 @@ def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     # Bot API 9.4 native colors: success=green, primary=blue, danger=red
     return (
         (
-            UiButton("✨ إنشاء بوت", "open_generate", style="success"),
+            UiButton("✨ إنشاء مشروع", "open_generate", style="success"),
             UiButton("📦 القوالب", "open_templates", style="success"),
         ),
         (
@@ -232,9 +232,10 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
         return _with_nav((), phase)
     if phase == EngineUiPhase.GEN_DONE:
         rows = []
-        # Path split by ProjectKind / delivery_surface (Phase 1 — no wrong buttons)
+        # Phase 4: buttons by project kind / delivery surface
         surface = (state.slots.get("delivery_surface") or "").strip()
         kind = (state.slots.get("project_kind") or "").strip()
+        public_url = (state.slots.get("public_url") or "").strip()
         if not surface and kind:
             try:
                 from lumen.engine.core.project_kind import delivery_surface, parse_kind
@@ -252,9 +253,19 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                     )
                 )
             elif surface == "http_runtime":
-                rows.append((UiButton("🚀 استضافة HTTP", "post_host", style="success"),))
-            # artifact_only / unknown: ZIP + preview only (no trial/host)
-            # All kinds get files
+                # Site/API: open URL / host / logs / stop after host
+                if public_url.startswith("http"):
+                    rows.append(
+                        (UiButton("🌐 فتح الرابط", "post_open_url", style="success", url=public_url),)
+                    )
+                rows.append((UiButton("🚀 نشر / استضافة", "post_host", style="success"),))
+                rows.append(
+                    (
+                        UiButton("📜 سجلات", "post_logs", style="primary"),
+                        UiButton("⏹ إيقاف", "post_stop", style="danger"),
+                    )
+                )
+            # All kinds: ZIP + preview
             rows.append(
                 (
                     UiButton("📦 تحميل ZIP", "post_zip", style="primary"),
@@ -273,17 +284,33 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
                 continue
             st = (state.slots.get(f"dash_s{i}") or "?")[:10]
             un = (state.slots.get(f"dash_u{i}") or "")[:16]
-            label = f"#{i+1} {st}"
-            if un:
-                label = f"#{i+1} @{un} {st}"
+            kind = (state.slots.get(f"dash_k{i}") or "")[:12]
+            mode = (state.slots.get(f"dash_m{i}") or "")[:12]
+            # Phase 4: show kind + status (+ bot username or slug)
+            kind_tag = {
+                "telegram_bot": "🤖",
+                "web_site": "🌐",
+                "web_api": "🔌",
+            }.get(kind, "📦")
+            if mode == "http_public" or kind in {"web_site", "web_api"}:
+                slug = (state.slots.get(f"dash_slug{i}") or "")[:16]
+                label = f"{kind_tag}#{i+1} {slug or 'web'} {st}"
+            elif un:
+                label = f"{kind_tag}#{i+1} @{un} {st}"
+            else:
+                label = f"{kind_tag}#{i+1} {st}"
             rows.append((UiButton(label[:40], "dash_status", str(i)),))
-            rows.append(
-                (
-                    UiButton("📡 حالة", "dash_status", str(i), style="primary"),
-                    UiButton("⏹ إيقاف", "dash_stop", str(i), style="danger"),
-                    UiButton("🩺 تشخيص", "dash_diagnose", str(i), style="primary"),
-                )
-            )
+            # Phase 4: mixed actions — HTTP gets open URL
+            url_i = (state.slots.get(f"dash_url{i}") or "").strip()
+            act_row = []
+            if url_i.startswith("http"):
+                act_row.append(UiButton("🌐 رابط", "post_open_url", str(i), style="success", url=url_i))
+            act_row.append(UiButton("📡 حالة", "dash_status", str(i), style="primary"))
+            act_row.append(UiButton("⏹ إيقاف", "dash_stop", str(i), style="danger"))
+            act_row.append(UiButton("🩺 تشخيص", "dash_diagnose", str(i), style="primary"))
+            # chunk into rows of 2
+            for j in range(0, len(act_row), 2):
+                rows.append(tuple(act_row[j : j + 2]))
         rows.append(
             (
                 UiButton("🔄 تحديث القائمة", "open_dashboard", style="primary"),
@@ -967,6 +994,15 @@ def apply_action(
                 new.plane = RuntimePlaneHint.PERMANENT_HOST
                 msg = "استضافة دائمة — أرسل توكن البوت من @BotFather."
                 post_fx = "post_host"
+    elif action_id == "post_open_url":
+        msg = "فتح الرابط..."
+        post_fx = "post_open_url"
+    elif action_id == "post_logs":
+        msg = "جلب السجلات..."
+        post_fx = "post_logs"
+    elif action_id == "post_stop":
+        msg = "إيقاف المشروع..."
+        post_fx = "post_stop"
     elif action_id == "post_zip":
         if not (new.project_ref or "").strip():
             msg = "لا يوجد مشروع لـ ZIP."

@@ -126,17 +126,24 @@ def collect_dashboard_rows(state: Any, facts: Any) -> tuple[list[list[str]], boo
         rows.append([str(i + 1), short, str(st), un_s, str(be)])
     if not rows and getattr(facts, "hosts", None):
         for i, h in enumerate(list(facts.hosts)[:8]):
-            un = getattr(h, "bot_username", None) or "—"
+            kind = str(getattr(h, "project_kind", None) or getattr(h, "kind", None) or "—")
+            mode = str(getattr(h, "host_mode", None) or "")
+            un = getattr(h, "bot_username", None) or ""
             un_s = str(un)
-            if un_s and un_s != "—" and not un_s.startswith("@"):
+            if un_s and not un_s.startswith("@"):
                 un_s = f"@{un_s}"
+            pub = str(getattr(h, "public_url", None) or getattr(h, "public_base_url", None) or "")
+            if mode == "http_public" or kind in {"web_site", "web_api"}:
+                label = str(getattr(h, "slug", None) or pub[-24:] or "web")
+            else:
+                label = un_s or "—"
             rows.append(
                 [
                     str(i + 1),
-                    str(getattr(h, "instance_id", "") or "")[-12:],
+                    kind[:12] if kind != "—" else (mode or "—")[:12],
                     str(getattr(h, "status", "") or "?"),
-                    un_s,
-                    str(getattr(h, "backend", None) or "—"),
+                    label[:20],
+                    (pub[:28] + "…") if len(pub) > 28 else (pub or "—"),
                 ]
             )
     return rows, len(rows) == 0

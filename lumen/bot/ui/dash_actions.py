@@ -41,6 +41,15 @@ def sync_dashboard_slots(user_id: int, state_slots: dict[str, str]) -> dict[str,
             be = str(getattr(inst, "sandbox_backend", "") or "")
             if be:
                 slots[f"dash_b{i}"] = be[:20]
+            # Phase 4: mixed platform dashboard
+            slots[f"dash_k{i}"] = str(getattr(inst, "project_kind", "") or "")[:24]
+            slots[f"dash_m{i}"] = str(getattr(inst, "host_mode", "") or "")[:24]
+            pub = str(getattr(inst, "public_url", "") or getattr(inst, "public_base_url", "") or "")
+            if pub:
+                slots[f"dash_url{i}"] = pub[:200]
+            slug = str(getattr(inst, "slug", "") or "")
+            if slug:
+                slots[f"dash_slug{i}"] = slug[:48]
         slots["dash_count"] = str(len(items))
     except Exception:
         logger.exception("sync_dashboard_slots failed")
