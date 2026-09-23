@@ -79,6 +79,21 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
         explicit=package.get("project_kind") or package.get("kind"),
     )
     km = kind_metadata(kind)
+    # Phase 2: formal acceptance criteria from kind (anti-hallucination contract)
+    _acc_crit = []
+    try:
+        from lumen.engine.core.ir import AcceptanceCriterion
+        for i, hint in enumerate(km.get("acceptance_hints") or []):
+            _acc_crit.append(
+                AcceptanceCriterion(
+                    id=f"kind_{i}_{kind.value}",
+                    description=str(hint),
+                    kind="kind_gate",
+                )
+            )
+    except Exception:
+        _acc_crit = []
+
 
     ir = BuildIR.from_dict(
         {
@@ -89,7 +104,7 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
             "capabilities_matched": matched,
             "capabilities_gap": gap,
             "integrations": integrations,
-            "acceptance": [],
+            "acceptance": _acc_crit,
             "engine_mode": mode.value,
             "confidence": conf,
             "model": package.get("model") or "rules",
@@ -293,12 +308,29 @@ def _finalize(result: Any, ir: BuildIR) -> Any:
             acc = check_project_against_ir(str(path), ir)
             meta["ir_acceptance"] = acc
             if not acc.get("ok"):
-                # Soft fail: keep success but flag for delivery layer
-                meta["ir_acceptance_soft_fail"] = True
-                logger.warning(
-                    "IR acceptance missing features: %s",
-                    acc.get("missing_features"),
-                )
+                pk = str(meta.get("project_kind") or getattr(ir, "project_kind", "") or "").lower()
+                # Phase 2: hard-fail for web/cli/library — never ship wrong-kind projects
+                if pk in {"web_site", "web_api", "cli_app", "library"}:
+                    result.success = False
+                    errs = list(getattr(result, "errors", None) or [])
+                    errs.append(
+                        "ir_acceptance_failed:"
+                        + ",".join(str(x) for x in (acc.get("missing_features") or [])[:8])
+                    )
+                    result.errors = errs
+                    meta["ir_acceptance_hard_fail"] = True
+                    logger.warning(
+                        "IR acceptance HARD fail kind=%s missing=%s",
+                        pk,
+                        acc.get("missing_features"),
+                    )
+                else:
+                    # Telegram: soft flag only (preferred_keys may be aspirational)
+                    meta["ir_acceptance_soft_fail"] = True
+                    logger.warning(
+                        "IR acceptance missing features: %s",
+                        acc.get("missing_features"),
+                    )
         except Exception as exc:
             meta["ir_acceptance_error"] = f"{type(exc).__name__}:{exc}"
 
