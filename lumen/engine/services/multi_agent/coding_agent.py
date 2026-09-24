@@ -205,6 +205,23 @@ def run_coding_session(
             meta.update(kind_metadata(_pk))
             ir_hint["metadata"] = meta
             ir_hint["project_kind"] = _pk.value
+        try:
+            from lumen.engine.core.language_runtime import resolve_language, language_metadata
+            _lr, _lc, _ln = resolve_language(
+                str(goal or ""),
+                explicit=hint.get("runtime_language") or hint.get("language")
+                or (hint.get("metadata") or {}).get("language")
+                or (hint.get("metadata") or {}).get("runtime_language"),
+            )
+            ir_hint["runtime_language"] = _lr.value
+            ir_hint["language"] = _lr.value
+            if isinstance(ir_hint.get("metadata"), dict):
+                ir_hint["metadata"].update(language_metadata(_lr, confidence=_lc, note=_ln, kind=_pk.value))
+            else:
+                ir_hint["metadata"] = language_metadata(_lr, confidence=_lc, note=_ln, kind=_pk.value)
+        except Exception:
+            ir_hint.setdefault("runtime_language", "python")
+
         if not (work / "main.py").exists() and not (work / "src" / "__init__.py").exists():
             seed_workspace(work, _pk)
     except Exception:
@@ -314,7 +331,7 @@ def run_coding_session(
         agent_acc = {}
         try:
             from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
-            agent_acc = check_agent_project(work, goal=goal, project_kind=str((getattr(state, "metadata", None) or {}).get("project_kind") or (ir_hint or {}).get("project_kind") or ""))
+            agent_acc = check_agent_project(work, goal=goal, project_kind=str((getattr(state, "metadata", None) or {}).get("project_kind") or (ir_hint or {}).get("project_kind") or ""), language=str((getattr(state, "metadata", None) or {}).get("language") or (ir_hint or {}).get("runtime_language") or (ir_hint or {}).get("language") or "python"))
             if not agent_acc.get("ok"):
                 ok = False
         except Exception as _aa:

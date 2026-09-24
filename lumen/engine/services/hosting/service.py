@@ -957,6 +957,7 @@ class HostingService:
         user_id: int,
         project_path: str | Path,
         project_kind: str = "web_api",
+        language: str = "python",
         slug: str = "",
         entry_point: str = "",
         tenant_id: str = "",
@@ -1024,6 +1025,17 @@ class HostingService:
             slug=slug_n,
             instance_id=iid,
         )
+        # LanguageRuntime (same path as project_kind)
+        lang_n = (language or "python").strip().lower() or "python"
+        try:
+            from lumen.engine.core.language_runtime import parse_language, recipe_for
+            _lr = parse_language(language) or parse_language("python")
+            lang_n = _lr.value if _lr else "python"
+            fields["language"] = lang_n
+            _rec = recipe_for(_lr)
+        except Exception:
+            fields["language"] = lang_n
+            _rec = None
 
         # Deterministic internal port 8000–8999
         try:
@@ -1032,6 +1044,10 @@ class HostingService:
         except Exception:
             internal_port = 8080
 
+        if start_command:
+            entry_point = start_command
+        if not entry_point and _rec is not None:
+            entry_point = str(_rec.default_start or "")
         if not entry_point:
             try:
                 from lumen.engine.core.project_kind import parse_kind, runtime_contract
@@ -1040,8 +1056,6 @@ class HostingService:
                     entry_point = str(runtime_contract(pk).get("start_command") or "")
             except Exception:
                 entry_point = ""
-        if start_command:
-            entry_point = start_command
         if not entry_point:
             entry_point = f"uvicorn main:app --host 0.0.0.0 --port {internal_port}"
         # Expand ${PORT} for local spawn
@@ -1064,6 +1078,7 @@ class HostingService:
             platform="http",
             host_mode=fields["host_mode"],
             project_kind=fields["project_kind"],
+            language=str(fields.get("language") or language or "python"),
             slug=fields["slug"],
             public_url=fields["public_url"],
             public_base_url=fields["public_url"] or "",

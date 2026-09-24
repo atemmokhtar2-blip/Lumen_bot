@@ -241,6 +241,7 @@ async def execute_post_side_effect(
                         user_id=int(uid or 0),
                         project_path=proj,
                         project_kind=kind,
+                        language=str(slots.get("language") or slots.get("runtime_language") or ud.get("language") or "python"),
                         slug=Path(proj).name,
                         entry_point=str(slots.get("start_command") or ""),
                     )

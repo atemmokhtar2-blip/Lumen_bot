@@ -46,8 +46,9 @@ def check_agent_project(
     *,
     goal: str = "",
     project_kind: str = "",
+    language: str = "",
 ) -> dict[str, Any]:
-    """Validate generated tree. When project_kind is set, enforce kind rules."""
+    """Validate generated tree. Kind + LanguageRuntime rules."""
     root = Path(work_dir)
     missing: list[str] = []
     found: list[str] = []
@@ -60,6 +61,24 @@ def check_agent_project(
     files = {f for f in files if not f.endswith("CLINE_AGENT.md") and ".git/" not in f}
 
     kind = (project_kind or "").strip().lower()
+
+    lang = (language or "").strip().lower()
+    if not lang and goal:
+        try:
+            from lumen.engine.core.language_runtime import resolve_language
+            lang = resolve_language(text=goal)[0].value
+        except Exception:
+            lang = "python"
+    if not lang:
+        lang = "python"
+    try:
+        from lumen.engine.core.language_runtime import recipe_for, parse_language
+        _lr = parse_language(lang)
+        _rec = recipe_for(_lr)
+    except Exception:
+        _lr = None
+        _rec = None
+
     if not kind and goal:
         try:
             from lumen.engine.core.project_kind import resolve_project_kind
@@ -76,11 +95,14 @@ def check_agent_project(
     if not entry and kind != "library":
         missing.append("entry_point (main.py|app.py|bot.py)")
 
-    has_req = any(n in files for n in ("requirements.txt", "pyproject.toml", "Pipfile"))
+    _manifests = ("requirements.txt", "pyproject.toml", "Pipfile")
+    if _rec is not None:
+        _manifests = tuple(_rec.manifest_files) or _manifests
+    has_req = any(n in files or any(f.endswith("/" + n) or f == n for f in files) for n in _manifests)
     if has_req:
         found.append("deps_manifest")
     else:
-        missing.append("requirements.txt|pyproject.toml")
+        missing.append("|".join(_manifests) if _manifests else "deps_manifest")
 
     has_readme = any(name.lower().startswith("readme") for name in files)
     if has_readme:
@@ -88,11 +110,25 @@ def check_agent_project(
     else:
         warnings.append("no_readme")
 
-    py_files = [f for f in files if f.endswith(".py")]
-    if not py_files:
-        missing.append("any_python_file")
+    if lang == "python" or not _rec:
+        py_files = [f for f in files if f.endswith(".py")]
+        if not py_files:
+            missing.append("any_python_file")
+        else:
+            found.append(f"py_count:{len(py_files)}")
     else:
-        found.append(f"py_count:{len(py_files)}")
+        # LanguageRuntime source globs (e.g. *.ts, *.go)
+        src = []
+        for f in files:
+            for g in (_rec.source_globs if _rec else ()):
+                suf = g.replace("*", "")
+                if suf and f.endswith(suf):
+                    src.append(f)
+                    break
+        if not src:
+            missing.append(f"source_files:{lang}")
+        else:
+            found.append(f"src_count:{len(src)}")
 
     if entry:
         try:
@@ -217,7 +253,7 @@ def check_agent_project(
     # Phase 5: python-only tree
     try:
         pys = [p for p in root.rglob("*.py") if p.is_file() and "__pycache__" not in p.parts]
-        if kind in {"web_site", "web_api", "telegram_bot", "cli_app", "general_app"} and not pys:
+        if lang == "python" and kind in {"web_site", "web_api", "telegram_bot", "cli_app", "general_app"} and not pys:
             missing.append("python_source_required")
         for name in ("package.json", "Cargo.toml", "go.mod", "pom.xml", "composer.json"):
             if (root / name).is_file():
@@ -255,6 +291,7 @@ def check_agent_project(
         "entry": entry,
         "file_count": len(files),
         "project_kind": kind,
+        "language": lang,
     }
 
 

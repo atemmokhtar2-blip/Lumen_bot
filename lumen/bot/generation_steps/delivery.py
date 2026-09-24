@@ -356,6 +356,8 @@ async def deliver_generation_result(
                 project_ref=str(project_path),
                 last_action="generation_done",
                 slots={
+                    "language": str((meta or {}).get("language") or "python"),
+                    "runtime_language": str((meta or {}).get("language") or "python"),
                     "project_kind": pk.value,
                     "delivery_surface": surface.value,
                     "public_url": hints.get("public_url") or "",

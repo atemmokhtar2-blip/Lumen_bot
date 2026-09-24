@@ -34,6 +34,7 @@ class HostInstance:
     platform: str = "telegram"  # telegram | discord | whatsapp | http
     host_mode: str = "telegram_webhook"  # telegram_webhook | http_public
     project_kind: str = ""  # telegram_bot | web_site | web_api | …
+    language: str = "python"  # LanguageRuntime
     slug: str = ""  # URL slug under LUMEN_PUBLIC_BASE
     public_url: str = ""  # browser-openable URL (Phase 3)
     health_path: str = ""  # e.g. /health for HTTP apps

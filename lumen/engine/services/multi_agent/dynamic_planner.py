@@ -569,6 +569,7 @@ def assemble_plan(
     language: str = "ar",
     work_dir: str | Path | None = None,
     project_kind: str | None = None,
+    runtime_language: str | None = None,
 ) -> ExecutionPlan:
     """Full dynamic plan used by node_plan / architect.
 
@@ -610,6 +611,19 @@ def assemble_plan(
     constraints_l = list(constraints or [])[:20]
     constraints_l.append(f"intent:{intent.kind}")
     constraints_l.append(f"project_kind:{kind.value}")
+
+    # LanguageRuntime (code) — same priority as project_kind
+    from lumen.engine.core.language_runtime import resolve_language, recipe_for
+    _rl, _rc, _rn = resolve_language(
+        goal or "",
+        explicit=runtime_language,
+    )
+    constraints_l.append(f"runtime_language:{_rl.value}")
+    try:
+        _rec = recipe_for(_rl)
+        constraints_l.append(f"docker_image:{_rec.docker_image}")
+    except Exception:
+        pass
     if intent.platform:
         constraints_l.append(f"platform:{intent.platform}")
     if refine:
@@ -624,6 +638,7 @@ def assemble_plan(
         features=feats[:40],
         version="dyn1",
         project_kind=kind.value,
+        runtime_language=_rl.value,
     )
 
 

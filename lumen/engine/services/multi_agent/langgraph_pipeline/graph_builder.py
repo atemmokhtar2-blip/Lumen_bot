@@ -288,10 +288,12 @@ def _make_builder(registry: Any, board: Any):
                         language=str((state.strict_spec or {}).get("language") or "ar") if isinstance(state.strict_spec, dict) else "ar",
                         work_dir=work or None,
                         project_kind=_pk or None,
+                        runtime_language=str((state.strict_spec or {}).get("runtime_language") or (state.strict_spec or {}).get("language_runtime") or (state.extensions or {}).get("runtime_language") or "") or None,
                     )
                 state.extensions = dict(state.extensions or {})
                 state.extensions["execution_plan"] = plan.to_dict()
                 state.extensions["project_kind"] = getattr(plan, "project_kind", None) or _pk or ""
+                state.extensions["runtime_language"] = getattr(plan, "runtime_language", None) or ""
                 state.extensions["plan_intent"] = [
                     c for c in (plan.constraints or []) if str(c).startswith("intent:") or str(c).startswith("platform:") or str(c).startswith("project_kind:")
                 ]

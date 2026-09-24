@@ -34,6 +34,7 @@ class ExecutionPlan:
     features: list[str] = field(default_factory=list)
     version: str = "a1"
     project_kind: str = ""  # ProjectKind value when known
+    runtime_language: str = "python"  # LanguageRuntime (code), not UI language=ar
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class ExecutionPlan:
             "features": list(self.features),
             "version": self.version,
             "project_kind": self.project_kind or "",
+            "runtime_language": self.runtime_language or "python",
         }
 
     @classmethod
@@ -74,6 +76,7 @@ class ExecutionPlan:
             features=list(d.get("features") or []),
             version=str(d.get("version") or "a1"),
             project_kind=str(d.get("project_kind") or ""),
+            runtime_language=str(d.get("runtime_language") or d.get("code_language") or "python").strip().lower() or "python",
         )
 
     def to_worker_brief(self) -> str:
@@ -81,6 +84,7 @@ class ExecutionPlan:
         lines = [
             f"GOAL: {self.goal[:600]}",
             f"LANG: {self.language}",
+            f"RUNTIME_LANGUAGE: {self.runtime_language or 'python'}",
             f"PROJECT_KIND: {self.project_kind or 'unspecified'}",
             "DELIVERABLES: " + ", ".join(self.deliverables),
         ]

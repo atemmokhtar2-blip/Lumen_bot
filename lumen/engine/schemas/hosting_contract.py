@@ -51,6 +51,7 @@ class HostInstanceRecord(BaseModel):
     platform: str = "telegram"
     host_mode: str = Field(default="telegram_webhook", max_length=32)
     project_kind: str = Field(default="", max_length=32)
+    language: str = Field(default="python", max_length=32)
     slug: str = Field(default="", max_length=64)
     public_url: str = Field(default="", max_length=512)
     health_path: str = Field(default="", max_length=128)
@@ -127,6 +128,7 @@ class HostInstanceRecord(BaseModel):
             platform=self.platform or "telegram",
             host_mode=self.host_mode or "telegram_webhook",
             project_kind=self.project_kind or "",
+            language=self.language or "python",
             slug=self.slug or "",
             public_url=self.public_url or "",
             health_path=self.health_path or "",
