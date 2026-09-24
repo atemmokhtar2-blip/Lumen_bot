@@ -159,15 +159,17 @@ def check_project_against_ir(project_path: str, ir: BuildIR) -> dict[str, Any]:
         "checked": [],
         "path": str(root),
         "project_kind": getattr(ir, "project_kind", None) or (ir.metadata or {}).get("project_kind") or "",
+        "language": getattr(ir, "language", None) or (ir.metadata or {}).get("language") or "python",
     }
 
     kind = str(report["project_kind"] or "").strip().lower()
+    lang = str(report["language"] or "python").strip().lower()
     goal = str(getattr(ir, "raw_request", None) or getattr(ir, "user_request", None) or "")
 
     # Primary gate: kind-aware structural acceptance
     try:
         from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
-        agent = check_agent_project(root, goal=goal, project_kind=kind)
+        agent = check_agent_project(root, goal=goal, project_kind=kind, language=lang)
         report["agent_acceptance"] = {
             "ok": agent.get("ok"),
             "missing": list(agent.get("missing") or [])[:20],

@@ -18,6 +18,7 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
     """Build agent goal from IR — ProjectKind-aware (no Telegram default)."""
     import json
     parts: list[str] = []
+    rt_lang = "python"
     for key in ("raw_request", "user_request", "spec_request", "purpose", "goal"):
         val = ir_dict.get(key)
         if isinstance(val, str) and val.strip():
@@ -29,11 +30,33 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
     gaps = ir_dict.get("capabilities_gap") or []
     if isinstance(gaps, list) and gaps:
         parts.append("Gaps / custom needs: " + ", ".join(str(x) for x in gaps[:30]))
-    lang = ir_dict.get("language") or "ar"
-    parts.append(f"Primary language: {lang}")
-
     meta = ir_dict.get("metadata") if isinstance(ir_dict.get("metadata"), dict) else {}
     kind = str(ir_dict.get("project_kind") or meta.get("project_kind") or "").strip().lower()
+
+    # LanguageRuntime (code language for Cline — not UI ar)
+    rt_lang = "python"
+    try:
+        from lumen.engine.core.language_runtime import (
+            resolve_language, recipe_for, label_ar as lang_label_ar,
+        )
+        _lr, _lc, _ln = resolve_language(
+            parts[0] if parts else "",
+            explicit=ir_dict.get("language")
+            or ir_dict.get("runtime_language")
+            or meta.get("language")
+            or meta.get("runtime_language"),
+        )
+        rt_lang = _lr.value
+        rec = recipe_for(_lr)
+        parts.append("RUNTIME_LANGUAGE=%s (%s)" % (rt_lang, lang_label_ar(_lr)))
+        parts.append(
+            "LANGUAGE_RECIPE: image=%s install=%r start=%r manifests=%s"
+            % (rec.docker_image, rec.install_command, rec.default_start, list(rec.manifest_files))
+        )
+    except Exception:
+        rt_lang = str(meta.get("language") or ir_dict.get("language") or "python")
+        parts.append("RUNTIME_LANGUAGE=%s" % rt_lang)
+
     if not kind:
         try:
             from lumen.engine.core.project_kind import resolve_project_kind
@@ -54,6 +77,12 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
             )
     except Exception:
         pass
+
+    if rt_lang != "python":
+        parts.append(
+            "NOTE: Prefer LANGUAGE_RECIPE over python-centric KIND_RULES when "
+            "RUNTIME_LANGUAGE is not python. Do not force main.py/requirements.txt."
+        )
 
     deliver = {
         "telegram_bot": (
@@ -78,8 +107,9 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
         ),
     }.get(
         kind,
-        "Deliver a runnable Python project matching PROJECT_KIND and the user request. "
-        "Do NOT default to Telegram unless PROJECT_KIND=telegram_bot.",
+        "Deliver a runnable project matching PROJECT_KIND and RUNTIME_LANGUAGE. "
+        "Do NOT default to Telegram unless PROJECT_KIND=telegram_bot. "
+        "Follow LANGUAGE_RECIPE manifests and entry for RUNTIME_LANGUAGE.",
     )
     parts.append(deliver)
 
@@ -90,7 +120,7 @@ def _goal_from_ir(ir_dict: dict[str, Any]) -> str:
     if repair:
         parts.append("REPAIR_DIRECTIVE_JSON=" + json.dumps(repair, ensure_ascii=False)[:1200])
     return "\n".join(parts) if parts else (
-        f"Build a complete {kind or 'Python'} project with main.py, requirements.txt, README."
+        f"Build a complete {kind or 'app'} project for RUNTIME_LANGUAGE={rt_lang} with correct manifests + README."
     )
 
 
@@ -116,9 +146,9 @@ def build(ir_dict: dict[str, Any], work_dir: str) -> dict[str, Any]:
     # Phase 5: hard acceptance gate — project must pass check_agent_project
     try:
         from .agent_acceptance import check_agent_project
-        acc = state.metadata.get("acceptance") or check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""))
+        acc = state.metadata.get("acceptance") or check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""), language=str((state.metadata or {}).get("language") or (state.metadata or {}).get("runtime_language") or "python"))
         if not isinstance(acc, dict):
-            acc = check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""))
+            acc = check_agent_project(work, goal=goal, project_kind=str((state.metadata or {}).get("project_kind") or ""), language=str((state.metadata or {}).get("language") or (state.metadata or {}).get("runtime_language") or "python"))
         state.metadata["acceptance"] = acc
         _hard_stops = {
             "insufficient_credits",

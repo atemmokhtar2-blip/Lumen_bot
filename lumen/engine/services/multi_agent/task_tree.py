@@ -298,6 +298,7 @@ class TaskTree:
             preferred_keys=list(features or []),
             work_dir=work_dir,
             project_kind=project_kind,
+            runtime_language=None,
         )
         return cls.from_execution_plan(plan, goal=plan.goal)
 

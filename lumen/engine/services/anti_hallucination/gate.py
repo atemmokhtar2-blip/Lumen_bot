@@ -553,6 +553,7 @@ def run_anti_hallucination_gate(
     claimed_features: list[str] | None = None,
     user_request: str = "",
     project_kind: str = "",
+    language: str = "",
 ) -> AntiHallucinationReport:
     """Run full anti-hallucination checks on a generated project directory.
 
@@ -570,12 +571,19 @@ def run_anti_hallucination_gate(
         except Exception:
             kind = ""
     rep.metadata["project_kind"] = kind
+    if not language:
+        try:
+            from lumen.engine.core.language_runtime import resolve_language
+            language = resolve_language(text=user_request or "")[0].value
+        except Exception:
+            language = "python"
+    rep.metadata["language"] = language or "python"
 
     # Non-bot kinds: kind-aware acceptance, not Telegram structure
     if kind in {"web_site", "web_api", "cli_app", "library", "general_app"}:
         try:
             from lumen.engine.services.cline_runtime.agent_acceptance import check_agent_project
-            acc = check_agent_project(root, goal=user_request or "", project_kind=kind)
+            acc = check_agent_project(root, goal=user_request or "", project_kind=kind, language=(language or "python"))
             rep.metadata["agent_acceptance"] = {
                 "ok": acc.get("ok"),
                 "missing": list(acc.get("missing") or [])[:15],

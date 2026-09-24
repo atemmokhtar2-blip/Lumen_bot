@@ -253,8 +253,9 @@ def run_agent(
             state.metadata.setdefault("language", "python")
 
         state.metadata.update({k: v for k, v in kind_metadata(_pk).items() if k not in state.metadata})
-        # Greenfield seed only (never overwrite agent work)
-        if not (Path(state.work_dir) / "main.py").exists() and not (
+        # Greenfield seed only for Python (LanguageRuntime scaffolds = later phase)
+        _seed_lang = str(state.metadata.get("language") or state.metadata.get("runtime_language") or "python")
+        if _seed_lang == "python" and not (Path(state.work_dir) / "main.py").exists() and not (
             Path(state.work_dir) / "src" / "__init__.py"
         ).exists():
             created = seed_workspace(state.work_dir, _pk)

@@ -309,6 +309,9 @@ def orchestrate_generate(
             preferred_keys=list(preferred_keys or []),
         )
         _kind_meta = kind_metadata(_pk)
+        from lumen.engine.core.language_runtime import resolve_language, language_metadata
+        _lr0, _lc0, _ln0 = resolve_language(str(spec_request or request or ""))
+        _kind_meta.update(language_metadata(_lr0, confidence=_lc0, note=_ln0, kind=_pk.value))
     except Exception:
         _pk = None
         _kind_meta = {}
@@ -404,6 +407,18 @@ def orchestrate_generate(
     if _pk is not None:
         state.extensions["project_kind"] = _pk.value
         state.extensions["ir_metadata"] = dict(_kind_meta)
+        try:
+            from lumen.engine.core.language_runtime import resolve_language, language_metadata
+            _txt = str(spec_request or request or "")
+            _lr, _lc, _ln = resolve_language(_txt, explicit=None)
+            state.extensions["runtime_language"] = _lr.value
+            state.extensions["language"] = _lr.value
+            _kind_meta = dict(_kind_meta or {})
+            _kind_meta.update(language_metadata(_lr, confidence=_lc, note=_ln, kind=_pk.value))
+            state.extensions["ir_metadata"] = dict(_kind_meta)
+        except Exception:
+            state.extensions.setdefault("runtime_language", "python")
+            state.extensions.setdefault("language", "python")
     board.put(state)
 
     out = run_langgraph_pipeline(
@@ -445,6 +460,17 @@ def orchestrate_generate(
                 (out.extensions or {}).get("project_kind")
                 or (_kind_meta or {}).get("project_kind")
                 or ""
+            ),
+            "language": (
+                (out.extensions or {}).get("runtime_language")
+                or (out.extensions or {}).get("language")
+                or (_kind_meta or {}).get("language")
+                or "python"
+            ),
+            "runtime_language": (
+                (out.extensions or {}).get("runtime_language")
+                or (_kind_meta or {}).get("language")
+                or "python"
             ),
             "final_message": (out.final_message or "")[:2000],
             "engine": "langgraph+cline",
