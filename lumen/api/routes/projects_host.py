@@ -38,6 +38,7 @@ def _inst_json(i) -> dict:
         "public_url": getattr(i, "public_url", "") or getattr(i, "public_base_url", "") or "",
         "host_mode": getattr(i, "host_mode", "") or "",
         "project_kind": getattr(i, "project_kind", "") or "",
+        "language": getattr(i, "language", "") or "python",
         "slug": getattr(i, "slug", "") or "",
         "health_url": getattr(i, "health_url", "") or "",
         "health_path": getattr(i, "health_path", "") or "",

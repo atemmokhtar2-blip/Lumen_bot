@@ -115,6 +115,7 @@ def gather_ui_facts(
                         bot_username=str(getattr(inst, "bot_username", "") or ""),
                         backend=str(getattr(inst, "sandbox_backend", "") or ""),
                         project_kind=str(getattr(inst, "project_kind", "") or ""),
+                        language=str(getattr(inst, "language", "") or "python"),
                         host_mode=str(getattr(inst, "host_mode", "") or ""),
                         public_url=str(
                             getattr(inst, "public_url", "")

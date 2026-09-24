@@ -83,7 +83,13 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
                 or ""
             )[:500],
             "features": (ir_hint.get("preferred_keys") or ir_hint.get("features_requested") or [])[:20],
-            "lang": ir_hint.get("language") or "ar",
+            "runtime_language": (
+                ir_hint.get("runtime_language")
+                or ir_hint.get("language")
+                or (ir_hint.get("metadata") or {}).get("language")
+                or "python"
+            ),
+            "ui_lang": "ar",
         }
         hint = "\nHINT: " + json.dumps(slim, ensure_ascii=False)[:800]
         meta = ir_hint.get("metadata") if isinstance(ir_hint.get("metadata"), dict) else {}
@@ -133,22 +139,67 @@ def _system_prompt(work_dir: str, goal: str, ir_hint: dict[str, Any] | None) -> 
     except Exception:
         kind_rules = ""
 
+    lang_rules = ""
+    rt_lang = "python"
+    try:
+        from lumen.engine.core.language_runtime import resolve_language, recipe_for, parse_language
+        _explicit = None
+        if isinstance(ir_hint, dict):
+            _explicit = (
+                ir_hint.get("runtime_language")
+                or ir_hint.get("language")
+                or (ir_hint.get("metadata") or {}).get("language")
+                or (ir_hint.get("metadata") or {}).get("runtime_language")
+            )
+            # Ignore UI language codes
+            if str(_explicit or "").lower() in {"ar", "en", "fa", "ur"}:
+                _explicit = None
+        _lr, _, _ = resolve_language(goal_s, explicit=_explicit)
+        rt_lang = _lr.value
+        rec = recipe_for(_lr)
+        lang_rules = (
+            f"\nRUNTIME_LANGUAGE={rt_lang}\n"
+            f"LANGUAGE_RECIPE: image={rec.docker_image} install={rec.install_command!r} "
+            f"start={rec.default_start!r} manifests={list(rec.manifest_files)} "
+            f"sources={list(rec.source_globs)}"
+        )
+        if rt_lang != "python":
+            lang_rules += (
+                "\nNOTE: Prefer LANGUAGE_RECIPE over python-centric KIND_RULES. "
+                "Do not force main.py/requirements.txt when RUNTIME_LANGUAGE is not python."
+            )
+    except Exception:
+        lang_rules = "\nRUNTIME_LANGUAGE=python"
+
+    if rt_lang == "python":
+        deliverable_rule = (
+            "1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example "
+            "(adjust if KIND_RULES say otherwise)"
+        )
+        syntax_rule = "3. Valid Python syntax in every .py file"
+    else:
+        deliverable_rule = (
+            f"1. Minimum deliverables for {rt_lang}: manifests from LANGUAGE_RECIPE, "
+            "source entry, README.md, .env.example — not Python files unless needed"
+        )
+        syntax_rule = f"3. Valid {rt_lang} syntax in source files; match LANGUAGE_RECIPE"
+
     return f"""{role_line}
-Build a complete runnable project matching the GOAL. No stub-only placeholders for required features.
-{kind_rules}
+Build a complete runnable project matching the GOAL and RUNTIME_LANGUAGE. No stub-only placeholders for required features.
+{kind_rules}{lang_rules}
 
 Workspace: {work_dir}
 
 {_tools_help()}
 
 Rules:
-1. Minimum deliverables: main.py, requirements.txt, README.md, .env.example (adjust if KIND_RULES say otherwise)
+{deliverable_rule}
 2. Never hardcode secrets; tokens/keys from environment only
-3. Valid Python syntax in every .py file
-4. Follow KIND_RULES strictly — do NOT build a Telegram bot unless PROJECT_KIND=telegram_bot
+{syntax_rule}
+4. Follow KIND_RULES + RUNTIME_LANGUAGE — do NOT build a Telegram bot unless PROJECT_KIND=telegram_bot
 5. If REPAIR_DIRECTIVE is present, fix those items first (prefer edit_file)
 6. If EXECUTION_PLAN is present, complete priority-1 tasks before finish
-7. Arabic UX when goal/language is Arabic
+7. Arabic UX when the user request is Arabic
 8. Call finish only when deliverables exist and repairs are addressed
 
 GOAL:

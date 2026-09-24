@@ -46,6 +46,7 @@ HOST_INSTANCE_FIELDS: Final[Tuple[str, ...]] = (
     "platform",
     "host_mode",
     "project_kind",
+    "language",
     "slug",
     "public_url",
     "health_path",

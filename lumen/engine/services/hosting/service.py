@@ -1022,6 +1022,7 @@ class HostingService:
         fields = registry_fields(
             host_mode=mode,
             project_kind=kind,
+            language=(language or "python"),
             slug=slug_n,
             instance_id=iid,
         )

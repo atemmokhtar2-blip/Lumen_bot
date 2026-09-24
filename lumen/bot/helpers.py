@@ -360,6 +360,20 @@ def run_generation_with_bridge(
             ).value
         except Exception:
             pass
+        try:
+            from lumen.engine.core.language_runtime import resolve_language
+            _lr, _lc, _ln = resolve_language(
+                str(package.get("spec_request") or request),
+                explicit=package.get("language")
+                or package.get("runtime_language")
+                or (translation.get("language") if isinstance(translation, dict) else None)
+                or (translation.get("runtime_language") if isinstance(translation, dict) else None),
+            )
+            package["language"] = _lr.value
+            package["runtime_language"] = _lr.value
+        except Exception:
+            package.setdefault("language", "python")
+            package.setdefault("runtime_language", "python")
         ir = build_ir_from_package(package, user_id=int(user_id or 0))
         logger.info(
             "engine-direct IR mode=%s matched=%s gap=%s conf=%.2f",

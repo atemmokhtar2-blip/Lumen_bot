@@ -43,6 +43,7 @@ def sync_dashboard_slots(user_id: int, state_slots: dict[str, str]) -> dict[str,
                 slots[f"dash_b{i}"] = be[:20]
             # Phase 4: mixed platform dashboard
             slots[f"dash_k{i}"] = str(getattr(inst, "project_kind", "") or "")[:24]
+            slots[f"dash_lang{i}"] = str(getattr(inst, "language", "") or "python")[:16]
             slots[f"dash_m{i}"] = str(getattr(inst, "host_mode", "") or "")[:24]
             pub = str(getattr(inst, "public_url", "") or getattr(inst, "public_base_url", "") or "")
             if pub:

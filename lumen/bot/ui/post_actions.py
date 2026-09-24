@@ -64,6 +64,25 @@ def _payload_project_kind(ud: dict) -> str:
     except Exception:
         return "general_app"
 
+def _payload_language(ud: dict) -> str:
+    """LanguageRuntime for plane payloads."""
+    try:
+        eu = ud.get("engine_ui") if isinstance(ud.get("engine_ui"), dict) else {}
+        slots = eu.get("slots") if isinstance(eu.get("slots"), dict) else {}
+        lang = str(
+            slots.get("runtime_language")
+            or slots.get("language")
+            or ud.get("runtime_language")
+            or ud.get("language")
+            or "python"
+        ).strip().lower()
+        if lang in {"ar", "en", "fa", "ur"}:
+            return "python"
+        return lang or "python"
+    except Exception:
+        return "python"
+
+
 def _live_seconds(user) -> int:
     try:
         from lumen.bot.helpers import plan_live_seconds  # type: ignore

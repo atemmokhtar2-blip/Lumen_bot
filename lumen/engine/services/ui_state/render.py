@@ -17,6 +17,7 @@ class HostRow:
     backend: str = ""
     # Phase 4 — mixed platform projects
     project_kind: str = ""
+    language: str = "python"
     host_mode: str = ""
     public_url: str = ""
     slug: str = ""

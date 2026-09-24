@@ -154,12 +154,14 @@ def registry_fields(
     project_kind: str,
     slug: str,
     instance_id: str = "",
+    language: str = "python",
 ) -> dict[str, Any]:
     """Fields to persist on HostInstance for unified plane."""
     urls = allocate_public_url(slug=slug, instance_id=instance_id)
     return {
         "host_mode": host_mode.value,
         "project_kind": (project_kind or "").strip().lower(),
+        "language": (language or "python").strip().lower() or "python",
         "slug": urls["slug"],
         "public_url": urls["public_url"],
         "public_base_url": urls["public_url"],  # alias for legacy field

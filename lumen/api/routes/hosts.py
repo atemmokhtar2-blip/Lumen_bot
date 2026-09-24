@@ -87,6 +87,7 @@ async def host_start(request: web.Request) -> web.Response:
                 user_id=uid,
                 project_path=str(safe_path),
                 project_kind=project_kind or "web_api",
+                language=str(body.get("language") or body.get("runtime_language") or "python").strip().lower() or "python",
                 slug=slug or Path(str(safe_path)).name,
                 tenant_id=tenant.tenant_id,
                 start_command=str(body.get("start_command") or body.get("entry_point") or ""),
