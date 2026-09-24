@@ -99,17 +99,27 @@ def hourly_hosting_credit_cost(project_kind: str = "") -> int:
 
 
 def is_python_only_request(text: str) -> tuple[bool, str]:
-    """Return (ok, reason). Fails if user clearly asks for non-Python stack."""
-    t = (text or "").strip()
-    if not t:
+    """Backward-compat gate. Prefer language_runtime.assert_language_allowed.
+
+    Returns (ok, reason). Non-enabled languages fail.
+    """
+    try:
+        from lumen.engine.core.language_runtime import resolve_language, assert_language_allowed
+        lang, _, note = resolve_language(text or "")
+        ok, reason = assert_language_allowed(lang)
+        if not ok:
+            return False, reason
         return True, ""
-    # Explicit python is fine
-    if re.search(r"(?i)\bpython\b|\bfastapi\b|\bflask\b|\bdjango\b|\bptb\b|\baiogram\b", t):
+    except Exception:
+        t = (text or "").strip()
+        if not t:
+            return True, ""
+        m = FORBIDDEN_LANG_HINTS.search(t)
+        if m:
+            return False, f"python_only_v1:rejected_language:{m.group(0)}"
         return True, ""
-    m = FORBIDDEN_LANG_HINTS.search(t)
-    if m:
-        return False, f"python_only_v1:rejected_language:{m.group(0)}"
-    return True, ""
+
+
 
 
 _DANGEROUS_CODE = re.compile(

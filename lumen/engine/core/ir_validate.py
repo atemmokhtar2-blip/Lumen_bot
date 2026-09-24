@@ -34,15 +34,27 @@ def validate_and_normalize_ir(ir: BuildIR) -> IRValidation:
     if len(text) < 3:
         errors.append("ir_text_too_short")
 
-    # Phase 5: Python-only platform
+    # Multi-lang Phase 1: LanguageRuntime allowlist + kind matrix
     try:
-        from lumen.engine.security.phase5_bounds import is_python_only_request
-        ok_lang, reason = is_python_only_request(text)
-        if not ok_lang:
-            errors.append(reason or "python_only_v1")
-        meta_v = (ir.metadata or {}).get("python_only_violation")
-        if meta_v:
-            errors.append(str(meta_v))
+        from lumen.engine.core.language_runtime import (
+            assert_language_allowed,
+            parse_language,
+            resolve_language,
+        )
+        lang_raw = (getattr(ir, "language", None) or (ir.metadata or {}).get("language") or "").strip()
+        if not lang_raw:
+            lr, _, _ = resolve_language(text)
+        else:
+            lr = parse_language(lang_raw)
+        if lr is not None:
+            ok_lang, reason = assert_language_allowed(
+                lr, kind=(getattr(ir, "project_kind", None) or (ir.metadata or {}).get("project_kind") or ""),
+            )
+            if not ok_lang:
+                errors.append(reason or "language_not_enabled")
+        gate = (ir.metadata or {}).get("language_gate")
+        if gate:
+            errors.append(str(gate))
     except Exception:
         pass
 

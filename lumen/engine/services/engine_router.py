@@ -73,25 +73,32 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
     )
 
     text_for_kind = str(package.get("original_text") or package.get("spec_request") or "")
-    # Phase 5: Python-only v1
-    try:
-        from lumen.engine.security.phase5_bounds import is_python_only_request
-        _ok_lang, _lang_reason = is_python_only_request(text_for_kind)
-        if not _ok_lang:
-            package.setdefault("notes", [])
-            if isinstance(package.get("notes"), list):
-                package["notes"].append(_lang_reason)
-            # Soft flag in metadata; hard reject at validate
-            package.setdefault("metadata", {})
-            if isinstance(package.get("metadata"), dict):
-                package["metadata"]["python_only_violation"] = _lang_reason
-    except Exception:
-        pass
     kind = resolve_project_kind(
         text=text_for_kind,
         preferred_keys=preferred,
         explicit=package.get("project_kind") or package.get("kind"),
     )
+    
+    # LanguageRuntime (multi-lang foundation Phase 1)
+    from lumen.engine.core.language_runtime import (
+        language_metadata,
+        resolve_language,
+        assert_language_allowed,
+    )
+    lang, lang_conf, lang_note = resolve_language(
+        text_for_kind,
+        explicit=package.get("language") or package.get("lang") or (package.get("metadata") or {}).get("language"),
+    )
+    lm = language_metadata(lang, confidence=lang_conf, note=lang_note, kind=kind.value)
+    lang_ok, lang_err = assert_language_allowed(lang, kind=kind.value)
+    if not lang_ok:
+        package.setdefault("notes", [])
+        if isinstance(package.get("notes"), list):
+            package["notes"].append(lang_err)
+        package.setdefault("metadata", {})
+        if isinstance(package.get("metadata"), dict):
+            package["metadata"]["language_gate"] = lang_err
+
     km = kind_metadata(kind)
     # Phase 2: formal acceptance criteria from kind (anti-hallucination contract)
     _acc_crit = []
@@ -135,8 +142,15 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
             },
             "user_id": int(user_id or 0),
             "project_kind": kind.value,
+            "language": lang.value,
         }
     )
+    # Stamp language + recipe into metadata
+    ir.language = lang.value
+    if isinstance(ir.metadata, dict):
+        ir.metadata.update(lm)
+        ir.metadata["project_kind"] = kind.value
+
     from lumen.engine.core.ir_validate import validate_and_normalize_ir
 
     v = validate_and_normalize_ir(ir)
@@ -288,6 +302,12 @@ def _finalize(result: Any, ir: BuildIR) -> Any:
         meta["project_kind"] = pk
         meta.setdefault("delivery_surface", (ir.metadata or {}).get("delivery_surface"))
         meta.setdefault("project_kind_label_ar", (ir.metadata or {}).get("project_kind_label_ar"))
+        lang = (getattr(ir, "language", None) or "").strip() or str((ir.metadata or {}).get("language") or "")
+        if lang:
+            meta["language"] = lang
+            meta.setdefault("language_label_ar", (ir.metadata or {}).get("language_label_ar"))
+            meta.setdefault("docker_image", (ir.metadata or {}).get("docker_image"))
+
         meta.setdefault("needs_bot_token", (ir.metadata or {}).get("needs_bot_token"))
 
     # Control plane: permissions + project record + delivery gate

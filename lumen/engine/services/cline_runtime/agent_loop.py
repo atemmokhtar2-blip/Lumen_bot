@@ -235,6 +235,23 @@ def run_agent(
         _pk = parse_kind(_project_kind) or resolve_project_kind(text=goal or "")
         _project_kind = _pk.value
         state.metadata["project_kind"] = _project_kind
+        # LanguageRuntime Phase 1
+        try:
+            from lumen.engine.core.language_runtime import parse_language, recipe_for, language_metadata
+            _lang = "python"
+            if isinstance(ir_dict, dict):
+                _lang = str(
+                    ir_dict.get("language")
+                    or (ir_dict.get("metadata") or {}).get("language")
+                    or "python"
+                ).strip() or "python"
+            _lr = parse_language(_lang)
+            if _lr is not None:
+                state.metadata["language"] = _lr.value
+                state.metadata.update(language_metadata(_lr, kind=_project_kind))
+        except Exception:
+            state.metadata.setdefault("language", "python")
+
         state.metadata.update({k: v for k, v in kind_metadata(_pk).items() if k not in state.metadata})
         # Greenfield seed only (never overwrite agent work)
         if not (Path(state.work_dir) / "main.py").exists() and not (

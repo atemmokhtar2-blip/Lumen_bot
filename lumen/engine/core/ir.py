@@ -63,6 +63,8 @@ class BuildIR:
     user_id: int = 0
     # Product type: telegram_bot | web_api | web_site | … (see project_kind.py)
     project_kind: str = ""  # filled by build_ir_from_package via resolve_project_kind
+    # Runtime language: python | node | typescript | go | rust (see language_runtime.py)
+    language: str = ""  # filled by resolve_language
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -115,6 +117,7 @@ class BuildIR:
             metadata=dict(data.get("metadata") or {}),
             user_id=int(data.get("user_id") or 0),
             project_kind=str(data.get("project_kind") or (data.get("metadata") or {}).get("project_kind") or "").strip().lower(),
+            language=str(data.get("language") or (data.get("metadata") or {}).get("language") or "").strip().lower(),
         )
 
     def non_core_keys(self) -> list[str]:
