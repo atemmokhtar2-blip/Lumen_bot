@@ -988,6 +988,34 @@ class HostingService:
         kind = (project_kind or "web_api").strip().lower() or "web_api"
         mode = host_mode_for_kind(kind)
 
+        # Phase 5: hosting credits gate
+        try:
+            from lumen.platform.credits.guards import assert_hosting_allowed
+            assert_hosting_allowed(user_id=int(user_id))
+        except Exception as cred_exc:
+            from lumen.platform.credits.guards import GenerationBlockedError
+            if isinstance(cred_exc, GenerationBlockedError) or "hosting" in str(cred_exc).lower() or "blocked" in str(cred_exc).lower() or "insufficient" in str(cred_exc).lower():
+                return HostResult(ok=False, message=f"رصيد الاستضافة: {cred_exc}")
+        try:
+            from lumen.platform.credits import get_credit_service
+            from lumen.engine.security.phase5_bounds import hourly_hosting_credit_cost
+            from lumen.platform.rating_engine import reserve_for_hosting
+            tid = f"tg:{int(user_id)}"
+            host_cost = hourly_hosting_credit_cost(kind)
+            if host_cost > 0:
+                res = reserve_for_hosting(
+                    get_credit_service(),
+                    tid,
+                    hours=1,
+                    ram_mb=128,
+                    reference_id=f"http-host-{user_id}",
+                    idempotency_key=f"reserve-http-{user_id}-{int(time.time()) // 3600}",
+                )
+                if not res.ok and "insufficient" in (getattr(res, "reason", "") or ""):
+                    return HostResult(ok=False, message=f"رصيد غير كافٍ للاستضافة ({host_cost} كريدت/ساعة)")
+        except Exception as _rc:
+            logger.debug("http host reserve soft: %s", _rc)
+
         iid = f"http-{user_id}-{int(time.time())}-{uuid.uuid4().hex[:8]}"
         slug_n = normalize_slug(slug or path.name or iid)
         fields = registry_fields(
@@ -1019,6 +1047,13 @@ class HostingService:
         # Expand ${PORT} for local spawn
         entry_resolved = entry_point.replace("${PORT:-8000}", str(internal_port)).replace("$PORT", str(internal_port))
 
+        from lumen.engine.security.phase5_bounds import (
+            force_loopback_bind,
+            resource_spec_for_kind,
+        )
+        res_spec = resource_spec_for_kind(kind)
+        entry_resolved = force_loopback_bind(entry_resolved, internal_port)
+
         inst = HostInstance(
             instance_id=iid,
             user_id=int(user_id),
@@ -1036,7 +1071,14 @@ class HostingService:
             health_url=fields.get("health_url") or "",
             started_at=float(time.time()),
             internal_port=int(internal_port),
+            cpu_quota=float(res_spec["cpu_quota"]),
+            memory_mb=int(res_spec["memory_mb"]),
         )
+        inst.last_diagnosis = {
+            "phase5_resources": res_spec,
+            "bind_host": res_spec["bind_host"],
+            "max_host_seconds": res_spec["max_host_seconds"],
+        }
 
         # Reverse-proxy route (Caddy/Traefik dynamic when configured)
         route_meta: dict = {}

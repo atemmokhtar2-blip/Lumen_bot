@@ -34,6 +34,18 @@ def validate_and_normalize_ir(ir: BuildIR) -> IRValidation:
     if len(text) < 3:
         errors.append("ir_text_too_short")
 
+    # Phase 5: Python-only platform
+    try:
+        from lumen.engine.security.phase5_bounds import is_python_only_request
+        ok_lang, reason = is_python_only_request(text)
+        if not ok_lang:
+            errors.append(reason or "python_only_v1")
+        meta_v = (ir.metadata or {}).get("python_only_violation")
+        if meta_v:
+            errors.append(str(meta_v))
+    except Exception:
+        pass
+
     preferred = [k for k in ir.preferred_keys if not caps or k in caps]
     matched = [k for k in ir.capabilities_matched if not caps or k in caps]
     unknown = [k for k in ir.preferred_keys if caps and k not in caps]

@@ -73,6 +73,20 @@ def build_ir_from_package(package: dict[str, Any], *, user_id: int = 0) -> Build
     )
 
     text_for_kind = str(package.get("original_text") or package.get("spec_request") or "")
+    # Phase 5: Python-only v1
+    try:
+        from lumen.engine.security.phase5_bounds import is_python_only_request
+        _ok_lang, _lang_reason = is_python_only_request(text_for_kind)
+        if not _ok_lang:
+            package.setdefault("notes", [])
+            if isinstance(package.get("notes"), list):
+                package["notes"].append(_lang_reason)
+            # Soft flag in metadata; hard reject at validate
+            package.setdefault("metadata", {})
+            if isinstance(package.get("metadata"), dict):
+                package["metadata"]["python_only_violation"] = _lang_reason
+    except Exception:
+        pass
     kind = resolve_project_kind(
         text=text_for_kind,
         preferred_keys=preferred,

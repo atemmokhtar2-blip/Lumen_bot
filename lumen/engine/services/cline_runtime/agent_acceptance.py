@@ -204,6 +204,27 @@ def check_agent_project(
         except Exception as _probe_exc:
             warnings.append(f"asgi_probe_error:{type(_probe_exc).__name__}")
 
+
+    # Phase 5: no raw system / shell abuse in delivered tree
+    try:
+        from lumen.engine.security.phase5_bounds import scan_project_for_dangerous_code
+        danger = scan_project_for_dangerous_code(root)
+        if danger:
+            missing.append("dangerous_system_code:" + ",".join(danger[:4]))
+    except Exception:
+        pass
+
+    # Phase 5: python-only tree
+    try:
+        pys = [p for p in root.rglob("*.py") if p.is_file() and "__pycache__" not in p.parts]
+        if kind in {"web_site", "web_api", "telegram_bot", "cli_app", "general_app"} and not pys:
+            missing.append("python_source_required")
+        for name in ("package.json", "Cargo.toml", "go.mod", "pom.xml", "composer.json"):
+            if (root / name).is_file():
+                missing.append(f"non_python_manifest:{name}")
+    except Exception:
+        pass
+
     must = 3
     got = sum([bool(entry or kind == "library"), has_req, bool(py_files)])
     score = got / must
@@ -218,8 +239,12 @@ def check_agent_project(
         or m == "GET_/health_required"
         or m == "fastapi_or_flask_required"
         or m.startswith("health_http_")
+        or m.startswith("dangerous_system_code")
+        or m.startswith("non_python_manifest")
+        or m == "python_source_required"
     }
     ok = got >= 2 and (bool(entry) or kind == "library") and not critical
+
 
     return {
         "ok": ok,
