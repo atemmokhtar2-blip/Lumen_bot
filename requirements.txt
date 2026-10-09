@@ -2,19 +2,19 @@
 # Bump only after: pip-audit + pip-compile
 # 22.7+ required for InlineKeyboardButton.style (Bot API 9.4 colored buttons)
 python-telegram-bot==22.7
-python-dotenv==1.2.2
+python-dotenv==1.2.4
 pydantic==2.10.6
 pydantic-settings==2.7.1
 requests==2.33.0
 curl_cffi==0.15.0
-aiohttp==3.14.3
+aiohttp==3.14.4
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz==3.12.1
 pymongo==4.11.1
 
 # Security / hosting foundation
-cryptography==50.0.0
+cryptography==50.0.2
 # Optional object storage (S3/R2/MinIO)
 # boto3==1.36.16
 # Optional Postgres host state
@@ -58,8 +58,8 @@ tree-sitter-c>=0.23.0
 tree-sitter-cpp>=0.23.0
 
 # Official agent orchestration (LangGraph)
-langgraph==1.2.11
-langchain-core==1.6.1
+langgraph==1.2.13
+langchain-core==1.6.6
 # Durable cross-process checkpointer — REQUIRED for Human-in-the-Loop resume
 # (generation runs in an RQ worker; confirm runs in the Telegram process).
 # Without this, MemorySaver is process-local and resume silently restarts the graph.
