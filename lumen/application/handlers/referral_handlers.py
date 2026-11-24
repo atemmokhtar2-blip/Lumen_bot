@@ -107,9 +107,11 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
         # Idempotent FIRST — never burn rate limit on repeat /start
         existing = repo.get_by_referred(referred)
         if existing is not None:
-            return RegisterReferralResult(
-                ok=True, referral=existing, already_registered=True
+            _grant_referral_reward_amount(
+                int(existing.referrer_telegram_id), amount=2,
+                batch_key=f"referral-invite-{referred}"
             )
+            return RegisterReferralResult(ok=True, referral=existing, already_registered=True)
 
         # STRICT: only brand-new platform users count for the referrer.
         # Anyone who already used the bot (users/tenant row exists) cannot
@@ -134,7 +136,14 @@ def handle_register_referral(cmd: RegisterReferralCommand) -> RegisterReferralRe
             return RegisterReferralResult(ok=False, error="register_rate_limited")
 
         ref = repo.create_pending(referrer, referred)
-        logger.info("referral registered referrer_tg=%s referred_tg=%s", referrer, referred)
+        # One fixed internal reward per newly referred Telegram account.
+        # CreditService idempotency protects repeated /start requests.
+        granted = _grant_referral_reward_amount(
+            referrer, amount=2, batch_key=f"referral-invite-{referred}"
+        )
+        if not granted:
+            logger.error("referral invite reward failed referrer_tg=%s referred_tg=%s", referrer, referred)
+        logger.info("referral registered referrer_tg=%s referred_tg=%s reward=%s", referrer, referred, granted)
         return RegisterReferralResult(ok=True, referral=ref)
     except ReferralError as exc:
         return RegisterReferralResult(ok=False, error=str(exc) or type(exc).__name__)
