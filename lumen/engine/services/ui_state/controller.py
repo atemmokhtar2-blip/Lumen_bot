@@ -814,9 +814,9 @@ def apply_action(
         msg = "استخدام دائم — حتى 30 يومًا (قيد التجهيز)."
         post_fx = "tpl_reserve_permanent"
     elif action_id == "open_connections":
-        new.phase = EngineUiPhase.CONNECTIONS
+        new.phase = EngineUiPhase.SETTINGS
         new.missing = []
-        msg = "الاتصالات."
+        msg = "إدارة الاتصالات ستكون من موقع Lumen المستقل."
     elif action_id == "conn_github":
         new.phase = EngineUiPhase.CONN_GITHUB
         new.slots["gh_page"] = "1"
