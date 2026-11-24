@@ -35,18 +35,8 @@ class ApplyResult:
 def _home_buttons() -> tuple[tuple[UiButton, ...], ...]:
     # Bot API 9.4 native colors: success=green, primary=blue, danger=red
     return (
-        (
-            UiButton("✨ إنشاء مشروع", "open_generate", style="success"),
-            UiButton("📦 القوالب", "open_templates", style="success"),
-        ),
-        (
-            UiButton("📊 لوحة التحكم", "open_dashboard", style="primary"),
-            UiButton("💎 الرصيد", "open_billing", style="primary"),
-        ),
-        (
-            UiButton("⚙️ الإعدادات", "open_settings", style="primary"),
-            UiButton("❓ المساعدة", "open_help"),
-        ),
+        (UiButton("⚙️ الإعدادات", "open_settings", style="primary"),),
+        (UiButton("❓ المساعدة", "open_help"),),
     )
 
 
@@ -390,8 +380,7 @@ def buttons_for_state(state: EngineUiState) -> tuple[tuple[UiButton, ...], ...]:
 
 def _settings_buttons() -> tuple[tuple[UiButton, ...], ...]:
     return (
-        (UiButton("🔗 الاتصالات", "open_connections", style="primary"),),
-        (UiButton("🎁 الإحالة — $5", "open_referral", style="success"),),
+        (UiButton("🎁 الإحالة", "open_referral", style="success"),),
     )
 
 
