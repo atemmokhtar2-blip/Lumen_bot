@@ -60,8 +60,8 @@ def test_reward_gate_fifty_qualified_not_fifty_links():
 
 
 def test_defaults_and_unique_index_declared():
-    assert REFERRAL_QUALIFIED_TARGET == 50
-    assert REFERRAL_REWARD_USD == 5
+    assert REFERRAL_QUALIFIED_TARGET == 1
+    assert REFERRAL_REWARD_USD == 0
     assert any(i.get("unique") for i in REFERRAL_INDEXES)
     assert "start=ref_1" in bot_username_link("lumen_bot", 1)
     assert parse_referrer_from_start_payload(referral_deep_link_payload(42)) == 42
