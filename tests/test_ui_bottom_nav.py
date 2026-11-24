@@ -38,7 +38,7 @@ def test_every_non_home_phase_has_nav_footer():
 def test_home_has_no_nav_footer():
     rows = buttons_for_state(EngineUiState(phase=EngineUiPhase.HOME))
     assert "nav_back" not in _actions(rows)
-    assert "open_generate" in _actions(rows)
+    assert _actions(rows) == ["open_settings", "open_help"]
 
 
 def test_with_nav_on_host_like_rows():
