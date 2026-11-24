@@ -249,13 +249,13 @@ def render_message(state: EngineUiState, facts: UiFacts | None = None) -> str:
         link = (state.slots or {}).get("referral_link") or ""
         stats_line = (state.slots or {}).get("referral_stats_line") or "—"
         return html_card(
-            "🎁 برنامج الإحالة — $5",
+            "🎁 نظام الإحالة",
             [
                 ("رابطك", link or "اضغط تحديث لجلب الرابط"),
                 ("التقدم", stats_line),
                 (
                     "الشروط",
-                    "المكافأة لمن يستخدم البوت فقط. كل 10 نشطين ≈ $1 حتى $5 عند 50.",
+                    "كل مستخدم جديد يسجل من رابطك يمنحك نجمتين من رصيد Lumen الداخلي، مرة واحدة لكل مستخدم.",
                 ),
             ],
             subtitle="مشاركة الرابط",
