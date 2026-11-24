@@ -388,9 +388,9 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             f"• إجمالي المدعوين: {stats.total_invited}",
             f"• استخدموا البوت (يُحتسب): {stats.qualified_count}",
             f"• بانتظار الاستخدام: {stats.pending_count}",
-            f"• المتبقي للمكافأة: {remaining}",
-            f"• المكافأة: ${int(REFERRAL_REWARD_USD)} عند {int(REFERRAL_QUALIFIED_TARGET)} مستخدم نشط",
-            f"• حالة الصرف: {'تم ✓' if stats.reward_paid else 'لم تُصرف بعد'}",
+            
+            "• المكافأة: نجمتان من رصيد Lumen الداخلي عن كل مستخدم جديد",
+            
         ]
     except Exception:
         stats_lines = [
@@ -401,14 +401,14 @@ async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     nl = chr(10)
     text = nl.join(
         [
-            "⭐ برنامج إحالة Lumen — $5",
+            "⭐ برنامج إحالة Lumen",
             "",
             "رابط الدعوة الخاص بك:",
             str(link),
             "",
             *stats_lines,
             "",
-            "ملاحظة: فتح الرابط وحده لا يُحتسب — يجب أن يستخدم المدعو البوت.",
+            "تُضاف النجمتان إلى رصيدك عند تسجيل مستخدم جديد من رابطك. كل مستخدم يُحتسب مرة واحدة فقط.",
         ]
     )
     share_kb = None
@@ -467,7 +467,7 @@ async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"• مرفوضون: {st.get('rejected', 0)}",
                 f"• مكافآت تم صرفها: {st.get('rewards_paid', 0)}",
                 "",
-                f"الهدف لكل محيل: {REFERRAL_QUALIFIED_TARGET} → ${REFERRAL_REWARD_USD}",
+                "المكافأة: نجمتان داخليتان لكل مستخدم جديد عبر رابطك",
             ]
         )
         await message.reply_text(text)
