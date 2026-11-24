@@ -103,6 +103,5 @@ def is_referral_dev_environment() -> bool:
 
 
 def referral_milestones() -> list[int]:
-    step = max(1, int(REFERRAL_MILESTONE_STEP))
-    target = max(step, int(REFERRAL_QUALIFIED_TARGET))
-    return list(range(step, target + 1, step))
+    # Legacy milestone payouts are retired; rewards are per eligible signup.
+    return []
