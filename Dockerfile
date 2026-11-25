@@ -1,5 +1,5 @@
 # Production image — hardened (Phase 3 + Phase 4 policy)
-FROM python:3.12.16-slim-trixie
+FROM python:3.12-slim-bookworm
 
 LABEL org.opencontainers.image.source="https://github.com/atemmokhtar2-blip/Lumen_bot" \
       org.opencontainers.image.title="Lumen" \
@@ -21,7 +21,7 @@ RUN apt-get update \
     && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
 
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir --upgrade pip==26.2.0 \
+RUN pip install --no-cache-dir --upgrade pip==26.3 setuptools==84.1.0 \
     && pip install --no-cache-dir -r requirements.lock \
     && mkdir -p /tmp/lumen_output \
     && chown -R appuser:appuser /app /tmp/lumen_output

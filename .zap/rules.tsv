@@ -2,3 +2,4 @@
 # 10021 IGNORE
 # 10016 IGNORE
 90005	IGNORE	Sec-Fetch-Dest is browser-only and is not required for API clients.
+10049	IGNORE	API responses deliberately set Cache-Control no-store to prevent caching tenant and service state.
