@@ -54,9 +54,8 @@ jobs:
             ghcr.io/google/osv-scanner:latest \
             scan source \
             --lockfile=/src/requirements.txt \
-            --lockfile=/src/requirements.lock \
-            --lockfile=/src/lumen/templates/assets/group_moderator/requirements.txt \
-            /src
+            --lockfile="requirements.txt:/src/requirements.lock" \
+            --lockfile=/src/lumen/templates/assets/group_moderator/requirements.txt
 
   syft-sbom:
     name: Syft SBOM (Anchore)
