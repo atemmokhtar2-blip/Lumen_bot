@@ -153,8 +153,10 @@ jobs:
         run: |
           docker run --rm --entrypoint /usr/local/bin/python3.12 \
             "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" -c '
-          import os
+          import os, sys, importlib.util
           assert os.getuid() == 65532, f"unexpected runtime uid: {os.getuid()}"
+          assert sys.version_info[:2] == (3, 12), f"unexpected Python: {sys.version}"
+          assert importlib.util.find_spec("pip") is None, "pip must not ship in runtime"
           import aiohttp, argon2, cryptography, curl_cffi, grpc, onnxruntime
           import PIL, playwright, psycopg, pymongo, redis, sqlite_vec, telegram
           import temporalio, tree_sitter
