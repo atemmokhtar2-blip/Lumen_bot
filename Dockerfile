@@ -1,5 +1,5 @@
 # Production image — hardened (Phase 3 + Phase 4 policy)
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 
 LABEL org.opencontainers.image.source="https://github.com/atemmokhtar2-blip/Lumen_bot" \
       org.opencontainers.image.title="Lumen" \
@@ -11,6 +11,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     OUTPUT_DIR=/tmp/lumen_output \
     PATH="/home/appuser/.local/bin:$PATH"
+
+# Refresh the slim base to the latest Debian security updates before adding app code.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
