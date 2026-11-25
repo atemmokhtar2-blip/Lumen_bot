@@ -15,7 +15,7 @@ ZAP_IMAGE="${ZAP_IMAGE:-ghcr.io/zaproxy/zaproxy:stable}"
 python scripts/security/start_api_dast.py >"$OUT/api.log" 2>&1 &
 PID=$!
 trap 'kill $PID 2>/dev/null || true' EXIT
-for i in $(seq 1 40); do curl -sf "$DAST_BASE_URL/health" >/dev/null && break; sleep 0.5; done
+for _ in $(seq 1 40); do curl -sf "$DAST_BASE_URL/health" >/dev/null && break; sleep 0.5; done
 
 python scripts/security/seed_dast_tenants.py
 python scripts/security/live_idor_http.py
