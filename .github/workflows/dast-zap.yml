@@ -28,6 +28,8 @@ env:
   # ZAP performs hundreds of requests from one localhost IP; keep rate limiting
   # enabled but raise the test-only ceiling so scans measure app security, not 429s.
   API_IP_RPM: "5000"
+  API_ADMIN_AUTH_RPM: "5000"
+  API_ADMIN_FAIL_LIMIT: "5000"
   API_TENANT_CREATE_RPM: "20"
   DAST_BASE_URL: http://127.0.0.1:8765
   DAST_HEALTH_URL: http://127.0.0.1:8765/health

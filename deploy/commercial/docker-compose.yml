@@ -18,8 +18,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    # Drop capabilities not needed by PostgreSQL while retaining its normal startup capabilities.
+    cap_drop: [NET_RAW, SYS_CHROOT, MKNOD, AUDIT_WRITE]
     security_opt:
       - no-new-privileges:true
     deploy:
