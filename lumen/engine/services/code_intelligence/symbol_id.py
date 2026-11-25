@@ -6,7 +6,7 @@ import hashlib
 
 def symbol_id(path: str, kind: str, name: str, line: int) -> str:
     raw = f"{path}:{kind}:{name}:{line}"
-    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+    return hashlib.sha1(raw.encode(), usedforsecurity=False).hexdigest()[:16]
 
 
 _sid = symbol_id
