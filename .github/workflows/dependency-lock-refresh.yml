@@ -1,6 +1,7 @@
 name: Dependency Lock Refresh
 
 on:
+  pull_request:
   push:
     branches: [Lumen]
     paths:
