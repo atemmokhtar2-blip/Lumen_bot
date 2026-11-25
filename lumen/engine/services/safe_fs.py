@@ -355,8 +355,38 @@ def safe_write_under_root(root: Path, abs_or_rel: Path, content: str) -> Path:
 
 def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
     """Open a file under root with O_NOFOLLOW at open time — never follow symlinks."""
-    path = safe_resolve_under(Path(root), rel)
-    path = assert_no_symlinks_in_path(path, root=root)
+    root_path = Path(root).resolve()
+    path = safe_resolve_under(root_path, rel)
+
+    if _require_openat2_for_paths():
+        from lumen.engine.services.linux_path_open import open_beneath
+
+        if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
+            flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)
+            if "w" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
+            if "a" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_APPEND", 1024)
+            if "x" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_EXCL", 128)
+        else:
+            flags = getattr(os, "O_RDONLY", 0)
+        opened = open_beneath(
+            root_path,
+            root_path / rel,
+            directory=False,
+            flags=flags,
+            require_openat2=True,
+        )
+        try:
+            if flags & getattr(os, "O_CREAT", 64):
+                os.fchmod(opened.fd, 0o600)
+            return open(opened.fd, mode, **kwargs)
+        except Exception:
+            opened.close()
+            raise
+
+    path = assert_no_symlinks_in_path(path, root=root_path)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
         flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)
