@@ -12,21 +12,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OUTPUT_DIR=/tmp/lumen_output \
     PATH="/home/appuser/.local/bin:$PATH"
 
-# Apply Trixie updates, then pull only security-fixed runtime packages from Debian Sid.
-# hadolint ignore=DL3008
+# Apply Trixie updates, then pin only the Sid security-fixed runtime packages.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && printf 'deb http://deb.debian.org/debian sid main\n' > /etc/apt/sources.list.d/sid.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends -t sid \
-        ncurses-bin \
-        openssl-provider-legacy \
-        libsqlite3-0 \
-        libudev1 \
-        libacl1 \
-        util-linux \
-        perl-base \
+        ncurses-bin=6.6+20260608-2 \
+        openssl-provider-legacy=3.6.5-1 \
+        libsqlite3-0=3.54.1-2 \
+        libudev1=262.2-1 \
+        libacl1=2.4.0-1 \
+        util-linux=2.42.4-1 \
+        perl-base=5.44.0-3 \
     && rm -f /etc/apt/sources.list.d/sid.list \
+    && dpkg-query -W -f='${Package}=${Version}\\n' \
+        ncurses-bin openssl-provider-legacy libsqlite3-0 libudev1 libacl1 util-linux perl-base \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
