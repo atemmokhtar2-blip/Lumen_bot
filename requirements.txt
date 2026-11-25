@@ -75,4 +75,8 @@ certifi==2026.10.18
 dnspython==2.9.2
 multidict==6.9.1
 urllib3==2.8.0
+anyio==4.14.2
+idna==3.19
+protobuf==5.29.6
+python-multipart==0.0.34
 # Lock refresh preserves the complete dependency graph and patched advisory pins.
