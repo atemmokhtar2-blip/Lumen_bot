@@ -10,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     OUTPUT_DIR=/tmp/lumen_output \
+    HOME=/home/appuser \
     PATH="/home/appuser/.local/bin:$PATH"
 
 # Apply Trixie updates, then pin only the Sid security-fixed runtime packages.
@@ -39,18 +40,19 @@ RUN apt-get update \
 
 WORKDIR /app
 
-RUN groupadd --gid 10001 appuser \
-    && useradd --uid 10001 --gid appuser --shell /usr/sbin/nologin --create-home appuser
+# Use a fixed numeric non-root identity; no account-management utilities needed.
+RUN mkdir -p /home/appuser \
+    && chown 10001:10001 /home/appuser
 
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip==25.3 setuptools==84.2.1 \
     && pip install --no-cache-dir -r requirements.lock \
     && mkdir -p /tmp/lumen_output \
-    && chown -R appuser:appuser /app /tmp/lumen_output
+    && chown -R 10001:10001 /app /tmp/lumen_output /home/appuser
 
 COPY . .
 
-USER appuser
+USER 10001:10001
 
 # Tokens MUST come from runtime env — never build args / image layers.
 EXPOSE 8080
