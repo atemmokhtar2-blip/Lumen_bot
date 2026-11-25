@@ -60,7 +60,7 @@ _BUILTIN: list[Capability] = [
         id="host_heal",
         title_ar="إصلاح الاستضافة",
         description_ar="إصلاح بوت الاستضافة عند تعطل الصحة",
-        keywords=(
+        phrases=(
             "اصلح الاستضافة", "أصلح الاستضافة", "صلح البوت", "إصلاح الاستضافة",
             "heal host", "repair host", "صلح الاستضافة",
         ),
