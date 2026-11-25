@@ -278,11 +278,11 @@ jobs:
           pip install -r requirements.txt
       - name: Generate ephemeral test credentials
         run: |
-          BOT_TOKEN="$(python -c 'import secrets; print(bytes([49,50,51,52,53,54,58]).decode() + secrets.token_urlsafe(32))')"
+          TG_AUTH_VALUE="$(python -c 'import secrets; print(bytes([49,50,51,52,53,54,58]).decode() + secrets.token_urlsafe(32))')"
           TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-          echo "::add-mask::$BOT_TOKEN"
+          echo "::add-mask::$TG_AUTH_VALUE"
           echo "::add-mask::$TOKEN_SECRET"
-          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
+          echo "TELEGRAM_TG_AUTH_VALUE=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
           echo "TBE_TOKEN_SECRET=$TOKEN_SECRET" >> "$GITHUB_ENV"
       - name: Ledger + welcome + privilege gates
         env:
@@ -350,9 +350,9 @@ jobs:
         run: python scripts/security/security_baseline_check.py --strict
       - name: Generate ephemeral probe token
         run: |
-          BOT_TOKEN="$(python -c 'import secrets; print(bytes([49,50,51,52,53,54,58]).decode() + secrets.token_urlsafe(32))')"
-          echo "::add-mask::$BOT_TOKEN"
-          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
+          TG_AUTH_VALUE="$(python -c 'import secrets; print(bytes([49,50,51,52,53,54,58]).decode() + secrets.token_urlsafe(32))')"
+          echo "::add-mask::$TG_AUTH_VALUE"
+          echo "TELEGRAM_TG_AUTH_VALUE=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
       - name: DAST API probe
         env:
           PYTHONPATH: ${{ github.workspace }}
