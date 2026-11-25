@@ -149,7 +149,7 @@ jobs:
       # Gate on HIGH/CRITICAL only. Trivy Action clears TRIVY_SEVERITY when
       # producing unrestricted SARIF, so a SARIF gate was incorrectly failing
       # on MEDIUM/LOW findings despite this workflow's HIGH/CRITICAL threshold.
-      - name: Distroless runtime smoke test (Python 3.12 + native wheels)
+      - name: Hardened runtime smoke test (Python 3.12 + privilege boundary)
         run: |
           docker run --rm --entrypoint /usr/local/bin/python3.12 \
             "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" -c '
@@ -157,10 +157,13 @@ jobs:
           assert os.getuid() == 65532, f"unexpected runtime uid: {os.getuid()}"
           assert sys.version_info[:2] == (3, 12), f"unexpected Python: {sys.version}"
           assert importlib.util.find_spec("pip") is None, "pip must not ship in runtime"
+          with open("/proc/self/status", encoding="ascii") as status_file:
+              cap_eff = next(line.split()[1] for line in status_file if line.startswith("CapEff:"))
+          assert int(cap_eff, 16) == 0, f"runtime process has effective capabilities: {cap_eff}"
           import aiohttp, argon2, cryptography, curl_cffi, grpc, onnxruntime
           import PIL, playwright, psycopg, pymongo, redis, sqlite_vec, telegram
           import temporalio, tree_sitter
-          print("Distroless Python 3.12 runtime imports OK; uid=65532")
+          print("Hardened Python 3.12 runtime imports OK; uid=65532; CapEff=0")
           '
 
       - name: Trivy image CVE gate (CRITICAL/HIGH fail)
