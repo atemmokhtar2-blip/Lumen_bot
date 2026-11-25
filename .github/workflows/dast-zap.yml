@@ -107,7 +107,7 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
           nohup python scripts/security/start_api_dast.py >"$OUTPUT_DIR/api.log" 2>&1 &
           echo $! >"$OUTPUT_DIR/api.pid"
-          for i in $(seq 1 45); do
+          for _ in $(seq 1 45); do
             curl -sf "$DAST_BASE_URL/health" && echo ready && exit 0
             sleep 1
           done
