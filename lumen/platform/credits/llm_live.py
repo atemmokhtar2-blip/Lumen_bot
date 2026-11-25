@@ -387,9 +387,40 @@ def charge_llm_step(
                 or 0
             )
         if toks > 0:
-            check_tenant_llm_budget(tid, add_tokens=toks, add_usd=0.0)
-    except Exception:
-        logger.debug("llm budget counter update skipped", exc_info=True)
+            budget_ok, budget_reason = check_tenant_llm_budget(
+                tid, add_tokens=toks, add_usd=0.0
+            )
+            if not budget_ok:
+                # The provider call has already happened and its credit charge
+                # is recorded. Stop the agent immediately so no subsequent
+                # model call can continue past the hard daily token budget.
+                raise InsufficientCreditsError(
+                    tenant_id=tid,
+                    needed=amount,
+                    available=0,
+                    reason=str(budget_reason or "llm_daily_budget_exceeded"),
+                    step=int(step or 0),
+                )
+    except InsufficientCreditsError:
+        raise
+    except Exception as exc:
+        # In production, inability to persist usage accounting must stop the
+        # agent; otherwise multiple workers could silently bypass daily caps.
+        env = (
+            os.getenv("ENVIRONMENT")
+            or os.getenv("TBE_ENV")
+            or os.getenv("LUMEN_ENV")
+            or ""
+        ).strip().lower()
+        if env in {"prod", "production", "staging"}:
+            raise InsufficientCreditsError(
+                tenant_id=tid,
+                needed=amount,
+                available=0,
+                reason="llm_budget_accounting_unavailable",
+                step=int(step or 0),
+            ) from exc
+        logger.debug("llm budget counter update skipped in development", exc_info=True)
 
     return receipt
 
