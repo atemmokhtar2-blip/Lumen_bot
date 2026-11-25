@@ -136,3 +136,21 @@ def test_specified_generate_still_routes_to_generate():
     )
     assert r.action in {"generate", "refine"}
     assert r.generate_request
+
+
+
+def test_tool_param_validation_fails_closed_when_registry_unavailable(monkeypatch):
+    import builtins
+    from lumen.engine.services.multi_agent import tools
+
+    original_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "lumen.engine.services.tool_runtime.registry":
+            raise ImportError("simulated_registry_unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+    ok, errors = tools._validate("host_start", {"service_name": "x"})
+    assert ok is False
+    assert errors == ["validation_unavailable"]
