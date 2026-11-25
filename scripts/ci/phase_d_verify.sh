@@ -6,11 +6,13 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="${PYTHONPATH:-$ROOT}"
 if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-  export TELEGRAM_BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  TELEGRAM_BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  export TELEGRAM_BOT_TOKEN
 fi
 export ENVIRONMENT="${ENVIRONMENT:-development}"
 if [[ -z "${TBE_TOKEN_SECRET:-}" ]]; then
-  export TBE_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+  TBE_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+  export TBE_TOKEN_SECRET
 fi
 
 echo "=== D0: HEAD ==="
