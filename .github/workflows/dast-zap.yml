@@ -53,9 +53,15 @@ jobs:
           pip install -r requirements.txt
       - name: Generate ephemeral DAST test credentials
         run: |
-          echo "PLATFORM_ADMIN_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
-          echo "STRIPE_WEBHOOK_SECRET=whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
-          echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
+          ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          WEBHOOK_SECRET="whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$ADMIN_TOKEN"
+          echo "::add-mask::$WEBHOOK_SECRET"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "PLATFORM_ADMIN_TOKEN=$ADMIN_TOKEN" >> "$GITHUB_ENV"
+          echo "STRIPE_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
       - name: Platform IDOR + probe
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -92,9 +98,15 @@ jobs:
 
       - name: Generate ephemeral live API credentials
         run: |
-          echo "PLATFORM_ADMIN_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
-          echo "STRIPE_WEBHOOK_SECRET=whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
-          echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
+          ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          WEBHOOK_SECRET="whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$ADMIN_TOKEN"
+          echo "::add-mask::$WEBHOOK_SECRET"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "PLATFORM_ADMIN_TOKEN=$ADMIN_TOKEN" >> "$GITHUB_ENV"
+          echo "STRIPE_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
 
       - name: Start live API
         env:
@@ -166,6 +178,7 @@ jobs:
         run: |
           set +e
           KEY=$(python -c "import json;print(json.load(open('$DAST_SEED_FILE'))['tenant_a']['key'])")
+          echo "::add-mask::$KEY"
           docker run --rm --user 0 --network host \
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
@@ -198,6 +211,12 @@ jobs:
           done
           exit $status
 
+      - name: Remove temporary DAST credentials and authenticated report
+        if: always()
+        env:
+          DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+        run: rm -f "$DAST_SEED_FILE" zap-auth-report.json
+
       - name: Upload ZAP engine artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -208,9 +227,6 @@ jobs:
             zap-baseline-report.html
             zap-api-report.json
             zap-api-report.html
-            zap-auth-report.json
-            ${{ runner.temp }}/dast-tenants.json
-            ${{ runner.temp }}/dast-api-out/api.log
           if-no-files-found: ignore
           retention-days: 14
 
