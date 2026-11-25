@@ -184,23 +184,24 @@ def open_directory_nofollow(path: Path | str) -> int:
 
 
 def _require_openat2_for_paths() -> bool:
-    """Production / multi-tenant must use openat2 (RESOLVE_BENEATH); O_NOFOLLOW-only is unsafe."""
-    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }:
-        return True
-    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
-        "0", "false", "no", "off",
-    }:
-        return False
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
-    if env in {"dev", "development", "local", "test"}:
-        return False
-    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    return multi or env not in {"dev", "development", "local", "test"}
+    """Production always requires openat2; only explicit dev/test may opt out."""
+    env = (
+        os.environ.get("ENVIRONMENT")
+        or os.environ.get("TBE_ENV")
+        or os.environ.get("LUMEN_ENV")
+        or "production"
+    ).strip().lower()
+    dev_mode = env in {"dev", "development", "local", "test"}
+    flag = (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower()
 
+    # An environment override must never downgrade production path resolution.
+    if not dev_mode:
+        return True
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return False
 
 def verify_directory_nofollow(path: Path | str, *, root: Path | str | None = None) -> Path:
     """Validate path is a real directory under root — prefers openat2.
@@ -291,6 +292,7 @@ def safe_write_text(
                 getattr(os, "O_WRONLY", 1)
                 | getattr(os, "O_CREAT", 64)
                 | getattr(os, "O_TRUNC", 512)
+                | getattr(os, "O_CLOEXEC", 0)
             )
             opened = open_beneath(
                 root,
@@ -370,7 +372,7 @@ def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
             if "x" in mode:
                 flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_EXCL", 128)
         else:
-            flags = getattr(os, "O_RDONLY", 0)
+            flags = getattr(os, "O_RDONLY", 0) | getattr(os, "O_CLOEXEC", 0)
         opened = open_beneath(
             root_path,
             root_path / rel,
