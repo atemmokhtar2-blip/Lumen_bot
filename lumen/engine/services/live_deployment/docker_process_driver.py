@@ -93,8 +93,10 @@ def _seccomp_arg() -> str:
         candidate = Path(configured)
         if not candidate.is_absolute():
             raise ValueError("seccomp_profile_path_must_be_absolute")
+        if candidate.is_symlink():
+            raise ValueError("seccomp_profile_symlink_rejected")
         resolved = candidate.resolve(strict=True)
-        if not resolved.is_file() or resolved.is_symlink() or resolved.stat().st_size > 256 * 1024:
+        if not resolved.is_file() or resolved.stat().st_size > 256 * 1024:
             raise ValueError("seccomp_profile_path_rejected")
         return str(resolved)
     try:
