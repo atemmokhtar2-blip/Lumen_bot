@@ -112,7 +112,7 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/project" \
             openpolicyagent/conftest:latest \
-            test /project/Dockerfile -p /project/policy --policy /project/policy
+            test /project/Dockerfile -p /project/policy/dockerfile
       - name: Conftest on selected workflows
         run: |
           set -e
@@ -122,9 +122,8 @@ jobs:
                    .github/workflows/policy-as-code.yml; do
             docker run --rm -v "${{ github.workspace }}:/project" \
               openpolicyagent/conftest:latest \
-              test "/project/$f" -p /project/policy || true
+              test "/project/$f" -p /project/policy/workflows
           done
-          # Dockerfile policies are mandatory (above). Workflow Rego is advisory until schemas stabilize.
 
   trivy-config:
     name: Trivy misconfig (Aqua)
