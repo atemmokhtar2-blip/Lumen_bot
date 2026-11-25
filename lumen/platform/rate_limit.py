@@ -240,20 +240,26 @@ def check_tenant_llm_budget(
     except (TypeError, ValueError, OverflowError):
         return False, "invalid_llm_budget_amount"
 
+    if add_tokens > (2**53 - 1) or add_usd > 1_000_000_000_000:
+        return False, "invalid_llm_budget_amount"
     add_usd_micro = int(round(add_usd * 1_000_000))
     usd_cap_micro = int(round(usd_cap * 1_000_000))
     if tok_cap <= 0 and usd_cap_micro <= 0:
-        return True, "budget_disabled"
+        return True, "ok"
 
     day = time.strftime("%Y%m%d", time.gmtime())
     tok_key = f"llm_tok:{tid}:{day}"
     usd_key = f"llm_usd:{tid}:{day}"
 
     try:
-        from .runtime_config import redis_url as _redis_url_fn
+        from .runtime_config import is_dev as _is_dev, redis_url as _redis_url_fn
         url = (_redis_url_fn() or "").strip()
+        dev_mode = bool(_is_dev())
     except Exception:
         url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+        dev_mode = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower() in {
+            "dev", "development", "local", "test"
+        }
 
     if url:
         try:
@@ -288,8 +294,13 @@ def check_tenant_llm_budget(
             logger.warning("llm budget redis failed; refusing", exc_info=True)
             return False, "llm_budget_backend_unavailable"
 
+    # Never use per-process accounting in production: multiple replicas would
+    # each get an independent allowance and could multiply the tenant's budget.
+    if not dev_mode:
+        return False, "llm_budget_backend_required"
+
     # No Redis: the lock in _in_process_budget_check makes this atomic only
-    # within one process; production deployments must use shared Redis.
+    # within one process; this fallback is explicitly development/test only.
     return _in_process_budget_check(
         tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd
     )
