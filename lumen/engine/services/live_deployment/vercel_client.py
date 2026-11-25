@@ -68,7 +68,7 @@ def sanitize_project_name(name: str, *, max_len: int = 48) -> str:
 
 
 def sha1_bytes(data: bytes) -> str:
-    return hashlib.sha1(data).hexdigest()
+    return hashlib.sha1(data, usedforsecurity=False).hexdigest()
 
 
 @dataclass
