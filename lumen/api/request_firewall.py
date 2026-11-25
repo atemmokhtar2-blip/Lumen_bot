@@ -57,6 +57,7 @@ _SKIP_PATH_PREFIXES = (
 )
 
 
+@web.middleware
 async def request_firewall_middleware(request, handler):
     from aiohttp import web
     path = request.path or "/"
