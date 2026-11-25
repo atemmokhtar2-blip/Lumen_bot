@@ -5,6 +5,10 @@ on:
     branches: [fix/ci-security-failures]
     paths:
       - requirements.txt
+  pull_request:
+    branches: [Lumen]
+    paths:
+      - requirements.txt
 
 permissions:
   contents: read
