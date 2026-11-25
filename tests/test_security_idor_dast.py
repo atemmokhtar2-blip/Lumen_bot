@@ -230,8 +230,8 @@ def test_llm_budget_reservations_are_atomic_across_workers(monkeypatch):
 
         allowed = [result for result in results if result[0]]
         assert len(allowed) == 5, f"expected exactly 5 atomic reservations, got {len(allowed)}"
-        assert int(redis.get(token_key) or 0) == 50
-        assert float(redis.get(usd_key) or 0) == pytest.approx(0.05, abs=0.000001)
+        assert int(redis.get(token_key) or 0) == workers * 10
+        assert float(redis.get(usd_key) or 0) == pytest.approx(workers * 0.01, abs=0.000001)
 
         # Negative adjustments must never refund or decrement a spend budget.
         ok, _ = check_tenant_llm_budget(
@@ -240,8 +240,8 @@ def test_llm_budget_reservations_are_atomic_across_workers(monkeypatch):
             add_usd=-10.0,
         )
         assert ok
-        assert int(redis.get(token_key) or 0) == 50
-        assert float(redis.get(usd_key) or 0) == pytest.approx(0.05, abs=0.000001)
+        assert int(redis.get(token_key) or 0) == workers * 10
+        assert float(redis.get(usd_key) or 0) == pytest.approx(workers * 0.01, abs=0.000001)
     finally:
         redis.delete(token_key, usd_key)
 
