@@ -1,0 +1,41 @@
+name: Dependency lock refresh (temporary)
+
+on:
+  push:
+    branches: [fix/ci-security-failures]
+    paths:
+      - requirements.txt
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-tools
+        run: python -m pip install --upgrade pip pip-tools
+      - name: Resolve only security-related upgrades
+        run: |
+          pip-compile --resolver=backtracking --output-file=/tmp/requirements.lock \
+            --upgrade-package aiohttp \
+            --upgrade-package multidict \
+            --upgrade-package certifi \
+            --upgrade-package dnspython \
+            --upgrade-package opentelemetry-api \
+            --upgrade-package opentelemetry-sdk \
+            --upgrade-package opentelemetry-exporter-otlp-proto-http \
+            --upgrade-package urllib3 \
+            --upgrade-package pymongo \
+            --upgrade-package langgraph \
+            --upgrade-package langgraph-checkpoint-sqlite \
+            requirements.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refreshed-requirements-lock
+          path: /tmp/requirements.lock
+          retention-days: 2
