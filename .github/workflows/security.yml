@@ -278,6 +278,8 @@ jobs:
           pip install -r requirements.txt
       - name: Generate ephemeral test credentials
         run: |
+          # Per-run random token, masked before being written to runner env.
+          # kics-scan ignore-line
           BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
           TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
           echo "::add-mask::$BOT_TOKEN"
@@ -349,6 +351,7 @@ jobs:
           TBE_ENV: test
         run: python scripts/security/security_baseline_check.py --strict
       - name: Generate ephemeral probe token
+        # kics-scan ignore-line
         run: echo "TELEGRAM_BOT_TOKEN=123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
       - name: DAST API probe
         env:
