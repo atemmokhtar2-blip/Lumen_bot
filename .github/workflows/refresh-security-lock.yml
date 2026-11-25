@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
       - name: Compile only the vulnerable dependency chain
         run: |
-          python -m pip install --upgrade pip pip-tools==7.5.2
+          python -m pip install --upgrade pip==25.3 pip-tools==7.5.2
           pip-compile --resolver=backtracking \
             --upgrade-package mcp \
             --upgrade-package pydantic \
