@@ -30,18 +30,16 @@ RUN mkdir -p /tmp/lumen_output \
 # Runtime contains Python and shared libraries only; no compiler, pip, apk, or shell tooling.
 FROM cgr.dev/chainguard/wolfi-base@sha256:6ab86c5e059da41ff1454b6f69ecd7422b94af41969f4e231aa23244e47d4a81 AS runtime
 
+# Install patched Python packages and remove the bundled bootstrap wheel in
+# the same image layer, so scanners cannot retain the vulnerable wheel layer.
 RUN apk add --no-cache \
     python-3.12=3.12.16_git20261116-r0 \
     py3.12-setuptools=84.2.1-r1 \
     ca-certificates-bundle=20261020-r1 \
     libstdc++=16.2.0-r5 \
     libgcc=16.2.0-r5 \
-    libgomp=16.2.0-r5
-
-# Python ships an unused ensurepip wheel containing setuptools 70.3.0.
-# The runtime uses the isolated /opt/venv; remove the stale bootstrap wheel so
-# scanners do not report an exploitable package that is not used or installed.
-RUN find /usr/lib/python3.12 -type f -name 'setuptools-*.whl' -delete \
+    libgomp=16.2.0-r5 \
+    && find /usr/lib/python3.12 -type f -name 'setuptools-*.whl' -delete \
     && python3.12 -c "import setuptools; assert setuptools.__version__.startswith('84.'), setuptools.__version__"
 
 ENV VIRTUAL_ENV=/opt/venv \
