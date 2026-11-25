@@ -112,6 +112,8 @@ jobs:
             bandit-report.txt
             bandit.json
           retention-days: 30
+        # Report upload is diagnostic only; the preceding Bandit gate remains hard-fail.
+        continue-on-error: true
 
   # ── 4. SAST — Semgrep (custom + severity ERROR) ─────────
   sast-semgrep:
