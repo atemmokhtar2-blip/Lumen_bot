@@ -34,8 +34,29 @@ def _ttl_seconds() -> float:
 
 
 def _hmac_secret() -> bytes:
-    raw = (os.environ.get("MULTI_AGENT_HITL_SECRET") or os.environ.get("SECRET_KEY") or "multi-agent-hitl").encode()
-    return hashlib.sha256(raw).digest()
+    configured = (
+        os.environ.get("MULTI_AGENT_HITL_SECRET")
+        or os.environ.get("SECRET_KEY")
+        or ""
+    ).strip()
+    if not configured:
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            production = is_production_runtime()
+        except Exception:
+            env = (
+                os.environ.get("ENVIRONMENT")
+                or os.environ.get("TBE_ENV")
+                or os.environ.get("LUMEN_ENV")
+                or ""
+            ).strip().lower()
+            production = env in {"prod", "production", "staging"}
+        if production:
+            raise RuntimeError(
+                "MULTI_AGENT_HITL_SECRET or SECRET_KEY is required for production approvals"
+            )
+        configured = "multi-agent-hitl-dev-only"
+    return hashlib.sha256(configured.encode("utf-8")).digest()
 
 
 def _sign(action_id: str, state_id: str, tool: str, user_id: int, expires_at: float) -> str:
