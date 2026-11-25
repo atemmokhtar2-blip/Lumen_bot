@@ -13,28 +13,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/appuser \
     PATH="/home/appuser/.local/bin:$PATH"
 
-# Apply Trixie updates, then pin only the Sid security-fixed runtime packages.
+# Stay on Debian Trixie and consume its supported security updates.
+# Do not mix Debian Sid packages into the stable runtime image.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
-    && printf 'deb http://deb.debian.org/debian sid main\n' > /etc/apt/sources.list.d/sid.list \
-    && apt-get update \
-    && apt-get -t sid install -y --no-install-recommends \
-        ncurses-bin=6.6+20260608-2 \
-        libsqlite3-0=3.54.1-2 \
-        libudev1=262.2-1 \
-        libacl1=2.4.0-1 \
-        util-linux=2.42.4-1 \
-        perl-base=5.44.0-3 \
-        dpkg=1.23.12 \
-        libc6=2.43-7 \
-        libc-bin=2.43-7 \
-        libseccomp2=2.6.2-1 \
-        openssl-provider-legacy=3.6.5-1 \
-        account-utils=1.4.0-1 \
-        account-utils-passwd=1.4.0-1 \
-    && rm -f /etc/apt/sources.list.d/sid.list \
-    && dpkg-query -W -f='${Package}=${Version}\\n' \
-        ncurses-bin libsqlite3-0 libudev1 libacl1 util-linux perl-base dpkg libc6 libc-bin libseccomp2 account-utils account-utils-passwd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -45,7 +27,7 @@ RUN mkdir -p /home/appuser \
     && chown 10001:10001 /home/appuser
 
 COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir --upgrade pip==25.3 setuptools==84.2.1 \
+RUN pip install --no-cache-dir --upgrade pip==26.2.0 setuptools==84.2.1 \
     && pip install --no-cache-dir -r requirements.lock \
     && mkdir -p /tmp/lumen_output \
     && chown -R 10001:10001 /app /tmp/lumen_output /home/appuser
