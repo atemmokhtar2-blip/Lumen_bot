@@ -19,15 +19,20 @@ RUN apt-get update \
     && apt-get update \
     && apt-get -t sid install -y --no-install-recommends \
         ncurses-bin=6.6+20260608-2 \
-        openssl-provider-legacy=3.6.5-1 \
         libsqlite3-0=3.54.1-2 \
         libudev1=262.2-1 \
         libacl1=2.4.0-1 \
         util-linux=2.42.4-1 \
         perl-base=5.44.0-3 \
+        dpkg=1.23.12 \
+        libc6=2.43-7 \
+        libc-bin=2.43-7 \
+        libseccomp2=2.6.1-1+b2 \
+        passwd=1:4.20.3-1 \
+    && apt-get purge -y --no-install-recommends openssl-provider-legacy \
     && rm -f /etc/apt/sources.list.d/sid.list \
     && dpkg-query -W -f='${Package}=${Version}\\n' \
-        ncurses-bin openssl-provider-legacy libsqlite3-0 libudev1 libacl1 util-linux perl-base \
+        ncurses-bin libsqlite3-0 libudev1 libacl1 util-linux perl-base dpkg libc6 libc-bin libseccomp2 passwd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
