@@ -13,6 +13,7 @@ from typing import Any
 from lumen.engine.services.safe_fs import (
     UnsafePathError,
     safe_resolve_under,
+    safe_open_under,
     safe_write_text,
 )
 
@@ -59,25 +60,22 @@ def list_dir(work_dir: str, path: str = ".") -> dict[str, Any]:
 def read_file(work_dir: str, path: str) -> dict[str, Any]:
     try:
         root = _root(work_dir)
+        import stat
+
         target = safe_resolve_under(root, path)
-        if not target.exists() or not target.is_file():
-            return {"ok": False, "error": "not_found", "path": path}
-        data = target.read_bytes()
-        if len(data) > _MAX_READ:
-            text = data[:_MAX_READ].decode("utf-8", errors="replace")
-            return {
-                "ok": True,
-                "path": path,
-                "content": text,
-                "truncated": True,
-                "size": len(data),
-            }
+        with safe_open_under(root, path, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return {"ok": False, "error": "not_a_regular_file", "path": path}
+            data = handle.read(_MAX_READ + 1)
+        truncated = len(data) > _MAX_READ
+        content = data[:_MAX_READ].decode("utf-8", errors="replace")
         return {
             "ok": True,
-            "path": path,
-            "content": data.decode("utf-8", errors="replace"),
-            "truncated": False,
-            "size": len(data),
+            "path": target.relative_to(root).as_posix(),
+            "content": content,
+            "truncated": truncated,
+            "size": int(info.st_size),
         }
     except UnsafePathError as exc:
         return {"ok": False, "error": f"unsafe:{exc}"}
