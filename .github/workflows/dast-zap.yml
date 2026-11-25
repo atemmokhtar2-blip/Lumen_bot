@@ -34,6 +34,16 @@ jobs:
   unit-idor:
     name: Platform IDOR (pytest)
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,6 +59,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
           ENVIRONMENT: test
           TBE_ENV: test
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           pytest tests/test_security_idor_dast.py -q --tb=short
           python scripts/security/dast_api_probe.py
@@ -56,6 +67,16 @@ jobs:
   live-zap-engine:
     name: Live API + OWASP ZAP engine (docker)
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,6 +94,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           ENVIRONMENT: test
           TBE_ENV: test
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           mkdir -p "$OUTPUT_DIR"
           nohup python scripts/security/start_api_dast.py >"$OUTPUT_DIR/api.log" 2>&1 &
