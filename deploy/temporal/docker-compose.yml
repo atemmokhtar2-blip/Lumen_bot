@@ -29,13 +29,13 @@ services:
       postgresql:
         condition: service_healthy
     environment:
-      - DB=postgres12
-      - DB_PORT=5432
-      - POSTGRES_USER=temporal
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
       # The Temporal container receives the same required runtime secret.
       # kics-scan ignore-line
-      - POSTGRES_PWD=${TEMPORAL_POSTGRES_PASSWORD:?Set TEMPORAL_POSTGRES_PASSWORD}
-      - POSTGRES_SEEDS=postgresql
+      POSTGRES_PWD: ${TEMPORAL_POSTGRES_PASSWORD:?Set TEMPORAL_POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgresql
     ports:
       - "127.0.0.1:7233:7233"
     healthcheck:
