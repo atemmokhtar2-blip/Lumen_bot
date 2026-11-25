@@ -474,7 +474,7 @@ async def _handle_message_body(
     # ══════════════════════════════════════════════════════════════════
     await _clear_thinking()
     try:
-        from lumen.infrastructure.ai import handle_user_turn
+        from lumen.engine.services.multi_agent.engine_turn import handle_user_turn
         turn = handle_user_turn(
             request,
             user_id=uid,
