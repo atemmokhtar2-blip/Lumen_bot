@@ -274,6 +274,47 @@ def safe_write_text(
     if len(data.encode("utf-8")) > limit:
         raise UnsafePathError("file_too_large")
     target = safe_resolve_under(root, rel)
+    raw = data.encode("utf-8")
+
+    # Production / multi-tenant writes use kernel-enforced RESOLVE_BENEATH and
+    # RESOLVE_NO_SYMLINKS. Create parent directories by walking verified dirfds;
+    # do not call Path.mkdir on an attacker-controlled path.
+    if _require_openat2_for_paths():
+        try:
+            from lumen.engine.services.linux_path_open import mkdirs_beneath, open_beneath
+
+            rel_norm = (rel or "").strip().replace("\\\\", "/")
+            parent_rel = "/".join(rel_norm.split("/")[:-1])
+            if parent_rel:
+                mkdirs_beneath(root, parent_rel, require_openat2=True)
+            flags = (
+                getattr(os, "O_WRONLY", 1)
+                | getattr(os, "O_CREAT", 64)
+                | getattr(os, "O_TRUNC", 512)
+            )
+            opened = open_beneath(
+                root,
+                root / rel_norm,
+                directory=False,
+                flags=flags,
+                require_openat2=True,
+            )
+            try:
+                os.fchmod(opened.fd, 0o600)
+                view = memoryview(raw)
+                while view:
+                    written = os.write(opened.fd, view)
+                    if written <= 0:
+                        raise OSError("short_write")
+                    view = view[written:]
+            finally:
+                opened.close()
+            return target
+        except Exception as exc:
+            raise UnsafePathError(f"openat2_write_failed:{type(exc).__name__}") from exc
+
+    # Explicit dev/test fallback: final-component O_NOFOLLOW plus component
+    # lstat checks. Production never reaches this weaker path.
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         target.resolve(strict=False).relative_to(Path(root).resolve())
@@ -282,27 +323,22 @@ def safe_write_text(
     assert_no_symlinks_in_path(target, root=root)
     flags = getattr(os, "O_WRONLY", 1) | getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    raw = data.encode("utf-8")
     try:
         fd = os.open(str(target), flags | nofollow, 0o600)
         try:
-            os.write(fd, raw)
+            view = memoryview(raw)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short_write")
+                view = view[written:]
         finally:
             os.close(fd)
     except OSError as exc:
-        # Never fall back to following open — re-check then retry O_NOFOLLOW only
         assert_no_symlinks_in_path(target, root=root)
         if _lstat_is_symlink(target):
             raise UnsafePathError("write_target_is_symlink") from exc
-        # File may not exist yet; O_NOFOLLOW on create is fine on Linux for new files
-        try:
-            fd = os.open(str(target), flags | nofollow, 0o600)
-            try:
-                os.write(fd, raw)
-            finally:
-                os.close(fd)
-        except OSError as exc2:
-            raise UnsafePathError(f"write_failed:{type(exc2).__name__}") from exc2
+        raise UnsafePathError(f"write_failed:{type(exc).__name__}") from exc
     return target
 
 
