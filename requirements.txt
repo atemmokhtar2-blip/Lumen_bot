@@ -33,6 +33,7 @@ prometheus-client==0.21.1
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
 SQLAlchemy==2.0.40
 alembic==1.15.2
+Mako==1.4.2  # Security fix for the Alembic template dependency
 
 # Phase B — durable workflows (official SDK)
 temporalio[langgraph]==1.37.0
