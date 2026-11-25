@@ -5,6 +5,8 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: tbe
+      # Required external secret; no literal/default credential is committed.
+      # kics-scan ignore-line
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}
       POSTGRES_DB: tbe
     ports:
