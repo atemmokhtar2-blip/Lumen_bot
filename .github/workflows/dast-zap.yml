@@ -157,7 +157,7 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_HEALTH_URL" -a \
+            zap-baseline.py -t "$DAST_HEALTH_URL" -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-baseline-report.json \
               -r zap-baseline-report.html
@@ -174,7 +174,7 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a \
+            zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-api-report.json \
               -r zap-api-report.html
@@ -205,7 +205,7 @@ jobs:
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             -v "$ZAP_AUTH_CONFIG:/zap/auth.properties:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_BASE_URL/v1/me" -a \
+            zap-baseline.py -t "$DAST_BASE_URL/v1/me" -a -I \
               -c /zap/rules/rules.tsv \
               -J zap-auth-report.json \
               -r zap-auth-report.html \
