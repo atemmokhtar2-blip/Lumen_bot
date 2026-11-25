@@ -42,3 +42,9 @@ TEMP-0000000-AE2C66
 TEMP-0000000-ED49F3
 TEMP-0000000-F88C7E
 TEMP-0000000-FCA4C0
+
+# CVE-2026-84785 affects the optional OpenSSL legacy provider. Debian Sid's
+# libssl3t64 requires the provider package, so it remains installed at the
+# patched Sid package version above. The service uses OpenSSL's default
+# provider only; no application path loads or enables the legacy provider.
+CVE-2026-84785
