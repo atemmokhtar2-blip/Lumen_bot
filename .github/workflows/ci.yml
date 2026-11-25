@@ -48,6 +48,7 @@ jobs:
             tests/test_github_connection_durable.py \
             tests/test_llm_live_charge.py \
             tests/test_cost_gaps_closed.py \
+            tests/test_engine_turn_wired.py \
             tests/test_live_runner_integration.py \
             -k "not postgres and not redis_testcontainer" 2>&1 | tee unit-pytest.log
 
