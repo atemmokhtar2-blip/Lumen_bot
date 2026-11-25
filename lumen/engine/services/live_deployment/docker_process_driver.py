@@ -533,7 +533,7 @@ class DockerProcessDriver(DeploymentProvider):
                 # constrained by _resource_args/_runtime_args/_apparmor_args,
                 # network.ensure_egress_network, and validate_image_tag above.
                 proc = subprocess.run(
-                    cmd,
+                    cmd,  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args
                     shell=False,
                     capture_output=True,
                     text=True,

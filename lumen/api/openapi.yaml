@@ -8,6 +8,8 @@ info:
 servers:
   - url: https://api.example.com
     description: Replace with the deployed HTTPS API origin
+security:
+  - ApiKeyAuth: []
 tags:
   - name: health
   - name: tenants
@@ -19,6 +21,7 @@ tags:
 paths:
   /health:
     get:
+      security: []
       tags: [health]
       summary: Liveness
       responses:
@@ -29,6 +32,7 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /ready:
     get:
+      security: []
       tags: [health]
       summary: Readiness
       responses:
@@ -44,6 +48,7 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /openapi.yaml:
     get:
+      security: []
       tags: [health]
       summary: OpenAPI document
       responses:
@@ -54,6 +59,7 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /docs:
     get:
+      security: []
       tags: [health]
       summary: Swagger UI
       responses:
@@ -64,6 +70,7 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /v1/plans:
     get:
+      security: []
       tags: [billing]
       summary: List plans
       responses:
@@ -127,6 +134,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [description]
               properties:
                 description:
@@ -303,6 +311,7 @@ components:
       additionalProperties: true
     Job:
       type: object
+      additionalProperties: false
       properties:
         ok: { type: boolean }
         job_id: { type: string, pattern: '^job_[A-Za-z0-9_-]{1,128}$' }
