@@ -12,9 +12,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OUTPUT_DIR=/tmp/lumen_output \
     PATH="/home/appuser/.local/bin:$PATH"
 
-# Refresh the slim base to the latest Debian security updates before adding app code.
+# Apply Trixie updates, then pull only security-fixed runtime packages from Debian Sid.
+# hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
+    && printf 'deb http://deb.debian.org/debian sid main\n' > /etc/apt/sources.list.d/sid.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends -t sid \
+        ncurses-bin \
+        openssl-provider-legacy \
+        libsqlite3-0 \
+        libudev1 \
+        libacl1 \
+        util-linux \
+        perl-base \
+    && rm -f /etc/apt/sources.list.d/sid.list \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
