@@ -106,12 +106,12 @@ for root in roots:
 
 subprocess.run(
     ["/usr/bin/python3.12", "-c",
-     "import setuptools; from packaging.version import Version; assert Version(setuptools.__version__) >= Version('84.1.0'), setuptools.__version__; print('system setuptools', setuptools.__version__)"],
+     "import setuptools; assert tuple(map(int, setuptools.__version__.split('.')[:2])) >= (84, 1), setuptools.__version__; print('system setuptools', setuptools.__version__)"],
     check=True,
 )
 subprocess.run(
     ["/opt/venv/bin/python", "-c",
-     "import setuptools; from packaging.version import Version; assert Version(setuptools.__version__) >= Version('84.1.0'), setuptools.__version__; print('app setuptools', setuptools.__version__)"],
+     "import setuptools; assert tuple(map(int, setuptools.__version__.split('.')[:2])) >= (84, 1), setuptools.__version__; print('app setuptools', setuptools.__version__)"],
     check=True,
 )
 PY
