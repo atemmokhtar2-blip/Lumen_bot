@@ -52,7 +52,7 @@ def qdrant_upsert(
 
     points = []
     for i, _id in enumerate(ids):
-        pid = uuid.UUID(hashlib.md5(_id.encode()).hexdigest())
+        pid = uuid.UUID(hashlib.md5(_id.encode(), usedforsecurity=False).hexdigest())
         points.append(
             qm.PointStruct(
                 id=str(pid),
