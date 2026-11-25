@@ -34,9 +34,11 @@ jobs:
             --upgrade-package multidict \
             --upgrade-package dnspython \
             --upgrade-package urllib3 \
+            --upgrade-package mcp \
             --output-file=requirements.lock requirements.txt
           pip-audit -r requirements.lock
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: refreshed-requirements-lock
           path: requirements.lock

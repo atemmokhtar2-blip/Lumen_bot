@@ -26,6 +26,7 @@ env:
   API_HOST: 127.0.0.1
   API_PORT: "8765"
   DAST_BASE_URL: http://127.0.0.1:8765
+  DAST_HEALTH_URL: http://127.0.0.1:8765/health
   ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
 
 jobs:
@@ -150,7 +151,7 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_BASE_URL" -a \
+            zap-baseline.py -t "$DAST_HEALTH_URL" -a \
               -c /zap/rules/rules.tsv \
               -J /zap/wrk/zap-baseline-report.json \
               -r /zap/wrk/zap-baseline-report.html
@@ -187,7 +188,7 @@ jobs:
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
             "$ZAP_IMAGE" \
-            zap-baseline.py -t "$DAST_BASE_URL" -a \
+            zap-baseline.py -t "$DAST_HEALTH_URL" -a \
               -c /zap/rules/rules.tsv \
               -J /zap/wrk/zap-auth-report.json \
               -z "-config replacer.full_list(0).description=auth \
