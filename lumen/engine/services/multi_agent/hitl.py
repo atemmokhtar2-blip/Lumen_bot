@@ -302,8 +302,10 @@ def confirm_action(
     if state is None:
         _audit("confirm_fail", reason="state_not_found", action_id=action_id)
         return False, None, "state_not_found"
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
-        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=user_id)
+    supplied_uid = int(user_id or 0)
+    owner_uid = int(state.user_id or 0)
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
+        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=supplied_uid)
         return False, state, "user_mismatch"
 
     pending = _load_pending(state)
@@ -376,7 +378,9 @@ def reject_action(
     state = board.get(state_id)
     if state is None:
         return False, None, "state_not_found"
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
+    supplied_uid = int(user_id or 0)
+    owner_uid = int(state.user_id or 0)
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
         return False, state, "user_mismatch"
     pending = _load_pending(state)
     # Verb-only reject: action_id may be empty — accept the sole pending action
