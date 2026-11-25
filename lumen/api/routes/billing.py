@@ -54,6 +54,33 @@ async def usage(request: web.Request) -> web.Response:
     )
 
 
+async def balance_status(request: web.Request) -> web.Response:
+    """Return the authenticated tenant's current credits balance."""
+    tenant = require_tenant(request)
+    try:
+        from lumen.application.handlers.billing_handlers import handle_get_balance
+        from lumen.application.queries.get_balance import GetBalanceQuery
+        from lumen.bootstrap import get_billing_gateway
+
+        balance = handle_get_balance(
+            GetBalanceQuery(tenant_id=tenant.tenant_id),
+            billing=get_billing_gateway(),
+        )
+        return web.json_response(
+            {
+                "ok": True,
+                "balance": balance.public_dict(),
+                "billing": "credits_only",
+            }
+        )
+    except Exception as exc:
+        logger.exception("billing balance lookup failed tenant=%s", tenant.tenant_id)
+        raise web.HTTPServiceUnavailable(
+            text='{"error":"balance_unavailable"}',
+            content_type="application/json",
+        ) from exc
+
+
 async def invoices(request: web.Request) -> web.Response:
     tenant = require_tenant(request)
     return web.json_response(
