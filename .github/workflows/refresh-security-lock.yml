@@ -43,4 +43,5 @@ jobs:
             exit 0
           fi
           git commit -m "chore(lock): refresh patched MCP dependencies [lock-refresh]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
