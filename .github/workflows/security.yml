@@ -122,12 +122,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install semgrep
-        run: pip install -U -r requirements-security.txt
+      - name: Pull official Semgrep CLI image
+        run: docker pull semgrep/semgrep:latest
       - name: Custom Lumen rules (fail on match)
         run: |
           if [ -d semgrep ] && ls semgrep/* >/dev/null 2>&1; then
-            semgrep scan --config semgrep/ --error --metrics off \
+            docker run --rm -v "${{ github.workspace }}:/src" -w /src \
+              semgrep/semgrep:latest semgrep scan --config semgrep/ --error --metrics off \
               --exclude tests \
               || { echo "::error::custom semgrep rules failed"; exit 1; }
           else
@@ -135,15 +136,16 @@ jobs:
           fi
       - name: OWASP / security-audit (ERROR severity only)
         run: |
-          semgrep scan \
-            --config p/owasp-top-ten \
-            --config p/security-audit \
-            --severity ERROR \
-            --error \
-            --metrics off \
-            --exclude tests \
-            --sarif -o semgrep.sarif \
-            || { echo "::error::semgrep ERROR findings"; exit 1; }
+          docker run --rm -v "${{ github.workspace }}:/src" -w /src \
+            semgrep/semgrep:latest semgrep scan \
+              --config p/owasp-top-ten \
+              --config p/security-audit \
+              --severity ERROR \
+              --error \
+              --metrics off \
+              --exclude tests \
+              --sarif -o /src/semgrep.sarif \
+              || { echo "::error::semgrep ERROR findings"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
