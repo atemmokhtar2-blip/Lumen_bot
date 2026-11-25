@@ -53,26 +53,6 @@ async def generate(request: web.Request) -> web.Response:
     """
     tenant = require_tenant(request)
 
-    # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
-    lim = get_rate_limiter()
-    if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):
-        retry = lim.seconds_until_allow(
-            f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0
-        )
-        raise web.HTTPTooManyRequests(
-            text=f'{{"error":"generate_rate_limited","retry_after":{retry}}}',
-            content_type="application/json",
-            headers={"Retry-After": str(retry)},
-        )
-
-    # Body: RAW_BODY_PATHS — capped read + single root parser (no request.json()).
-    ok, reason = get_billing().enforce_generation(tenant.tenant_id)
-    if not ok:
-        raise web.HTTPPaymentRequired(
-            text=f'{{"error":"{reason}"}}',
-            content_type="application/json",
-        )
-
     from lumen.api.security import parse_json_object_bytes, read_capped_body
 
     try:
@@ -102,6 +82,26 @@ async def generate(request: web.Request) -> web.Response:
     if len(description) > _MAX_DESCRIPTION:
         raise web.HTTPBadRequest(
             text=f'{{"error":"description_too_long","max":{_MAX_DESCRIPTION}}}',
+            content_type="application/json",
+        )
+
+    # Strict per-tenant generate rate limit (defense in depth beyond plan quotas)
+    lim = get_rate_limiter()
+    if not lim.allow(f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0):
+        retry = lim.seconds_until_allow(
+            f"generate:{tenant.tenant_id}", limit=max(1, _GEN_RPM), window_sec=60.0
+        )
+        raise web.HTTPTooManyRequests(
+            text=f'{{"error":"generate_rate_limited","retry_after":{retry}}}',
+            content_type="application/json",
+            headers={"Retry-After": str(retry)},
+        )
+
+    # Body: RAW_BODY_PATHS — capped read + single root parser (no request.json()).
+    ok, reason = get_billing().enforce_generation(tenant.tenant_id)
+    if not ok:
+        raise web.HTTPPaymentRequired(
+            text=f'{{"error":"{reason}"}}',
             content_type="application/json",
         )
 
