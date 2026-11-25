@@ -213,30 +213,28 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3.7.0
 
-      - name: Cosign keyless sign (OIDC)
+      - name: Cosign keyless sign Docker archive (OIDC)
         if: github.event_name != 'pull_request'
+        id: cosign
         run: |
-          # Sign local image digest reference (keyless via GitHub OIDC)
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" 2>/dev/null || true)
-          if [ -z "$DIGEST" ]; then
-            # Tag into a pseudo ref for local cosign save
-            docker tag "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" "ghcr.io/${{ github.repository }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
-            cosign sign-blob --yes \
-              --bundle cosign-bundle.json \
-              <(docker save "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" | sha256sum | awk '{print $1}' | tr -d '\n' | tee image.sha256)
-            echo "signed blob of image checksum"
-            cat image.sha256
-          else
-            cosign sign --yes "$DIGEST"
-          fi
+          # Sign the exact image archive; never treat a local Docker RepoDigest as a registry digest.
+          docker save "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" -o image.tar
+          IMAGE_DIGEST="$(sha256sum image.tar | awk '{print $1}')"
+          printf '%s\n' "$IMAGE_DIGEST" > image.sha256
+          echo "digest=sha256:$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          cosign sign-blob --yes --bundle cosign-bundle.json image.tar
+          cosign verify-blob --bundle cosign-bundle.json \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/supply-chain.yml@refs/heads/Lumen" \
+            image.tar
+          rm -f image.tar
 
       - name: Attest build provenance (GitHub official)
         if: github.event_name != 'pull_request' && github.actor != 'dependabot[bot]'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: sha256:${{ github.sha }}
-        continue-on-error: true
+          subject-name: lumen-supply-docker-archive
+          subject-digest: ${{ steps.cosign.outputs.digest }}
 
       - uses: actions/upload-artifact@v4
         if: always()
