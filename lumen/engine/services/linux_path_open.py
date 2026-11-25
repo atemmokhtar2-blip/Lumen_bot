@@ -305,7 +305,9 @@ def mkdirs_beneath(
                     ),
                     resolve=_DEFAULT_RESOLVE,
                 )
-            except FileNotFoundError:
+            except OSError as exc:
+                if exc.errno != errno.ENOENT:
+                    raise PathOpenError(exc.errno, f"unsafe_or_invalid_directory:{part}") from exc
                 try:
                     os.mkdir(part, mode=mode, dir_fd=current_fd)
                 except FileExistsError:
@@ -323,10 +325,8 @@ def mkdirs_beneath(
                         ),
                         resolve=_DEFAULT_RESOLVE,
                     )
-                except OSError as exc:
-                    raise PathOpenError(exc.errno, f"unsafe_or_invalid_directory:{part}") from exc
-            except OSError as exc:
-                raise PathOpenError(exc.errno, f"unsafe_or_invalid_directory:{part}") from exc
+                except OSError as open_exc:
+                    raise PathOpenError(open_exc.errno, f"unsafe_or_invalid_directory:{part}") from open_exc
             os.close(current_fd)
             current_fd = next_fd
     finally:
