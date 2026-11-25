@@ -90,10 +90,10 @@ jobs:
       - name: KICS fail on MEDIUM+ (official CLI container)
         run: |
           mkdir -p kics-results
-          docker pull checkmarx/kics:latest
+          docker pull checkmarx/kics:v2.2.1
           docker run --rm \
             -v "${{ github.workspace }}:/path" \
-            checkmarx/kics:latest scan \
+            checkmarx/kics:v2.2.1 scan \
               -p /path \
               -o /path/kics-results \
               --report-formats json,sarif \
