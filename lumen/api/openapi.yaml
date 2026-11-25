@@ -21,6 +21,8 @@ security:
 paths:
   /health:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
       security: []
       tags: [health]
       summary: Liveness
@@ -32,6 +34,8 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /ready:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
       security: []
       tags: [health]
       summary: Readiness
@@ -48,6 +52,8 @@ paths:
               schema: { $ref: "#/components/schemas/GenericResponse" }
   /openapi.yaml:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
       security: []
       tags: [health]
       summary: OpenAPI document
@@ -59,6 +65,8 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /docs:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
       security: []
       tags: [health]
       summary: Swagger UI
@@ -70,6 +78,8 @@ paths:
               schema: { type: string, pattern: '^[\s\S]*$' }
   /v1/plans:
     get:
+      # Public endpoint by design; authentication is intentionally not required.
+      # kics-scan ignore-line
       security: []
       tags: [billing]
       summary: List plans
