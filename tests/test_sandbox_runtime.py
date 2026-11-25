@@ -487,7 +487,7 @@ def test_docker_backend_fails_closed_when_production_policy_import_fails(monkeyp
     original_import = builtins.__import__
 
     def blocked_import(name, *args, **kwargs):
-        if name in {".strict", "lumen.engine.services.sandbox_runtime.strict"}:
+        if name in {"strict", ".strict", "lumen.engine.services.sandbox_runtime.strict"}:
             raise ImportError("simulated_policy_unavailable")
         return original_import(name, *args, **kwargs)
 
