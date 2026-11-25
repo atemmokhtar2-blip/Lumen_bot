@@ -21,7 +21,6 @@ paths:
     get:
       tags: [health]
       summary: Liveness
-      security: []
       responses:
         "200":
           description: OK
@@ -29,7 +28,6 @@ paths:
     get:
       tags: [health]
       summary: Readiness
-      security: []
       responses:
         "200": { description: Ready }
         "503": { description: Not ready }
@@ -37,7 +35,6 @@ paths:
     get:
       tags: [health]
       summary: OpenAPI document
-      security: []
       responses:
         "200":
           description: YAML
@@ -45,14 +42,12 @@ paths:
     get:
       tags: [health]
       summary: Swagger UI
-      security: []
       responses:
         "200": { description: HTML }
   /v1/plans:
     get:
       tags: [billing]
       summary: List plans
-      security: []
       responses:
         "200": { description: OK }
   /v1/tenants:
