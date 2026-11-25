@@ -75,4 +75,4 @@ certifi==2026.10.18
 dnspython==2.9.2
 multidict==6.9.1
 urllib3==2.8.0
-# Lock refresh is targeted to patched advisories; unrelated pins remain stable.
+# Lock refresh preserves unrelated dependency pins; only advisory fixes move.
