@@ -42,3 +42,15 @@ def test_openat2_rejects_symlinked_parent_for_read_and_write(monkeypatch, tmp_pa
     with pytest.raises(UnsafePathError):
         safe_write_text(root, "escape/created.txt", "must-not-escape")
     assert not (outside / "created.txt").exists()
+
+
+
+def test_production_cannot_disable_openat2_with_environment_flag(monkeypatch):
+    from lumen.engine.services.safe_fs import _require_openat2_for_paths
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TBE_REQUIRE_OPENAT2", "0")
+    assert _require_openat2_for_paths() is True
+
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    assert _require_openat2_for_paths() is False
