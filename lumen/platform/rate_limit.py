@@ -194,24 +194,25 @@ local cur_tok = math.max(0, tonumber(redis.call("GET", tok_key) or "0"))
 local cur_usd = math.max(0, tonumber(redis.call("GET", usd_key) or "0"))
 local cur_usd_micro = math.floor(cur_usd * 1000000 + 0.5)
 
--- Check both budgets and reserve both amounts in one Redis transaction.
-if tok_cap > 0 and cur_tok + add_tok > tok_cap then
-  return {0, cur_tok, string.format("%.6f", cur_usd), 1}
-end
-if usd_cap_micro > 0 and cur_usd_micro + add_usd_micro > usd_cap_micro then
-  return {0, cur_tok, string.format("%.6f", cur_usd), 2}
+-- Record actual usage atomically even when it crosses a cap. This ensures
+-- every subsequent preflight check sees the exhausted budget and fails closed.
+local next_tok = cur_tok + add_tok
+local next_usd_micro = cur_usd_micro + add_usd_micro
+local reason = 0
+if tok_cap > 0 and next_tok > tok_cap then
+  reason = 1
+elseif usd_cap_micro > 0 and next_usd_micro > usd_cap_micro then
+  reason = 2
 end
 
 if add_tok > 0 then
-  redis.call("INCRBY", tok_key, add_tok)
-  redis.call("EXPIRE", tok_key, ttl)
+  redis.call("SET", tok_key, next_tok, "EX", ttl)
 end
 if add_usd_micro > 0 then
-  local next_usd_micro = cur_usd_micro + add_usd_micro
   redis.call("SET", usd_key, string.format("%.6f", next_usd_micro / 1000000), "EX", ttl)
 end
 
-return {1, cur_tok + add_tok, string.format("%.6f", (cur_usd_micro + add_usd_micro) / 1000000), 0}
+return {reason == 0 and 1 or 0, next_tok, string.format("%.6f", next_usd_micro / 1000000), reason}
 """
 
 
@@ -333,12 +334,14 @@ def _in_process_budget_check(
         entry = _PROC_BUDGET.setdefault(today_prefix, {"tokens": 0.0, "usd": 0.0})
         cur_tok = int(entry["tokens"])
         cur_usd = float(entry["usd"])
-        if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
-            return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
-        if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
-            return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
-        if add_tokens:
-            entry["tokens"] = cur_tok + int(add_tokens)
-        if add_usd:
-            entry["usd"] = cur_usd + float(add_usd)
+        next_tok = cur_tok + max(0, int(add_tokens))
+        next_usd = cur_usd + max(0.0, float(add_usd))
+        # Persist real usage even if it crosses the cap so every following
+        # preflight check remains blocked until the daily window resets.
+        entry["tokens"] = next_tok
+        entry["usd"] = next_usd
+        if tok_cap > 0 and next_tok > tok_cap:
+            return False, f"llm_token_cap_exceeded:{next_tok}/{tok_cap}"
+        if usd_cap > 0 and next_usd > usd_cap:
+            return False, f"llm_usd_cap_exceeded:{next_usd:.4f}/{usd_cap}"
         return True, "ok_proc"
