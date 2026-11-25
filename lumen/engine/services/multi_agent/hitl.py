@@ -449,7 +449,9 @@ def consume_execute_grant(
         return False
     uid = int(user_id or state.user_id or 0)
     grant_uid = int(grant.get("user_id") or 0)
-    if grant_uid and uid and grant_uid != uid:
+    # A missing identity is not an authorization context. Require an exact,
+    # positive owner match; zero must never act as a wildcard.
+    if uid <= 0 or grant_uid <= 0 or grant_uid != uid:
         state.record(AgentRole.HITL, "grant_user_mismatch", tool)
         return False
     expected_digest = str(grant.get("params_digest") or "")
