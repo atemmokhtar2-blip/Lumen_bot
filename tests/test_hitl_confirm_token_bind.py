@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 os.environ.setdefault("ENVIRONMENT", "test")
 
 from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard
@@ -60,3 +62,13 @@ def test_execution_grant_digest_is_key_order_independent():
     assert _params_digest({"a": 1, "b": {"x": 2, "y": 3}}) == _params_digest(
         {"b": {"y": 3, "x": 2}, "a": 1}
     )
+
+
+def test_production_hitl_requires_configured_hmac_secret(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("MULTI_AGENT_HITL_SECRET", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    from lumen.engine.services.multi_agent.hitl import _hmac_secret
+
+    with pytest.raises(RuntimeError, match="required for production approvals"):
+        _hmac_secret()
