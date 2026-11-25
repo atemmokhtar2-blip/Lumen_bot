@@ -51,6 +51,7 @@ jobs:
             tests/test_engine_turn_wired.py \
             tests/test_sandbox_runtime.py \
             tests/test_hitl_confirm_token_bind.py \
+            tests/test_safe_fs_openat2.py \
             tests/test_live_runner_integration.py \
             -k "not postgres and not redis_testcontainer" 2>&1 | tee unit-pytest.log
 
