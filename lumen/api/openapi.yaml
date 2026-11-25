@@ -19,6 +19,26 @@ tags:
   - name: billing
   - name: dashboard
 paths:
+  /:
+    get:
+      # kics-scan ignore-line
+      security: []
+      tags: [health]
+      summary: Root health alias
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  service:
+                    type: string
+                  version:
+                    type: string
   /health:
     get:
       # kics-scan ignore-line

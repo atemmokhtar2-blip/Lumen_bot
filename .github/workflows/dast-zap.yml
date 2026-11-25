@@ -153,8 +153,8 @@ jobs:
             "$ZAP_IMAGE" \
             zap-baseline.py -t "$DAST_HEALTH_URL" -a \
               -c /zap/rules/rules.tsv \
-              -J /zap/wrk/zap-baseline-report.json \
-              -r /zap/wrk/zap-baseline-report.html
+              -J zap-baseline-report.json \
+              -r zap-baseline-report.html
           code=$?
           echo "zap-baseline exit=$code"
           test -f zap-baseline-report.json || { echo "missing ZAP baseline JSON report"; exit 1; }
@@ -170,8 +170,8 @@ jobs:
             "$ZAP_IMAGE" \
             zap-api-scan.py -t "$DAST_BASE_URL/openapi.yaml" -f openapi -a \
               -c /zap/rules/rules.tsv \
-              -J /zap/wrk/zap-api-report.json \
-              -r /zap/wrk/zap-api-report.html
+              -J zap-api-report.json \
+              -r zap-api-report.html
           code=$?
           echo "zap-api-scan exit=$code"
           test -f zap-api-report.json || { echo "missing ZAP API JSON report"; exit 1; }
@@ -190,7 +190,7 @@ jobs:
             "$ZAP_IMAGE" \
             zap-baseline.py -t "$DAST_HEALTH_URL" -a \
               -c /zap/rules/rules.tsv \
-              -J /zap/wrk/zap-auth-report.json \
+              -J zap-auth-report.json \
               -z "-config replacer.full_list(0).description=auth \
                   -config replacer.full_list(0).enabled=true \
                   -config replacer.full_list(0).matchtype=REQ_HEADER \

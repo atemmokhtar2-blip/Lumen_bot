@@ -55,8 +55,10 @@ def _cors_origin_for(request: web.Request) -> str | None:
 
 def _apply_security_headers(resp: web.StreamResponse, request: web.Request) -> None:
     path = request.path or ""
-    if path.startswith("/v1/") and path not in {"/v1/plans"}:
-        resp.headers.setdefault("Cache-Control", "no-store")
+    # API and health responses contain tenant/service state; never let shared
+    # intermediaries cache them, including error and root responses.
+    resp.headers.setdefault("Cache-Control", "no-store")
+    resp.headers.setdefault("Server", "Lumen")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -368,6 +370,7 @@ def create_app() -> web.Application:
         middlewares=_mws,
         client_max_size=max(4096, max_size),
     )
+    app.router.add_get("/", health.health)
     app.router.add_get("/health", health.health)
     app.router.add_get("/health/cost-stack", health.cost_stack)
 
