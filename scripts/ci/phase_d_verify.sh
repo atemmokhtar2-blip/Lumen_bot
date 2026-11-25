@@ -5,9 +5,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="${PYTHONPATH:-$ROOT}"
-export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-1:phase-d-local}"
+if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+  export TELEGRAM_BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+fi
 export ENVIRONMENT="${ENVIRONMENT:-development}"
-export TBE_TOKEN_SECRET="${TBE_TOKEN_SECRET:-unit-test-secret-key-32b-phase-d!!}"
+if [[ -z "${TBE_TOKEN_SECRET:-}" ]]; then
+  export TBE_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+fi
 
 echo "=== D0: HEAD ==="
 git rev-parse --short HEAD
