@@ -98,6 +98,10 @@ jobs:
           severity-cutoff: high
           fail-build: true
           output-format: sarif
+      - name: Print Grype vulnerability details
+        if: always()
+        run: grype dir:. -o table
+        continue-on-error: true
       - name: Preserve Grype SARIF report
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,7 +112,7 @@ jobs:
           retention-days: 30
       - name: Upload Grype SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.grype.outputs.sarif }}
           category: grype
