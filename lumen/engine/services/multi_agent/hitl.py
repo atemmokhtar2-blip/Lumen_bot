@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -105,10 +106,19 @@ class PendingAction:
 
 
 def _params_digest(params: dict[str, Any] | None) -> str:
-    """Stable digest of execution params (full SHA-256 hex) for HITL grant binding."""
-    items = sorted((str(k), str(v)[:200]) for k, v in dict(params or {}).items())
-    raw = repr(items).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    """Hash the complete, canonical parameter payload for HITL grant binding."""
+    try:
+        canonical = json.dumps(
+            dict(params or {}),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        # Fail deterministically for unusual values without truncating payloads.
+        canonical = repr(dict(params or {}))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def tool_requires_confirmation(tool: str) -> bool:
@@ -293,20 +303,15 @@ def confirm_action(
         _audit("expired", action_id=action_id)
         return False, state, "expired"
 
-    # Token: board pending token is authority. Verb-only OR stale session token
-    # from Telegram user_data must not fail the owning user on button confirm.
+    # The Telegram bridge resolves verb-only confirmations from the durable
+    # pending action before calling this function. This boundary must still
+    # reject missing, stale, or forged tokens; ownership alone is not a token.
     expected = (pending.confirm_token or "").strip()
     if not expected:
         expected = _sign(
             pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
         )
     supplied = (confirm_token or "").strip()
-    owner_ok = int(user_id or 0) in {0, int(pending.user_id or 0)}
-    if owner_ok and expected:
-        if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
-            # Rebind for owner (button path / multi-worker stale session)
-            supplied = expected
-            _audit("token_rebound_owner", action_id=action_id, user_id=user_id)
     if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
         _audit("confirm_fail", reason="bad_token", action_id=action_id)
         state.record(AgentRole.HITL, "bad_token", action_id)
