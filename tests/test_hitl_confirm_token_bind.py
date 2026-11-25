@@ -11,6 +11,7 @@ from lumen.engine.services.multi_agent.blackboard import MemoryBlackboard
 from lumen.engine.services.multi_agent.hitl import (
     _params_digest,
     confirm_action,
+    consume_execute_grant,
     request_confirmation,
 )
 from lumen.engine.services.multi_agent.state import AgentState, AgentStatus
@@ -72,3 +73,40 @@ def test_production_hitl_requires_configured_hmac_secret(monkeypatch):
 
     with pytest.raises(RuntimeError, match="required for production approvals"):
         _hmac_secret()
+
+
+
+def test_execution_grant_rejects_missing_or_mismatched_user():
+    state = AgentState(user_id=0, status=AgentStatus.PLANNING.value)
+    params = {"target": "tenant-resource"}
+    state.extensions["hitl_execute_grant"] = {
+        "tool": "host_start",
+        "user_id": 42,
+        "params_digest": _params_digest(params),
+        "single_use": True,
+    }
+    assert not consume_execute_grant(
+        state, "host_start", user_id=0, params=params
+    )
+    assert "hitl_execute_grant" in state.extensions
+
+    state.user_id = 42
+    assert consume_execute_grant(
+        state, "host_start", user_id=42, params=params
+    )
+    assert "hitl_execute_grant" not in state.extensions
+
+
+def test_execution_grant_rejects_zero_owner():
+    state = AgentState(user_id=42, status=AgentStatus.PLANNING.value)
+    params = {"target": "tenant-resource"}
+    state.extensions["hitl_execute_grant"] = {
+        "tool": "host_start",
+        "user_id": 0,
+        "params_digest": _params_digest(params),
+        "single_use": True,
+    }
+    assert not consume_execute_grant(
+        state, "host_start", user_id=42, params=params
+    )
+    assert "hitl_execute_grant" in state.extensions
