@@ -149,6 +149,18 @@ jobs:
       # Gate on HIGH/CRITICAL only. Trivy Action clears TRIVY_SEVERITY when
       # producing unrestricted SARIF, so a SARIF gate was incorrectly failing
       # on MEDIUM/LOW findings despite this workflow's HIGH/CRITICAL threshold.
+      - name: Distroless runtime smoke test (Python 3.12 + native wheels)
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/python3.12 \
+            "${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" -c '
+          import os
+          assert os.getuid() == 65532, f"unexpected runtime uid: {os.getuid()}"
+          import aiohttp, argon2, cryptography, curl_cffi, grpc, onnxruntime
+          import PIL, playwright, psycopg, pymongo, redis, sqlite_vec, telegram
+          import temporalio, tree_sitter
+          print("Distroless Python 3.12 runtime imports OK; uid=65532")
+          '
+
       - name: Trivy image CVE gate (CRITICAL/HIGH fail)
         uses: aquasecurity/trivy-action@0.35.0
         with:
