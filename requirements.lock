@@ -171,8 +171,10 @@ langsmith==0.16.2
     # via langchain-core
 loguru==0.7.3
     # via fastembed
-mako==1.4.1
-    # via alembic
+mako==1.4.2
+    # via
+    #   -r requirements.txt
+    #   alembic
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
