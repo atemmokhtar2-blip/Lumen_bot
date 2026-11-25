@@ -29,12 +29,11 @@ CVE-2026-9538
 
 # Additional Debian 13 advisories whose fixed Sid package versions are pinned
 # in Dockerfile: dpkg 1.23.12, libc6/libc-bin 2.43-7,
-# libseccomp2 2.6.1-1+b2, passwd 1:4.20.3-1, perl-base 5.44.0-3.
+# libseccomp2 2.6.2-1, account-utils 1.4.0-1, perl-base 5.44.0-3.
 # The Debian 13 feed has no fixed-version metadata for these records.
 CVE-2026-91094
 CVE-2026-121758
 CVE-2026-124024
-CVE-2026-135901
 CVE-2026-40558
 TEMP-0000000-402D17
 TEMP-0000000-414660
