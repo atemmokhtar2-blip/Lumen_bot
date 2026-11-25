@@ -22,6 +22,7 @@ annotated-types==0.8.0
     # via pydantic
 anyio==4.14.2
     # via
+    #   -r requirements.txt
     #   httpx
     #   httpx2
     #   langsmith
@@ -123,6 +124,7 @@ hyperframe==6.1.0
     # via h2
 idna==3.19
     # via
+    #   -r requirements.txt
     #   anyio
     #   httpx
     #   httpx2
@@ -145,6 +147,7 @@ langchain-core==1.6.1
     #   langgraph-checkpoint
     #   langgraph-prebuilt
     #   langgraph-sdk
+    #   temporalio-langgraph
 langchain-protocol==0.0.22
     # via
     #   langchain-core
@@ -152,7 +155,7 @@ langchain-protocol==0.0.22
 langgraph==1.2.14
     # via
     #   -r requirements.txt
-    #   temporalio
+    #   temporalio-langgraph
 langgraph-checkpoint==4.3.2
     # via
     #   langgraph
@@ -185,7 +188,7 @@ multidict==6.9.1
     #   -r requirements.txt
     #   aiohttp
     #   yarl
-nexus-rpc==1.4.0
+nexus-rpc==1.5.0
     # via temporalio
 numpy==2.5.5
     # via
@@ -250,6 +253,7 @@ propcache==0.5.2
     #   yarl
 protobuf==5.29.6
     # via
+    #   -r requirements.txt
     #   googleapis-common-protos
     #   onnxruntime
     #   opentelemetry-proto
@@ -272,6 +276,7 @@ pydantic==2.12.5
     #   mcp
     #   pydantic-settings
     #   qdrant-client
+    #   temporalio-langgraph
 pydantic-core==2.41.5
     # via pydantic
 pydantic-settings==2.7.1
@@ -285,12 +290,13 @@ pyjwt[crypto]==2.15.1
 pymongo==4.18.3
     # via -r requirements.txt
 python-dotenv==1.2.2
-setuptools==84.2.1
     # via
     #   -r requirements.txt
     #   pydantic-settings
 python-multipart==0.0.34
-    # via mcp
+    # via
+    #   -r requirements.txt
+    #   mcp
 python-telegram-bot==22.7
     # via -r requirements.txt
 pyyaml==6.0.4
@@ -343,8 +349,12 @@ starlette==1.10.0
     # via
     #   mcp
     #   sse-starlette
-temporalio[langgraph]==1.32.0
-    # via -r requirements.txt
+temporalio[langgraph]==1.37.0
+    # via
+    #   -r requirements.txt
+    #   temporalio-langgraph
+temporalio-langgraph==1.0.0
+    # via temporalio
 tenacity==9.2.1
     # via langchain-core
 tokenizers==0.23.3
@@ -402,6 +412,7 @@ typing-extensions==4.16.0
     #   sqlalchemy
     #   starlette
     #   temporalio
+    #   temporalio-langgraph
     #   typing-inspection
 typing-inspection==0.4.5
     # via
@@ -430,3 +441,6 @@ yarl==1.25.1
     # via aiohttp
 zstandard==0.25.0
     # via langsmith
+
+# The following packages are considered to be unsafe in a requirements file:
+# setuptools
