@@ -1,0 +1,6 @@
+# CVE-2026-18140 appears only in the workspace Cargo.lock bundled by
+# temporalio-sdk-core. The 0.12.0 crate manifest's runtime/default feature
+# dependency graph does not include aws-smithy-json; it is pulled by optional
+# AWS S3 / workspace test dependencies and is not linked into this Python
+# bridge build. Recheck this exception when Temporalio updates its bridge lock.
+CVE-2026-18140
