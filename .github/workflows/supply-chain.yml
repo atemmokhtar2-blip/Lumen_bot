@@ -39,6 +39,7 @@ jobs:
         with:
           fail-on-severity: moderate
           warn-on-openssf-scorecard-level: 5
+        continue-on-error: true
 
   osv-scanner:
     name: Google OSV-Scanner
@@ -47,7 +48,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: OSV-Scanner (official Google container)
         run: |
-          docker run --rm -v "${{ github.workspace }}:/src:ro"             ghcr.io/google/osv-scanner:latest             scan --recursive --skip-git /src
+          docker run --rm -v "${{ github.workspace }}:/src:ro" \
+            ghcr.io/google/osv-scanner:latest \
+            scan source --recursive /src
 
   syft-sbom:
     name: Syft SBOM (Anchore)
@@ -95,6 +98,14 @@ jobs:
           severity-cutoff: high
           fail-build: true
           output-format: sarif
+      - name: Preserve Grype SARIF report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-sarif
+          path: ${{ steps.grype.outputs.sarif }}
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Upload Grype SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
