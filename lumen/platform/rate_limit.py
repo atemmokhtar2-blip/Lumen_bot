@@ -196,10 +196,10 @@ local cur_usd_micro = math.floor(cur_usd * 1000000 + 0.5)
 
 -- Check both budgets and reserve both amounts in one Redis transaction.
 if tok_cap > 0 and cur_tok + add_tok > tok_cap then
-  return {0, cur_tok, cur_usd, 1}
+  return {0, cur_tok, string.format("%.6f", cur_usd), 1}
 end
 if usd_cap_micro > 0 and cur_usd_micro + add_usd_micro > usd_cap_micro then
-  return {0, cur_tok, cur_usd, 2}
+  return {0, cur_tok, string.format("%.6f", cur_usd), 2}
 end
 
 if add_tok > 0 then
@@ -211,7 +211,7 @@ if add_usd_micro > 0 then
   redis.call("SET", usd_key, string.format("%.6f", next_usd_micro / 1000000), "EX", ttl)
 end
 
-return {1, cur_tok + add_tok, (cur_usd_micro + add_usd_micro) / 1000000, 0}
+return {1, cur_tok + add_tok, string.format("%.6f", (cur_usd_micro + add_usd_micro) / 1000000), 0}
 """
 
 
