@@ -69,6 +69,11 @@ def _reset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # DAST matrices intentionally issue many requests; keep the real limiter
     # enabled but set a high test-only ceiling so auth assertions are not masked.
     monkeypatch.setenv("API_IP_RPM", "10000")
+    # Admin endpoints have an independent brute-force limiter. Raise only
+    # the test process thresholds so the DAST matrix can assert auth outcomes
+    # rather than being short-circuited by the shared localhost IP bucket.
+    monkeypatch.setenv("API_ADMIN_AUTH_RPM", "10000")
+    monkeypatch.setenv("API_ADMIN_FAIL_LIMIT", "10000")
     # Prevent host firewall mutations in API unit tests; production defaults
     # remain strict and are covered by dedicated sandbox policy tests.
     monkeypatch.setenv("TBE_EGRESS_MODE", "baseline")
