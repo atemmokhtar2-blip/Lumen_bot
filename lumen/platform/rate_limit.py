@@ -9,6 +9,7 @@ Callers use RateLimiter only — never branch on backend type.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -180,33 +181,80 @@ def _budget_defaults() -> tuple[int, float]:
     return max(0, tokens), max(0.0, usd)
 
 
+_LLM_BUDGET_LUA = """
+local tok_key = KEYS[1]
+local usd_key = KEYS[2]
+local tok_cap = tonumber(ARGV[1])
+local usd_cap_micro = tonumber(ARGV[2])
+local add_tok = tonumber(ARGV[3])
+local add_usd_micro = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+local cur_tok = math.max(0, tonumber(redis.call("GET", tok_key) or "0"))
+local cur_usd = math.max(0, tonumber(redis.call("GET", usd_key) or "0"))
+local cur_usd_micro = math.floor(cur_usd * 1000000 + 0.5)
+
+-- Check both budgets and reserve both amounts in one Redis transaction.
+if tok_cap > 0 and cur_tok + add_tok > tok_cap then
+  return {0, cur_tok, cur_usd, 1}
+end
+if usd_cap_micro > 0 and cur_usd_micro + add_usd_micro > usd_cap_micro then
+  return {0, cur_tok, cur_usd, 2}
+end
+
+if add_tok > 0 then
+  redis.call("INCRBY", tok_key, add_tok)
+  redis.call("EXPIRE", tok_key, ttl)
+end
+if add_usd_micro > 0 then
+  local next_usd_micro = cur_usd_micro + add_usd_micro
+  redis.call("SET", usd_key, string.format("%.6f", next_usd_micro / 1000000), "EX", ttl)
+end
+
+return {1, cur_tok + add_tok, (cur_usd_micro + add_usd_micro) / 1000000, 0}
+"""
+
+
 def check_tenant_llm_budget(
     tenant_id: str,
     *,
     add_tokens: int = 0,
     add_usd: float = 0.0,
 ) -> tuple[bool, str]:
-    """Hard-cap daily LLM usage per tenant. Returns (allowed, reason).
+    """Atomically reserve daily token and USD budget for one tenant.
 
-    Uses Redis when available; process-local counters in pure dev only.
-    add_* are reserved/consumed only when the call is allowed.
+    Redis performs the read/check/increment in one Lua script, so concurrent
+    workers cannot both spend the same remaining budget. The single-process
+    fallback is protected by a lock and is only suitable for local development.
     """
     tid = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(tenant_id or "anon"))[:80]
     tok_cap, usd_cap = _budget_defaults()
-    if tok_cap <= 0 and usd_cap <= 0:
+    try:
+        # Budget checks are reservations, never refunds: negative or non-finite
+        # caller values must not decrement counters or bypass a cap.
+        add_tokens = max(0, int(add_tokens))
+        usd_amount = float(add_usd)
+        if not math.isfinite(usd_amount):
+            return False, "invalid_llm_budget_amount"
+        add_usd = max(0.0, usd_amount)
+    except (TypeError, ValueError, OverflowError):
+        return False, "invalid_llm_budget_amount"
+
+    add_usd_micro = int(round(add_usd * 1_000_000))
+    usd_cap_micro = int(round(usd_cap * 1_000_000))
+    if tok_cap <= 0 and usd_cap_micro <= 0:
         return True, "budget_disabled"
 
     day = time.strftime("%Y%m%d", time.gmtime())
     tok_key = f"llm_tok:{tid}:{day}"
     usd_key = f"llm_usd:{tid}:{day}"
 
-    # Try Redis atomic INCR
     try:
         from .runtime_config import redis_url as _redis_url_fn
-
         url = (_redis_url_fn() or "").strip()
     except Exception:
         url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+
     if url:
         try:
             from lumen.platform.redis_client import connect_redis_url
@@ -216,34 +264,35 @@ def check_tenant_llm_budget(
                 socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "5"),
                 socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "5"),
             )
-            pipe = r.pipeline()
-            pipe.get(tok_key)
-            pipe.get(usd_key)
-            cur_tok_s, cur_usd_s = pipe.execute()
-            cur_tok = int(float(cur_tok_s or 0))
-            cur_usd = float(cur_usd_s or 0)
-            if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
-                return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
-            if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
-                return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
-            if add_tokens or add_usd:
-                pipe = r.pipeline()
-                if add_tokens:
-                    pipe.incrby(tok_key, int(add_tokens))
-                    pipe.expire(tok_key, 48 * 3600)
-                if add_usd:
-                    pipe.incrbyfloat(usd_key, float(add_usd))
-                    pipe.expire(usd_key, 48 * 3600)
-                pipe.execute()
+            result = r.eval(
+                _LLM_BUDGET_LUA,
+                2,
+                tok_key,
+                usd_key,
+                int(tok_cap),
+                usd_cap_micro,
+                add_tokens,
+                add_usd_micro,
+                48 * 3600,
+            )
+            allowed = int(result[0])
+            current_tokens = int(float(result[1]))
+            current_usd = float(result[2])
+            reason_code = int(result[3])
+            if not allowed:
+                if reason_code == 1:
+                    return False, f"llm_token_cap_exceeded:{current_tokens}/{tok_cap}"
+                return False, f"llm_usd_cap_exceeded:{current_usd:.4f}/{usd_cap}"
             return True, "ok"
         except Exception:
             logger.warning("llm budget redis failed; refusing", exc_info=True)
             return False, "llm_budget_backend_unavailable"
 
-    # No Redis: fall back to process-local daily counters.
-    # Safe for single-process deployments (the common Telegram-bot case).
-    # Multi-worker deployments should set REDIS_URL for shared accounting.
-    return _in_process_budget_check(tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd)
+    # No Redis: the lock in _in_process_budget_check makes this atomic only
+    # within one process; production deployments must use shared Redis.
+    return _in_process_budget_check(
+        tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd
+    )
 
 
 # ── Process-local LLM budget (fallback when Redis is unavailable) ──────────────
