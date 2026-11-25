@@ -1,8 +1,12 @@
 # Multi-stage production image: Wolfi runtime keeps build tooling out of the final image.
 # Python 3.12 and runtime libraries are installed from the patched Wolfi package repository.
-FROM cgr.dev/chainguard/wolfi-base:latest AS builder
+FROM cgr.dev/chainguard/wolfi-base@sha256:6ab86c5e059da41ff1454b6f69ecd7422b94af41969f4e231aa23244e47d4a81 AS builder
 
-RUN apk add --no-cache python-3.12 py3.12-pip build-base
+RUN apk add --no-cache \
+    python-3.12=3.12.16_git20261116-r0 \
+    py3.12-pip=26.2.2-r3 \
+    py3.12-setuptools=84.2.1-r1 \
+    build-base=1-r11
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
@@ -24,9 +28,15 @@ RUN mkdir -p /tmp/lumen_output \
     && chown -R 65532:65532 /app /opt/venv /tmp/lumen_output
 
 # Runtime contains Python and shared libraries only; no compiler, pip, apk, or shell tooling.
-FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
+FROM cgr.dev/chainguard/wolfi-base@sha256:6ab86c5e059da41ff1454b6f69ecd7422b94af41969f4e231aa23244e47d4a81 AS runtime
 
-RUN apk add --no-cache python-3.12 ca-certificates-bundle libstdc++ libgcc libgomp
+RUN apk add --no-cache \
+    python-3.12=3.12.16_git20261116-r0 \
+    py3.12-setuptools=84.2.1-r1 \
+    ca-certificates-bundle=20261020-r1 \
+    libstdc++=16.2.0-r5 \
+    libgcc=16.2.0-r5 \
+    libgomp=16.2.0-r5
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \
