@@ -29,6 +29,9 @@ RUN mkdir -p /home/appuser \
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir --upgrade pip==26.2.0 setuptools==84.2.1 \
     && pip install --no-cache-dir -r requirements.lock \
+    # pip is a build-time installer; its vendored libraries are not runtime dependencies.\
+    && python -m pip uninstall -y pip \
+    && ! python -c "import importlib.util; raise SystemExit(importlib.util.find_spec('pip') is not None)" \
     && mkdir -p /tmp/lumen_output \
     && chown -R 10001:10001 /app /tmp/lumen_output /home/appuser
 
