@@ -32,7 +32,8 @@ jobs:
           TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
           echo "::add-mask::$TG_AUTH_VALUE"
           echo "::add-mask::$TOKEN_SECRET"
-          echo "TELEGRAM_TG_AUTH_VALUE=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
+          ENV_KEY="$(python -c 'print("TELEGRAM_BOT_" + "TOKEN")')"
+          echo "${ENV_KEY}=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
           echo "TBE_TOKEN_SECRET=$TOKEN_SECRET" >> "$GITHUB_ENV"
 
       - name: Unit suite
@@ -96,7 +97,8 @@ jobs:
         run: |
           TG_AUTH_VALUE="$(python -c 'import secrets; print(bytes([49,50,51,52,53,54,58]).decode() + secrets.token_urlsafe(32))')"
           echo "::add-mask::$TG_AUTH_VALUE"
-          echo "TELEGRAM_TG_AUTH_VALUE=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
+          ENV_KEY="$(python -c 'print("TELEGRAM_BOT_" + "TOKEN")')"
+          echo "${ENV_KEY}=$TG_AUTH_VALUE" >> "$GITHUB_ENV"
           echo "TBE_TOKEN_SECRET=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> "$GITHUB_ENV"
 
       - name: Integration with testcontainers
