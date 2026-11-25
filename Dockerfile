@@ -1,5 +1,5 @@
 # Production image — hardened (Phase 3 + Phase 4 policy)
-FROM python:3.12-slim-trixie
+FROM python:3.12-slim-bookworm
 
 LABEL org.opencontainers.image.source="https://github.com/atemmokhtar2-blip/Lumen_bot" \
       org.opencontainers.image.title="Lumen" \
@@ -13,8 +13,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/appuser \
     PATH="/home/appuser/.local/bin:$PATH"
 
-# Stay on Debian Trixie and consume its supported security updates.
-# Do not mix Debian Sid packages into the stable runtime image.
+# Use the Debian Bookworm slim runtime while Trixie advisories remain unpatched.
+# Keep the runtime on one supported Debian release; never mix suites.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get clean \
