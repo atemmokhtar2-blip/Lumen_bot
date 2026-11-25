@@ -54,68 +54,8 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app /app
 
-# Remove stale setuptools metadata/wheels that may be shipped by the Python
-# bootstrap layer. The system and application environments both use patched
-# setuptools; keep scanners from resolving an obsolete bundled distribution.
-RUN /opt/venv/bin/python - <<'PY'
-from pathlib import Path
-import shutil
-import subprocess
-from packaging.version import InvalidVersion, Version
-
-roots = (Path("/usr/lib/python3.12"), Path("/opt/venv"))
-stale = []
-for root in roots:
-    if not root.exists():
-        continue
-    for item in root.rglob("*"):
-        name = item.name.lower()
-        version_text = None
-        if item.is_dir() and name.startswith("setuptools-") and name.endswith((".dist-info", ".egg-info")):
-            suffix = ".dist-info" if name.endswith(".dist-info") else ".egg-info"
-            version_text = item.name[len("setuptools-"):-len(suffix)]
-        elif item.is_file() and name.startswith("setuptools-") and name.endswith(".whl"):
-            parts = item.name.split("-", 2)
-            version_text = parts[1] if len(parts) > 1 else None
-        if version_text:
-            try:
-                if Version(version_text) < Version("84.1.0"):
-                    stale.append(item)
-            except InvalidVersion:
-                continue
-
-for item in stale:
-    if item.is_dir():
-        shutil.rmtree(item)
-    else:
-        item.unlink()
-    print(f"Removed stale setuptools artifact: {item}")
-
-for root in roots:
-    if not root.exists():
-        continue
-    for item in root.rglob("*"):
-        name = item.name.lower()
-        if item.is_dir() and name.startswith("setuptools-") and name.endswith((".dist-info", ".egg-info")):
-            suffix = ".dist-info" if name.endswith(".dist-info") else ".egg-info"
-            version_text = item.name[len("setuptools-"):-len(suffix)]
-            try:
-                assert Version(version_text) >= Version("84.1.0"), str(item)
-            except InvalidVersion:
-                continue
-
-subprocess.run(
-    ["/usr/bin/python3.12", "-c",
-     "import setuptools; assert tuple(map(int, setuptools.__version__.split('.')[:2])) >= (84, 1), setuptools.__version__; print('system setuptools', setuptools.__version__)"],
-    check=True,
-)
-subprocess.run(
-    ["/opt/venv/bin/python", "-c",
-     "import setuptools; assert tuple(map(int, setuptools.__version__.split('.')[:2])) >= (84, 1), setuptools.__version__; print('app setuptools', setuptools.__version__)"],
-    check=True,
-)
-PY
-
+# Remove stale setuptools metadata/wheels shipped by the Python bootstrap layer.
+RUN /opt/venv/bin/python /app/scripts/security/prune_stale_setuptools.py
 RUN mkdir -p /tmp/lumen_output \
     && chown -R 65532:65532 /app /opt/venv /tmp/lumen_output
 
