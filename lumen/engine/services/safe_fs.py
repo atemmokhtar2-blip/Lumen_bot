@@ -184,23 +184,24 @@ def open_directory_nofollow(path: Path | str) -> int:
 
 
 def _require_openat2_for_paths() -> bool:
-    """Production / multi-tenant must use openat2 (RESOLVE_BENEATH); O_NOFOLLOW-only is unsafe."""
-    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }:
-        return True
-    if (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower() in {
-        "0", "false", "no", "off",
-    }:
-        return False
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("TBE_ENV") or "production").strip().lower()
-    if env in {"dev", "development", "local", "test"}:
-        return False
-    multi = (os.environ.get("TBE_MULTI_TENANT") or "1").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    return multi or env not in {"dev", "development", "local", "test"}
+    """Production always requires openat2; only explicit dev/test may opt out."""
+    env = (
+        os.environ.get("ENVIRONMENT")
+        or os.environ.get("TBE_ENV")
+        or os.environ.get("LUMEN_ENV")
+        or "production"
+    ).strip().lower()
+    dev_mode = env in {"dev", "development", "local", "test"}
+    flag = (os.environ.get("TBE_REQUIRE_OPENAT2") or "").strip().lower()
 
+    # An environment override must never downgrade production path resolution.
+    if not dev_mode:
+        return True
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return False
 
 def verify_directory_nofollow(path: Path | str, *, root: Path | str | None = None) -> Path:
     """Validate path is a real directory under root — prefers openat2.
@@ -274,6 +275,48 @@ def safe_write_text(
     if len(data.encode("utf-8")) > limit:
         raise UnsafePathError("file_too_large")
     target = safe_resolve_under(root, rel)
+    raw = data.encode("utf-8")
+
+    # Production / multi-tenant writes use kernel-enforced RESOLVE_BENEATH and
+    # RESOLVE_NO_SYMLINKS. Create parent directories by walking verified dirfds;
+    # do not call Path.mkdir on an attacker-controlled path.
+    if _require_openat2_for_paths():
+        try:
+            from lumen.engine.services.linux_path_open import mkdirs_beneath, open_beneath
+
+            rel_norm = (rel or "").strip().replace("\\\\", "/")
+            parent_rel = "/".join(rel_norm.split("/")[:-1])
+            if parent_rel:
+                mkdirs_beneath(root, parent_rel, require_openat2=True)
+            flags = (
+                getattr(os, "O_WRONLY", 1)
+                | getattr(os, "O_CREAT", 64)
+                | getattr(os, "O_TRUNC", 512)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            opened = open_beneath(
+                root,
+                root / rel_norm,
+                directory=False,
+                flags=flags,
+                require_openat2=True,
+            )
+            try:
+                os.fchmod(opened.fd, 0o600)
+                view = memoryview(raw)
+                while view:
+                    written = os.write(opened.fd, view)
+                    if written <= 0:
+                        raise OSError("short_write")
+                    view = view[written:]
+            finally:
+                opened.close()
+            return target
+        except Exception as exc:
+            raise UnsafePathError(f"openat2_write_failed:{type(exc).__name__}") from exc
+
+    # Explicit dev/test fallback: final-component O_NOFOLLOW plus component
+    # lstat checks. Production never reaches this weaker path.
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         target.resolve(strict=False).relative_to(Path(root).resolve())
@@ -282,27 +325,22 @@ def safe_write_text(
     assert_no_symlinks_in_path(target, root=root)
     flags = getattr(os, "O_WRONLY", 1) | getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
-    raw = data.encode("utf-8")
     try:
         fd = os.open(str(target), flags | nofollow, 0o600)
         try:
-            os.write(fd, raw)
+            view = memoryview(raw)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short_write")
+                view = view[written:]
         finally:
             os.close(fd)
     except OSError as exc:
-        # Never fall back to following open — re-check then retry O_NOFOLLOW only
         assert_no_symlinks_in_path(target, root=root)
         if _lstat_is_symlink(target):
             raise UnsafePathError("write_target_is_symlink") from exc
-        # File may not exist yet; O_NOFOLLOW on create is fine on Linux for new files
-        try:
-            fd = os.open(str(target), flags | nofollow, 0o600)
-            try:
-                os.write(fd, raw)
-            finally:
-                os.close(fd)
-        except OSError as exc2:
-            raise UnsafePathError(f"write_failed:{type(exc2).__name__}") from exc2
+        raise UnsafePathError(f"write_failed:{type(exc).__name__}") from exc
     return target
 
 
@@ -319,8 +357,38 @@ def safe_write_under_root(root: Path, abs_or_rel: Path, content: str) -> Path:
 
 def safe_open_under(root: Path | str, rel: str, mode: str = "r", **kwargs):
     """Open a file under root with O_NOFOLLOW at open time — never follow symlinks."""
-    path = safe_resolve_under(Path(root), rel)
-    path = assert_no_symlinks_in_path(path, root=root)
+    root_path = Path(root).resolve()
+    path = safe_resolve_under(root_path, rel)
+
+    if _require_openat2_for_paths():
+        from lumen.engine.services.linux_path_open import open_beneath
+
+        if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
+            flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)
+            if "w" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_TRUNC", 512)
+            if "a" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_APPEND", 1024)
+            if "x" in mode:
+                flags |= getattr(os, "O_CREAT", 64) | getattr(os, "O_EXCL", 128)
+        else:
+            flags = getattr(os, "O_RDONLY", 0) | getattr(os, "O_CLOEXEC", 0)
+        opened = open_beneath(
+            root_path,
+            root_path / rel,
+            directory=False,
+            flags=flags,
+            require_openat2=True,
+        )
+        try:
+            if flags & getattr(os, "O_CREAT", 64):
+                os.fchmod(opened.fd, 0o600)
+            return open(opened.fd, mode, **kwargs)
+        except Exception:
+            opened.close()
+            raise
+
+    path = assert_no_symlinks_in_path(path, root=root_path)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if "w" in mode or "a" in mode or "x" in mode or "+" in mode:
         flags = getattr(os, "O_RDWR", 2) if "+" in mode else getattr(os, "O_WRONLY", 1)

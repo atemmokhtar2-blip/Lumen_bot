@@ -9,6 +9,7 @@ Callers use RateLimiter only — never branch on backend type.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -180,33 +181,87 @@ def _budget_defaults() -> tuple[int, float]:
     return max(0, tokens), max(0.0, usd)
 
 
+_LLM_BUDGET_LUA = """
+local tok_key = KEYS[1]
+local usd_key = KEYS[2]
+local tok_cap = tonumber(ARGV[1])
+local usd_cap_micro = tonumber(ARGV[2])
+local add_tok = tonumber(ARGV[3])
+local add_usd_micro = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+local cur_tok = math.max(0, tonumber(redis.call("GET", tok_key) or "0"))
+local cur_usd = math.max(0, tonumber(redis.call("GET", usd_key) or "0"))
+local cur_usd_micro = math.floor(cur_usd * 1000000 + 0.5)
+
+-- Record actual usage atomically even when it crosses a cap. This ensures
+-- every subsequent preflight check sees the exhausted budget and fails closed.
+local next_tok = cur_tok + add_tok
+local next_usd_micro = cur_usd_micro + add_usd_micro
+local reason = 0
+if tok_cap > 0 and next_tok > tok_cap then
+  reason = 1
+elseif usd_cap_micro > 0 and next_usd_micro > usd_cap_micro then
+  reason = 2
+end
+
+if add_tok > 0 then
+  redis.call("SET", tok_key, next_tok, "EX", ttl)
+end
+if add_usd_micro > 0 then
+  redis.call("SET", usd_key, string.format("%.6f", next_usd_micro / 1000000), "EX", ttl)
+end
+
+return {reason == 0 and 1 or 0, next_tok, string.format("%.6f", next_usd_micro / 1000000), reason}
+"""
+
+
 def check_tenant_llm_budget(
     tenant_id: str,
     *,
     add_tokens: int = 0,
     add_usd: float = 0.0,
 ) -> tuple[bool, str]:
-    """Hard-cap daily LLM usage per tenant. Returns (allowed, reason).
+    """Atomically reserve daily token and USD budget for one tenant.
 
-    Uses Redis when available; process-local counters in pure dev only.
-    add_* are reserved/consumed only when the call is allowed.
+    Redis performs the read/check/increment in one Lua script, so concurrent
+    workers cannot both spend the same remaining budget. The single-process
+    fallback is protected by a lock and is only suitable for local development.
     """
     tid = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(tenant_id or "anon"))[:80]
     tok_cap, usd_cap = _budget_defaults()
-    if tok_cap <= 0 and usd_cap <= 0:
-        return True, "budget_disabled"
+    try:
+        # Budget checks are reservations, never refunds: negative or non-finite
+        # caller values must not decrement counters or bypass a cap.
+        add_tokens = max(0, int(add_tokens))
+        usd_amount = float(add_usd)
+        if not math.isfinite(usd_amount):
+            return False, "invalid_llm_budget_amount"
+        add_usd = max(0.0, usd_amount)
+    except (TypeError, ValueError, OverflowError):
+        return False, "invalid_llm_budget_amount"
+
+    if add_tokens > (2**53 - 1) or add_usd > 1_000_000_000_000:
+        return False, "invalid_llm_budget_amount"
+    add_usd_micro = int(round(add_usd * 1_000_000))
+    usd_cap_micro = int(round(usd_cap * 1_000_000))
+    if tok_cap <= 0 and usd_cap_micro <= 0:
+        return True, "ok"
 
     day = time.strftime("%Y%m%d", time.gmtime())
     tok_key = f"llm_tok:{tid}:{day}"
     usd_key = f"llm_usd:{tid}:{day}"
 
-    # Try Redis atomic INCR
     try:
-        from .runtime_config import redis_url as _redis_url_fn
-
+        from .runtime_config import is_dev as _is_dev, redis_url as _redis_url_fn
         url = (_redis_url_fn() or "").strip()
+        dev_mode = bool(_is_dev())
     except Exception:
         url = (os.getenv("REDIS_URL") or os.getenv("JOB_REDIS_URL") or "").strip()
+        dev_mode = (os.getenv("ENVIRONMENT") or os.getenv("TBE_ENV") or "").strip().lower() in {
+            "dev", "development", "local", "test"
+        }
+
     if url:
         try:
             from lumen.platform.redis_client import connect_redis_url
@@ -216,34 +271,40 @@ def check_tenant_llm_budget(
                 socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT") or "5"),
                 socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT") or "5"),
             )
-            pipe = r.pipeline()
-            pipe.get(tok_key)
-            pipe.get(usd_key)
-            cur_tok_s, cur_usd_s = pipe.execute()
-            cur_tok = int(float(cur_tok_s or 0))
-            cur_usd = float(cur_usd_s or 0)
-            if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
-                return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
-            if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
-                return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
-            if add_tokens or add_usd:
-                pipe = r.pipeline()
-                if add_tokens:
-                    pipe.incrby(tok_key, int(add_tokens))
-                    pipe.expire(tok_key, 48 * 3600)
-                if add_usd:
-                    pipe.incrbyfloat(usd_key, float(add_usd))
-                    pipe.expire(usd_key, 48 * 3600)
-                pipe.execute()
+            result = r.eval(
+                _LLM_BUDGET_LUA,
+                2,
+                tok_key,
+                usd_key,
+                int(tok_cap),
+                usd_cap_micro,
+                add_tokens,
+                add_usd_micro,
+                48 * 3600,
+            )
+            allowed = int(result[0])
+            current_tokens = int(float(result[1]))
+            current_usd = float(result[2])
+            reason_code = int(result[3])
+            if not allowed:
+                if reason_code == 1:
+                    return False, f"llm_token_cap_exceeded:{current_tokens}/{tok_cap}"
+                return False, f"llm_usd_cap_exceeded:{current_usd:.4f}/{usd_cap}"
             return True, "ok"
         except Exception:
             logger.warning("llm budget redis failed; refusing", exc_info=True)
             return False, "llm_budget_backend_unavailable"
 
-    # No Redis: fall back to process-local daily counters.
-    # Safe for single-process deployments (the common Telegram-bot case).
-    # Multi-worker deployments should set REDIS_URL for shared accounting.
-    return _in_process_budget_check(tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd)
+    # Never use per-process accounting in production: multiple replicas would
+    # each get an independent allowance and could multiply the tenant's budget.
+    if not dev_mode:
+        return False, "llm_budget_backend_required"
+
+    # No Redis: the lock in _in_process_budget_check makes this atomic only
+    # within one process; this fallback is explicitly development/test only.
+    return _in_process_budget_check(
+        tid, day, tok_key, usd_key, tok_cap, usd_cap, add_tokens, add_usd
+    )
 
 
 # ── Process-local LLM budget (fallback when Redis is unavailable) ──────────────
@@ -273,12 +334,14 @@ def _in_process_budget_check(
         entry = _PROC_BUDGET.setdefault(today_prefix, {"tokens": 0.0, "usd": 0.0})
         cur_tok = int(entry["tokens"])
         cur_usd = float(entry["usd"])
-        if tok_cap > 0 and cur_tok + max(0, int(add_tokens)) > tok_cap:
-            return False, f"llm_token_cap_exceeded:{cur_tok}/{tok_cap}"
-        if usd_cap > 0 and cur_usd + max(0.0, float(add_usd)) > usd_cap:
-            return False, f"llm_usd_cap_exceeded:{cur_usd:.4f}/{usd_cap}"
-        if add_tokens:
-            entry["tokens"] = cur_tok + int(add_tokens)
-        if add_usd:
-            entry["usd"] = cur_usd + float(add_usd)
+        next_tok = cur_tok + max(0, int(add_tokens))
+        next_usd = cur_usd + max(0.0, float(add_usd))
+        # Persist real usage even if it crosses the cap so every following
+        # preflight check remains blocked until the daily window resets.
+        entry["tokens"] = next_tok
+        entry["usd"] = next_usd
+        if tok_cap > 0 and next_tok > tok_cap:
+            return False, f"llm_token_cap_exceeded:{next_tok}/{tok_cap}"
+        if usd_cap > 0 and next_usd > usd_cap:
+            return False, f"llm_usd_cap_exceeded:{next_usd:.4f}/{usd_cap}"
         return True, "ok_proc"

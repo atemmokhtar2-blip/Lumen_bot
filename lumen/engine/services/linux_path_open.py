@@ -259,6 +259,83 @@ def open_beneath(
             pass
 
 
+def mkdirs_beneath(
+    root: str | Path,
+    relative_parent: str | Path,
+    *,
+    mode: int = 0o700,
+    require_openat2: bool = True,
+) -> None:
+    """Create parent directories beneath root using dirfds and openat2.
+
+    Each component is opened relative to the already verified parent dirfd;
+    mkdirat therefore never follows an attacker-controlled intermediate symlink.
+    """
+    root_p = Path(os.path.abspath(str(root)))
+    rel_s = _lexical_rel_under(root_p, Path(relative_parent))
+    if not rel_s:
+        return
+    if not _has_openat2():
+        if require_openat2:
+            raise PathOpenError(errno.ENOSYS, "openat2_required_for_mkdir")
+        raise PathOpenError(errno.ENOSYS, "safe_dirfd_mkdir_unavailable")
+
+    root_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        current_fd = os.open(str(root_p), root_flags)
+    except OSError as exc:
+        raise PathOpenError(exc.errno, f"root_open_failed:{exc.strerror}") from exc
+
+    try:
+        for part in rel_s.split("/"):
+            try:
+                next_fd = openat2(
+                    current_fd,
+                    part,
+                    flags=(
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    ),
+                    resolve=_DEFAULT_RESOLVE,
+                )
+            except OSError as exc:
+                if exc.errno != errno.ENOENT:
+                    raise PathOpenError(exc.errno, f"unsafe_or_invalid_directory:{part}") from exc
+                try:
+                    os.mkdir(part, mode=mode, dir_fd=current_fd)
+                except FileExistsError:
+                    # Concurrent creator won the race; verify by openat2 below.
+                    pass
+                try:
+                    next_fd = openat2(
+                        current_fd,
+                        part,
+                        flags=(
+                            os.O_RDONLY
+                            | getattr(os, "O_DIRECTORY", 0)
+                            | getattr(os, "O_CLOEXEC", 0)
+                            | getattr(os, "O_NOFOLLOW", 0)
+                        ),
+                        resolve=_DEFAULT_RESOLVE,
+                    )
+                except OSError as open_exc:
+                    raise PathOpenError(open_exc.errno, f"unsafe_or_invalid_directory:{part}") from open_exc
+            os.close(current_fd)
+            current_fd = next_fd
+    finally:
+        try:
+            os.close(current_fd)
+        except OSError:
+            pass
+
+
 def verify_dir_beneath(root: str | Path, path: str | Path, *, require_openat2: bool = True) -> Path:
     """Open-and-verify directory under root; close fd; return real Path.
 
@@ -287,6 +364,7 @@ __all__ = [
     "openat2_available",
     "open_beneath",
     "verify_dir_beneath",
+    "mkdirs_beneath",
     "RESOLVE_BENEATH",
     "RESOLVE_NO_SYMLINKS",
     "RESOLVE_NO_MAGICLINKS",

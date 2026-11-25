@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 logger = logging.getLogger("lumen.metrics")
+
+_METRICS_LOCK = threading.Lock()
+_REQUESTS = None
+_LATENCY = None
 
 
 def prometheus_available() -> bool:
@@ -27,17 +32,23 @@ def instrument_app_middleware():
     except ImportError:
         return None
 
-    reqs = Counter(
-        "lumen_http_requests_total",
-        "HTTP requests",
-        ["method", "path", "status"],
-    )
-    latency = Histogram(
-        "lumen_http_request_duration_seconds",
-        "Request latency",
-        ["method", "path"],
-        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-    )
+    global _REQUESTS, _LATENCY
+    with _METRICS_LOCK:
+        if _REQUESTS is None:
+            _REQUESTS = Counter(
+                "lumen_http_requests_total",
+                "HTTP requests",
+                ["method", "path", "status"],
+            )
+        if _LATENCY is None:
+            _LATENCY = Histogram(
+                "lumen_http_request_duration_seconds",
+                "Request latency",
+                ["method", "path"],
+                buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+            )
+    reqs = _REQUESTS
+    latency = _LATENCY
 
     @web_middleware_safe
     async def middleware(request, handler):

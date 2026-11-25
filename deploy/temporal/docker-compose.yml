@@ -4,22 +4,48 @@ services:
   postgresql:
     image: postgres:16
     environment:
-      POSTGRES_PASSWORD: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:?Set TEMPORAL_POSTGRES_PASSWORD}
       POSTGRES_USER: temporal
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512M
   temporal:
     image: temporalio/auto-setup:1.25.2
     depends_on:
-      - postgresql
+      postgresql:
+        condition: service_healthy
     environment:
       - DB=postgres12
       - DB_PORT=5432
       - POSTGRES_USER=temporal
-      - POSTGRES_PWD=temporal
+      - POSTGRES_PWD=${TEMPORAL_POSTGRES_PASSWORD:?Set TEMPORAL_POSTGRES_PASSWORD}
       - POSTGRES_SEEDS=postgresql
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address 127.0.0.1:7233 cluster health"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
   temporal-ui:
     image: temporalio/ui:2.31.2
     depends_on:
@@ -27,4 +53,16 @@ services:
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M

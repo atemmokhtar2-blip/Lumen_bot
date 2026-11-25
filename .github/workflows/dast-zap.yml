@@ -22,8 +22,6 @@ env:
   TBE_MULTI_TENANT: "0"
   TBE_REQUIRE_DOCKER: "0"
   TBE_ALLOW_LOCAL_PROCESS: "1"
-  PLATFORM_ADMIN_TOKEN: dast-live-admin-token-32chars-xx
-  STRIPE_WEBHOOK_SECRET: whsec_dast_live_secret
   ALLOW_DEV_BILLING: "0"
   API_HOST: 127.0.0.1
   API_PORT: "8765"
@@ -34,6 +32,16 @@ jobs:
   unit-idor:
     name: Platform IDOR (pytest)
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,12 +51,23 @@ jobs:
           python -m pip install -U pip
           pip install pytest
           pip install -r requirements.txt
+      - name: Generate ephemeral DAST test credentials
+        run: |
+          ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          WEBHOOK_SECRET="whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$ADMIN_TOKEN"
+          echo "::add-mask::$WEBHOOK_SECRET"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "PLATFORM_ADMIN_TOKEN=$ADMIN_TOKEN" >> "$GITHUB_ENV"
+          echo "STRIPE_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
       - name: Platform IDOR + probe
         env:
           PYTHONPATH: ${{ github.workspace }}
-          TELEGRAM_BOT_TOKEN: "1:ci-placeholder"
           ENVIRONMENT: test
           TBE_ENV: test
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           pytest tests/test_security_idor_dast.py -q --tb=short
           python scripts/security/dast_api_probe.py
@@ -56,6 +75,16 @@ jobs:
   live-zap-engine:
     name: Live API + OWASP ZAP engine (docker)
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -67,17 +96,30 @@ jobs:
           pip install -U pip
           pip install -r requirements.txt
 
+      - name: Generate ephemeral live API credentials
+        run: |
+          ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          WEBHOOK_SECRET="whsec_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          BOT_TOKEN="123456:$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          echo "::add-mask::$ADMIN_TOKEN"
+          echo "::add-mask::$WEBHOOK_SECRET"
+          echo "::add-mask::$BOT_TOKEN"
+          echo "PLATFORM_ADMIN_TOKEN=$ADMIN_TOKEN" >> "$GITHUB_ENV"
+          echo "STRIPE_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"
+          echo "TELEGRAM_BOT_TOKEN=$BOT_TOKEN" >> "$GITHUB_ENV"
+
       - name: Start live API
         env:
           OUTPUT_DIR: ${{ runner.temp }}/dast-api-out
           PYTHONPATH: ${{ github.workspace }}
           ENVIRONMENT: test
           TBE_ENV: test
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           mkdir -p "$OUTPUT_DIR"
           nohup python scripts/security/start_api_dast.py >"$OUTPUT_DIR/api.log" 2>&1 &
           echo $! >"$OUTPUT_DIR/api.pid"
-          for i in $(seq 1 45); do
+          for _ in $(seq 1 45); do
             curl -sf "$DAST_BASE_URL/health" && echo ready && exit 0
             sleep 1
           done
@@ -136,6 +178,7 @@ jobs:
         run: |
           set +e
           KEY=$(python -c "import json;print(json.load(open('$DAST_SEED_FILE'))['tenant_a']['key'])")
+          echo "::add-mask::$KEY"
           docker run --rm --user 0 --network host \
             -v "${{ github.workspace }}:/zap/wrk:rw" \
             -v "${{ github.workspace }}/.zap:/zap/rules:ro" \
@@ -168,6 +211,12 @@ jobs:
           done
           exit $status
 
+      - name: Remove temporary DAST credentials and authenticated report
+        if: always()
+        env:
+          DAST_SEED_FILE: ${{ runner.temp }}/dast-tenants.json
+        run: rm -f "$DAST_SEED_FILE" zap-auth-report.json
+
       - name: Upload ZAP engine artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -178,9 +227,6 @@ jobs:
             zap-baseline-report.html
             zap-api-report.json
             zap-api-report.html
-            zap-auth-report.json
-            ${{ runner.temp }}/dast-tenants.json
-            ${{ runner.temp }}/dast-api-out/api.log
           if-no-files-found: ignore
           retention-days: 14
 

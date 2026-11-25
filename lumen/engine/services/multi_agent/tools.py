@@ -50,8 +50,11 @@ def _validate(tool: str, params: dict[str, Any]) -> tuple[bool, list[str]]:
     try:
         from lumen.engine.services.tool_runtime.registry import validate_tool_params
         return validate_tool_params(tool, params)
-    except Exception:
-        return True, []
+    except Exception as exc:
+        # Parameter validation is a security boundary. If the registry or its
+        # schema cannot be loaded, do not execute the tool with unvalidated data.
+        logger.error("tool parameter validation unavailable for %s: %s", tool, type(exc).__name__)
+        return False, ["validation_unavailable"]
 
 
 def execute_tool_gated(

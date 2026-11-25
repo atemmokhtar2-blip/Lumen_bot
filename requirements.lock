@@ -4,8 +4,7 @@
 #
 #    pip-compile --output-file=requirements.lock requirements.txt
 #
---index-url http://35.245.43.102/pypi/simple/
---trusted-host 35.245.43.102
+--index-url https://pypi.org/simple/
 
 aiohappyeyeballs==2.7.1
     # via aiohttp

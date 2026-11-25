@@ -69,8 +69,15 @@ class DockerSandboxBackend(SandboxBackend):
                 }:
                     # dual-ACK required elsewhere; still refuse socket for *tenant bot* containers
                     pass  # host daemon access gated by assert_docker_socket_allowed
-        except Exception:
-            pass
+        except Exception as exc:
+            # A production policy import/runtime error must never fall through
+            # to a Docker launch. Treat policy evaluation as a hard boundary.
+            return SandboxHandle(
+                backend=self.name,
+                deployment_id="",
+                status="failed",
+                message=f"docker_policy_check_failed:{type(exc).__name__}",
+            )
         probe = self.probe()
         if not probe.available:
             return SandboxHandle(

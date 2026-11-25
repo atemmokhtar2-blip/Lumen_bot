@@ -43,7 +43,7 @@ jobs:
       - name: Install actionlint
         run: bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
       - name: actionlint (with ShellCheck integration)
-        run: ./actionlint -color -shellcheck=$(command -v shellcheck)
+        run: ./actionlint -color -shellcheck="$(command -v shellcheck)"
 
   shellcheck:
     name: ShellCheck (scripts)
@@ -75,7 +75,7 @@ jobs:
           output_format: cli,sarif
           output_file_path: console,checkov.sarif
           # No broad skip list — Dockerfile now has HEALTHCHECK + non-root
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: checkov.sarif
@@ -112,7 +112,7 @@ jobs:
         run: |
           docker run --rm -v "${{ github.workspace }}:/project" \
             openpolicyagent/conftest:latest \
-            test /project/Dockerfile -p /project/policy --policy /project/policy
+            test /project/Dockerfile -p /project/policy/dockerfile
       - name: Conftest on selected workflows
         run: |
           set -e
@@ -122,9 +122,8 @@ jobs:
                    .github/workflows/policy-as-code.yml; do
             docker run --rm -v "${{ github.workspace }}:/project" \
               openpolicyagent/conftest:latest \
-              test "/project/$f" -p /project/policy || true
+              test "/project/$f" -p /project/policy/workflows
           done
-          # Dockerfile policies are mandatory (above). Workflow Rego is advisory until schemas stabilize.
 
   trivy-config:
     name: Trivy misconfig (Aqua)

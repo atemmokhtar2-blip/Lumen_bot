@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -33,8 +34,29 @@ def _ttl_seconds() -> float:
 
 
 def _hmac_secret() -> bytes:
-    raw = (os.environ.get("MULTI_AGENT_HITL_SECRET") or os.environ.get("SECRET_KEY") or "multi-agent-hitl").encode()
-    return hashlib.sha256(raw).digest()
+    configured = (
+        os.environ.get("MULTI_AGENT_HITL_SECRET")
+        or os.environ.get("SECRET_KEY")
+        or ""
+    ).strip()
+    if not configured:
+        try:
+            from lumen.platform.prod_security_gate import is_production_runtime
+            production = is_production_runtime()
+        except Exception:
+            env = (
+                os.environ.get("ENVIRONMENT")
+                or os.environ.get("TBE_ENV")
+                or os.environ.get("LUMEN_ENV")
+                or ""
+            ).strip().lower()
+            production = env in {"prod", "production", "staging"}
+        if production:
+            raise RuntimeError(
+                "MULTI_AGENT_HITL_SECRET or SECRET_KEY is required for production approvals"
+            )
+        configured = "multi-agent-hitl-dev-only"
+    return hashlib.sha256(configured.encode("utf-8")).digest()
 
 
 def _sign(action_id: str, state_id: str, tool: str, user_id: int, expires_at: float) -> str:
@@ -105,10 +127,19 @@ class PendingAction:
 
 
 def _params_digest(params: dict[str, Any] | None) -> str:
-    """Stable digest of execution params (full SHA-256 hex) for HITL grant binding."""
-    items = sorted((str(k), str(v)[:200]) for k, v in dict(params or {}).items())
-    raw = repr(items).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    """Hash the complete, canonical parameter payload for HITL grant binding."""
+    try:
+        canonical = json.dumps(
+            dict(params or {}),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        # Fail deterministically for unusual values without truncating payloads.
+        canonical = repr(dict(params or {}))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def tool_requires_confirmation(tool: str) -> bool:
@@ -271,8 +302,10 @@ def confirm_action(
     if state is None:
         _audit("confirm_fail", reason="state_not_found", action_id=action_id)
         return False, None, "state_not_found"
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
-        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=user_id)
+    supplied_uid = int(user_id or 0)
+    owner_uid = int(state.user_id or 0)
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
+        _audit("confirm_fail", reason="user_mismatch", action_id=action_id, user_id=supplied_uid)
         return False, state, "user_mismatch"
 
     pending = _load_pending(state)
@@ -293,20 +326,15 @@ def confirm_action(
         _audit("expired", action_id=action_id)
         return False, state, "expired"
 
-    # Token: board pending token is authority. Verb-only OR stale session token
-    # from Telegram user_data must not fail the owning user on button confirm.
+    # The Telegram bridge resolves verb-only confirmations from the durable
+    # pending action before calling this function. This boundary must still
+    # reject missing, stale, or forged tokens; ownership alone is not a token.
     expected = (pending.confirm_token or "").strip()
     if not expected:
         expected = _sign(
             pending.action_id, pending.state_id, pending.tool, pending.user_id, pending.expires_at
         )
     supplied = (confirm_token or "").strip()
-    owner_ok = int(user_id or 0) in {0, int(pending.user_id or 0)}
-    if owner_ok and expected:
-        if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
-            # Rebind for owner (button path / multi-worker stale session)
-            supplied = expected
-            _audit("token_rebound_owner", action_id=action_id, user_id=user_id)
     if not supplied or not hmac.compare_digest(str(supplied), str(expected)):
         _audit("confirm_fail", reason="bad_token", action_id=action_id)
         state.record(AgentRole.HITL, "bad_token", action_id)
@@ -350,7 +378,9 @@ def reject_action(
     state = board.get(state_id)
     if state is None:
         return False, None, "state_not_found"
-    if user_id and int(state.user_id or 0) not in {0, int(user_id)}:
+    supplied_uid = int(user_id or 0)
+    owner_uid = int(state.user_id or 0)
+    if supplied_uid <= 0 or owner_uid <= 0 or supplied_uid != owner_uid:
         return False, state, "user_mismatch"
     pending = _load_pending(state)
     # Verb-only reject: action_id may be empty — accept the sole pending action
@@ -423,7 +453,9 @@ def consume_execute_grant(
         return False
     uid = int(user_id or state.user_id or 0)
     grant_uid = int(grant.get("user_id") or 0)
-    if grant_uid and uid and grant_uid != uid:
+    # A missing identity is not an authorization context. Require an exact,
+    # positive owner match; zero must never act as a wildcard.
+    if uid <= 0 or grant_uid <= 0 or grant_uid != uid:
         state.record(AgentRole.HITL, "grant_user_mismatch", tool)
         return False
     expected_digest = str(grant.get("params_digest") or "")

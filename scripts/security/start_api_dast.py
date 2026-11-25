@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -15,8 +16,10 @@ os.environ.setdefault("TBE_ENV", "test")
 os.environ.setdefault("TBE_MULTI_TENANT", "0")
 os.environ.setdefault("TBE_REQUIRE_DOCKER", "0")
 os.environ.setdefault("TBE_ALLOW_LOCAL_PROCESS", "1")
-os.environ.setdefault("PLATFORM_ADMIN_TOKEN", "dast-live-admin-token-32chars-xx")
-os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "whsec_dast_live_secret")
+os.environ.setdefault("PLATFORM_ADMIN_TOKEN", secrets.token_urlsafe(48))
+os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "whsec_" + secrets.token_urlsafe(32))
+os.environ.setdefault("TBE_TOKEN_SECRET", secrets.token_urlsafe(48))
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:" + secrets.token_urlsafe(32))
 os.environ.setdefault("ALLOW_DEV_BILLING", "0")
 os.environ.setdefault("API_HOST", "127.0.0.1")
 os.environ.setdefault("API_PORT", "8765")

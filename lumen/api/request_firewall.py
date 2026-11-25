@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 import re
 
+from aiohttp import web
+
 logger = logging.getLogger("lumen.api.firewall")
 
 # Max URL length (path + query) — refuse probing / buffer abuse
@@ -57,6 +59,7 @@ _SKIP_PATH_PREFIXES = (
 )
 
 
+@web.middleware
 async def request_firewall_middleware(request, handler):
     from aiohttp import web
     path = request.path or "/"

@@ -59,7 +59,7 @@ def embed_text_local(text: str, *, dims: int = 256) -> list[float]:
     if not toks:
         return vec
     for t in toks:
-        h = int(hashlib.md5(t.encode()).hexdigest(), 16)
+        h = int(hashlib.md5(t.encode(), usedforsecurity=False).hexdigest(), 16)
         idx = h % dims
         sign = 1.0 if (h >> 8) & 1 else -1.0
         vec[idx] += sign

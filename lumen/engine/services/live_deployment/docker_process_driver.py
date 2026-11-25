@@ -87,35 +87,45 @@ def _assert_sandbox_mount_path(project_path: Path) -> Path:
 
 
 def _seccomp_arg() -> str:
-    """Return seccomp profile path or 'default'."""
-    p = (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip()
-    if p and os.path.isfile(p):
-        return p
+    """Return a trusted seccomp profile path or Docker's built-in default."""
+    configured = (os.environ.get("TBE_DOCKER_SECCOMP") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            raise ValueError("seccomp_profile_path_must_be_absolute")
+        if candidate.is_symlink():
+            raise ValueError("seccomp_profile_symlink_rejected")
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_file() or resolved.stat().st_size > 256 * 1024:
+            raise ValueError("seccomp_profile_path_rejected")
+        return str(resolved)
     try:
         from lumen.engine.services.sandbox_runtime.network import seccomp_profile_path
         sp = seccomp_profile_path()
         if sp:
-            return sp
+            resolved = Path(sp).resolve(strict=True)
+            if resolved.is_file() and not resolved.is_symlink():
+                return str(resolved)
     except Exception:
         pass
     return "default"
 
 
-def _runtime_args() -> list:
-    """Optional Docker runtime (runsc for gVisor)."""
-    rt = (os.environ.get("TBE_DOCKER_RUNTIME") or "").strip()
-    if rt and rt not in {"runc", "default"}:
-        return ["--runtime", rt]
-    return []
+def _runtime_args() -> list[str]:
+    """Only allow the explicitly supported gVisor runtime."""
+    rt = (os.environ.get("TBE_DOCKER_RUNTIME") or "").strip().lower()
+    if rt in {"", "runc", "default"}:
+        return []
+    if rt == "runsc":
+        return ["--runtime", "runsc"]
+    raise ValueError("unsupported_docker_runtime")
 
 
-def _apparmor_args() -> list:
-    """Attach AppArmor profile when host has it loaded."""
-    profile = (os.environ.get("TBE_APPARMOR_PROFILE") or "").strip()
-    if not profile:
-        # default name if operator loaded our profile
-        profile = "tbe-bot"
-    # Only pass if profile appears loaded
+def _apparmor_args() -> list[str]:
+    """Attach only a syntactically safe, already-loaded AppArmor profile."""
+    profile = (os.environ.get("TBE_APPARMOR_PROFILE") or "tbe-bot").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", profile):
+        raise ValueError("invalid_apparmor_profile")
     try:
         import pathlib
         aa = pathlib.Path("/sys/kernel/security/apparmor/profiles")
@@ -124,6 +134,26 @@ def _apparmor_args() -> list:
     except Exception:
         pass
     return []
+
+
+def _resource_args() -> list[str]:
+    """Validate operator resource settings before they become Docker argv."""
+    memory = str(_MEMORY).strip().lower()
+    if not re.fullmatch(r"[1-9][0-9]{0,4}[kmg]?", memory):
+        raise ValueError("invalid_docker_memory_limit")
+    amount = int(re.match(r"[0-9]+", memory).group(0))
+    unit = memory[-1] if memory[-1].isalpha() else "b"
+    memory_mb = amount / (1024 if unit == "k" else 1 if unit == "m" else 1 / 1024 if unit == "g" else 1024 * 1024)
+    if memory_mb < 64 or memory_mb > 1024:
+        raise ValueError("docker_memory_limit_out_of_range")
+    try:
+        cpus = float(_CPUS)
+        pids = int(_PIDS)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid_docker_resource_limit") from exc
+    if not 0.1 <= cpus <= 2.0 or not 1 <= pids <= 256:
+        raise ValueError("docker_resource_limit_out_of_range")
+    return [f"--memory={memory}", f"--memory-swap={memory}", f"--cpus={cpus:g}", f"--pids-limit={pids}"]
 
 def docker_available() -> bool:
     """Return True if docker CLI is present and the daemon responds."""
@@ -352,14 +382,21 @@ class DockerProcessDriver(DeploymentProvider):
 
         # Runtime: image-only (code baked in). No bind-mount of user source.
         # Writable tmp only; read-only rootfs.
-        net = (os.environ.get("TBE_DOCKER_NETWORK") or "").strip()
-        if not net:
-            # Fail closed — never silently use default bridge in this path
+        try:
+            from lumen.engine.services.sandbox_runtime.network import ensure_egress_network
+            net = ensure_egress_network(create_if_missing=False)
+            from lumen.engine.services.sandbox_runtime.policy import assert_network_not_default_bridge
+            assert_network_not_default_bridge(net)
+            resource_args = _resource_args()
+            runtime_args = _runtime_args()
+            apparmor_args = _apparmor_args()
+            seccomp_profile = _seccomp_arg()
+        except Exception as _runtime_config_exc:
             return DeploymentStatus(
                 provider=self.name,
                 deployment_id=dep_id,
                 status=DEPLOY_FAILED,
-                message="TBE_DOCKER_NETWORK is required (egress-limited network)",
+                message=f"docker_runtime_policy_rejected:{type(_runtime_config_exc).__name__}",
             )
         try:
             from lumen.engine.services.bot_image_builder import validate_image_tag
@@ -450,10 +487,7 @@ class DockerProcessDriver(DeploymentProvider):
                 "--label", "tbe.managed=1",
                 "--label", "tbe.isolation=image",
                 "--restart", "no",
-                f"--memory={_MEMORY}",
-                f"--memory-swap={_MEMORY}",
-                f"--cpus={_CPUS}",
-                f"--pids-limit={_PIDS}",
+                *resource_args,
                 "--ulimit", "nproc=32:32",
                 "--ulimit", "nofile=128:128",
                 "--log-driver", "json-file",
@@ -461,9 +495,9 @@ class DockerProcessDriver(DeploymentProvider):
                 "--log-opt", "max-file=2",
                 "--security-opt", "no-new-privileges:true",
                 "--cap-drop", "ALL",
-                "--security-opt", f"seccomp={_seccomp_arg()}",
-                *(_runtime_args()),
-                *(_apparmor_args()),
+                "--security-opt", f"seccomp={seccomp_profile}",
+                *runtime_args,
+                *apparmor_args,
                 "--read-only",
                 "--ipc", "none",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m",
@@ -494,8 +528,13 @@ class DockerProcessDriver(DeploymentProvider):
                     message=f"policy_violation:{pol_exc}",
                 )
             try:
+                # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args
+                # The command is an argv list (shell=False); env-derived values are
+                # constrained by _resource_args/_runtime_args/_apparmor_args,
+                # network.ensure_egress_network, and validate_image_tag above.
                 proc = subprocess.run(
                     cmd,
+                    shell=False,
                     capture_output=True,
                     text=True,
                     timeout=60,

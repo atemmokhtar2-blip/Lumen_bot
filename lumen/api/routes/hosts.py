@@ -1,6 +1,7 @@
-from pathlib import Path
 """Managed bot hosting API — sandbox-scoped paths only."""
 from __future__ import annotations
+
+from pathlib import Path
 
 import asyncio
 import logging

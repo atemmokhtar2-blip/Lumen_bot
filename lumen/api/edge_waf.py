@@ -15,6 +15,8 @@ import logging
 import os
 from typing import Any
 
+from aiohttp import web
+
 logger = logging.getLogger("lumen.api.edge_waf")
 
 
@@ -111,6 +113,7 @@ def _has_edge_mark(request: Any) -> bool:
     return _has_provider_mark(request)
 
 
+@web.middleware
 async def edge_waf_middleware(request, handler):
     from aiohttp import web
 

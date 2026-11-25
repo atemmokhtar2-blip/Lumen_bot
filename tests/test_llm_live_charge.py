@@ -39,6 +39,32 @@ def credits_simple(monkeypatch):
     return svc
 
 
+def test_daily_token_budget_overage_remains_blocked(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("TENANT_LLM_TOKEN_DAILY_CAP", "10")
+    monkeypatch.setenv("TENANT_LLM_USD_DAILY_CAP", "0")
+    from lumen.platform import runtime_config
+    from lumen.platform.rate_limit import check_tenant_llm_budget
+
+    monkeypatch.setattr(runtime_config, "redis_url", lambda: "")
+    tenant_id = "budget-overage-sticky-test"
+    allowed, reason = check_tenant_llm_budget(tenant_id, add_tokens=11)
+    assert not allowed
+    assert reason == "llm_token_cap_exceeded:11/10"
+
+    # The post-call overage is retained: all subsequent preflight checks fail.
+    allowed_again, reason_again = check_tenant_llm_budget(tenant_id)
+    assert not allowed_again
+    assert reason_again == "llm_token_cap_exceeded:11/10"
+
+    # Negative input cannot refund the recorded usage.
+    allowed_negative, _ = check_tenant_llm_budget(tenant_id, add_tokens=-100)
+    assert not allowed_negative
+    allowed_final, reason_final = check_tenant_llm_budget(tenant_id)
+    assert not allowed_final
+    assert reason_final == "llm_token_cap_exceeded:11/10"
+
+
 def test_tenant_id_from_user():
     assert tenant_id_from_user(42) == "tg:42"
     assert tenant_id_from_user(0) == ""

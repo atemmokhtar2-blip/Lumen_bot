@@ -515,7 +515,7 @@ window.ui = SwaggerUIBundle({
     app.router.add_get("/v1/me", tenants.me)
     app.router.add_post("/v1/me/rotate_key", tenants.rotate_key)
     app.router.add_get("/v1/admin/secret-rotation", secret_rotation.rotation_status)
-    app.router.add_post("/v1/admin/secret-rotation", secret_rotation.record)
+    app.router.add_post("/v1/admin/secret-rotation", secret_rotation.rotation_record)
 
     app.router.add_patch("/v1/me/white-label", tenants.update_white_label)
     app.router.add_post("/v1/generate", generate.generate)
