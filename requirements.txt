@@ -8,6 +8,10 @@ pydantic-settings==2.7.1
 requests==2.33.0
 curl_cffi==0.15.0
 aiohttp==3.14.4
+anyio==4.14.2
+certifi==2026.11.20
+idna==3.15
+python-multipart==0.0.31
 
 # Optional: faster fuzzy matching for Layer-1 LU
 rapidfuzz==3.12.1
@@ -32,6 +36,7 @@ prometheus-client==0.21.1
 # Database migrations (Alembic + SQLAlchemy engine for migration runner only)
 SQLAlchemy==2.0.40
 alembic==1.15.2
+Mako==1.4.2
 
 # Phase B — durable workflows (official SDK)
 temporalio[langgraph]==1.36.1

@@ -37,6 +37,10 @@ jobs:
             --upgrade-package mcp \
             --upgrade-package temporalio \
             --upgrade-package mako \
+            --upgrade-package anyio \
+            --upgrade-package certifi \
+            --upgrade-package idna \
+            --upgrade-package python-multipart \
             --output-file=requirements.lock requirements.txt
           pip-audit -r requirements.lock
       - uses: actions/upload-artifact@v4
