@@ -25,7 +25,7 @@ jobs:
         run: python -m pip install --upgrade pip pip-tools
       - name: Resolve only security-related upgrades
         run: |
-          pip-compile --resolver=backtracking --output-file=/tmp/requirements.lock \
+          pip-compile --resolver=backtracking --output-file=requirements.lock \
             --upgrade-package aiohttp \
             --upgrade-package multidict \
             --upgrade-package certifi \
@@ -41,5 +41,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: refreshed-requirements-lock
-          path: /tmp/requirements.lock
+          path: requirements.lock
           retention-days: 2
