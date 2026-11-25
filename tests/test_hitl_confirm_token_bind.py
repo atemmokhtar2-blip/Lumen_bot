@@ -33,6 +33,16 @@ def test_wrong_token_is_rejected_but_exact_owner_token_succeeds(monkeypatch):
     ok, _, reason = confirm_action(
         state.state_id,
         pending.action_id,
+        user_id=0,
+        confirm_token=pending.confirm_token,
+        board=board,
+    )
+    assert ok is False
+    assert reason == "user_mismatch"
+
+    ok, _, reason = confirm_action(
+        state.state_id,
+        pending.action_id,
         user_id=42,
         confirm_token="deadbeef_stale_token_xxx",
         board=board,
@@ -110,3 +120,20 @@ def test_execution_grant_rejects_zero_owner():
         state, "host_start", user_id=42, params=params
     )
     assert "hitl_execute_grant" in state.extensions
+
+
+
+def test_reject_action_requires_exact_positive_owner():
+    from lumen.engine.services.multi_agent.hitl import reject_action
+
+    board = MemoryBlackboard()
+    state = AgentState(user_id=42, status=AgentStatus.PLANNING.value)
+    board.put(state)
+    pending = request_confirmation(
+        state, tool="host_start", params={"service_name": "svc"}, board=board
+    )
+    ok, _, reason = reject_action(
+        state.state_id, pending.action_id, user_id=0, board=board
+    )
+    assert not ok
+    assert reason == "user_mismatch"
