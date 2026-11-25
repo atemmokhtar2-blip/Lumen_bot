@@ -14,7 +14,7 @@ import urllib.request
 from pathlib import Path
 
 BASE = os.environ.get("DAST_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
-ADMIN = os.environ.get("PLATFORM_ADMIN_TOKEN", "dast-live-admin-token-32chars-xx")
+ADMIN = (os.environ.get("PLATFORM_ADMIN_TOKEN") or "").strip()
 OUT = Path(os.environ.get("DAST_SEED_FILE", "/tmp/dast-tenants.json"))
 
 
@@ -38,6 +38,11 @@ def _req(method: str, path: str, *, headers: dict | None = None, body: dict | No
 
 
 def main() -> int:
+    if not ADMIN:
+        print("missing PLATFORM_ADMIN_TOKEN; provide an ephemeral admin credential")
+        return 2
+    # This file contains temporary tenant API keys.
+    os.umask(0o077)
     # Create tenants via admin API
     tenants = []
     for name in ("DastLiveA", "DastLiveB"):
@@ -48,7 +53,7 @@ def main() -> int:
             body={"name": name, "plan_id": "free"},
         )
         if code not in (200, 201) or not body.get("api_key"):
-            print(json.dumps({"ok": False, "step": "create", "name": name, "code": code, "body": body}, indent=2))
+            print(json.dumps({"ok": False, "step": "create", "name": name, "code": code, "error": body.get("error", "tenant_create_failed")}, indent=2))
             return 1
         tenants.append(
             {
@@ -63,12 +68,14 @@ def main() -> int:
     for t in (a, b):
         code, body = _req("GET", "/v1/me", headers={"Authorization": f"Bearer {t['key']}"})
         if code != 200 or body.get("tenant", {}).get("tenant_id") != t["id"]:
-            print(json.dumps({"ok": False, "step": "me", "tenant": t, "code": code, "body": body}, indent=2))
+            print(json.dumps({"ok": False, "step": "me", "tenant_id": t["id"], "code": code, "error": body.get("error", "tenant_auth_failed")}, indent=2))
             return 1
 
-    payload = {"ok": True, "base": BASE, "admin": ADMIN, "tenant_a": a, "tenant_b": b}
+    payload = {"ok": True, "base": BASE, "tenant_a": a, "tenant_b": b}
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps(payload, indent=2))
+    os.chmod(OUT, 0o600)
+    print(json.dumps({"ok": True, "tenant_ids": [a["id"], b["id"]]}, indent=2))
     return 0
 
 
