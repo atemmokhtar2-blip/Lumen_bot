@@ -260,7 +260,8 @@ def cache_repo_page(
                 "cached_at": time.time(),
                 "fingerprint": fingerprint
                 or hashlib.sha1(
-                    ",".join(str(x.get("resource_id") or "") for x in resources).encode()
+                    ",".join(str(x.get("resource_id") or "") for x in resources).encode(),
+                    usedforsecurity=False,
                 ).hexdigest()[:16],
             },
             ensure_ascii=False,
